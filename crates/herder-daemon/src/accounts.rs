@@ -6,7 +6,7 @@
 //! herder never reads, copies or relays what is in an account's config dir; the adapter only
 //! sets the CLI's config dir variable.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ use herder_adapters::Adapter;
 use herder_adapters::acp::{AcpAdapter, AgentProfile};
 use herder_adapters::claude::ClaudeAdapter;
 use herder_adapters::codex::CodexAdapter;
-use herder_protocol::{Account, Provider};
+use herder_protocol::{Account, AccountId, Provider, Timestamp};
 
 use crate::session::{Accounts, Adapters, TitleCli, TitleClis};
 use crate::usage::{Known, Probe, Probes};
@@ -132,8 +132,13 @@ pub fn title_clis(binaries: &HashMap<Provider, PathBuf>) -> TitleClis {
 }
 
 /// `accounts` as clients see them, ordered by id, each with the email and windows `usage`
-/// holds for it; none until its provider reports them.
-pub(crate) fn list(accounts: &Accounts, usage: &Known) -> Vec<Account> {
+/// holds for it, none until its provider reports them, and since when it needs logging in
+/// again, as `needs_login` says.
+pub(crate) fn list(
+    accounts: &Accounts,
+    usage: &Known,
+    needs_login: &BTreeMap<AccountId, Timestamp>,
+) -> Vec<Account> {
     accounts
         .iter()
         .map(|(id, account)| Account {
@@ -147,6 +152,7 @@ pub(crate) fn list(accounts: &Accounts, usage: &Known) -> Vec<Account> {
             email: usage.emails.get(id).cloned(),
             usage: usage.windows.get(id).cloned().unwrap_or_default(),
             fallback: account.fallback,
+            needs_login: needs_login.get(id).copied(),
         })
         .collect()
 }
@@ -289,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn list_shows_each_account_with_its_usage() {
+    fn list_shows_each_account_with_its_usage_and_whether_it_needs_login() {
         let accounts = Accounts::from([
             (
                 AccountId::new("claude-main"),
@@ -306,8 +312,10 @@ mod tests {
             windows: BTreeMap::from([(AccountId::new("claude-main"), vec![window.clone()])]),
             emails: BTreeMap::from([(AccountId::new("claude-main"), "dev@example.com".into())]),
         };
+        let since: Timestamp = "2026-10-25T09:00:00Z".parse().unwrap();
+        let needs_login = BTreeMap::from([(AccountId::new("codex"), since)]);
         assert_eq!(
-            list(&accounts, &usage),
+            list(&accounts, &usage, &needs_login),
             [
                 Account {
                     config_dir: Some("/secret/dir".into()),
@@ -317,6 +325,7 @@ mod tests {
                     email: Some("dev@example.com".into()),
                     usage: vec![window],
                     fallback: false,
+                    needs_login: None,
                 },
                 Account {
                     config_dir: None,
@@ -326,6 +335,7 @@ mod tests {
                     email: None,
                     usage: Vec::new(),
                     fallback: false,
+                    needs_login: Some(since),
                 }
             ]
         );

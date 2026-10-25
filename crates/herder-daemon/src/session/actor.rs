@@ -21,7 +21,7 @@ use herder_protocol::{
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -241,6 +241,9 @@ pub(super) struct Actor {
     retry_deadline: Option<Instant>,
     /// Prompts journaled so far, counted once titles need it.
     prompts: Option<u64>,
+    /// Every account that needs logging in again: while the session's does, it holds its
+    /// prompts (`needs_login`), and starts them once it no longer does.
+    logins: watch::Receiver<BTreeMap<AccountId, Timestamp>>,
 }
 
 enum Next {
@@ -253,12 +256,16 @@ enum Next {
     /// A request routed to the primary session ran out of time.
     Overdue,
     LimitReset,
+    /// The session's account no longer needs logging in.
+    LoggedIn,
     Stop,
 }
 
 impl Actor {
     pub(super) fn new(session: Session, inner: Arc<Inner>) -> Self {
+        let logins = inner.limits.logins();
         Self {
+            logins,
             inner,
             session,
             adapter: None,
@@ -378,8 +385,24 @@ impl Actor {
                         None => std::future::pending().await,
                     }
                 };
-                let (adapter, waiting, setup) =
-                    (&mut self.adapter, &mut self.waiting, &mut self.setup);
+                let (adapter, waiting, setup, logins) = (
+                    &mut self.adapter,
+                    &mut self.waiting,
+                    &mut self.setup,
+                    &mut self.logins,
+                );
+                let account_id = &self.session.account_id;
+                let held = self.session.status == SessionStatus::NeedsLogin;
+                let logged_in = async {
+                    if !held
+                        || logins
+                            .wait_for(|logged_out| !logged_out.contains_key(account_id))
+                            .await
+                            .is_err()
+                    {
+                        std::future::pending::<()>().await;
+                    }
+                };
                 let adapter_event = async {
                     match adapter.as_mut() {
                         Some(adapter) => adapter.events.recv().await,
@@ -406,6 +429,7 @@ impl Actor {
                     outcome = set_up => Next::SetUp(outcome),
                     () = overdue => Next::Overdue,
                     () = limit_reset => Next::LimitReset,
+                    () = logged_in => Next::LoggedIn,
                 }
             };
             match next {
@@ -444,6 +468,12 @@ impl Actor {
                         retry_at: None,
                     })
                     .await;
+                    self.start_next().await;
+                }
+                Next::LoggedIn => {
+                    if self.queue.is_empty() && self.turn.is_none() {
+                        self.set_status(SessionStatus::Idle).await;
+                    }
                     self.start_next().await;
                 }
                 Next::SetUp(outcome) => self.set_up_ended(outcome).await,
@@ -618,7 +648,8 @@ impl Actor {
             } => {
                 let attachments = self.keep(images, files).await?;
                 self.cancel_retry(false).await;
-                let busy = self.turn.is_some() || !self.queue.is_empty();
+                let busy =
+                    self.turn.is_some() || !self.queue.is_empty() || self.needs_login().is_some();
                 self.queue.push_back(Prompt {
                     prompt_id: new_prompt_id(),
                     agent_message: None,
@@ -1567,10 +1598,15 @@ impl Actor {
     }
 
     /// Starts queued prompts while no turn runs and the host admits them, starting the adapter
-    /// when it is not running; `waiting_for_capacity` while the host has no room.
+    /// when it is not running; `waiting_for_capacity` while the host has no room, and
+    /// `needs_login`, holding them, while the session's account needs logging in again.
     async fn start_next(&mut self) {
         while self.turn.is_none() && self.setup.is_none() && !self.queue.is_empty() {
             if self.retry_deadline.is_some() {
+                return;
+            }
+            if self.needs_login().is_some() {
+                self.set_status(SessionStatus::NeedsLogin).await;
                 return;
             }
             if self.needs_setup && self.adapter.is_none() {
@@ -2166,7 +2202,11 @@ impl Actor {
                 if error.class == ErrorClass::LimitReached {
                     return self.limit_reached(turn_id, error).await;
                 }
-                let mut settled = SessionStatus::NeedsYou;
+                // The account needs logging in again: what is sent meanwhile waits for it.
+                let mut settled = match error.class {
+                    ErrorClass::Auth => SessionStatus::NeedsLogin,
+                    _ => SessionStatus::NeedsYou,
+                };
                 let error = match self.out_of_memory(&error).await {
                     Some(oom) => {
                         // The CLI is dying: the next prompt starts a new one, seeded with the
@@ -2729,6 +2769,11 @@ impl Actor {
                 None
             }
         }
+    }
+
+    /// Since when the session's account needs logging in again, if it does.
+    fn needs_login(&self) -> Option<Timestamp> {
+        self.inner.limits.needs_login(&self.session.account_id)
     }
 
     async fn set_status(&mut self, status: SessionStatus) {

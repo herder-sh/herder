@@ -62,6 +62,7 @@ impl Backend for TestBackend {
             email: None,
             usage: Vec::new(),
             fallback: false,
+            needs_login: None,
         }]
     }
 

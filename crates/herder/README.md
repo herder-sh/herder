@@ -39,7 +39,8 @@ one of `read-only`, `ask`, `auto-edit`, `full-access`, and defaults to the proje
 mode, else `ask`.
 
 Exit codes: 0 done, 1 failed (the reason is on stderr), 64 usage error. `wait` also exits 2
-when the session needs you (an approval, a question, or a failed turn), 3 when it is in error,
+when the session needs you (an approval, a question, a failed turn, or its account to be
+logged in again), 3 when it is in error,
 and 4 when `--timeout` passed first.
 
 Switch a session with `herder session switch <id> --account <id-or-label>`,

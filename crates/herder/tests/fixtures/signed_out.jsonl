@@ -1,0 +1,5 @@
+# `herder session wait` on an account whose login expired: the turn fails as auth.
+{"emit": {"type": "model_changed", "model": "fake-model-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Say hello."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-1", "error": {"class": "auth", "message": "Not logged in · Please run /login"}}}

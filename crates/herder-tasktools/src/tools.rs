@@ -88,7 +88,7 @@ pub struct ChildStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "String")]
     pub branch: Option<String>,
-    /// `running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue, `archived` when it was archived, by herder once all its pull requests merged or by hand (send unarchives it).
+    /// `running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `needs_login` while its account needs logging in again (what you send it waits until then), `error` when it cannot continue, `archived` when it was archived, by herder once all its pull requests merged or by hand (send unarchives it).
     pub status: SessionStatus,
     /// Summary of its latest finished turn; absent before the first one ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
