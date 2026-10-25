@@ -52,6 +52,9 @@ public final class Fleet {
     private(set) var lists = Lists()
     /// The machines' latest usage summaries, per period; see `refreshUsage`.
     var usageCache = UsageCache()
+    /// Where each machine last said it backs up, so its page shows that at once; see
+    /// `backupLink(of:)`.
+    var backupLinks: [HostId: BackupLink] = [:]
     /// The rebuild of `lists` waiting to run; see `listsChanged`.
     @ObservationIgnored private var listsRefresh: Task<Void, Never>?
     /// The sessions shown on screen now, whose turns ending are seen.

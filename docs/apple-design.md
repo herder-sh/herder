@@ -636,7 +636,7 @@ quiet "Saved" by the control for two seconds, or the error in the hint's place u
 change. A Save button exists only in create sheets.
 
 The pages' contents are today's settings, regrouped into this anatomy; P14.10–P14.14 redesign
-each one. `DetailPageScreenshotTests` draws the scaffold
+each one (the machine page: §8.7). `DetailPageScreenshotTests` draws the scaffold
 ([`screenshots/p14-9/detail-page.png`](screenshots/p14-9/detail-page.png)); `DetailPage` has an
 Xcode preview.
 
@@ -664,6 +664,41 @@ The plan, a 7-day sparkline and removing the account from a machine are still to
 protocol has no plan, no daily usage and no command to remove an account. Screenshot:
 [`screenshots/p14-11/account-page.png`](screenshots/p14-11/account-page.png)
 (`AccountPageScreenshotTests`).
+
+### 8.7 Machine page (P14.10)
+
+`MachinePage`, top to bottom:
+
+- **Header**: the name; the chip says how it is connected and, while connected, the last round
+  trip ("Connected · 38 ms"); the status sentence is the user's role and how many sessions run.
+  There is no Open Terminal yet: terminals open in a session's worktree only, and a machine
+  terminal needs a protocol change.
+- **Needs attention** (`MachineAttention`): each account signed out there, with the sessions it
+  holds up and since when, fixed by **Sign in again** (a relogin job in Activity); and the CLI
+  updates herder can run there, fixed by **Update** / **Update both** / **Update all** (install
+  jobs in Activity). Only the owner can fix them; a member sees no updates.
+- **Accounts**: a row per account with what is left of its tightest limit as a bar, or "Signed
+  out"; it opens the account's page, where its settings are edited. Below, each login the user's
+  other machines have that this one lacks, as "Missing here", with **Set Up**; then
+  **Add Account**.
+- **Provider CLIs**, **MCP servers**.
+- **Capacity**: "Turns at once" as a stepper (`TurnLimitRow`), its hint the machine's memory and
+  cores and about how many turns fit (`TurnLoad.fit`: a core and 2 GB a turn, a quarter of the
+  cores left to the rest); running and waiting turns behind ⓘ.
+- **Backup** (`BackupSection`, owners only): the vault it backs up to and how far that got
+  ("Caught up · 3m ago"), **Stop…**, the **Back up sessions** and **Secrets** switches and, when
+  this device owns the vault, **Takes handoffs from other machines**. It shows where the machine
+  last said it backs up (`Fleet.backupLinks`) while it asks again.
+- **Connection**: the name on this device, and the addresses, which unfold to reorder, add,
+  remove and connect through them, with the link's health since the app opened.
+- **About** (fingerprint, host id), **Danger zone** (Forget).
+
+Each section is one view listed once in `MachinePage.body`, so a new one (Bots, P15.8) is one
+line there. `MachinePageScreenshotTests` draws an owner's page
+([`screenshots/p14-10/machine-owner.png`](screenshots/p14-10/machine-owner.png)) and a
+member's ([`screenshots/p14-10/machine-member.png`](screenshots/p14-10/machine-member.png)).
+In the demo fleet the user is a member on `laptop`, and `devbox` backs up to a vault, so the
+app's ScreenshotTests also shoot `mac-machine-backup` and `mac-machine-member`.
 
 ---
 

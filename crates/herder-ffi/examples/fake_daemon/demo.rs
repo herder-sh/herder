@@ -18,7 +18,10 @@
 //! waits for Enter, then reports the account logged in. Claude Code's vendor publishes a newer
 //! release than any machine has ([`LATEST`]), and the machines have MCP servers of the user's
 //! ([`MCP_SERVERS`]): stdio and HTTP ones, a disabled one and one for a single project. Their
-//! skill library is one repository ([`SKILLS`]), with one skill turned off on `laptop`.
+//! skill library is one repository ([`SKILLS`]), with one skill turned off on `studio`.
+//!
+//! The user owns `devbox` and `studio` and is a member on `laptop`, which someone else owns.
+//! `devbox` backs up to a vault, `vault`, which the user owns too.
 //!
 //! [`Demo::start`] returns once all of it is in place, with the link a device paired with every
 //! machine shares, as `--share` prints.
@@ -38,7 +41,8 @@ use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
 use herder_client_core::{Client, ConnectionState, PairResult, PairingUri};
-use herder_daemon::auth::{Auth, PAIRING_TTL};
+use herder_daemon::auth::{Auth, PAIRING_TTL, User};
+use herder_daemon::config::Retention;
 use herder_daemon::login::{self, Logins};
 use herder_daemon::mcp;
 use herder_daemon::projects::{
@@ -50,12 +54,15 @@ use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, Sessi
 use herder_daemon::settings::Settings;
 use herder_daemon::skills::{Skills, SkillsSink};
 use herder_daemon::terminal::Terminals;
+use herder_daemon::vault::{
+    self, HostSecrets, Link, LinkSetup, SecretsKey, VaultStore, WakeOnEvent,
+};
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_daemon::ws::{Host, Server, Tls};
-use herder_daemon::{Config, Hub, session};
+use herder_daemon::{Config, Hub};
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, EventBody, HostId, Item, ItemBody, ItemId,
-    PermissionMode, Provider, SessionId, SessionStatus, Timestamp, TurnId,
+    PermissionMode, Provider, Role, SessionId, SessionStatus, Timestamp, TurnId, UserId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -156,8 +163,8 @@ const SKILLS: &[(&str, &str)] = &[
     ),
 ];
 
-/// The skill turned off on `laptop`.
-const LAPTOP_OFF: &str = "migrate-db";
+/// The skill turned off on `studio`, by its owner.
+const STUDIO_OFF: &str = "migrate-db";
 
 /// The repositories every machine has a clone of, as `acme/<name>`.
 const REPOS: &[&str] = &["api", "web", "infra"];
@@ -272,11 +279,21 @@ const MACHINES: &[(&str, u32, u64, &[Account])] = &[
     ),
 ];
 
+/// The machine the demo's user is a member on: another user owns it.
+const MEMBER_ON: &str = "laptop";
+
+/// The machine that backs up to the demo's vault.
+const BACKS_UP: &str = "devbox";
+
+/// The demo's vault.
+const VAULT: &str = "vault";
+
 /// The running demo; [`Demo::stop`] stops it and removes everything it created.
 pub struct Demo {
     /// The link a device paired with every machine shares.
     pub link: String,
     daemons: Vec<Daemon>,
+    vault: DemoVault,
     _tmp: TempDir,
 }
 
@@ -322,6 +339,8 @@ impl Demo {
         if busy {
             demo.busy().await?;
         }
+        let vault = DemoVault::start(&tmp.path().join(VAULT)).await?;
+        demo.back_up(&vault).await?;
         let shared = client.share().await?;
         if let Some(skipped) = shared.skipped.first() {
             bail!("{} was not shared: {}", skipped.host_id, skipped.error);
@@ -329,17 +348,19 @@ impl Demo {
         Ok(Self {
             link: shared.link.to_string(),
             daemons,
+            vault,
             _tmp: tmp,
         })
     }
 
-    /// Stops every machine and waits until they have.
+    /// Stops every machine and the vault, and waits until they have.
     pub async fn stop(self) -> Result<()> {
         for daemon in self.daemons {
             daemon.shutdown.cancel();
             daemon.server.await?;
         }
-        Ok(())
+        self.vault.shutdown.cancel();
+        Ok(self.vault.server.await?)
     }
 }
 
@@ -394,6 +415,58 @@ struct Scenario<'a> {
 }
 
 impl Scenario<'_> {
+    /// Pairs the demo's device with `vault` as its owner and links [`BACKS_UP`] to it, as the
+    /// apps' Back Up does, then waits until the vault holds what the machine has.
+    async fn back_up(&self, vault: &DemoVault) -> Result<()> {
+        for result in self.client.pair(vault.link.clone()).await? {
+            if let PairResult::Failed { error, .. } = result {
+                bail!("the demo device did not pair with the vault: {error}");
+            }
+        }
+        let vault_id = HostId::new(VAULT);
+        let CommandResult::HostPairing { code, .. } = self
+            .client
+            .send(
+                vault_id.clone(),
+                CommandBody::PairVaultHost {
+                    host_name: BACKS_UP.into(),
+                },
+            )
+            .await?
+        else {
+            bail!("the vault did not mint a host code");
+        };
+        self.client
+            .send(
+                HostId::new(BACKS_UP),
+                CommandBody::LinkVault {
+                    addresses: vec![vault.address.clone()],
+                    fingerprint: vault.fingerprint.clone(),
+                    pairing_code: code,
+                    backup: true,
+                    secrets: true,
+                },
+            )
+            .await?;
+        let changes = self.client.changes();
+        tokio::time::timeout(TIMEOUT, async {
+            while !self.client.machines().iter().any(|machine| {
+                machine.host_id == vault_id
+                    && machine.vault.as_ref().is_some_and(|status| {
+                        status.hosts.iter().any(|host| {
+                            host.host_id == HostId::new(BACKS_UP) && host.last_event_at.is_some()
+                        })
+                    })
+            }) {
+                if !changes.next().await {
+                    break;
+                }
+            }
+        })
+        .await
+        .context("the vault did not catch up with the machine")
+    }
+
     async fn set_up(&self) -> Result<()> {
         // A turn that fails over between accounts, and the turn before a handoff, first: both
         // finish, and the handoff forks once its turn is checkpointed.
@@ -455,9 +528,9 @@ impl Scenario<'_> {
         self.prompt("laptop", &browsers, BROWSERS).await?;
         self.client
             .send(
-                HostId::new("laptop"),
+                HostId::new("studio"),
                 CommandBody::SetSkillEnabled {
-                    name: LAPTOP_OFF.into(),
+                    name: STUDIO_OFF.into(),
                     enabled: false,
                 },
             )
@@ -634,6 +707,74 @@ fn finished(turns: usize) -> impl Fn(&[EventBody]) -> bool {
     }
 }
 
+/// The demo's vault, which [`BACKS_UP`] backs up to.
+struct DemoVault {
+    /// A pairing link for its owner.
+    link: String,
+    address: String,
+    fingerprint: String,
+    shutdown: CancellationToken,
+    server: JoinHandle<()>,
+}
+
+impl DemoVault {
+    async fn start(dir: &Path) -> Result<Self> {
+        std::fs::create_dir_all(dir.join("tls"))?;
+        let tls = Tls::load_or_create(&dir.join("tls"), VAULT)?;
+        let auth = Arc::new(Auth::open(dir)?);
+        let store = VaultStore::open(dir.join("vault.db"))?;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let address = listener.local_addr()?.to_string();
+        let fingerprint = tls.fingerprint().to_owned();
+        let link = PairingUri {
+            hosts: vec![address.clone()],
+            fingerprint: fingerprint.clone(),
+            code: auth.mint("sam", None, PAIRING_TTL)?.code,
+        }
+        .to_string();
+        let host = Host {
+            id: HostId::new(VAULT),
+            name: VAULT.into(),
+        };
+        let server = vault::Server::new(
+            tls,
+            auth,
+            store,
+            host,
+            vault::LIVENESS_TIMEOUT,
+            Retention::default(),
+            Some(SecretsKey::new(&[7; 32])),
+        );
+        let shutdown = CancellationToken::new();
+        let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
+        Ok(Self {
+            link,
+            address,
+            fingerprint,
+            shutdown,
+            server,
+        })
+    }
+}
+
+/// Writes the users file a daemon opens with `pat` as its owner, as though they had paired,
+/// so the demo's user can be paired as a member. The file's shape is the daemon's own
+/// (`herder_daemon::auth`).
+fn owned_by_another(dir: &Path) -> Result<()> {
+    let users = json!({
+        "version": 1,
+        "users": [User {
+            user_id: UserId::new("pat"),
+            name: "pat".into(),
+            role: Role::Owner,
+            created_at: Timestamp::now(),
+        }],
+        "devices": [],
+    });
+    std::fs::write(dir.join("auth.json"), serde_json::to_vec(&users)?)?;
+    Ok(())
+}
+
 /// A running machine.
 struct Daemon {
     id: HostId,
@@ -662,6 +803,9 @@ impl Daemon {
             repos.insert(*repo, clone(origins, repo, &dir.join("src"))?);
         }
         let tls = Tls::load_or_create(&dir.join("tls"), name)?;
+        if name == MEMBER_ON {
+            owned_by_another(dir)?;
+        }
         let auth = Arc::new(Auth::open(dir)?);
         let hub = Arc::new(Hub::default());
         let scripted = Arc::new(Scripted {
@@ -687,13 +831,18 @@ impl Daemon {
         }
         let turns = AtomicU64::new(0);
         let sessions_changed = Arc::new(tokio::sync::Notify::new());
+        // Woken as the journal grows, for the vault the machine may be linked to.
+        let journal_grew = Arc::new(tokio::sync::Notify::new());
         let setup = Setup {
             store: herder_store::Store::open(dir.join("herder.db"))?,
             adapters,
             accounts: configs,
-            sink: Arc::new(OnSessionsChanged {
-                next: Arc::clone(&hub) as Arc<dyn EventSink>,
-                notify: Arc::clone(&sessions_changed),
+            sink: Arc::new(WakeOnEvent {
+                next: Arc::new(OnSessionsChanged {
+                    next: Arc::clone(&hub) as Arc<dyn EventSink>,
+                    notify: Arc::clone(&sessions_changed),
+                }),
+                notify: Arc::clone(&journal_grew),
             }),
             turn_ids: Box::new(move || {
                 TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
@@ -790,15 +939,26 @@ impl Daemon {
             }
             .run(shutdown.clone()),
         );
-        sessions.fork_from(session::fork::Forks {
-            host: host.id.clone(),
-            vault: None,
-        })?;
+        let secrets = Arc::new(HostSecrets::default());
+        sessions.use_secrets(Arc::clone(&secrets))?;
+        let vault_link = Arc::new(Link::start(
+            LinkSetup {
+                config_file: config_file.clone(),
+                host: host.clone(),
+                sessions: sessions.clone(),
+                changed: journal_grew,
+                data_dir: dir.to_owned(),
+                shutdown: shutdown.clone(),
+                secrets,
+            },
+            None,
+        )?);
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let role = (name == MEMBER_ON).then_some(Role::Member);
         let link = PairingUri {
             hosts: vec![listener.local_addr()?.to_string()],
             fingerprint: tls.fingerprint().to_owned(),
-            code: auth.mint("sam", None, PAIRING_TTL)?.code,
+            code: auth.mint("sam", role, PAIRING_TTL)?.code,
         };
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
         let (binaries, recipes) = clis(dir, name)?;
@@ -821,6 +981,7 @@ impl Daemon {
             host.clone(),
         );
         server.manage_settings(settings)?;
+        server.link_vault(vault_link)?;
         server.manage_providers(providers)?;
         let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
         Ok(Self {
