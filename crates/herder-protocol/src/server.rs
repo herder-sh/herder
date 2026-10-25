@@ -312,6 +312,9 @@ pub struct SessionHead {
     /// leaves it as its turn starts. A vault lists none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queue: Vec<QueuedPrompt>,
+    /// Chat threads linked to the session, in the order they were linked. A vault lists none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<crate::ThreadLink>,
 }
 
 /// A prompt waiting in a session's queue.
@@ -601,6 +604,16 @@ pub enum CommandResult {
         sets: Vec<SecretSet>,
         /// Every secret, ordered by set, then name.
         secrets: Vec<SecretInfo>,
+    },
+    /// The bots this daemon's host holds, answering `list_bots`.
+    Bots {
+        /// Every bot, in the order the config file has them.
+        bots: Vec<crate::Bot>,
+    },
+    /// How each bot's connection stands, answering `get_bot_status`.
+    BotStatus {
+        /// One per bot, in the order `bots` lists them.
+        bots: Vec<crate::BotStatus>,
     },
     /// The latest fetches of secrets by hosts, answering `list_secret_audit`.
     SecretAudit {

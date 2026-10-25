@@ -59,4 +59,6 @@ id! {
     AttachmentId,
     /// Identifies a prompt waiting in its session's queue; a ULID string, opaque.
     PromptId,
+    /// Identifies a chat bot on a host; the name its owner gave it, opaque to receivers.
+    BotId,
 }
