@@ -11,7 +11,8 @@ use herder_client_core::{
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
     ApprovalId, ApprovalOutcome, Attachment, AttachmentId, AwsDeviceCode, AwsProfile,
-    BackupSettings, Bytes, CiStatus, CommandBody, CommandResult, Constraint, Container,
+    BackupSettings, Bot, BotDefaults, BotError, BotId, BotKind, BotState, BotStatus, BotUser,
+    Bytes, ChannelBinding, CiStatus, CommandBody, CommandResult, Constraint, Container,
     ContainerState, DaemonSettings, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
     EscalationReason, Event, EventBody, FailoverSettings, FailoverTotal, FleetHost, FollowUp,
     FollowUpReason, FollowUpSettings, HistoryPart, HostId, HostReplication, HostResources,
@@ -21,9 +22,9 @@ use herder_protocol::{
     ProviderStatus, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus,
     Role, Route, SecretAccess, SecretInfo, SecretRef, SecretSet, SecretValue, SessionHead,
     SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource,
-    SkillsStatus, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSettings, TitleSource,
-    TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId, VaultStatus,
-    VaultVolume,
+    SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings,
+    TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId,
+    VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -50,6 +51,7 @@ string_ids!(
     ProjectId,
     AttachmentId,
     PromptId,
+    BotId,
 );
 
 // A provider is its wire name; unknown names stay verbatim, as on the wire.
@@ -336,6 +338,9 @@ pub enum EventBody {
         attachment: Attachment,
         url: Option<String>,
         expires_at: Option<Timestamp>,
+    },
+    ThreadLinked {
+        thread: ThreadLink,
     },
     Unknown,
 }
@@ -786,6 +791,14 @@ pub enum CommandBody {
         cols: u16,
         rows: u16,
     },
+    ListBots,
+    PutBot {
+        bot: Bot,
+    },
+    RemoveBot {
+        bot_id: BotId,
+    },
+    GetBotStatus,
     AttachTerminal {
         terminal_id: TerminalId,
     },
@@ -901,12 +914,94 @@ pub enum CommandResult {
     SecretAudit {
         entries: Vec<SecretAccess>,
     },
+    Bots {
+        bots: Vec<Bot>,
+    },
+    BotStatus {
+        bots: Vec<BotStatus>,
+    },
     SessionForked {
         session_id: SessionId,
         account_id: AccountId,
         forked_from: SessionId,
         from_host_id: HostId,
     },
+}
+
+#[uniffi::remote(Record)]
+pub struct Bot {
+    pub bot_id: BotId,
+    pub kind: BotKind,
+    pub name: String,
+    pub token: SecretRef,
+    pub app_token: Option<SecretRef>,
+    pub allow: Vec<BotUser>,
+    pub defaults: BotDefaults,
+    pub channel_bindings: Vec<ChannelBinding>,
+}
+
+#[uniffi::remote(Enum)]
+pub enum BotKind {
+    Slack,
+    Telegram,
+    Unknown,
+}
+
+#[uniffi::remote(Record)]
+pub struct BotUser {
+    pub external_user_id: String,
+    pub display_name: String,
+    pub dm: bool,
+    pub channels: bool,
+    pub approve: bool,
+    pub notify: bool,
+}
+
+#[uniffi::remote(Record)]
+pub struct BotDefaults {
+    pub project_id: Option<ProjectId>,
+    pub provider: Option<Provider>,
+    pub account_ids: Vec<AccountId>,
+    pub model: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
+}
+
+#[uniffi::remote(Record)]
+pub struct ChannelBinding {
+    pub channel_id: String,
+    pub project_id: ProjectId,
+}
+
+#[uniffi::remote(Record)]
+pub struct BotStatus {
+    pub bot_id: BotId,
+    pub state: BotState,
+    pub last_error: Option<BotError>,
+}
+
+#[uniffi::remote(Enum)]
+pub enum BotState {
+    Connecting,
+    Connected,
+    WaitingForVault,
+    TokenRejected,
+    Unsupported,
+    Unknown,
+}
+
+#[uniffi::remote(Record)]
+pub struct BotError {
+    pub at: Timestamp,
+    pub message: String,
+}
+
+#[uniffi::remote(Record)]
+pub struct ThreadLink {
+    pub kind: BotKind,
+    pub bot_id: BotId,
+    pub channel_id: String,
+    pub thread_id: String,
+    pub url: Option<String>,
 }
 
 #[uniffi::remote(Record)]
@@ -1091,6 +1186,7 @@ pub struct SessionHead {
     pub account_id: AccountId,
     pub children_need_you: u32,
     pub queue: Vec<QueuedPrompt>,
+    pub threads: Vec<ThreadLink>,
 }
 
 #[uniffi::remote(Record)]

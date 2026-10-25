@@ -49,6 +49,60 @@ fn pr(state: PrState, ci: CiStatus, review: ReviewStatus, mergeable: Mergeable) 
     }
 }
 
+fn thread() -> ThreadLink {
+    ThreadLink {
+        kind: BotKind::Slack,
+        bot_id: BotId::new("trash-can"),
+        channel_id: "C012AB3CD".into(),
+        thread_id: "1730000000.000100".into(),
+        url: Some("https://acme.slack.com/archives/C012AB3CD/p1730000000000100".into()),
+    }
+}
+
+/// A Slack bot with every field set.
+fn slack_bot() -> Bot {
+    Bot {
+        bot_id: BotId::new("trash-can"),
+        kind: BotKind::Slack,
+        name: "trash-can".into(),
+        token: "slack/BOT_TOKEN".parse().unwrap(),
+        app_token: Some("slack/APP_TOKEN".parse().unwrap()),
+        allow: vec![BotUser {
+            external_user_id: "U012AB3CD".into(),
+            display_name: "Ada".into(),
+            dm: true,
+            channels: true,
+            approve: true,
+            notify: false,
+        }],
+        defaults: BotDefaults {
+            project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
+            provider: Some(Provider::Claude),
+            account_ids: vec![AccountId::new("claude-main")],
+            model: Some("opus".into()),
+            permission_mode: Some(PermissionMode::Ask),
+        },
+        channel_bindings: vec![ChannelBinding {
+            channel_id: "C012AB3CD".into(),
+            project_id: ProjectId::new("github.com/herder-sh/herder"),
+        }],
+    }
+}
+
+/// A Telegram bot with only what it needs.
+fn telegram_bot() -> Bot {
+    Bot {
+        bot_id: BotId::new("tg"),
+        kind: BotKind::Telegram,
+        name: "herder".into(),
+        token: "TELEGRAM_TOKEN".parse().unwrap(),
+        app_token: None,
+        allow: Vec::new(),
+        defaults: BotDefaults::default(),
+        channel_bindings: Vec::new(),
+    }
+}
+
 fn command(body: CommandBody) -> ClientMessage {
     ClientMessage::Command(Command {
         id: CommandId::new("01J9COMMAND"),
@@ -282,6 +336,15 @@ fn client_fixtures() -> Vec<ClientMessage> {
             host_id: HostId::new("01J9HOST"),
         }),
         command(CommandBody::ListSecrets),
+        command(CommandBody::ListBots),
+        command(CommandBody::PutBot { bot: slack_bot() }),
+        command(CommandBody::PutBot {
+            bot: telegram_bot(),
+        }),
+        command(CommandBody::RemoveBot {
+            bot_id: BotId::new("trash-can"),
+        }),
+        command(CommandBody::GetBotStatus),
         command(CommandBody::ListSecretAudit { before: None }),
         command(CommandBody::ListSecretAudit { before: Some(41) }),
         command(CommandBody::SetVaultHostAccess {
@@ -552,6 +615,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                             }),
                         },
                     ],
+                    threads: vec![thread()],
                     chat: false,
                 },
                 SessionHead {
@@ -567,6 +631,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     account_id: account_id(),
                     children_need_you: 0,
                     queue: Vec::new(),
+                    threads: Vec::new(),
                     chat: false,
                 },
                 SessionHead {
@@ -582,6 +647,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     account_id: account_id(),
                     children_need_you: 0,
                     queue: Vec::new(),
+                    threads: Vec::new(),
                     chat: true,
                 },
             ],
@@ -793,6 +859,34 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     hosts: vec![HostId::new("01J9HOST")],
                 }],
                 secrets: vec![secret_info()],
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::Bots {
+                bots: vec![slack_bot(), telegram_bot()],
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::BotStatus {
+                bots: [
+                    BotState::Connecting,
+                    BotState::Connected,
+                    BotState::WaitingForVault,
+                    BotState::TokenRejected,
+                    BotState::Unsupported,
+                ]
+                .into_iter()
+                .map(|state| BotStatus {
+                    bot_id: BotId::new("trash-can"),
+                    state,
+                    last_error: (state == BotState::TokenRejected).then(|| BotError {
+                        at: at(),
+                        message: "invalid_auth".into(),
+                    }),
+                })
+                .collect(),
             },
         },
         ServerMessage::CommandAccepted {
@@ -1067,6 +1161,20 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 },
                 url: Some("https://krowk.com/a/art_1".into()),
                 expires_at: Some("2026-10-11T17:57:01Z".parse().unwrap()),
+            },
+        ),
+        event(24, None, EventBody::ThreadLinked { thread: thread() }),
+        event(
+            25,
+            owner,
+            EventBody::ThreadLinked {
+                thread: ThreadLink {
+                    kind: BotKind::Telegram,
+                    bot_id: BotId::new("tg"),
+                    channel_id: "-1001234".into(),
+                    thread_id: "42".into(),
+                    url: None,
+                },
             },
         ),
         event(
@@ -2439,6 +2547,54 @@ fn project_optional_fields_may_be_absent() {
         serde_json::to_value(&icon).unwrap(),
         json!({ "type": "project_icon", "icon": "ab12", "media_type": "image/png", "data": "cG5n" })
     );
+}
+
+#[test]
+fn bots_and_thread_links_have_their_wire_form() {
+    let put = CommandBody::PutBot {
+        bot: telegram_bot(),
+    };
+    let wire = json!({
+        "type": "put_bot",
+        "bot": {
+            "bot_id": "tg",
+            "kind": "telegram",
+            "name": "herder",
+            "token": "TELEGRAM_TOKEN",
+            "defaults": {}
+        }
+    });
+    assert_eq!(serde_json::to_value(&put).unwrap(), wire);
+    // A bot without its optional parts may leave out `defaults` too.
+    let mut bare = wire.clone();
+    bare["bot"].as_object_mut().unwrap().remove("defaults");
+    assert_eq!(serde_json::from_value::<CommandBody>(bare).unwrap(), put);
+
+    let user: BotUser = serde_json::from_value(json!({
+        "external_user_id": "U1",
+        "display_name": "Ada"
+    }))
+    .unwrap();
+    assert!(!(user.dm || user.channels || user.approve || user.notify));
+
+    let linked = EventBody::ThreadLinked { thread: thread() };
+    assert_eq!(
+        serde_json::to_value(&linked).unwrap(),
+        json!({
+            "type": "thread_linked",
+            "thread": {
+                "kind": "slack",
+                "bot_id": "trash-can",
+                "channel_id": "C012AB3CD",
+                "thread_id": "1730000000.000100",
+                "url": "https://acme.slack.com/archives/C012AB3CD/p1730000000000100"
+            }
+        })
+    );
+    let kind: BotKind = serde_json::from_value(json!("discord")).unwrap();
+    assert_eq!(kind, BotKind::Unknown);
+    let state: BotState = serde_json::from_value(json!("rate_limited")).unwrap();
+    assert_eq!(state, BotState::Unknown);
 }
 
 #[test]

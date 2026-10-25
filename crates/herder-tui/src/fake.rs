@@ -25,6 +25,7 @@ pub fn head(id: &str, project: Option<&str>) -> SessionHead {
         account_id: AccountId::new("claude-main"),
         children_need_you: 0,
         queue: Vec::new(),
+        threads: Vec::new(),
         chat: false,
     }
 }

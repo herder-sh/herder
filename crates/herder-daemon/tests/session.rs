@@ -572,6 +572,7 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
             account_id: account(),
             children_need_you: 0,
             queue: Vec::new(),
+            threads: Vec::new(),
             chat: false,
         }]
     );
@@ -616,6 +617,43 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
             "-: turn_completed turn-2",
             "-: status Idle",
         ]
+    );
+}
+
+#[tokio::test]
+async fn the_session_list_carries_the_threads_linked_to_each_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let turns = Arc::new(AtomicU64::new(0));
+    let daemon = Daemon::open(dir.path(), "first.jsonl", turns.clone()).await;
+    let session = daemon.create().await;
+    daemon.stop().await;
+
+    let thread = herder_protocol::ThreadLink {
+        kind: herder_protocol::BotKind::Slack,
+        bot_id: herder_protocol::BotId::new("trash-can"),
+        channel_id: "C012AB3CD".into(),
+        thread_id: "1730000000.000100".into(),
+        url: None,
+    };
+    Store::open(dir.path().join("herder.db"))
+        .unwrap()
+        .append(herder_store::NewEvent {
+            session_id: session.clone(),
+            at: jiff::Timestamp::now(),
+            by: None,
+            body: EventBody::ThreadLinked {
+                thread: thread.clone(),
+            },
+        })
+        .unwrap();
+    let daemon = Daemon::open(dir.path(), "first.jsonl", turns).await;
+    let heads = daemon.manager.sessions().await.unwrap();
+    let [head] = heads.as_slice() else {
+        panic!("expected one session, got {heads:?}");
+    };
+    assert_eq!(
+        (&head.session_id, &head.threads[..]),
+        (&session, &[thread][..])
     );
 }
 
