@@ -213,7 +213,9 @@ public final class Fleet {
 
     func answer(_ request: PendingRequest, with answer: Answer) async {
         let key = request.session.key
-        await send(.answerQuestion(sessionId: key.sessionId, questionId: request.requestId, answer: answer), about: key)
+        await send(
+            .answerQuestion(sessionId: key.sessionId, questionId: request.requestId, answer: answer, images: [], files: []),
+            about: key)
     }
 
     /// The provider new sessions start on: the project's default account's, else Claude when the
@@ -269,13 +271,17 @@ public final class Fleet {
         return key
     }
 
-    /// Sends what the user typed: the answer to the session's oldest question when one is
-    /// pending, else a prompt, queued behind the turn when one runs, as the TUI does.
+    /// Sends what the user typed, with its attachments: the answer to the session's oldest
+    /// question when one is pending, else a prompt, queued behind the turn when one runs, as
+    /// the TUI does.
     func submit(_ text: String, images: [Herder.Image] = [], files: [PromptFile] = [], to key: SessionKey) async {
         guard let session = session(key) else { return }
-        if let question = session.questions.first, images.isEmpty, files.isEmpty {
-            await send(.answerQuestion(sessionId: key.sessionId, questionId: question.id, answer: .text(text: text)),
-                       about: key)
+        if let question = session.questions.first {
+            await send(
+                .answerQuestion(
+                    sessionId: key.sessionId, questionId: question.id, answer: .text(text: text), images: images,
+                    files: files),
+                about: key)
             return
         }
         let outgoing = Outgoing(text: text, images: images, files: files)

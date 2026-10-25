@@ -246,6 +246,8 @@ fn a_tap_on_a_choice_answers_the_question() {
             session_id: herder_protocol::SessionId::new("s2"),
             question_id: herder_protocol::QuestionId::new("q1"),
             answer: herder_protocol::Answer::Choice { index: 1 },
+            images: Vec::new(),
+            files: Vec::new(),
         };
         assert_eq!(effects, [on("s2", command)], "{size:?}");
     }

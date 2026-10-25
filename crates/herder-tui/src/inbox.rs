@@ -285,6 +285,8 @@ impl App {
                     session_id: waiting.key.session_id.clone(),
                     question_id: question.id.clone(),
                     answer: Answer::Choice { index },
+                    images: Vec::new(),
+                    files: Vec::new(),
                 };
                 return vec![send(waiting.key, command)];
             }
@@ -328,6 +330,8 @@ impl App {
                     session_id: waiting.key.session_id.clone(),
                     question_id: question.id.clone(),
                     answer: Answer::Text { text },
+                    images: Vec::new(),
+                    files: Vec::new(),
                 };
                 let effect = send(waiting.key, command);
                 self.inbox.answer = None;
@@ -487,6 +491,8 @@ mod tests {
                     session_id: SessionId::new("s3"),
                     question_id: QuestionId::new("q1"),
                     answer,
+                    images: Vec::new(),
+                    files: Vec::new(),
                 },
             )]
         };

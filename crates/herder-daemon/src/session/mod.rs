@@ -777,11 +777,15 @@ impl SessionManager {
                 session_id,
                 question_id,
                 answer,
+                images,
+                files,
             } => (
                 session_id,
                 Request::AnswerQuestion {
                     question_id,
                     answer,
+                    images,
+                    files,
                 },
             ),
             CommandBody::ArchiveSession { session_id } => {

@@ -624,6 +624,8 @@ pub enum CommandBody {
         session_id: SessionId,
         question_id: QuestionId,
         answer: Answer,
+        images: Vec<Image>,
+        files: Vec<PromptFile>,
     },
     SwitchAccount {
         session_id: SessionId,
