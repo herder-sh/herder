@@ -359,6 +359,8 @@ impl App {
                         addresses: machine.addresses.clone(),
                         fingerprint: machine.fingerprint.clone(),
                         pairing_code: code,
+                        backup: true,
+                        secrets: true,
                     },
                     origin: Origin::Backup(Sent::Link { host, vault }),
                 }];
@@ -374,6 +376,8 @@ impl App {
                     let linked = LinkedVault {
                         address: machine.addresses.first().cloned().unwrap_or_default(),
                         fingerprint: machine.fingerprint.clone(),
+                        backup: true,
+                        secrets: true,
                     };
                     if let Some(panel) = &mut self.machine_panel {
                         panel.links.insert(host.clone(), Known::Linked(linked));
@@ -536,6 +540,8 @@ mod tests {
                 addresses: vec!["vault.lan:7447".into()],
                 fingerprint: "3f9a".repeat(16),
                 pairing_code: "ABCDE-FGHJK".into(),
+                backup: true,
+                secrets: true,
             }
         );
         app.update(Msg::Sent {

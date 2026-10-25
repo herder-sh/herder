@@ -575,6 +575,7 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
         command,
         CommandBody::GetVaultLink
             | CommandBody::LinkVault { .. }
+            | CommandBody::SetVaultLink { .. }
             | CommandBody::UnlinkVault
             | CommandBody::PairVaultHost { .. }
             | CommandBody::RevokeVaultHost { .. }

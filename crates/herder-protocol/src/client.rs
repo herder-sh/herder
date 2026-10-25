@@ -555,14 +555,16 @@ pub enum CommandBody {
         /// The period, ending now.
         period: UsagePeriod,
     },
-    /// Say where this daemon backs its sessions up; owners only. Answered with `vault_link`.
+    /// Say which vault this daemon is linked to; owners only. Answered with `vault_link`.
     /// It changes nothing, so a resend is answered afresh.
     GetVaultLink,
-    /// Back this host's sessions up to a vault from now on, without a restart; owners only.
-    /// The daemon connects to the vault at the first of `addresses` that answers, pairs with
-    /// `pairing_code` and replicates every session there; only once the vault accepted it
-    /// does it keep the vault as the `[vault]` table of its config. Refused with `conflict`
-    /// while it backs up to a vault already, and with `unsupported` on a vault.
+    /// Link this host to a vault from now on, without a restart; owners only. The daemon
+    /// connects to the vault at the first of `addresses` that answers and pairs with
+    /// `pairing_code`; only once the vault accepted it does it keep the vault as the `[vault]`
+    /// table of its config, and then replicates every session there with `backup` and fetches
+    /// its sessions' secrets from it with `secrets`. Clients offer both on for a new link.
+    /// Refused with `conflict` while it is linked to a vault already, as a host links to one
+    /// vault at most, and with `unsupported` on a vault.
     LinkVault {
         /// The vault's addresses as `host:port`, tried in order.
         addresses: Vec<String>,
@@ -570,10 +572,25 @@ pub enum CommandBody {
         fingerprint: String,
         /// A host-only code from the vault's `pair_vault_host`.
         pairing_code: String,
+        /// Whether the host replicates its sessions to the vault.
+        backup: bool,
+        /// Whether the host's sessions fetch secrets from the vault.
+        secrets: bool,
     },
-    /// Stop backing this host's sessions up: stop replicating and remove the `[vault]` table
-    /// of its config; owners only. What the vault holds stays there. Refused with `not_found`
-    /// when it backs up nowhere.
+    /// Change what this host does with the vault it is linked to, without relinking: turning
+    /// `backup` off stops replicating and on resumes it from where the vault left off; turning
+    /// `secrets` off forgets every value held and refuses fetches. Owners only; answered with
+    /// `applied`. Kept in the `[vault]` table of its config. Refused with `not_found` when it is
+    /// linked to no vault, and with `unsupported` on a vault.
+    SetVaultLink {
+        /// Whether the host replicates its sessions to the vault.
+        backup: bool,
+        /// Whether the host's sessions fetch secrets from the vault.
+        secrets: bool,
+    },
+    /// Unlink this host from its vault: stop replicating and fetching secrets, and remove the
+    /// `[vault]` table of its config; owners only. What the vault holds stays there. Refused
+    /// with `not_found` when it is linked to no vault.
     UnlinkVault,
     /// Mint a one-time code, as `herder pair` does, that pairs another device as the caller's
     /// own user with the caller's role, so a shared code never grants more than the sharer

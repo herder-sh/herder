@@ -688,6 +688,12 @@ pub enum CommandBody {
         addresses: Vec<String>,
         fingerprint: String,
         pairing_code: String,
+        backup: bool,
+        secrets: bool,
+    },
+    SetVaultLink {
+        backup: bool,
+        secrets: bool,
     },
     UnlinkVault,
     PairDevice,
@@ -937,6 +943,8 @@ pub struct SecretAccess {
 pub struct LinkedVault {
     pub address: String,
     pub fingerprint: String,
+    pub backup: bool,
+    pub secrets: bool,
 }
 
 #[uniffi::remote(Record)]

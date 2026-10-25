@@ -92,6 +92,9 @@ pairing_code = "<code>"
 then restart the host's daemon (`herder service restart`). The code works once, for ten
 minutes; once the host has paired, `pairing_code` is no longer needed. The host replicates
 every session's journal from then on, and catches up after either side was offline.
+`backup = false` in the table stops it replicating, and `secrets = false` stops its sessions
+fetching secrets from the vault; both are on by default, and the app switches them on a
+running host. A host links to one vault at most.
 
 A host paired with `--host` may only replicate its own sessions. It reads nothing on the
 vault: no hosts, sessions, transcripts, PRs, attachments or devices, so a shared machine, or

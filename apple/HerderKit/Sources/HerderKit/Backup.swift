@@ -42,8 +42,8 @@ extension Fleet {
         return vault.map(BackupLink.linked) ?? .nowhere
     }
 
-    /// Backs `host` up to `vault` from now on: a host-only code from the vault, named after
-    /// the host, handed to the host with the vault's addresses.
+    /// Links `host` to `vault` from now on, backing up and fetching secrets: a host-only code
+    /// from the vault, named after the host, handed to the host with the vault's addresses.
     func backUp(_ host: Machine, to vault: Machine) async throws {
         let name = String(host.name.trimmingCharacters(in: .whitespaces).prefix(Self.maxVaultHostName))
         guard case .hostPairing(let code, _) = try await client.send(
@@ -51,7 +51,15 @@ extension Fleet {
         else { throw HerderError.Local(detail: "the vault did not mint a code") }
         _ = try await client.send(
             hostId: host.hostId,
-            command: .linkVault(addresses: vault.addresses, fingerprint: vault.fingerprint, pairingCode: code))
+            command: .linkVault(
+                addresses: vault.addresses, fingerprint: vault.fingerprint, pairingCode: code,
+                backup: true, secrets: true))
+    }
+
+    /// Sets whether `hostId` backs up to the vault it is linked to, and fetches secrets from
+    /// it, keeping the link.
+    func setVaultLink(_ hostId: HostId, backup: Bool, secrets: Bool) async throws {
+        _ = try await client.send(hostId: hostId, command: .setVaultLink(backup: backup, secrets: secrets))
     }
 
     /// Stops `hostId` backing up to `link`, and unpairs it from that vault when it is paired
@@ -64,8 +72,8 @@ extension Fleet {
     }
 }
 
-/// A machine's backup in its settings: where it backs up, and backing it up to a vault this
-/// device owns, or stopping.
+/// A machine's backup in its settings: the vault it is linked to, with its Back Up Sessions
+/// and Secrets switches, and linking it to a vault this device owns, or unlinking.
 struct BackupField: View {
     let fleet: Fleet
     let machine: Machine
@@ -84,7 +92,11 @@ struct BackupField: View {
                 case .vault:
                     Text("This machine is a vault.").foregroundStyle(Theme.secondary)
                 case .linked(let vault):
-                    DetailRow(label: "Backs up to", value: fleet.pairedVault(vault)?.name ?? vault.address)
+                    DetailRow(label: "Vault", value: fleet.pairedVault(vault)?.name ?? vault.address)
+                    Toggle("Back Up Sessions", isOn: switchBinding(vault, \.backup))
+                        .disabled(working)
+                    Toggle("Secrets", isOn: switchBinding(vault, \.secrets))
+                        .disabled(working)
                     ActionButton(title: "Stop Backing Up", style: .secondary) { confirmingStop = true }
                         .frame(maxWidth: 200)
                         .disabled(working)
@@ -121,6 +133,20 @@ struct BackupField: View {
         } message: {
             Text("What the vault holds stays there.")
         }
+    }
+
+    /// One of `vault`'s switches, set on the machine when flipped.
+    private func switchBinding(_ vault: LinkedVault, _ key: WritableKeyPath<LinkedVault, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { vault[keyPath: key] },
+            set: { on in
+                var switched = vault
+                switched[keyPath: key] = on
+                link = .linked(switched)
+                run {
+                    try await fleet.setVaultLink(machine.hostId, backup: switched.backup, secrets: switched.secrets)
+                }
+            })
     }
 
     private func refresh() async {

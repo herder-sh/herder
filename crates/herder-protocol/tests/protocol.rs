@@ -252,6 +252,12 @@ fn client_fixtures() -> Vec<ClientMessage> {
             addresses: vec!["vault.lan:7447".into(), "10.0.0.9:7447".into()],
             fingerprint: "3f9a".repeat(16),
             pairing_code: "ABCDE-FGHJK".into(),
+            backup: true,
+            secrets: false,
+        }),
+        command(CommandBody::SetVaultLink {
+            backup: false,
+            secrets: true,
         }),
         command(CommandBody::UnlinkVault),
         command(CommandBody::PairDevice),
@@ -657,6 +663,8 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 vault: Some(LinkedVault {
                     address: "vault.lan:7447".into(),
                     fingerprint: "3f9a".repeat(16),
+                    backup: true,
+                    secrets: false,
                 }),
                 volume: None,
             },
@@ -2455,6 +2463,8 @@ fn vault_link_commands_have_their_wire_form() {
         addresses: vec!["vault.lan:7447".into()],
         fingerprint: "ab".into(),
         pairing_code: "ABCDE-FGHJK".into(),
+        backup: true,
+        secrets: true,
     };
     assert_eq!(
         serde_json::to_value(&link).unwrap(),
@@ -2463,6 +2473,39 @@ fn vault_link_commands_have_their_wire_form() {
             "addresses": ["vault.lan:7447"],
             "fingerprint": "ab",
             "pairing_code": "ABCDE-FGHJK",
+            "backup": true,
+            "secrets": true,
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(CommandBody::SetVaultLink {
+            backup: false,
+            secrets: true,
+        })
+        .unwrap(),
+        json!({ "type": "set_vault_link", "backup": false, "secrets": true })
+    );
+    let linked = CommandResult::VaultLink {
+        is_vault: false,
+        vault: Some(LinkedVault {
+            address: "vault.lan:7447".into(),
+            fingerprint: "ab".into(),
+            backup: false,
+            secrets: true,
+        }),
+        volume: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&linked).unwrap(),
+        json!({
+            "type": "vault_link",
+            "is_vault": false,
+            "vault": {
+                "address": "vault.lan:7447",
+                "fingerprint": "ab",
+                "backup": false,
+                "secrets": true,
+            },
         })
     );
     let unlinked = CommandResult::VaultLink {

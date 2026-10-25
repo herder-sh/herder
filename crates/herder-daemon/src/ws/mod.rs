@@ -298,6 +298,7 @@ impl<B: Backend> Shared<B> {
             }),
             command @ (CommandBody::GetVaultLink
             | CommandBody::LinkVault { .. }
+            | CommandBody::SetVaultLink { .. }
             | CommandBody::UnlinkVault)
                 if let Some(link) = self.link.get() =>
             {

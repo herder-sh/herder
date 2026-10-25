@@ -123,8 +123,8 @@ struct VaultStatsTests {
 
 struct UnpairedVaultTests {
     @Test func groupsHostsByVaultAndLeavesOutPairedOnes() {
-        let home = LinkedVault(address: "vault.lan:7447", fingerprint: "aa")
-        let work = LinkedVault(address: "backup.example.com:7447", fingerprint: "bb")
+        let home = LinkedVault(address: "vault.lan:7447", fingerprint: "aa", backup: true, secrets: true)
+        let work = LinkedVault(address: "backup.example.com:7447", fingerprint: "bb", backup: true, secrets: true)
         let vaults = UnpairedVault.from(
             [(host: "laptop", vault: home), (host: "Builder", vault: home), (host: "devbox", vault: work)],
             paired: [])
