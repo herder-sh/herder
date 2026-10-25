@@ -1475,6 +1475,8 @@ async fn requests_the_primary_may_not_decide_or_escalates_go_to_the_user() {
             session_id: child.clone(),
             question_id: QuestionId::new("question-1"),
             answer: Answer::Text { text: "B".into() },
+            images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
@@ -1571,6 +1573,8 @@ async fn a_user_answers_a_request_routed_to_the_primary_first() {
             session_id: child.clone(),
             question_id: QuestionId::new("question-1"),
             answer: Answer::Choice { index: 0 },
+            images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     // The request left the primary's queue unseen: its next event is the report.

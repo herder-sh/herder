@@ -778,6 +778,69 @@ async fn a_prompt_with_images_sends_them_as_base64_blocks_before_its_text() {
     shutdown(session).await;
 }
 
+#[tokio::test]
+async fn an_answers_image_follows_its_text_as_the_next_prompt() {
+    // Claude's answer to `AskUserQuestion` is text: the answer says the image follows, and
+    // the daemon sends it as the prompt right after the turn.
+    let fixture = Fixture::parse(
+        "inline",
+        r#"{"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-1\",\"request\":{\"subtype\":\"initialize\"}}"}
+{"dir":"out","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"herder-1\",\"response\":{}}}"}
+{"dir":"in","line":"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Ask me.\"},\"parent_tool_use_id\":null,\"session_id\":\"\",\"origin\":{\"kind\":\"human\"}}"}
+{"dir":"out","line":"{\"type\":\"control_request\",\"request_id\":\"ask-1\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"AskUserQuestion\",\"input\":{\"questions\":[{\"question\":\"Which layout?\",\"header\":\"Layout\",\"options\":[{\"label\":\"Grid\",\"description\":\"A grid\"}],\"multiSelect\":false}]},\"tool_use_id\":\"toolu_1\"}}"}
+{"dir":"in","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"ask-1\",\"response\":{\"behavior\":\"allow\",\"updatedInput\":{\"answers\":{\"Which layout?\":\"Like this.\\n\\n(1 attachment to this answer follows in my next message.)\"},\"questions\":[{\"header\":\"Layout\",\"multiSelect\":false,\"options\":[{\"description\":\"A grid\",\"label\":\"Grid\"}],\"question\":\"Which layout?\"}]}}}}"}
+{"dir":"out","line":"{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"\"}"}
+{"dir":"in","line":"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"iVBORw0KGgo=\"}},{\"type\":\"text\",\"text\":\"The attachments to my answer.\"}]},\"parent_tool_use_id\":null,\"session_id\":\"\",\"origin\":{\"kind\":\"human\"}}"}
+{"dir":"out","line":"{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"\"}"}
+{"dir":"in","eof":true}
+{"exit":0}
+"#,
+    )
+    .unwrap();
+    let mut session = start_with(fixture, request(Vec::new())).await;
+    session.commands.send(prompt("Ask me.")).unwrap();
+    until(&mut session, |event| {
+        matches!(event, AdapterEvent::QuestionAsked { .. })
+    })
+    .await;
+    // The replay checks the answer line, and then the prompt's image block.
+    session
+        .commands
+        .send(AdapterCommand::AnswerQuestion {
+            question_id: QuestionId::new("question-1"),
+            answer: Answer::Text {
+                text: "Like this.\n\n(1 attachment to this answer follows in my next message.)"
+                    .into(),
+            },
+        })
+        .unwrap();
+    assert_eq!(until(&mut session, is_turn_end).await, [completed()]);
+    session
+        .commands
+        .send(AdapterCommand::SendPrompt {
+            agent_sender: None,
+            turn_id: TurnId::new("turn-2"),
+            text: "The attachments to my answer.".into(),
+            images: vec![Image {
+                media_type: "image/png".into(),
+                data: Bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+            }],
+        })
+        .unwrap();
+    let events = until(&mut session, is_turn_end).await;
+    assert!(
+        matches!(
+            &events[..],
+            [
+                AdapterEvent::TurnStarted { .. },
+                AdapterEvent::TurnCompleted { .. }
+            ]
+        ),
+        "{events:?}"
+    );
+    shutdown(session).await;
+}
+
 #[test]
 fn claude_takes_images() {
     use herder_adapters::Adapter;

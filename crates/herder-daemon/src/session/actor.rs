@@ -50,6 +50,9 @@ const SETUP_TOOL: &str = "herder_setup";
 /// left out, which herder makes, not the agent.
 const MCP_TOOL: &str = "herder_mcp";
 
+/// The text of the prompt that brings an answer's images and files to the agent.
+const ATTACHED_TO_ANSWER: &str = "The attachments to my answer.";
+
 /// A command for one session, from the user `by` (`None` for the primary session's agent),
 /// answered on `reply`.
 pub(super) struct SessionCommand {
@@ -107,10 +110,13 @@ pub(super) enum Request {
         approval_id: ApprovalId,
         decision: ApprovalDecision,
     },
-    /// The first answer to an open question applies.
+    /// The first answer to an open question applies; its images and files follow it as the
+    /// next prompt.
     AnswerQuestion {
         question_id: QuestionId,
         answer: Answer,
+        images: Vec<Image>,
+        files: Vec<PromptFile>,
     },
     /// The primary session's agent answers or escalates one of this child's requests; `done`
     /// learns the outcome, as the tool reports it.
@@ -710,6 +716,8 @@ impl Actor {
             Request::AnswerQuestion {
                 question_id,
                 answer,
+                images,
+                files,
             } => {
                 let Some((choices, _)) = self.questions.get(&question_id) else {
                     return Err(error(
@@ -717,17 +725,44 @@ impl Actor {
                         format!("question {question_id} is not pending"),
                     ));
                 };
-                if let Answer::Choice { index } = answer
-                    && index as usize >= *choices
-                {
-                    return Err(error(
-                        ErrorCode::BadRequest,
-                        format!("question {question_id} has no choice {index}"),
-                    ));
+                if let Answer::Choice { index } = answer {
+                    if index as usize >= *choices {
+                        return Err(error(
+                            ErrorCode::BadRequest,
+                            format!("question {question_id} has no choice {index}"),
+                        ));
+                    }
+                    if !images.is_empty() || !files.is_empty() {
+                        return Err(error(
+                            ErrorCode::BadRequest,
+                            "only a text answer takes images and files",
+                        ));
+                    }
                 }
-                self.answer_question(by, question_id, answer, Answerer::User)
-                    .await
-                    .map_err(super::internal)?;
+                let attachments = self.keep(images, files).await?;
+                self.answer_question(
+                    by.clone(),
+                    question_id,
+                    answer,
+                    Answerer::User,
+                    attachments.len(),
+                )
+                .await
+                .map_err(super::internal)?;
+                if !attachments.is_empty() {
+                    // Right after the turn the answer lets go on, ahead of the queue.
+                    self.queue.push_front(Prompt {
+                        prompt_id: new_prompt_id(),
+                        agent_message: None,
+                        follow_up: None,
+                        by,
+                        text: ATTACHED_TO_ANSWER.to_owned(),
+                        attachments,
+                        retry: false,
+                        retry_at: None,
+                    });
+                    self.save_queue().await;
+                }
             }
             Request::Archive => self.archive(by).await?,
             Request::ArchiveIfDone => {
@@ -791,22 +826,30 @@ impl Actor {
         Ok(())
     }
 
-    /// Sends the answer to an open question to the agent and journals it.
+    /// Sends the answer to an open question to the agent and journals it; a text answer tells
+    /// the agent that `attachments` images and files follow it.
     async fn answer_question(
         &mut self,
         by: Option<UserId>,
         question_id: QuestionId,
         answer: Answer,
         answered_by: Answerer,
+        attachments: usize,
     ) -> Result<()> {
         let Some((_, open)) = self.questions.remove(&question_id) else {
             return Ok(());
         };
         self.withdraw(&open, RequestRef::Question(question_id.clone()));
         if let Some(adapter) = &self.adapter {
+            let answer = match &answer {
+                Answer::Text { text } if attachments > 0 => Answer::Text {
+                    text: attachments_follow(text, attachments),
+                },
+                answer => answer.clone(),
+            };
             let _ = adapter.commands.send(AdapterCommand::AnswerQuestion {
                 question_id: question_id.clone(),
-                answer: answer.clone(),
+                answer,
             });
         }
         let body = EventBody::QuestionAnswered {
@@ -877,7 +920,7 @@ impl Actor {
                     };
                     return Err(ToolError::new(Tool::InvalidArguments, message));
                 }
-                self.answer_question(None, question_id, answer, answered_by)
+                self.answer_question(None, question_id, answer, answered_by, 0)
                     .await
                     .map_err(internal)
             }
@@ -2756,6 +2799,17 @@ impl Actor {
             warn!(session_id = %self.session.session_id, "cannot journal an event: {err:#}");
         }
     }
+}
+
+/// A text answer as the agent gets it when `count` images and files follow it as the next
+/// prompt: no provider takes them with an answer.
+fn attachments_follow(text: &str, count: usize) -> String {
+    let what = if count == 1 {
+        "1 attachment to this answer follows".to_owned()
+    } else {
+        format!("{count} attachments to this answer follow")
+    };
+    format!("{text}\n\n({what} in my next message.)")
 }
 
 /// The journal event for `event` when it ends the turn `turn_id`.

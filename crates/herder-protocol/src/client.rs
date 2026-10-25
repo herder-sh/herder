@@ -307,6 +307,16 @@ pub enum CommandBody {
         question_id: QuestionId,
         /// The answer.
         answer: Answer,
+        /// Images to go with a `text` answer, as `send_prompt` takes them. No provider takes
+        /// images with an answer, so the agent's answer says how many attachments follow, and
+        /// they come as the session's next prompt, which runs right after the turn, ahead of
+        /// the queue, and shows them in the transcript.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<Image>,
+        /// Files to go with a `text` answer, as `send_prompt` takes them; they follow it as
+        /// `images` do.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<PromptFile>,
     },
     /// Move to another account of the same provider.
     SwitchAccount {

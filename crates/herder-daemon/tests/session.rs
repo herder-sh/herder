@@ -1169,6 +1169,8 @@ async fn question_is_journaled_for_the_user_and_its_answer_reaches_the_adapter()
         session_id: session.clone(),
         question_id: QuestionId::new(question_id),
         answer,
+        images: Vec::new(),
+        files: Vec::new(),
     };
     let unknown = daemon
         .manager
@@ -1214,6 +1216,72 @@ async fn question_is_journaled_for_the_user_and_its_answer_reaches_the_adapter()
             &["SQLite".to_owned(), "Postgres".to_owned()][..]
         )
     );
+}
+
+#[tokio::test]
+async fn an_answers_image_reaches_the_agent_right_after_the_turn_ahead_of_the_queue() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "question_image.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Add a migration.").await;
+    daemon.until_status(SessionStatus::NeedsYou).await;
+    daemon.prompt(alice(), &session, "Then add tests.").await;
+
+    let answer = |answer: Answer, images: Vec<Image>| CommandBody::AnswerQuestion {
+        session_id: session.clone(),
+        question_id: QuestionId::new("question-1"),
+        answer,
+        images,
+        files: Vec::new(),
+    };
+    let with_a_choice = answer(Answer::Choice { index: 0 }, vec![png()]);
+    let refused = daemon.manager.handle(bob(), with_a_choice).await;
+    assert_eq!(refused.unwrap_err().code, ErrorCode::BadRequest);
+    let text = Answer::Text {
+        text: "This one.".into(),
+    };
+    let applied = daemon
+        .manager
+        .handle(bob(), answer(text, vec![png()]))
+        .await;
+    assert_eq!(applied, Ok(CommandResult::Applied));
+    daemon
+        .events_until(|body| {
+            matches!(body, EventBody::TurnCompleted { turn_id, .. } if turn_id.as_str() == "turn-3")
+        })
+        .await;
+    daemon.until_status(SessionStatus::Idle).await;
+
+    // Answered in one step; the image came as its own prompt, before the one queued earlier.
+    let journal = daemon.journal(&session).await;
+    let described = describe(&journal);
+    let from = described
+        .iter()
+        .position(|line| line.starts_with("bob: question_answered"))
+        .unwrap();
+    assert_eq!(
+        described[from..],
+        [
+            r#"bob: question_answered question-1 Text { text: "This one." }"#,
+            "-: status Running",
+            "-: turn_completed turn-1",
+            "bob: user turn-2 The attachments to my answer.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 Seen.",
+            "-: turn_completed turn-2",
+            "alice: user turn-3 Then add tests.",
+            "-: turn_started turn-3",
+            "-: turn_completed turn-3",
+            "-: status Idle",
+        ]
+    );
+    // The transcript shows the image with that prompt.
+    let kept = attachments(&journal[journal.len() - 9..]);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].media_type, "image/png");
+    daemon.stop().await;
+    let store = Store::open(dir.path().join("herder.db")).unwrap();
+    assert!(store.queued_prompts(&session).unwrap().is_empty());
 }
 
 #[tokio::test]

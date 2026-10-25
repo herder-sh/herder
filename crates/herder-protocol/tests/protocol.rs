@@ -493,8 +493,25 @@ fn client_fixtures() -> Vec<ClientMessage> {
             session_id: session_id(),
             question_id: QuestionId::new("01J9QUESTION"),
             answer,
+            images: Vec::new(),
+            files: Vec::new(),
         }));
     }
+    messages.push(command(CommandBody::AnswerQuestion {
+        session_id: session_id(),
+        question_id: QuestionId::new("01J9QUESTION"),
+        answer: Answer::Text {
+            text: "Like this photo".into(),
+        },
+        images: vec![Image {
+            media_type: "image/png".into(),
+            data: Bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+        }],
+        files: vec![PromptFile {
+            name: "notes.txt".into(),
+            data: Bytes(b"notes".to_vec()),
+        }],
+    }));
     for decision in [ApprovalDecision::Allow, ApprovalDecision::Deny] {
         messages.push(command(CommandBody::AnswerApproval {
             session_id: session_id(),
