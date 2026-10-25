@@ -879,6 +879,20 @@
               "description": "The answer.",
               "$ref": "#/$defs/Answer"
             },
+            "files": {
+              "description": "Files to go with a `text` answer, as `send_prompt` takes them; they follow it as\n`images` do.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PromptFile"
+              }
+            },
+            "images": {
+              "description": "Images to go with a `text` answer, as `send_prompt` takes them. No provider takes\nimages with an answer, so the agent's answer says how many attachments follow, and\nthey come as the session's next prompt, which runs right after the turn, ahead of\nthe queue, and shows them in the transcript.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Image"
+              }
+            },
             "question_id": {
               "description": "Question to answer.",
               "$ref": "#/$defs/QuestionId"

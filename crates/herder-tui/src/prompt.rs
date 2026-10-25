@@ -748,6 +748,8 @@ mod tests {
                 session_id: SessionId::new("s2"),
                 question_id: herder_protocol::QuestionId::new("q1"),
                 answer: herder_protocol::Answer::Choice { index: 1 },
+                images: Vec::new(),
+                files: Vec::new(),
             })]
         );
         // Once something is typed, digits are text.

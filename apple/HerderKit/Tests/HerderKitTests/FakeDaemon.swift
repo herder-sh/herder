@@ -16,6 +16,8 @@ final class FakeDaemon {
     let memberLink: String
     /// A repository with a skill to import, `changelog`, in a folder of its name.
     let skillSource: String
+    /// The account whose turn asks a question (`fixtures/question.jsonl`).
+    let questionAccount: String
     private let process = Process()
     private let stdin = Pipe()
 
@@ -28,9 +30,10 @@ final class FakeDaemon {
         process.standardInput = stdin
         process.standardOutput = stdout
         try process.run()
-        let lines = try Self.readLines(6, from: stdout.fileHandleForReading)
-        (link, repo, account, holdAccount, memberLink, skillSource) = (lines[0], lines[1], lines[2], lines[3], lines[4],
-                                                                       lines[5])
+        let lines = try Self.readLines(7, from: stdout.fileHandleForReading)
+        (link, repo, account, holdAccount, memberLink, skillSource, questionAccount) = (
+            lines[0], lines[1], lines[2], lines[3], lines[4], lines[5], lines[6]
+        )
     }
 
     deinit {
