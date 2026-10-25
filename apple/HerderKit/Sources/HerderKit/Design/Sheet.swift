@@ -1,12 +1,15 @@
 import SwiftUI
 
 /// A sheet in herder's style: a header with a close button, scrolling content, and a footer
-/// with the primary action.
+/// with the primary action. A create sheet is short: its fields, at most one line of hint, by
+/// the footer's button, and no terminal; what it starts runs in Activity.
 struct SheetScaffold<Content: View, Footer: View>: View {
     let title: String
     var subtitle = ""
     /// The sheet's height on the Mac.
     var height: CGFloat = 620
+    /// The sheet's one line of hint, beside its button.
+    var hint = ""
     @ViewBuilder var content: Content
     @ViewBuilder var footer: Footer
     @Environment(\.dismiss) private var dismiss
@@ -32,8 +35,14 @@ struct SheetScaffold<Content: View, Footer: View>: View {
                     .padding(.bottom, 20)
             }
             Rectangle().fill(Theme.stroke).frame(height: 1)
-            HStack(spacing: 10) { footer }
-                .padding(16)
+            HStack(spacing: 10) {
+                if !hint.isEmpty {
+                    Text(LocalizedStringKey(hint)).font(.footnote).foregroundStyle(Theme.tertiary)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                }
+                footer
+            }
+            .padding(16)
         }
         .background(Theme.surface)
         #if os(macOS)

@@ -61,7 +61,7 @@ struct ReachTests {
         #expect(work.missing.map(\.name) == ["mini"])
         #expect(work.missing[0].owner == false)
         let draft = work.draft(taken: [])
-        #expect(draft.account == NewAccount(accountId: "claude-work", provider: "claude", label: "Claude-Work",
+        #expect(draft.account(taken: []) == NewAccount(accountId: "claude-work", provider: "claude", label: "Claude-Work",
                                             configDir: "~/.claude-work"))
         // An id taken there gets one named after the login's email.
         #expect(work.draft(taken: ["claude-work"]).id == "claude-me")
