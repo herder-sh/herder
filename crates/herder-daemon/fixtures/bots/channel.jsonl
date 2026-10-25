@@ -1,0 +1,9 @@
+# A mention in a channel starts a session; only mentions in its thread reach it.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "What does the bot do?"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "It answers."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "and how is it tested?"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "With fakes."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}

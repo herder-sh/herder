@@ -1,0 +1,40 @@
+{
+  "envelope_id": "e5",
+  "type": "events_api",
+  "accepts_response_payload": false,
+  "retry_attempt": 0,
+  "retry_reason": "",
+  "payload": {
+    "token": "verification-token-unused",
+    "team_id": "T0HERDER01",
+    "context_team_id": "T0HERDER01",
+    "api_app_id": "A0HERDER01",
+    "event": {
+      "user": "U0BOT00001",
+      "type": "message",
+      "ts": "1761400240.000500",
+      "bot_id": "B0HERDER01",
+      "app_id": "A0HERDER01",
+      "text": "_working…_",
+      "team": "T0HERDER01",
+      "channel": "D0ADA00001",
+      "event_ts": "1761400240.000500",
+      "channel_type": "im",
+      "thread_ts": "1761400000.000100"
+    },
+    "type": "event_callback",
+    "event_id": "Ev0005",
+    "event_time": 1761400240,
+    "authorizations": [
+      {
+        "enterprise_id": null,
+        "team_id": "T0HERDER01",
+        "user_id": "U0BOT00001",
+        "is_bot": true,
+        "is_enterprise_install": false
+      }
+    ],
+    "is_ext_shared_channel": false,
+    "event_context": "4-eyJldCI6Im1lc3NhZ2UifQ"
+  }
+}

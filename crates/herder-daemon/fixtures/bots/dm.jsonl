@@ -1,0 +1,11 @@
+# A direct message starts a session; a reply in its thread is its next prompt.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Fix the login bug"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Let me look."}}}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-1", "body": {"type": "tool_call", "name": "Bash", "input": {"command": "cargo test"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "item-3", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Fixed **it**."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Thanks, now add a test."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-4", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Added one."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}

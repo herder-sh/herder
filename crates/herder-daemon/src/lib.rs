@@ -114,6 +114,7 @@ pub async fn serve(
             _ => info!(account_id = %id, provider = account.provider.as_str(), "account loaded"),
         }
     }
+    let auth_names = Arc::clone(&auth);
     let hub = Arc::new(Hub::default());
     let terminals = terminal::Terminals::new(Arc::clone(&hub), terminal::login_shell());
     let sessions_changed = Arc::new(tokio::sync::Notify::new());
@@ -129,6 +130,11 @@ pub async fn serve(
     sink = Arc::new(vault::WakeOnEvent {
         next: sink,
         notify: Arc::clone(&journal_grew),
+    });
+    let (bot_events, _) = tokio::sync::broadcast::channel(bots::EVENTS);
+    sink = Arc::new(bots::Watch {
+        next: sink,
+        events: bot_events.clone(),
     });
     let setup = session::Setup {
         store,
@@ -155,6 +161,20 @@ pub async fn serve(
     })?;
     let secrets = Arc::new(vault::HostSecrets::default());
     sessions.use_secrets(Arc::clone(&secrets))?;
+    let bots = Arc::new(bots::Bots::new(config));
+    bots.start(
+        bots::Runtime {
+            host: bots::runner::Host {
+                host_id: host.id.clone(),
+                sessions: sessions.clone(),
+                names: Arc::new(move |user_id| auth_names.name(user_id)),
+            },
+            secrets: Arc::clone(&secrets),
+            events: bot_events,
+            shutdown: shutdown.clone(),
+        },
+        &config.bots,
+    )?;
     let link = Arc::new(vault::Link::start(
         vault::LinkSetup {
             config_file: config.path.clone(),
@@ -310,7 +330,7 @@ pub async fn serve(
     server.manage_aws(aws::Aws::from_env(|key| std::env::var_os(key)))?;
     server.link_vault(link)?;
     server.manage_settings(settings)?;
-    server.manage_bots(Arc::new(bots::Bots::new(config)))?;
+    server.manage_bots(bots)?;
     sessions.serve_control(server.control())?;
     server.run(listeners, shutdown).await;
     terminals.close_all();

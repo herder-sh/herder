@@ -1,0 +1,948 @@
+//! One connected bot: what reaches its sessions from its chat, and what it posts back.
+//!
+//! A thread is one session. A direct message, or a mention in a channel, outside a linked
+//! thread starts a session and links the thread to it; in a linked thread every direct message
+//! is a prompt, and in a channel only those that mention the bot. Only people the bot's
+//! allowlist names drive sessions, each where their switches say, and only those with Approve
+//! answer approval requests; anyone else gets one note that only they see, and nothing reaches
+//! the session.
+//!
+//! The bot posts quietly: one "working…" message with Stop while a session works, edited as its
+//! status changes; then each turn's final answer, trimmed past [`ANSWER_LINES`] lines with
+//! Full answer and Open in herder; approval requests and questions as buttons; failures with
+//! what fixes them; and images the agent publishes. Tool calls, reasoning and children are
+//! never posted. Prompts sent from elsewhere, such as the app, post into the session's threads
+//! as "‹name› (app): …", and their answers go to every thread; a thread's own prompts are
+//! answered there only.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+
+use herder_protocol::{
+    Answer, Bot, BotUser, Bytes, CommandBody, CommandResult, ErrorClass, Event, EventBody, HostId,
+    IMAGE_MEDIA_TYPES, Image, ItemBody, ItemId, MAX_IMAGE_BYTES, ProjectId, PromptFile, QuestionId,
+    Route, SessionId, SessionStatus, ThreadLink, TurnError, UserId,
+};
+use tokio::sync::{broadcast, mpsc};
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
+
+use super::bridge::{Action, Bridge, ChatFile, Inbound, Message, Place, Post, Press};
+use crate::session::SessionManager;
+
+/// How many lines of an answer are posted before Full answer.
+pub const ANSWER_LINES: usize = 30;
+
+/// The name of the herder user `by` names, for "‹name› (app)"; `None` for an unknown one.
+pub type Names = Arc<dyn Fn(&UserId) -> Option<String> + Send + Sync>;
+
+/// What a bot's runner drives.
+#[derive(Clone)]
+pub struct Host {
+    /// This host, for Open in herder links.
+    pub host_id: HostId,
+    /// Its sessions.
+    pub sessions: SessionManager,
+    /// The names of its users.
+    pub names: Names,
+}
+
+/// A bot driving the host's sessions over its chat's bridge.
+pub struct Runner {
+    bot: Bot,
+    bridge: Arc<dyn Bridge>,
+    host: Host,
+    /// The session of each thread linked to it.
+    links: HashMap<Place, SessionId>,
+    /// The threads of this bot linked to each session, in the order linked.
+    threads: HashMap<SessionId, Vec<Place>>,
+    /// The latest status of each linked session.
+    statuses: HashMap<SessionId, SessionStatus>,
+    /// Where each linked session's running turn answers.
+    turns: HashMap<SessionId, Vec<Place>>,
+    /// The "working…" message of each session in each thread, with what it says.
+    working: HashMap<SessionId, Vec<(Place, String, &'static str)>>,
+    /// The latest final-answer candidate of each session's running turn.
+    answers: HashMap<SessionId, (ItemId, String)>,
+    /// Each session's latest prompt, for Retry.
+    prompts: HashMap<SessionId, String>,
+    /// The threads of the prompts the bot sent each session that have not run yet, in order.
+    sent: HashMap<SessionId, VecDeque<Place>>,
+    /// The question each session waits on, which a message in its thread answers.
+    questions: HashMap<SessionId, QuestionId>,
+    /// Approval requests and questions posted, by id, to edit once answered.
+    asks: HashMap<String, Vec<(Place, String, Post)>>,
+    /// Messages that named an ambiguous project, waiting for a pick, by thread.
+    picking: HashMap<Place, Message>,
+    /// Who has been told, in which thread, that they may not.
+    noted: HashSet<(String, Place)>,
+}
+
+impl Runner {
+    pub fn new(bot: Bot, bridge: Arc<dyn Bridge>, host: Host) -> Self {
+        Self {
+            bot,
+            bridge,
+            host,
+            links: HashMap::new(),
+            threads: HashMap::new(),
+            statuses: HashMap::new(),
+            turns: HashMap::new(),
+            working: HashMap::new(),
+            answers: HashMap::new(),
+            prompts: HashMap::new(),
+            sent: HashMap::new(),
+            questions: HashMap::new(),
+            asks: HashMap::new(),
+            picking: HashMap::new(),
+            noted: HashSet::new(),
+        }
+    }
+
+    /// Runs until `stop`, or until the bridge closes `inbound`. `events` must be subscribed
+    /// before the call, so no thread linked meanwhile is missed.
+    pub async fn run(
+        mut self,
+        mut inbound: mpsc::Receiver<Inbound>,
+        mut events: broadcast::Receiver<Event>,
+        stop: CancellationToken,
+    ) {
+        match self.host.sessions.sessions().await {
+            Ok(heads) => {
+                for head in heads {
+                    let bot_id = self.bot.bot_id.clone();
+                    for thread in head.threads.iter().filter(|t| t.bot_id == bot_id) {
+                        self.statuses.insert(head.session_id.clone(), head.status);
+                        self.add_link(&head.session_id, place_of(thread));
+                    }
+                }
+            }
+            Err(err) => {
+                warn!(bot_id = %self.bot.bot_id, "cannot list the linked sessions: {err:#}")
+            }
+        }
+        loop {
+            tokio::select! {
+                () = stop.cancelled() => return,
+                received = inbound.recv() => match received {
+                    Some(Inbound::Message(message)) => self.message(message).await,
+                    Some(Inbound::Press(press)) => self.press(press).await,
+                    None => return,
+                },
+                event = events.recv() => match event {
+                    Ok(event) => self.event(event).await,
+                    Err(broadcast::error::RecvError::Lagged(missed)) => {
+                        warn!(bot_id = %self.bot.bot_id, missed, "the bot missed session events");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return,
+                },
+            }
+        }
+    }
+
+    // Inbound.
+
+    async fn message(&mut self, message: Message) {
+        if !message.direct && !message.mentioned {
+            return;
+        }
+        let Some(user) = self.driver(&message.user_id, message.direct) else {
+            self.refuse(&message.place, &message.user_id).await;
+            return;
+        };
+        let by = self.by(&user);
+        if let Some(session_id) = self.links.get(&message.place).cloned() {
+            match self.questions.get(&session_id).cloned() {
+                Some(question_id) => {
+                    self.reply(&session_id, question_id, &message, by).await;
+                }
+                None => {
+                    self.prompt(
+                        &session_id,
+                        &message.place,
+                        by,
+                        &message.text,
+                        &message.files,
+                    )
+                    .await;
+                }
+            }
+            return;
+        }
+        let (project_id, text) = match self.project_for(&message) {
+            Pick::Project(project_id, text) => (Some(project_id), text),
+            Pick::Chat => (None, message.text.clone()),
+            Pick::Ambiguous(projects, text) => {
+                let post = Post::Picker {
+                    text: "Which project?".into(),
+                    projects,
+                };
+                self.post(&message.place, &post).await;
+                self.picking
+                    .insert(message.place.clone(), Message { text, ..message });
+                return;
+            }
+        };
+        self.start(project_id, &message.place, by, &text, &message.files)
+            .await;
+    }
+
+    async fn press(&mut self, press: Press) {
+        // Buttons act only on the bot's own sessions.
+        if press
+            .action
+            .session_id()
+            .is_some_and(|session_id| !self.threads.contains_key(session_id))
+        {
+            return;
+        }
+        let user = self.user(&press.user_id).cloned();
+        let allowed = user.as_ref().is_some_and(|user| match &press.action {
+            Action::Approve { .. } => user.approve,
+            _ if press.direct => user.dm,
+            _ => user.channels,
+        });
+        let Some(user) = user.filter(|_| allowed) else {
+            self.refuse(&press.place, &press.user_id).await;
+            return;
+        };
+        let by = self.by(&user);
+        let command = match press.action {
+            Action::Stop { session_id } => CommandBody::Interrupt { session_id },
+            Action::Approve {
+                session_id,
+                approval_id,
+                decision,
+            } => CommandBody::AnswerApproval {
+                session_id,
+                approval_id,
+                decision,
+            },
+            Action::Choose {
+                session_id,
+                question_id,
+                index,
+            } => CommandBody::AnswerQuestion {
+                session_id,
+                question_id,
+                answer: Answer::Choice { index },
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            Action::ChooseMany { indices, .. } if indices.is_empty() => {
+                let text = "Tick at least one choice, then Submit.";
+                self.note(&press.place, &press.user_id, text).await;
+                return;
+            }
+            Action::ChooseMany {
+                session_id,
+                question_id,
+                indices,
+            } => CommandBody::AnswerQuestion {
+                session_id,
+                question_id,
+                answer: Answer::Choices { indices },
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            Action::FullAnswer {
+                session_id,
+                item_id,
+            } => {
+                self.full_answer(&press.place, &session_id, &item_id).await;
+                return;
+            }
+            Action::Retry { session_id } => {
+                let Some(text) = self.prompts.get(&session_id).cloned() else {
+                    let text = "There is no prompt to send again.";
+                    self.note(&press.place, &press.user_id, text).await;
+                    return;
+                };
+                self.prompt(&session_id, &press.place, by, &text, &[]).await;
+                return;
+            }
+            Action::Pick { project_id } => {
+                if let Some(message) = self.picking.remove(&press.place) {
+                    let place = message.place;
+                    self.start(Some(project_id), &place, by, &message.text, &message.files)
+                        .await;
+                }
+                return;
+            }
+        };
+        if let Err(err) = self.host.sessions.handle(by, command).await {
+            self.note(&press.place, &press.user_id, &err.message).await;
+        }
+    }
+
+    /// Starts a session on `project_id`, or a chat, links `place` to it and sends it `text`.
+    async fn start(
+        &mut self,
+        project_id: Option<ProjectId>,
+        place: &Place,
+        by: UserId,
+        text: &str,
+        files: &[ChatFile],
+    ) {
+        let defaults = &self.bot.defaults;
+        let command = CommandBody::CreateSession {
+            repo: None,
+            chat: project_id.is_none(),
+            project_id,
+            branch: None,
+            account_id: defaults.account_ids.first().cloned(),
+            provider: defaults.provider.clone(),
+            model: defaults.model.clone(),
+            permission_mode: defaults.permission_mode,
+            failover_pin: None,
+        };
+        let session_id = match self.host.sessions.handle(by.clone(), command).await {
+            Ok(CommandResult::SessionCreated { session_id }) => session_id,
+            Ok(other) => {
+                warn!(bot_id = %self.bot.bot_id, "creating a session answered {other:?}");
+                return;
+            }
+            Err(err) => {
+                let text = format!("Cannot start a session: {}", err.message);
+                self.post(place, &Post::Text(text)).await;
+                return;
+            }
+        };
+        let thread = ThreadLink {
+            kind: self.bot.kind,
+            bot_id: self.bot.bot_id.clone(),
+            channel_id: place.channel_id.clone(),
+            thread_id: place.thread_id.clone(),
+            url: self.bridge.link(place).await,
+        };
+        if let Err(err) = self.host.sessions.link_thread(&session_id, thread).await {
+            warn!(%session_id, "cannot link a thread: {}", err.message);
+        }
+        self.add_link(&session_id, place.clone());
+        self.prompt(&session_id, place, by, text, files).await;
+    }
+
+    /// Sends `text` with `files` to `session_id` as `by`, from `place`.
+    async fn prompt(
+        &mut self,
+        session_id: &SessionId,
+        place: &Place,
+        by: UserId,
+        text: &str,
+        files: &[ChatFile],
+    ) {
+        let Some((images, files)) = self.download(place, files).await else {
+            return;
+        };
+        let command = CommandBody::SendPrompt {
+            session_id: session_id.clone(),
+            text: text.to_owned(),
+            images,
+            files,
+        };
+        self.sent
+            .entry(session_id.clone())
+            .or_default()
+            .push_back(place.clone());
+        if let Err(err) = self.host.sessions.handle(by, command).await {
+            if let Some(sent) = self.sent.get_mut(session_id) {
+                sent.pop_back();
+            }
+            self.post(place, &Post::Text(err.message)).await;
+            return;
+        }
+        if !self.has_working(session_id, place) {
+            let status = self.statuses.get(session_id).copied();
+            let status = status.and_then(working_status).unwrap_or("working…");
+            self.post_working(session_id, place, status).await;
+        }
+    }
+
+    /// Answers the question `question_id` of `session_id` with `message`, as `by`.
+    async fn reply(
+        &mut self,
+        session_id: &SessionId,
+        question_id: QuestionId,
+        message: &Message,
+        by: UserId,
+    ) {
+        let Some((images, files)) = self.download(&message.place, &message.files).await else {
+            return;
+        };
+        let command = CommandBody::AnswerQuestion {
+            session_id: session_id.clone(),
+            question_id,
+            answer: Answer::Text {
+                text: message.text.clone(),
+            },
+            images,
+            files,
+        };
+        if let Err(err) = self.host.sessions.handle(by, command).await {
+            self.post(&message.place, &Post::Text(err.message)).await;
+        }
+    }
+
+    /// The images and other files of `files`, downloaded; `None`, once said in `place`, when
+    /// one cannot be.
+    async fn download(
+        &self,
+        place: &Place,
+        files: &[ChatFile],
+    ) -> Option<(Vec<Image>, Vec<PromptFile>)> {
+        let mut images = Vec::new();
+        let mut prompt_files = Vec::new();
+        for file in files {
+            match self.bridge.download(file).await {
+                Ok(data)
+                    if IMAGE_MEDIA_TYPES.contains(&file.media_type.as_str())
+                        && data.len() <= MAX_IMAGE_BYTES =>
+                {
+                    images.push(Image {
+                        media_type: file.media_type.clone(),
+                        data: Bytes(data),
+                    });
+                }
+                Ok(data) => prompt_files.push(PromptFile {
+                    name: file.name.clone(),
+                    data: Bytes(data),
+                }),
+                Err(err) => {
+                    let text = format!("Cannot read {}: {err}", file.name);
+                    self.post(place, &Post::Text(text)).await;
+                    return None;
+                }
+            }
+        }
+        Some((images, prompt_files))
+    }
+
+    /// Posts the rest of the answer `item_id` of `session_id`, past its first lines.
+    async fn full_answer(&mut self, place: &Place, session_id: &SessionId, item_id: &ItemId) {
+        let mut after = 0;
+        let text = loop {
+            let events = match self.host.sessions.read_since(session_id, after, 512).await {
+                Ok(events) => events,
+                Err(err) => {
+                    warn!(%session_id, "cannot read the answer: {err:#}");
+                    return;
+                }
+            };
+            let Some(last) = events.last() else { return };
+            after = last.seq;
+            let found = events.into_iter().find_map(|event| match event.body {
+                EventBody::ItemAdded { item } if item.id == *item_id => match item.body {
+                    ItemBody::AssistantMessage { text } => Some(text),
+                    _ => None,
+                },
+                _ => None,
+            });
+            if let Some(text) = found {
+                break text;
+            }
+        };
+        if let Some((_, rest)) = trim(&text)
+            && let Err(err) = self.bridge.snippet(place, "Full answer", &rest).await
+        {
+            warn!(bot_id = %self.bot.bot_id, "cannot post a snippet: {err}");
+        }
+    }
+
+    // Session events.
+
+    async fn event(&mut self, event: Event) {
+        let session_id = event.session_id;
+        if let EventBody::ThreadLinked { thread } = &event.body {
+            if thread.bot_id == self.bot.bot_id {
+                self.add_link(&session_id, place_of(thread));
+            }
+            return;
+        }
+        if !self.threads.contains_key(&session_id) {
+            return;
+        }
+        match event.body {
+            EventBody::ItemAdded { item } if item.parent_call_id.is_none() => match item.body {
+                ItemBody::UserMessage { text, .. } => {
+                    self.turn_started(&session_id, event.by.as_ref(), text)
+                        .await;
+                }
+                ItemBody::AssistantMessage { text } => {
+                    self.answers.insert(session_id, (item.id, text));
+                }
+                _ => {}
+            },
+            EventBody::SessionStatusChanged { status, .. } => {
+                self.statuses.insert(session_id.clone(), status);
+                let Some(text) = working_status(status) else {
+                    return;
+                };
+                let post = Post::Working {
+                    session_id: session_id.clone(),
+                    status: text.into(),
+                };
+                let mut working = self.working.remove(&session_id).unwrap_or_default();
+                for (place, message_id, says) in &mut working {
+                    if *says != text {
+                        self.edit(place, message_id, &post).await;
+                        *says = text;
+                    }
+                }
+                self.working.insert(session_id, working);
+            }
+            EventBody::ApprovalRequested {
+                approval_id,
+                summary,
+                routed_to: Route::User,
+                ..
+            } => {
+                let post = Post::Approval {
+                    session_id: session_id.clone(),
+                    approval_id: approval_id.clone(),
+                    summary,
+                    resolved: None,
+                };
+                self.ask(&session_id, approval_id.to_string(), post).await;
+            }
+            EventBody::ApprovalResolved {
+                approval_id,
+                decision,
+                ..
+            } => {
+                let by = self.who(event.by.as_ref());
+                self.answered(approval_id.as_str(), |post| {
+                    if let Post::Approval { resolved, .. } = post {
+                        *resolved = Some((decision, by.clone()));
+                    }
+                })
+                .await;
+            }
+            EventBody::QuestionAsked {
+                question_id,
+                text,
+                choices,
+                multi_select,
+                routed_to: Route::User,
+                ..
+            } => {
+                self.questions
+                    .insert(session_id.clone(), question_id.clone());
+                let post = Post::Question {
+                    session_id: session_id.clone(),
+                    question_id: question_id.clone(),
+                    text,
+                    choices,
+                    multi_select,
+                    answered: None,
+                };
+                self.ask(&session_id, question_id.to_string(), post).await;
+            }
+            EventBody::QuestionAnswered {
+                question_id,
+                answer,
+                ..
+            } => {
+                self.questions.remove(&session_id);
+                let by = self.who(event.by.as_ref());
+                self.answered(question_id.as_str(), |post| {
+                    if let Post::Question {
+                        choices, answered, ..
+                    } = post
+                    {
+                        *answered = Some(format!("{} — {by}", answer_text(&answer, choices)));
+                    }
+                })
+                .await;
+            }
+            EventBody::TurnCompleted { .. } => {
+                let post = match self.answers.remove(&session_id) {
+                    Some((item_id, text)) => match trim(&text) {
+                        Some((start, _)) => Post::Answer {
+                            session_id: session_id.clone(),
+                            text: start,
+                            more: Some((item_id, self.open(&session_id))),
+                        },
+                        None => Post::Answer {
+                            session_id: session_id.clone(),
+                            text,
+                            more: None,
+                        },
+                    },
+                    None => Post::Text("Done.".into()),
+                };
+                self.turn_ended(&session_id, post).await;
+            }
+            EventBody::TurnInterrupted { .. } => {
+                self.answers.remove(&session_id);
+                self.turn_ended(&session_id, Post::Text("Stopped.".into()))
+                    .await;
+            }
+            EventBody::TurnFailed { error, .. } => {
+                self.answers.remove(&session_id);
+                let post = self.failure(&session_id, &error).await;
+                self.turn_ended(&session_id, post).await;
+            }
+            EventBody::ArtifactPublished {
+                title, attachment, ..
+            } if IMAGE_MEDIA_TYPES.contains(&attachment.media_type.as_str()) => {
+                let data = match self
+                    .host
+                    .sessions
+                    .attachment_data(&session_id, &attachment)
+                    .await
+                {
+                    Ok(data) => data.0,
+                    Err(err) => {
+                        warn!(%session_id, "cannot read a published image: {}", err.message);
+                        return;
+                    }
+                };
+                let name = attachment.name.clone().unwrap_or_else(|| {
+                    let extension = attachment.media_type.trim_start_matches("image/");
+                    format!("{title}.{extension}")
+                });
+                for place in self.answer_places(&session_id) {
+                    if let Err(err) = self.bridge.upload(&place, &name, data.clone()).await {
+                        warn!(bot_id = %self.bot.bot_id, "cannot upload an image: {err}");
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A turn of `session_id` started with the prompt `text` by `by`.
+    async fn turn_started(&mut self, session_id: &SessionId, by: Option<&UserId>, text: String) {
+        let ours = by.is_some_and(|by| self.bot.allow.iter().any(|user| self.by(user) == *by));
+        let sent = if ours {
+            self.sent.get_mut(session_id).and_then(VecDeque::pop_front)
+        } else {
+            None
+        };
+        let places = match sent {
+            Some(place) => vec![place],
+            None => {
+                let places = self.threads.get(session_id).cloned().unwrap_or_default();
+                if let Some(by) = by.filter(|_| !ours) {
+                    let name = (self.host.names)(by).unwrap_or_else(|| "someone".into());
+                    let mirror = Post::Text(format!("{name} (app): {text}"));
+                    for place in &places {
+                        self.post(place, &mirror).await;
+                    }
+                }
+                places
+            }
+        };
+        self.prompts.insert(session_id.clone(), text);
+        self.answers.remove(session_id);
+        for place in &places {
+            if !self.has_working(session_id, place) {
+                self.post_working(session_id, place, "working…").await;
+            }
+        }
+        self.turns.insert(session_id.clone(), places);
+    }
+
+    /// The running turn of `session_id` ended: its "working…" messages go, and `post` takes
+    /// their place.
+    async fn turn_ended(&mut self, session_id: &SessionId, post: Post) {
+        let places = self.answer_places(session_id);
+        self.turns.remove(session_id);
+        self.questions.remove(session_id);
+        let working = self.working.remove(session_id).unwrap_or_default();
+        let (done, waiting): (Vec<_>, Vec<_>) = working
+            .into_iter()
+            .partition(|(place, _, _)| places.contains(place));
+        if !waiting.is_empty() {
+            self.working.insert(session_id.clone(), waiting);
+        }
+        for (place, message_id, _) in done {
+            if let Err(err) = self.bridge.delete(&place, &message_id).await {
+                warn!(bot_id = %self.bot.bot_id, "cannot delete a message: {err}");
+            }
+        }
+        for place in &places {
+            self.post(place, &post).await;
+        }
+    }
+
+    /// Posts an approval request or question, `id`, where `session_id` answers.
+    async fn ask(&mut self, session_id: &SessionId, id: String, post: Post) {
+        let mut posted = Vec::new();
+        for place in self.answer_places(session_id) {
+            if let Some(message_id) = self.post(&place, &post).await {
+                posted.push((place, message_id, post.clone()));
+            }
+        }
+        self.asks.insert(id, posted);
+    }
+
+    /// Edits the posts of the approval request or question `id` as `answer` changes them.
+    async fn answered(&mut self, id: &str, answer: impl Fn(&mut Post)) {
+        for (place, message_id, mut post) in self.asks.remove(id).unwrap_or_default() {
+            answer(&mut post);
+            self.edit(&place, &message_id, &post).await;
+        }
+    }
+
+    /// What a failed turn of `session_id` posts.
+    async fn failure(&self, session_id: &SessionId, error: &TurnError) -> Post {
+        let account = match self.host.sessions.sessions().await {
+            Ok(heads) => heads
+                .into_iter()
+                .find(|head| head.session_id == *session_id)
+                .map(|head| head.account_id.to_string()),
+            Err(_) => None,
+        }
+        .unwrap_or_else(|| "its account".into());
+        let (text, retry) = match error.class {
+            ErrorClass::Auth => (
+                format!(
+                    "The account {account} needs signing in again on this machine. Prompts \
+                     sent meanwhile wait, and run once it is signed in."
+                ),
+                false,
+            ),
+            ErrorClass::LimitReached => (
+                format!(
+                    "The account {account} hit its usage limit. {}",
+                    error.message
+                ),
+                true,
+            ),
+            ErrorClass::Transient | ErrorClass::Fatal => {
+                (first_sentence(&error.message).to_owned(), true)
+            }
+        };
+        Post::Failure {
+            session_id: session_id.clone(),
+            text,
+            retry,
+            open: self.open(session_id),
+        }
+    }
+
+    // Helpers.
+
+    fn add_link(&mut self, session_id: &SessionId, place: Place) {
+        let threads = self.threads.entry(session_id.clone()).or_default();
+        if !threads.contains(&place) {
+            threads.push(place.clone());
+        }
+        self.links.insert(place, session_id.clone());
+    }
+
+    /// Where `session_id`'s answers go: its running turn's thread, else every thread of it.
+    fn answer_places(&self, session_id: &SessionId) -> Vec<Place> {
+        self.turns
+            .get(session_id)
+            .or_else(|| self.threads.get(session_id))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn has_working(&self, session_id: &SessionId, place: &Place) -> bool {
+        self.working
+            .get(session_id)
+            .is_some_and(|working| working.iter().any(|(at, _, _)| at == place))
+    }
+
+    async fn post_working(&mut self, session_id: &SessionId, place: &Place, status: &'static str) {
+        let post = Post::Working {
+            session_id: session_id.clone(),
+            status: status.into(),
+        };
+        if let Some(message_id) = self.post(place, &post).await {
+            self.working.entry(session_id.clone()).or_default().push((
+                place.clone(),
+                message_id,
+                status,
+            ));
+        }
+    }
+
+    async fn post(&self, place: &Place, post: &Post) -> Option<String> {
+        match self.bridge.post(place, post).await {
+            Ok(message_id) => Some(message_id),
+            Err(err) => {
+                warn!(bot_id = %self.bot.bot_id, "cannot post: {err}");
+                None
+            }
+        }
+    }
+
+    async fn edit(&self, place: &Place, message_id: &str, post: &Post) {
+        if let Err(err) = self.bridge.edit(place, message_id, post).await {
+            warn!(bot_id = %self.bot.bot_id, "cannot edit a message: {err}");
+        }
+    }
+
+    async fn note(&self, place: &Place, user_id: &str, text: &str) {
+        if let Err(err) = self.bridge.ephemeral(place, user_id, text).await {
+            warn!(bot_id = %self.bot.bot_id, "cannot post a note: {err}");
+        }
+    }
+
+    /// Tells `user_id`, once per thread, that the bot does not take this from them.
+    async fn refuse(&mut self, place: &Place, user_id: &str) {
+        if self.noted.insert((user_id.to_owned(), place.clone())) {
+            let text = format!(
+                "{} does not take this from you. Ask the owner of its herder to allow you.",
+                self.bot.name
+            );
+            self.note(place, user_id, &text).await;
+        }
+    }
+
+    fn user(&self, user_id: &str) -> Option<&BotUser> {
+        self.bot
+            .allow
+            .iter()
+            .find(|user| user.external_user_id == user_id)
+    }
+
+    /// The allowlisted person `user_id`, if they may drive sessions in a direct message or a
+    /// channel, as `direct` says.
+    fn driver(&self, user_id: &str, direct: bool) -> Option<BotUser> {
+        self.user(user_id)
+            .filter(|user| if direct { user.dm } else { user.channels })
+            .cloned()
+    }
+
+    /// The user the journal records a person's actions as: "via ‹bot›, ‹name›".
+    fn by(&self, user: &BotUser) -> UserId {
+        UserId::new(format!("via {}, {}", self.bot.name, user.display_name))
+    }
+
+    /// Who did something, for the bot's posts.
+    fn who(&self, by: Option<&UserId>) -> String {
+        let Some(by) = by else {
+            return "herder".into();
+        };
+        match self.bot.allow.iter().find(|user| self.by(user) == *by) {
+            Some(user) => user.display_name.clone(),
+            None => (self.host.names)(by).unwrap_or_else(|| "someone".into()),
+        }
+    }
+
+    /// The link that opens `session_id` in the herder app.
+    fn open(&self, session_id: &SessionId) -> String {
+        format!(
+            "herder://session?host={}&session={session_id}",
+            self.host.host_id
+        )
+    }
+
+    /// The project a new thread starts on, from the channel's binding, a project named at the
+    /// start of `message` as "‹name›: …", or the bot's default.
+    fn project_for(&self, message: &Message) -> Pick {
+        if !message.direct
+            && let Some(binding) = self
+                .bot
+                .channel_bindings
+                .iter()
+                .find(|binding| binding.channel_id == message.place.channel_id)
+        {
+            return Pick::Project(binding.project_id.clone(), message.text.clone());
+        }
+        if let Some((name, rest)) = message.text.split_once(':')
+            && !name.trim().is_empty()
+            && !name.contains('\n')
+        {
+            let name = name.trim();
+            let named: Vec<_> = self
+                .host
+                .sessions
+                .project_list()
+                .into_iter()
+                .filter(|project| project.name.eq_ignore_ascii_case(name))
+                .map(|project| (project.project_id, project.name))
+                .collect();
+            let rest = rest.trim().to_owned();
+            match named.len() {
+                0 => {}
+                1 => return Pick::Project(named[0].0.clone(), rest),
+                _ => return Pick::Ambiguous(named, rest),
+            }
+        }
+        match &self.bot.defaults.project_id {
+            Some(project_id) => Pick::Project(project_id.clone(), message.text.clone()),
+            None => Pick::Chat,
+        }
+    }
+}
+
+/// The project a new thread starts on.
+enum Pick {
+    /// This project, with the prompt's text.
+    Project(ProjectId, String),
+    /// One of these, whose name the message named; with the prompt's text.
+    Ambiguous(Vec<(ProjectId, String)>, String),
+    /// A chat, about no project.
+    Chat,
+}
+
+fn place_of(thread: &ThreadLink) -> Place {
+    Place {
+        channel_id: thread.channel_id.clone(),
+        thread_id: thread.thread_id.clone(),
+    }
+}
+
+/// What the "working…" message says while a session is in `status`; `None` when it says
+/// nothing new.
+fn working_status(status: SessionStatus) -> Option<&'static str> {
+    match status {
+        SessionStatus::Running => Some("working…"),
+        SessionStatus::WaitingForCapacity => Some("waiting for capacity…"),
+        SessionStatus::NeedsYou => Some("waiting for you…"),
+        SessionStatus::NeedsLogin => {
+            Some("waiting: the account needs signing in again on this machine…")
+        }
+        _ => None,
+    }
+}
+
+/// An answer of more than [`ANSWER_LINES`] lines split into its start, posted at once, and its
+/// rest, for Full answer; `None` for a shorter one. A code block the start leaves open is
+/// closed.
+pub fn trim(text: &str) -> Option<(String, String)> {
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    if lines.len() <= ANSWER_LINES {
+        return None;
+    }
+    let mut start = lines[..ANSWER_LINES].join("\n");
+    let fences = lines[..ANSWER_LINES]
+        .iter()
+        .filter(|line| line.trim_start().starts_with("```"))
+        .count();
+    if fences % 2 == 1 {
+        start.push_str("\n```");
+    }
+    start.push_str("\n…");
+    Some((start, lines[ANSWER_LINES..].join("\n")))
+}
+
+/// The text of `answer` to a question with `choices`.
+fn answer_text(answer: &Answer, choices: &[String]) -> String {
+    let choice = |index: &u32| {
+        choices
+            .get(*index as usize)
+            .cloned()
+            .unwrap_or_else(|| format!("choice {}", index + 1))
+    };
+    match answer {
+        Answer::Text { text } => text.clone(),
+        Answer::Choice { index } => choice(index),
+        Answer::Choices { indices } => indices.iter().map(choice).collect::<Vec<_>>().join(", "),
+    }
+}
+
+/// The first sentence of `message`, or its first line.
+fn first_sentence(message: &str) -> &str {
+    let line = message.trim().lines().next().unwrap_or_default();
+    match line.find(". ") {
+        Some(end) => &line[..=end],
+        None => line,
+    }
+}

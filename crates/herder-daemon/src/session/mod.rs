@@ -266,7 +266,7 @@ use herder_protocol::{
     ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, FollowUp, HostId, Image, Item, ItemId,
     JournalRecord, MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS, PROJECT_ICON_MEDIA_TYPES,
     PermissionMode, Project, ProjectId, Provider, Seq, SessionHead, SessionId, SessionStatus,
-    SessionSummary, Timestamp, TitleSource, TurnId, UsageWindow, UserId, clean_title,
+    SessionSummary, ThreadLink, Timestamp, TitleSource, TurnId, UsageWindow, UserId, clean_title,
 };
 use herder_store::{Session, Store};
 use jiff::SignedDuration;
@@ -1671,7 +1671,7 @@ impl SessionManager {
             )
         })?;
         let _titling = self.inner.titling.lock().await;
-        let session = self.titleable(&session_id).await?;
+        let session = self.writable(&session_id).await?;
         if session.title.as_deref() != Some(title)
             || session.title_source != Some(TitleSource::User)
         {
@@ -1688,6 +1688,27 @@ impl SessionManager {
         Ok(CommandResult::Applied)
     }
 
+    /// Links the chat thread `thread` to `session_id`, as a bot does for a thread a message in
+    /// its chat started.
+    pub async fn link_thread(
+        &self,
+        session_id: &SessionId,
+        thread: ThreadLink,
+    ) -> Result<(), ErrorInfo> {
+        self.writable(session_id).await?;
+        self.inner
+            .journal
+            .record(session_id.clone(), None, EventBody::ThreadLinked { thread })
+            .await
+            .map_err(internal)?;
+        Ok(())
+    }
+
+    /// The projects discovery last found.
+    pub fn project_list(&self) -> Vec<Project> {
+        self.inner.journal.projects().list.clone()
+    }
+
     /// Starts generating the title of `session_id` again from its conversation, as `by`
     /// asked ([`titles`]).
     pub async fn retitle(
@@ -1695,14 +1716,14 @@ impl SessionManager {
         by: UserId,
         session_id: SessionId,
     ) -> Result<CommandResult, ErrorInfo> {
-        let session = self.titleable(&session_id).await?;
+        let session = self.writable(&session_id).await?;
         titles::request(&self.inner, by, &session)
             .map_err(|why| error(ErrorCode::Unsupported, why))?;
         Ok(CommandResult::Applied)
     }
 
-    /// The session, if it exists and its title may change.
-    async fn titleable(&self, session_id: &SessionId) -> Result<Session, ErrorInfo> {
+    /// The session, if it exists and may change: neither archived nor moved.
+    async fn writable(&self, session_id: &SessionId) -> Result<Session, ErrorInfo> {
         let session = self
             .inner
             .journal

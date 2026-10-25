@@ -1,0 +1,84 @@
+{
+  "envelope_id": "e6",
+  "type": "events_api",
+  "accepts_response_payload": false,
+  "retry_attempt": 0,
+  "retry_reason": "",
+  "payload": {
+    "token": "verification-token-unused",
+    "team_id": "T0HERDER01",
+    "context_team_id": "T0HERDER01",
+    "api_app_id": "A0HERDER01",
+    "event": {
+      "user": "U0ADA00001",
+      "type": "message",
+      "ts": "1761400300.000600",
+      "client_msg_id": "c0ffee00-0000-4000-8000-000000000600",
+      "text": "What is wrong here?",
+      "team": "T0HERDER01",
+      "blocks": [
+        {
+          "type": "rich_text",
+          "block_id": "b1",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {
+                  "type": "text",
+                  "text": "What is wrong here?"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "channel": "D0ADA00001",
+      "event_ts": "1761400300.000600",
+      "channel_type": "im",
+      "subtype": "file_share",
+      "upload": false,
+      "files": [
+        {
+          "id": "F0SCREEN01",
+          "created": 1761400299,
+          "timestamp": 1761400299,
+          "name": "screen.png",
+          "title": "screen.png",
+          "mimetype": "image/png",
+          "filetype": "png",
+          "pretty_type": "PNG",
+          "user": "U0ADA00001",
+          "user_team": "T0HERDER01",
+          "editable": false,
+          "size": 12,
+          "mode": "hosted",
+          "is_external": false,
+          "external_type": "",
+          "is_public": false,
+          "public_url_shared": false,
+          "display_as_bot": false,
+          "username": "",
+          "url_private": "https://files.slack.com/files-pri/T0HERDER01-F0SCREEN01/screen.png",
+          "url_private_download": "https://files.slack.com/files-pri/T0HERDER01-F0SCREEN01/download/screen.png",
+          "permalink": "https://herder-test.slack.com/files/U0ADA00001/F0SCREEN01/screen.png",
+          "has_rich_preview": false
+        }
+      ]
+    },
+    "type": "event_callback",
+    "event_id": "Ev0006",
+    "event_time": 1761400300,
+    "authorizations": [
+      {
+        "enterprise_id": null,
+        "team_id": "T0HERDER01",
+        "user_id": "U0BOT00001",
+        "is_bot": true,
+        "is_enterprise_install": false
+      }
+    ],
+    "is_ext_shared_channel": false,
+    "event_context": "4-eyJldCI6Im1lc3NhZ2UifQ"
+  }
+}
