@@ -20,6 +20,10 @@
 //! direct message already. It carries the same buttons as a thread, and replying in its thread,
 //! or pressing one, links that thread to the session. A session that keeps waiting is notified
 //! of once; the message is edited when it is answered, saying where.
+//!
+//! Outside a linked thread, a message that is one of the bot's commands ([`Command`]) is
+//! answered by the bot itself: `sessions`, `continue ‹name›`, `use ‹project›`, `status` and
+//! `help`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -27,17 +31,32 @@ use std::sync::Arc;
 use herder_protocol::{
     Answer, Bot, BotUser, Bytes, CommandBody, CommandResult, ErrorClass, Event, EventBody, HostId,
     IMAGE_MEDIA_TYPES, Image, ItemBody, ItemId, MAX_IMAGE_BYTES, ProjectId, PromptFile, QuestionId,
-    Route, SessionId, SessionStatus, ThreadLink, TurnError, UserId,
+    Route, SessionHead, SessionId, SessionStatus, ThreadLink, TurnError, UserId,
 };
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use super::Bindings;
 use super::bridge::{Action, Bridge, ChatFile, Inbound, Message, Place, Post, Press};
 use crate::session::SessionManager;
 
 /// How many lines of an answer are posted before Full answer.
 pub const ANSWER_LINES: usize = 30;
+
+/// The most sessions `sessions` lists, and the most a `continue` picker offers.
+pub const SESSIONS: usize = 10;
+
+/// What `help` answers.
+const HELP: &str = "**sessions**: recent sessions in my projects, and those waiting for you, \
+                    to continue in a thread\n\
+                    **continue ‹name›**: continue the session whose title has ‹name›\n\
+                    **use ‹project›**: start this channel's new threads on a project; \
+                    **use none** clears it\n\
+                    **status**: what runs and what waits for you on this machine\n\
+                    **help**: these commands\n\
+                    Anything else starts a session, on the project it names first as \
+                    \"‹project›: …\" if it names one.";
 
 /// The name of the herder user `by` names, for "‹name› (app)"; `None` for an unknown one.
 pub type Names = Arc<dyn Fn(&UserId) -> Option<String> + Send + Sync>;
@@ -58,6 +77,8 @@ pub struct Runner {
     bot: Bot,
     bridge: Arc<dyn Bridge>,
     host: Host,
+    /// Where `use` changes the bot's channel bindings.
+    bindings: Bindings,
     /// The session of each thread linked to it.
     links: HashMap<Place, SessionId>,
     /// The threads of this bot linked to each session, in the order linked.
@@ -91,11 +112,12 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(bot: Bot, bridge: Arc<dyn Bridge>, host: Host) -> Self {
+    pub fn new(bot: Bot, bridge: Arc<dyn Bridge>, host: Host, bindings: Bindings) -> Self {
         Self {
             bot,
             bridge,
             host,
+            bindings,
             links: HashMap::new(),
             threads: HashMap::new(),
             statuses: HashMap::new(),
@@ -188,13 +210,21 @@ impl Runner {
             }
             return;
         }
+        if let Some(command) = Command::parse(&message.text) {
+            self.command(command, &message).await;
+            return;
+        }
         let (project_id, text) = match self.project_for(&message) {
             Pick::Project(project_id, text) => (Some(project_id), text),
             Pick::Chat => (None, message.text.clone()),
             Pick::Ambiguous(projects, text) => {
+                let choices = projects
+                    .into_iter()
+                    .map(|(project_id, name)| (name, Action::Pick { project_id }))
+                    .collect();
                 let post = Post::Picker {
                     text: "Which project?".into(),
-                    projects,
+                    choices,
                 };
                 self.post(&message.place, &post).await;
                 self.picking
@@ -292,10 +322,294 @@ impl Runner {
                 }
                 return;
             }
+            Action::Continue { session_id } => {
+                self.continue_session(&session_id, &press.place, press.direct, &press.user_id)
+                    .await;
+                return;
+            }
+            Action::Use { project_id } => {
+                if !press.direct {
+                    let name = self.project_name(Some(&project_id));
+                    self.bind(&press.place, Some((project_id, name))).await;
+                }
+                return;
+            }
         };
         if let Err(err) = self.host.sessions.handle(by, command).await {
             self.note(&press.place, &press.user_id, &err.message).await;
         }
+    }
+
+    // Commands.
+
+    /// Answers `command`, which `message` gave.
+    async fn command(&mut self, command: Command<'_>, message: &Message) {
+        let place = &message.place;
+        let post = match command {
+            Command::Help => Some(Post::Text(HELP.into())),
+            Command::Status => Some(Post::Text(self.status().await)),
+            Command::Sessions => {
+                let heads = self.scoped().await;
+                Some(if heads.is_empty() {
+                    Post::Text("No sessions in my projects to continue.".into())
+                } else {
+                    Post::Sessions {
+                        text: "Recent sessions, those waiting for you first:".into(),
+                        sessions: heads
+                            .iter()
+                            .map(|head| (head.session_id.clone(), self.line(head)))
+                            .collect(),
+                    }
+                })
+            }
+            Command::Continue(name) => {
+                let needle = name.to_lowercase();
+                let heads = self.scoped().await;
+                let titled = |head: &&SessionHead| {
+                    head.title
+                        .as_ref()
+                        .is_some_and(|title| title.to_lowercase().contains(&needle))
+                };
+                let found: Vec<_> = heads.iter().filter(titled).collect();
+                match found.as_slice() {
+                    [] => {
+                        let text = format!(
+                            "No session in my projects has \"{name}\" in its title. \
+                             **sessions** lists them."
+                        );
+                        Some(Post::Text(text))
+                    }
+                    [head] => {
+                        let session_id = head.session_id.clone();
+                        self.continue_session(&session_id, place, message.direct, &message.user_id)
+                            .await;
+                        None
+                    }
+                    several => {
+                        let choices = several
+                            .iter()
+                            .map(|head| {
+                                let session_id = head.session_id.clone();
+                                (title(head).to_owned(), Action::Continue { session_id })
+                            })
+                            .collect();
+                        Some(Post::Picker {
+                            text: "Which session?".into(),
+                            choices,
+                        })
+                    }
+                }
+            }
+            Command::Use(_) if message.direct => {
+                let text = "**use** binds a channel: mention me with it in one.";
+                Some(Post::Text(text.into()))
+            }
+            Command::Use(name) if name.eq_ignore_ascii_case("none") => {
+                self.bind(place, None).await;
+                None
+            }
+            Command::Use(name) => {
+                let named: Vec<_> = self
+                    .host
+                    .sessions
+                    .project_list()
+                    .into_iter()
+                    .filter(|project| {
+                        project.name.eq_ignore_ascii_case(name)
+                            || project.project_id.as_str() == name
+                    })
+                    .collect();
+                match <[_; 1]>::try_from(named) {
+                    Ok([project]) => {
+                        self.bind(place, Some((project.project_id, project.name)))
+                            .await;
+                        None
+                    }
+                    Err(named) if named.is_empty() => {
+                        let text = format!("No project is named \"{name}\".");
+                        Some(Post::Text(text))
+                    }
+                    // The names are the same: the buttons tell the projects apart by id.
+                    Err(named) => {
+                        let choices = named
+                            .into_iter()
+                            .map(|project| {
+                                let label = project.project_id.to_string();
+                                let project_id = project.project_id;
+                                (label, Action::Use { project_id })
+                            })
+                            .collect();
+                        Some(Post::Picker {
+                            text: "Which project?".into(),
+                            choices,
+                        })
+                    }
+                }
+            }
+        };
+        if let Some(post) = post {
+            self.post(place, &post).await;
+        }
+    }
+
+    /// What `status` answers: the sessions of this host that run, and those that wait for
+    /// someone.
+    async fn status(&self) -> String {
+        let heads = match self.host.sessions.sessions().await {
+            Ok(heads) => heads,
+            Err(err) => return format!("Cannot list the sessions: {err:#}"),
+        };
+        let (mut running, mut waiting) = (Vec::new(), Vec::new());
+        for head in heads.iter().filter(|head| head.parent.is_none()) {
+            match head.status {
+                SessionStatus::Running | SessionStatus::WaitingForCapacity => {
+                    running.push(head);
+                }
+                SessionStatus::NeedsYou | SessionStatus::NeedsLogin => waiting.push(head),
+                _ => {}
+            }
+        }
+        if running.is_empty() && waiting.is_empty() {
+            return "Nothing runs or waits for you on this machine.".into();
+        }
+        let mut lines = Vec::new();
+        for (heading, heads) in [("Running", running), ("Waiting for you", waiting)] {
+            if heads.is_empty() {
+                continue;
+            }
+            lines.push(format!("**{heading}** ({})", heads.len()));
+            lines.extend(heads.iter().map(|head| format!("• {}", self.line(head))));
+        }
+        lines.join("\n")
+    }
+
+    /// The sessions `sessions` lists and `continue` finds: those of the bot's projects, and
+    /// those linked to its threads; waiting ones first, then the newest; at most
+    /// [`SESSIONS`].
+    async fn scoped(&self) -> Vec<SessionHead> {
+        let mut heads: Vec<_> = match self.host.sessions.sessions().await {
+            Ok(heads) => heads
+                .into_iter()
+                .filter(|head| self.in_scope(head))
+                .collect(),
+            Err(err) => {
+                warn!(bot_id = %self.bot.bot_id, "cannot list the sessions: {err:#}");
+                Vec::new()
+            }
+        };
+        // Session ids are ULIDs: the newest sorts last.
+        heads.sort_by(|a, b| {
+            let waits = |head: &SessionHead| head.status == SessionStatus::NeedsYou;
+            waits(b)
+                .cmp(&waits(a))
+                .then_with(|| b.session_id.as_str().cmp(a.session_id.as_str()))
+        });
+        heads.truncate(SESSIONS);
+        heads
+    }
+
+    /// Whether `head` is a session the bot's threads may continue.
+    fn in_scope(&self, head: &SessionHead) -> bool {
+        let live = !matches!(head.status, SessionStatus::Archived | SessionStatus::Moved);
+        let ours = head
+            .project_id
+            .as_ref()
+            .is_some_and(|project_id| self.projects().contains(&project_id))
+            || head
+                .threads
+                .iter()
+                .any(|thread| thread.bot_id == self.bot.bot_id);
+        live && head.parent.is_none() && ours
+    }
+
+    /// The bot's projects: its default one, and those its channels are bound to.
+    fn projects(&self) -> Vec<&ProjectId> {
+        let bound = self.bot.channel_bindings.iter().map(|b| &b.project_id);
+        self.bot.defaults.project_id.iter().chain(bound).collect()
+    }
+
+    /// Links `place` to `session_id`, at `user_id`'s asking, so its prompts continue it.
+    async fn continue_session(
+        &mut self,
+        session_id: &SessionId,
+        place: &Place,
+        direct: bool,
+        user_id: &str,
+    ) {
+        if let Some(linked) = self.links.get(place) {
+            let text = if linked == session_id {
+                "This thread continues that session already."
+            } else {
+                "This thread continues another session already. Start a new thread for this one."
+            };
+            self.note(place, user_id, text).await;
+            return;
+        }
+        let head = match self.host.sessions.sessions().await {
+            Ok(heads) => heads
+                .into_iter()
+                .find(|head| head.session_id == *session_id && self.in_scope(head)),
+            Err(err) => {
+                warn!(bot_id = %self.bot.bot_id, "cannot list the sessions: {err:#}");
+                None
+            }
+        };
+        let Some(head) = head else {
+            self.note(place, user_id, "That session cannot be continued here.")
+                .await;
+            return;
+        };
+        self.statuses.insert(session_id.clone(), head.status);
+        self.link(session_id, place).await;
+        let how = if direct {
+            "Reply here to prompt it."
+        } else {
+            "Mention me here to prompt it."
+        };
+        let text = format!("This thread continues **{}**. {how}", title(&head));
+        self.post(place, &Post::Text(text)).await;
+    }
+
+    /// Binds the channel of `place` to `project`, by id and name, or to none, and says so
+    /// there.
+    async fn bind(&mut self, place: &Place, project: Option<(ProjectId, String)>) {
+        let project_id = project.as_ref().map(|(project_id, _)| project_id.clone());
+        let text = match self.bindings.bind(&place.channel_id, project_id).await {
+            Ok(bindings) => {
+                self.bot.channel_bindings = bindings;
+                match project {
+                    Some((_, name)) => format!("New threads in this channel work on **{name}**."),
+                    None => "This channel is bound to no project now.".into(),
+                }
+            }
+            Err(err) => format!("Cannot bind this channel: {}", err.message),
+        };
+        self.post(place, &Post::Text(text)).await;
+    }
+
+    /// `head` as a line of a list: its title, its project, and what it waits on.
+    fn line(&self, head: &SessionHead) -> String {
+        let project = self.project_name(head.project_id.as_ref());
+        let status = match head.status {
+            SessionStatus::NeedsYou => " · waiting for you",
+            SessionStatus::NeedsLogin => " · needs signing in",
+            SessionStatus::Running => " · running",
+            _ => "",
+        };
+        format!("{} · {project}{status}", title(head))
+    }
+
+    /// The name of the project `project_id`; "chat" for none.
+    fn project_name(&self, project_id: Option<&ProjectId>) -> String {
+        let Some(project_id) = project_id else {
+            return "chat".into();
+        };
+        self.host
+            .sessions
+            .project_list()
+            .into_iter()
+            .find(|project| project.project_id == *project_id)
+            .map_or_else(|| project_id.to_string(), |project| project.name)
     }
 
     /// Starts a session on `project_id`, or a chat, links `place` to it and sends it `text`.
@@ -725,9 +1039,7 @@ impl Runner {
         if self.threads.contains_key(session_id) {
             return true;
         }
-        let projects: Vec<&ProjectId> = (self.bot.defaults.project_id.iter())
-            .chain(self.bot.channel_bindings.iter().map(|b| &b.project_id))
-            .collect();
+        let projects = self.projects();
         if projects.is_empty() {
             return false;
         }
@@ -1008,6 +1320,44 @@ impl Runner {
             None => Pick::Chat,
         }
     }
+}
+
+/// One of the bot's commands, which a message outside a linked thread may be.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Command<'a> {
+    Help,
+    Status,
+    Sessions,
+    /// Continue the session whose title has this.
+    Continue(&'a str),
+    /// Bind the channel to the project of this name, or to none.
+    Use(&'a str),
+}
+
+impl<'a> Command<'a> {
+    /// The command `text` is; `None` for a prompt. `use` takes one word, so a prompt such as
+    /// "use the new API" stays one.
+    pub(super) fn parse(text: &'a str) -> Option<Self> {
+        let text = text.trim();
+        let (word, rest) = text
+            .split_once(char::is_whitespace)
+            .map_or((text, ""), |(word, rest)| (word, rest.trim()));
+        match word.to_ascii_lowercase().as_str() {
+            "help" if rest.is_empty() => Some(Self::Help),
+            "status" if rest.is_empty() => Some(Self::Status),
+            "sessions" if rest.is_empty() => Some(Self::Sessions),
+            "continue" if !rest.is_empty() => Some(Self::Continue(rest)),
+            "use" if !rest.is_empty() && !rest.contains(char::is_whitespace) => {
+                Some(Self::Use(rest))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A session's title, as the bot shows it.
+fn title(head: &SessionHead) -> &str {
+    head.title.as_deref().unwrap_or("Untitled session")
 }
 
 /// The project a new thread starts on.

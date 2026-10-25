@@ -105,10 +105,15 @@ pub enum Action {
     Retry { session_id: SessionId },
     /// Start the thread's session on a project the message named ambiguously.
     Pick { project_id: ProjectId },
+    /// Link the thread to a session, which its prompts then continue.
+    Continue { session_id: SessionId },
+    /// Bind the channel to a project, which its new threads then work on.
+    Use { project_id: ProjectId },
 }
 
 impl Action {
-    /// The session the button acts on; `None` for a pick, which starts one.
+    /// The bot's session the button acts on; `None` for one that starts or links a session,
+    /// or binds a channel.
     pub fn session_id(&self) -> Option<&SessionId> {
         match self {
             Self::Stop { session_id }
@@ -117,7 +122,7 @@ impl Action {
             | Self::ChooseMany { session_id, .. }
             | Self::FullAnswer { session_id, .. }
             | Self::Retry { session_id } => Some(session_id),
-            Self::Pick { .. } => None,
+            Self::Pick { .. } | Self::Continue { .. } | Self::Use { .. } => None,
         }
     }
 }
@@ -171,10 +176,17 @@ pub enum Post {
         /// Where Open in herder goes.
         open: String,
     },
-    /// A choice of projects, for a message whose project name is ambiguous.
+    /// A choice, as one button per choice: of projects, for a name that names several, or of
+    /// sessions, for a title several match.
     Picker {
         text: String,
-        projects: Vec<(ProjectId, String)>,
+        /// Each button's label, and what it does.
+        choices: Vec<(String, Action)>,
+    },
+    /// Sessions a thread may continue, each a line of Markdown with Continue here.
+    Sessions {
+        text: String,
+        sessions: Vec<(SessionId, String)>,
     },
 }
 

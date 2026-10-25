@@ -22,8 +22,9 @@ use std::sync::{Arc, OnceLock, PoisonError};
 use std::time::Duration;
 
 use herder_protocol::{
-    Account, Bot, BotError, BotId, BotKind, BotState, BotStatus, CommandBody, CommandResult,
-    ErrorCode, ErrorInfo, Event, Item, ItemId, SessionHead, SessionId, Timestamp,
+    Account, Bot, BotError, BotId, BotKind, BotState, BotStatus, ChannelBinding, CommandBody,
+    CommandResult, ErrorCode, ErrorInfo, Event, Item, ItemId, ProjectId, SessionHead, SessionId,
+    Timestamp,
 };
 use tokio::sync::{Mutex, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -49,11 +50,11 @@ pub struct Bots {
     /// The config file.
     path: PathBuf,
     /// Held across a change, so changes apply one at a time.
-    changing: Mutex<()>,
+    changing: Arc<Mutex<()>>,
     /// What bots run with, once started ([`Bots::start`]).
     runtime: OnceLock<Runtime>,
     /// Each running bot as it runs, and what stops it.
-    running: std::sync::Mutex<HashMap<BotId, (Bot, CancellationToken)>>,
+    running: Running,
     /// How each running bot's connection stands.
     statuses: Statuses,
 }
@@ -73,14 +74,16 @@ pub struct Runtime {
 
 type Statuses = Arc<std::sync::Mutex<HashMap<BotId, BotStatus>>>;
 
+type Running = Arc<std::sync::Mutex<HashMap<BotId, (Bot, CancellationToken)>>>;
+
 impl Bots {
     /// The bots of the daemon `config` started; none runs until [`Bots::start`].
     pub fn new(config: &Config) -> Self {
         Self {
             path: config.path.clone(),
-            changing: Mutex::new(()),
+            changing: Arc::default(),
             runtime: OnceLock::new(),
-            running: std::sync::Mutex::default(),
+            running: Running::default(),
             statuses: Statuses::default(),
         }
     }
@@ -124,7 +127,14 @@ impl Bots {
             };
             if bot.kind == BotKind::Slack {
                 status.set(BotState::Connecting, None);
-                tokio::spawn(keep(bot.clone(), runtime.clone(), status, stop.clone()));
+                let bindings = self.bindings(&bot.bot_id);
+                tokio::spawn(keep(
+                    bot.clone(),
+                    runtime.clone(),
+                    bindings,
+                    status,
+                    stop.clone(),
+                ));
             } else {
                 status.set(BotState::Unsupported, None);
             }
@@ -200,6 +210,78 @@ impl Bots {
             .await?
             .map_err(|err| error(ErrorCode::Internal, format!("{err:#}")))
     }
+
+    /// Where the bot `bot_id` changes its own channel bindings.
+    pub fn bindings(&self, bot_id: &BotId) -> Bindings {
+        Bindings {
+            path: self.path.clone(),
+            changing: Arc::clone(&self.changing),
+            running: Arc::clone(&self.running),
+            bot_id: bot_id.clone(),
+        }
+    }
+}
+
+/// Where a bot changes its own channel bindings, as `use` asks it to: in its config file
+/// entry, as an owner's change would, but without connecting it again.
+#[derive(Clone)]
+pub struct Bindings {
+    path: PathBuf,
+    changing: Arc<Mutex<()>>,
+    running: Running,
+    bot_id: BotId,
+}
+
+impl Bindings {
+    /// The bot as it runs now, with the bindings it changed; `None` once it stopped.
+    fn bot(&self) -> Option<Bot> {
+        let running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+        running.get(&self.bot_id).map(|(bot, _)| bot.clone())
+    }
+
+    /// Binds `channel_id` to `project_id`, or to none; resolves to the bot's channel bindings
+    /// as they are now.
+    pub async fn bind(
+        &self,
+        channel_id: &str,
+        project_id: Option<ProjectId>,
+    ) -> Result<Vec<ChannelBinding>, ErrorInfo> {
+        let _changing = self.changing.lock().await;
+        let path = self.path.clone();
+        let bot_id = self.bot_id.clone();
+        let channel_id = channel_id.to_owned();
+        let bot = blocking(move || -> anyhow::Result<Bot> {
+            let config = Config::load_file(&path)?;
+            let mut bot = config
+                .bots
+                .into_iter()
+                .find(|bot| bot.bot_id == bot_id)
+                .ok_or_else(|| anyhow::anyhow!("bot {bot_id} does not exist"))?;
+            bot.channel_bindings
+                .retain(|binding| binding.channel_id != channel_id);
+            if let Some(project_id) = project_id {
+                bot.channel_bindings.push(ChannelBinding {
+                    channel_id,
+                    project_id,
+                });
+            }
+            config::put_bot(&path, &bot)?;
+            Ok(bot)
+        })
+        .await?
+        .map_err(|err| error(ErrorCode::Internal, format!("{err:#}")))?;
+        info!(bot_id = %self.bot_id, "a bot changed its channel bindings");
+        // The bot runs on as it is now, rather than connecting again.
+        if let Some((running, _)) = self
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(&self.bot_id)
+        {
+            *running = bot.clone();
+        }
+        Ok(bot.channel_bindings)
+    }
 }
 
 /// Where one bot's status is kept.
@@ -232,7 +314,13 @@ impl Status {
 
 /// Keeps a Slack bot connected until `stop`: holds its tokens, connects with them, and runs it
 /// while connected, connecting again when its tokens change or its connection fails.
-async fn keep(bot: Bot, runtime: Runtime, status: Status, stop: CancellationToken) {
+async fn keep(
+    bot: Bot,
+    runtime: Runtime,
+    bindings: Bindings,
+    status: Status,
+    stop: CancellationToken,
+) {
     let mut tokens = vec![bot.token.clone()];
     tokens.extend(bot.app_token.clone());
     // Holds the tokens until the bot stops.
@@ -268,8 +356,12 @@ async fn keep(bot: Bot, runtime: Runtime, status: Status, stop: CancellationToke
                 backoff = MIN_BACKOFF;
                 status.set(BotState::Connected, None);
                 info!(bot_id = %bot.bot_id, "a bot connected");
-                let runner =
-                    runner::Runner::new(bot.clone(), connection.bridge, runtime.host.clone());
+                let runner = runner::Runner::new(
+                    bindings.bot().unwrap_or_else(|| bot.clone()),
+                    connection.bridge,
+                    runtime.host.clone(),
+                    bindings.clone(),
+                );
                 let events = runtime.events.subscribe();
                 let running = stop.child_token();
                 tokio::select! {
