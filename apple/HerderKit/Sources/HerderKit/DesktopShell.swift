@@ -2,7 +2,7 @@ import Herder
 import SwiftUI
 
 /// iPad and the Mac: herder's own sidebar and panes, edge to edge, with no system chrome
-/// around them. The Board, Pull Requests and projects show their sessions beside the open one;
+/// around them. The Board and projects show their sessions beside the open one;
 /// Machines fills the width.
 struct DesktopShell: View {
     let fleet: Fleet
@@ -85,14 +85,6 @@ struct DesktopShell: View {
                     drafting { BoardView(fleet: fleet, sheet: $sheet, selection: $session, query: query) }
                 } actions: {
                     PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession }
-                }
-            }
-        case .pullRequests:
-            ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: "Pull Requests", subtitle: "Linked to sessions", switcher: switcher, query: $query) {
-                    drafting { PullRequestsView(fleet: fleet, selection: $session, query: query) }
-                } actions: {
-                    EmptyView()
                 }
             }
         case .skills:
@@ -320,7 +312,6 @@ struct Switcher {
     @MainActor @ViewBuilder var items: some View {
         Button("Board", systemImage: "checklist") { go(.board) }
         Button("Chats", systemImage: Self.chatSymbol) { go(.chats) }
-        Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
         Button("Providers", systemImage: "person.2") { go(.providers) }
         Button("Machines", systemImage: "server.rack") { go(.machines) }
@@ -404,9 +395,6 @@ struct Sidebar: View {
                        selected: item == .board) { select(.board) }
             SidebarRow(title: "Chats", symbol: Switcher.chatSymbol, state: SessionState.rollup(lists.chats.map(\.state)),
                        selected: item == .chats) { select(.chats) }
-            SidebarRow(title: "Pull Requests", symbol: "arrow.triangle.pull",
-                       badge: lists.pullRequests(openOnly: true).flatMap(\.sessions).map(\.prs.count).reduce(0, +),
-                       selected: item == .pullRequests) { select(.pullRequests) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Machines", symbol: "server.rack", badge: lists.machines.count,
@@ -487,7 +475,6 @@ private struct SidebarRail: View {
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("checklist", "Board", .board, badge: lists.requests.count)
             rail(Switcher.chatSymbol, "Chats", .chats, badge: 0, state: SessionState.rollup(lists.chats.map(\.state)))
-            rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
             rail("book.closed", "Skills", .skills, badge: 0)
             rail("person.2", "Providers", .providers, badge: 0)
             rail("server.rack", "Machines", .machines, badge: 0)

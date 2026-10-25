@@ -11,8 +11,6 @@ struct SessionView: View {
     @State private var pushedFork: SessionKey?
     @State private var switching = false
     @State private var showsTerminal = false
-    @State private var showsPRs = false
-    @Environment(\.sessionPath) private var path
     @State private var showsMachineSettings = false
     @AppStorage("listHidden") private var listHidden = false
     @AppStorage("inspectorShown") private var inspectorShown = false
@@ -25,8 +23,6 @@ struct SessionView: View {
     private let compact = false
     #endif
     private var inspector: InspectorPresentation { InspectorPresentation(compact: compact) }
-    @State private var linking = false
-    @State private var typedPR = ""
     /// Where the transcript is scrolled, and where each session shown here was left.
     @State private var scroll = TranscriptScroll()
     /// The block at the top of the transcript, for the checkpoint rail.
@@ -193,14 +189,6 @@ struct SessionView: View {
                 .presentationDetents([.medium, .large])
                 .presentationBackground(Theme.surface)
         }
-        .alert("Link a pull request", isPresented: $linking) {
-            TextField("123, #123 or a link", text: $typedPR)
-            Button("Link") {
-                if let number = prNumber(in: typedPR) { Task { await fleet.linkPR(number, to: key) } }
-                typedPR = ""
-            }
-            Button("Cancel", role: .cancel) { typedPR = "" }
-        }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
@@ -208,7 +196,7 @@ struct SessionView: View {
             if compact {
                 ToolbarItem(placement: .principal) { compactTitle(model, summary) }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    prButton(labels: false, inToolbar: true)
+                    prChip(labels: false, inToolbar: true)
                     if let model { actionsMenu(model, inToolbar: true) }
                 }
             }
@@ -288,7 +276,7 @@ struct SessionView: View {
             }
             .frame(idealWidth: 160, maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 6) {
-            prButton(labels: labels, inToolbar: false)
+            prChip(labels: labels, inToolbar: false)
             if ownsTerminal, model?.state != .archived {
                 HeaderButton(symbol: showsTerminal ? "text.bubble" : "terminal",
                              title: labels ? showsTerminal ? "Chat" : "Terminal" : nil,
@@ -335,7 +323,7 @@ struct SessionView: View {
     /// The pull requests `#123` in the transcript can name: the session tree's, then the
     /// project's, whose repository the rest are in.
     private var linkablePRs: [PullRequest] {
-        let tree = PRRollup(of: key, session: fleet.session, children: fleet.lists.children).groups.flatMap(\.prs)
+        let tree = PRRollup(of: key, session: fleet.session, children: fleet.lists.children).all
         let project = fleet.lists.projects.first { $0.sessions.contains { $0.key == key } }?
             .sessions.flatMap(\.prs) ?? []
         return tree + project
@@ -348,31 +336,24 @@ struct SessionView: View {
         }
     }
 
-    /// The session's pull requests, tinted by the most urgent, opening their list.
+    /// The session's pull requests as text, tinted by the most urgent.
     @ViewBuilder
-    private func prButton(labels: Bool, inToolbar: Bool) -> some View {
+    private func prChip(labels: Bool, inToolbar: Bool) -> some View {
         let rollup = PRRollup(of: key, session: fleet.session, children: fleet.lists.children)
-        if !rollup.groups.isEmpty {
+        if !rollup.all.isEmpty {
             Group {
                 if inToolbar {
-                    Button(rollup.chip, systemImage: "arrow.triangle.pull") { showsPRs.toggle() }
-                        .tint(rollup.urgent?.color ?? Theme.secondary)
+                    Label(rollup.shortChip, systemImage: "arrow.triangle.pull")
+                        .labelStyle(.titleAndIcon)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(rollup.urgent?.color ?? Theme.secondary)
                 } else {
-                    HeaderButton(symbol: "arrow.triangle.pull", title: labels ? rollup.chip : rollup.shortChip,
-                                 tint: rollup.urgent?.color ?? Theme.secondary) {
-                        showsPRs.toggle()
-                    }
+                    HeaderLabel(symbol: "arrow.triangle.pull", title: labels ? rollup.chip : rollup.shortChip,
+                                tint: rollup.urgent?.color ?? Theme.secondary)
                 }
             }
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(rollup.chip)
-            // On compact width the popover adapts to a sheet, which PRStrip then frames.
-            .popover(isPresented: $showsPRs, arrowEdge: .bottom) {
-                PRStrip(fleet: fleet, key: key, rollup: rollup, presentation: PRListPresentation(compact: compact)) { child in
-                    showsPRs = false
-                    if let open { open(child) } else { path?.wrappedValue.append(.session(child)) }
-                }
-                .presentationCompactAdaptation(.sheet)
-            }
         }
     }
 
@@ -400,7 +381,6 @@ struct SessionView: View {
                     Button("Interrupt", systemImage: "stop.circle") { Task { await fleet.interrupt(key) } }
                 }
                 Button("Switch Account or Model…", systemImage: "arrow.left.arrow.right") { switching = true }
-                Button("Link Pull Request…", systemImage: "link") { linking = true }
                 if model.state.renamable {
                     Button("Rename…", systemImage: "pencil") { fleet.renaming = key }
                 }

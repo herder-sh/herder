@@ -49,8 +49,6 @@ struct VaultStats: Hashable, Identifiable {
     /// Whether this device's user owns the vault, and so may change what its hosts may do.
     let owned: Bool
     let byState: [SessionState: Int]
-    /// Open and draft pull requests linked to its sessions.
-    let openPRs: Int
     /// Projects it knows or runs sessions in.
     let projects: Int
     let storedEvents: UInt64?
@@ -84,7 +82,6 @@ struct VaultStats: Hashable, Identifiable {
         storedEvents = machine.vault?.events
         storageBytes = machine.vault?.storageBytes
         byState = tally(entries)
-        openPRs = entries.flatMap(\.model.prs).filter { $0.state.rank == 0 }.count
         projects = Set(machine.projects.map(\.projectId) + entries.compactMap(\.projectId)).count
         hosts = machine.hosts.map { host in
             let own = entries.filter { $0.head.hostId == host.hostId }
@@ -286,7 +283,6 @@ struct VaultSection: View {
                  tint: vault.count(.needsYou) > 0 ? Theme.accent : Theme.text)
             Stat(label: "Idle", value: "\(vault.count(.idle))")
             Stat(label: "Archived", value: "\(vault.count(.archived))", tint: Theme.tertiary)
-            Stat(label: "Open PRs", value: "\(vault.openPRs)")
             Stat(label: "Projects", value: "\(vault.projects)")
         }
     }
