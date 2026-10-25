@@ -2,7 +2,7 @@
 # as the next prompt, right after the turn and ahead of a prompt queued before the answer.
 {"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Add a migration."}}
 {"emit": {"type": "turn_started", "turn_id": "turn-1"}}
-{"emit": {"type": "question_asked", "question_id": "question-1", "turn_id": "turn-1", "text": "Which schema?", "choices": []}}
+{"emit": {"type": "question_asked", "question_id": "question-1", "turn_id": "turn-1", "text": "Which schema?", "choices": [], "multi_select": false}}
 {"expect": {"type": "answer_question", "question_id": "question-1", "answer": {"type": "text", "text": "This one.\n\n(1 attachment to this answer follows in my next message.)"}}}
 {"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
 {"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "The attachments to my answer.", "images": [{"media_type": "image/png", "data": "iVBORw0KGgpwbmc="}]}}
