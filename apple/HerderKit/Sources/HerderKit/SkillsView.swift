@@ -2,342 +2,388 @@ import Herder
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Skills: the skill library, its checkout on each machine, every skill with the providers it
-/// reaches and a switch per machine, the skills in each account's own folder, and the project
-/// skills of a session's repository. Owners add, import, edit and delete skills, and sync the
-/// library through a git repository; members only look.
+/// The Skills page's tabs.
+enum SkillsTab: String, Hashable {
+    case library, account, project
+
+    /// What the tab lists, for its ⓘ and its empty state.
+    var about: String {
+        switch self {
+        case .library:
+            "One folder per skill, each with a SKILL.md. Every machine keeps the library and hands the skills it has enabled to its provider CLIs; a switch turns a skill on or off on one machine. Synced through a git repository, each machine pulls what another pushed, and a dot marks a skill a machine that is behind does not have yet."
+        case .account:
+            "The skills in each account's own folder, such as ~/.claude/skills, with the skills Claude syncs from claude.ai. The account's CLI loads them; change them there."
+        case .project:
+            "The skills a project checks in, in .claude/skills or .agents/skills. They show once one of its sessions runs; change them in the repository."
+        }
+    }
+}
+
+/// Skills, in three tabs. **Library**: every skill with the providers it reaches and a switch
+/// per machine, then one line on how the machines' checkouts of the library stand. **Account**:
+/// the skills in each account's own folder. **Project**: the skills checked in to a project.
+/// Owners add, import, edit and delete skills (`SkillActions`) and sync the library through a git
+/// repository; members only look.
 struct SkillsView: View {
     let fleet: Fleet
-    /// The session open beside the screen, whose project's skills it lists first.
+    @Binding var sheet: AppSheet?
+    /// The session open beside the screen, whose project's skills the Project tab shows first.
     var session: SessionKey?
-    @State private var editing: SkillEditing?
-    @State private var importing = false
-    @State private var deleting: SkillLibrary.Skill?
-    @State private var repoURL = ""
-    @State private var projectId: ProjectId?
-    @State private var failures: [String] = []
 
     var body: some View {
-        let library = SkillLibrary(fleet.machines)
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                if library.checkouts.isEmpty {
-                    Text("No machine yet.").font(.footnote).foregroundStyle(Theme.tertiary)
-                } else {
-                    header(library)
-                    skills(library)
-                    if library.repo == nil {
-                        setup(library)
-                    } else {
-                        checkouts(library)
-                    }
-                }
-                accountSkills
-                projectSkills
-                ForEach(failures, id: \.self) { failure in
-                    Text(failure).font(.footnote).foregroundStyle(Theme.failure)
-                }
-            }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 16)
-            .frame(maxWidth: .infinity)
+            SkillsPage(fleet: fleet, sheet: $sheet, session: session)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .frame(maxWidth: 920, alignment: .leading)
+                .frame(maxWidth: .infinity)
         }
         .background(Theme.background)
         .navigationTitle("Skills")
-        .refreshable { failures = await fleet.pullSkills() }
-        .sheet(item: $editing) { editing in
-            SkillEditorSheet(fleet: fleet, editing: editing)
+        .toolbar {
+            #if os(iOS)
+            SkillActions(fleet: fleet, sheet: $sheet)
+            #endif
         }
-        .sheet(isPresented: $importing) { SkillImportSheet(fleet: fleet) }
+        .refreshable { await SkillActions.pull(fleet) }
+    }
+}
+
+/// What `SkillsView` scrolls: the tabs and the one shown.
+struct SkillsPage: View {
+    let fleet: Fleet
+    @Binding var sheet: AppSheet?
+    var session: SessionKey?
+    @State private var tab = SkillsTab.library
+    @State private var deleting: SkillLibrary.Skill?
+    @State private var repoURL = ""
+    @State private var projectId: ProjectId?
+
+    var body: some View {
+        let library = SkillLibrary(fleet.machines)
+        let accounts = AccountSkillList.all(fleet.machines)
+        let projects = ProjectSkills.all(fleet.machines)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                tabButton(.library, "Library", count: library.skills.count)
+                tabButton(.account, "Account", count: accounts.map(\.skills.count).reduce(0, +))
+                tabButton(.project, "Project", count: projects.map(\.skills.count).reduce(0, +))
+                Spacer()
+                InfoButton(text: tab.about)
+            }
+            switch tab {
+            case .library: libraryTab(library)
+            case .account: accountTab(accounts)
+            case .project: projectTab(projects)
+            }
+        }
         .confirmationDialog("Delete \(deleting?.name ?? "")?", isPresented: Binding(
             get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
-                if let deleting { delete(deleting.name) }
+                if let deleting { run("Could not delete \(deleting.name)") { try await fleet.deleteSkill(deleting.name) } }
             }
         } message: {
             Text("It is removed from the library on every machine.")
         }
     }
 
-    /// While each machine keeps its own library: syncing it through a git repository.
-    @ViewBuilder private func setup(_ library: SkillLibrary) -> some View {
-        Card {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Sync with a git repository").font(.headline).foregroundStyle(Theme.text)
-                Text("One folder per skill, each with a SKILL.md. Every machine keeps a checkout, pulls what another pushed, and hands the skills to the provider CLIs. The skills each machine has now are pushed to it.")
-                    .font(.subheadline).foregroundStyle(Theme.secondary)
-                if let setter = library.setter {
-                    HStack(spacing: 10) {
-                        InputBox(placeholder: "git@github.com:you/skills.git", text: $repoURL, mono: true)
-                            .accessibilityIdentifier("skills-repo-url")
-                        ActionButton(title: "Use", style: .primary) {
-                            await run { try await fleet.setSkillsRepo(repoURL.trimmingCharacters(in: .whitespaces), on: setter) }
-                        }
-                        .frame(width: 100)
-                        .disabled(repoURL.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                    Text("Each machine clones it with its own git access, as it pushes checkpoints.")
-                        .font(.footnote).foregroundStyle(Theme.tertiary)
-                } else {
-                    Label("Only a machine's owners can sync its library.", systemImage: "lock")
-                        .font(.footnote).foregroundStyle(Theme.tertiary)
-                }
+    private func tabButton(_ value: SkillsTab, _ title: String, count: Int) -> some View {
+        let selected = tab == value
+        return Button { tab = value } label: {
+            HStack(spacing: 5) {
+                Text(title).foregroundStyle(selected ? Theme.text : Theme.secondary)
+                Text("\(count)").monospacedDigit().foregroundStyle(Theme.tertiary)
             }
+            .font(Theme.body.weight(.medium))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(selected ? Theme.raised : .clear, in: .rect(cornerRadius: 8))
+            .hitTarget()
         }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("skills-tab-\(value.rawValue)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    /// The repository, and the buttons that change the library.
-    private func header(_ library: SkillLibrary) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let repo = library.repo {
-                Text(repo).font(Theme.mono).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                    .textSelection(.enabled)
+    // MARK: Library
+
+    @ViewBuilder private func libraryTab(_ library: SkillLibrary) -> some View {
+        if library.checkouts.isEmpty {
+            EmptySkills(title: "No machine yet", text: "Skills live on your machines; add one under Machines.")
+        } else {
+            if library.skills.isEmpty {
+                EmptySkills(title: "No skills yet",
+                            text: (library.writer == nil ? "" : "Write one with New Skill, or import a folder or a git repository. ")
+                                + SkillsTab.library.about)
             } else {
-                Text("Kept on each of your machines; not synced.").font(.subheadline).foregroundStyle(Theme.secondary)
+                SortableTable("skills.library", rows: library.skills, sortedBy: TableSort(column: "Skill"),
+                              columns: columns(library))
             }
-            FlowLayout(spacing: 8) {
-                if library.repo != nil {
-                    control("Pull", symbol: "arrow.down.circle") { failures = await fleet.pullSkills() }
-                        .disabled(library.pullable.isEmpty)
-                }
-                if library.writer != nil {
-                    control("New Skill", symbol: "plus") { editing = .new }
-                    control("Import", symbol: "square.and.arrow.down") { importing = true }
-                }
-            }
+            if library.repo == nil { setup(library) } else { health(library) }
             if library.writer == nil {
                 Label(library.checkouts.contains(where: \.owner) ? "Connect a machine you own to change the library."
                                                                  : "Only a machine's owners can change its library.",
                       systemImage: "lock")
-                    .font(.footnote).foregroundStyle(Theme.tertiary)
+                    .font(Theme.meta).foregroundStyle(Theme.tertiary)
             }
         }
     }
 
-    private func control(_ title: String, symbol: String, action: @escaping () async -> Void) -> some View {
-        Button { Task { await action() } } label: {
-            Chip(symbol: symbol, text: title, tint: Theme.text)
-                .frame(minHeight: 30)
-                .hitTarget()
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Each machine's checkout: its commit, when it last pulled, and why a pull failed.
-    private func checkouts(_ library: SkillLibrary) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeading(title: "Machines", count: library.checkouts.count)
-            Card(padding: 0) {
-                VStack(spacing: 0) {
-                    ForEach(Array(library.checkouts.enumerated()), id: \.element.id) { index, checkout in
-                        if index > 0 { Rectangle().fill(Theme.stroke).frame(height: 1) }
-                        CheckoutRow(checkout: checkout, repo: library.repo)
+    /// The skill and its description, the providers it reaches, a column per machine, and the
+    /// skill's menu for an owner.
+    private func columns(_ library: SkillLibrary) -> [SortableColumn<SkillLibrary.Skill>] {
+        var columns: [SortableColumn<SkillLibrary.Skill>] = [
+            SortableColumn("Skill", value: \.name) { SkillLabel(name: $0.name, description: $0.description) },
+            SortableColumn("Providers", width: 70, value: { $0.providers.count }) { skill in
+                HStack(spacing: 5) {
+                    ForEach(skill.providers, id: \.self) { provider in
+                        ProviderMark(provider: provider, size: 13).help(ModelCatalog.providerName(provider))
+                    }
+                    if skill.providers.isEmpty { Text("None").font(Theme.meta).foregroundStyle(Theme.tertiary) }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(skill.providers.isEmpty ? "Reaches no CLI"
+                                    : skill.providers.map(ModelCatalog.providerName).joined(separator: ", "))
+            },
+        ]
+        let behind = Set(library.behind.map(\.hostId))
+        for checkout in library.checkouts {
+            columns.append(SortableColumn(checkout.name, width: 84, alignment: .center) { skill in
+                MachineCell(skill: skill, checkout: checkout, behind: behind.contains(checkout.hostId)) { enabled in
+                    run("Could not turn \(skill.name) \(enabled ? "on" : "off")") {
+                        try await fleet.setSkillEnabled(skill.name, enabled, on: checkout.hostId)
                     }
                 }
-            }
+            })
         }
-    }
-
-    @ViewBuilder private func skills(_ library: SkillLibrary) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeading(title: "Library", count: library.skills.count)
-            if library.skills.isEmpty {
-                Text("No skills yet.").font(.footnote).foregroundStyle(Theme.tertiary)
-            }
-            ForEach(library.skills) { skill in
-                LibrarySkillRow(skill: skill, editable: library.writer != nil,
-                                edit: { editing = .existing(skill.name, description: skill.description) },
-                                delete: { deleting = skill },
-                                setEnabled: { hostId, enabled in
-                                    Task { await run { try await fleet.setSkillEnabled(skill.name, enabled, on: hostId) } }
-                                })
-            }
-        }
-    }
-
-    /// The skills in each account's own folder, which its CLI loads; read-only here.
-    @ViewBuilder private var accountSkills: some View {
-        let lists = AccountSkillList.all(fleet.machines)
-        if !lists.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                SectionHeading(title: "Account Skills", count: lists.map(\.skills.count).reduce(0, +))
-                ForEach(lists) { list in
-                    Text(list.title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                    ForEach(list.skills, id: \.self) { SourcedSkillRow(skill: $0) }
+        if library.writer != nil {
+            columns.append(SortableColumn("", width: 30, alignment: .trailing) { skill in
+                Menu {
+                    Button("Edit", systemImage: "pencil") { sheet = .skill(.existing(skill.name, description: skill.description)) }
+                    Button("Delete", systemImage: "trash", role: .destructive) { deleting = skill }
+                } label: {
+                    Image(systemName: "ellipsis").foregroundStyle(Theme.secondary).frame(width: 30, height: 24).hitTarget()
                 }
-                Text("In each account's own skills folder, such as ~/.claude/skills, with the skills Claude syncs from claude.ai; change them there.")
-                    .font(.footnote).foregroundStyle(Theme.tertiary)
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("\(skill.name) actions")
+            })
+        }
+        return columns
+    }
+
+    /// The library's sync health: its repository, then who is behind or stuck with a pull,
+    /// else the commit every machine is at.
+    private func health(_ library: SkillLibrary) -> some View {
+        let off = !library.behind.isEmpty || !library.stuck.isEmpty
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(library.repo ?? "").font(Theme.monoSmall).lineLimit(1).truncationMode(.middle)
+                    .textSelection(.enabled)
+                Text("·")
+                Text(library.health).foregroundStyle(off ? Theme.text : Theme.secondary).lineLimit(1)
+                if off && !library.pullable.isEmpty {
+                    Button("Pull now") { Task { await SkillActions.pull(fleet) } }
+                        .buttonStyle(.plain)
+                        .underline()
+                        .foregroundStyle(Theme.text)
+                        .fixedSize()
+                }
             }
+            .font(Theme.meta)
+            .foregroundStyle(Theme.secondary)
+            ForEach(library.stuck.filter { $0.pullError != nil }) { checkout in
+                Text("\(checkout.name): \(checkout.pullError ?? "")")
+                    .font(Theme.meta).foregroundStyle(Theme.failure).lineLimit(2).textSelection(.enabled)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// While each machine keeps its own library: syncing it through a git repository.
+    private func setup(_ library: SkillLibrary) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 4) {
+                Text("Kept on each machine; not synced.").font(Theme.meta).foregroundStyle(Theme.secondary)
+                InfoButton(text: "Sync the library through a git repository: every machine keeps a checkout, pulls what another pushed, and pushes the skills it has now. Each clones it with its own git access, as it pushes checkpoints.")
+            }
+            if let setter = library.setter {
+                HStack(spacing: 8) {
+                    InputBox(placeholder: "git@github.com:you/skills.git", text: $repoURL, mono: true)
+                        .accessibilityIdentifier("skills-repo-url")
+                    ActionButton(title: "Sync", style: .primary) {
+                        let url = repoURL.trimmingCharacters(in: .whitespaces)
+                        do { try await fleet.setSkillsRepo(url, on: setter) } catch {
+                            fleet.toast = .failure("Could not sync with \(url)", error)
+                        }
+                    }
+                    .frame(width: 100)
+                    .disabled(repoURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .frame(maxWidth: 560)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    // MARK: Account and project
+
+    @ViewBuilder private func accountTab(_ lists: [AccountSkillList]) -> some View {
+        if lists.isEmpty {
+            EmptySkills(title: "No account skills", text: SkillsTab.account.about)
+        } else {
+            let rows = lists.flatMap { list in list.skills.map { SourcedSkill(id: "\(list.id)/\($0.path ?? $0.name)", skill: $0, place: list.title) } }
+            SortableTable("skills.account", rows: rows, sortedBy: TableSort(column: "Skill"), columns: [
+                SortableColumn("Skill", value: \.skill.name) { SkillLabel(name: $0.skill.name, description: $0.skill.description) },
+                SortableColumn("Account", width: 220, value: \.place) {
+                    Text($0.place).font(Theme.meta).foregroundStyle(Theme.secondary).lineLimit(1)
+                },
+            ])
         }
     }
 
     /// The project skills of one project: the open session's, or one picked.
-    @ViewBuilder private var projectSkills: some View {
-        let projects = ProjectSkills.all(fleet.machines)
+    @ViewBuilder private func projectTab(_ projects: [ProjectSkills]) -> some View {
         let open = session.flatMap { key in
             fleet.machines.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }?.projectId
         }
-        let shown = projects.first { $0.projectId == projectId } ?? projects.first { $0.projectId == open }
-            ?? projects.first
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                SectionHeading(title: "Project Skills", count: shown?.skills.count)
-                Spacer()
-                if projects.count > 1, let shown {
-                    Menu {
-                        ForEach(projects) { project in
-                            Button(project.name) { projectId = project.projectId }
-                        }
-                    } label: {
-                        Chip(symbol: "folder", text: shown.name).frame(minHeight: 30).hitTarget()
-                    }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .fixedSize()
+        if let shown = projects.first(where: { $0.projectId == projectId }) ?? projects.first(where: { $0.projectId == open })
+            ?? projects.first {
+            Menu {
+                ForEach(projects) { project in
+                    Button(project.name) { projectId = project.projectId }
                 }
+            } label: {
+                Chip(symbol: "folder", text: shown.name).frame(minHeight: 30).hitTarget()
             }
-            if let shown {
-                if projects.count == 1 {
-                    Text(shown.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                }
-                ForEach(shown.skills, id: \.self) { SourcedSkillRow(skill: $0) }
-                Text("Checked in to the repository; change them there.")
-                    .font(.footnote).foregroundStyle(Theme.tertiary)
-            } else {
-                Text("Skills a project checks in, in .claude/skills or .agents/skills, show here once one of its sessions runs.")
-                    .font(.footnote).foregroundStyle(Theme.tertiary)
-            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .fixedSize()
+            .disabled(projects.count == 1)
+            let rows = shown.skills.map { SourcedSkill(id: $0.path ?? $0.name, skill: $0, place: $0.path ?? $0.name) }
+            SortableTable("skills.project", rows: rows, sortedBy: TableSort(column: "Skill"), columns: [
+                SortableColumn("Skill", value: \.skill.name) { SkillLabel(name: $0.skill.name, description: $0.skill.description) },
+                SortableColumn("Folder", width: 220, value: \.place) {
+                    Text($0.place).font(Theme.monoSmall).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.middle)
+                },
+            ])
+        } else {
+            EmptySkills(title: "No project skills", text: SkillsTab.project.about)
         }
     }
 
-    private func delete(_ name: String) {
-        Task { await run { try await fleet.deleteSkill(name) } }
-    }
-
-    private func run(_ action: () async throws -> Void) async {
-        do {
-            try await action()
-            failures = []
-        } catch {
-            failures = [describe(error)]
+    /// Runs a change of the library; a refusal shows as a toast headed `failure`.
+    private func run(_ failure: String, _ action: @escaping () async throws -> Void) {
+        Task {
+            do { try await action() } catch { fleet.toast = .failure(failure, error) }
         }
     }
 }
 
-/// One machine's checkout of the library.
-private struct CheckoutRow: View {
-    let checkout: SkillLibrary.Checkout
-    let repo: String?
+/// The Skills page's actions: **Pull** once there is a repository, **Import** and **New Skill**
+/// for an owner.
+struct SkillActions: View {
+    let fleet: Fleet
+    @Binding var sheet: AppSheet?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: "server.rack").foregroundStyle(Theme.secondary)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(checkout.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                Text(state).font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
-                if let error = checkout.pullError {
-                    Text(error).font(.caption).foregroundStyle(Theme.failure).lineLimit(3)
-                }
-            }
-            Spacer()
-            if let head = checkout.head {
-                Text(SkillLibrary.shortHead(head)).font(Theme.monoSmall).foregroundStyle(Theme.text)
-                    .textSelection(.enabled)
-            }
+        let library = SkillLibrary(fleet.machines)
+        if library.repo != nil {
+            button("Pull", symbol: "arrow.down.circle") { Task { await Self.pull(fleet) } }
+                .disabled(library.pullable.isEmpty)
         }
-        .padding(12)
-        .accessibilityElement(children: .combine)
+        if library.writer != nil {
+            button("Import", symbol: "square.and.arrow.down") { sheet = .importSkill }
+            button("New Skill", symbol: "plus", prominent: true) { sheet = .skill(.new) }
+        }
     }
 
-    private var state: String {
-        if !checkout.connected { return "Not connected" }
-        if !checkout.reported { return "Has not reported its library yet" }
-        guard let own = checkout.repo else { return "No library yet" }
-        if own != repo { return "On another repository: \(own)" }
-        guard let pulled = checkout.lastPull else { return "Not pulled yet" }
-        let age = Timestamp.age(pulled, now: .now)
-        return age == "now" ? "Pulled just now" : "Pulled \(age) ago"
+    @ViewBuilder private func button(_ title: String, symbol: String, prominent: Bool = false,
+                                     action: @escaping () -> Void) -> some View {
+        #if os(iOS)
+        Button(title, systemImage: symbol, action: action)
+        #else
+        PaneButton(title: title, symbol: symbol, prominent: prominent, action: action)
+        #endif
+    }
+
+    /// Pulls the library on every machine that can; what failed shows as a toast.
+    static func pull(_ fleet: Fleet) async {
+        let failures = await fleet.pullSkills()
+        if !failures.isEmpty {
+            fleet.toast = Toast(text: "Could not pull the skills", detail: failures.joined(separator: "\n"), failed: true)
+        }
     }
 }
 
-/// A library skill: its name and description, the providers it reaches, and a switch per
-/// machine.
-private struct LibrarySkillRow: View {
+/// A skill's name, with its description under it.
+private struct SkillLabel: View {
+    let name: String
+    let description: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(name).font(Theme.mono.weight(.semibold)).foregroundStyle(Theme.text)
+            if !description.isEmpty {
+                Text(description).font(Theme.meta).foregroundStyle(Theme.secondary).lineLimit(2)
+            }
+        }
+    }
+}
+
+/// A skill's cell in a machine's column: its switch there; an amber dot when the machine is
+/// behind and does not have it yet; a dash when the machine does not have it.
+private struct MachineCell: View {
     let skill: SkillLibrary.Skill
-    let editable: Bool
-    let edit: () -> Void
-    let delete: () -> Void
-    let setEnabled: (HostId, Bool) -> Void
+    let checkout: SkillLibrary.Checkout
+    let behind: Bool
+    let setEnabled: (Bool) -> Void
 
     var body: some View {
-        Card(padding: 12) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(skill.name).font(Theme.mono.weight(.semibold)).foregroundStyle(Theme.text)
-                        if !skill.description.isEmpty {
-                            Text(skill.description).font(.subheadline).foregroundStyle(Theme.secondary)
-                        }
-                    }
-                    Spacer()
-                    if editable {
-                        Menu {
-                            Button("Edit", systemImage: "pencil", action: edit)
-                            Button("Delete", systemImage: "trash", role: .destructive, action: delete)
-                        } label: {
-                            Image(systemName: "ellipsis").foregroundStyle(Theme.secondary)
-                                .frame(width: 30, height: 30).hitTarget()
-                        }
-                        .menuStyle(.button)
-                        .buttonStyle(.plain)
-                        .fixedSize()
-                        .accessibilityLabel("\(skill.name) actions")
-                    }
-                }
-                FlowLayout(spacing: 6) {
-                    if skill.providers.isEmpty {
-                        Chip(text: "Reaches no CLI")
-                    }
-                    ForEach(skill.providers, id: \.self) { provider in
-                        HStack(spacing: 4) {
-                            ProviderMark(provider: provider, size: 11)
-                            Text(ModelCatalog.providerName(provider))
-                        }
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Theme.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Theme.raised, in: .capsule)
-                    }
-                }
-                ForEach(skill.machines) { presence in
-                    Toggle(isOn: Binding(get: { presence.enabled }, set: { setEnabled(presence.hostId, $0) })) {
-                        Text("On \(presence.machine)").font(.subheadline).foregroundStyle(Theme.text)
-                    }
-                    .toggleStyle(.switch)
-                    .disabled(!presence.changeable)
-                    .accessibilityIdentifier("skill-\(skill.name)-\(presence.hostId)")
-                }
+        if let presence = skill.machines.first(where: { $0.hostId == checkout.hostId }) {
+            Toggle(isOn: Binding(get: { presence.enabled }, set: setEnabled)) {
+                Text("\(skill.name) on \(checkout.name)")
             }
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .controlSize(.mini)
+            .disabled(!presence.changeable)
+            .accessibilityIdentifier("skill-\(skill.name)-\(checkout.hostId)")
+        } else if behind {
+            Circle().fill(Theme.accent).frame(width: 7, height: 7)
+                .hitTarget()
+                .help("\(checkout.name) is behind; pull to get \(skill.name)")
+                .accessibilityLabel("\(checkout.name) is behind")
+        } else {
+            Text("–").foregroundStyle(Theme.tertiary)
+                .help("Not on \(checkout.name)")
+                .accessibilityLabel("Not on \(checkout.name)")
         }
     }
 }
 
-/// A project or account skill, read-only, labelled with where it is.
-private struct SourcedSkillRow: View {
+/// An account or project skill, with where it is.
+private struct SourcedSkill: Identifiable {
+    let id: String
     let skill: SessionSkill
+    /// The account and machine, or the folder in the repository.
+    let place: String
+}
+
+/// A tab with nothing to list: what it would list, and where that comes from.
+private struct EmptySkills: View {
+    let title: String
+    let text: String
 
     var body: some View {
-        Card(padding: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(skill.name).font(Theme.mono.weight(.semibold)).foregroundStyle(Theme.text)
-                if !skill.description.isEmpty {
-                    Text(skill.description).font(.subheadline).foregroundStyle(Theme.secondary)
-                }
-                Chip(symbol: "folder", text: "\(skill.sourceLabel) · \(skill.path ?? skill.name)")
-            }
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.headline).foregroundStyle(Theme.text)
+            Text(text).font(Theme.body).foregroundStyle(Theme.secondary).fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: 560, alignment: .leading)
+        .padding(.vertical, 24)
     }
 }
 

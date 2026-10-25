@@ -21,6 +21,10 @@ enum AppSheet: Identifiable, Hashable {
     case awsSignIn
     /// The installs, logins and sign-ins running, as a sheet on the iPhone.
     case activity
+    /// A new skill, or one of the library's to edit.
+    case skill(SkillEditing)
+    /// A skill to import into the library.
+    case importSkill
 
     var id: Self { self }
 }
@@ -36,6 +40,8 @@ extension AppSheet {
         case .addAccount: NewAccountSheet(fleet: fleet)
         case .awsSignIn: AwsSignInSheet(fleet: fleet)
         case .activity: ActivitySheet(fleet: fleet)
+        case .skill(let editing): SkillEditorSheet(fleet: fleet, editing: editing)
+        case .importSkill: SkillImportSheet(fleet: fleet)
         }
     }
 }
