@@ -9,35 +9,6 @@ private func pr(_ number: UInt64, _ state: PrState) -> PullRequest {
                 headBranch: "b\(number)", state: state, ci: .passing, review: .none, mergeable: .clean)
 }
 
-struct PullRequestTests {
-    @Test func aPRIsLinkedByNumberOrLinkAsInTheTUI() {
-        #expect(prNumber(in: "123") == 123)
-        #expect(prNumber(in: " #42 ") == 42)
-        #expect(prNumber(in: "https://github.com/herder-sh/herder/pull/96/files") == 96)
-        #expect(prNumber(in: "pull request") == nil)
-    }
-
-    @Test func pullRequestsGroupByProjectWithOpenOnesFirst() {
-        var withPRs = Script("01A")
-        var without = Script("01B")
-        let sessions = [
-            withPRs.key: withPRs.model([created(task: "Ship"), .prLinked(pr: pr(1, .merged)), .prLinked(pr: pr(2, .open))]),
-            without.key: without.model([created(task: "Idle")]),
-        ]
-        let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B"])], sessions: sessions)
-        let all = lists.pullRequests(openOnly: false)
-        #expect(all.count == 1)
-        #expect(all[0].sessions.map(\.session.title) == ["Ship"])
-        #expect(all[0].sessions[0].prs.map(\.number) == [2, 1])
-        #expect(lists.pullRequests(openOnly: true)[0].sessions[0].prs.map(\.number) == [2])
-    }
-
-    @Test func aSessionsPRsAreASheetOnCompactWidthAsThePopoverIsWiderThanAPhone() {
-        #expect(PRListPresentation(compact: true) == .sheet)
-        #expect(PRListPresentation(compact: false) == .popover)
-    }
-}
-
 private extension PRRollup {
     /// The rollup over `sessions`, each child found by its parent.
     init(of key: SessionKey, sessions: [SessionKey: SessionModel]) {
@@ -68,24 +39,18 @@ struct PRRollupTests {
 
     @Test func theRollupHoldsOwnAndNestedDescendantsPRsOnce() {
         let rollup = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01P"), sessions: tree)
-        #expect(rollup.groups.map(\.title) == ["Primary", "Child a", "Child b", "Grandchild"])
-        #expect(rollup.groups.map(\.depth) == [0, 1, 1, 2])
-        // #181 is linked to the primary and to Child a: it shows under the primary only.
-        #expect(rollup.groups.map { $0.prs.map(\.number) } == [[181], [185], [191, 190], [201, 200]])
-        #expect(rollup.all.count == 6)
+        // The primary's, then Child a's, Child b's and the grandchild's. #181 is linked to the
+        // primary and to Child a: it shows under the primary only.
+        #expect(rollup.all.map(\.number) == [181, 185, 191, 190, 201, 200])
         // A child's own roll-up leaves its parent and siblings out.
         let child = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01C"), sessions: tree)
-        #expect(child.groups.map(\.title) == ["Child b", "Grandchild"])
+        #expect(child.all.map(\.number) == [191, 190, 201, 200])
     }
 
-    @Test func eachGroupSortsOpenDraftMergedClosed() {
+    @Test func eachSessionsPRsSortOpenDraftMergedClosed() {
         let (key, model) = session("01P", task: "Primary",
                                    prs: [pr(1, .closed), pr(2, .merged), pr(3, .draft), pr(4, .open), pr(5, .open)])
-        let rollup = PRRollup(of: key, sessions: [key: model])
-        #expect(rollup.groups[0].prs.map(\.number) == [5, 4, 3, 2, 1])
-        #expect(rollup.groups[0].finished.map(\.number) == [2, 1])
-        #expect(PRRollup.folded(rollup.groups[0].finished) == "1 merged · 1 closed")
-        #expect(PRRollup.folded([pr(7, .merged), pr(8, .merged)]) == "2 merged")
+        #expect(PRRollup(of: key, sessions: [key: model]).all.map(\.number) == [5, 4, 3, 2, 1])
     }
 
     @Test func theChipSaysTheCountAndHowManyAreOpen() {
@@ -101,17 +66,6 @@ struct PRRollupTests {
         let (done, finished) = session("01P", task: "Primary", prs: [pr(1, .merged), pr(2, .closed)])
         #expect(PRRollup(of: done, sessions: [done: finished]).chip == "2 PRs")
         #expect(PRRollup(of: done, sessions: [done: finished]).shortChip == "2")
-    }
-
-    @Test func theListFiltersToOpenAndSearchesNumberTitleAndBranch() {
-        let rollup = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01P"), sessions: tree)
-        let open = rollup.shown(openOnly: true, query: "")
-        #expect(open.map(\.title) == ["Primary", "Child b", "Grandchild"])
-        #expect(open.flatMap { $0.prs.map(\.number) } == [181, 191, 201])
-        #expect(rollup.shown(openOnly: false, query: "#19").flatMap { $0.prs.map(\.number) } == [191, 190])
-        #expect(rollup.shown(openOnly: false, query: "PR 200").flatMap { $0.prs.map(\.number) } == [200])
-        #expect(rollup.shown(openOnly: false, query: "b185").map(\.title) == ["Child a"])
-        #expect(rollup.shown(openOnly: true, query: "nothing").isEmpty)
     }
 }
 
@@ -238,7 +192,6 @@ struct DraftTests {
         #expect(lists.project(for: .project("github.com/acme/app")) == "github.com/acme/app")
         // Anywhere but a project pane leaves it to the picker.
         #expect(lists.project(for: .board) == nil)
-        #expect(lists.project(for: .pullRequests) == nil)
         #expect(lists.project(for: .project("")) == nil)
     }
 }
@@ -371,8 +324,6 @@ struct CompactTabTests {
         #expect(CompactTab(.project("p")) == .projects)
         #expect(CompactTab(.chats) == .chats)
         #expect(CompactTab(.board) == .board)
-        // Pull Requests has no tab of its own: it opens from the Board.
-        #expect(CompactTab(.pullRequests) == .board)
         #expect(CompactTab(.skills) == .machines)
         // Usage shows on Providers, inside Machines.
         #expect(CompactTab(.providers) == .machines)

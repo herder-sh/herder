@@ -3,12 +3,12 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case board, chats, pullRequests, skills, providers, machines, vault
+    case board, chats, skills, providers, machines, vault
     case project(String)
 }
 
 /// The tab bar's tabs on compact width: the sidebar's sections, with the projects as one tab,
-/// Pull Requests inside the Board, and Skills, Providers and a vault inside Machines.
+/// and Skills, Providers and a vault inside Machines.
 enum CompactTab: Hashable, CaseIterable {
     case board, chats, projects, machines
 
@@ -17,7 +17,7 @@ enum CompactTab: Hashable, CaseIterable {
         switch item {
         case .project: self = .projects
         case .chats: self = .chats
-        case .board, .pullRequests: self = .board
+        case .board: self = .board
         case .skills, .providers, .machines, .vault: self = .machines
         }
     }
@@ -131,7 +131,7 @@ struct FleetView: View {
         .onChange(of: fleet.lists.projects.map(\.id)) { _, ids in
             if case .project(let id) = item, !ids.contains(id) { item = .board }
         }
-        // A draft belongs to the Board, Pull Requests or its own project, a chat to Chats;
+        // A draft belongs to the Board or its own project, a chat to Chats;
         // leaving for elsewhere closes it, and its card stays in those lists.
         .onChange(of: item) {
             guard let draft else { return }
@@ -140,15 +140,15 @@ struct FleetView: View {
         }
     }
 
-    /// The Board and Pull Requests list every project's sessions, so a session started from
-    /// one opens beside it rather than in its project's pane.
-    private var showsEverySession: Bool { item == .board || item == .pullRequests }
+    /// The Board lists every project's sessions, so a session started from it opens beside it
+    /// rather than in its project's pane.
+    private var showsEverySession: Bool { item == .board }
 
     private var shell: some View {
         DesktopShell(fleet: fleet, sheet: $sheet, item: $item, session: $session, draft: $draft, opened: opened)
     }
 
-    /// Shows a session just created from a draft: beside the Board, Pull Requests or Chats it
+    /// Shows a session just created from a draft: beside the Board or Chats it
     /// was started from, in its project's pane, or pushed on the Projects or Chats tab it was
     /// started from, else on the Board.
     private func opened(_ key: SessionKey) {
@@ -209,7 +209,7 @@ struct FleetView: View {
             .environment(\.sessionPath, $chatsPath)
         case .board:
             NavigationStack(path: $boardPath) {
-                BoardView(fleet: fleet, sheet: $sheet, query: boardQuery, showsPullRequests: true)
+                BoardView(fleet: fleet, sheet: $sheet, query: boardQuery)
                     .alwaysSearchable(text: $boardQuery, prompt: "Sessions")
                     .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession } }
                     .navigationDestination(for: NavRoute.self, destination: destination)
