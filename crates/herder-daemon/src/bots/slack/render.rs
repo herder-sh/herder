@@ -187,19 +187,29 @@ pub fn render(post: &Post) -> Value {
             blocks.push(actions(elements));
             (text, blocks)
         }
-        Post::Picker { text, projects } => {
+        Post::Picker { text, choices } => {
             let text = mrkdwn(text);
             let mut blocks = sections(&text);
-            let elements = projects
+            let elements = choices
                 .iter()
-                .map(|(project_id, name)| {
-                    let pick = Action::Pick {
-                        project_id: project_id.clone(),
-                    };
-                    buttons.action(name, None, &pick)
-                })
+                .map(|(label, action)| buttons.action(label, None, action))
                 .collect();
             blocks.push(actions(elements));
+            (text, blocks)
+        }
+        Post::Sessions { text, sessions } => {
+            let text = mrkdwn(text);
+            let mut blocks = sections(&text);
+            for (session_id, line) in sessions {
+                let next = Action::Continue {
+                    session_id: session_id.clone(),
+                };
+                blocks.push(json!({
+                    "type": "section",
+                    "text": { "type": "mrkdwn", "text": truncate(&mrkdwn(line), SECTION_CHARS) },
+                    "accessory": buttons.action("Continue here", None, &next),
+                }));
+            }
             (text, blocks)
         }
     };
@@ -242,10 +252,15 @@ impl Buttons {
 }
 
 fn label_of(label: &str) -> String {
-    if label.chars().count() <= LABEL_CHARS {
-        return label.to_owned();
+    truncate(label, LABEL_CHARS)
+}
+
+/// `text`, cut to at most `chars` characters with an ellipsis.
+fn truncate(text: &str, chars: usize) -> String {
+    if text.chars().count() <= chars {
+        return text.to_owned();
     }
-    let mut short: String = label.chars().take(LABEL_CHARS - 1).collect();
+    let mut short: String = text.chars().take(chars - 1).collect();
     short.push('…');
     short
 }

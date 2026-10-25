@@ -209,7 +209,7 @@ mod running {
     use slack_morphism::prelude::{SlackInteractionEvent, SlackPushEventCallback};
     use tokio::sync::mpsc;
 
-    use super::super::bridge::{Inbound, Place, Post};
+    use super::super::bridge::{Action, Inbound, Place, Post};
     use super::super::fake::{FakeBridge, Sent};
     use super::super::runner::{self, Runner};
     use super::super::slack::{payload, render};
@@ -330,6 +330,8 @@ mod running {
         inbound: mpsc::Sender<Inbound>,
         events: broadcast::Sender<Event>,
         dir: PathBuf,
+        /// The config file holding the bot.
+        config: PathBuf,
         stop: CancellationToken,
         _tmp: tempfile::TempDir,
     }
@@ -360,7 +362,23 @@ mod running {
                     (user_id.as_str() == "alice").then(|| "Alice".to_owned())
                 }),
             };
-            let runner = Runner::new(bot, Arc::clone(&bridge) as _, host);
+            let config = dir.join("daemon.toml");
+            let account = dir.join("account");
+            std::fs::write(
+                &config,
+                format!(
+                    "[[accounts]]\nid = \"account-1\"\nprovider = \"claude\"\n\
+                     config_dir = {account:?}\n"
+                ),
+            )
+            .unwrap();
+            // A config file runs no fake sessions: it holds the bot without its defaults,
+            // which `use` leaves as they are.
+            let mut entry = bot.clone();
+            entry.defaults = BotDefaults::default();
+            crate::config::put_bot(&config, &entry).unwrap();
+            let bindings = Bots::new(&Config::load_file(&config).unwrap()).bindings(&bot.bot_id);
+            let runner = Runner::new(bot, Arc::clone(&bridge) as _, host, bindings);
             let (inbound, received) = mpsc::channel(16);
             let stop = CancellationToken::new();
             tokio::spawn(runner.run(received, events.subscribe(), stop.clone()));
@@ -370,9 +388,89 @@ mod running {
                 inbound,
                 events,
                 dir,
+                config,
                 stop,
                 _tmp: tmp,
             }
+        }
+
+        /// The bots the config file lists now.
+        async fn listed(&self) -> Vec<Bot> {
+            list(&Bots::new(&Config::load_file(&self.config).unwrap())).await
+        }
+
+        /// A project named `name`, a git repository in the bot's directory, whose id is
+        /// `github.com/‹owner›/‹name›`.
+        fn project(&self, owner: &str, name: &str) -> herder_protocol::Project {
+            let repo = self.dir.join(owner);
+            std::fs::create_dir_all(&repo).unwrap();
+            for args in [
+                &["init", "--quiet", "--initial-branch=main"][..],
+                &[
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.com",
+                    "commit",
+                    "--quiet",
+                    "--allow-empty",
+                    "-m",
+                    "init",
+                ],
+            ] {
+                let status = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&repo)
+                    .args(args)
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+            }
+            herder_protocol::Project {
+                project_id: ProjectId::new(format!("github.com/{owner}/{name}")),
+                name: name.into(),
+                paths: vec![repo.to_str().unwrap().to_owned()],
+                remote: None,
+                default_permission_mode: None,
+                default_account: None,
+                setup_command: None,
+                icon: None,
+                icon_uploaded: false,
+                icon_background: None,
+                private_artifacts: false,
+            }
+        }
+
+        /// A session someone started in the app on `project_id`, titled `title`.
+        async fn started(&self, project_id: &ProjectId, title: &str) -> SessionId {
+            let alice = UserId::new("alice");
+            let created = self
+                .sessions
+                .handle(
+                    alice.clone(),
+                    CommandBody::CreateSession {
+                        repo: None,
+                        chat: false,
+                        project_id: Some(project_id.clone()),
+                        branch: None,
+                        account_id: Some(AccountId::new("account-1")),
+                        provider: Some(Provider::Other("fake".into())),
+                        model: None,
+                        permission_mode: None,
+                        failover_pin: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let CommandResult::SessionCreated { session_id } = created else {
+                panic!("created as {created:?}");
+            };
+            let rename = CommandBody::RenameSession {
+                session_id: session_id.clone(),
+                title: title.into(),
+            };
+            self.sessions.handle(alice, rename).await.unwrap();
+            session_id
         }
 
         async fn send(&self, inbound: Option<Inbound>) {
@@ -435,45 +533,28 @@ mod running {
         }
     }
 
-    /// The project `github.com/‹id›/trip1`, named trip1, in a new repository under `dir`.
-    fn project(dir: &Path, id: &str) -> herder_protocol::Project {
-        let repo = dir.join(id);
-        std::fs::create_dir_all(&repo).unwrap();
-        for args in [
-            &["init", "--quiet", "--initial-branch=main"][..],
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@example.com",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "-m",
-                "init",
-            ],
-        ] {
-            let status = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&repo)
-                .args(args)
-                .status()
-                .unwrap();
-            assert!(status.success());
-        }
-        herder_protocol::Project {
-            project_id: ProjectId::new(format!("github.com/{id}/trip1")),
-            name: "trip1".into(),
-            paths: vec![repo.to_str().unwrap().to_owned()],
-            remote: None,
-            default_permission_mode: None,
-            default_account: None,
-            setup_command: None,
-            icon: None,
-            icon_uploaded: false,
-            icon_background: None,
-            private_artifacts: false,
-        }
+    /// The recorded message `name`, saying `text` in the thread `thread_id`.
+    fn said(name: &str, text: &str, thread_id: &str) -> Option<Inbound> {
+        let Some(Inbound::Message(mut message)) = slack(name) else {
+            panic!("{name} is a message");
+        };
+        message.text = text.into();
+        message.place.thread_id = thread_id.into();
+        Some(Inbound::Message(message))
+    }
+
+    /// [`press`], in the thread `place`.
+    fn press_at(place: &Place, user: &str, post: &Post, label: &str) -> Option<Inbound> {
+        let Some(Inbound::Press(mut press)) = press("press_button.json", user, post, label) else {
+            panic!("a press");
+        };
+        press.direct = place.channel_id.starts_with('D');
+        press.place = place.clone();
+        Some(Inbound::Press(press))
+    }
+
+    fn text(text: &str) -> impl Fn(&Post) -> bool + '_ {
+        move |post| matches!(post, Post::Text(posted) if posted == text)
     }
 
     fn is_post(sent: &Sent, place: &Place, matches: impl Fn(&Post) -> bool) -> bool {
@@ -722,7 +803,7 @@ mod running {
     #[tokio::test]
     async fn a_project_named_in_the_message_is_where_the_thread_works() {
         let bot = Running::start("dm.jsonl", HashMap::new()).await;
-        let projects = [project(&bot.dir, "ada"), project(&bot.dir, "team")];
+        let projects = [bot.project("ada", "trip1"), bot.project("team", "trip1")];
         bot.sessions.set_projects(&projects).await;
 
         // Two projects are named so: the bot asks which.
@@ -738,9 +819,12 @@ mod running {
             picker,
             Post::Picker {
                 text: "Which project?".into(),
-                projects: projects
+                choices: projects
                     .iter()
-                    .map(|project| (project.project_id.clone(), "trip1".into()))
+                    .map(|project| {
+                        let project_id = project.project_id.clone();
+                        ("trip1".into(), Action::Pick { project_id })
+                    })
                     .collect(),
             }
         );
@@ -855,7 +939,7 @@ mod running {
         /// A session of the bot's project that Alice starts in the app, sending it `text`.
         async fn start_in_the_app(&self, text: &str) -> SessionId {
             self.sessions
-                .set_projects(&[project(&self.dir, "ada")])
+                .set_projects(&[self.project("ada", "trip1")])
                 .await;
             let alice = UserId::new("alice");
             let created = self
@@ -1133,6 +1217,279 @@ mod running {
         shutdown.cancel();
     }
 
+    /// The usual bot, with `project_id` its default project.
+    fn bot_on(project_id: &ProjectId) -> Bot {
+        let mut bot = bot();
+        bot.defaults.project_id = Some(project_id.clone());
+        bot
+    }
+
+    #[tokio::test]
+    async fn help_lists_the_commands_and_status_what_runs_and_waits() {
+        let bot = Running::start("approval.jsonl", HashMap::new()).await;
+        bot.send(said("dm_message.json", "help", "1761400900.000100"))
+            .await;
+        let help = Place {
+            thread_id: "1761400900.000100".into(),
+            ..dm()
+        };
+        let posted = bot
+            .posted(&help, |post| matches!(post, Post::Text(_)))
+            .await;
+        let Post::Text(posted) = posted else {
+            unreachable!()
+        };
+        for command in ["**sessions**", "**continue ‹name›**", "**use ‹project›**"] {
+            assert!(posted.contains(command), "{posted}");
+        }
+        // A command starts no session.
+        assert!(bot.sessions.sessions().await.unwrap().is_empty());
+
+        let status = Place {
+            thread_id: "1761400910.000100".into(),
+            ..dm()
+        };
+        bot.send(said("dm_message.json", "Status", &status.thread_id))
+            .await;
+        bot.posted(
+            &status,
+            text("Nothing runs or waits for you on this machine."),
+        )
+        .await;
+
+        // A session waits for an approval: status says so.
+        bot.send(slack("dm_message.json")).await;
+        bot.posted(&dm(), |post| matches!(post, Post::Approval { .. }))
+            .await;
+        bot.status(SessionStatus::NeedsYou).await;
+        let again = Place {
+            thread_id: "1761400920.000100".into(),
+            ..dm()
+        };
+        bot.send(said("dm_message.json", "status", &again.thread_id))
+            .await;
+        bot.posted(
+            &again,
+            text("**Waiting for you** (1)\n• Untitled session · chat · waiting for you"),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn sessions_lists_the_bots_sessions_and_continue_here_links_the_thread() {
+        let trip1 = ProjectId::new("github.com/ada/trip1");
+        let bot = Running::with(bot_on(&trip1), "continue.jsonl", HashMap::new()).await;
+        let projects = [bot.project("ada", "trip1"), bot.project("team", "other")];
+        bot.sessions.set_projects(&projects).await;
+        let login = bot.started(&trip1, "Fix the login bug").await;
+        // Another project's sessions are not the bot's.
+        bot.started(&projects[1].project_id, "Fix the team bug")
+            .await;
+
+        bot.send(said("dm_message.json", "sessions", &dm().thread_id))
+            .await;
+        let list = bot
+            .posted(&dm(), |post| matches!(post, Post::Sessions { .. }))
+            .await;
+        assert_eq!(
+            list,
+            Post::Sessions {
+                text: "Recent sessions, those waiting for you first:".into(),
+                sessions: vec![(login.clone(), "Fix the login bug · trip1".into())],
+            }
+        );
+        let rendered = render::render(&list).to_string();
+        assert!(rendered.contains("Continue here"), "{rendered}");
+
+        bot.send(press_at(&dm(), ADA, &list, "Continue here")).await;
+        bot.posted(
+            &dm(),
+            text("This thread continues **Fix the login bug**. Reply here to prompt it."),
+        )
+        .await;
+        let heads = bot.sessions.sessions().await.unwrap();
+        let head = heads.iter().find(|head| head.session_id == login).unwrap();
+        assert_eq!(head.threads.len(), 1);
+        assert_eq!(head.threads[0].thread_id, dm().thread_id);
+
+        // The thread's replies are the session's prompts now.
+        bot.send(slack("dm_reply.json")).await;
+        bot.posted(&dm(), answer("Added one.")).await;
+        assert_eq!(
+            bot.prompts(&login).await,
+            [(
+                Some(UserId::new("via trash-can, Ada")),
+                "Thanks, now add a test.".to_owned()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn continue_finds_a_session_by_title_or_offers_a_picker() {
+        let trip1 = ProjectId::new("github.com/ada/trip1");
+        let bot = Running::with(bot_on(&trip1), "continue.jsonl", HashMap::new()).await;
+        bot.sessions
+            .set_projects(&[bot.project("ada", "trip1")])
+            .await;
+        let login = bot.started(&trip1, "Fix the login bug").await;
+        let logout = bot.started(&trip1, "Fix the logout bug").await;
+        let thread = |thread_id: &str| Place {
+            thread_id: thread_id.into(),
+            ..dm()
+        };
+
+        bot.send(said("dm_message.json", "continue nothing", "1761401000.1"))
+            .await;
+        bot.posted(&thread("1761401000.1"), |post| {
+            matches!(post, Post::Text(text) if text.starts_with("No session in my projects"))
+        })
+        .await;
+
+        // Several titles match: the bot asks which, newest first.
+        bot.send(said("dm_message.json", "continue FIX", "1761401010.1"))
+            .await;
+        let picker = bot
+            .posted(&thread("1761401010.1"), |post| {
+                matches!(post, Post::Picker { .. })
+            })
+            .await;
+        assert_eq!(
+            picker,
+            Post::Picker {
+                text: "Which session?".into(),
+                choices: vec![
+                    (
+                        "Fix the logout bug".into(),
+                        Action::Continue {
+                            session_id: logout.clone()
+                        }
+                    ),
+                    (
+                        "Fix the login bug".into(),
+                        Action::Continue {
+                            session_id: login.clone()
+                        }
+                    ),
+                ],
+            }
+        );
+        bot.send(press_at(
+            &thread("1761401010.1"),
+            ADA,
+            &picker,
+            "Fix the logout bug",
+        ))
+        .await;
+        let linked = "This thread continues **Fix the logout bug**. Reply here to prompt it.";
+        bot.posted(&thread("1761401010.1"), text(linked)).await;
+
+        // One matches: the thread continues it at once.
+        bot.send(said(
+            "dm_message.json",
+            "continue login bug",
+            &dm().thread_id,
+        ))
+        .await;
+        let linked = "This thread continues **Fix the login bug**. Reply here to prompt it.";
+        bot.posted(&dm(), text(linked)).await;
+        bot.send(slack("dm_reply.json")).await;
+        bot.posted(&dm(), answer("Added one.")).await;
+        assert_eq!(bot.prompts(&login).await.len(), 1);
+        assert!(bot.prompts(&logout).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn use_binds_the_channel_and_list_bots_shows_it() {
+        let bot = Running::start("channel.jsonl", HashMap::new()).await;
+        let projects = [bot.project("ada", "trip1"), bot.project("team", "trip1")];
+        bot.sessions.set_projects(&projects).await;
+        let at = |thread_id: &str| Place {
+            thread_id: thread_id.into(),
+            ..channel()
+        };
+
+        // A direct message has no channel to bind.
+        let direct = Place {
+            thread_id: "1761401100.1".into(),
+            ..dm()
+        };
+        bot.send(said("dm_message.json", "use trip1", &direct.thread_id))
+            .await;
+        bot.posted(
+            &direct,
+            text("**use** binds a channel: mention me with it in one."),
+        )
+        .await;
+
+        bot.send(said("channel_mention.json", "use nowhere", "1761401110.1"))
+            .await;
+        bot.posted(
+            &at("1761401110.1"),
+            text("No project is named \"nowhere\"."),
+        )
+        .await;
+
+        // Two projects are named trip1: the bot asks which, by id.
+        bot.send(said("channel_mention.json", "use trip1", "1761401120.1"))
+            .await;
+        let picker = bot
+            .posted(&at("1761401120.1"), |post| {
+                matches!(post, Post::Picker { .. })
+            })
+            .await;
+        bot.send(press_at(
+            &at("1761401120.1"),
+            ADA,
+            &picker,
+            "github.com/team/trip1",
+        ))
+        .await;
+        bot.posted(
+            &at("1761401120.1"),
+            text("New threads in this channel work on **trip1**."),
+        )
+        .await;
+        let bound = vec![ChannelBinding {
+            channel_id: channel().channel_id,
+            project_id: projects[1].project_id.clone(),
+        }];
+        assert_eq!(bot.listed().await[0].channel_bindings, bound);
+
+        // The channel's new threads work on it.
+        bot.send(slack("channel_mention.json")).await;
+        bot.posted(&channel(), answer("It answers.")).await;
+        let head = bot.session().await;
+        assert_eq!(head.project_id.as_ref(), Some(&projects[1].project_id));
+
+        bot.send(said("channel_mention.json", "use none", "1761401130.1"))
+            .await;
+        bot.posted(
+            &at("1761401130.1"),
+            text("This channel is bound to no project now."),
+        )
+        .await;
+        assert_eq!(bot.listed().await[0].channel_bindings, []);
+    }
+
+    #[test]
+    fn only_a_whole_command_is_one() {
+        use super::super::runner::Command;
+        assert_eq!(Command::parse(" Help "), Some(Command::Help));
+        assert_eq!(Command::parse("use trip1"), Some(Command::Use("trip1")));
+        assert_eq!(
+            Command::parse("continue the login bug"),
+            Some(Command::Continue("the login bug"))
+        );
+        for prompt in [
+            "help me fix this",
+            "use the new API",
+            "continue",
+            "statuses",
+        ] {
+            assert_eq!(Command::parse(prompt), None, "{prompt}");
+        }
+    }
+
     #[test]
     fn every_post_renders_as_slack_message_content() {
         use herder_protocol::ApprovalId;
@@ -1192,7 +1549,16 @@ mod running {
             },
             Post::Picker {
                 text: "Which project?".into(),
-                projects: vec![(ProjectId::new("github.com/a/trip1"), "trip1".into())],
+                choices: vec![(
+                    "trip1".into(),
+                    Action::Pick {
+                        project_id: ProjectId::new("github.com/a/trip1"),
+                    },
+                )],
+            },
+            Post::Sessions {
+                text: "Recent sessions, those waiting for you first:".into(),
+                sessions: vec![(session_id.clone(), "Fix the login bug · trip1".into())],
             },
         ];
         for post in posts {
