@@ -232,7 +232,7 @@ struct ListsTests {
         #expect(lists.chats.map(\.title) == ["What is a monad?", "Look it up"])
         #expect(lists.chats.map(\.depth) == [0, 1])
         #expect(lists.archivedChats.map(\.title) == ["Old question"])
-        #expect(lists.board.map(\.lead.title) == ["Not in a project yet"])
+        #expect(lists.board().map(\.lead.title) == ["Not in a project yet"])
     }
 
     @Test func aChatDraftIsKeptApartFromProjectsAndPaths() {

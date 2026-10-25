@@ -40,6 +40,8 @@ struct SessionSummary: Hashable, Identifiable {
     let state: SessionState
     let activity: String
     let age: String
+    /// When it last did something; `nil` until its events have loaded.
+    var updatedAt: Date?
     var prs: [PullRequest] = []
     var depth = 0
     var children = 0

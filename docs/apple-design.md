@@ -51,7 +51,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 
 | app section | what it holds | TUI equivalent | component |
 |---|---|---|---|
-| **Board** | request cards, then every task tree by where its work stands, across all machines | board | `BoardView` |
+| **Board** | every open task tree across all machines, by day, cleared by archiving | board | `BoardView` |
 | **Projects** | every project with its sessions, children under parents | sidebar *projects* tree | `ProjectsView` (iPhone), `ProjectSessions` (Mac/iPad) |
 | **Pull Requests** | PRs linked to sessions, by project | prs view | `PullRequestsView` |
 | **Usage** | tokens and API-equivalent dollars over a period, per account and model | — | `UsageView` |
@@ -108,8 +108,7 @@ Rules:
   one-line subtitle, the pane's actions on the right (`PaneButton`, `IconButton`), then a
   search field where the pane lists sessions.
 - **The tab bar** on compact width has the same sections as the sidebar: Board (badged with the
-  request count), Projects, Usage, Machines. Pull Requests opens from the Board; Skills and a
-  vault show inside Machines. Each tab is its own `NavigationStack` (`boardPath`,
+  request count), Projects, Usage, Machines. Skills and a vault show inside Machines. Each tab is its own `NavigationStack` (`boardPath`,
   `projectsPath`), so switching tabs keeps each tab's place.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
@@ -221,25 +220,32 @@ top of Machines. Screenshots are still to come, in `docs/screenshots/p11-9`.
 
 ### 4.8 Board (`BoardView`, `Lists.board`)
 
-On iPhone, a connection line ("1 machine connected", `ConnectionLine`) heads the Board; on the
-Mac and iPad that line is the pane subtitle. With no machine paired it offers Add Machine.
-Then **Requests**: one `RequestCard` per pending approval or question, newest first,
-answerable in place; the card's session line opens that session. Then one column per
-`WorkState`, what needs the user first: needs you, CI failed, changes
-requested, conflicting, ready to merge, idle, working, waiting on CI, merged. A column lists
-task trees, not sessions, newest first, and its count counts trees.
+A task list you clear by archiving. On iPhone, a connection line ("1 machine connected",
+`ConnectionLine`) heads it; on the Mac and iPad the pane subtitle says "9 open · 3 working",
+with the machines after it while one is not connected. With no machine paired it offers Add
+Machine.
 
-- **Only top-level trees:** a child never has a card of its own. Under its tree's top row and
-  that session's own provider agents (`NativeAgentRow`), each herder child is a compact row in
-  the same style: tree line, provider mark, title, and its own `WorkState` badge on the right,
-  with a mini spinner while it works. Tapping it opens the child. A child's provider agents
-  are not shown on the Board.
-- **Column:** the most urgent `WorkState` among the tree's sessions that are neither archived
-  nor moved, so a child that needs you or failed CI never hides in its parent's Working column.
-- **Archived:** the Board lists a project's live trees (§4.7), so an archived child is on it
-  only while a live session hangs from it: dimmed, badged "Archived", after the live children;
-  several fold into one "N archived" row that expands. A tree whose top is archived but that
-  has a live child stays, its top row dimmed. A tree with no live session is not on the Board.
+- **One list of top-level task trees,** sectioned by the day of their last activity (Today,
+  Yesterday, then the date; Earlier for a tree whose events have not loaded), newest first
+  (`BoardSection`). The sort menu (`BoardSortMenu`, kept in `boardSort`) offers Recent, the
+  default; Created, by the top session's ULID; and Project, a section a project. A child never
+  has a row: the row says "N agents" for its herder children and provider agents, and they open
+  from the session.
+- **Row** (`TaskRow`): the archive circle, the state glyph, the title, `project ·` what the task
+  is doing, "N agents", and the age of its last activity.
+- **Three states** (`TaskState`), read from the tree's sessions only, never from a PR, CI or a
+  review: working ◐ (`Theme.running`) while one runs or waits for capacity; waiting for you, a
+  small amber dot, while one waits on an approval or a question or stopped on a failed turn, the
+  line then saying what it waits for; idle ○ otherwise. There are no request cards on the Board:
+  approvals and questions are answered in the session (§5.3); the sidebar's Board badge counts
+  them.
+- **Archiving completes a task:** the circle, E on the Mac, a swipe on iOS, or the context menu
+  archives the top session, and with it the tree (the daemon archives children first). The row
+  goes at once; the toast's Undo stays 5 s, and ⌘Z (the window's undo manager) undoes too.
+  "Archived today · N" ends the list, with Show Archived listing the tasks archived today,
+  dimmed, their circle filled: it or a swipe brings one back.
+- **Mac keyboard:** J and K move the highlighted row, Return opens it beside the list, E
+  archives it; a legend under the list says so.
 - **Search** keeps a tree when its top or any of its children matches.
 
 ---
@@ -426,7 +432,7 @@ blindness. No view uses a literal colour; new colours are added to `Theme` first
   Fixed point sizes only for glyphs and the draft's 30 pt question.
 - Corners: `Theme.corner` (10 pt) for cards and fields, 8–9 pt for buttons, 18 pt bubbles,
   22 pt composer, capsules for chips and badges.
-- Spacing: 16 pt screen margins on iOS, 20 pt pane margins on the Mac; 22 pt between Board
+- Spacing: 16 pt screen margins on iOS, 20 pt pane margins on the Mac; 22 pt between
   groups; content columns 760 pt (transcript, Board) and 784 pt (composer).
 
 ### 8.3 Components
