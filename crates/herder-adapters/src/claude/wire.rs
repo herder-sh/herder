@@ -420,6 +420,14 @@ pub(super) struct Question {
     pub multi_select: bool,
 }
 
+impl Question {
+    /// The label of the option at `index`; `None` when it has no such option.
+    pub fn label(&self, index: u32) -> Option<&str> {
+        let option = self.options.get(usize::try_from(index).ok()?)?;
+        Some(&option.label)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct QuestionOption {
     pub label: String,
