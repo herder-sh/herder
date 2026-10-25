@@ -113,7 +113,7 @@ async fn put_list_and_remove_round_trip_through_the_config_file() {
             .collect::<Vec<_>>(),
         [
             ("trash-can", BotState::Connecting),
-            ("tg", BotState::Unsupported)
+            ("tg", BotState::Connecting)
         ]
     );
 
@@ -199,6 +199,7 @@ mod running {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use frankenstein::updates::{Update, UpdateContent};
     use herder_adapters::fake::FakeAdapter;
     use herder_protocol::{
         ApprovalOutcome, Attachment, AttachmentId, EventBody, HostId, ItemBody, SessionStatus,
@@ -213,6 +214,9 @@ mod running {
     use super::super::fake::{FakeBridge, Sent};
     use super::super::runner::{self, Runner};
     use super::super::slack::{payload, render};
+    use super::super::telegram;
+    use super::super::telegram::payload::{Me, Pressed, Threads};
+    use super::super::telegram::render::Keys;
     use super::*;
     use crate::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
     use crate::worktree::Worktrees;
@@ -284,6 +288,169 @@ mod running {
             .to_owned()
     }
 
+    /// A chat the bots run on, with its recorded payloads under `fixtures/‹chat›`.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Chat {
+        Slack,
+        Telegram,
+    }
+
+    impl Chat {
+        fn ada(self) -> &'static str {
+            match self {
+                Self::Slack => ADA,
+                Self::Telegram => "700000001",
+            }
+        }
+
+        fn bob(self) -> &'static str {
+            match self {
+                Self::Slack => BOB,
+                Self::Telegram => "700000002",
+            }
+        }
+
+        fn eve(self) -> &'static str {
+            match self {
+                Self::Slack => EVE,
+                Self::Telegram => "700000003",
+            }
+        }
+
+        fn place(channel_id: &str, thread_id: &str) -> Place {
+            Place {
+                channel_id: channel_id.into(),
+                thread_id: thread_id.into(),
+            }
+        }
+
+        /// The thread Ada's direct message starts.
+        fn dm(self) -> Place {
+            match self {
+                Self::Slack => dm(),
+                Self::Telegram => Self::place("700000001", "101"),
+            }
+        }
+
+        /// The thread Ada's mention in the team's channel starts.
+        fn channel(self) -> Place {
+            match self {
+                Self::Slack => channel(),
+                Self::Telegram => Self::place("-1002000000001", "401"),
+            }
+        }
+
+        /// The thread Eve's direct message starts.
+        fn stranger(self) -> Place {
+            match self {
+                Self::Slack => Self::place("D0EVE00001", "1761400120.000300"),
+                Self::Telegram => Self::place("700000003", "201"),
+            }
+        }
+
+        /// The thread Ada's direct message with a screenshot starts, and where the bridge
+        /// downloads the screenshot from.
+        fn image(self) -> (Place, &'static str) {
+            match self {
+                Self::Slack => (
+                    Self::place("D0ADA00001", "1761400300.000600"),
+                    "https://files.slack.com/files-pri/T0HERDER01-F0SCREEN01/download/screen.png",
+                ),
+                Self::Telegram => (Self::place("700000001", "301"), "BQACAgQAAxkBAAMtZScreen01"),
+            }
+        }
+
+        /// The recorded update `name`, as getUpdates returns it.
+        fn update(name: &str) -> UpdateContent {
+            let text = std::fs::read_to_string(fixtures().join("telegram").join(name)).unwrap();
+            let update: Update = serde_json::from_str(&text).unwrap();
+            update.content
+        }
+
+        /// The recorded message `name`, as the bot takes it; `None` when it ignores it.
+        fn message(self, name: &str) -> Option<Inbound> {
+            match self {
+                Self::Slack => slack(name),
+                Self::Telegram => {
+                    let UpdateContent::Message(message) = Self::update(name) else {
+                        panic!("{name} is not a message");
+                    };
+                    telegram::payload::message(&message, &me(), &Threads::default())
+                }
+            }
+        }
+
+        /// The recorded press `name`, by `user`, of the button labelled `label` on `post`;
+        /// with no label, the recorded press as it is. `None` when it is no answer yet.
+        fn press(self, name: &str, user: &str, post: &Post, label: &str) -> Option<Inbound> {
+            match self {
+                Self::Slack if label.is_empty() => {
+                    payload::interaction(serde_json::from_value(recorded(name)).unwrap())
+                }
+                Self::Slack => press(name, user, post, label),
+                Self::Telegram => {
+                    let keys = Keys::default();
+                    let UpdateContent::CallbackQuery(mut query) = Self::update(name) else {
+                        panic!("{name} is not a press");
+                    };
+                    if !label.is_empty() {
+                        query.from.id = user.parse().unwrap();
+                        query.data = Some(telegram_button(post, label, &keys));
+                    }
+                    match telegram::payload::press(&query, &keys, &Threads::default()) {
+                        Pressed::Press(press) => Some(Inbound::Press(press)),
+                        _ => None,
+                    }
+                }
+            }
+        }
+
+        /// What the chat shows of `post`'s text.
+        fn shown(self, post: &Post) -> String {
+            match self {
+                Self::Slack => render::render(post)["text"].as_str().unwrap().to_owned(),
+                Self::Telegram => telegram::render::render(post, &Keys::default())
+                    .messages
+                    .join("\n"),
+            }
+        }
+
+        fn bot(self) -> Bot {
+            match self {
+                Self::Slack => bot(),
+                Self::Telegram => Bot {
+                    kind: BotKind::Telegram,
+                    token: "telegram/BOT_TOKEN".parse().unwrap(),
+                    app_token: None,
+                    allow: vec![
+                        person(self.ada(), "Ada", true),
+                        person(self.bob(), "Bob", false),
+                    ],
+                    ..bot()
+                },
+            }
+        }
+    }
+
+    fn me() -> Me {
+        Me {
+            id: 7_000_000_001,
+            username: "trash_can_bot".into(),
+        }
+    }
+
+    /// The callback data of the button labelled `label` that Telegram shows on `post`.
+    fn telegram_button(post: &Post, label: &str, keys: &Keys) -> String {
+        let rendered = telegram::render::render(post, keys);
+        rendered
+            .keyboard
+            .iter()
+            .flat_map(|keyboard| keyboard.inline_keyboard.iter().flatten())
+            .find(|button| button.text == label)
+            .and_then(|button| button.callback_data.clone())
+            .unwrap_or_else(|| panic!("no {label} button on {rendered:#?}"))
+    }
+
     fn person(id: &str, name: &str, approve: bool) -> BotUser {
         BotUser {
             external_user_id: id.into(),
@@ -345,8 +512,8 @@ mod running {
     impl Running {
         /// A bot whose sessions run the fake script `script`, and whose messages carry
         /// `files`, by url.
-        async fn start(script: &str, files: HashMap<String, Vec<u8>>) -> Self {
-            Self::with(bot(), script, files).await
+        async fn start(chat: Chat, script: &str, files: HashMap<String, Vec<u8>>) -> Self {
+            Self::with(chat.bot(), script, files).await
         }
 
         /// `bot` running, as [`Running::start`] runs the test bot.
@@ -604,14 +771,54 @@ mod running {
         (manager, events)
     }
 
-    #[tokio::test]
-    async fn a_direct_message_starts_a_session_and_a_reply_continues_it() {
-        let bot = Running::start("dm.jsonl", HashMap::new()).await;
-        bot.send(slack("dm_message.json")).await;
+    macro_rules! on_every_chat {
+        ($($test:ident),* $(,)?) => {
+            mod on_slack {
+                $(
+                    #[tokio::test]
+                    async fn $test() {
+                        super::$test(super::Chat::Slack).await;
+                    }
+                )*
+            }
 
-        // Only the final answer is posted, as mrkdwn; the working message goes.
-        let posted = bot.posted(&dm(), answer("Fixed **it**.")).await;
-        assert_eq!(render::render(&posted)["text"], "Fixed *it*.");
+            mod on_telegram {
+                $(
+                    #[tokio::test]
+                    async fn $test() {
+                        super::$test(super::Chat::Telegram).await;
+                    }
+                )*
+            }
+        };
+    }
+
+    // The scenarios each chat's bot runs, with its own recorded payloads.
+    on_every_chat!(
+        a_direct_message_starts_a_session_and_a_reply_continues_it,
+        in_a_channel_thread_only_mentions_are_prompts,
+        people_off_the_allowlist_get_one_note_and_reach_nothing,
+        only_people_with_approve_answer_approvals,
+        a_multi_select_question_is_answered_with_the_ticked_choices,
+        a_reply_answers_the_question_the_session_waits_on,
+        a_project_named_in_the_message_is_where_the_thread_works,
+        a_long_answer_posts_its_start_and_the_rest_on_full_answer,
+        stop_interrupts_the_turn,
+        a_prompt_start_in_the_app_is_mirrored_into_the_thread,
+        images_reach_the_agent_and_the_agents_images_are_uploaded,
+    );
+
+    async fn a_direct_message_starts_a_session_and_a_reply_continues_it(chat: Chat) {
+        let bot = Running::start(chat, "dm.jsonl", HashMap::new()).await;
+        bot.send(chat.message("dm_message.json")).await;
+
+        // Only the final answer is posted, in the chat's markup; the working message goes.
+        let posted = bot.posted(&chat.dm(), answer("Fixed **it**.")).await;
+        let shown = match chat {
+            Chat::Slack => "Fixed *it*.",
+            Chat::Telegram => "Fixed <b>it</b>.",
+        };
+        assert_eq!(chat.shown(&posted), shown);
         let sent = bot.bridge.sent();
         let working: Vec<_> = sent
             .iter()
@@ -626,7 +833,7 @@ mod running {
             .collect();
         assert_eq!(working.len(), 1, "{sent:#?}");
         assert!(sent.contains(&Sent::Delete {
-            place: dm(),
+            place: chat.dm(),
             id: working[0].clone(),
         }));
         let posts: Vec<_> = sent
@@ -643,12 +850,12 @@ mod running {
         let head = bot.session().await;
         assert!(head.chat);
         assert_eq!(head.threads.len(), 1);
-        assert_eq!(head.threads[0].channel_id, "D0ADA00001");
-        assert_eq!(head.threads[0].thread_id, "1761400000.000100");
+        assert_eq!(head.threads[0].channel_id, chat.dm().channel_id);
+        assert_eq!(head.threads[0].thread_id, chat.dm().thread_id);
         assert!(head.threads[0].url.is_some());
 
-        bot.send(slack("dm_reply.json")).await;
-        bot.posted(&dm(), answer("Added one.")).await;
+        bot.send(chat.message("dm_reply.json")).await;
+        bot.posted(&chat.dm(), answer("Added one.")).await;
         assert_eq!(bot.sessions.sessions().await.unwrap().len(), 1);
         let via = Some(UserId::new("via trash-can, Ada"));
         assert_eq!(
@@ -660,16 +867,16 @@ mod running {
         );
     }
 
-    #[tokio::test]
-    async fn in_a_channel_thread_only_mentions_are_prompts() {
-        let bot = Running::start("channel.jsonl", HashMap::new()).await;
-        bot.send(slack("channel_mention.json")).await;
-        bot.posted(&channel(), answer("It answers.")).await;
+    async fn in_a_channel_thread_only_mentions_are_prompts(chat: Chat) {
+        let bot = Running::start(chat, "channel.jsonl", HashMap::new()).await;
+        bot.send(chat.message("channel_mention.json")).await;
+        bot.posted(&chat.channel(), answer("It answers.")).await;
 
         // A reply without a mention is the people's own talk: Slack sends it as a channel
         // message, which the bot drops, and the runner ignores it should it arrive.
-        assert_eq!(slack("channel_reply.json"), None);
-        let Some(Inbound::Message(mut unmentioned)) = slack("channel_mention_reply.json") else {
+        assert_eq!(chat.message("channel_reply.json"), None);
+        let Some(Inbound::Message(mut unmentioned)) = chat.message("channel_mention_reply.json")
+        else {
             panic!("a mention is a message");
         };
         unmentioned.mentioned = false;
@@ -679,8 +886,8 @@ mod running {
             .await
             .unwrap();
 
-        bot.send(slack("channel_mention_reply.json")).await;
-        bot.posted(&channel(), answer("With fakes.")).await;
+        bot.send(chat.message("channel_mention_reply.json")).await;
+        bot.posted(&chat.channel(), answer("With fakes.")).await;
         let head = bot.session().await;
         let prompts: Vec<_> = bot
             .prompts(&head.session_id)
@@ -691,23 +898,19 @@ mod running {
         assert_eq!(prompts, ["What does the bot do?", "and how is it tested?"]);
     }
 
-    #[tokio::test]
-    async fn people_off_the_allowlist_get_one_note_and_reach_nothing() {
-        let bot = Running::start("dm.jsonl", HashMap::new()).await;
+    async fn people_off_the_allowlist_get_one_note_and_reach_nothing(chat: Chat) {
+        let bot = Running::start(chat, "dm.jsonl", HashMap::new()).await;
         // Bots, the bot itself among them, are never heard.
-        assert_eq!(slack("dm_bot.json"), None);
-        assert_eq!(slack("dm_own.json"), None);
+        assert_eq!(chat.message("dm_bot.json"), None);
+        assert_eq!(chat.message("dm_own.json"), None);
 
-        bot.send(slack("dm_stranger.json")).await;
-        bot.send(slack("dm_stranger.json")).await;
-        let place = Place {
-            channel_id: "D0EVE00001".into(),
-            thread_id: "1761400120.000300".into(),
-        };
+        bot.send(chat.message("dm_stranger.json")).await;
+        bot.send(chat.message("dm_stranger.json")).await;
+        let place = chat.stranger();
         let sent = bot.bridge.until(|sent| !sent.is_empty()).await;
         // Ada's message, sent after, is taken: the stranger's were handled before it.
-        bot.send(slack("dm_message.json")).await;
-        bot.posted(&dm(), answer("Fixed **it**.")).await;
+        bot.send(chat.message("dm_message.json")).await;
+        bot.posted(&chat.dm(), answer("Fixed **it**.")).await;
         let notes: Vec<_> = bot
             .bridge
             .sent()
@@ -721,16 +924,15 @@ mod running {
         else {
             unreachable!()
         };
-        assert_eq!((at, user_id.as_str()), (&place, EVE));
+        assert_eq!((at, user_id.as_str()), (&place, chat.eve()));
         assert_eq!(bot.sessions.sessions().await.unwrap().len(), 1);
     }
 
-    #[tokio::test]
-    async fn only_people_with_approve_answer_approvals() {
-        let bot = Running::start("approval.jsonl", HashMap::new()).await;
-        bot.send(slack("dm_message.json")).await;
+    async fn only_people_with_approve_answer_approvals(chat: Chat) {
+        let bot = Running::start(chat, "approval.jsonl", HashMap::new()).await;
+        bot.send(chat.message("dm_message.json")).await;
         let approval = bot
-            .posted(&dm(), |post| matches!(post, Post::Approval { .. }))
+            .posted(&chat.dm(), |post| matches!(post, Post::Approval { .. }))
             .await;
         let Post::Approval {
             summary, resolved, ..
@@ -742,19 +944,20 @@ mod running {
 
         // Bob may drive sessions but not approve: he gets a note, and the request waits.
         bot.status(SessionStatus::NeedsYou).await;
-        bot.send(press("press_button.json", BOB, &approval, "Allow"))
+        bot.send(chat.press("press_button.json", chat.bob(), &approval, "Allow"))
             .await;
         bot.bridge
             .until(|sent| {
-                sent.iter()
-                    .any(|sent| matches!(sent, Sent::Ephemeral { user_id, .. } if user_id == BOB))
+                sent.iter().any(
+                    |sent| matches!(sent, Sent::Ephemeral { user_id, .. } if user_id == chat.bob()),
+                )
             })
             .await;
         assert_eq!(bot.session().await.status, SessionStatus::NeedsYou);
 
-        bot.send(press("press_button.json", ADA, &approval, "Allow"))
+        bot.send(chat.press("press_button.json", chat.ada(), &approval, "Allow"))
             .await;
-        bot.posted(&dm(), answer("All green.")).await;
+        bot.posted(&chat.dm(), answer("All green.")).await;
         let edited = bot.bridge.sent().into_iter().any(|sent| {
             matches!(
                 sent,
@@ -765,31 +968,29 @@ mod running {
         assert!(edited, "{:#?}", bot.bridge.sent());
     }
 
-    #[tokio::test]
-    async fn a_multi_select_question_is_answered_with_the_ticked_choices() {
-        let bot = Running::start("question.jsonl", HashMap::new()).await;
-        bot.send(slack("dm_message.json")).await;
+    async fn a_multi_select_question_is_answered_with_the_ticked_choices(chat: Chat) {
+        let bot = Running::start(chat, "question.jsonl", HashMap::new()).await;
+        bot.send(chat.message("dm_message.json")).await;
         let question = bot
-            .posted(&dm(), |post| matches!(post, Post::Question { .. }))
+            .posted(&chat.dm(), |post| matches!(post, Post::Question { .. }))
             .await;
         // Ticking a box is no answer yet.
         assert_eq!(
-            payload::interaction(serde_json::from_value(recorded("press_tick.json")).unwrap()),
+            chat.press("press_tick.json", chat.ada(), &question, ""),
             None
         );
-        bot.send(press("press_submit.json", ADA, &question, "Submit"))
+        bot.send(chat.press("press_submit.json", chat.ada(), &question, "Submit"))
             .await;
-        bot.posted(&dm(), answer("Set up.")).await;
+        bot.posted(&chat.dm(), answer("Set up.")).await;
     }
 
-    #[tokio::test]
-    async fn a_reply_answers_the_question_the_session_waits_on() {
-        let bot = Running::start("reply.jsonl", HashMap::new()).await;
-        bot.send(slack("dm_message.json")).await;
-        bot.posted(&dm(), |post| matches!(post, Post::Question { .. }))
+    async fn a_reply_answers_the_question_the_session_waits_on(chat: Chat) {
+        let bot = Running::start(chat, "reply.jsonl", HashMap::new()).await;
+        bot.send(chat.message("dm_message.json")).await;
+        bot.posted(&chat.dm(), |post| matches!(post, Post::Question { .. }))
             .await;
-        bot.send(slack("dm_reply.json")).await;
-        bot.posted(&dm(), answer("Will do.")).await;
+        bot.send(chat.message("dm_reply.json")).await;
+        bot.posted(&chat.dm(), answer("Will do.")).await;
         let answered = bot.bridge.sent().into_iter().any(|sent| {
             matches!(
                 sent,
@@ -800,20 +1001,19 @@ mod running {
         assert!(answered, "{:#?}", bot.bridge.sent());
     }
 
-    #[tokio::test]
-    async fn a_project_named_in_the_message_is_where_the_thread_works() {
-        let bot = Running::start("dm.jsonl", HashMap::new()).await;
+    async fn a_project_named_in_the_message_is_where_the_thread_works(chat: Chat) {
+        let bot = Running::start(chat, "dm.jsonl", HashMap::new()).await;
         let projects = [bot.project("ada", "trip1"), bot.project("team", "trip1")];
         bot.sessions.set_projects(&projects).await;
 
         // Two projects are named so: the bot asks which.
-        let Some(Inbound::Message(mut message)) = slack("dm_message.json") else {
+        let Some(Inbound::Message(mut message)) = chat.message("dm_message.json") else {
             panic!("a direct message is a message");
         };
         message.text = "Trip1: Fix the login bug".into();
         bot.inbound.send(Inbound::Message(message)).await.unwrap();
         let picker = bot
-            .posted(&dm(), |post| matches!(post, Post::Picker { .. }))
+            .posted(&chat.dm(), |post| matches!(post, Post::Picker { .. }))
             .await;
         assert_eq!(
             picker,
@@ -831,9 +1031,9 @@ mod running {
         assert!(bot.sessions.sessions().await.unwrap().is_empty());
 
         // The one picked starts with the message, less the project's name.
-        let pick = press("press_button.json", ADA, &picker, "trip1");
+        let pick = chat.press("press_button.json", chat.ada(), &picker, "trip1");
         bot.send(pick).await;
-        bot.posted(&dm(), answer("Fixed **it**.")).await;
+        bot.posted(&chat.dm(), answer("Fixed **it**.")).await;
         let head = bot.session().await;
         assert_eq!(head.project_id.as_ref(), Some(&projects[0].project_id));
         assert_eq!(
@@ -842,12 +1042,11 @@ mod running {
         );
     }
 
-    #[tokio::test]
-    async fn a_long_answer_posts_its_start_and_the_rest_on_full_answer() {
-        let bot = Running::start("long.jsonl", HashMap::new()).await;
-        bot.send(slack("dm_message.json")).await;
+    async fn a_long_answer_posts_its_start_and_the_rest_on_full_answer(chat: Chat) {
+        let bot = Running::start(chat, "long.jsonl", HashMap::new()).await;
+        bot.send(chat.message("dm_message.json")).await;
         let posted = bot
-            .posted(&dm(), |post| matches!(post, Post::Answer { .. }))
+            .posted(&chat.dm(), |post| matches!(post, Post::Answer { .. }))
             .await;
         let Post::Answer { text, more, .. } = &posted else {
             unreachable!()
@@ -862,13 +1061,16 @@ mod running {
             open,
             &format!("herder://session?host=host-1&session={session_id}")
         );
-        let rendered = render::render(&posted);
-        assert!(
-            rendered.to_string().contains("Open in herder"),
-            "{rendered:#}"
-        );
+        // Telegram opens no herder:// link.
+        if chat == Chat::Slack {
+            let rendered = render::render(&posted);
+            assert!(
+                rendered.to_string().contains("Open in herder"),
+                "{rendered:#}"
+            );
+        }
 
-        bot.send(press("press_button.json", ADA, &posted, "Full answer"))
+        bot.send(chat.press("press_button.json", chat.ada(), &posted, "Full answer"))
             .await;
         let sent = bot
             .bridge
@@ -876,33 +1078,31 @@ mod running {
             .await;
         let rest = (31..=40).map(|i| format!("Line {i}.")).collect::<Vec<_>>();
         assert!(sent.contains(&Sent::Snippet {
-            place: dm(),
+            place: chat.dm(),
             title: "Full answer".into(),
             text: rest.join("\n"),
         }));
     }
 
-    #[tokio::test]
-    async fn stop_interrupts_the_turn() {
-        let bot = Running::start("stop.jsonl", HashMap::new()).await;
-        bot.send(slack("dm_message.json")).await;
+    async fn stop_interrupts_the_turn(chat: Chat) {
+        let bot = Running::start(chat, "stop.jsonl", HashMap::new()).await;
+        bot.send(chat.message("dm_message.json")).await;
         let working = bot
-            .posted(&dm(), |post| matches!(post, Post::Working { .. }))
+            .posted(&chat.dm(), |post| matches!(post, Post::Working { .. }))
             .await;
         // Stop works once the turn runs.
         bot.status(SessionStatus::Running).await;
-        bot.send(press("press_button.json", ADA, &working, "Stop"))
+        bot.send(chat.press("press_button.json", chat.ada(), &working, "Stop"))
             .await;
-        bot.posted(&dm(), |post| post == &Post::Text("Stopped.".into()))
+        bot.posted(&chat.dm(), |post| post == &Post::Text("Stopped.".into()))
             .await;
         bot.status(SessionStatus::Idle).await;
     }
 
-    #[tokio::test]
-    async fn a_prompt_start_in_the_app_is_mirrored_into_the_thread() {
-        let bot = Running::start("mirror.jsonl", HashMap::new()).await;
-        bot.send(slack("dm_message.json")).await;
-        bot.posted(&dm(), answer("Fixed it.")).await;
+    async fn a_prompt_start_in_the_app_is_mirrored_into_the_thread(chat: Chat) {
+        let bot = Running::start(chat, "mirror.jsonl", HashMap::new()).await;
+        bot.send(chat.message("dm_message.json")).await;
+        bot.posted(&chat.dm(), answer("Fixed it.")).await;
         let session_id = bot.session().await.session_id;
 
         bot.sessions
@@ -917,11 +1117,11 @@ mod running {
             )
             .await
             .unwrap();
-        bot.posted(&dm(), |post| {
+        bot.posted(&chat.dm(), |post| {
             post == &Post::Text("Alice (app): Also update the docs.".into())
         })
         .await;
-        bot.posted(&dm(), answer("Updated.")).await;
+        bot.posted(&chat.dm(), answer("Updated.")).await;
     }
 
     /// The test bot, working on a project, with Ada asking to be notified.
@@ -1102,20 +1302,16 @@ mod running {
             .await;
     }
 
-    #[tokio::test]
-    async fn images_reach_the_agent_and_the_agents_images_are_uploaded() {
+    async fn images_reach_the_agent_and_the_agents_images_are_uploaded(chat: Chat) {
         let png = b"\x89PNG\r\n\x1a\npng".to_vec();
-        let url = "https://files.slack.com/files-pri/T0HERDER01-F0SCREEN01/download/screen.png";
+        let (place, url) = chat.image();
         let bot = Running::start(
+            chat,
             "image.jsonl",
             HashMap::from([(url.to_owned(), png.clone())]),
         )
         .await;
-        bot.send(slack("dm_image.json")).await;
-        let place = Place {
-            channel_id: "D0ADA00001".into(),
-            thread_id: "1761400300.000600".into(),
-        };
+        bot.send(chat.message("dm_image.json")).await;
         bot.posted(&place, answer("The button is cut off.")).await;
 
         // The agent publishes a screenshot: it is uploaded into the thread.
@@ -1202,7 +1398,10 @@ mod running {
                     )
                 })
                 .collect();
-            if states[0].1 == BotState::WaitingForVault {
+            if states
+                .iter()
+                .all(|(_, state, _)| *state == BotState::WaitingForVault)
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1211,7 +1410,7 @@ mod running {
             states,
             [
                 ("trash-can".to_owned(), BotState::WaitingForVault, true),
-                ("tg".to_owned(), BotState::Unsupported, false),
+                ("tg".to_owned(), BotState::WaitingForVault, true),
             ]
         );
         shutdown.cancel();
@@ -1226,7 +1425,7 @@ mod running {
 
     #[tokio::test]
     async fn help_lists_the_commands_and_status_what_runs_and_waits() {
-        let bot = Running::start("approval.jsonl", HashMap::new()).await;
+        let bot = Running::start(Chat::Slack, "approval.jsonl", HashMap::new()).await;
         bot.send(said("dm_message.json", "help", "1761400900.000100"))
             .await;
         let help = Place {
@@ -1400,7 +1599,7 @@ mod running {
 
     #[tokio::test]
     async fn use_binds_the_channel_and_list_bots_shows_it() {
-        let bot = Running::start("channel.jsonl", HashMap::new()).await;
+        let bot = Running::start(Chat::Slack, "channel.jsonl", HashMap::new()).await;
         let projects = [bot.project("ada", "trip1"), bot.project("team", "trip1")];
         bot.sessions.set_projects(&projects).await;
         let at = |thread_id: &str| Place {
@@ -1490,10 +1689,9 @@ mod running {
         }
     }
 
-    #[test]
-    fn every_post_renders_as_slack_message_content() {
+    /// One post of every kind, long ones among them.
+    fn every_post() -> Vec<Post> {
         use herder_protocol::ApprovalId;
-        use slack_morphism::prelude::SlackMessageContent;
 
         let session_id = SessionId::new("s1");
         let long = (1..=200)
@@ -1561,7 +1759,14 @@ mod running {
                 sessions: vec![(session_id.clone(), "Fix the login bug · trip1".into())],
             },
         ];
-        for post in posts {
+        posts.into()
+    }
+
+    #[test]
+    fn every_post_renders_as_slack_message_content() {
+        use slack_morphism::prelude::SlackMessageContent;
+
+        for post in every_post() {
             let rendered = render::render(&post);
             let content: SlackMessageContent = serde_json::from_value(rendered.clone())
                 .unwrap_or_else(|err| panic!("{err}: {rendered:#}"));
@@ -1572,5 +1777,33 @@ mod running {
                 }
             }
         }
+    }
+
+    #[test]
+    fn every_post_renders_as_telegram_messages() {
+        for post in every_post() {
+            let rendered = telegram::render::render(&post, &Keys::default());
+            assert!(!rendered.messages.is_empty(), "{post:?}");
+            for message in &rendered.messages {
+                // Telegram takes 4096 characters, once its HTML is read.
+                assert!(message.chars().count() <= 4096, "{post:?}");
+            }
+            for button in rendered
+                .keyboard
+                .iter()
+                .flat_map(|k| k.inline_keyboard.iter().flatten())
+            {
+                let data = button.callback_data.as_deref().unwrap();
+                assert!(data.len() <= 64, "{data}");
+            }
+        }
+        // A long answer is split between lines, into messages that each read as a whole.
+        let Post::Answer { text, .. } = &every_post()[2] else {
+            panic!("the third post is an answer");
+        };
+        let long = text.repeat(4);
+        let rendered = telegram::render::render(&Post::Text(long.clone()), &Keys::default());
+        assert!(rendered.messages.len() > 1);
+        assert_eq!(rendered.messages.join("\n"), long);
     }
 }

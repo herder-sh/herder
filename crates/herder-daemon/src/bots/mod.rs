@@ -6,13 +6,15 @@
 //! [`bridge::Bridge`], and drives the host's sessions from it ([`runner`]). A bot whose tokens
 //! cannot be read waits for the vault and retries; one whose chat refuses them waits for new
 //! ones; one whose chat cannot be reached connects again, backing off. Changing a bot's entry
-//! connects it again. Slack bots run ([`slack`]); Telegram ones are `unsupported` for now.
+//! connects it again. Slack bots ([`slack`]) and Telegram ones ([`telegram`]) run; a kind newer
+//! than this build is `unsupported`.
 
 pub mod bridge;
 #[cfg(test)]
 mod fake;
 pub mod runner;
 pub mod slack;
+pub mod telegram;
 #[cfg(test)]
 mod tests;
 
@@ -21,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, PoisonError};
 use std::time::Duration;
 
+use futures_util::FutureExt;
 use herder_protocol::{
     Account, Bot, BotError, BotId, BotKind, BotState, BotStatus, ChannelBinding, CommandBody,
     CommandResult, ErrorCode, ErrorInfo, Event, Item, ItemId, ProjectId, SessionHead, SessionId,
@@ -30,6 +33,7 @@ use tokio::sync::{Mutex, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use self::bridge::ConnectError;
 use crate::config::{self, Config};
 use crate::session::EventSink;
 use crate::vault::{Held, HostSecrets};
@@ -125,7 +129,7 @@ impl Bots {
                 bot_id: bot.bot_id.clone(),
                 statuses: Arc::clone(&self.statuses),
             };
-            if bot.kind == BotKind::Slack {
+            if runs(bot.kind) {
                 status.set(BotState::Connecting, None);
                 let bindings = self.bindings(&bot.bot_id);
                 tokio::spawn(keep(
@@ -185,9 +189,10 @@ impl Bots {
                         .map(|bot| match statuses.get(&bot.bot_id) {
                             Some(status) => status.clone(),
                             None => BotStatus {
-                                state: match bot.kind {
-                                    BotKind::Slack => BotState::Connecting,
-                                    _ => BotState::Unsupported,
+                                state: if runs(bot.kind) {
+                                    BotState::Connecting
+                                } else {
+                                    BotState::Unsupported
                                 },
                                 bot_id: bot.bot_id,
                                 last_error: None,
@@ -284,6 +289,11 @@ impl Bindings {
     }
 }
 
+/// Whether this build runs bots of `kind`.
+fn runs(kind: BotKind) -> bool {
+    matches!(kind, BotKind::Slack | BotKind::Telegram)
+}
+
 /// Where one bot's status is kept.
 struct Status {
     bot_id: BotId,
@@ -312,7 +322,7 @@ impl Status {
     }
 }
 
-/// Keeps a Slack bot connected until `stop`: holds its tokens, connects with them, and runs it
+/// Keeps a bot connected until `stop`: holds its tokens, connects with them, and runs it
 /// while connected, connecting again when its tokens change or its connection fails.
 async fn keep(
     bot: Bot,
@@ -339,17 +349,23 @@ async fn keep(
                 Vec::new()
             }
         };
-        let [bot_token, app_token] = values.as_slice() else {
-            tokio::select! {
-                () = stop.cancelled() => return,
-                changed = held.changed() => if changed.is_err() { return },
+        let connect = match (bot.kind, values.as_slice()) {
+            (BotKind::Slack, [bot_token, app_token]) => {
+                slack::connect(&bot_token.value, &app_token.value).boxed()
             }
-            continue;
+            (BotKind::Telegram, [bot_token]) => telegram::connect(&bot_token.value).boxed(),
+            _ => {
+                tokio::select! {
+                    () = stop.cancelled() => return,
+                    changed = held.changed() => if changed.is_err() { return },
+                }
+                continue;
+            }
         };
         status.set(BotState::Connecting, None);
         let connected = tokio::select! {
             () = stop.cancelled() => return,
-            connected = slack::connect(&bot_token.value, &app_token.value) => connected,
+            connected = connect => connected,
         };
         let wait = match connected {
             Ok(connection) => {
@@ -369,19 +385,19 @@ async fn keep(
                     _ = held.changed() => {}
                 }
                 running.cancel();
-                connection.closer.close().await;
+                connection.close.await;
                 if stop.is_cancelled() {
                     return;
                 }
                 status.set(BotState::Connecting, None);
                 continue;
             }
-            Err(slack::ConnectError::Rejected(message)) => {
+            Err(ConnectError::Rejected(message)) => {
                 warn!(bot_id = %bot.bot_id, "{message}");
                 status.set(BotState::TokenRejected, Some(message));
                 None
             }
-            Err(slack::ConnectError::Failed(message)) => {
+            Err(ConnectError::Failed(message)) => {
                 warn!(bot_id = %bot.bot_id, "{message}");
                 status.set(BotState::Connecting, Some(message));
                 let wait = backoff;

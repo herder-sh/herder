@@ -1,0 +1,27 @@
+{
+  "update_id": 900000007,
+  "message": {
+    "message_id": 401,
+    "from": {
+      "id": 700000001,
+      "is_bot": false,
+      "first_name": "Ada",
+      "username": "ada",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": -1002000000001,
+      "title": "team",
+      "type": "supergroup"
+    },
+    "date": 1761400400,
+    "text": "@trash_can_bot What does the bot do?",
+    "entities": [
+      {
+        "type": "mention",
+        "offset": 0,
+        "length": 14
+      }
+    ]
+  }
+}
