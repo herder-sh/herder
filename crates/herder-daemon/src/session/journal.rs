@@ -96,6 +96,7 @@ impl Journal {
                 | EventBody::AccountSwitched { .. }
                 | EventBody::ProviderSwitched { .. }
                 | EventBody::TitleChanged { .. }
+                | EventBody::ThreadLinked { .. }
         );
         let event = NewEvent {
             session_id,
@@ -400,11 +401,12 @@ impl Journal {
     }
 }
 
-/// Every session in `store` as lists show it, with its queue and its project as `projects`
-/// resolve it and, for a primary, how many of its children need the user.
+/// Every session in `store` as lists show it, with its queue, its linked threads and its
+/// project as `projects` resolve it and, for a primary, how many of its children need the user.
 fn heads(store: &Store, projects: &Projects) -> herder_store::Result<Vec<SessionHead>> {
     let sessions = store.sessions()?;
     let mut queues = store.queues()?;
+    let mut threads = store.threads()?;
     let mut need_you: HashMap<SessionId, u32> = HashMap::new();
     for session in &sessions {
         if let Some(parent) = &session.parent
@@ -428,6 +430,7 @@ fn heads(store: &Store, projects: &Projects) -> herder_store::Result<Vec<Session
                 .into_iter()
                 .filter_map(listed)
                 .collect(),
+            threads: threads.remove(&session.session_id).unwrap_or_default(),
             session_id: session.session_id,
             head_seq: session.last_seq,
             status: session.status,
