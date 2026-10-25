@@ -8,10 +8,13 @@
 //!
 //! Values are write-only: `put_secret` carries one to the vault, and no result, event or
 //! client message ever carries one back. The only way out is a host's fetch over its
-//! replication connection ([`HostMessage::FetchSecrets`](crate::HostMessage::FetchSecrets)),
-//! for secrets in sets granted to that host, on behalf of one of its sessions. The vault
-//! records each fetch ([`SecretAccess`]), never the value. Hosts keep fetched values in memory
-//! only, for a short while, and hand them to a session's command as environment variables.
+//! replication connection, for secrets in sets granted to that host: on behalf of one of its
+//! sessions ([`HostMessage::FetchSecrets`](crate::HostMessage::FetchSecrets)), or for the
+//! host's own use, such as a bot's token
+//! ([`HostMessage::FetchHostSecrets`](crate::HostMessage::FetchHostSecrets)). A set is granted
+//! to a host for one or the other: its sessions never get what is granted for host use. The
+//! vault records each fetch ([`SecretAccess`]), never the value. Hosts keep fetched values in
+//! memory only, and hand a session's to its command as environment variables.
 //!
 //! On a host, a secret is named `NAME` when exactly one set granted to the host has it, and
 //! `set/NAME` otherwise ([`SecretRef`]); the environment variable is `NAME` either way.
@@ -46,6 +49,17 @@ pub fn is_valid_secret_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// Whether `purpose` may say what a host fetches secrets for its own use for, such as
+/// `bot:trip1-team`: 1 to [`MAX_SECRET_NAME_BYTES`] lowercase ASCII letters, digits, `-`, `_`,
+/// `.` and `:`.
+pub fn is_valid_secret_purpose(purpose: &str) -> bool {
+    !purpose.is_empty()
+        && purpose.len() <= MAX_SECRET_NAME_BYTES
+        && purpose.bytes().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'-' | b'_' | b'.' | b':')
+        })
 }
 
 /// Whether `name` may name a set of secrets: 1 to [`MAX_SECRET_NAME_BYTES`] lowercase ASCII
@@ -174,6 +188,10 @@ pub struct SecretSet {
     /// The hosts it is granted to, ordered by host id; every session on them may use its
     /// secrets.
     pub hosts: Vec<HostId>,
+    /// The hosts it is granted to for their own use, ordered by host id; their sessions do not
+    /// get its secrets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_use: Vec<HostId>,
 }
 
 /// One fetch of a secret's value by a host, as the vault recorded it.
@@ -185,8 +203,14 @@ pub struct SecretAccess {
     pub at: Timestamp,
     /// The host that fetched it.
     pub host_id: HostId,
-    /// The session of that host it was fetched for.
-    pub session_id: SessionId,
+    /// The session of that host it was fetched for; absent when the host fetched it for its
+    /// own use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
+    /// What the host fetched it for, when for its own use, as [`is_valid_secret_purpose`]
+    /// accepts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
     /// The secret's set.
     pub set: String,
     /// The secret's name.
@@ -233,4 +257,22 @@ pub enum SecretErrorCode {
     NoVault,
     /// The host is linked to a vault but cannot reach it now.
     VaultUnreachable,
+}
+
+/// Where a host stands with secrets it fetches for its own use, so a feature that needs them,
+/// such as a bot, can say why it is not running.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum HostSecretsState {
+    /// The host holds every value.
+    Ok,
+    /// The host has no values yet, or no longer, because it cannot reach its vault; it keeps
+    /// trying.
+    WaitingForVault,
+    /// The vault, or the host's lack of one, refuses them; the host asks again now and then,
+    /// should an owner grant them.
+    Denied {
+        /// Why.
+        error: SecretError,
+    },
 }

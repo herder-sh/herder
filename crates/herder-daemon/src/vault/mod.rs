@@ -29,7 +29,7 @@
 //!
 //! The vault keeps secrets too, encrypted under its master key, in sets its owners grant to
 //! hosts ([`SecretsKey`]). A host fetches their values over its replication connection, for its
-//! sessions, and keeps them in memory for a few minutes ([`HostSecrets`]).
+//! sessions or for its own use, and keeps them in memory only ([`HostSecrets`]).
 
 mod client;
 mod conn;
@@ -51,7 +51,7 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-pub use host_secrets::{CACHE_TTL as SECRETS_CACHE_TTL, HostSecrets};
+pub use host_secrets::{CACHE_TTL as SECRETS_CACHE_TTL, Held, HeldSecrets, HostSecrets};
 pub use link::{Link, Setup as LinkSetup};
 pub use replicator::{Replicator, WakeOnEvent};
 pub use retention::{Admin, Forgot, PRUNE_EVERY};

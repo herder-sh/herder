@@ -716,10 +716,12 @@ pub enum CommandBody {
     GrantSecretSet {
         set: String,
         host_id: HostId,
+        host_use: bool,
     },
     RevokeSecretSet {
         set: String,
         host_id: HostId,
+        host_use: bool,
     },
     ListSecrets,
     ListSecretAudit {
@@ -913,6 +915,7 @@ pub enum CommandResult {
 pub struct SecretSet {
     pub name: String,
     pub hosts: Vec<HostId>,
+    pub host_use: Vec<HostId>,
 }
 
 #[uniffi::remote(Record)]
@@ -928,7 +931,8 @@ pub struct SecretAccess {
     pub id: u64,
     pub at: Timestamp,
     pub host_id: HostId,
-    pub session_id: SessionId,
+    pub session_id: Option<SessionId>,
+    pub purpose: Option<String>,
     pub set: String,
     pub name: String,
 }

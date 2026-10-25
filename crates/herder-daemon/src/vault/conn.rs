@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::store::{self, Kept, Outcome};
+use super::store::{self, Kept, Outcome, SecretUse};
 use super::{BUILD, Shared, blocking, secrets};
 use crate::auth::DeviceRole;
 use crate::ws::{self, Ws};
@@ -296,7 +296,29 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) 
             }
             Ok(HostMessage::FetchSecrets(fetch)) => {
                 let key = shared.secrets_key.as_ref();
-                secrets::fetch(&shared.store, key, host, fetch).await?
+                let used = SecretUse::Session(fetch.session_id);
+                secrets::fetch(
+                    &shared.store,
+                    key,
+                    host,
+                    fetch.request_id,
+                    used,
+                    fetch.secrets,
+                )
+                .await?
+            }
+            Ok(HostMessage::FetchHostSecrets(fetch)) => {
+                let key = shared.secrets_key.as_ref();
+                let used = SecretUse::Host(fetch.purpose);
+                secrets::fetch(
+                    &shared.store,
+                    key,
+                    host,
+                    fetch.request_id,
+                    used,
+                    fetch.secrets,
+                )
+                .await?
             }
             Ok(HostMessage::Unknown) => continue,
             Err(err) => return fail(ws, bad(&err)).await,

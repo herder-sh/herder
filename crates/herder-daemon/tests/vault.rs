@@ -2,7 +2,8 @@
 //! appear in the vault, a vault restarted mid-stream gets the rest, images included, a host that was offline
 //! catches up when it is back, and a client paired with the vault sees every host's sessions,
 //! read-only, and the hosts with their liveness. A host's device replicates and reads nothing.
-//! A host fetches the secrets of the sets granted to it, and only those, each fetch audited.
+//! A host fetches the secrets of the sets granted to it, and only those, each fetch audited,
+//! and holds those granted for its own use, with no session, until they are revoked.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -19,15 +20,16 @@ use herder_daemon::auth::{Auth, DeviceRole, PAIRING_TTL};
 use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::session::{Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::vault::{
-    Admin, HostSecrets, LIVENESS_TIMEOUT, Replicator, SecretsKey, Server, VaultStore, WakeOnEvent,
+    Admin, Held, HeldSecrets, HostSecrets, LIVENESS_TIMEOUT, Replicator, SecretsKey, Server,
+    VaultStore, WakeOnEvent,
 };
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Tls};
 use herder_protocol::{
     AccountId, Attachment, AttachmentId, ClientHello, ClientMessage, Command, CommandBody,
     CommandId, CommandResult, Cursor, ErrorCode, Event, EventBody, HostHello, HostId, HostMessage,
-    Item, ItemBody, ItemId, JournalRecord, PROTOCOL_VERSION, PermissionMode, Provider,
-    REPLICATION_VERSION, ReplicationErrorCode, SecretError, SecretErrorCode, SecretRef,
+    HostSecretsState, Item, ItemBody, ItemId, JournalRecord, PROTOCOL_VERSION, PermissionMode,
+    Provider, REPLICATION_VERSION, ReplicationErrorCode, SecretError, SecretErrorCode, SecretRef,
     SecretValue, ServerMessage, SessionId, SessionStatus, SessionSummary, Timestamp, TurnId,
     UserId, VaultMessage,
 };
@@ -201,9 +203,14 @@ struct HostDaemon {
 
 impl HostDaemon {
     async fn start(dir: &Path, vault: VaultConfig) -> Self {
+        Self::start_with(dir, vault, HostSecrets::default()).await
+    }
+
+    /// Starts a host whose secrets are `secrets`.
+    async fn start_with(dir: &Path, vault: VaultConfig, secrets: HostSecrets) -> Self {
         let runtime = Runtime::new();
         let dir = dir.to_owned();
-        let secrets = Arc::new(HostSecrets::default());
+        let secrets = Arc::new(secrets);
         secrets.set_linked(true);
         let host_secrets = Arc::clone(&secrets);
         let sessions = runtime
@@ -1329,6 +1336,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         let grant = CommandBody::GrantSecretSet {
             set: set.into(),
             host_id: host_id(),
+            host_use: false,
         };
         assert_eq!(
             secret_command(&client, grant).await,
@@ -1338,6 +1346,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
     let stranger = CommandBody::GrantSecretSet {
         set: "other".into(),
         host_id: HostId::new("stranger"),
+        host_use: false,
     };
     assert_eq!(
         secret_command(&client, stranger).await,
@@ -1400,6 +1409,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
     let revoke = CommandBody::RevokeSecretSet {
         set: "prod".into(),
         host_id: host_id(),
+        host_use: false,
     };
     assert_eq!(
         secret_command(&client, revoke).await,
@@ -1424,7 +1434,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         .map(|entry| {
             (
                 entry.host_id.as_str(),
-                entry.session_id.as_str(),
+                entry.session_id.as_ref().unwrap().as_str(),
                 format!("{}/{}", entry.set, entry.name),
             )
         })
@@ -1475,6 +1485,200 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
     vault.runtime.kill().await;
 }
 
+/// Waits until what `held` holds is `wanted`.
+async fn held_until(held: &HeldSecrets, wanted: impl Fn(&Held) -> bool) -> Held {
+    let mut watch = held.watch();
+    let reached = tokio::time::timeout(TIMEOUT, watch.wait_for(|held| wanted(held))).await;
+    match reached {
+        Ok(Ok(held)) => held.clone(),
+        _ => panic!("still holding {:?}", held.current()),
+    }
+}
+
+fn holds(held: &Held, value: &str) -> bool {
+    matches!(held, Held::Ok(values) if values[0].value.expose() == value)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 1, 1);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let secrets = HostSecrets::with_ttl(Duration::from_millis(300));
+    let host = HostDaemon::start_with(&host_dir, vault.config(), secrets).await;
+    caught_up(&host_dir, &vault_dir).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .map(one_machine)
+        .unwrap();
+    for (set, name, value) in [
+        ("bots", "SLACK_TOKEN", "slack-v1"),
+        ("mail", "SMTP_PASSWORD", "smtp-value"),
+    ] {
+        let created = CommandBody::CreateSecretSet { set: set.into() };
+        assert_eq!(
+            secret_command(&client, created).await,
+            Ok(CommandResult::Applied)
+        );
+        let put = CommandBody::PutSecret {
+            set: set.into(),
+            name: name.into(),
+            description: format!("{name} of {set}"),
+            value: SecretValue::new(value).unwrap(),
+        };
+        assert_eq!(
+            secret_command(&client, put).await,
+            Ok(CommandResult::Applied)
+        );
+    }
+
+    // Not granted for host use yet: denied.
+    let slack = host
+        .secrets
+        .hold("bot:trip1-team".into(), vec![secret("SLACK_TOKEN")]);
+    let denied = held_until(&slack, |held| matches!(held, Held::Denied(_))).await;
+    assert_eq!(
+        denied.state(),
+        HostSecretsState::Denied {
+            error: SecretError {
+                code: SecretErrorCode::Unknown,
+                message: "no set granted to this host for host use has SLACK_TOKEN; ask the \
+                          vault's owner to grant its set for host use"
+                    .into(),
+                secret: Some(secret("SLACK_TOKEN")),
+                candidates: Vec::new(),
+            }
+        }
+    );
+    for set in ["bots", "mail"] {
+        let grant = CommandBody::GrantSecretSet {
+            set: set.into(),
+            host_id: host_id(),
+            host_use: true,
+        };
+        assert_eq!(
+            secret_command(&client, grant).await,
+            Ok(CommandResult::Applied)
+        );
+    }
+    let listed = secret_command(&client, CommandBody::ListSecrets)
+        .await
+        .unwrap();
+    let CommandResult::Secrets { sets, .. } = &listed else {
+        panic!("expected secrets: {listed:?}");
+    };
+    let grants: Vec<_> = sets
+        .iter()
+        .map(|set| (set.name.as_str(), set.hosts.len(), set.host_use.clone()))
+        .collect();
+    assert_eq!(
+        grants,
+        [("bots", 0, vec![host_id()]), ("mail", 0, vec![host_id()])]
+    );
+
+    // Granted, the host reads them with no session, and asks again on its own.
+    held_until(&slack, |held| holds(held, "slack-v1")).await;
+    let mail = host
+        .secrets
+        .hold("mail:alerts".into(), vec![secret("SMTP_PASSWORD")]);
+    held_until(&mail, |held| holds(held, "smtp-value")).await;
+    assert_eq!(mail.current().state(), HostSecretsState::Ok);
+
+    // Its sessions get none of them.
+    let unknown = fetch(&host, "s1", &["SLACK_TOKEN"]).await.unwrap_err();
+    assert_eq!(unknown.code, SecretErrorCode::Unknown);
+    let not_granted = fetch(&host, "s1", &["bots/SLACK_TOKEN"]).await.unwrap_err();
+    assert_eq!(not_granted.code, SecretErrorCode::NotGranted);
+    assert!(host.secrets.list().await.unwrap().is_empty());
+
+    // The audit shows the host's use, under its purpose, with no session.
+    let audit = secret_command(&client, CommandBody::ListSecretAudit { before: None })
+        .await
+        .unwrap();
+    let CommandResult::SecretAudit { entries } = &audit else {
+        panic!("expected the audit: {audit:?}");
+    };
+    let slack_reads = entries
+        .iter()
+        .filter(|entry| entry.purpose.as_deref() == Some("bot:trip1-team"))
+        .inspect(|entry| {
+            assert_eq!(entry.host_id, host_id());
+            assert_eq!(entry.session_id, None);
+            assert_eq!(
+                (entry.set.as_str(), entry.name.as_str()),
+                ("bots", "SLACK_TOKEN")
+            );
+        })
+        .count();
+    assert!(slack_reads >= 1, "{entries:?}");
+    let wire = serde_json::to_string(&audit).unwrap();
+    assert!(!wire.contains("slack-v"), "{wire}");
+
+    // A changed value is picked up.
+    let put = CommandBody::PutSecret {
+        set: "bots".into(),
+        name: "SLACK_TOKEN".into(),
+        description: "the bot's token".into(),
+        value: SecretValue::new("slack-v2").unwrap(),
+    };
+    assert_eq!(
+        secret_command(&client, put).await,
+        Ok(CommandResult::Applied)
+    );
+    held_until(&slack, |held| holds(held, "slack-v2")).await;
+
+    // The grant for host use is its own: revoking the sessions' one finds none, and revoking
+    // it stops the reads.
+    let sessions_grant = CommandBody::RevokeSecretSet {
+        set: "bots".into(),
+        host_id: host_id(),
+        host_use: false,
+    };
+    assert_eq!(
+        secret_command(&client, sessions_grant).await,
+        Err(ErrorCode::NotFound)
+    );
+    let revoke = CommandBody::RevokeSecretSet {
+        set: "bots".into(),
+        host_id: host_id(),
+        host_use: true,
+    };
+    assert_eq!(
+        secret_command(&client, revoke).await,
+        Ok(CommandResult::Applied)
+    );
+    let revoked = held_until(&slack, |held| matches!(held, Held::Denied(_))).await;
+    let Held::Denied(error) = revoked else {
+        unreachable!()
+    };
+    assert_eq!(error.code, SecretErrorCode::Unknown);
+    assert!(holds(&mail.current(), "smtp-value"));
+
+    // A purpose the vault cannot audit gets nothing.
+    let bad = host
+        .secrets
+        .hold("Bot Team".into(), vec![secret("SMTP_PASSWORD")]);
+    let refused = held_until(&bad, |held| matches!(held, Held::Denied(_))).await;
+    let Held::Denied(error) = refused else {
+        unreachable!()
+    };
+    assert!(error.message.contains("`Bot Team`"), "{}", error.message);
+
+    // The vault down, the host is waiting for it.
+    vault.runtime.kill().await;
+    held_until(&mail, |held| *held == Held::WaitingForVault).await;
+    assert_eq!(mail.current().state(), HostSecretsState::WaitingForVault);
+    host.runtime.kill().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1505,6 +1709,7 @@ async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
         CommandBody::GrantSecretSet {
             set: "prod".into(),
             host_id: host_id(),
+            host_use: false,
         },
     ] {
         assert_eq!(
