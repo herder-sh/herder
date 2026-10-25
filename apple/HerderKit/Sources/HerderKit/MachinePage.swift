@@ -97,6 +97,7 @@ struct MachinePage: View {
                 }
                 if runsSessions && machine.role == .owner && machine.connection == .connected {
                     BackupSection(fleet: fleet, machine: machine).detailSection("Backup")
+                    MachineBotsSection(fleet: fleet, machine: machine).detailSection("Bots")
                 }
                 connection(machine).detailSection("Connection")
                 if let error {

@@ -13,20 +13,20 @@ struct SecretInput: Equatable, CustomStringConvertible, CustomDebugStringConvert
     var customMirror: Mirror { Mirror(self, children: []) }
 }
 
+/// A list a machine was asked for.
+enum Load<T> {
+    case asking
+    case loaded(T)
+    /// The machine's refusal, as it said it.
+    case failed(String)
+}
+
 /// A vault's secrets, for its owners: its sets with the hosts each is granted to, the secrets in
 /// each, and its latest fetches. Each change goes to the vault, then the lists are asked again.
 /// No answer carries a value back, so replacing a secret is the only way to change one.
 @MainActor @Observable
 final class VaultSecrets {
     typealias Send = @MainActor (CommandBody) async throws -> CommandResult
-
-    /// A list the vault was asked for.
-    enum Load<T> {
-        case asking
-        case loaded(T)
-        /// The vault's refusal, as it said it.
-        case failed(String)
-    }
 
     let vault: HostId
     private let send: Send

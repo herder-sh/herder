@@ -72,6 +72,7 @@ struct DesktopShell: View {
         case .skills: "Skills"
         case .providers: "Providers"
         case .machines: "Machines"
+        case .integrations: "Integrations"
         case .project(let id): lists.projects.first { $0.id == id }?.name ?? "Project"
         }
         return [root] + pages.pages.map { page in
@@ -154,6 +155,13 @@ struct DesktopShell: View {
                 }
                 IconButton(symbol: "qrcode", help: "Pair Another Device") { sheet = .share }
                 PaneButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair }
+            }
+        case .integrations:
+            Pane(fleet: fleet, title: "Integrations", switcher: switcher) {
+                IntegrationsView(fleet: fleet, sheet: $sheet)
+            } actions: {
+                PaneButton(title: "Add Bot", symbol: "plus", prominent: true) { sheet = .addBot }
+                    .disabled(fleet.botMachines.isEmpty)
             }
         }
     }
@@ -336,6 +344,8 @@ struct Pane<Content: View, Actions: View>: View {
 struct Switcher {
     /// The symbol of Chats, wherever it is listed.
     static let chatSymbol = "bubble.left.and.bubble.right"
+    /// The symbol of Integrations.
+    static let integrationsSymbol = "puzzlepiece.extension"
     let fleet: Fleet
     let item: Binding<SidebarItem>
     let session: Binding<SessionKey?>
@@ -349,6 +359,7 @@ struct Switcher {
         Button("Providers", systemImage: "person.2") { go(.providers) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
         Button("Machines", systemImage: "server.rack") { go(.machines) }
+        Button("Integrations", systemImage: Switcher.integrationsSymbol) { go(.integrations) }
         Divider()
         ForEach(order.sorted(fleet.lists.projects)) { project in
             Button(project.name, systemImage: "shippingbox") { go(.project(project.id)) }
@@ -444,6 +455,9 @@ struct Sidebar: View {
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
             SidebarRow(title: "Machines", symbol: "server.rack", selected: item == .machines) { select(.machines) }
+            SidebarRow(title: "Integrations", symbol: Switcher.integrationsSymbol, selected: item == .integrations) {
+                select(.integrations)
+            }
 
             heading("Projects") {
                 Menu {
@@ -667,6 +681,7 @@ private struct SidebarRail: View {
             rail("person.2", "Providers", .providers)
             rail("book.closed", "Skills", .skills)
             rail("server.rack", "Machines", .machines)
+            rail(Switcher.integrationsSymbol, "Integrations", .integrations)
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             ScrollView {
                 VStack(spacing: 10) {

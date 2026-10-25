@@ -372,7 +372,7 @@ struct Lists: Equatable {
                 state: state, activity: model.activity,
                 age: Timestamp.age(model.updatedAt, now: now), updatedAt: model.updatedAt, prs: model.prs,
                 children: kids.count, childrenNeedYou: kids.filter(\.model.needsUser).count,
-                agents: NativeAgent.listed(in: model))
+                agents: NativeAgent.listed(in: model), threads: head.threads)
         }
     }
 }

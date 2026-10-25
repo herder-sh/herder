@@ -97,6 +97,7 @@ struct MachinesView: View {
                     VStack(spacing: 10) {
                         skillsLink
                         providersLink
+                        integrationsLink
                     }
                 }
                 SortableTable("machines", rows: MachineRow.rows(fleet.machines, summaries: fleet.lists.machines),
@@ -229,6 +230,26 @@ struct MachinesView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("providers-link")
+    }
+
+    private var integrationsLink: some View {
+        // A page on the stack, so the bot pages it opens push over it rather than replace it.
+        Button { pages.open(.integrations) } label: {
+            Card(padding: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: Switcher.integrationsSymbol).foregroundStyle(Theme.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Integrations").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                        Text("Slack bots on your machines").font(.caption).foregroundStyle(Theme.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("integrations-link")
     }
 
     private var skillsLink: some View {

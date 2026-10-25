@@ -48,6 +48,8 @@ struct SessionSummary: Hashable, Identifiable {
     var childrenNeedYou = 0
     /// The provider's own agents to list under it (`NativeAgent.listed`).
     var agents: [NativeAgent] = []
+    /// The chat threads linked to it, in the order they were linked.
+    var threads: [ThreadLink] = []
 }
 
 /// An approval or a question waiting on the user: the one its session pins, with how many
