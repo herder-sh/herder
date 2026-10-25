@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use semver::Version;
 use sha2::{Digest, Sha256};
 
-use crate::service;
+use crate::service::{self, Service};
 
 const DEFAULT_DOWNLOAD_BASE: &str = "https://github.com/herder-sh/herder/releases";
 
@@ -53,14 +53,43 @@ pub fn run(args: Args) -> Result<()> {
     replace_exe(&exe, &binary)?;
     println!("updated {} from {current} to {wanted}", exe.display());
 
-    if service::is_active() {
-        if args.yes || confirm("the herder service is running the old version; restart it now?")? {
-            service::restart()?;
-        } else {
-            println!("restart it later with: herder service restart");
+    let vault = crate::vault::installed_service();
+    let services = to_restart(service::is_active(), vault);
+    if services.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<&str> = services.iter().map(|service| service.name).collect();
+    let question = match names.as_slice() {
+        [name] => format!("the {name} is running the old version; restart it now?"),
+        names => format!(
+            "the {} are running the old version; restart them now?",
+            names.join(" and the ")
+        ),
+    };
+    if args.yes || confirm(&question)? {
+        for service in &services {
+            service::restart(service)?;
+        }
+    } else {
+        for service in &services {
+            println!(
+                "restart the {} later with: {}",
+                service.name, service.installer
+            );
         }
     }
     Ok(())
+}
+
+/// The services running this binary that an update restarts onto the new one: the daemon's
+/// while it runs, and an installed vault's, so the vault never runs another version than the
+/// daemon next to it.
+fn to_restart(daemon_active: bool, vault: Option<Service>) -> Vec<Service> {
+    daemon_active
+        .then(Service::daemon)
+        .into_iter()
+        .chain(vault)
+        .collect()
 }
 
 /// The release target for this machine. Linux releases are static musl builds; macOS ones
@@ -215,6 +244,21 @@ mod tests {
 
     fn v(text: &str) -> Version {
         Version::parse(text).unwrap()
+    }
+
+    #[test]
+    fn an_update_restarts_an_installed_vault_with_the_daemon() {
+        let vault = || Some(crate::vault::service(Path::new("/v")));
+        let labels = |services: Vec<Service>| -> Vec<&str> {
+            services.iter().map(|service| service.label).collect()
+        };
+        assert_eq!(
+            labels(to_restart(true, vault())),
+            ["sh.herder.daemon", "sh.herder.vault"]
+        );
+        assert_eq!(labels(to_restart(false, vault())), ["sh.herder.vault"]);
+        assert_eq!(labels(to_restart(true, None)), ["sh.herder.daemon"]);
+        assert!(to_restart(false, None).is_empty());
     }
 
     #[test]

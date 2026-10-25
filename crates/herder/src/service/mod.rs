@@ -125,16 +125,26 @@ pub fn run(action: Action) -> Result<ExitCode> {
                 u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
             ));
         }
-        Action::Restart => restart()?,
+        Action::Restart => restart(&Service::daemon())?,
     }
     Ok(ExitCode::SUCCESS)
 }
 
-pub fn restart() -> Result<()> {
+/// Restarts `service`, starting it if it was stopped.
+pub fn restart(service: &Service) -> Result<()> {
     if MACOS {
-        launchd::restart()
+        launchd::restart(service)
     } else {
-        systemd::restart()
+        systemd::restart(service)
+    }
+}
+
+/// Whether `service`'s service file is installed.
+pub fn is_installed(service: &Service) -> bool {
+    if MACOS {
+        launchd::is_installed(service)
+    } else {
+        systemd::is_installed(service)
     }
 }
 

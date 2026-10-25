@@ -177,10 +177,14 @@ pub fn uninstall(service: &Service) -> Result<()> {
     Ok(())
 }
 
-pub fn restart() -> Result<()> {
-    systemctl(&["restart", UNIT])?;
-    println!("herder service restarted");
+pub fn restart(service: &Service) -> Result<()> {
+    systemctl(&["restart", service.unit])?;
+    println!("{} restarted", service.name);
     Ok(())
+}
+
+pub fn is_installed(service: &Service) -> bool {
+    env_unit_path(service.unit).is_ok_and(|path| path.is_file())
 }
 
 /// Whether the herder service is running right now.
@@ -199,7 +203,7 @@ pub fn state() -> Option<State> {
         .stderr(Stdio::null())
         .status()
         .ok()?;
-    let installed = env_unit_path(UNIT).is_ok_and(|path| path.is_file());
+    let installed = is_installed(&Service::daemon());
     let enabled = Command::new("systemctl")
         .args(["--user", "is-enabled", "--quiet", UNIT])
         .stderr(Stdio::null())

@@ -234,10 +234,14 @@ pub fn status() -> Result<ExitStatus> {
         .context("running launchctl")
 }
 
-pub fn restart() -> Result<()> {
-    launchctl(&["kickstart", "-k", &service()])?;
-    println!("herder service restarted");
+pub fn restart(service: &Service) -> Result<()> {
+    launchctl(&["kickstart", "-k", &target(service.label)])?;
+    println!("{} restarted", service.name);
     Ok(())
+}
+
+pub fn is_installed(service: &Service) -> bool {
+    home().is_ok_and(|home| plist_path(&home, service.label).is_file())
 }
 
 /// Whether the herder service is running right now.
@@ -246,7 +250,7 @@ pub fn is_active() -> bool {
 }
 
 pub fn state() -> State {
-    let installed = home().is_ok_and(|home| plist_path(&home, LABEL).is_file());
+    let installed = is_installed(&Service::daemon());
     let disabled = Command::new("launchctl")
         .args(["print-disabled", &domain()])
         .stderr(Stdio::null())

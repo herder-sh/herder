@@ -43,6 +43,8 @@ herder vault uninstall --purge   # deletes the dir too: its sessions, secrets an
 ```
 
 Reinstalling keeps the dir, so the vault comes back with its devices, sessions and secrets.
+`herder update` restarts an installed vault onto the new binary along with the daemon's
+service, so the two never run different versions.
 
 ## On Kubernetes
 

@@ -97,6 +97,12 @@ pub fn service(dir: &Path) -> Service {
     }
 }
 
+/// The vault's service, when `herder vault install` installed one on this machine.
+pub fn installed_service() -> Option<Service> {
+    let service = service(&env_vault_dir().ok()?);
+    service::is_installed(&service).then_some(service)
+}
+
 fn config_path(dir: &Path) -> PathBuf {
     dir.join("vault.toml")
 }
