@@ -6,6 +6,8 @@ enum NavRoute: Hashable {
     case session(SessionKey)
     /// A project's own screen, by its group's id.
     case project(String)
+    /// An object's page (`Page`).
+    case page(Page)
 }
 
 extension EnvironmentValues {
