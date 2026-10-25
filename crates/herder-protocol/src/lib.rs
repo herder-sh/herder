@@ -11,6 +11,7 @@
 //!   that is absent from the schema and never sent; [`Provider`] keeps unknown names verbatim.
 
 mod attachment;
+mod bots;
 mod bytes;
 mod client;
 mod event;
@@ -29,6 +30,9 @@ pub use attachment::{
     Attachment, FILE_MEDIA_TYPE, IMAGE_MEDIA_TYPES, IMAGE_NOT_BACKED_UP, Image, MAX_FILE_BYTES,
     MAX_FILE_NAME_BYTES, MAX_IMAGE_BYTES, MAX_PROMPT_ATTACHMENT_BYTES, PromptFile,
 };
+pub use bots::{
+    Bot, BotDefaults, BotError, BotKind, BotState, BotStatus, BotUser, ChannelBinding, ThreadLink,
+};
 pub use bytes::Bytes;
 pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor, HistoryPart, Relay};
 pub use event::{
@@ -37,8 +41,8 @@ pub use event::{
     PrState, PullRequest, ReviewStatus, Route, SessionStatus, TitleSource, TurnError,
 };
 pub use ids::{
-    AccountId, ApprovalId, AttachmentId, CommandId, DeviceId, HostId, ItemId, PromptId, QuestionId,
-    SessionId, TerminalId, TurnId, UserId,
+    AccountId, ApprovalId, AttachmentId, BotId, CommandId, DeviceId, HostId, ItemId, PromptId,
+    QuestionId, SessionId, TerminalId, TurnId, UserId,
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use replication::{
