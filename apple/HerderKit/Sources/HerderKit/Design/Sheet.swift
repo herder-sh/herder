@@ -104,11 +104,11 @@ struct ChoiceChips<Value: Hashable>: View {
                             Text(option.detail).font(.caption).opacity(0.7)
                         }
                     }
-                    .foregroundStyle(selected ? Theme.onPrimary : Theme.text)
+                    .foregroundStyle(Theme.text)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .frame(minHeight: 44)
-                    .background(selected ? Theme.primary : Theme.raised, in: .rect(cornerRadius: Theme.corner))
+                    .primaryFill(in: .rect(cornerRadius: Theme.corner), on: selected)
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)

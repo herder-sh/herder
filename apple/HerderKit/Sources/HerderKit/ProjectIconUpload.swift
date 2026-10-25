@@ -58,7 +58,7 @@ struct ProjectIconRow: View {
     #endif
 
     var body: some View {
-        SettingRow(label: "Icon", detail: detail) {
+        SettingRow(label: "Icon", hint: detail) {
             HStack(spacing: 10) {
                 if busy { ProgressView().controlSize(.small) }
                 ProjectIcon(projectId: project.projectId, name: project.name,

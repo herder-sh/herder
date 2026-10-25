@@ -429,7 +429,7 @@ struct FooterItem<Items: View>: View {
     }
 }
 
-/// A round send/stop button in the primary colour.
+/// A round send/stop button in the primary style.
 struct CircleButton: View {
     let symbol: String
     let help: String
@@ -439,9 +439,9 @@ struct CircleButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.callout.weight(.bold))
-                .foregroundStyle(Theme.onPrimary)
+                .foregroundStyle(Theme.text)
                 .frame(width: 34, height: 34)
-                .background(Theme.primary, in: .circle)
+                .primaryFill(in: .circle)
                 .hitTarget()
         }
         .buttonStyle(.plain)

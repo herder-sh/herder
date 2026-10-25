@@ -102,9 +102,9 @@ struct RequestCard: View {
             Button(action: sendAnswer) {
                 Image(systemName: "arrow.up")
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(typed.isEmpty ? Theme.tertiary : Theme.onPrimary)
+                    .foregroundStyle(typed.isEmpty ? Theme.tertiary : Theme.text)
                     .frame(width: 24, height: 24)
-                    .background(typed.isEmpty ? Theme.raised : Theme.primary, in: .circle)
+                    .primaryFill(in: .circle, on: !typed.isEmpty)
             }
             .buttonStyle(.plain)
             .disabled(typed.isEmpty)
@@ -211,13 +211,13 @@ struct ActionButton: View {
             }
         } label: {
             Group {
-                if running { ProgressView().tint(style == .primary ? Theme.onPrimary : Theme.text) } else { Text(title) }
+                if running { ProgressView().tint(Theme.text) } else { Text(title) }
             }
             .font(.body.weight(.semibold))
             .frame(maxWidth: .infinity)
             .frame(height: 48)
-            .foregroundStyle(style == .primary ? Theme.onPrimary : Theme.text)
-            .background(style == .primary ? Theme.primary : Theme.raised, in: .rect(cornerRadius: Theme.corner))
+            .foregroundStyle(Theme.text)
+            .primaryFill(in: .rect(cornerRadius: Theme.corner), on: style == .primary)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)

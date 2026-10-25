@@ -526,7 +526,7 @@ struct SetUpSheet: View {
                     .foregroundStyle(Theme.secondary)
             }
             ForEach(gaps.gaps) { gap in
-                SettingsGroup(title: ModelCatalog.providerName(gap.login.provider)) {
+                SettingsList(title: ModelCatalog.providerName(gap.login.provider)) {
                     HStack(spacing: 10) {
                         ProviderMark(provider: gap.login.provider, size: 16)
                         VStack(alignment: .leading, spacing: 2) {
@@ -769,7 +769,7 @@ struct AccountDetailSheet: View {
             if let login {
                 limits(login)
                 usage(login)
-                SettingsGroup(title: "Machines") {
+                SettingsList(title: "Machines") {
                     ForEach(Array(login.on.enumerated()), id: \.element.id) { index, place in
                         if index > 0 { RowDivider() }
                         machine(place, login: login)
@@ -900,10 +900,10 @@ struct PillButton: View {
                 Text(title)
             }
             .font(.caption.weight(.semibold))
-            .foregroundStyle(prominent ? Theme.onPrimary : Theme.text)
+            .foregroundStyle(Theme.text)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(prominent ? Theme.primary : Theme.raised, in: .capsule)
+            .primaryFill(in: .capsule, on: prominent)
             .opacity(enabled ? 1 : 0.45)
             .contentShape(.capsule)
             .fixedSize()

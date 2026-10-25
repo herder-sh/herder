@@ -37,10 +37,10 @@ struct ProjectReachGroup: View {
 
     var body: some View {
         if let remote = reach.remote, !reach.missing.isEmpty {
-            SettingsGroup(title: "Missing on") {
+            SettingsList(title: "Missing on") {
                 ForEach(Array(reach.missing.enumerated()), id: \.element.id) { index, machine in
                     if index > 0 { RowDivider() }
-                    SettingRow(label: machine.name, detail: detail(machine, remote: remote)) {
+                    SettingRow(label: machine.name, hint: detail(machine, remote: remote)) {
                         if cloning.contains(machine.hostId) {
                             ProgressView().controlSize(.small)
                         } else {

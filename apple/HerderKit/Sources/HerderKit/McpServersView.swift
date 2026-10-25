@@ -630,10 +630,10 @@ struct McpMachinePicker: View {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                 Text(title).font(.subheadline.weight(.semibold))
             }
-            .foregroundStyle(selected ? Theme.onPrimary : Theme.text)
+            .foregroundStyle(Theme.text)
             .padding(.horizontal, 12)
             .frame(minHeight: 40)
-            .background(selected ? Theme.primary : Theme.raised, in: .rect(cornerRadius: Theme.corner))
+            .primaryFill(in: .rect(cornerRadius: Theme.corner), on: selected)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -695,7 +695,7 @@ struct McpImportSheet: View {
     }
 
     private func preview(_ servers: [McpServerSettings]) -> some View {
-        SettingsGroup(title: servers.count == 1 ? "1 server" : "\(servers.count) servers") {
+        SettingsList(title: servers.count == 1 ? "1 server" : "\(servers.count) servers") {
             ForEach(Array(servers.enumerated()), id: \.element.name) { index, server in
                 if index > 0 { RowDivider() }
                 HStack(spacing: 8) {

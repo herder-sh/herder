@@ -104,9 +104,9 @@ Rules:
   Mac).
 - **The list pane** is 380 pt (`ListAndSession`). ⌘\ hides it to give the session the whole
   width (`listHidden`); with no session open it always shows.
-- **The pane header** (`Pane`) is the title (a menu of sections and projects, `Switcher`), a
-  one-line subtitle, the pane's actions on the right (`PaneButton`, `IconButton`), then a
-  search field where the pane lists sessions.
+- **The pane header** (`Pane`) is a `PageHeader` (§8.4): the title (a menu of sections and
+  projects, `Switcher`), the page's live status, the pane's actions on the right (`PaneButton`,
+  `IconButton`), then a search field where the pane lists sessions.
 - **The tab bar** on compact width has the same sections as the sidebar: Board (badged with the
   request count), Projects, Usage, Machines. Pull Requests opens from the Board; Skills and a
   vault show inside Machines. Each tab is its own `NavigationStack` (`boardPath`,
@@ -222,7 +222,7 @@ top of Machines. Screenshots are still to come, in `docs/screenshots/p11-9`.
 ### 4.8 Board (`BoardView`, `Lists.board`)
 
 On iPhone, a connection line ("1 machine connected", `ConnectionLine`) heads the Board; on the
-Mac and iPad that line is the pane subtitle. With no machine paired it offers Add Machine.
+Mac and iPad that line is the page header's status. With no machine paired it offers Add Machine.
 Then **Requests**: one `RequestCard` per pending approval or question, newest first,
 answerable in place; the card's session line opens that session. Then one column per
 `WorkState`, what needs the user first: needs you, CI failed, changes
@@ -406,9 +406,9 @@ phone), `mac-new-session.png`, `ios-new-session.png`, `mac-machine-settings.png`
 | `raised` | `#1A1A1A` | chips, code blocks, secondary buttons, selection |
 | `stroke` | `#252525` | dividers, card borders |
 | `text` / `secondary` / `tertiary` | `#F7F7F7` / `#D1D1D1` / `#939393` | three text levels |
-| `primary` / `onPrimary` | `#F7F7F7` / `#141414` | the primary button |
+| `primaryFill` / `primaryStroke` | `#26262B` / `#3D3D44` | the primary button: dark raised fill, lighter border |
 | `bubble` / `onBubble` | `#1A1A1A` / `#F7F7F7` | user messages, header buttons |
-| `accent` | `#E69F00` | needs you: approvals, questions (TUI `attention`) |
+| `accent` | `#E69F00` | needs you: approvals, questions (TUI `attention`), and nothing else |
 | `running` | `#5382EE` | running (TUI `warning`) |
 | `waiting` / `idle` | `#999999` / `#666666` | waiting for capacity / idle |
 | `failure` | `#D55E00` | error, closed PR, offline host |
@@ -438,12 +438,56 @@ blindness. No view uses a literal colour; new colours are added to `Theme` first
 | `UsageBar` | `Design/StatusGlyph.swift` | neutral under 70%, accent from 70%, failure from 90%, as the TUI |
 | `SessionRow` | `Design/SessionRow.swift` | the one session row (§4.7) |
 | `RequestCard`, `ActionButton` | `Design/RequestCard.swift` | approvals and questions; 48 pt buttons |
+| `PageHeader`, `SignalStrip`, `SettingsList`, `SortableTable`, `RelativeTime` | `Design/` | the design system (§8.4) |
 | `SheetScaffold`, `Field`, `InputBox`, `ChoiceChips`, `DetailRow` | `Design/Sheet.swift` | every sheet and form |
 | `Card`, `Chip`, `SectionHeading` | `Design/Theme.swift` | surfaces and headings |
 | `ProjectIcon`, `ProviderLogo` | `Design/` | a project's tile; a provider's mark |
-| `Pane`, `PaneButton`, `IconButton`, `Sidebar` | `DesktopShell.swift` | the regular-width frame |
+| `Pane`, `PaneButton`, `IconButton`, `Sidebar` | `DesktopShell.swift` | the regular-width frame; `PaneButton(prominent:)` is a page's main action |
 | `HeaderButton`, `HeaderLabel` | `SessionView.swift` | the session header's buttons |
 | `PRLine` | `PullRequests.swift` | one PR on one line in the session's PR list (§5.1) |
+
+### 8.4 Design system (P14.2)
+
+The rules every screen follows from P14 on, and the component that carries each. A screen todo
+adopts them; nothing new is drawn by hand where a component exists. HerderKit's
+`DesignSystemScreenshotTests` draws them all on one sheet
+([`screenshots/p14-2/design-system.png`](screenshots/p14-2/design-system.png)); each has an
+Xcode preview in its file.
+
+- **The header says what is true now** (`PageHeader`, which `Pane` draws). A title at the page
+  size, a live status sentence built from the page's state ("9 open · 3 working"), then the
+  page's actions, the main one `PaneButton(prominent: true)`. No subtitle explains what the
+  page is for: that goes in the empty state or an ⓘ (`InfoButton`). The Activity center (P14.6)
+  sits between the status and the actions.
+- **Show signal, hide zeros** (`SignalStrip`). A chip per state that is non-zero, coloured by
+  its `Urgency`: needs you (amber), failing (red), running (blue), done (green), quiet (grey).
+  A chip filters the page to its state; the chosen one clears the filter. With every count
+  zero the strip takes no room. Totals go at the bottom or on hover, not in the strip.
+- **Three surfaces.** The canvas (`Theme.background`) under every page; a section is a
+  `SectionHeading` over rows split by hairlines, with no box; the raised surface
+  (`Theme.raised`) for a row's hover and selection and a settings group. A card
+  (`Card`, `RequestCard`) only for an object you act on: a request, a machine in its detail page.
+- **Settings are rows** (`SettingsList`, `SettingRow`). Grouped under a heading; the label on
+  the left with at most one line of hint, the control on the right. Longer help goes behind
+  the ⓘ (`SettingRow(help:)`).
+- **Collections are tables** (`SortableTable`). Anything over about four items of one kind.
+  A click on a column header sorts by it, again reverses it, and the sorted column shows an
+  arrow. Each device keeps each table's sort (`table.<id>.sort` in its defaults). Text sorts as
+  Finder does. Where order is personal, rows reorder by dragging instead.
+- **Relative time** (`RelativeTime`). "3 min. ago", "yesterday", kept current, with the exact
+  time on hover on the Mac and on a long press on iOS. No ISO timestamp reaches the UI.
+  Monospace (`Theme.mono`) only for versions, branches, ids and code.
+- **Type scale** (`Theme.page`, `.title`, `.body`, `.meta`): 20 page · 14 section and row
+  title · 13 body · 11.5 meta (times, counts, hints) on the Mac; on iOS the nearest Dynamic
+  Type styles (title 2, headline, subheadline, footnote).
+- **One primary button style, never white** (`View.primaryFill(in:on:)`). The dark raised fill
+  (`Theme.primaryFill`) with a lighter border (`Theme.primaryStroke`) and semibold
+  `Theme.text`. `ActionButton(.primary)`, `PillButton(prominent:)`, `PaneButton(prominent:)`, the
+  send button, selected choice chips and selected header buttons all draw it. A page has one
+  primary action; the rest are `Theme.raised` secondary buttons.
+- **Amber means needs you** (`Theme.accent`), and nothing else uses it.
+- **Every problem carries its fix.** Anything warning- or error-coloured has its action
+  button beside it.
 
 ---
 

@@ -695,8 +695,8 @@ struct ProjectSettingsForm: View {
     var body: some View {
         let owner = machine.role == .owner
         VStack(alignment: .leading, spacing: 18) {
-            SettingsGroup(title: "Appearance") {
-                SettingRow(label: "Name", detail: "Blank goes back to the repository's") {
+            SettingsList(title: "Appearance") {
+                SettingRow(label: "Name", hint: "Blank goes back to the repository's") {
                     TextField(defaultName, text: $name)
                         .textFieldStyle(.plain)
                         .foregroundStyle(Theme.text)
@@ -712,7 +712,7 @@ struct ProjectSettingsForm: View {
                 ProjectIconRow(fleet: fleet, project: project, background: iconBackground,
                                error: $error)
                 RowDivider()
-                SettingRow(label: "Background", detail: "Fills the tile behind the icon") {
+                SettingRow(label: "Background", hint: "Fills the tile behind the icon") {
                     FooterItem(symbol: "paintpalette", text: Self.backgroundLabel(iconBackground)) {
                         Picker("Background", selection: $iconBackground) {
                             ForEach(Self.backgrounds, id: \.colour) { Text($0.label).tag($0.colour) }
@@ -727,8 +727,8 @@ struct ProjectSettingsForm: View {
                 .foregroundStyle(Theme.secondary)
             }
             .disabled(!owner)
-            SettingsGroup(title: "New sessions") {
-                SettingRow(label: "Permissions", detail: "What agents may do without asking") {
+            SettingsList(title: "New sessions") {
+                SettingRow(label: "Permissions", hint: "What agents may do without asking") {
                     FooterItem(symbol: "lock.shield", text: mode?.label ?? "Ask each time") {
                         Picker("Permissions", selection: $mode) {
                             Text("Ask each time").tag(PermissionMode?.none)
@@ -740,7 +740,7 @@ struct ProjectSettingsForm: View {
                     }
                 }
                 RowDivider()
-                SettingRow(label: "Account", detail: "Rotates to another when it runs out") {
+                SettingRow(label: "Account", hint: "Rotates to another when it runs out") {
                     FooterItem(symbol: "person.crop.circle", text: accountLabel) {
                         Picker("Account", selection: $account) {
                             Text("Most room left").tag(AccountId?.none)
@@ -752,7 +752,7 @@ struct ProjectSettingsForm: View {
                     }
                 }
                 RowDivider()
-                SettingRow(label: "Setup command", detail: "Runs once in each new worktree") {
+                SettingRow(label: "Setup command", hint: "Runs once in each new worktree") {
                     TextField("make bootstrap", text: $setup)
                         .textFieldStyle(.plain)
                         .font(Theme.mono)
@@ -769,8 +769,8 @@ struct ProjectSettingsForm: View {
             .font(.subheadline)
             .foregroundStyle(Theme.secondary)
             .disabled(!owner)
-            SettingsGroup(title: "Artifacts") {
-                SettingRow(label: "Keep private", detail: "Shown in the thread, never uploaded for a public link") {
+            SettingsList(title: "Artifacts") {
+                SettingRow(label: "Keep private", hint: "Shown in the thread, never uploaded for a public link") {
                     Toggle("Keep private", isOn: $privateArtifacts)
                         .labelsHidden()
                         .toggleStyle(.switch)
@@ -783,7 +783,7 @@ struct ProjectSettingsForm: View {
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(Theme.failure)
             }
-            SettingsGroup(title: project.paths.count == 1 ? "Clone" : "Clones") {
+            SettingsList(title: project.paths.count == 1 ? "Clone" : "Clones") {
                 ForEach(Array(project.paths.enumerated()), id: \.offset) { index, path in
                     if index > 0 { RowDivider() }
                     HStack(spacing: 8) {
@@ -796,10 +796,10 @@ struct ProjectSettingsForm: View {
                     .frame(minHeight: 44)
                 }
             }
-            SettingsGroup(title: "Remove") {
+            SettingsList(title: "Remove") {
                 let live = ProjectSettingsForm.liveSessions(of: project.projectId, on: machine)
                 SettingRow(label: "Remove from \(machine.name)",
-                           detail: live == 0 ? "The clones stay on disk; you can add it again"
+                           hint: live == 0 ? "The clones stay on disk; you can add it again"
                                              : "Archive its \(live) live session\(live == 1 ? "" : "s") first") {
                     Button("Remove…", role: .destructive) { confirmingRemove = true }
                         .buttonStyle(.plain)
@@ -897,51 +897,6 @@ struct ProjectSettingsForm: View {
         } catch {
             self.error = describe(error)
         }
-    }
-}
-
-/// The hairline between rows of a settings card.
-struct RowDivider: View {
-    var body: some View {
-        Rectangle().fill(Theme.stroke.opacity(0.6)).frame(height: 1).padding(.leading, 14)
-    }
-}
-
-/// A titled card of settings rows; `RowDivider` separates them.
-struct SettingsGroup<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading(title: title)
-            VStack(spacing: 0) {
-                content
-            }
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
-            .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
-        }
-    }
-}
-
-/// A setting: its name and what it does on the left, its control on the right.
-struct SettingRow<Control: View>: View {
-    let label: String
-    var detail = ""
-    @ViewBuilder var control: Control
-
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
-                if !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(Theme.tertiary) }
-            }
-            Spacer(minLength: 12)
-            control
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(minHeight: 52)
     }
 }
 
@@ -1078,7 +1033,7 @@ struct MachineSettingsSheet: View {
         }
         let running = fleet.providerTerminals.pendingIds(on: hostId).count
         return VStack(alignment: .leading, spacing: 8) {
-            SettingsGroup(title: "Accounts") {
+            SettingsList(title: "Accounts") {
                 if machine.accounts.isEmpty {
                     Text("No accounts yet").font(.subheadline).foregroundStyle(Theme.tertiary)
                         .padding(.horizontal, 14).frame(minHeight: 44)
@@ -1127,7 +1082,7 @@ struct MachineSettingsSheet: View {
                 .frame(minHeight: 44)
             }
             if !missing.isEmpty {
-                SettingsGroup(title: "On your other machines") {
+                SettingsList(title: "On your other machines") {
                     ForEach(Array(missing.enumerated()), id: \.element.login.id) { index, gap in
                         if index > 0 { RowDivider() }
                         HStack(spacing: 10) {
@@ -1162,7 +1117,7 @@ struct MachineSettingsSheet: View {
     @ViewBuilder private func clis(_ machine: Machine) -> some View {
         let rows = ProviderVersions(machines: fleet.machines).rows
         if !rows.isEmpty {
-            SettingsGroup(title: "Provider CLIs") {
+            SettingsList(title: "Provider CLIs") {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                     if index > 0 { RowDivider() }
                     if let cell = row.cells.first(where: { $0.hostId == hostId }) {
