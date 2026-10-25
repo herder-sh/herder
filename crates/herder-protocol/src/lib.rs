@@ -46,15 +46,16 @@ pub use ids::{
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use replication::{
-    AttachmentData, Batch, HostHello, HostMessage, JournalRecord, MAX_BATCH_EVENTS,
-    REPLICATION_VERSION, RawEventBody, RejectReason, ReplicationError, ReplicationErrorCode,
-    SecretFetch, SessionSummary, VaultHello, VaultMessage,
+    AttachmentData, Batch, HostHello, HostMessage, HostSecretFetch, JournalRecord,
+    MAX_BATCH_EVENTS, REPLICATION_VERSION, RawEventBody, RejectReason, ReplicationError,
+    ReplicationErrorCode, SecretFetch, SessionSummary, VaultHello, VaultMessage,
 };
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use secrets::{
-    FetchedSecret, MAX_SECRET_AUDIT_ENTRIES, MAX_SECRET_DESCRIPTION_CHARS, MAX_SECRET_NAME_BYTES,
-    MAX_SECRET_VALUE_BYTES, SecretAccess, SecretError, SecretErrorCode, SecretInfo, SecretRef,
-    SecretSet, SecretValue, is_valid_secret_name, is_valid_secret_set_name,
+    FetchedSecret, HostSecretsState, MAX_SECRET_AUDIT_ENTRIES, MAX_SECRET_DESCRIPTION_CHARS,
+    MAX_SECRET_NAME_BYTES, MAX_SECRET_VALUE_BYTES, SecretAccess, SecretError, SecretErrorCode,
+    SecretInfo, SecretRef, SecretSet, SecretValue, is_valid_secret_name, is_valid_secret_purpose,
+    is_valid_secret_set_name,
 };
 pub use server::{
     Account, AwsDeviceCode, AwsProfile, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo,

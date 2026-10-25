@@ -23,9 +23,9 @@ use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Account, Attachment, AttachmentData, Batch, Cursor, Event, FetchedSecret, HostHello,
-    HostMessage, Item, ItemId, JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION, RejectReason,
-    SecretError, SecretFetch, SecretInfo, Seq, SessionHead, SessionId, SessionStatus,
-    SessionSummary, VaultMessage,
+    HostMessage, HostSecretFetch, Item, ItemId, JournalRecord, MAX_BATCH_EVENTS,
+    REPLICATION_VERSION, RejectReason, SecretError, SecretFetch, SecretInfo, Seq, SessionHead,
+    SessionId, SessionStatus, SessionSummary, VaultMessage,
 };
 use tokio::sync::{Notify, oneshot};
 use tokio::time::Instant;
@@ -37,6 +37,7 @@ use tracing::{debug, info, warn};
 use super::BUILD;
 use super::client::{self, Ws};
 use super::host_secrets::{Ask, HostSecrets};
+use super::store::SecretUse;
 use crate::config::VaultConfig;
 use crate::data_dir::write_private;
 use crate::session::{EventSink, SessionManager};
@@ -393,16 +394,23 @@ impl Link {
                 HostMessage::ListSecrets { request_id }
             }
             Ask::Fetch {
-                session_id,
+                used,
                 secrets,
                 answer,
             } => {
                 self.pending.insert(request_id, Pending::Fetch(answer));
-                HostMessage::FetchSecrets(SecretFetch {
-                    request_id,
-                    session_id,
-                    secrets,
-                })
+                match used {
+                    SecretUse::Session(session_id) => HostMessage::FetchSecrets(SecretFetch {
+                        request_id,
+                        session_id,
+                        secrets,
+                    }),
+                    SecretUse::Host(purpose) => HostMessage::FetchHostSecrets(HostSecretFetch {
+                        request_id,
+                        purpose,
+                        secrets,
+                    }),
+                }
             }
         }
     }

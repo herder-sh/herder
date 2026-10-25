@@ -336,10 +336,17 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::GrantSecretSet {
             set: "prod".into(),
             host_id: HostId::new("01J9HOST"),
+            host_use: false,
         }),
         command(CommandBody::RevokeSecretSet {
             set: "prod".into(),
             host_id: HostId::new("01J9HOST"),
+            host_use: false,
+        }),
+        command(CommandBody::GrantSecretSet {
+            set: "bots".into(),
+            host_id: HostId::new("01J9HOST"),
+            host_use: true,
         }),
         command(CommandBody::ListSecrets),
         command(CommandBody::ListBots),
@@ -881,10 +888,18 @@ fn server_fixtures() -> Vec<ServerMessage> {
         ServerMessage::CommandAccepted {
             command_id: CommandId::new("01J9COMMAND"),
             result: CommandResult::Secrets {
-                sets: vec![SecretSet {
-                    name: "prod".into(),
-                    hosts: vec![HostId::new("01J9HOST")],
-                }],
+                sets: vec![
+                    SecretSet {
+                        name: "bots".into(),
+                        hosts: Vec::new(),
+                        host_use: vec![HostId::new("01J9HOST")],
+                    },
+                    SecretSet {
+                        name: "prod".into(),
+                        hosts: vec![HostId::new("01J9HOST")],
+                        host_use: Vec::new(),
+                    },
+                ],
                 secrets: vec![secret_info()],
             },
         },
@@ -919,14 +934,26 @@ fn server_fixtures() -> Vec<ServerMessage> {
         ServerMessage::CommandAccepted {
             command_id: CommandId::new("01J9COMMAND"),
             result: CommandResult::SecretAudit {
-                entries: vec![SecretAccess {
-                    id: 42,
-                    at: at(),
-                    host_id: HostId::new("01J9HOST"),
-                    session_id: SessionId::new("01J9SESSION"),
-                    set: "prod".into(),
-                    name: "STRIPE_KEY".into(),
-                }],
+                entries: vec![
+                    SecretAccess {
+                        id: 43,
+                        at: at(),
+                        host_id: HostId::new("01J9HOST"),
+                        session_id: None,
+                        purpose: Some("bot:trip1-team".into()),
+                        set: "bots".into(),
+                        name: "SLACK_BOT_TOKEN".into(),
+                    },
+                    SecretAccess {
+                        id: 42,
+                        at: at(),
+                        host_id: HostId::new("01J9HOST"),
+                        session_id: Some(SessionId::new("01J9SESSION")),
+                        purpose: None,
+                        set: "prod".into(),
+                        name: "STRIPE_KEY".into(),
+                    },
+                ],
             },
         },
         ServerMessage::CommandAccepted {
@@ -3065,6 +3092,11 @@ fn host_fixtures() -> Vec<HostMessage> {
                 "prod/DB_URL".parse().unwrap(),
             ],
         }),
+        HostMessage::FetchHostSecrets(HostSecretFetch {
+            request_id: 9,
+            purpose: "bot:trip1-team".into(),
+            secrets: vec!["SLACK_BOT_TOKEN".parse().unwrap()],
+        }),
         HostMessage::Hello(HostHello {
             replication_version: REPLICATION_VERSION,
             host_id: HostId::new("01J9HOST"),
@@ -3834,6 +3866,48 @@ fn secret_fetches_have_their_wire_form() {
             "secrets": ["prod/DB_URL"],
         })
     );
+    let for_host = HostMessage::FetchHostSecrets(HostSecretFetch {
+        request_id: 9,
+        purpose: "bot:trip1-team".into(),
+        secrets: vec!["SLACK_BOT_TOKEN".parse().unwrap()],
+    });
+    assert_eq!(
+        serde_json::to_value(&for_host).unwrap(),
+        json!({
+            "type": "fetch_host_secrets",
+            "request_id": 9,
+            "purpose": "bot:trip1-team",
+            "secrets": ["SLACK_BOT_TOKEN"],
+        })
+    );
+    for state in [
+        HostSecretsState::Ok,
+        HostSecretsState::WaitingForVault,
+        HostSecretsState::Denied {
+            error: SecretError {
+                code: SecretErrorCode::NotGranted,
+                message: "the set bots is not granted to this host for host use".into(),
+                secret: Some("bots/SLACK_BOT_TOKEN".parse().unwrap()),
+                candidates: Vec::new(),
+            },
+        },
+    ] {
+        let wire = serde_json::to_value(&state).unwrap();
+        assert_eq!(
+            serde_json::from_value::<HostSecretsState>(wire).unwrap(),
+            state
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(HostSecretsState::WaitingForVault).unwrap(),
+        json!({ "state": "waiting_for_vault" })
+    );
+    for purpose in ["bot:trip1-team", "a", "mail.smtp_1"] {
+        assert!(is_valid_secret_purpose(purpose), "{purpose}");
+    }
+    for purpose in ["", "Bot:x", "bot x", "bot/x", &"a".repeat(65)] {
+        assert!(!is_valid_secret_purpose(purpose), "{purpose}");
+    }
     let refused = VaultMessage::SecretsRefused {
         request_id: 8,
         error: SecretError {

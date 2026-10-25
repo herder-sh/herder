@@ -3973,9 +3973,23 @@
           "description": "The secret's name.",
           "type": "string"
         },
+        "purpose": {
+          "description": "What the host fetched it for, when for its own use, as [`is_valid_secret_purpose`]\naccepts it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "session_id": {
-          "description": "The session of that host it was fetched for.",
-          "$ref": "#/$defs/SessionId"
+          "description": "The session of that host it was fetched for; absent when the host fetched it for its\nown use.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "set": {
           "description": "The secret's set.",
@@ -3986,7 +4000,6 @@
         "id",
         "at",
         "host_id",
-        "session_id",
         "set",
         "name"
       ]
@@ -4029,6 +4042,13 @@
       "description": "A set of secrets on a vault, and the hosts it is granted to.",
       "type": "object",
       "properties": {
+        "host_use": {
+          "description": "The hosts it is granted to for their own use, ordered by host id; their sessions do not\nget its secrets.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostId"
+          }
+        },
         "hosts": {
           "description": "The hosts it is granted to, ordered by host id; every session on them may use its\nsecrets.",
           "type": "array",

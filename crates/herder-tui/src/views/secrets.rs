@@ -211,7 +211,7 @@ fn secret_row<'a>(ui: Ui, secret: &SecretInfo, names: usize, now: Timestamp) -> 
     ))
 }
 
-/// A fetch: how long ago, the host, its session and the secret.
+/// A fetch: how long ago, the host, its session or purpose and the secret.
 fn fetch_line<'a>(
     ui: Ui,
     entry: &SecretAccess,
@@ -226,9 +226,18 @@ fn fetch_line<'a>(
             format!("{:<hosts$}  ", host_name(vault, &entry.host_id)),
             ui.text(),
         ),
-        Span::styled(format!("{}  ", entry.session_id), ui.muted()),
+        Span::styled(format!("{}  ", used_for(entry)), ui.muted()),
         Span::styled(format!("{}/{}", entry.set, entry.name), ui.text()),
     ])
+}
+
+/// The session a fetch was for, or the host's own purpose.
+fn used_for(entry: &SecretAccess) -> &str {
+    match (&entry.session_id, &entry.purpose) {
+        (Some(session_id), _) => session_id.as_str(),
+        (None, Some(purpose)) => purpose,
+        (None, None) => "",
+    }
 }
 
 fn since(now: Timestamp, then: Timestamp) -> i64 {

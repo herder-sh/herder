@@ -20,7 +20,8 @@
 //!
 //! Secrets are kept here too, in named sets: each value encrypted under the vault's master key,
 //! as ciphertext and nonce, never in plaintext. A set granted to a host lets that host fetch
-//! its values; every fetch is recorded in the audit log, without the value.
+//! its values, for its sessions or, by a separate grant, for its own use; every fetch is
+//! recorded in the audit log, without the value.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -37,7 +38,7 @@ use sha2::{Digest, Sha256};
 
 mod secrets;
 
-pub use secrets::{Grant, Sealed, SetDeleted};
+pub use secrets::{Grant, Sealed, SecretUse, SetDeleted};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only.
 const MIGRATIONS: &[&str] = &[
@@ -133,6 +134,35 @@ CREATE TABLE secret_audit (
     set_name   TEXT    NOT NULL,
     name       TEXT    NOT NULL
 ) STRICT;
+",
+    // A grant is for a host's sessions, or for the host's own use; a fetch is for a session,
+    // or for a purpose of the host's own.
+    "
+CREATE TABLE secret_grants_new (
+    set_name TEXT    NOT NULL,
+    host_id  TEXT    NOT NULL,
+    host_use INTEGER NOT NULL,
+    PRIMARY KEY (set_name, host_id, host_use)
+) STRICT;
+INSERT INTO secret_grants_new SELECT set_name, host_id, 0 FROM secret_grants;
+DROP TABLE secret_grants;
+ALTER TABLE secret_grants_new RENAME TO secret_grants;
+CREATE INDEX secret_grants_host ON secret_grants (host_id);
+
+CREATE TABLE secret_audit_new (
+    id         INTEGER PRIMARY KEY,
+    at         TEXT    NOT NULL,
+    host_id    TEXT    NOT NULL,
+    session_id TEXT,
+    purpose    TEXT,
+    set_name   TEXT    NOT NULL,
+    name       TEXT    NOT NULL,
+    CHECK ((session_id IS NULL) <> (purpose IS NULL))
+) STRICT;
+INSERT INTO secret_audit_new (id, at, host_id, session_id, set_name, name)
+    SELECT id, at, host_id, session_id, set_name, name FROM secret_audit;
+DROP TABLE secret_audit;
+ALTER TABLE secret_audit_new RENAME TO secret_audit;
 ",
 ];
 
@@ -1603,7 +1633,8 @@ mod tests {
                 "INSERT INTO secret_sets VALUES ('prod', '2027-01-15T08:00:00Z');
                  INSERT INTO secrets VALUES ('prod', 'STRIPE_KEY', 'Stripe', x'00', x'01',
                      '2027-01-15T08:00:00Z');
-                 INSERT INTO secret_grants VALUES ('prod', 'granted'), ('prod', 'other');
+                 INSERT INTO secret_grants VALUES ('prod', 'granted', 0), ('prod', 'other', 0),
+                     ('prod', 'granted', 1);
                  INSERT INTO secret_audit (at, host_id, session_id, set_name, name)
                      VALUES ('2027-01-15T08:00:00Z', 'granted', 's1', 'prod', 'STRIPE_KEY');",
             )
@@ -1628,13 +1659,27 @@ mod tests {
                 "updated_at"
             ]
         );
-        // A set is granted to a host at most once.
+        // A set is granted to a host at most once each way.
         assert!(
             store
                 .conn
-                .execute("INSERT INTO secret_grants VALUES ('prod', 'granted')", [])
+                .execute(
+                    "INSERT INTO secret_grants VALUES ('prod', 'granted', 0)",
+                    []
+                )
                 .is_err()
         );
+        // A fetch is for a session or a purpose, never both nor neither.
+        for (session, purpose) in [("NULL", "NULL"), ("'s1'", "'bot:team'")] {
+            let audit = format!(
+                "INSERT INTO secret_audit (at, host_id, session_id, purpose, set_name, name)
+                 VALUES ('2027-01-15T08:00:00Z', 'granted', {session}, {purpose}, 'prod', 'K')"
+            );
+            assert!(
+                store.conn.execute(&audit, []).is_err(),
+                "{session}, {purpose}"
+            );
+        }
 
         store.forget(&granted).unwrap();
         let grants: Vec<String> = store
@@ -1656,5 +1701,48 @@ mod tests {
         // Reopening migrates nothing twice.
         drop(store);
         VaultStore::open(&path).unwrap();
+    }
+
+    #[test]
+    fn grants_and_fetches_from_before_host_use_are_for_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.db");
+        let conn = Connection::open(&path).unwrap();
+        let before = MIGRATIONS.len() - 1;
+        for sql in &MIGRATIONS[..before] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", before as u32)
+            .unwrap();
+        conn.execute_batch(
+            "INSERT INTO hosts (host_id, device_id, host_name, seen_at)
+                 VALUES ('granted', 'device', 'devbox', '2027-01-15T08:00:00Z');
+             INSERT INTO secret_sets VALUES ('prod', '2027-01-15T08:00:00Z');
+             INSERT INTO secret_grants VALUES ('prod', 'granted');
+             INSERT INTO secret_audit (at, host_id, session_id, set_name, name)
+                 VALUES ('2027-01-15T08:00:00Z', 'granted', 's1', 'prod', 'STRIPE_KEY');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut store = VaultStore::open(&path).unwrap();
+        let sets = store.secret_sets().unwrap();
+        assert_eq!(sets[0].hosts, [HostId::new("granted")]);
+        assert!(sets[0].host_use.is_empty());
+        let audit = store.secret_audit(None).unwrap();
+        assert_eq!(audit[0].session_id, Some(SessionId::new("s1")));
+        assert_eq!(audit[0].purpose, None);
+
+        // Granted for host use too, each grant is revoked on its own.
+        let host = HostId::new("granted");
+        assert_eq!(
+            store.grant_secret_set("prod", &host, true).unwrap(),
+            Grant::Granted
+        );
+        assert!(store.revoke_secret_set("prod", &host, false).unwrap());
+        assert!(!store.revoke_secret_set("prod", &host, false).unwrap());
+        let sets = store.secret_sets().unwrap();
+        assert!(sets[0].hosts.is_empty());
+        assert_eq!(sets[0].host_use, [host]);
     }
 }

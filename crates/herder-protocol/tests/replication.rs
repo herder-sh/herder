@@ -250,6 +250,7 @@ impl Vault {
             HostMessage::Attachment(_)
             | HostMessage::ListSecrets { .. }
             | HostMessage::FetchSecrets(_)
+            | HostMessage::FetchHostSecrets(_)
             | HostMessage::Unknown => Vec::new(),
         }
     }

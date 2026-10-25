@@ -326,6 +326,7 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
             let grant = CommandBody::GrantSecretSet {
                 set: set.into(),
                 host_id: HostId::new("devbox"),
+                host_use: false,
             };
             // The host is known once it has replicated.
             if owner.send(HostId::new("vault"), grant).await.is_ok() {
@@ -421,7 +422,11 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
         panic!("expected the audit: {audit:?}");
     };
     assert!(!entries.is_empty());
-    assert!(entries.iter().all(|entry| entry.session_id == session_id));
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.session_id.as_ref() == Some(&session_id))
+    );
     assert!(!serde_json::to_string(&audit).unwrap().contains("expected"));
 
     if let Some(out) = std::env::var_os("HERDER_SECRET_TRANSCRIPT") {
@@ -526,6 +531,7 @@ async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
         let grant = CommandBody::GrantSecretSet {
             set: "prod".into(),
             host_id: HostId::new("devbox"),
+            host_use: false,
         };
         // The host is known once it has replicated.
         if owner.send(HostId::new("vault"), grant).await.is_ok() {

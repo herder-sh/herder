@@ -49,7 +49,8 @@
 //! [`EventBody::Unknown`].
 //!
 //! Secrets (see [`crate::SecretInfo`]) travel over the same connection, on the host's request
-//! only: [`HostMessage::ListSecrets`] and [`HostMessage::FetchSecrets`], each answered once,
+//! only: [`HostMessage::ListSecrets`], [`HostMessage::FetchSecrets`] and
+//! [`HostMessage::FetchHostSecrets`], each answered once,
 //! under its `request_id`, in any order relative to acks. The vault answers for the sets
 //! granted to this connection's host, and nothing else.
 //!
@@ -97,6 +98,10 @@ pub enum HostMessage {
     /// [`VaultMessage::SecretValues`], or [`VaultMessage::SecretsRefused`] when any of them
     /// cannot be handed out. The vault records each value it hands out.
     FetchSecrets(SecretFetch),
+    /// Fetch secrets' values for this host's own use, from the sets granted to it for that;
+    /// answered as [`HostMessage::FetchSecrets`] is. A vault older than this message skips it,
+    /// so the host hears nothing back.
+    FetchHostSecrets(HostSecretFetch),
     /// A message type newer than this build; skip it.
     #[serde(other, skip_serializing)]
     #[schemars(skip)]
@@ -197,6 +202,19 @@ pub struct SecretFetch {
     /// The session of this host the values are for, as the vault's audit records it.
     pub session_id: SessionId,
     /// The secrets, as the session named them; at least one.
+    pub secrets: Vec<SecretRef>,
+}
+
+/// A host's request for secrets' values for its own use.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HostSecretFetch {
+    /// Chosen by the host to match the answer.
+    pub request_id: u64,
+    /// What the values are for, such as `bot:trip1-team`, as the vault's audit records it;
+    /// refused unless [`crate::is_valid_secret_purpose`] accepts it.
+    pub purpose: String,
+    /// The secrets, named as a session would name them among the sets granted for host use;
+    /// at least one.
     pub secrets: Vec<SecretRef>,
 }
 
@@ -332,14 +350,16 @@ pub enum VaultMessage {
         /// The secrets, without values, ordered by set, then name.
         secrets: Vec<SecretInfo>,
     },
-    /// Every secret a [`HostMessage::FetchSecrets`] asked for, with its value.
+    /// Every secret a [`HostMessage::FetchSecrets`] or [`HostMessage::FetchHostSecrets`] asked
+    /// for, with its value.
     SecretValues {
         /// The request's id.
         request_id: u64,
         /// One per secret asked for, in the order asked.
         secrets: Vec<FetchedSecret>,
     },
-    /// A [`HostMessage::FetchSecrets`] was refused and handed nothing out.
+    /// A [`HostMessage::FetchSecrets`] or [`HostMessage::FetchHostSecrets`] was refused and
+    /// handed nothing out.
     SecretsRefused {
         /// The request's id.
         request_id: u64,

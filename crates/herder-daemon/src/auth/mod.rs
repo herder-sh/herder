@@ -1188,10 +1188,12 @@ mod tests {
             CommandBody::GrantSecretSet {
                 set: set(),
                 host_id: host_id(),
+                host_use: false,
             },
             CommandBody::RevokeSecretSet {
                 set: set(),
                 host_id: host_id(),
+                host_use: false,
             },
             CommandBody::ListSecrets,
             CommandBody::ListSecretAudit { before: None },
