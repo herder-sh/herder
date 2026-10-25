@@ -223,25 +223,37 @@ Machines; on iPhone it is the Usage tab. Screenshots are still to come, in `docs
 
 ### 4.6 Skills (`SkillsView`)
 
-The skill library (`SkillLibrary`, from each machine's `skills_status`). At the top, the
-repository, or "Kept on each of your machines" until one is set, with **Pull** (with a
-repository), **New Skill** and **Import**. Then one card per skill: name, description, the
-providers it reaches, its menu (Edit, Delete) and a switch per machine (`set_skill_enabled`).
-Without a repository, a write goes to every connected machine the user owns, each keeping its
-own library, and a card offers to sync through a git URL (`set_skills_repo`, through one
-machine the user owns; the client sets it on the rest, and each pushes the skills it has).
-With one, a write goes through one machine and the others pull, and one row per machine shows
-its commit, when it last pulled, and why a pull failed. **New Skill** and **Edit** write one
-`SKILL.md` (`SkillEditorSheet`: name, description, instructions); editing replaces the skill's
-folder, since the app cannot read a skill's files. **Import** (`SkillImportSheet`) takes a
-folder picked on the device, every file in it but the hidden ones, named after it
-(`SkillFolder`), or a git URL and a folder in it. **Account Skills** lists, read-only, the
-skills in each account's own folder (`~/.claude/skills`, with those Claude syncs from
-claude.ai), per account and machine. Last, **Project Skills**: the skills checked in to the repository
-of the session open beside the screen, or of a project picked from a menu, read-only and
-labelled with their folder. Members see everything and change nothing: the write controls are
-hidden and the switches disabled. It fills the width on the Mac; on iPhone it opens from the
-top of Machines. Screenshots are still to come, in `docs/screenshots/p11-9`.
+Mockups §8. The header says how the library stands ("14 in library · synced from git · 1 machine
+behind", `SkillLibrary.status`), with **Pull** once there is a repository, and **Import** and
+**New Skill** (primary) for an owner (`SkillActions`; on iPhone, in the toolbar). Under it, three
+tabs with their counts, each with an ⓘ that says where its skills come from:
+
+- **Library** (`SkillLibrary`, from each machine's `skills_status`): a `SortableTable` with the
+  skill and its description, the providers it reaches, one column per machine (a vault keeps no
+  library) and the skill's menu (Edit, Delete). A machine's cell is the skill's switch there
+  (`set_skill_enabled`); where the machine does not have the skill, an amber dot if the machine
+  is behind, else a dash. Under the table, one line of sync health: the repository, then who is
+  behind, cannot pull or is on another repository, with **Pull now**, else the commit every
+  machine is at; a failed pull's error follows on its own line. A machine is behind when it is
+  not at the commit most connected machines are at (`SkillLibrary.head`, the one pulled last
+  between equals); the protocol has no commit counts. Without a repository, the line says the
+  library is kept on each machine, with a git URL field and **Sync** (`set_skills_repo`, through
+  one machine the user owns; the client sets it on the rest, and each pushes the skills it has)
+  and the explanation in its ⓘ. A write then goes to every connected machine the user owns;
+  with a repository it goes through one machine and the others pull.
+- **Account**: the skills in each account's own folder (`~/.claude/skills`, with those Claude
+  syncs from claude.ai), read-only, with the account and machine.
+- **Project**: the skills checked in to a project's repository, read-only with their folder:
+  the project of the session open beside the screen, or one picked from the menu above.
+
+An empty tab says what it would list and where that comes from. **New Skill** and **Edit** open
+`SkillEditorSheet` (name, description, instructions; editing replaces the skill's folder, since
+the app cannot read a skill's files); **Import** opens `SkillImportSheet`: a folder picked on the
+device, every file in it but the hidden ones, named after it (`SkillFolder`), or a git URL and a
+folder in it. Both are `AppSheet`s; a refused change shows as a toast. Members see everything and
+change nothing: the actions and menus are hidden, the switches disabled, and a line says why. It
+fills the width on the Mac; on iPhone it opens from the top of Machines. Screenshots:
+`mac-skills.png`, `ios-skills.png` (`apple/ScreenshotTests`, against the demo fleet's library).
 
 ### 4.7 List rules (every session list)
 

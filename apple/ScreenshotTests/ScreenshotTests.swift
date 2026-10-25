@@ -97,6 +97,7 @@ final class ScreenshotTests: XCTestCase {
             shoot("ios-machines")
             #endif
         }
+        skills()
         providers()
         archiving()
         project()
@@ -181,6 +182,22 @@ final class ScreenshotTests: XCTestCase {
         tree.lifetime = .keepAlways
         add(tree)
         return false
+    }
+
+    /// The Skills page: the library, a switch per machine, one skill off on `laptop`.
+    private func skills() {
+        #if os(macOS)
+        guard section("Skills") else { return }
+        #else
+        // On the iPhone, Skills is a link at the top of Machines, not a tab.
+        guard section("Machines") else { return }
+        let link = app.descendants(matching: .any)["skills-link"].firstMatch
+        guard wait(link, "Skills link") else { return }
+        press(link)
+        #endif
+        guard wait(app.staticTexts["review-pr"].firstMatch, "the skill library") else { return }
+        settle()
+        shoot(platform("skills"))
     }
 
     /// The Providers page, adding accounts on `devbox` (a login that runs in Activity, a second

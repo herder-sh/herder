@@ -96,6 +96,52 @@ struct SkillLibrary: Equatable {
     /// The machines to pull on: every connected one the user owns with a repository.
     var pullable: [HostId] { checkouts.filter { $0.writable && $0.repo != nil }.map(\.hostId) }
 
+    /// The commit the library is at: the one most connected machines on the repository have,
+    /// the one pulled last between equals. A machine that missed a write or a pull is off it.
+    var head: String? {
+        let current = checkouts.filter { $0.connected && $0.repo != nil && $0.repo == repo && $0.head != nil }
+        let counts = Dictionary(grouping: current, by: \.head).mapValues(\.count)
+        return current.max { a, b in
+            let (ca, cb) = (counts[a.head] ?? 0, counts[b.head] ?? 0)
+            return ca != cb ? ca < cb : (a.lastPull ?? .distantPast) < (b.lastPull ?? .distantPast)
+        }?.head
+    }
+
+    /// The machines on the repository that are not at its `head`, in the machines' order.
+    var behind: [Checkout] {
+        guard let repo, let head else { return [] }
+        return checkouts.filter { $0.repo == repo && $0.head != head }
+    }
+
+    /// The machines whose checkout is wrong in a way a pull does not show: on another
+    /// repository, or failing to pull.
+    var stuck: [Checkout] {
+        guard let repo else { return [] }
+        return checkouts.filter { ($0.repo != nil && $0.repo != repo) || $0.pullError != nil }
+    }
+
+    /// The page's status sentence: "14 in library · synced from git · 1 machine behind".
+    var status: String {
+        guard !checkouts.isEmpty else { return "" }
+        var parts = ["\(skills.count) in library", repo == nil ? "not synced" : "synced from git"]
+        let off = Set(behind.map(\.hostId)).union(stuck.map(\.hostId)).count
+        if off > 0 { parts.append(off == 1 ? "1 machine behind" : "\(off) machines behind") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// How the checkouts stand, in one line: who is behind or stuck, else the commit every
+    /// machine is at; empty without a repository.
+    var health: String {
+        guard repo != nil else { return "" }
+        let problems = stuck.map { checkout in
+            checkout.pullError != nil ? "\(checkout.name) could not pull" : "\(checkout.name) is on another repository"
+        } + behind.filter { checkout in !stuck.contains { $0.hostId == checkout.hostId } }.map { "\($0.name) is behind" }
+        if !problems.isEmpty { return problems.joined(separator: " · ") }
+        guard let head else { return "No machine has pulled yet" }
+        let short = Self.shortHead(head)
+        return checkouts.count == 1 ? "At \(short)" : "Every machine at \(short)"
+    }
+
     /// A commit, as short as git shows it.
     static func shortHead(_ head: String) -> String { String(head.prefix(7)) }
 }

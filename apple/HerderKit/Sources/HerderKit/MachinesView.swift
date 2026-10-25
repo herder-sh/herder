@@ -232,7 +232,7 @@ struct MachinesView: View {
     }
 
     private var skillsLink: some View {
-        NavigationLink { SkillsView(fleet: fleet) } label: {
+        NavigationLink { SkillsView(fleet: fleet, sheet: $sheet) } label: {
             Card(padding: 12) {
                 HStack(spacing: 10) {
                     Image(systemName: "book.closed").foregroundStyle(Theme.secondary)
