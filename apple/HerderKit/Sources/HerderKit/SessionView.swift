@@ -195,7 +195,7 @@ struct SessionView: View {
                 ToolbarItem(placement: .principal) { compactTitle(model, summary) }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     prChip(labels: false, inToolbar: true)
-                    if let model { actionsMenu(model, inToolbar: true) }
+                    if let model { actionsMenu(model, threads: summary?.threads ?? [], inToolbar: true) }
                 }
             }
         }
@@ -277,6 +277,14 @@ struct SessionView: View {
             }
             .frame(idealWidth: 160, maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 6) {
+            if let thread = summary?.threads.last(where: { $0.url != nil }), let url = thread.url.flatMap(URL.init) {
+                Link(destination: url) {
+                    HeaderLabel(symbol: "bubble.left.and.text.bubble.right", title: labels ? thread.kind.label : nil)
+                }
+                .buttonStyle(.plain)
+                .help("Open the linked \(thread.kind.label) thread")
+                .accessibilityLabel("Open in \(thread.kind.label)")
+            }
             prChip(labels: labels, inToolbar: false)
             if ownsTerminal, model?.state != .archived {
                 HeaderButton(symbol: showsTerminal ? "text.bubble" : "terminal",
@@ -307,7 +315,7 @@ struct SessionView: View {
                 ArchivingLabel()
             }
             if let model {
-                actionsMenu(model, inToolbar: false)
+                actionsMenu(model, threads: summary?.threads ?? [], inToolbar: false)
             }
             }
             // The buttons keep their size; the title, status and branch take what is left.
@@ -360,7 +368,7 @@ struct SessionView: View {
 
     /// The session's actions. In the phone's toolbar it also holds what the wide header shows
     /// as buttons and lines: the terminal, the inspector, the branch and the fork origin.
-    private func actionsMenu(_ model: SessionModel, inToolbar: Bool) -> some View {
+    private func actionsMenu(_ model: SessionModel, threads: [ThreadLink], inToolbar: Bool) -> some View {
         Menu {
             if inToolbar {
                 // The branch and fork origin title the section, as the menu has no other line
@@ -374,6 +382,11 @@ struct SessionView: View {
                     Button("Events and Statistics", systemImage: "info.circle") { showInspector() }
                     if !showsTerminal {
                         Button("Find in Transcript", systemImage: "magnifyingglass") { toggleFind() }
+                    }
+                    if let thread = threads.last(where: { $0.url != nil }), let url = thread.url.flatMap(URL.init) {
+                        Link(destination: url) {
+                            Label("Open \(thread.kind.label) Thread", systemImage: "bubble.left.and.text.bubble.right")
+                        }
                     }
                 }
             }

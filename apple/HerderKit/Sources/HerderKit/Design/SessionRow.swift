@@ -58,6 +58,7 @@ struct SessionRow: View {
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 4)
+                    ThreadBadge(threads: session.threads)
                     ForEach(session.prs.sorted { $0.state.rank < $1.state.rank }.prefix(2), id: \.number) {
                         PRBadge(pr: $0)
                     }

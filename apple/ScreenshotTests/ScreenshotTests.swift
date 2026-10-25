@@ -99,6 +99,7 @@ final class ScreenshotTests: XCTestCase {
         }
         skills()
         providers()
+        integrations()
         archiving()
         project()
         finish()
@@ -182,6 +183,36 @@ final class ScreenshotTests: XCTestCase {
         tree.lifetime = .keepAlways
         add(tree)
         return false
+    }
+
+    /// Integrations: every machine's bots, then `trash-can`'s page, then Add Bot with its Slack
+    /// app manifest. The demo's bots wait for a vault, so none reaches Slack.
+    private func integrations() {
+        #if os(macOS)
+        guard section("Integrations") else { return }
+        #else
+        // On the iPhone, Integrations is a link at the top of Machines, not a tab.
+        guard section("Machines") else { return }
+        let link = app.descendants(matching: .any)["integrations-link"].firstMatch
+        guard wait(link, "Integrations link") else { return }
+        press(link)
+        #endif
+        let bot = app.descendants(matching: .any)["bot-trash-can"].firstMatch
+        guard wait(bot, "trash-can in Integrations") else { return }
+        settle()
+        shoot(platform("integrations"))
+        press(bot)
+        guard wait(app.staticTexts["U04SAM0001"].firstMatch, "trash-can's people") else { return }
+        settle()
+        shoot(platform("bot"))
+        back()
+        let add = app.buttons["Add Bot"].firstMatch
+        guard wait(add, "Add Bot") else { return }
+        press(add)
+        type("trip1-team\n", into: "bot-name")
+        settle()
+        shoot(platform("add-bot"))
+        dismiss()
     }
 
     /// The Skills page: the library, a switch per machine, one skill off on `studio`.

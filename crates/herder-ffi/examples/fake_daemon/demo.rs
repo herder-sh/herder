@@ -42,6 +42,7 @@ use herder_adapters::{
 };
 use herder_client_core::{Client, ConnectionState, PairResult, PairingUri};
 use herder_daemon::auth::{Auth, PAIRING_TTL, User};
+use herder_daemon::bots::{Bots, Runtime as BotsRuntime, runner};
 use herder_daemon::config::Retention;
 use herder_daemon::login::{self, Logins};
 use herder_daemon::mcp;
@@ -249,6 +250,66 @@ headers = { Authorization = "Bearer lin_demo_0000" }
 "#,
     ),
 ];
+
+/// Each machine's chat bots, as its `daemon.toml` has them. Their tokens are in no vault, so
+/// they wait for one and never reach Slack.
+const BOTS: &[(&str, &str)] = &[(
+    "devbox",
+    r#"
+[[bots]]
+bot_id = "trash-can"
+kind = "slack"
+name = "trash-can"
+token = "bot-trash-can/BOT_TOKEN"
+app_token = "bot-trash-can/APP_TOKEN"
+
+[[bots.allow]]
+external_user_id = "U04SAM0001"
+display_name = "Sam"
+dm = true
+channels = true
+approve = true
+notify = true
+
+[[bots.allow]]
+external_user_id = "U04ALEX002"
+display_name = "Alex"
+dm = true
+channels = true
+
+[[bots.allow]]
+external_user_id = "U04KIM0003"
+display_name = "Kim"
+channels = true
+
+[bots.defaults]
+project_id = "github.com/acme/api"
+provider = "claude"
+model = "sonnet"
+permission_mode = "auto_edit"
+
+[[bots.channel_bindings]]
+channel_id = "C07WEB0001"
+project_id = "github.com/acme/web"
+
+[[bots.channel_bindings]]
+channel_id = "C07OPS0002"
+project_id = "github.com/acme/infra"
+
+[[bots]]
+bot_id = "acme-ops"
+kind = "slack"
+name = "acme-ops"
+token = "bot-acme-ops/BOT_TOKEN"
+app_token = "bot-acme-ops/APP_TOKEN"
+
+[[bots.allow]]
+external_user_id = "U04SAM0001"
+display_name = "Sam"
+dm = true
+approve = true
+"#,
+)];
 
 /// The machines: name, cores, memory in GiB, accounts.
 const MACHINES: &[(&str, u32, u64, &[Account])] = &[
@@ -895,12 +956,17 @@ impl Daemon {
             .iter()
             .find(|(machine, _)| *machine == name)
             .map_or("", |(_, servers)| servers);
+        let bots = BOTS
+            .iter()
+            .find(|(machine, _)| *machine == name)
+            .map_or("", |(_, bots)| bots);
         std::fs::write(
             &config_file,
-            format!("[resources]\nmax_turns = 16\n{mcp_servers}"),
+            format!("[resources]\nmax_turns = 16\n{mcp_servers}{bots}"),
         )?;
+        let config = Config::load_file(&config_file)?;
         let settings = Arc::new(Settings::new(
-            &Config::load_file(&config_file)?,
+            &config,
             Some(Arc::clone(&admission)),
             shutdown.clone(),
         ));
@@ -949,7 +1015,7 @@ impl Daemon {
                 changed: journal_grew,
                 data_dir: dir.to_owned(),
                 shutdown: shutdown.clone(),
-                secrets,
+                secrets: Arc::clone(&secrets),
             },
             None,
         )?);
@@ -983,6 +1049,21 @@ impl Daemon {
         server.manage_settings(settings)?;
         server.link_vault(vault_link)?;
         server.manage_providers(providers)?;
+        let bots = Arc::new(Bots::new(&config));
+        bots.start(
+            BotsRuntime {
+                host: runner::Host {
+                    host_id: host.id.clone(),
+                    sessions: sessions.clone(),
+                    names: Arc::new(|_| None),
+                },
+                secrets: Arc::clone(&secrets),
+                events: tokio::sync::broadcast::channel(1).0,
+                shutdown: shutdown.clone(),
+            },
+            &config.bots,
+        )?;
+        server.manage_bots(bots)?;
         let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
         Ok(Self {
             id: host.id,

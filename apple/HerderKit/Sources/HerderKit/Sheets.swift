@@ -25,6 +25,8 @@ enum AppSheet: Identifiable, Hashable {
     case skill(SkillEditing)
     /// A skill to import into the library.
     case importSkill
+    /// A new chat bot: pick its machine first.
+    case addBot
 
     var id: Self { self }
 }
@@ -42,6 +44,7 @@ extension AppSheet {
         case .activity: ActivitySheet(fleet: fleet)
         case .skill(let editing): SkillEditorSheet(fleet: fleet, editing: editing)
         case .importSkill: SkillImportSheet(fleet: fleet)
+        case .addBot: AddBotSheet(fleet: fleet)
         }
     }
 }
