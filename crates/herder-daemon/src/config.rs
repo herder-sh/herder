@@ -169,6 +169,40 @@
 //! `setup_command` runs with `sh -c` once in every new session worktree of the project, in the
 //! session's resource scope, before the agent's first turn; see [`crate::session`].
 //!
+//! # Bots
+//!
+//! Each `[[bots]]` entry is a chat bot this host holds; see [`herder_protocol::Bot`] for its
+//! keys. Owners put and remove bots from a client ([`put_bot`], [`remove_bot`]), which
+//! replaces or removes the whole entry and keeps the rest of the file as written:
+//!
+//! ```toml
+//! [[bots]]
+//! bot_id = "trash-can"          # unique on this host
+//! kind = "slack"                # slack or telegram
+//! name = "trash-can"
+//! token = "slack/BOT_TOKEN"     # machine-level secrets of the host's vault, never the tokens
+//! app_token = "slack/APP_TOKEN" # Slack's Socket Mode token; none for Telegram
+//!
+//! [[bots.allow]]                # each person the bot answers; nobody else
+//! external_user_id = "U012AB3CD"
+//! display_name = "Ada"
+//! dm = true                     # each switch false by default
+//! channels = true
+//! approve = true
+//! notify = false
+//!
+//! [bots.defaults]               # each key chosen as for any new session when absent
+//! project_id = "github.com/herder-sh/herder" # a chat when absent
+//! provider = "claude"
+//! account_ids = ["claude-main"] # `[[accounts]]` ids, all of one provider
+//! model = "opus"
+//! permission_mode = "ask"
+//!
+//! [[bots.channel_bindings]]
+//! channel_id = "C012AB3CD"
+//! project_id = "github.com/herder-sh/trip1"
+//! ```
+//!
 //! # Vault
 //!
 //! `mode = "vault"` (or `herder daemon --vault`) runs the daemon as a vault: it runs no
@@ -205,9 +239,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use herder_protocol::{
-    AccountId, BackupSettings, DaemonSettings, FollowUpSettings, LogSettings, McpServerSettings,
-    McpTransport, PermissionMode, ProjectDiscovery, ProjectId, Provider, ProviderBinary,
-    ResourceSettings, SecretRef, TitleSettings, is_valid_mcp_server_name,
+    AccountId, BackupSettings, Bot, BotId, BotKind, DaemonSettings, FollowUpSettings, LogSettings,
+    McpServerSettings, McpTransport, PermissionMode, ProjectDiscovery, ProjectId, Provider,
+    ProviderBinary, ResourceSettings, SecretRef, TitleSettings, is_valid_mcp_server_name,
 };
 use serde::Deserialize;
 
@@ -252,6 +286,8 @@ pub struct Config {
     pub retention: Retention,
     /// The user's MCP servers, in file order, as written.
     pub mcp_servers: Vec<McpServerSettings>,
+    /// The chat bots this host holds, in file order, as written.
+    pub bots: Vec<Bot>,
 }
 
 /// The projects dir unless the `[projects]` table names another.
@@ -405,6 +441,7 @@ struct ConfigFile {
     mode: Mode,
     vault: Option<VaultFile>,
     mcp_servers: Vec<McpServerFile>,
+    bots: Vec<Bot>,
 }
 
 impl Default for ConfigFile {
@@ -427,6 +464,7 @@ impl Default for ConfigFile {
             mode: Mode::default(),
             vault: None,
             mcp_servers: Vec::new(),
+            bots: Vec::new(),
         }
     }
 }
@@ -674,6 +712,7 @@ fn resolve(
     let titles = resolve_titles(file.titles, &accounts)?;
     let (vault, retention) = resolve_vault(file.mode, file.vault)?;
     let mcp_servers = resolve_mcp_servers(file.mcp_servers, env)?;
+    validate_bots(&file.bots, &accounts)?;
     Ok(Config {
         path,
         listen,
@@ -690,7 +729,74 @@ fn resolve(
         vault,
         retention,
         mcp_servers,
+        bots: file.bots,
     })
+}
+
+/// Validates the `[[bots]]` entries against the `[[accounts]]` ones.
+fn validate_bots(bots: &[Bot], accounts: &Accounts) -> Result<()> {
+    let mut ids = HashSet::new();
+    for bot in bots {
+        let id = bot.bot_id.as_str();
+        ensure!(
+            valid_id(id),
+            "bot id {id:?} must be ASCII letters, digits, -, _ or ."
+        );
+        ensure!(ids.insert(id), "two bots entries have the id {id:?}");
+        validate_bot(bot, accounts).with_context(|| format!("bot {id:?}"))?;
+    }
+    Ok(())
+}
+
+/// Validates one `[[bots]]` entry.
+fn validate_bot(bot: &Bot, accounts: &Accounts) -> Result<()> {
+    ensure!(
+        !bot.name.trim().is_empty() && !bot.name.contains('\n'),
+        "name must be one line, not blank"
+    );
+    match bot.kind {
+        BotKind::Slack => ensure!(
+            bot.app_token.is_some(),
+            "a Slack bot needs app_token, its Socket Mode token"
+        ),
+        BotKind::Telegram => ensure!(bot.app_token.is_none(), "a Telegram bot has no app_token"),
+        BotKind::Unknown => bail!("kind must be slack or telegram"),
+    }
+    let mut people = HashSet::new();
+    for user in &bot.allow {
+        let id = &user.external_user_id;
+        ensure!(!id.trim().is_empty(), "allow names a person without an id");
+        ensure!(people.insert(id), "allow names {id:?} twice");
+    }
+    let mut channels = HashSet::new();
+    for binding in &bot.channel_bindings {
+        let id = &binding.channel_id;
+        ensure!(
+            !id.trim().is_empty(),
+            "channel_bindings names a channel without an id"
+        );
+        ensure!(channels.insert(id), "channel_bindings names {id:?} twice");
+    }
+    // A session rotates across accounts of its own provider only.
+    let defaults = &bot.defaults;
+    let mut provider = defaults.provider.as_ref();
+    let mut seen = HashSet::new();
+    for account_id in &defaults.account_ids {
+        let account = accounts
+            .get(account_id)
+            .with_context(|| format!("defaults: {account_id} is not an account"))?;
+        ensure!(
+            seen.insert(account_id),
+            "defaults: {account_id} is listed twice"
+        );
+        let provider = provider.get_or_insert(&account.provider);
+        ensure!(
+            account.provider == **provider,
+            "defaults: {account_id} is not a {} account",
+            provider.as_str()
+        );
+    }
+    Ok(())
 }
 
 /// Validates the `[[mcp_servers]]` entries.
@@ -1347,6 +1453,91 @@ pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
         Ok(())
     })?;
     Ok(())
+}
+
+/// Puts `bot` in the config file at `path`: replaces the `[[bots]]` entry with its id, in its
+/// place, or appends one. The rest of the file is kept as written, and only a file that still
+/// loads replaces it. Returns the bots as the new file has them.
+pub fn put_bot(path: &Path, bot: &Bot) -> Result<Vec<Bot>> {
+    let table = bot_table(bot)?;
+    let config = edit_file(path, |doc, _| {
+        let entries = bots_mut(doc, path)?;
+        let id = Some(bot.bot_id.as_str());
+        let index = entries
+            .iter()
+            .position(|entry| entry.get("bot_id").and_then(toml_edit::Item::as_str) == id);
+        match index.and_then(|index| entries.get_mut(index)) {
+            Some(entry) => *entry = table,
+            None => entries.push(table),
+        }
+        Ok(())
+    })?;
+    Ok(config.bots)
+}
+
+/// Removes the `[[bots]]` entry of `bot_id` from the config file at `path`, as [`put_bot`]
+/// edits it; `false`, changing nothing, when there is none.
+pub fn remove_bot(path: &Path, bot_id: &BotId) -> Result<bool> {
+    let mut found = false;
+    edit_file(path, |doc, _| {
+        let entries = bots_mut(doc, path)?;
+        let before = entries.len();
+        entries.retain(|entry| {
+            entry.get("bot_id").and_then(toml_edit::Item::as_str) != Some(bot_id.as_str())
+        });
+        found = entries.len() != before;
+        if entries.is_empty() {
+            doc.remove("bots");
+        }
+        Ok(())
+    })?;
+    Ok(found)
+}
+
+/// The `[[bots]]` entries of `doc`, the config file at `path`; added when it has none.
+fn bots_mut<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
+    path: &Path,
+) -> Result<&'a mut toml_edit::ArrayOfTables> {
+    doc.entry("bots")
+        .or_insert(toml_edit::Item::ArrayOfTables(
+            toml_edit::ArrayOfTables::new(),
+        ))
+        .as_array_of_tables_mut()
+        .with_context(|| format!("bots in {} is not an array of tables", path.display()))
+}
+
+/// `bot` as a `[[bots]]` entry, leaving out what is at its default.
+fn bot_table(bot: &Bot) -> Result<toml_edit::Table> {
+    let text = toml::to_string(bot).context("writing the bot as TOML")?;
+    let mut table = text
+        .parse::<toml_edit::DocumentMut>()
+        .context("reading the bot back as TOML")?
+        .as_table()
+        .clone();
+    if table
+        .get("defaults")
+        .and_then(toml_edit::Item::as_table_like)
+        .is_some_and(toml_edit::TableLike::is_empty)
+    {
+        table.remove("defaults");
+    }
+    table.decor_mut().clear();
+    unplace(&mut table);
+    Ok(table)
+}
+
+/// Forgets where `table` and the tables under it were in the document they were parsed from,
+/// so each renders under its parent wherever it is inserted.
+fn unplace(table: &mut toml_edit::Table) {
+    table.set_position(None);
+    for (_, item) in table.iter_mut() {
+        match item {
+            toml_edit::Item::Table(table) => unplace(table),
+            toml_edit::Item::ArrayOfTables(tables) => tables.iter_mut().for_each(unplace),
+            _ => {}
+        }
+    }
 }
 
 /// Changes the config file at `path` from the settings `old` it holds to `new`: only the keys
@@ -2124,6 +2315,7 @@ mod tests {
                 vault: None,
                 retention: Retention::default(),
                 mcp_servers: Vec::new(),
+                bots: Vec::new(),
             }
         );
     }

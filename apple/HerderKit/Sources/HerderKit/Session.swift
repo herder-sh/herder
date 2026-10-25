@@ -280,7 +280,7 @@ struct SessionModel {
         case .prLinked(let pr): notice("Pull request #\(pr.number) linked: \(pr.title)")
         case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
         case .sessionCreated, .sessionStatusChanged, .turnStarted, .turnCompleted, .prUpdated,
-             .titleChanged, .unknown:
+             .titleChanged, .threadLinked, .unknown:
             break
         }
     }
@@ -480,6 +480,7 @@ struct SessionModel {
         case .titleChanged(let title, _): return "Title: \(title)"
         case .sessionForked(let fromSession, let fromHost): return "Machine: from \(fromHost) (\(fromSession))"
         case .artifactPublished(let title, _, _, _): return "Published: \(title)"
+        case .threadLinked(let thread): return "Thread linked: \(thread.botId) in \(thread.channelId)"
         case .unknown: return "Event"
         }
     }

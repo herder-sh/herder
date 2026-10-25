@@ -84,6 +84,7 @@ impl Backend for TestBackend {
                 account_id: session.account_id,
                 children_need_you: 0,
                 queue: Vec::new(),
+                threads: Vec::new(),
                 chat: false,
             })
             .collect())
@@ -225,6 +226,8 @@ impl Daemon {
             shutdown.clone(),
         );
         server.manage_settings(Arc::new(settings)).unwrap();
+        let bots = crate::bots::Bots::new(&crate::Config::load_file(&config).unwrap());
+        server.manage_bots(Arc::new(bots)).unwrap();
         let aws = tmp.path().join("aws");
         let vars = [
             ("PATH", aws.join("bin")),
@@ -1535,6 +1538,66 @@ async fn a_restart_is_answered_before_the_daemon_stops() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn owners_put_and_list_bots_and_members_are_refused() {
+    let daemon = Daemon::start().await;
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    let bot = herder_protocol::Bot {
+        bot_id: herder_protocol::BotId::new("tg"),
+        kind: herder_protocol::BotKind::Telegram,
+        name: "herder".into(),
+        token: "TELEGRAM_TOKEN".parse().unwrap(),
+        app_token: None,
+        allow: Vec::new(),
+        defaults: herder_protocol::BotDefaults::default(),
+        channel_bindings: Vec::new(),
+    };
+    let put = CommandBody::PutBot { bot: bot.clone() };
+    assert!(matches!(
+        owner.command("c1", put.clone()).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+    assert_eq!(
+        owner.command("c2", CommandBody::ListBots).await,
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("c2"),
+            result: CommandResult::Bots {
+                bots: vec![bot.clone()]
+            },
+        }
+    );
+
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut member = daemon.client_on(&device, Some(&code)).await;
+    member.hello(Vec::new()).await;
+    let remove = CommandBody::RemoveBot {
+        bot_id: bot.bot_id.clone(),
+    };
+    for (n, command) in [
+        CommandBody::ListBots,
+        put,
+        remove,
+        CommandBody::GetBotStatus,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(matches!(
+            member.command(&format!("m{n}"), command).await,
+            ServerMessage::CommandRejected { error, .. } if error.code == ErrorCode::Forbidden
+        ));
+    }
+    assert_eq!(
+        crate::Config::load_file(&daemon.config).unwrap().bots,
+        [bot]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agents_run_commands_as_their_user_within_its_role() {
     let daemon = Daemon::start().await;
     let owner = daemon.client().await.hello(Vec::new()).await.user_id;
@@ -1589,6 +1652,9 @@ async fn agents_run_commands_as_their_user_within_its_role() {
         CommandBody::PairDevice,
         CommandBody::PairVaultHost {
             host_name: "devbox".into(),
+        },
+        CommandBody::RemoveBot {
+            bot_id: herder_protocol::BotId::new("trash-can"),
         },
     ];
     for command in refused {

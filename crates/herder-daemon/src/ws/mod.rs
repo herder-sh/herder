@@ -34,6 +34,7 @@ pub(crate) type Ws =
 use crate::auth::control::addresses;
 use crate::auth::{self, Auth, PAIRING_TTL};
 use crate::aws::Aws;
+use crate::bots::Bots;
 use crate::hub::Hub;
 use crate::hub::Outbox;
 use crate::listen;
@@ -166,6 +167,8 @@ struct Shared<B> {
     listen: OnceLock<Vec<SocketAddr>>,
     /// The daemon's settings, which answer the settings commands, once set.
     settings: OnceLock<Arc<Settings>>,
+    /// The host's bots, which answer the bot commands, once set; a vault has none.
+    bots: OnceLock<Arc<Bots>>,
     /// The host's provider CLIs, which answer install and the providers list, once set.
     providers: OnceLock<Arc<Providers>>,
     /// The host's AWS CLI, which answers the AWS sign-in commands, once set.
@@ -313,6 +316,16 @@ impl<B: Backend> Shared<B> {
                     message: "this daemon's settings are not changed from a client".to_owned(),
                 }),
             },
+            command @ (CommandBody::ListBots
+            | CommandBody::PutBot { .. }
+            | CommandBody::RemoveBot { .. }
+            | CommandBody::GetBotStatus) => match self.bots.get() {
+                Some(bots) => bots.command(command).await,
+                None => Err(ErrorInfo {
+                    code: ErrorCode::Unsupported,
+                    message: "this daemon holds no bots; a vault runs none".to_owned(),
+                }),
+            },
             command => self.backend.command(user_id, command_id, command).await,
         }
     }
@@ -443,15 +456,19 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::ListAwsProfiles
                     | CommandBody::AwsSsoLogin { .. }
             );
+            // A bot's allowlist grants people access, as a pairing code does.
             let pairing = matches!(
                 command,
-                CommandBody::PairDevice | CommandBody::PairVaultHost { .. }
+                CommandBody::PairDevice
+                    | CommandBody::PairVaultHost { .. }
+                    | CommandBody::PutBot { .. }
+                    | CommandBody::RemoveBot { .. }
             );
             if connection || pairing {
                 return Err(ErrorInfo {
                     code: ErrorCode::Forbidden,
-                    message: "terminals, logins, installs and pairing codes are never run for \
-                              an agent; ask the user to do this in a herder app"
+                    message: "terminals, logins, installs, pairing codes and bots are never \
+                              run for an agent; ask the user to do this in a herder app"
                         .to_owned(),
                 });
             }
@@ -495,6 +512,7 @@ impl<B: Backend> Server<B> {
                 link: OnceLock::new(),
                 listen: OnceLock::new(),
                 settings: OnceLock::new(),
+                bots: OnceLock::new(),
                 providers: OnceLock::new(),
                 aws: OnceLock::new(),
             }),
@@ -528,6 +546,14 @@ impl<B: Backend> Server<B> {
             .settings
             .set(settings)
             .map_err(|_| anyhow::anyhow!("the settings are managed already"))
+    }
+
+    /// Answers the bot commands with `bots`; once per server.
+    pub fn manage_bots(&self, bots: Arc<Bots>) -> anyhow::Result<()> {
+        self.shared
+            .bots
+            .set(bots)
+            .map_err(|_| anyhow::anyhow!("the bots are managed already"))
     }
 
     /// Answers the vault link commands with `link`; once per server.

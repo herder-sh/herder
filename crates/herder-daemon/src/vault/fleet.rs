@@ -508,6 +508,10 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::ImportSkill { .. }
         | CommandBody::PullSkills
         | CommandBody::SetSkillEnabled { .. }
+        | CommandBody::ListBots
+        | CommandBody::PutBot { .. }
+        | CommandBody::RemoveBot { .. }
+        | CommandBody::GetBotStatus
         | CommandBody::AddAccount { .. }
         | CommandBody::InstallProvider { .. }
         | CommandBody::LogInAccount { .. }

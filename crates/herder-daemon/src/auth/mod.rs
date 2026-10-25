@@ -608,6 +608,16 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             "changing the skill library is for the daemon's owners only",
         ));
     }
+    let bots = matches!(
+        command,
+        CommandBody::ListBots
+            | CommandBody::PutBot { .. }
+            | CommandBody::RemoveBot { .. }
+            | CommandBody::GetBotStatus
+    );
+    if bots && role != Role::Owner {
+        return Err(forbidden("the daemon's bots are for its owners only"));
+    }
     let secrets = matches!(
         command,
         CommandBody::CreateSecretSet { .. }
@@ -1107,6 +1117,41 @@ mod tests {
             },
             CommandBody::SetResourceLimits { max_turns: 4 },
             CommandBody::RestartDaemon,
+        ];
+        for command in &commands {
+            assert!(authorize(alice.role, command).is_ok());
+        }
+        alice.role = Role::Member;
+        for command in &commands {
+            assert_eq!(
+                authorize(alice.role, command).unwrap_err().code,
+                ErrorCode::Forbidden
+            );
+        }
+    }
+
+    #[test]
+    fn only_owners_may_list_put_remove_or_watch_bots() {
+        let (_tmp, auth) = open();
+        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let bot_id = || herder_protocol::BotId::new("trash-can");
+        let commands = [
+            CommandBody::ListBots,
+            CommandBody::PutBot {
+                bot: herder_protocol::Bot {
+                    bot_id: bot_id(),
+                    kind: herder_protocol::BotKind::Slack,
+                    name: "trash-can".into(),
+                    token: "BOT_TOKEN".parse().unwrap(),
+                    app_token: Some("APP_TOKEN".parse().unwrap()),
+                    allow: Vec::new(),
+                    defaults: herder_protocol::BotDefaults::default(),
+                    channel_bindings: Vec::new(),
+                },
+            },
+            CommandBody::RemoveBot { bot_id: bot_id() },
+            CommandBody::GetBotStatus,
         ];
         for command in &commands {
             assert!(authorize(alice.role, command).is_ok());

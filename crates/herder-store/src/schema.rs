@@ -6,7 +6,7 @@ use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
 const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18,
 ];
 
 /// Schema version this build writes.
@@ -211,6 +211,21 @@ const V16: &str = "CREATE INDEX events_type_at ON events (event_type, at);";
 
 /// Chats: sessions about no project. Every session before was about one.
 const V17: &str = "ALTER TABLE sessions ADD COLUMN chat INTEGER NOT NULL DEFAULT 0;";
+
+/// Chat threads linked to each session, with the seq of the event that first linked each.
+/// No session before had one.
+const V18: &str = "
+CREATE TABLE session_threads (
+    session_id     TEXT    NOT NULL,
+    kind           TEXT    NOT NULL,
+    bot_id         TEXT    NOT NULL,
+    channel_id     TEXT    NOT NULL,
+    thread_id      TEXT    NOT NULL,
+    url            TEXT,
+    first_seen_seq INTEGER NOT NULL,
+    PRIMARY KEY (session_id, bot_id, channel_id, thread_id)
+) STRICT;
+";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.
 pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {

@@ -400,7 +400,8 @@ impl SessionManager {
             .await
             .map_err(worktree_error)?;
         attachments::keep(&inner.attachments, &session_id, source.attachments).await?;
-        // The fork tracks none of the original's pull requests, and owns only its own branch.
+        // The fork tracks none of the original's pull requests, owns only its own branch, and
+        // is linked to none of its chat threads, which stay the original's.
         let mut events: Vec<Event> = source
             .events
             .into_iter()
@@ -411,6 +412,7 @@ impl SessionManager {
                         | EventBody::PrUpdated { .. }
                         | EventBody::PrUnlinked { .. }
                         | EventBody::BranchCheckedOut { .. }
+                        | EventBody::ThreadLinked { .. }
                 )
             })
             .collect();
