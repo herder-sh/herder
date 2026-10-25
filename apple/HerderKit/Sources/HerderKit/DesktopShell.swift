@@ -81,9 +81,10 @@ struct DesktopShell: View {
             }
         case .board:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: "Board", status: connectionStatus(lists), switcher: switcher, query: $query) {
+                Pane(title: "Board", status: boardStatus(lists), switcher: switcher, query: $query) {
                     drafting { BoardView(fleet: fleet, sheet: $sheet, selection: $session, query: query) }
                 } actions: {
+                    BoardSortMenu().fixedSize()
                     PaneButton(title: "New Session", symbol: "plus", prominent: true) { sheet = .newSession }
                 }
             }
@@ -164,6 +165,16 @@ struct DesktopShell: View {
     }
 
     private var switcher: Switcher { Switcher(fleet: fleet, item: $item, session: $session) }
+
+    /// How many tasks are open and how many of them work, then the machines while one is not
+    /// connected.
+    private func boardStatus(_ lists: Lists) -> String {
+        let tasks = lists.board()
+        let working = tasks.filter { $0.state == .working }.count
+        let line = "\(tasks.count) open · \(working) working"
+        let connected = lists.machines.filter(\.connected).count
+        return connected < lists.machines.count || lists.machines.isEmpty ? "\(line) · \(connectionStatus(lists))" : line
+    }
 
     private func connectionStatus(_ lists: Lists) -> String {
         let connected = lists.machines.filter(\.connected).count
