@@ -38,6 +38,20 @@ async fn the_demo_sets_up_every_scene() -> anyhow::Result<()> {
     let dates = scene("devbox", "Upgrade date-fns to v4");
     assert_eq!(dates.status, SessionStatus::NeedsYou);
 
+    // A question several of whose choices may be picked.
+    let browsers = scene("laptop", "Run checkout e2e in more browsers");
+    assert_eq!(browsers.status, SessionStatus::NeedsYou);
+    assert_eq!(
+        count(browsers, |body| matches!(
+            body,
+            EventBody::QuestionAsked {
+                multi_select: true,
+                ..
+            }
+        )),
+        1
+    );
+
     // Failover: the limit on Work, the switch to Personal, the retried turn done there.
     let ledger = scene("devbox", "Move invoices onto the ledger");
     let failed = ledger

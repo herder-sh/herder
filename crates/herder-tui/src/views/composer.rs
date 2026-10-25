@@ -159,14 +159,23 @@ fn request<'a>(
     let mut rows = Vec::new();
     for (at, choice) in (0..).zip(&question.choices) {
         let first = body.len();
-        let number = Span::styled(format!(" {} ", at + 1), ui.accent());
-        let pad = Span::raw("   ");
-        body.extend(wrap(
-            &[(choice.clone(), ui.text())],
-            room,
-            &[number],
-            &[pad],
-        ));
+        let mut lead = vec![Span::styled(format!(" {} ", at + 1), ui.accent())];
+        let mut pad = vec![Span::raw("   ")];
+        let mut style = ui.text();
+        // A multi-select question shows a box per choice, and the one Space picks.
+        if question.multi_select {
+            let mark = if question.picked.contains(&at) {
+                "[x] "
+            } else {
+                "[ ] "
+            };
+            lead.push(Span::styled(mark, ui.accent()));
+            pad.push(Span::raw("    "));
+            if at as usize == app.compose.option {
+                style = ui.strong();
+            }
+        }
+        body.extend(wrap(&[(choice.clone(), style)], room, &lead, &pad));
         let click = Click::Act(Action::Compose(Act::Choose(at)));
         rows.extend((first..body.len()).map(|row| (row, click.clone())));
     }
@@ -176,9 +185,19 @@ fn request<'a>(
         question.note.as_deref(),
         question.routed_to,
     );
-    let panel = Request::new(ui, header, right(question.since))
+    let mut panel = Request::new(ui, header, right(question.since))
         .body(body)
         .padded(!compact);
+    if question.multi_select {
+        let picked = format!("{} picked", question.picked.len());
+        let keys = if compact {
+            "space pick · enter submit"
+        } else {
+            "↑/↓ · space pick · enter submit"
+        };
+        let hint = Span::styled(fit_sep(ui, keys), ui.muted());
+        panel = panel.footer(Span::styled(picked, ui.muted()), hint);
+    }
     Some((panel, Tap::Rows(rows)))
 }
 

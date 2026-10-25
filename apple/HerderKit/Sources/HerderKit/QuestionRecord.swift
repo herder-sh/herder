@@ -25,7 +25,7 @@ struct QuestionRecord: View {
             if question.answer != nil && !text.choices.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(text.choices.enumerated()), id: \.offset) { index, choice in
-                        ChoiceLine(choice: choice, picked: index == question.picked)
+                        ChoiceLine(choice: choice, picked: question.picked.contains(index))
                     }
                 }
             }

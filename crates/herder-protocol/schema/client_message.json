@@ -157,6 +157,29 @@
             "type",
             "index"
           ]
+        },
+        {
+          "description": "Several of a multi-select question's choices.",
+          "type": "object",
+          "properties": {
+            "indices": {
+              "description": "Positions of the choices in the question's `choices`, from 0, in the order picked.",
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "choices"
+            }
+          },
+          "required": [
+            "type",
+            "indices"
+          ]
         }
       ]
     },
@@ -2619,6 +2642,10 @@
               "items": {
                 "type": "string"
               }
+            },
+            "multi_select": {
+              "description": "Whether several choices may be picked, answered with `choices`.",
+              "type": "boolean"
             },
             "question_id": {
               "description": "The question, answered by this id.",

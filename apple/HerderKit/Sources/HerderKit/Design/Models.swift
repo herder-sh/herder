@@ -53,7 +53,7 @@ struct SessionSummary: Hashable, Identifiable {
 struct PendingRequest: Hashable, Identifiable {
     enum Kind: Hashable {
         case approval(summary: String)
-        case question(text: String, choices: [String])
+        case question(text: String, choices: [String], multiSelect: Bool)
     }
 
     /// Which of the questions asked together this is, and of how many.
