@@ -15,11 +15,15 @@ auth=(-allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH"
   -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
 
 xcodegen generate --spec apple/project.yml
+# Archived unsigned: signing the archive needs a development certificate, which a fresh runner
+# lacks, so Xcode made a new one on every run until the account hit Apple's limit. The export
+# below signs for distribution with a cloud-managed certificate. The iOS app has no entitlements
+# for the unsigned archive to lose.
 xcodebuild archive -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
   -scheme herder-iOS -configuration Release -destination "generic/platform=iOS" \
   -archivePath "$work/herder.xcarchive" COMPILER_INDEX_STORE_ENABLE=NO \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-  CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$APPLE_TEAM_ID" "${auth[@]}"
+  CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
 
 cat > "$work/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
