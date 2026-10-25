@@ -221,6 +221,6 @@ struct UsageBar: View {
     }
 
     private var color: Color {
-        percent >= 90 ? Theme.failure : percent >= 70 ? Theme.accent : Theme.secondary
+        percent >= 90 ? Theme.failure : percent >= 70 ? Theme.limit : Theme.secondary
     }
 }

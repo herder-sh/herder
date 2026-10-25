@@ -116,3 +116,41 @@ struct ProvidersTests {
         })
     }
 }
+
+struct ProvidersOverviewTests {
+    @Test func theStatusCountsAccountsSignInsAndUpdatesNotAlreadyRunning() {
+        let overview = ProvidersFixture.overview()
+        // Claude on trash-can-01 can update; Codex on both is updating or queued already.
+        #expect(overview.updatable.map(\.machine) == ["trash-can-01"])
+        #expect(overview.versions.updatable.count == 3)
+        #expect(overview.status == "4 accounts · 1 needs sign-in · 1 update")
+    }
+
+    @Test func aSignedOutAccountAndAFailedInstallNeedYou() throws {
+        let overview = ProvidersFixture.overview()
+        let signedOut = try #require(overview.signedOut.first)
+        #expect(overview.signedOut.count == 1)
+        #expect(signedOut.accountId == "ops" && signedOut.place.name == "trash-can-01")
+        #expect(signedOut.login.signedOutEverywhere && signedOut.login.needsAttention)
+        #expect(overview.failedInstalls.map(\.machine) == ["trash-can-01"])
+        #expect(overview.failedInstalls.first?.provider == "opencode")
+        #expect(overview.needsAttention)
+    }
+
+    @Test func eachCellShowsItsInstallJob() throws {
+        let overview = ProvidersFixture.overview()
+        let codex = try #require(overview.versions.rows.first { $0.provider == "codex" })
+        #expect(codex.latest == "0.51.2")
+        #expect(codex.cells.map { overview.job($0) } == [.installing, .queued, nil])
+    }
+
+    @Test func aQuietFleetSaysOnlyHowManyAccounts() {
+        let machines = [machine("a", name: "laptop", sessions: [], accounts: [
+            Account(accountId: "main", provider: "claude", label: "main", configDir: nil, email: "a@example.com", usage: []),
+        ])]
+        let overview = ProvidersOverview(accounts: ProviderAccounts(machines: machines),
+                                         versions: ProviderVersions(machines: machines), installs: [:])
+        #expect(overview.status == "1 account")
+        #expect(!overview.needsAttention)
+    }
+}

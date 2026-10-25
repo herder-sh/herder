@@ -135,9 +135,14 @@ struct DesktopShell: View {
                 SkillActions(fleet: fleet, sheet: $sheet)
             }
         case .providers:
-            Pane(fleet: fleet, title: "Providers", switcher: switcher) {
+            let overview = ProvidersOverview(fleet: fleet)
+            Pane(fleet: fleet, title: "Providers", status: overview.status, switcher: switcher) {
                 ProvidersView(fleet: fleet, sheet: $sheet)
             } actions: {
+                let updatable = overview.updatable
+                if !updatable.isEmpty {
+                    PaneButton(title: "Update All (\(updatable.count))", symbol: "arrow.down.circle") { fleet.update(updatable) }
+                }
                 PaneButton(title: "Add Account", symbol: "plus", prominent: true) { sheet = .addAccount }
             }
         case .machines:
