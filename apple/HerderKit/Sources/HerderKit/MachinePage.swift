@@ -9,8 +9,6 @@ struct MachinePage: View {
     @Environment(\.pages) private var pages
     @State private var name = ""
     @State private var newAddress = ""
-    @State private var editingAccount: Account?
-    @State private var showingAccountSettings = false
     @State private var addingAccount = false
     @State private var setup: ProvidersView.Setup?
     @State private var installing: ProviderJobKey?
@@ -61,9 +59,6 @@ struct MachinePage: View {
             } else {
                 Text("This machine is no longer paired with this device.").foregroundStyle(Theme.secondary)
             }
-        }
-        .sheet(isPresented: $showingAccountSettings) {
-            if let editingAccount { EditAccountSheet(fleet: fleet, hostId: hostId, account: editingAccount) }
         }
         .sheet(isPresented: $addingAccount) { AddAccountSheet(fleet: fleet, hostId: hostId) }
         .sheet(item: $setup) { setup in
@@ -162,8 +157,8 @@ struct MachinePage: View {
         Task { await saves.save("Name") { try fleet.rename(hostId, to: trimmed) } }
     }
 
-    /// The machine's accounts, each to edit; adding one; and the logins its other machines have
-    /// that it lacks, to set up here.
+    /// The machine's accounts, each to open as its page; adding one; and the logins its other
+    /// machines have that it lacks, to set up here.
     private func accounts(_ machine: Machine) -> some View {
         let owner = machine.role == .owner
         let connected = machine.connection == .connected
@@ -188,13 +183,8 @@ struct MachinePage: View {
                         }
                         if account.fallback { Badge(text: "Fallback") }
                         Spacer(minLength: 8)
-                        if owner {
-                            PillButton(title: "Edit…") {
-                                editingAccount = account
-                                showingAccountSettings = true
-                            }
-                            .disabled(!connected)
-                        }
+                        PillButton(title: "Open") { pages.open(.account(loginId: ProviderAccounts.key(account))) }
+                            .accessibilityLabel("Open \(account.email ?? account.label)")
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)

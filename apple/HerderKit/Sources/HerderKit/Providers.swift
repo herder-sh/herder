@@ -126,7 +126,10 @@ struct ProviderAccounts: Equatable {
         let reset = { (window: UsageWindow) in window.resetsAt.flatMap(Timestamp.date) ?? .distantPast }
         return windows.filter { Lists.usageLabel($0.window) == label }
             .max { (reset($0), $0.usedPercent) < (reset($1), $1.usedPercent) }
-            .map { WindowLeft(percentUsed: $0.usedPercent, resets: Timestamp.until($0.resetsAt.flatMap(Timestamp.date), now: now)) }
+            .map { window in
+                let at = window.resetsAt.flatMap(Timestamp.date)
+                return WindowLeft(percentUsed: window.usedPercent, resets: Timestamp.until(at, now: now), resetsAt: at)
+            }
     }
 }
 
@@ -746,142 +749,6 @@ struct InstallsSheet: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("install-\(provider)-\(name)")
-    }
-}
-
-/// One login's page: what is left of its plan's limits, what it cost over the last week, and
-/// each machine it is on, to edit or log in again there, or missing from, to set it up there.
-struct AccountPage: View {
-    let fleet: Fleet
-    let loginId: String
-    @State private var editing: Editing?
-    @State private var setup: ProvidersView.Setup?
-    private let period = UsagePeriod.week
-
-    /// An account on a machine, to edit.
-    struct Editing: Identifiable {
-        let hostId: HostId
-        let account: Account
-
-        var id: String { "\(hostId)/\(account.accountId)" }
-    }
-
-    var body: some View {
-        let login = ProviderAccounts(machines: fleet.machines).groups.flatMap(\.logins).first { $0.id == loginId }
-        DetailPage(title: login.map { $0.email ?? $0.account.label } ?? "Account",
-                   status: login.map(status) ?? "") {
-            if let login { ProviderMark(provider: login.provider, size: 28) }
-        } actions: {
-            EmptyView()
-        } content: {
-            if let login {
-                limits(login).detailSection("Plan limits")
-                usage(login).detailSection(period.title)
-                SettingsList(title: "Machines") {
-                    ForEach(Array(login.on.enumerated()), id: \.element.id) { index, place in
-                        if index > 0 { RowDivider() }
-                        machine(place, login: login)
-                    }
-                    ForEach(login.missing) { place in
-                        RowDivider()
-                        SetUpRow(fleet: fleet, login: login, place: place) { setup = $0 }
-                    }
-                }
-                .detailSection("Machines")
-            } else {
-                Text("This account is no longer on any machine.").foregroundStyle(Theme.secondary)
-            }
-        }
-        .task { await fleet.refreshUsage(over: period) }
-        .sheet(item: $editing) { editing in
-            EditAccountSheet(fleet: fleet, hostId: editing.hostId, account: editing.account)
-        }
-        .sheet(item: $setup) { setup in
-            AddAccountSheet(fleet: fleet, hostId: setup.hostId, initialProvider: setup.draft.provider,
-                            initialDraft: setup.draft)
-        }
-    }
-
-    /// "Claude · on 2 machines": accounts with the same provider and email share one login, and
-    /// its limits.
-    private func status(_ login: ProviderAccounts.Login) -> String {
-        let on = login.on.count == 1 ? "on 1 machine" : "on \(login.on.count) machines"
-        let parts: [String?] = [ModelCatalog.providerName(login.provider), on, login.fallbackOn.isEmpty ? nil : "fallback"]
-        return parts.compactMap(\.self).joined(separator: " · ")
-    }
-
-    @ViewBuilder private func limits(_ login: ProviderAccounts.Login) -> some View {
-        Field(label: "Plan limits") {
-            if login.session == nil && login.weekly == nil {
-                Text("No limits reported yet").font(.subheadline).foregroundStyle(Theme.tertiary)
-            } else {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
-                    if let session = login.session { meter("Session", session) }
-                    if let weekly = login.weekly { meter("Weekly", weekly) }
-                }
-            }
-        }
-    }
-
-    private func meter(_ label: String, _ window: WindowLeft) -> some View {
-        GridRow {
-            Text(label).foregroundStyle(Theme.secondary)
-            HeadroomMeter(window: window).frame(minWidth: 120, maxWidth: 220)
-            Text("\(Int(window.percentLeft.rounded()))% left").foregroundStyle(Theme.text)
-            Text(window.resets.isEmpty ? "" : "resets \(window.resets)").foregroundStyle(Theme.tertiary)
-        }
-        .font(.subheadline.monospacedDigit())
-        .lineLimit(1)
-        .accessibilityElement(children: .combine)
-    }
-
-    @ViewBuilder private func usage(_ login: ProviderAccounts.Login) -> some View {
-        let usage = fleet.usageCache[period].map { UsageReport($0.machines) }?.logins[login.id] ?? UsageReport.Login()
-        Field(label: period.title) {
-            HStack(spacing: 10) {
-                tile("Cost", UsageReport.dollars(usage.amount))
-                tile("Tokens", UsageReport.tokens(usage.amount.tokens))
-                tile("Limit hits", "\(usage.limitHits)")
-                tile("Failovers", "\(usage.failoversOut) out · \(usage.failoversIn) in")
-            }
-        }
-    }
-
-    private func tile(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.caption).foregroundStyle(Theme.tertiary)
-            Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(Theme.text)
-                .lineLimit(1).minimumScaleFactor(0.8)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
-    }
-
-    /// A machine the login is on: its accounts there, each to edit.
-    private func machine(_ place: ProviderAccounts.Place, login: ProviderAccounts.Login) -> some View {
-        let accounts = fleet.machines.first { $0.hostId == place.hostId }?.accounts
-            .filter { place.accounts.contains($0.accountId) } ?? []
-        return VStack(spacing: 0) {
-            ForEach(accounts, id: \.accountId) { account in
-                HStack(spacing: 10) {
-                    Image(systemName: "desktopcomputer").foregroundStyle(Theme.secondary).frame(width: 16)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(place.name).font(.subheadline).foregroundStyle(Theme.text)
-                        Text("\(account.label) · \(account.accountId)").font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
-                    }
-                    if account.fallback { Badge(text: "Fallback") }
-                    Spacer(minLength: 8)
-                    if place.owner {
-                        PillButton(title: "Edit…") { editing = Editing(hostId: place.hostId, account: account) }
-                            .disabled(!place.connected)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .frame(minHeight: 48)
-            }
-        }
     }
 }
 

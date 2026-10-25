@@ -38,7 +38,10 @@ struct UsageAmount: Equatable {
 /// How much of a plan's limit window is left, and when it resets.
 struct WindowLeft: Equatable {
     let percentUsed: Double
+    /// How long until it resets, compactly: "2h 10m".
     let resets: String
+    /// When it resets, when the provider says.
+    var resetsAt: Date?
 
     var percentLeft: Double { max(0, 100 - percentUsed) }
     var headroom: Headroom { Headroom(percentLeft: percentLeft) }
