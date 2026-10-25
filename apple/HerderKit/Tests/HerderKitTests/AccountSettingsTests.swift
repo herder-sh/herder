@@ -3,31 +3,25 @@ import Herder
 import Testing
 
 struct AccountSettingsTests {
-    @Test func accountDraftValidatesNamesAndHostPaths() {
+    @Test func aDraftValidatesItsConfigDirAndCleansItsFields() {
         var draft = AccountDraft()
-        #expect(draft.problem(existing: []) != nil)
-        draft.id = " Claude-work.2 "
-        #expect(draft.problem(existing: []) == nil)
-        #expect(draft.problem(existing: ["Claude-work.2"]) != nil)
-        draft.id = "work/account"
-        #expect(draft.problem(existing: []) != nil)
-        draft.id = "work"
+        #expect(draft.problem == nil)
         draft.configDir = "relative/path"
-        #expect(draft.problem(existing: []) != nil)
+        #expect(draft.problem != nil)
         draft.configDir = "~/.claude-work"
-        #expect(draft.problem(existing: []) == nil)
+        #expect(draft.problem == nil)
         #expect(!AccountDraft.validPath("/tmp/invalid\0path"))
         #expect(AccountDraft.validPath("/Users/me/login"))
         draft.label = " Personal "
-        #expect(draft.account.label == "Personal")
-        #expect(draft.account.configDir == "~/.claude-work")
+        #expect(draft.account(taken: []).label == "Personal")
+        #expect(draft.account(taken: []).configDir == "~/.claude-work")
         draft.configDir = " "
-        #expect(draft.account.configDir == nil)
+        #expect(draft.account(taken: []).configDir == nil)
         #expect(AccountDraft.nextId(provider: "cursor", taken: []) == "cursor")
         #expect(AccountDraft.nextId(provider: "cursor", taken: ["cursor", "cursor-2"]) == "cursor-3")
     }
 
-    @Test func suggestionsSkipAccountsAndLoginsStillRunning() {
+    @Test func eachMachineGetsTheFirstIdFreeThere() {
         var box = machine("box", name: "box", sessions: [], accounts: [
             Account(accountId: "claude", provider: "claude", label: "claude", configDir: nil, email: nil, usage: []),
         ])
@@ -35,28 +29,61 @@ struct AccountSettingsTests {
         let taken = AccountDraft.taken(on: box, pending: ["claude-3"])
         #expect(taken == ["claude", "claude-2", "claude-3"])
         var draft = AccountDraft(provider: "claude")
-        draft.suggest(taken: taken)
-        #expect(draft.id == "claude-4")
-        #expect(draft.suggestedLabel == "Claude 4")
-        #expect(draft.submitted.label == "Claude 4")
+        // One draft, two machines: each names the account the first way free on it.
+        #expect(draft.account(taken: taken).accountId == "claude-4")
+        #expect(draft.account(taken: taken).label == "Claude 4")
+        #expect(draft.account(taken: []).accountId == "claude")
+        #expect(draft.account(taken: []).label == "Claude")
+        // A label names the id, and is the label on every machine.
         draft.label = "Work"
-        #expect(draft.submitted.label == "Work")
-        // Switching provider moves the id along, until the user types one.
+        #expect(draft.account(taken: taken).accountId == "claude-work")
+        #expect(draft.account(taken: ["claude-work"]).accountId == "claude-work-2")
+        #expect(draft.account(taken: ["claude-work"]).label == "Work")
         draft.provider = "codex"
-        draft.suggest(taken: taken)
-        #expect(draft.id == "codex")
-        #expect(draft.suggestedLabel == "Codex")
-        draft.id = "codex-work"
-        draft.idEdited = true
-        draft.suggest(taken: ["codex-work"])
-        #expect(draft.id == "codex-work")
-        #expect(draft.problem(existing: ["codex-work"]) != nil)
+        #expect(draft.account(taken: taken).accountId == "codex-work")
+        // A login set up from another machine keeps its id wherever it is free.
+        draft.id = "codex-sam"
+        #expect(draft.account(taken: taken).accountId == "codex-sam")
+        #expect(draft.account(taken: ["codex-sam"]).accountId == "codex-work")
     }
 
     @Test func aKnownEmailNamesTheSuggestion() {
-        #expect(AccountDraft.nextId(provider: "claude", taken: ["claude"], email: "Sam.Lee@example.com") == "claude-sam.lee")
-        #expect(AccountDraft.nextId(provider: "codex", taken: ["codex-sam"], email: "sam@example.com") == "codex-sam-2")
-        #expect(AccountDraft.nextId(provider: "codex", taken: [], email: "@example.com") == "codex")
+        #expect(AccountDraft.nextId(provider: "claude", taken: ["claude"], name: "Sam.Lee@example.com") == "claude-sam.lee")
+        #expect(AccountDraft.nextId(provider: "codex", taken: ["codex-sam"], name: "sam@example.com") == "codex-sam-2")
+        #expect(AccountDraft.nextId(provider: "codex", taken: [], name: "@example.com") == "codex")
+        #expect(AccountDraft.nextId(provider: "codex", taken: [], name: "Codex") == "codex")
+    }
+
+    @MainActor
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func addingAnAccountOnTwoMachinesRunsTwoLoginsAndAddsItOnBoth() async throws {
+        let one = try FakeDaemon(name: "one")
+        let two = try FakeDaemon(name: "two")
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open profile")
+            return
+        }
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        let first = try await fleet.pair(one)
+        let second = try await fleet.pair(two)
+        try await fleet.client.synced(hostId: first.hostId)
+        try await fleet.client.synced(hostId: second.hostId)
+        // The fake daemons log OpenCode in at once, in the config dir given.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var draft = AccountDraft(provider: "opencode", label: "Work")
+        draft.configDir = dir.path
+        let keys = fleet.addAccount(draft, on: [first.hostId, second.hostId])
+        #expect(keys == [JobKey(hostId: first.hostId, kind: .add("opencode-work")),
+                         JobKey(hostId: second.hostId, kind: .add("opencode-work"))])
+        #expect(keys.allSatisfy { fleet.activity.phase($0) != .ended })
+        let added = { (hostId: HostId) in
+            fleet.machines.first { $0.hostId == hostId }?.accounts.first { $0.accountId == "opencode-work" }
+        }
+        #expect(await eventually(within: 30) { added(first.hostId) != nil && added(second.hostId) != nil })
+        #expect(added(first.hostId)?.label == "Work" && added(second.hostId)?.label == "Work")
+        #expect(await eventually { keys.allSatisfy { fleet.progress($0) == .added } })
     }
 
     @Test func progressReadsTheTerminalAndTheAccountList() {

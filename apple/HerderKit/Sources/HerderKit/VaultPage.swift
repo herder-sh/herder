@@ -279,19 +279,18 @@ private struct SecretEditorSheet: View {
 
     var body: some View {
         SheetScaffold(title: editor.replacing ? "Replace \(editor.name)" : "Add Secret",
-                      subtitle: "In the set \(editor.set)", height: 520) {
-            Field(label: "Name", hint: "As an environment variable: A-Z, 0-9 and _, such as `API_KEY`.") {
+                      subtitle: "In the set \(editor.set)", height: 420,
+                      hint: editor.replacing ? "The value it holds now is never shown." : "The value is never shown again once saved.") {
+            Field(label: "Name") {
                 InputBox(placeholder: "API_KEY", text: $editor.name, mono: true)
                     .disabled(editor.replacing)
                     .accessibilityIdentifier("secret-name")
             }
-            Field(label: "Description", hint: "What the secret is for; agents read it to pick one.") {
-                InputBox(placeholder: "Deploys to staging", text: $editor.description)
+            Field(label: "Description") {
+                InputBox(placeholder: "What it is for, such as deploys to staging", text: $editor.description)
                     .accessibilityIdentifier("secret-description")
             }
-            Field(label: "Value", hint: editor.replacing
-                  ? "The value it holds now is never shown; this one replaces it."
-                  : "Never shown again once saved.") {
+            Field(label: "Value") {
                 SecureField("Value", text: $editor.value.text)
                     .textFieldStyle(.plain)
                     .font(Theme.mono)
