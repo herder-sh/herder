@@ -17,18 +17,10 @@ struct PageHeader<Actions: View>: View {
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             if let icon { icon.padding(.trailing, 4) }
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                titleView
-                if state != nil || !status.isEmpty {
-                    HStack(spacing: 4) {
-                        if let state {
-                            StatusGlyph(state: state, size: 7, pulses: false)
-                            Text(status.isEmpty ? state.label : "\(state.label) ·")
-                        }
-                        if !status.isEmpty { Text(status) }
-                    }
-                    .font(Theme.body).foregroundStyle(Theme.secondary).lineLimit(1)
-                }
+            // The status follows the title on its line, or goes under it in a narrow pane.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) { titleView; statusView.fixedSize() }
+                VStack(alignment: .leading, spacing: 2) { titleView; statusView }
             }
             Spacer(minLength: 8)
             // The actions take their room before the title, so a label never wraps.
@@ -38,6 +30,19 @@ struct PageHeader<Actions: View>: View {
         .padding(.horizontal, 20)
         .padding(.top, 22)
         .padding(.bottom, 10)
+    }
+
+    @ViewBuilder private var statusView: some View {
+        if state != nil || !status.isEmpty {
+            HStack(spacing: 4) {
+                if let state {
+                    StatusGlyph(state: state, size: 7, pulses: false)
+                    Text(status.isEmpty ? state.label : "\(state.label) ·")
+                }
+                if !status.isEmpty { Text(status) }
+            }
+            .font(Theme.body).foregroundStyle(Theme.secondary).lineLimit(1)
+        }
     }
 
     @ViewBuilder private var titleView: some View {

@@ -41,6 +41,11 @@ private struct Gallery: View {
                 PaneButton(title: "Update All (3)", symbol: "arrow.down.circle") {}
                 PaneButton(title: "Add Account", symbol: "plus", prominent: true) {}
             }
+            // A narrow list pane: the status goes under the title.
+            PageHeader(title: "Board", status: "All 3 machines connected") {
+                PaneButton(title: "New Session", symbol: "plus", prominent: true) {}
+            }
+            .frame(width: 360)
             VStack(alignment: .leading, spacing: 18) {
                 SignalStrip(signals: [
                     Signal(id: "needs", count: 1, label: "needs sign-in", urgency: .needsYou),
