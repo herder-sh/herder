@@ -10,6 +10,8 @@ enum Page: Hashable {
     case account(loginId: String)
     /// A project's settings, by its group's id.
     case projectSettings(projectId: String)
+    /// The skills screen, opened from a project's settings.
+    case skills
     /// A vault, for its owners.
     case vault(HostId)
     /// A provider's own sub-agent, in its session.
@@ -27,6 +29,8 @@ extension Page {
             return login.map { "\(ModelCatalog.providerName($0.provider)) · \($0.email ?? $0.account.label)" } ?? "Account"
         case .projectSettings:
             return "Settings"
+        case .skills:
+            return "Skills"
         case .agent(let key, let id):
             return fleet.session(key).flatMap { NativeAgent.find(id, in: $0) }?.title ?? "Sub-agent"
         }
@@ -37,6 +41,7 @@ extension Page {
         case .machine(let hostId): MachinePage(fleet: fleet, hostId: hostId)
         case .account(let loginId): AccountPage(fleet: fleet, loginId: loginId)
         case .projectSettings(let projectId): ProjectSettingsPage(fleet: fleet, projectId: projectId)
+        case .skills: SkillsView(fleet: fleet)
         case .vault(let hostId): VaultPage(fleet: fleet, vault: hostId)
         case .agent(let key, let id): NativeAgentPage(reference: id, fleet: fleet, key: key)
         }

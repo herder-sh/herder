@@ -1,42 +1,59 @@
 import Herder
 import SwiftUI
 
-/// A project's settings page, on each machine that has it, editable by the machine's owners: its
-/// name and icon, the permissions and account new sessions start with, and the command a new
-/// worktree runs first. Changes apply as they are made.
+/// A project's settings page: its name and icon, the permissions, account and setup command new
+/// sessions start with on each machine, where it is cloned and where it could be, and removing it
+/// from a machine. Each machine's owners change its settings; changes apply as they are made.
 struct ProjectSettingsPage: View {
     let fleet: Fleet
     let projectId: String
     @State private var addingMachine = false
     @State private var hostId: HostId?
+    /// The machines a clone is running on.
+    @State private var cloning: Set<HostId> = []
+    @State private var removing: ProjectReach.Clone?
+    @State private var error: String?
     @Environment(\.pages) private var pages
 
     var body: some View {
         let group = fleet.lists.projects.first { $0.id == projectId }
         let machines = fleet.machines.filter { $0.projects.contains { $0.projectId == projectId } }
         let machine = machines.first { $0.hostId == hostId } ?? machines.first
+        let reach = ProjectReach(projectId: projectId, machines: fleet.machines)
         DetailPage(title: group?.name ?? "Project", status: status(machines, shown: machine)) {
             ProjectIcon(projectId: group?.projectId, name: group?.name, image: fleet.projectIcon(group?.projectId),
                         size: 34)
         } actions: {
             PaneButton(title: "Add to Machine", symbol: "plus") { addingMachine = true }
         } content: {
-            if machines.count > 1 {
-                MachineTabs(machines: machines, selection: Binding(get: { machine?.hostId }, set: { hostId = $0 }))
-            }
             if let machine, let project = machine.projects.first(where: { $0.projectId == projectId }) {
-                ProjectSettingsForm(fleet: fleet, machine: machine, project: project)
+                ProjectSettingsForm(fleet: fleet, machine: machine, project: project, machines: machines,
+                                    shown: Binding(get: { machine.hostId }, set: { hostId = $0 }))
                     .id(machine.hostId)
             } else {
                 Text("No connected machine has this project.").foregroundStyle(Theme.secondary)
             }
-            ProjectReachGroup(fleet: fleet, reach: ProjectReach(projectId: projectId, machines: fleet.machines))
+            machinesList(reach)
+            skillsLink
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(Theme.failure)
+            }
+            if !reach.clones.isEmpty {
+                dangerZone(reach.clones)
+            }
         }
         .sheet(isPresented: $addingMachine) {
             ProjectPicker(fleet: fleet, newProject: true, picked: { selection in
                 hostId = selection.hostId
                 addingMachine = false
             }, existingProjectId: projectId)
+        }
+        .confirmationDialog("Remove \(group?.name ?? "the project") from \(removing?.name ?? "")?",
+                            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                            titleVisibility: .visible, presenting: removing) { clone in
+            Button("Remove", role: .destructive) { Task { await remove(from: clone.hostId) } }
+        } message: { _ in
+            Text("Its clones stay on disk. Archived sessions keep their history.")
         }
         // Removed from its last machine: nothing is left to set.
         .onChange(of: machines.isEmpty) { if machines.isEmpty { pages.close() } }
@@ -48,41 +65,127 @@ struct ProjectSettingsPage: View {
         if let shown, shown.role != .owner { parts.append("only \(shown.name)’s owners can change these") }
         return parts.joined(separator: " · ")
     }
-}
 
-/// One tab per machine, when a project is on several.
-struct MachineTabs: View {
-    let machines: [Machine]
-    @Binding var selection: HostId?
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(machines, id: \.hostId) { machine in
-                let selected = machine.hostId == selection
-                Button { selection = machine.hostId } label: {
-                    HStack(spacing: 6) {
-                        ConnectionMark(state: machine.connection)
-                        Text(machine.name).lineLimit(1)
+    /// Each machine with its clones and sessions, then each it could be cloned onto.
+    private func machinesList(_ reach: ProjectReach) -> some View {
+        SettingsList(title: "Machines") {
+            ForEach(Array(reach.clones.enumerated()), id: \.element.id) { index, clone in
+                if index > 0 { RowDivider() }
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(clone.name).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
+                        ForEach(clone.paths, id: \.self) { path in
+                            Text(path).font(.caption.monospaced()).foregroundStyle(Theme.tertiary)
+                                .lineLimit(1).truncationMode(.head).textSelection(.enabled)
+                        }
                     }
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(selected ? Theme.text : Theme.secondary)
-                    .padding(.horizontal, 10)
-                    .frame(height: 30)
-                    .background(selected ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
-                    .contentShape(.rect)
+                    Spacer(minLength: 8)
+                    Text(clone.sessions == 1 ? "1 session" : "\(clone.sessions) sessions")
+                        .font(.caption).foregroundStyle(Theme.secondary)
+                    if let path = clone.paths.first { CopyButton(text: path) }
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .frame(minHeight: 52)
+            }
+            if let remote = reach.remote {
+                ForEach(Array(reach.missing.enumerated()), id: \.element.id) { index, machine in
+                    if index > 0 || !reach.clones.isEmpty { RowDivider() }
+                    SettingRow(label: machine.name, hint: detail(machine, remote: remote)) {
+                        if cloning.contains(machine.hostId) {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            PillButton(title: "Clone") { Task { await clone(remote, on: machine.hostId) } }
+                                .disabled(!machine.owner || !machine.connected)
+                        }
+                    }
+                }
             }
         }
-        .padding(3)
-        .background(Theme.background, in: .rect(cornerRadius: 9))
+        .detailSection("Machines")
+    }
+
+    private func detail(_ machine: ProjectReach.Missing, remote: String) -> String {
+        if cloning.contains(machine.hostId) { return "Cloning \(remote)…" }
+        if !machine.owner { return "Not cloned · only its owners can clone it there" }
+        if !machine.connected { return "Not cloned · connect to it to clone it there" }
+        return "Not cloned · clones \(remote) into its projects folder"
+    }
+
+    private func clone(_ remote: String, on hostId: HostId) async {
+        cloning.insert(hostId)
+        defer { cloning.remove(hostId) }
+        do {
+            _ = try await fleet.cloneProject(remote, into: nil, on: hostId)
+            error = nil
+        } catch {
+            self.error = describe(error)
+        }
+    }
+
+    /// The skills the project checks in, and the way to the Skills screen, where the library's
+    /// skills and MCP servers are turned on per machine.
+    private var skillsLink: some View {
+        let count = ProjectSkills.all(fleet.machines).first { $0.projectId == projectId }?.skills.count ?? 0
+        return SettingsList(title: "MCP servers & skills") {
+            Button { pages.open(.skills) } label: {
+                SettingRow(label: count == 1 ? "1 checked-in skill" : "\(count) checked-in skills",
+                           hint: "The library and MCP servers are set per machine") {
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("project-skills-link")
+        }
+        .detailSection("MCP servers & skills")
+    }
+
+    /// Removing the project from one of its machines, once its sessions there are archived.
+    private func dangerZone(_ clones: [ProjectReach.Clone]) -> some View {
+        DangerZone {
+            SettingRow(label: "Remove from a machine", hint: "The clones stay on disk; you can add it again") {
+                Menu {
+                    ForEach(clones) { clone in
+                        Button(clone.live == 0 ? clone.name
+                               : "\(clone.name) · archive its \(clone.live) live session\(clone.live == 1 ? "" : "s") first") {
+                            removing = clone
+                        }
+                        .disabled(!clone.owner || clone.live > 0)
+                    }
+                } label: {
+                    Text("Remove…")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.failure)
+                        .padding(.horizontal, 12)
+                        .frame(height: 32)
+                        .background(Theme.raised, in: .rect(cornerRadius: 7))
+                }
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+                .fixedSize()
+                .disabled(!clones.contains { $0.owner })
+            }
+        }
+    }
+
+    private func remove(from hostId: HostId) async {
+        do {
+            try await fleet.removeProject(projectId, on: hostId)
+            error = nil
+        } catch {
+            self.error = describe(error)
+        }
     }
 }
 
+/// The project's appearance, shared by every machine, and the settings new sessions start with
+/// on the shown one of `machines`.
 struct ProjectSettingsForm: View {
     let fleet: Fleet
     let machine: Machine
     let project: Project
+    let machines: [Machine]
+    @Binding var shown: HostId
     @State private var name = ""
     @State private var mode: PermissionMode?
     @State private var account: AccountId?
@@ -91,7 +194,6 @@ struct ProjectSettingsForm: View {
     @State private var privateArtifacts = false
     @State private var loaded = false
     @State private var error: String?
-    @State private var confirmingRemove = false
     @State private var saves = Autosave()
     @FocusState private var editingSetup: Bool
     @FocusState private var editingName: Bool
@@ -100,6 +202,9 @@ struct ProjectSettingsForm: View {
         let owner = machine.role == .owner
         VStack(alignment: .leading, spacing: 18) {
             SettingsList(title: "Appearance") {
+                ProjectIconRow(fleet: fleet, project: project, background: iconBackground,
+                               error: $error)
+                RowDivider()
                 SettingRow(label: "Name", hint: "Blank goes back to the repository's", saved: saves["Name"]) {
                     TextField(defaultName, text: $name)
                         .textFieldStyle(.plain)
@@ -112,9 +217,6 @@ struct ProjectSettingsForm: View {
                         .frame(maxWidth: 240, minHeight: 32)
                         .background(Theme.surface, in: .rect(cornerRadius: 7))
                 }
-                RowDivider()
-                ProjectIconRow(fleet: fleet, project: project, background: iconBackground,
-                               error: $error)
                 RowDivider()
                 SettingRow(label: "Background", hint: "Fills the tile behind the icon", saved: saves["Background"]) {
                     FooterItem(symbol: "paintpalette", text: Self.backgroundLabel(iconBackground)) {
@@ -133,93 +235,73 @@ struct ProjectSettingsForm: View {
             .disabled(!owner)
             .detailSection("Appearance")
             SettingsList(title: "New sessions") {
-                SettingRow(label: "Permissions", hint: "What agents may do without asking", saved: saves["Permissions"]) {
-                    FooterItem(symbol: "lock.shield", text: mode?.label ?? "Ask each time") {
-                        Picker("Permissions", selection: $mode) {
-                            Text("Ask each time").tag(PermissionMode?.none)
+                if machines.count > 1 {
+                    SettingRow(label: "On", hint: "Each machine keeps its own") {
+                        FooterItem(symbol: "desktopcomputer", text: machine.name) {
+                            Picker("Machine", selection: $shown) {
+                                ForEach(machines, id: \.hostId) { Text($0.name).tag($0.hostId) }
+                            }
+                            .pickerStyle(.inline)
+                        }
+                    }
+                    .accessibilityIdentifier("project-settings-machine")
+                    RowDivider()
+                }
+                Group {
+                    SettingRow(label: "Permissions", hint: "What agents may do without asking", saved: saves["Permissions"]) {
+                        // No mode set starts sessions asking, as Ask does.
+                        Picker("Permissions", selection: Binding(get: { mode ?? .ask }, set: { mode = $0 })) {
                             ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) {
-                                Text($0.label).tag(Optional($0))
+                                Text($0.label).tag($0)
                             }
                         }
-                        .pickerStyle(.inline)
-                    }
-                }
-                RowDivider()
-                SettingRow(label: "Account", hint: "Rotates to another when it runs out", saved: saves["Account"]) {
-                    FooterItem(symbol: "person.crop.circle", text: accountLabel) {
-                        Picker("Account", selection: $account) {
-                            Text("Most room left").tag(AccountId?.none)
-                            ForEach(machine.accounts, id: \.accountId) { account in
-                                Text("\(account.label) · \(account.provider)").tag(Optional(account.accountId))
-                            }
-                        }
-                        .pickerStyle(.inline)
-                    }
-                }
-                RowDivider()
-                SettingRow(label: "Setup command", hint: "Runs once in each new worktree", saved: saves["Setup command"]) {
-                    TextField("make bootstrap", text: $setup)
-                        .textFieldStyle(.plain)
-                        .font(Theme.mono)
-                        .foregroundStyle(Theme.text)
-                        .multilineTextAlignment(.trailing)
-                        .autocorrectionDisabled()
-                        .focused($editingSetup)
-                        .onSubmit { save("Setup command") }
-                        .padding(.horizontal, 10)
-                        .frame(maxWidth: 240, minHeight: 32)
-                        .background(Theme.surface, in: .rect(cornerRadius: 7))
-                }
-            }
-            .font(.subheadline)
-            .foregroundStyle(Theme.secondary)
-            .disabled(!owner)
-            .detailSection("New sessions")
-            SettingsList(title: "Artifacts") {
-                SettingRow(label: "Keep private", hint: "Shown in the thread, never uploaded for a public link",
-                           saved: saves["Keep private"]) {
-                    Toggle("Keep private", isOn: $privateArtifacts)
+                        .pickerStyle(.segmented)
                         .labelsHidden()
-                        .toggleStyle(.switch)
-                        .accessibilityIdentifier("private-artifacts")
+                        .fixedSize()
+                    }
+                    RowDivider()
+                    SettingRow(label: "Account", hint: "Rotates to another when it runs out", saved: saves["Account"]) {
+                        FooterItem(symbol: "person.crop.circle", text: accountLabel) {
+                            Picker("Account", selection: $account) {
+                                Text("Most room left").tag(AccountId?.none)
+                                ForEach(machine.accounts, id: \.accountId) { account in
+                                    Text("\(account.label) · \(account.provider)").tag(Optional(account.accountId))
+                                }
+                            }
+                            .pickerStyle(.inline)
+                        }
+                    }
+                    RowDivider()
+                    SettingRow(label: "Setup command", hint: "Runs once in each new worktree", saved: saves["Setup command"]) {
+                        TextField("make bootstrap", text: $setup)
+                            .textFieldStyle(.plain)
+                            .font(Theme.mono)
+                            .foregroundStyle(Theme.text)
+                            .multilineTextAlignment(.trailing)
+                            .autocorrectionDisabled()
+                            .focused($editingSetup)
+                            .onSubmit { save("Setup command") }
+                            .padding(.horizontal, 10)
+                            .frame(maxWidth: 240, minHeight: 32)
+                            .background(Theme.surface, in: .rect(cornerRadius: 7))
+                    }
+                    RowDivider()
+                    SettingRow(label: "Keep artifacts private", hint: "Shown in the thread, never uploaded for a public link",
+                               saved: saves["Keep private"]) {
+                        Toggle("Keep artifacts private", isOn: $privateArtifacts)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityIdentifier("private-artifacts")
+                    }
                 }
+                .disabled(!owner)
             }
             .font(.subheadline)
             .foregroundStyle(Theme.secondary)
-            .disabled(!owner)
-            .detailSection("Artifacts")
+            .detailSection("New sessions")
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(Theme.failure)
             }
-            SettingsList(title: project.paths.count == 1 ? "Clone" : "Clones") {
-                ForEach(Array(project.paths.enumerated()), id: \.offset) { index, path in
-                    if index > 0 { RowDivider() }
-                    HStack(spacing: 8) {
-                        Text(path).font(Theme.mono).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.head)
-                            .textSelection(.enabled)
-                        Spacer(minLength: 8)
-                        CopyButton(text: path)
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 44)
-                }
-            }
-            .detailSection("Clones")
-            DangerZone {
-                let live = ProjectSettingsForm.liveSessions(of: project.projectId, on: machine)
-                SettingRow(label: "Remove from \(machine.name)",
-                           hint: live == 0 ? "The clones stay on disk; you can add it again"
-                                             : "Archive its \(live) live session\(live == 1 ? "" : "s") first") {
-                    DangerButton(title: "Remove…") { confirmingRemove = true }
-                        .disabled(!owner || live > 0)
-                }
-            }
-        }
-        .confirmationDialog("Remove \(project.name) from \(machine.name)?", isPresented: $confirmingRemove,
-                            titleVisibility: .visible) {
-            Button("Remove", role: .destructive) { Task { await remove() } }
-        } message: {
-            Text("Its clones stay on disk. Archived sessions keep their history.")
         }
         .onAppear {
             name = project.name
@@ -245,19 +327,6 @@ struct ProjectSettingsForm: View {
 
     static func backgroundLabel(_ colour: String?) -> String {
         backgrounds.first { $0.colour == colour }?.label ?? colour ?? "None"
-    }
-
-    /// Sessions of the project on the machine that are not archived, which block removing it.
-    nonisolated static func liveSessions(of projectId: ProjectId, on machine: Machine) -> Int {
-        machine.sessions.filter { $0.projectId == projectId && $0.status != .archived }.count
-    }
-
-    private func remove() async {
-        do {
-            try await fleet.removeProject(project.projectId, on: machine.hostId)
-        } catch {
-            self.error = describe(error)
-        }
     }
 
     private var accountLabel: String {
