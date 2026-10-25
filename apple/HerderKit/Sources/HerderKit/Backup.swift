@@ -29,7 +29,8 @@ extension Fleet {
         machines.first { $0.fingerprint.caseInsensitiveCompare(link.fingerprint) == .orderedSame }
     }
 
-    /// Asks `hostId` where it backs up.
+    /// Asks `hostId` where it backs up, and keeps the answer in `backupLinks`.
+    @discardableResult
     func backupLink(of hostId: HostId) async throws -> BackupLink {
         let client = client
         let answer = try await answered(within: Self.vaultLinkTimeout, or: "did not say where it backs up") {
@@ -38,8 +39,9 @@ extension Fleet {
         guard case .vaultLink(let isVault, let vault, _) = answer else {
             throw HerderError.Local(detail: "the machine did not say where it backs up")
         }
-        if isVault { return .vault }
-        return vault.map(BackupLink.linked) ?? .nowhere
+        let link: BackupLink = isVault ? .vault : vault.map(BackupLink.linked) ?? .nowhere
+        backupLinks[hostId] = link
+        return link
     }
 
     /// Links `host` to `vault` from now on, backing up and fetching secrets: a host-only code
@@ -70,64 +72,70 @@ extension Fleet {
             _ = try await client.send(hostId: vault.hostId, command: .revokeVaultHost(hostId: hostId))
         }
     }
+
+    /// How far the vault has got with a host's sessions, from what it reports of the host:
+    /// "Caught up · 3m ago" while its last batch came in close behind the host.
+    nonisolated static func freshness(_ replication: HostReplication?, now: Date) -> String {
+        guard let replication else { return "" }
+        guard let last = replication.lastEventAt.flatMap(Timestamp.date) else { return "Nothing backed up yet" }
+        let age = "\(Timestamp.age(last, now: now)) ago"
+        guard let lag = replication.lagMs, lag <= caughtUpLagMs else { return "Last change held \(age)" }
+        return "Caught up · \(age)"
+    }
+
+    /// The most a batch may lag the host for the vault to count as caught up with it.
+    nonisolated static let caughtUpLagMs: UInt64 = 60_000
 }
 
-/// A machine's backup in its settings: the vault it is linked to, with its Back Up Sessions
-/// and Secrets switches, and linking it to a vault this device owns, or unlinking.
-struct BackupField: View {
+/// A machine's Backup section: the vault it backs up to and how far that got, its Back up and
+/// Secrets switches, whether it takes handoffs, and stopping; or linking it to a vault this
+/// device owns. It shows where the machine last said it backs up while it asks again.
+struct BackupSection: View {
     let fleet: Fleet
     let machine: Machine
-    @State private var link: BackupLink?
     @State private var working = false
     @State private var confirmingStop = false
     @State private var error: String?
+    @State private var saves = Autosave()
+    /// Takes handoffs as just switched, until the vault's status says so.
+    @State private var handoffs: Bool?
 
     var body: some View {
-        Field(label: "Backup",
-              hint: "A machine that backs up replicates every session to the vault, which keeps them when the machine is gone.") {
-            VStack(alignment: .leading, spacing: 10) {
-                switch link {
-                case nil:
-                    Text("Checking…").foregroundStyle(Theme.tertiary)
-                case .vault:
-                    Text("This machine is a vault.").foregroundStyle(Theme.secondary)
-                case .linked(let vault):
-                    DetailRow(label: "Vault", value: fleet.pairedVault(vault)?.name ?? vault.address)
-                    Toggle("Back Up Sessions", isOn: switchBinding(vault, \.backup))
-                        .disabled(working)
-                    Toggle("Secrets", isOn: switchBinding(vault, \.secrets))
-                        .disabled(working)
-                    ActionButton(title: "Stop Backing Up", style: .secondary) { confirmingStop = true }
-                        .frame(maxWidth: 200)
-                        .disabled(working)
-                case .nowhere:
-                    let vaults = fleet.backupVaults(for: machine.hostId)
-                    if vaults.isEmpty {
-                        Text("Backs up nowhere. Pair this device with a vault as its owner to back this machine up.")
-                            .foregroundStyle(Theme.tertiary)
-                    } else {
-                        Text("Backs up nowhere.").foregroundStyle(Theme.secondary)
-                        ForEach(vaults, id: \.hostId) { vault in
-                            ActionButton(title: "Back Up to \(vault.name)", style: .secondary) {
-                                run { try await fleet.backUp(machine, to: vault) }
-                            }
-                            .frame(maxWidth: 280)
-                            .disabled(working)
+        let link = fleet.backupLinks[machine.hostId]
+        SettingsList(title: "Backup") {
+            switch link {
+            case nil:
+                SettingRow(label: "Backs up to") { ProgressView().controlSize(.small) }
+            case .vault:
+                SettingRow(label: "This machine is a vault") { EmptyView() }
+            case .linked(let vault):
+                linked(vault)
+            case .nowhere:
+                let vaults = fleet.backupVaults(for: machine.hostId)
+                SettingRow(label: "Backs up nowhere",
+                           hint: vaults.isEmpty ? "Pair this device with a vault as its owner to back this machine up" : "") {
+                    EmptyView()
+                }
+                ForEach(vaults, id: \.hostId) { vault in
+                    RowDivider()
+                    SettingRow(label: vault.name, hint: "A vault you own") {
+                        PillButton(title: "Back Up Here", prominent: true) {
+                            run { try await fleet.backUp(machine, to: vault) }
                         }
+                        .disabled(working)
                     }
                 }
-                if let error {
-                    Text(error).font(.footnote).foregroundStyle(Theme.failure)
-                }
             }
-            .font(.subheadline)
-            .padding(12)
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            if let error {
+                RowDivider()
+                Text(error).font(.footnote).foregroundStyle(Theme.failure)
+                    .padding(.horizontal, 14).frame(minHeight: 36)
+            }
         }
         .task(id: machine.hostId) { await refresh() }
         .confirmationDialog("Stop backing \(machine.name) up?", isPresented: $confirmingStop, titleVisibility: .visible) {
             Button("Stop Backing Up", role: .destructive) {
-                guard case .linked(let vault) = link else { return }
+                guard case .linked(let vault) = fleet.backupLinks[machine.hostId] else { return }
                 run { try await fleet.stopBackingUp(machine.hostId, from: vault) }
             }
         } message: {
@@ -135,26 +143,72 @@ struct BackupField: View {
         }
     }
 
-    /// One of `vault`'s switches, set on the machine when flipped.
-    private func switchBinding(_ vault: LinkedVault, _ key: WritableKeyPath<LinkedVault, Bool>) -> Binding<Bool> {
+    /// The vault, how far it got with this machine, the switches, and Stop. The paired vault
+    /// reports how far it got and whether the machine takes handoffs; one not paired here, nothing.
+    @ViewBuilder private func linked(_ vault: LinkedVault) -> some View {
+        let paired = fleet.pairedVault(vault)
+        let replication = paired?.vault?.hosts.first { $0.hostId == machine.hostId }
+        SettingRow(label: "Backs up to \(paired?.name ?? vault.address)",
+                   hint: Fleet.freshness(replication, now: .now)) {
+            PillButton(title: "Stop…") { confirmingStop = true }.disabled(working)
+        }
+        RowDivider()
+        SettingRow(label: "Back up sessions", hint: "Every session is replicated to the vault", saved: saves["backup"]) {
+            Toggle("Back up sessions", isOn: switchBinding(vault, \.backup, row: "backup")).labelsHidden().toggleStyle(.switch)
+                .disabled(working)
+        }
+        RowDivider()
+        SettingRow(label: "Secrets", hint: "Sessions here fetch secrets from the vault", saved: saves["secrets"]) {
+            Toggle("Secrets", isOn: switchBinding(vault, \.secrets, row: "secrets")).labelsHidden().toggleStyle(.switch)
+                .disabled(working)
+        }
+        if let paired, paired.role == .owner, let replication {
+            RowDivider()
+            SettingRow(label: "Takes handoffs from other machines",
+                       hint: "It may read their sessions from the vault", saved: saves["handoffs"]) {
+                Toggle("Takes handoffs from other machines", isOn: Binding(get: { handoffs ?? replication.read }, set: { on in
+                    handoffs = on
+                    Task {
+                        await saves.save("handoffs") {
+                            try await fleet.setTakesHandoffs(on, host: machine.hostId, vault: paired.hostId)
+                        }
+                        if case .failed = saves["handoffs"] { handoffs = nil }
+                    }
+                }))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .accessibilityIdentifier("takes-handoffs")
+            }
+            // The vault's status follows the change; until then the switch shows it.
+            .onChange(of: replication.read) { handoffs = nil }
+        }
+    }
+
+    /// One of `vault`'s switches, set on the machine when flipped; back as the machine has it
+    /// if that fails.
+    private func switchBinding(_ vault: LinkedVault, _ key: WritableKeyPath<LinkedVault, Bool>, row: String) -> Binding<Bool> {
         Binding(
             get: { vault[keyPath: key] },
             set: { on in
                 var switched = vault
                 switched[keyPath: key] = on
-                link = .linked(switched)
-                run {
-                    try await fleet.setVaultLink(machine.hostId, backup: switched.backup, secrets: switched.secrets)
+                fleet.backupLinks[machine.hostId] = .linked(switched)
+                Task {
+                    await saves.save(row) {
+                        try await fleet.setVaultLink(machine.hostId, backup: switched.backup, secrets: switched.secrets)
+                    }
+                    if case .failed = saves[row] { await refresh() }
                 }
             })
     }
 
+    /// Asks the machine again; a failure shows only while there is nothing known to show.
     private func refresh() async {
         do {
-            link = try await fleet.backupLink(of: machine.hostId)
-        } catch {
+            try await fleet.backupLink(of: machine.hostId)
+        } catch where fleet.backupLinks[machine.hostId] == nil {
             self.error = describe(error)
-        }
+        } catch {}
     }
 
     private func run(_ action: @escaping () async throws -> Void) {

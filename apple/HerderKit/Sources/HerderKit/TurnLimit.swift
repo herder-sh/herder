@@ -27,7 +27,7 @@ struct TurnLoad: Hashable {
     /// "2/4 turns", beside the running count on a machine's card.
     var fraction: String { "\(running)/\(max) turns" }
 
-    /// "2 running · 1 waiting", under the limit in machine settings.
+    /// "2 running · 1 waiting", behind the ⓘ of "Turns at once".
     var usage: String { "\(running) running · \(waiting) waiting" }
 
     /// Why a session waits for capacity: "Waiting for a free slot · 2 of 2 turns in use", or
@@ -98,61 +98,55 @@ final class TurnLimitSetter {
     }
 }
 
-/// The "Turns at once" setting of a machine: its limit with a stepper for owners, and how many
-/// turns run and wait now.
-struct TurnLimitField: View {
-    let load: TurnLoad
+/// The "Turns at once" row of a machine's Capacity: its limit with a stepper for owners, what
+/// fits on the machine and how many turns run and wait now.
+struct TurnLimitRow: View {
+    let resources: HostResources
     let canChange: Bool
     @State private var setter: TurnLimitSetter
 
-    init(fleet: Fleet, hostId: HostId, load: TurnLoad, canChange: Bool) {
-        self.load = load
+    init(fleet: Fleet, hostId: HostId, resources: HostResources, canChange: Bool) {
+        self.resources = resources
         self.canChange = canChange
         _setter = State(initialValue: TurnLimitSetter(fleet: fleet, hostId: hostId))
     }
 
-    init(load: TurnLoad, canChange: Bool, setter: TurnLimitSetter) {
-        self.load = load
-        self.canChange = canChange
-        _setter = State(initialValue: setter)
-    }
-
     var body: some View {
+        let load = TurnLoad(resources)
         let value = setter.shown(load.max)
-        Field(label: "Turns at once",
-              hint: "Agent turns this machine runs at the same time; more turns use more CPU and memory. The rest wait for a free slot.") {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .center, spacing: 12) {
-                    Text("\(value)")
-                        .font(.title2.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(Theme.text)
-                        .contentTransition(.numericText())
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(load.usage)
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(load.waiting > 0 ? Theme.accent : Theme.secondary)
-                        if value != load.max {
-                            Text("Applying…").font(.caption).foregroundStyle(Theme.tertiary)
-                        }
-                    }
-                    Spacer()
-                    if canChange {
-                        Stepper("Turns at once", value: Binding(get: { value }, set: { setter.pick($0) }),
-                                in: 1...TurnLoad.ceiling)
-                            .labelsHidden()
-                    }
-                }
-                if let error = setter.error {
-                    Text(error).font(.footnote).foregroundStyle(Theme.failure)
-                }
-                if !canChange {
-                    Text("Only the machine owner can change this.").font(.footnote).foregroundStyle(Theme.tertiary)
-                }
+        SettingRow(label: "Turns at once", hint: TurnLoad.fitHint(resources),
+                   help: "Agent turns this machine runs at the same time; more turns use more CPU and memory. The rest wait for a free slot. \(load.usage).",
+                   saved: setter.error.map { .failed($0) } ?? (value != load.max ? .saving : nil)) {
+            if load.waiting > 0 {
+                Text("\(load.waiting) waiting").font(.caption.monospacedDigit()).foregroundStyle(Theme.accent)
             }
-            .padding(12)
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            Text("\(value)")
+                .font(.title3.weight(.semibold).monospacedDigit())
+                .foregroundStyle(Theme.text)
+                .contentTransition(.numericText())
+                .frame(minWidth: 28, alignment: .trailing)
+            if canChange {
+                Stepper("Turns at once", value: Binding(get: { value }, set: { setter.pick($0) }),
+                        in: 1...TurnLoad.ceiling)
+                    .labelsHidden()
+            }
         }
         .onChange(of: load.max, initial: true) { setter.reported(load.max) }
+    }
+}
+
+extension TurnLoad {
+    /// About how many turns fit on a machine at once: a core and 2 GB of memory each, leaving a
+    /// quarter of its cores to everything else.
+    static func fit(cores: UInt32, memoryBytes: UInt64) -> Int {
+        Swift.max(1, Swift.min(Int(cores) * 3 / 4, Int(memoryBytes >> 31)))
+    }
+
+    /// "16 GB, 8 cores · about 6 fit", under "Turns at once".
+    static func fitHint(_ resources: HostResources) -> String {
+        let memory = (resources.memoryTotalBytes + (1 << 29)) >> 30
+        let fit = fit(cores: resources.cpuCores, memoryBytes: resources.memoryTotalBytes)
+        return "\(memory) GB, \(resources.cpuCores) cores · about \(fit) fit"
     }
 }
 

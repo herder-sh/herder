@@ -273,6 +273,24 @@ final class ScreenshotTests: XCTestCase {
                 settle()
                 shoot("mac-machine-settings-mcp")
             }
+            // Its backup to the demo's vault: the switches, and whether it takes handoffs.
+            let backup = app.buttons["section-index-Backup"].firstMatch
+            if wait(backup, "Backup in the section index") {
+                press(backup)
+                let handoffs = app.descendants(matching: .any)["takes-handoffs"].firstMatch
+                if wait(handoffs, "Takes handoffs switch") {
+                    settle()
+                    shoot("mac-machine-backup")
+                }
+            }
+            back()
+        }
+        // laptop, where the user is a member: no account, CLI or limit to change.
+        let laptop = app.descendants(matching: .any)["sidebar-machine-laptop"].firstMatch
+        if openMachines(), wait(laptop, "laptop in the machines popover") {
+            press(laptop)
+            settle()
+            shoot("mac-machine-member")
             back()
         }
         updateAll()
