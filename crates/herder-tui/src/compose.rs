@@ -619,6 +619,8 @@ impl App {
                     session_id: session.id.clone(),
                     question_id: question.id.clone(),
                     answer,
+                    images: Vec::new(),
+                    files: Vec::new(),
                 };
                 return vec![send(&key, command, Origin::Session(key.clone()))];
             }
@@ -1511,6 +1513,8 @@ mod tests {
                 session_id: SessionId::new("s2"),
                 question_id: QuestionId::new("q1"),
                 answer,
+                images: Vec::new(),
+                files: Vec::new(),
             })
         };
         // Digits pick and unpick instead of answering at once.

@@ -338,6 +338,8 @@ impl App {
                     session_id: waiting.key.session_id.clone(),
                     question_id: question.id.clone(),
                     answer,
+                    images: Vec::new(),
+                    files: Vec::new(),
                 };
                 return vec![send(waiting.key, command)];
             }
@@ -536,6 +538,8 @@ mod tests {
                     answer: Answer::Choices {
                         indices: vec![0, 2]
                     },
+                    images: Vec::new(),
+                    files: Vec::new(),
                 },
             )]
         );

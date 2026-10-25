@@ -797,7 +797,9 @@ impl Actor {
                         format!("question {question_id} {problem}"),
                     ));
                 }
-                if !matches!(answer, Answer::Text { .. }) && (!images.is_empty() || !files.is_empty()) {
+                if !matches!(answer, Answer::Text { .. })
+                    && (!images.is_empty() || !files.is_empty())
+                {
                     return Err(error(
                         ErrorCode::BadRequest,
                         "only a text answer takes images and files",
