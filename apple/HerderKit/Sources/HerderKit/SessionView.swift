@@ -38,7 +38,7 @@ struct SessionView: View {
     var body: some View {
         let model = fleet.session(key)
         let summary = fleet.lists.projects.lazy.flatMap(\.sessions).first { $0.key == key }
-        let blocks = model.map(Transcript.collapsed) ?? []
+        let blocks = model.map { Transcript.collapsed($0, queue: fleet.queue(of: key)) } ?? []
         let matches = find.shown ? find.matches(blocks) : []
         VStack(spacing: 0) {
             if let parent = model?.parent {
@@ -83,7 +83,8 @@ struct SessionView: View {
                         TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
                             .environment(\.findHighlight, find.highlight(block.id))
                     }
-                    if model?.loaded == true && model?.status == .waitingForCapacity {
+                    // A turn waiting for its usage limit to reset says so in its failure's card.
+                    if model?.loaded == true && model?.status == .waitingForCapacity && model?.retryAt == nil {
                         let resources = fleet.machines.first { $0.hostId == key.hostId }?.resources
                         WaitingForCapacityNote(load: resources.map(TurnLoad.init)) { pages.open(.machine(key.hostId)) }
                     }
@@ -220,7 +221,7 @@ struct SessionView: View {
                 StatusGlyph(state: model?.state ?? .idle, size: 6)
                 let detail = SessionHeading.detail(project: summary?.project, machine: summary?.machine,
                                                    archiving: fleet.archiving.contains(key))
-                (Text(model?.state.label ?? "")
+                (Text(model?.stateLabel ?? "")
                     .foregroundStyle(model?.state == .needsYou ? Theme.accent : Theme.secondary)
                  + Text(detail.isEmpty ? "" : " · " + detail).foregroundStyle(Theme.tertiary))
                     .lineLimit(1).truncationMode(.tail)
@@ -252,12 +253,15 @@ struct SessionView: View {
                     Text(summary?.title ?? model?.title ?? "Session")
                         .font(.title3.weight(.bold)).foregroundStyle(Theme.text).lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
+                    if model?.status == .needsLogin {
+                        NeedsSignInChip()
+                    }
                 }
                 // One line, so a narrow header truncates where it runs on rather than wrapping
                 // its parts beside each other.
                 HStack(spacing: 6) {
                     StatusGlyph(state: model?.state ?? .idle, size: 7)
-                    (Text(model?.state.label ?? "")
+                    (Text(model?.stateLabel ?? "")
                         .foregroundStyle(model?.state == .needsYou ? Theme.accent : Theme.secondary)
                      + Text(summary.map { " · \($0.project.isEmpty ? "" : $0.project + " · ")\($0.machine)" } ?? "")
                         .foregroundStyle(Theme.tertiary))
@@ -539,7 +543,8 @@ private struct Composer: View {
                 Label("Archived · sending a message brings it back", systemImage: "archivebox")
                     .font(.caption).foregroundStyle(Theme.tertiary).padding(.horizontal, 18)
             }
-            let queue = model.waiting(in: fleet.queue(of: key))
+            // Held messages show in the transcript, above the failure that holds them.
+            let queue = model.status == .needsLogin ? [] : model.waiting(in: fleet.queue(of: key))
             if !queue.isEmpty {
                 QueueTray(fleet: fleet, key: key, queue: queue, running: model.turn != nil)
             }
@@ -629,6 +634,7 @@ private struct Composer: View {
         if case .question(_, let choices, _) = model.questions.first?.kind {
             return choices.isEmpty ? "Type an answer…" : "Type your own answer…"
         }
+        if model.status == .needsLogin { return "Messages you send now wait with the others" }
         if model.parent != nil {
             return model.turn != nil ? "Queue a message for this child session…" : "Message this child session…"
         }
@@ -649,6 +655,21 @@ private struct Composer: View {
         } else {
             Task { await fleet.submit(text, images: images, files: files, to: key) }
         }
+    }
+}
+
+/// The amber "Needs sign-in" chip beside the title of a session whose account is signed out.
+struct NeedsSignInChip: View {
+    var body: some View {
+        Label("Needs sign-in", systemImage: "exclamationmark.circle.fill")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Theme.accent.opacity(0.14), in: .capsule)
+            .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.5)))
+            .fixedSize()
+            .accessibilityIdentifier("needs-sign-in")
     }
 }
 

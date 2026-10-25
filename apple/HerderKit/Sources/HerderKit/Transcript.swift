@@ -39,6 +39,10 @@ enum TranscriptBlock: Hashable, Identifiable {
     case earlierReports(id: String, [ChildReport])
     case agents(id: String, [NativeAgent])
     case notice(Notice)
+    /// A failed turn: its card while it stands, else a line.
+    case failure(Failure)
+    /// A message held while the session's account needs signing in again.
+    case held(id: String, text: String)
     case question(AskedQuestion)
     case handoff(Handoff)
     /// A turn's tool calls and reasoning behind one line; a finished turn's passing prose too.
@@ -52,6 +56,8 @@ enum TranscriptBlock: Hashable, Identifiable {
         case .artifact(let artifact): "artifact-\(artifact.id)"
         case .working: "working"
         case .notice(let notice): "notice-\(notice.id)"
+        case .failure(let failure): "failure-\(failure.id)"
+        case .held(let id, _): "held-\(id)"
         case .question(let question): "question-\(question.seq)"
         case .handoff(let handoff): "handoff-\(handoff.id)"
         case .report(let report, _): "report-\(report.id)"
@@ -94,17 +100,28 @@ struct ChildRef: Hashable {
 enum Transcript {
     /// The session's transcript: completed entries, streaming content, and pending or failed sends.
     /// Consecutive tool calls and their results group into one block.
-    static func blocks(_ model: SessionModel) -> [TranscriptBlock] { blocks(model, parent: nil) }
+    /// `queue` is the session's queue on its machine, which shows here while the account holds it.
+    static func blocks(_ model: SessionModel, queue: [QueuedPrompt] = []) -> [TranscriptBlock] {
+        build(model, parent: nil, queue: queue).blocks
+    }
 
     static func blocks(_ model: SessionModel, parent: NativeAgent.ID?) -> [TranscriptBlock] {
-        build(model, parent: parent).blocks
+        build(model, parent: parent, queue: []).blocks
+    }
+
+    /// The messages the session holds while its account needs signing in again, oldest first:
+    /// those on the machine's queue, then those this device sent that the queue does not list yet.
+    static func held(_ model: SessionModel, queue: [QueuedPrompt]) -> [TranscriptBlock] {
+        guard model.status == .needsLogin else { return [] }
+        return model.waiting(in: queue).map { .held(id: $0.promptId, text: $0.text) }
+            + model.outbox.filter { $0.state == .delivered }.map { .held(id: $0.id.uuidString, text: $0.text) }
     }
 
     /// The session's transcript with each turn's work folded behind a `.work` block: what stays
     /// in view is the user's messages, each finished turn's last reply, the running turn's prose,
     /// and what needs the user.
-    static func collapsed(_ model: SessionModel) -> [TranscriptBlock] {
-        let (blocks, turns) = build(model, parent: nil)
+    static func collapsed(_ model: SessionModel, queue: [QueuedPrompt] = []) -> [TranscriptBlock] {
+        let (blocks, turns) = build(model, parent: nil, queue: queue)
         var hidden: [TurnId: [Int]] = [:]
         var replies: [TurnId: Int] = [:]
         for (index, block) in blocks.enumerated() {
@@ -163,7 +180,9 @@ enum Transcript {
     }
 
     /// The blocks, each with the turn of the items it shows, if any.
-    private static func build(_ model: SessionModel, parent: NativeAgent.ID?) -> (blocks: [TranscriptBlock], turns: [TurnId?]) {
+    private static func build(
+        _ model: SessionModel, parent: NativeAgent.ID?, queue: [QueuedPrompt]
+    ) -> (blocks: [TranscriptBlock], turns: [TurnId?]) {
         var blocks: [TranscriptBlock] = []
         var turns: [TurnId?] = []
         func append(_ block: TranscriptBlock, turn: TurnId? = nil) {
@@ -263,6 +282,11 @@ enum Transcript {
                 guard parent == nil else { continue }
                 flushCalls(); flushChildren(); flushAgents()
                 append(.notice(notice))
+            case .failure(let failure):
+                // The failure that stands goes last, below what it holds.
+                guard parent == nil, failure.resolution != nil else { continue }
+                flushCalls(); flushChildren(); flushAgents()
+                append(.failure(failure))
             case .question(let question):
                 guard parent == nil else { continue }
                 flushCalls(); flushChildren(); flushAgents()
@@ -300,13 +324,17 @@ enum Transcript {
         if model.turn != nil && !streamingVisible {
             append(.working(since: model.turnStartedAt, waiting: false))
         }
-        // What the machine queued shows above the composer, from its queue, not here.
-        for outgoing in model.outbox {
+        // What the machine queued shows above the composer, from its queue, not here; while the
+        // account needs signing in again, here, held.
+        let held = held(model, queue: queue)
+        for outgoing in model.outbox where held.isEmpty || outgoing.state != .delivered {
             append(.user(id: outgoing.id.uuidString, text: outgoing.text, outgoing: outgoing))
         }
-        if model.turn == nil && model.outbox.contains(where: { $0.state == .delivered }) {
+        for block in held { append(block) }
+        if model.turn == nil && held.isEmpty && model.outbox.contains(where: { $0.state == .delivered }) {
             append(.working(since: nil, waiting: true))
         }
+        if let failure = model.standingFailure { append(.failure(failure)) }
         return (blocks, turns)
     }
 

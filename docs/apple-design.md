@@ -345,7 +345,10 @@ From the top: a child's `ChildBanner` ("Agent of ‹parent›", Back), then the 
 
 - **Left, stacked:** the title (`.title3` bold, two lines at most, then truncated), the status
   line (`StatusGlyph` + state label + `· project · machine`), the branch (monospace, one line,
-  middle-truncated), and "Forked from …" when it is a fork.
+  middle-truncated), and "Forked from …" when it is a fork. While the session's account is
+  signed out, an amber "Needs sign-in" chip sits beside the title and the status line says
+  "Needs sign-in" (on a phone too); its Board row shows the waiting dot and "Claude account
+  needs sign-in".
 - **Right, one row:** the PRs chip (when linked), then `HeaderButton`s: Terminal / Chat (owners only, ⌘\`),
   Inspector (ⓘ, ⌥⌘I), list toggle (Mac, ⌘\), and the ⋯ menu (Interrupt, Switch Account or
   Model…, Archive).
@@ -372,6 +375,29 @@ From the top: a child's `ChildBanner` ("Agent of ‹parent›", Back), then the 
   the column (`NoticeLine`), as the TUI renders them.
 - The transcript follows new output from the bottom; scrolled up, it stays put and returns to
   where it was left (`TranscriptScroll`, `FollowsGrowth`).
+
+### 5.2.1 Turn failures (`FailureCard`, P14.8)
+
+A failed turn is one card with its fix, not a line per attempt. The card that stands sits at
+the end of the transcript; the same failure again (same class, same summary) with no turn
+completed between folds into it with "×N". Its actions are buttons in a row (`PillButton`):
+
+- **Auth** (amber): "‹Provider› signed out the ‹account› account on ‹machine›", how many
+  messages are held, then **Sign in again** (owners only; starts the login as an Activity job
+  and reads "Signing in… see Activity" while it runs), **Continue on ‹account› account** when the
+  provider has another logged-in account with room (the reactive-failover rule: an offer, never
+  automatic), and **Details** (the raw message). While the account needs sign-in, the session's
+  queue shows in the transcript as dimmed bubbles marked "held" (not in the `QueueTray`), and the
+  composer says "Messages you send now wait with the others". Once the account works again, the
+  card becomes the quiet line "Signed in again · resumed".
+- **Usage limit** (amber): the reset time, **Wait** (the machine runs the turn again at the reset;
+  the card gives way to a line saying so), **Continue on ‹account› account** (switches and sends
+  the failed prompt there), Details. Without a retry waiting, **Retry** instead of Wait.
+- **Transient and fatal** (vermilion): the error's first sentence, **Retry** (sends the failed
+  prompt again) and **Details**.
+
+A failure is over once a turn completes, the session switches account or provider, or another
+failure follows; it then reads as a `NoticeLine`.
 
 ### 5.3 Requests
 
@@ -635,6 +661,10 @@ iPhone layout fixes land in P7.21.
 | Terminal | `mac-session-terminal.png` | — |
 | New session | `mac-new-session.png` | `ios-new-session.png`, `ios-new-session-path.png` |
 | Narrow window | `mac-narrow.png` | — |
+
+`FailureCardScreenshotTests` draws the auth card, under the "Needs sign-in" chip and a held
+message, at the Mac's transcript width and an iPhone's (`auth-card-mac.png`,
+`auth-card-iphone.png`).
 
 ---
 
