@@ -22,12 +22,21 @@ struct ProjectGroup: Hashable, Identifiable {
     /// recent. A rank rather than the time itself, so the lists change when the order does,
     /// not on every event a session streams.
     var recency = 0
+    /// Whether none of its sessions did anything in the last 30 days, or it has none: the
+    /// sidebar folds it away.
+    var quiet = false
 
     var sessions: [SessionSummary] { live + archived }
 
     /// What its sidebar row and header show: its live sessions' states rolled up, as the TUI
     /// rolls up a project; `nil` without any.
     var state: SessionState? { SessionState.rollup(live.map(\.state)) }
+
+    /// How many of its sessions wait for the user.
+    var needsYou: Int { live.filter { $0.state == .needsYou }.count }
+
+    /// How many of its sessions are running a turn.
+    var working: Int { live.filter { $0.state == .running }.count }
 
     /// Whether the project itself matches a search: its name, id or a clone's path.
     func matches(_ query: String) -> Bool {
@@ -159,7 +168,8 @@ struct Lists: Equatable {
             let group = ProjectGroup(
                 projectId: projectId, name: name, machines: machineNames,
                 live: live, archived: archived, paths: paths,
-                age: Timestamp.age(lastActive, now: now))
+                age: Timestamp.age(lastActive, now: now),
+                quiet: lastActive.map { now.timeIntervalSince($0) > 30 * 24 * 3600 } ?? true)
             return (group, lastActive)
         }
         var ranked = groups.sorted { a, b in
