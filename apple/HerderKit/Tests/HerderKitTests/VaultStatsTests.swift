@@ -3,11 +3,6 @@ import Herder
 @testable import HerderKit
 import Testing
 
-private func pr(_ number: UInt64, _ state: PrState) -> PullRequest {
-    PullRequest(number: number, url: "https://github.com/acme/demo/pull/\(number)", title: "PR \(number)",
-                headBranch: "b\(number)", state: state, ci: .passing, review: .none, mergeable: .clean)
-}
-
 /// A vault with two hosts: `builder` online, `laptop` last seen two hours before `now`.
 private let now = Date(timeIntervalSince1970: 1_767_240_000)
 
@@ -72,7 +67,7 @@ struct VaultStatsTests {
         #expect(VaultStats(machine: machine("host-a", name: "a", sessions: ["01A"]), sessions: [:]) == nil)
     }
 
-    @Test func totalsCountHostsSessionsByStatePRsAndProjects() throws {
+    @Test func totalsCountHostsSessionsByStateAndProjects() throws {
         var running = Script("01A", host: "vault")
         var asking = Script("01B", host: "vault")
         let machine = vault([
@@ -83,10 +78,7 @@ struct VaultStatsTests {
         ])
         let sessions = [
             // Its events say running, and outrank the listing's idle.
-            running.key: running.model([
-                created(), .sessionStatusChanged(status: .running, retryAt: nil),
-                .prLinked(pr: pr(1, .open)), .prLinked(pr: pr(2, .merged)), .prLinked(pr: pr(3, .draft)),
-            ]),
+            running.key: running.model([created(), .sessionStatusChanged(status: .running, retryAt: nil)]),
             asking.key: asking.model([
                 created(), .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "s",
                                               routedTo: .user, reason: nil),
@@ -102,7 +94,6 @@ struct VaultStatsTests {
         #expect(stats.count(.needsYou) == 1)
         #expect(stats.count(.idle) == 1)
         #expect(stats.count(.archived) == 1)
-        #expect(stats.openPRs == 2)
         #expect(stats.projects == 2)
     }
 
