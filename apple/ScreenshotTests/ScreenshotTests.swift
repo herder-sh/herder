@@ -183,8 +183,8 @@ final class ScreenshotTests: XCTestCase {
         return false
     }
 
-    /// The Providers page, adding accounts on `devbox` (a second login while the first runs,
-    /// then the first finished) and the machine's settings.
+    /// The Providers page, adding accounts on `devbox` (a login that runs in Activity, a second
+    /// one cancelled there) and the machine's settings, then Update All.
     private func providers() {
         #if os(macOS)
         guard section("Providers") else { return }
@@ -202,65 +202,48 @@ final class ScreenshotTests: XCTestCase {
         mcpServers()
         guard openAddAccount() else { return }
         shoot(platform("add-account-form"))
+        // Start Login closes the sheet: the login runs in Activity, which needs you.
+        let start = app.buttons["Start Login"].firstMatch
+        guard wait(start, "Start Login") else { return dismiss() }
+        press(start)
+        settle()
+        guard openActivity() else { return }
+        shoot(platform("activity-login"), screen: true)
+        let login = job("job-add-claude")
+        guard wait(login, "Claude login in Activity") else { return closeActivity() }
+        press(login)
+        let terminal = app.descendants(matching: .any)["job-terminal"].firstMatch
+        guard wait(terminal, "login terminal") else { return closeActivity() }
         #if os(iOS)
-        // The concurrent logins are shot on the Mac; the phone starts one and cancels it.
-        let start = app.buttons["Start Login"].firstMatch
-        guard wait(start, "Start Login") else { return dismiss() }
-        press(start)
-        _ = wait(app.descendants(matching: .any)["login-terminal"].firstMatch, "login terminal")
-        settle()
-        let cancel = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Cancel Login '")).firstMatch
-        if wait(cancel, "Cancel Login") {
-            press(cancel)
-            settle()
-            shoot("ios-cancel-login")
-            confirmCancel()
-            if wait(app.buttons["Done"].firstMatch, "cancelled login ended") {
-                settle()
-                shoot("ios-cancel-login-ended")
-            }
-        }
-        dismiss()
-        return
+        // The phone cancels it.
+        cancelLogin(named: "claude")
+        closeActivity()
         #else
-        let start = app.buttons["Start Login"].firstMatch
-        guard wait(start, "Start Login") else { return dismiss() }
-        press(start)
-        let terminal = app.descendants(matching: .any)["login-terminal"].firstMatch
-        _ = wait(terminal, "login terminal")
-        settle()
-        shoot(platform("add-account-login"))
-        // A second login, for another provider, while the first one waits.
-        let another = app.buttons["Add Another Account"].firstMatch
-        if wait(another, "Add Another Account") {
-            press(another)
+        // The fake login: Enter answers its prompt, and the account is added.
+        press(terminal)
+        app.typeKey(.return, modifierFlags: [])
+        let added = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Added Claude'")).firstMatch
+        if wait(added, "Account added") {
+            settle()
+            shoot("mac-activity-login-added", screen: true)
+        }
+        closeActivity()
+        // A second login, for Codex, cancelled from its detail. Its id is `codex-2`, as devbox
+        // has a `codex` account already.
+        if openAddAccount() {
             let codex = app.buttons["Codex"].firstMatch
             if wait(codex, "Codex choice") { press(codex) }
-            settle()
-            shoot(platform("add-account-second-form"))
             press(start)
             settle()
-            dismiss()
-            if openAddAccount() {
-                shoot(platform("add-account-running"))
-                // The first login: Enter answers its prompt, and the account is added.
-                let first = app.descendants(matching: .any)["running-login-claude"].firstMatch
-                if wait(first, "running Claude login") {
-                    press(first)
-                    if wait(terminal, "login terminal again") {
-                        press(terminal)
-                        app.typeKey(.return, modifierFlags: [])
-                        let done = app.staticTexts["Account added"].firstMatch
-                        if wait(done, "Account added") {
-                            settle()
-                            shoot(platform("add-account-finished"))
-                        }
-                    }
+            if openActivity() {
+                let second = job("job-add-codex")
+                if wait(second, "Codex login in Activity") {
+                    press(second)
+                    cancelLogin(named: "codex")
                 }
+                closeActivity()
             }
         }
-        dismiss()
-        cancelLogin()
         let machine = app.descendants(matching: .any)["sidebar-machine-devbox"].firstMatch
         if openMachines(), wait(machine, "devbox in the machines popover") {
             press(machine)
@@ -280,29 +263,74 @@ final class ScreenshotTests: XCTestCase {
     }
 
     #if os(macOS)
-    /// Update All on the Providers page: every job runs at once and ends with its outcome, and
-    /// the one picked shows its own terminal.
+    /// Update All on the Providers page: one installer at a time per machine, so studio's Codex
+    /// waits for its Claude while devbox's runs; each ends with its outcome, and the detail of
+    /// Claude's shows the warning read out of its installer, then its terminal.
     private func updateAll() {
         guard section("Providers") else { return }
         let update = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Update All ('")).firstMatch
         guard wait(update, "Update All") else { return }
         press(update)
-        guard wait(app.descendants(matching: .any)["login-terminal"].firstMatch, "install terminal") else { return }
-        shoot("mac-installs-running")
+        guard openActivity() else { return }
+        let queued = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == 'job-install-codex-studio' AND label ENDSWITH ', Queued'")).firstMatch
+        if wait(queued, "studio's Codex queued") { shoot("mac-activity-queued", screen: true) }
         // The demo's installers take two seconds; each row reads its outcome once its job ends.
-        let outcome = { (id: String) in
-            self.app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS 'Updated '", id)).firstMatch
+        for id in ["job-install-claude-devbox", "job-install-claude-studio", "job-install-codex-studio"] {
+            let outcome = app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier == %@ AND label CONTAINS 'Updated '", id)).firstMatch
+            guard wait(outcome, "\(id) updated") else { return closeActivity() }
         }
-        for id in ["install-claude-devbox", "install-claude-studio", "install-codex-studio"] {
-            guard wait(outcome(id), "\(id) updated") else { return dismiss() }
-        }
-        // Picking a row shows that job's terminal under its header.
-        press(app.buttons["install-codex-studio"].firstMatch)
         settle()
-        shoot("mac-installs-finished")
-        dismiss()
+        shoot("mac-activity-done", screen: true)
+        press(job("job-install-claude-studio"))
+        if wait(app.descendants(matching: .any)["job-terminal"].firstMatch, "update terminal") {
+            settle()
+            shoot("mac-activity-detail", screen: true)
+        }
+        closeActivity()
     }
     #endif
+
+    /// A job's row in Activity, by the start of its id: `job-add-claude` for any machine.
+    private func job(_ id: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", id)).firstMatch
+    }
+
+    /// Opens Activity: the header chip's popover on the Mac, the toolbar's sheet on the iPhone.
+    private func openActivity() -> Bool {
+        let chip = app.descendants(matching: .any)["activity"].firstMatch
+        guard wait(chip, "Activity") else { return false }
+        press(chip)
+        settle()
+        return true
+    }
+
+    private func closeActivity() {
+        #if os(macOS)
+        // Escape would go to a focused terminal; a click outside the popover closes it.
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.9)).click()
+        #else
+        app.swipeDown(velocity: .fast)
+        #endif
+        settle()
+    }
+
+    /// Cancels the login whose detail is open, from its Cancel Login button, and waits for it to
+    /// say it stopped.
+    private func cancelLogin(named id: String) {
+        let cancel = app.buttons.matching(NSPredicate(format: "label == %@", "Cancel Login \(id)")).firstMatch
+        guard wait(cancel, "Cancel Login \(id)") else { return }
+        press(cancel)
+        settle()
+        shoot(platform("cancel-login"), screen: true)
+        confirmCancel()
+        let stopped = app.staticTexts["Stopped"].firstMatch
+        if wait(stopped, "cancelled login stopped") {
+            settle()
+            shoot(platform("cancel-login-ended"), screen: true)
+        }
+    }
 
     /// The MCP servers on the Providers page: the list, adding one to every machine, editing
     /// one with a header, and importing a README's JSON.
@@ -355,28 +383,6 @@ final class ScreenshotTests: XCTestCase {
             }
         }
     }
-
-    #if os(macOS)
-    /// Cancels the Codex login still waiting, from the list of running logins. Its id is
-    /// `codex-2`, as devbox has a `codex` account already.
-    private func cancelLogin() {
-        guard openAddAccount() else { return }
-        let cancel = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Cancel Login codex'")).firstMatch
-        guard wait(cancel, "Cancel Login codex") else { return dismiss() }
-        press(cancel)
-        settle()
-        shoot("mac-cancel-login")
-        confirmCancel()
-        // The row is the running login's spinner until it ends, so it is matched by any type.
-        let ended = app.descendants(matching: .any).matching(NSPredicate(
-            format: "label BEGINSWITH 'Codex codex' AND label ENDSWITH ', Ended'")).firstMatch
-        if wait(ended, "cancelled login ended") {
-            settle()
-            shoot("mac-cancel-login-ended")
-        }
-        dismiss()
-    }
-    #endif
 
     /// Answers the Cancel Login confirmation.
     private func confirmCancel() {

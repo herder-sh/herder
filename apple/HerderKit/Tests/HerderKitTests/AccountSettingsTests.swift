@@ -59,48 +59,12 @@ struct AccountSettingsTests {
         #expect(AccountDraft.nextId(provider: "codex", taken: [], email: "@example.com") == "codex")
     }
 
-    @MainActor
-    @Test func loginsOnOneMachineEachKeepTheirOwnTerminal() {
-        var terminals = ProviderTerminals()
-        let claude = terminals.add(NewAccount(accountId: "claude-2", provider: "claude", label: nil, configDir: nil), on: "box")
-        let codex = terminals.add(NewAccount(accountId: "codex", provider: "codex", label: nil, configDir: nil), on: "box")
-        let elsewhere = terminals.add(NewAccount(accountId: "claude-2", provider: "claude", label: nil, configDir: nil), on: "laptop")
-        let install = terminals.install("cursor", on: "box", from: nil)
-        let relogin = terminals.relogin("claude", on: "box")
-        #expect(Set([claude, codex, elsewhere, install, relogin]).count == 5)
-        #expect(terminals.adds(on: "box") == [claude, codex])
-        #expect(terminals.pendingIds(on: "box") == ["claude-2", "codex"])
-        #expect(terminals.installs == [install])
-        #expect(terminals[claude] !== terminals[codex])
-        // The same login again while it runs is the one already running.
-        let first = terminals[claude]
-        terminals.add(NewAccount(accountId: "claude-2", provider: "claude", label: "Again", configDir: nil), on: "box")
-        #expect(terminals[claude] === first)
-        // Done forgets it, and only it.
-        terminals.clear(claude)
-        #expect(terminals[claude] == nil)
-        #expect(terminals.adds(on: "box") == [codex])
-        #expect(terminals.pendingIds(on: "box") == ["codex"])
-        #expect(terminals[install] != nil && terminals[relogin] != nil)
-    }
-
-    @Test func theSheetListsRunningLoginsUntilAskedForAnother() {
-        let one = ProviderJobKey(hostId: "box", job: .add("claude"))
-        let two = ProviderJobKey(hostId: "box", job: .add("codex"))
-        #expect(AddAccountPage.resolve(shown: nil, exists: false, adds: [], addingAnother: false) == .form)
-        #expect(AddAccountPage.resolve(shown: nil, exists: false, adds: [one, two], addingAnother: false) == .logins)
-        #expect(AddAccountPage.resolve(shown: nil, exists: false, adds: [one, two], addingAnother: true) == .form)
-        #expect(AddAccountPage.resolve(shown: two, exists: true, adds: [one, two], addingAnother: true) == .job(two))
-        // A login cleared while shown falls back to the others.
-        #expect(AddAccountPage.resolve(shown: two, exists: false, adds: [one], addingAnother: false) == .logins)
-    }
-
     @Test func progressReadsTheTerminalAndTheAccountList() {
         #expect(JobProgress(.connecting, added: false) == .starting)
         #expect(JobProgress(.attached, added: false) == .running)
         #expect(JobProgress(.attached, added: true) == .added)
         #expect(JobProgress(.exited(0), added: true) == .added)
-        #expect(JobProgress(.exited(0), added: false) == .ended)
+        #expect(JobProgress(.exited(0), added: false) == .ended && JobProgress.ended.label == "Stopped")
         #expect(JobProgress(.failed("no"), added: false) == .failed("no"))
         #expect(!JobProgress.running.finished && JobProgress.ended.finished)
     }
@@ -111,7 +75,7 @@ struct AccountSettingsTests {
         let installing = JobProgress(install: .attached, before: "2.1.303", after: "2.1.303")
         #expect(installing == .installing && installing.label == "Installing" && !installing.finished)
         let updated = JobProgress(install: .exited(0), before: "2.1.303", after: "2.1.310")
-        #expect(updated == .updated(from: "2.1.303", to: "2.1.310") && updated.label == "Updated 2.1.303 → 2.1.310")
+        #expect(updated == .updated(from: "2.1.303", to: "2.1.310") && updated.label == "2.1.303 → 2.1.310")
         let installed = JobProgress(install: .exited(0), before: nil, after: "0.9.4")
         #expect(installed == .installed("0.9.4") && installed.label == "Installed 0.9.4")
         #expect(JobProgress(install: .exited(0), before: "2.1.310", after: "2.1.310") == .upToDate("2.1.310"))
@@ -124,17 +88,6 @@ struct AccountSettingsTests {
     }
 
     @MainActor
-    @Test func anInstallKeepsTheVersionItStartedFrom() {
-        var terminals = ProviderTerminals()
-        let key = terminals.install("claude", on: "box", from: "2.1.303")
-        // Again while it runs: the same job, still from where it started.
-        terminals.install("claude", on: "box", from: "2.1.310")
-        #expect(terminals.before(key) == "2.1.303")
-        terminals.clear(key)
-        #expect(terminals.before(key) == nil)
-    }
-
-    @MainActor
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
     func everyInstallOpensItsTerminalWithoutBeingShown() async throws {
         let daemon = try FakeDaemon()
@@ -144,11 +97,11 @@ struct AccountSettingsTests {
         }
         let machine = try await fleet.pair(daemon)
         try await fleet.client.synced(hostId: machine.hostId)
-        // No emulator is ever made: Update All shows one job's terminal at most. The fake
+        // No emulator is ever made: a job runs whether its terminal is shown or not. The fake
         // daemon installs no provider, and says so, which only an opened request learns.
         let keys = ["claude", "codex"].map { fleet.install($0, on: machine.hostId) }
         for key in keys {
-            let connection = try #require(fleet.providerTerminals[key])
+            let connection = try #require(fleet.activity[key]?.connection)
             #expect(await eventually {
                 if case .failed = connection.state { return true }
                 return false
@@ -167,17 +120,18 @@ struct AccountSettingsTests {
         let machine = try await fleet.pair(daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         let account = NewAccount(accountId: "work", provider: "claude", label: nil, configDir: nil)
-        let key = fleet.providerTerminals.add(account, on: machine.hostId)
-        let connection = try #require(fleet.providerTerminals[key])
+        let key = fleet.addAccount(account, on: machine.hostId)
+        let connection = try #require(fleet.activity[key]?.connection)
         let screen = connection.view(client: fleet.client, sessionId: nil)
-        connection.connect(client: fleet.client, sessionId: nil, cols: 80, rows: 24)
         #expect(await eventually {
             if case .failed = connection.state { return true }
             return false
         })
-        #expect(fleet.providerTerminals[key] === connection)
+        #expect(fleet.activity[key]?.connection === connection)
         // Ended, it no longer holds its id, so the form may suggest it again.
-        #expect(fleet.providerTerminals.pendingIds(on: machine.hostId).isEmpty)
+        #expect(await eventually { fleet.activity.phase(key) == .ended })
+        #expect(fleet.activity.pendingIds(on: machine.hostId).isEmpty)
+        #expect(fleet.progress(key).failed)
         #expect(connection.view(client: fleet.client, sessionId: nil) === screen)
         // A login the machine never opened has no terminal there to cancel.
         await #expect(throws: HerderError.self) { try await fleet.cancelLogin(key) }

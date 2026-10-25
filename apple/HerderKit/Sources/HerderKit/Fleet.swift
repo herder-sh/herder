@@ -28,10 +28,8 @@ public final class Fleet {
     var renaming: SessionKey?
     /// A short note about something that just finished, shown briefly.
     var toast: Toast?
-    /// The provider logins and installs this device started; see `ProviderTerminals`.
-    var providerTerminals = ProviderTerminals()
-    /// The last AWS sign-in across the machines, kept while its sign-ins run; see `AwsSignIn`.
-    var awsSignIn: AwsSignIn?
+    /// The installs, logins and AWS sign-ins this device started; see `Activity`.
+    var activity = Activity()
     /// Each session's open shells, kept while the app runs; see `SessionTerminals`.
     @ObservationIgnored var sessionTerminals: [SessionKey: SessionTerminals] = [:]
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]

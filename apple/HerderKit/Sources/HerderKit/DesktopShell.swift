@@ -39,6 +39,7 @@ struct DesktopShell: View {
                 if let page = pages.top {
                     VStack(spacing: 0) {
                         PageTrail(crumbs: crumbs) { pages.back(to: $0) }
+                            .overlay(alignment: .trailing) { ActivityChip(fleet: fleet).padding(.trailing, 20) }
                         page.view(fleet: fleet).id(page)
                     }
                 } else {
@@ -89,7 +90,7 @@ struct DesktopShell: View {
         case .project(let id):
             let project = lists.projects.first { $0.id == id }
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: project?.name ?? "Project",
+                Pane(fleet: fleet, title: project?.name ?? "Project",
                      status: project.map { ProjectSessions.status(live: $0.live, archived: $0.archived) } ?? "",
                      state: project?.state, icon: ProjectIcon(projectId: project?.projectId, name: project?.name, image: fleet.projectIcon(project?.projectId), size: 30),
                      switcher: switcher, query: $query) {
@@ -107,7 +108,7 @@ struct DesktopShell: View {
             }
         case .chats:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: "Chats", switcher: switcher, query: $query) {
+                Pane(fleet: fleet, title: "Chats", switcher: switcher, query: $query) {
                     drafting(\.isChat) {
                         ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats,
                                         query: query, selection: $session)
@@ -121,7 +122,7 @@ struct DesktopShell: View {
             }
         case .board:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: "Board", status: boardStatus(lists), switcher: switcher, query: $query) {
+                Pane(fleet: fleet, title: "Board", status: boardStatus(lists), switcher: switcher, query: $query) {
                     drafting { BoardView(fleet: fleet, sheet: $sheet, selection: $session, query: query) }
                 } actions: {
                     BoardSortMenu().fixedSize()
@@ -129,19 +130,19 @@ struct DesktopShell: View {
                 }
             }
         case .skills:
-            Pane(title: "Skills", switcher: switcher) {
+            Pane(fleet: fleet, title: "Skills", switcher: switcher) {
                 SkillsView(fleet: fleet, session: session)
             } actions: {
                 EmptyView()
             }
         case .providers:
-            Pane(title: "Providers", switcher: switcher) {
+            Pane(fleet: fleet, title: "Providers", switcher: switcher) {
                 ProvidersView(fleet: fleet, sheet: $sheet)
             } actions: {
                 PaneButton(title: "Add Account", symbol: "plus", prominent: true) { sheet = .addAccount }
             }
         case .machines:
-            Pane(title: "Machines", status: connectionStatus(lists), switcher: switcher) {
+            Pane(fleet: fleet, title: "Machines", status: connectionStatus(lists), switcher: switcher) {
                 MachinesView(fleet: fleet, sheet: $sheet)
             } actions: {
                 if !AwsSignIn.machines(fleet.machines).isEmpty {
@@ -151,7 +152,7 @@ struct DesktopShell: View {
                 PaneButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair }
             }
         case .vault:
-            Pane(title: "Vault", switcher: switcher) {
+            Pane(fleet: fleet, title: "Vault", switcher: switcher) {
                 VaultView(fleet: fleet, sheet: $sheet)
             } actions: {
                 EmptyView()
@@ -274,8 +275,11 @@ private struct ListAndSession<List: View>: View {
     }
 }
 
-/// A pane: its `PageHeader`, a search field when it has one, then the content.
+/// A pane: its `PageHeader` with the Activity chip, a search field when it has one, then the
+/// content.
 struct Pane<Content: View, Actions: View>: View {
+    /// For the Activity chip, before the page's actions.
+    let fleet: Fleet
     let title: String
     /// The page's live status sentence (`PageHeader.status`).
     var status = ""
@@ -292,7 +296,10 @@ struct Pane<Content: View, Actions: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: title, status: status, state: state, icon: icon, switcher: switcher) { actions }
+            PageHeader(title: title, status: status, state: state, icon: icon, switcher: switcher) {
+                ActivityChip(fleet: fleet)
+                actions
+            }
             if let query {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary)

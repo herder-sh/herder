@@ -210,7 +210,10 @@ struct FleetView: View {
         case .projects:
             NavigationStack(path: $projectsPath) {
                 ProjectsView(fleet: fleet, draft: $draft, projects: fleet.lists.projects)
-                    .toolbar { Button("Add Project", systemImage: "plus") { sheet = .newProject } }
+                    .toolbar {
+                        ActivityToolbarButton(fleet: fleet) { sheet = .activity }
+                        Button("Add Project", systemImage: "plus") { sheet = .newProject }
+                    }
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $projectsPath)
@@ -218,6 +221,7 @@ struct FleetView: View {
             NavigationStack(path: $chatsPath) {
                 ChatsView(fleet: fleet)
                     .toolbar {
+                        ActivityToolbarButton(fleet: fleet) { sheet = .activity }
                         BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey)
                         let started = Draft.chat(fleet: fleet)
                         Button("New Chat", systemImage: "plus") { draft = started }
@@ -231,6 +235,7 @@ struct FleetView: View {
                 BoardView(fleet: fleet, sheet: $sheet, query: boardQuery)
                     .alwaysSearchable(text: $boardQuery, prompt: "Tasks")
                     .toolbar {
+                        ActivityToolbarButton(fleet: fleet) { sheet = .activity }
                         BoardSortMenu()
                         Button("New Session", systemImage: "plus") { sheet = .newSession }
                     }

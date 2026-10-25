@@ -157,14 +157,12 @@ struct ProvidersView: View {
         case setUp
         case login(Setup)
         case add(Provider)
-        case installs(ProviderJobKey)
 
         var id: String {
             switch self {
             case .setUp: "set-up"
             case .login(let setup): "login/\(setup.hostId)/\(setup.draft.provider)"
             case .add(let provider): "add/\(provider)"
-            case .installs(let key): "installs/\(key.hostId)/\(key.job)"
             }
         }
     }
@@ -205,6 +203,7 @@ struct ProvidersView: View {
         .navigationTitle("Providers")
         .toolbar {
             #if os(iOS)
+            ActivityToolbarButton(fleet: fleet) { sheet = .activity }
             Button("Add Account", systemImage: "plus") { sheet = .addAccount }
             #endif
         }
@@ -220,7 +219,6 @@ struct ProvidersView: View {
                 AddAccountSheet(fleet: fleet, hostId: setup.hostId, initialProvider: setup.draft.provider,
                                 initialDraft: setup.draft)
             case .add(let provider): NewAccountSheet(fleet: fleet, provider: provider)
-            case .installs(let key): InstallsSheet(fleet: fleet, focus: key)
             }
         }
     }
@@ -420,7 +418,7 @@ struct ProvidersView: View {
                 let updatable = versions.updatable
                 if !updatable.isEmpty {
                     PillButton(title: "Update All (\(updatable.count))", symbol: "arrow.down.circle", prominent: true) {
-                        presented = updatable.map { fleet.install($0.provider, on: $0.hostId) }.first.map(Presented.installs)
+                        for cell in updatable { fleet.install(cell.provider, on: cell.hostId) }
                     }
                 } else if versions.rows.contains(where: { !$0.outdated.isEmpty }) {
                     PillButton(title: "Update All", symbol: "arrow.down.circle") {}
@@ -430,16 +428,7 @@ struct ProvidersView: View {
             }
             VersionTable(versions: versions) { cell in
                 guard cell.blocked == nil, cell.action != nil else { return }
-                presented = .installs(fleet.install(cell.provider, on: cell.hostId))
-            }
-            let running = fleet.providerTerminals.installs
-            if !running.isEmpty {
-                Button { presented = running.last.map(Presented.installs) } label: {
-                    Label(running.count == 1 ? "1 install or update" : "\(running.count) installs and updates",
-                          systemImage: "terminal")
-                        .font(.caption).foregroundStyle(Theme.secondary)
-                }
-                .buttonStyle(.plain)
+                fleet.install(cell.provider, on: cell.hostId)
             }
         }
     }
@@ -578,7 +567,7 @@ struct SetUpRow: View {
             }
             PillButton(title: place.needsInstall ? "Install & Set Up" : "Set Up") {
                 let taken = AccountDraft.taken(on: fleet.machines.first { $0.hostId == place.hostId },
-                                               pending: fleet.providerTerminals.pendingIds(on: place.hostId))
+                                               pending: fleet.activity.pendingIds(on: place.hostId))
                 if place.needsInstall { fleet.install(login.provider, on: place.hostId) }
                 open(ProvidersView.Setup(hostId: place.hostId, draft: login.draft(taken: taken)))
             }
@@ -688,64 +677,6 @@ struct VersionCell: View {
         }
         .lineLimit(1)
         .accessibilityElement(children: .combine)
-    }
-}
-
-/// The installs and updates this device started, on every machine: each one's progress, and
-/// the terminal of the one picked.
-struct InstallsSheet: View {
-    let fleet: Fleet
-    let focus: ProviderJobKey
-    @State private var picked: ProviderJobKey?
-
-    var body: some View {
-        let keys = fleet.providerTerminals.installs
-        let shown = picked.flatMap { keys.contains($0) ? $0 : nil } ?? (keys.contains(focus) ? focus : keys.last)
-        SheetScaffold(title: "Install and Update", subtitle: "The vendors’ own installers, run in view", height: 720) {
-            if keys.count > 1 {
-                VStack(spacing: 0) {
-                    ForEach(Array(keys.enumerated()), id: \.element) { index, key in
-                        if index > 0 { RowDivider() }
-                        row(key, selected: key == shown)
-                    }
-                }
-                .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
-                .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
-            }
-            if let shown { JobTerminal(fleet: fleet, key: shown) }
-        } footer: {
-            let finished = keys.filter { fleet.providerTerminals[$0].map(ProviderTerminals.running) == false }
-            if !finished.isEmpty {
-                ActionButton(title: finished.count == keys.count ? "Clear" : "Clear Finished", style: .secondary) {
-                    for key in finished { fleet.providerTerminals.clear(key) }
-                }
-                .frame(maxWidth: 180)
-            }
-            Spacer()
-            if finished.count < keys.count {
-                Text("Keeps running if you close this").font(.footnote).foregroundStyle(Theme.tertiary)
-            }
-        }
-    }
-
-    private func row(_ key: ProviderJobKey, selected: Bool) -> some View {
-        let name = fleet.machines.first { $0.hostId == key.hostId }?.name ?? key.hostId
-        let provider: Provider = if case .install(let provider) = key.job { provider } else { "" }
-        let progress = fleet.installProgress(key)
-        return Button { picked = key } label: {
-            HStack(spacing: 10) {
-                ProviderMark(provider: provider, size: 16)
-                Text("\(ModelCatalog.providerName(provider)) on \(name)").font(.subheadline).foregroundStyle(Theme.text)
-                Spacer()
-                JobBadge(progress: progress)
-            }
-            .padding(.horizontal, 14)
-            .frame(minHeight: 40)
-            .background(selected ? Theme.raised : .clear)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("install-\(provider)-\(name)")
     }
 }
 
