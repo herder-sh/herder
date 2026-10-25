@@ -4,11 +4,14 @@
 //! A chat's bridge turns its own payloads into [`Inbound`]s and renders each [`Post`] its own
 //! way; the runner decides what to post, and never sees a chat's wire format.
 
+use std::sync::Arc;
+
 use futures_util::future::BoxFuture;
 use herder_protocol::{
     ApprovalDecision, ApprovalId, ApprovalOutcome, ItemId, ProjectId, QuestionId, SessionId,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 /// A thread of a chat: a channel or direct message, and the thread within it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -176,6 +179,25 @@ pub enum Post {
         text: String,
         projects: Vec<(ProjectId, String)>,
     },
+}
+
+/// A bot connected to its chat.
+pub struct Connection {
+    /// Where it posts.
+    pub bridge: Arc<dyn Bridge>,
+    /// What arrives for it; closed when the connection ends for good.
+    pub inbound: mpsc::Receiver<Inbound>,
+    /// Disconnects it, once awaited.
+    pub close: BoxFuture<'static, ()>,
+}
+
+/// Why a bot did not connect.
+#[derive(Debug)]
+pub enum ConnectError {
+    /// The chat refused its tokens.
+    Rejected(String),
+    /// Anything else, such as the chat being unreachable; trying again may connect.
+    Failed(String),
 }
 
 /// What a bridge's calls fail with: the chat's own error, as it says it.

@@ -1,0 +1,28 @@
+{
+  "update_id": 900000006,
+  "message": {
+    "message_id": 301,
+    "from": {
+      "id": 700000001,
+      "is_bot": false,
+      "first_name": "Ada",
+      "username": "ada",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 700000001,
+      "first_name": "Ada",
+      "username": "ada",
+      "type": "private"
+    },
+    "date": 1761400300,
+    "caption": "What is wrong here?",
+    "document": {
+      "file_name": "screen.png",
+      "mime_type": "image/png",
+      "file_id": "BQACAgQAAxkBAAMtZScreen01",
+      "file_unique_id": "AgADScreen01",
+      "file_size": 11
+    }
+  }
+}

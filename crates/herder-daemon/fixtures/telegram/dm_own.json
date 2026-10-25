@@ -1,0 +1,38 @@
+{
+  "update_id": 900000005,
+  "message": {
+    "message_id": 104,
+    "from": {
+      "id": 7000000001,
+      "is_bot": true,
+      "first_name": "trash-can",
+      "username": "trash_can_bot"
+    },
+    "chat": {
+      "id": 700000001,
+      "first_name": "Ada",
+      "username": "ada",
+      "type": "private"
+    },
+    "date": 1761400240,
+    "reply_to_message": {
+      "message_id": 101,
+      "from": {
+        "id": 700000001,
+        "is_bot": false,
+        "first_name": "Ada",
+        "username": "ada",
+        "language_code": "en"
+      },
+      "chat": {
+        "id": 700000001,
+        "first_name": "Ada",
+        "username": "ada",
+        "type": "private"
+      },
+      "date": 1761400000,
+      "text": "Fix the login bug"
+    },
+    "text": "working…"
+  }
+}

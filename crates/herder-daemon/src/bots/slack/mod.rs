@@ -19,39 +19,10 @@ use slack_morphism::errors::SlackClientError;
 use slack_morphism::prelude::*;
 use tokio::sync::mpsc;
 
-use super::bridge::{self, Bridge, ChatFile, Inbound, Place, Post};
+use super::bridge::{self, Bridge, ChatFile, ConnectError, Connection, Inbound, Place, Post};
 
 /// Messages and presses the connection holds before the runner takes them.
 const INBOUND: usize = 64;
-
-/// Why a bot did not connect.
-#[derive(Debug)]
-pub enum ConnectError {
-    /// Slack refused its tokens.
-    Rejected(String),
-    /// Anything else, such as Slack being unreachable; trying again may connect.
-    Failed(String),
-}
-
-/// A bot connected to Slack.
-pub struct Connection {
-    /// Where it posts.
-    pub bridge: Arc<dyn Bridge>,
-    /// What arrives for it.
-    pub inbound: mpsc::Receiver<Inbound>,
-    /// What disconnects it.
-    pub closer: Closer,
-}
-
-/// Disconnects a bot from Slack.
-pub struct Closer(SlackClientSocketModeListener<SlackClientHyperHttpsConnector>);
-
-impl Closer {
-    /// Disconnects the bot.
-    pub async fn close(self) {
-        self.0.shutdown().await;
-    }
-}
 
 /// What the Socket Mode callbacks need, kept as the listener's user state.
 struct Listening {
@@ -102,7 +73,7 @@ pub async fn connect(
     Ok(Connection {
         bridge: Arc::new(Slack { client, token }),
         inbound,
-        closer: Closer(listener),
+        close: Box::pin(async move { listener.shutdown().await }),
     })
 }
 
