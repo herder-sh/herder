@@ -32,6 +32,12 @@ final class ScreenshotTests: XCTestCase {
         settle()
         #if os(macOS)
         shoot("mac-home")
+        // The machines footer's popover, which the window's own screenshot leaves out.
+        if openMachines() {
+            shoot("mac-sidebar-machines", screen: true)
+            app.typeKey(.escape, modifierFlags: [])
+            settle()
+        }
         #else
         shoot("ios-home")
         #endif
@@ -164,7 +170,7 @@ final class ScreenshotTests: XCTestCase {
         dismiss()
         cancelLogin()
         let machine = app.descendants(matching: .any)["sidebar-machine-devbox"].firstMatch
-        if wait(machine, "devbox in the sidebar") {
+        if openMachines(), wait(machine, "devbox in the machines popover") {
             press(machine)
             settle()
             shoot("mac-machine-settings")
@@ -401,9 +407,21 @@ final class ScreenshotTests: XCTestCase {
         Thread.sleep(forTimeInterval: 1.5)
     }
 
-    private func shoot(_ name: String) {
+    #if os(macOS)
+    /// Opens the sidebar's machines popover.
+    private func openMachines() -> Bool {
+        let footer = app.descendants(matching: .any)["sidebar-machines"].firstMatch
+        guard wait(footer, "machines footer") else { return false }
+        press(footer)
+        settle()
+        return true
+    }
+    #endif
+
+    /// `screen` takes the whole screen, for what shows outside the window, such as a popover.
+    private func shoot(_ name: String, screen: Bool = false) {
         #if os(macOS)
-        let screenshot = app.windows.firstMatch.screenshot()
+        let screenshot = screen ? XCUIScreen.main.screenshot() : app.windows.firstMatch.screenshot()
         #else
         let screenshot = XCUIScreen.main.screenshot()
         #endif

@@ -12,6 +12,8 @@ struct DesktopShell: View {
     @Binding var draft: Draft?
     let opened: (SessionKey) -> Void
     @AppStorage("sidebarCollapsed") private var sidebarCollapsed = true
+    @AppStorage(ProjectOrder.sortKey) private var projectSort = ProjectSort.manual
+    @AppStorage(ProjectOrder.manualKey) private var projectOrder = ""
     @State private var query = ""
     /// The open draft's prompt as typed, for its card.
     @State private var typed = ""
@@ -20,12 +22,12 @@ struct DesktopShell: View {
         HStack(spacing: 0) {
             Group {
                 if sidebarCollapsed {
-                    SidebarRail(fleet: fleet, item: $item, session: $session, collapsed: $sidebarCollapsed,
-                                newSession: newSession)
+                    SidebarRail(fleet: fleet, item: $item, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed,
+                                order: order, newSession: newSession)
                         .frame(width: 76)
                 } else {
                     Sidebar(fleet: fleet, item: $item, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed,
-                            newSession: newSession)
+                            sort: $projectSort, manual: $projectOrder, newSession: newSession)
                         .frame(width: 228)
                 }
             }
@@ -163,7 +165,9 @@ struct DesktopShell: View {
         }
     }
 
-    private var switcher: Switcher { Switcher(fleet: fleet, item: $item, session: $session) }
+    private var order: ProjectOrder { ProjectOrder(sort: projectSort, stored: projectOrder) }
+
+    private var switcher: Switcher { Switcher(fleet: fleet, item: $item, session: $session, order: order) }
 
     private func connectionStatus(_ lists: Lists) -> String {
         let connected = lists.machines.filter(\.connected).count
@@ -281,17 +285,20 @@ struct Switcher {
     let fleet: Fleet
     let item: Binding<SidebarItem>
     let session: Binding<SessionKey?>
+    /// The projects' order, the sidebar's.
+    let order: ProjectOrder
 
     @MainActor @ViewBuilder var items: some View {
         Button("Board", systemImage: "checklist") { go(.board) }
         Button("Chats", systemImage: Self.chatSymbol) { go(.chats) }
         Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
-        Button("Skills", systemImage: "book.closed") { go(.skills) }
+        Divider()
         Button("Providers", systemImage: "person.2") { go(.providers) }
+        Button("Skills", systemImage: "book.closed") { go(.skills) }
         Button("Machines", systemImage: "server.rack") { go(.machines) }
         Button("Vault", systemImage: "archivebox") { go(.vault) }
         Divider()
-        ForEach(fleet.lists.projects) { project in
+        ForEach(order.sorted(fleet.lists.projects)) { project in
             Button(project.name, systemImage: "shippingbox") { go(.project(project.id)) }
         }
     }
@@ -332,7 +339,8 @@ struct PaneButton: View {
     }
 }
 
-/// The sidebar: sections, projects, and the machines' status at the bottom.
+/// The sidebar: what the user works on, then the workspace's setup, the projects in the order
+/// the user chose, and the machines' health in one line at the bottom.
 struct Sidebar: View {
     #if os(macOS)
     static let topBar: CGFloat = 52
@@ -344,7 +352,11 @@ struct Sidebar: View {
     @Binding var session: SessionKey?
     @Binding var sheet: AppSheet?
     @Binding var collapsed: Bool
+    @Binding var sort: ProjectSort
+    /// The manual order, as `ProjectOrder` keeps it.
+    @Binding var manual: String
     let newSession: () -> Void
+    @State private var showsQuiet = false
 
     private func select(_ next: SidebarItem) {
         if item != next { session = nil }
@@ -353,6 +365,7 @@ struct Sidebar: View {
 
     var body: some View {
         let lists = fleet.lists
+        let (shown, quiet) = ProjectOrder(sort: sort, stored: manual).folded(lists.projects, open: item)
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Spacer()
@@ -367,22 +380,35 @@ struct Sidebar: View {
             .frame(height: Self.topBar)
             .padding(.horizontal, 10)
 
-            SidebarRow(title: "Board", symbol: "checklist", badge: lists.requests.count, attention: true,
+            SidebarRow(title: "Board", symbol: "checklist", needsYou: lists.requests.count,
                        selected: item == .board) { select(.board) }
-            SidebarRow(title: "Chats", symbol: Switcher.chatSymbol, state: SessionState.rollup(lists.chats.map(\.state)),
+            SidebarRow(title: "Chats", symbol: Switcher.chatSymbol,
+                       needsYou: lists.chats.filter { $0.state == .needsYou }.count,
+                       working: lists.chats.filter { $0.state == .running }.count,
                        selected: item == .chats) { select(.chats) }
             SidebarRow(title: "Pull Requests", symbol: "arrow.triangle.pull",
                        badge: lists.pullRequests(openOnly: true).flatMap(\.sessions).map(\.prs.count).reduce(0, +),
                        selected: item == .pullRequests) { select(.pullRequests) }
-            SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
+
+            heading("Workspace")
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
-            SidebarRow(title: "Machines", symbol: "server.rack", badge: lists.machines.count,
-                       selected: item == .machines) { select(.machines) }
+            SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
+            SidebarRow(title: "Machines", symbol: "server.rack", selected: item == .machines) { select(.machines) }
             SidebarRow(title: "Vault", symbol: "archivebox", selected: item == .vault) { select(.vault) }
 
-            HStack {
-                SectionHeading(title: "Projects")
-                Spacer()
+            heading("Projects") {
+                Menu {
+                    Picker("Sort Projects", selection: $sort) {
+                        ForEach(ProjectSort.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down").font(.caption.weight(.bold)).foregroundStyle(Theme.secondary)
+                        .frame(width: 24, height: 24).contentShape(.rect)
+                }
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                .help("Sort Projects")
+                .accessibilityLabel("Sort Projects")
                 Button { sheet = .newProject } label: {
                     Image(systemName: "plus").font(.caption.weight(.bold)).foregroundStyle(Theme.secondary)
                         .frame(width: 24, height: 24).contentShape(.rect)
@@ -390,57 +416,187 @@ struct Sidebar: View {
                 .buttonStyle(.plain)
                 .help("Add Project")
             }
-            .padding(.leading, 14)
-            .padding(.trailing, 6)
-            .padding(.top, 18)
-            .padding(.bottom, 4)
             ScrollView {
                 VStack(spacing: 2) {
-                    ForEach(lists.projects) { project in
-                        SidebarRow(
-                            title: project.name, symbol: "shippingbox",
-                            icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId)),
-                            state: project.state,
-                            selected: item == .project(project.id),
-                            settings: project.projectId == nil ? nil : { sheet = .projectSettings(projectId: project.id) }
-                        ) { select(.project(project.id)) }
+                    ForEach(shown) { project in row(project, among: shown + quiet) }
+                    if !quiet.isEmpty {
+                        Button { showsQuiet.toggle() } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "chevron.down")
+                                    .rotationEffect(.degrees(showsQuiet ? 0 : -90))
+                                    .frame(width: 20)
+                                Text(showsQuiet ? "Fewer" : "\(quiet.count) more")
+                                Spacer()
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.secondary)
+                            .padding(.horizontal, 10)
+                            .frame(height: 30)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Projects quiet for 30 days")
+                        if showsQuiet {
+                            ForEach(quiet) { project in row(project, among: shown + quiet) }
+                        }
                     }
                 }
             }
             Spacer(minLength: 0)
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(lists.machines) { machine in
-                    Button { sheet = .machineSettings(hostId: machine.hostId) } label: {
-                        HStack(spacing: 8) {
-                            ConnectionMark(state: machine.connection)
-                            Text(machine.name).lineLimit(1).truncationMode(.middle)
-                            Spacer()
-                            if machine.running > 0 {
-                                Text("\(machine.running)").foregroundStyle(Theme.running)
-                            }
-                        }
-                        .font(.footnote)
-                        .foregroundStyle(Theme.secondary)
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .help("\(machine.name): \(machine.connection.label)")
-                    .accessibilityIdentifier("sidebar-machine-\(machine.name)")
-                }
-            }
-            .padding(14)
+            MachinesFooter(machines: lists.machines, sheet: $sheet) { select(.machines) }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 10)
         }
         .padding(.horizontal, 8)
         .frame(maxHeight: .infinity, alignment: .top)
     }
+
+    private func heading<Actions: View>(
+        _ title: String, @ViewBuilder actions: () -> Actions = { EmptyView() }
+    ) -> some View {
+        HStack(spacing: 2) {
+            SectionHeading(title: title)
+            Spacer()
+            actions()
+        }
+        .frame(minHeight: 24)
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
+        .padding(.top, 18)
+        .padding(.bottom, 4)
+    }
+
+    /// A project's row; dragging it onto another puts it there and sorts the projects by hand
+    /// from the order shown. `all` is that order, the folded ones included.
+    private func row(_ project: ProjectGroup, among all: [ProjectGroup]) -> some View {
+        SidebarRow(
+            title: project.name, symbol: "shippingbox",
+            icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId)),
+            needsYou: project.needsYou, working: project.working,
+            selected: item == .project(project.id),
+            settings: project.projectId == nil ? nil : { sheet = .projectSettings(projectId: project.id) }
+        ) { select(.project(project.id)) }
+        .draggable(project.id)
+        .dropDestination(for: String.self) { ids, _ in
+            guard let moved = ids.first, project.projectId != nil else { return false }
+            let order = ProjectOrder.move(moved, onto: project.id, in: all.compactMap(\.projectId))
+            manual = order.joined(separator: "\n")
+            sort = .manual
+            return true
+        }
+    }
 }
 
-/// The sidebar collapsed to a rail of icons, leaving the room to the session.
+/// The machines in one line: a dot per machine by its health and how many are not well. It
+/// opens a popover with each one's status and a way to its page.
+struct MachinesFooter: View {
+    let machines: [MachineSummary]
+    @Binding var sheet: AppSheet?
+    /// Shows only the dots, stacked, for the rail.
+    var compact = false
+    let showAll: () -> Void
+    @State private var open = false
+
+    /// "4 machines · 1 offline": the count, then those not connected.
+    nonisolated static func summary(_ machines: [MachineSummary]) -> String {
+        guard !machines.isEmpty else { return "No machines" }
+        var parts = [machines.count == 1 ? "1 machine" : "\(machines.count) machines"]
+        let offline = machines.filter { if case .disconnected = $0.connection { true } else { false } }.count
+        let connecting = machines.filter { $0.connection == .connecting }.count
+        if offline > 0 { parts.append("\(offline) offline") }
+        if connecting > 0 { parts.append("\(connecting) connecting") }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        let summary = Self.summary(machines)
+        Button { open.toggle() } label: {
+            Group {
+                if compact {
+                    VStack(spacing: 8) { dots }
+                        .frame(width: 38)
+                } else {
+                    HStack(spacing: 8) {
+                        HStack(spacing: 4) { dots }
+                        Text(summary).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 30)
+                }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(summary)
+        .accessibilityLabel(summary)
+        .accessibilityIdentifier("sidebar-machines")
+        .popover(isPresented: $open, arrowEdge: compact ? .trailing : .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                SectionHeading(title: "Machines").padding(.horizontal, 10).padding(.bottom, 4)
+                ForEach(machines) { machine in
+                    Button {
+                        open = false
+                        sheet = .machineSettings(hostId: machine.hostId)
+                    } label: {
+                        HStack(spacing: 10) {
+                            ConnectionMark(state: machine.connection).frame(width: 12)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(machine.name).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                                Text(Self.status(machine)).font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
+                            }
+                            Spacer(minLength: 12)
+                            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 40)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open \(machine.name)")
+                    .accessibilityIdentifier("sidebar-machine-\(machine.name)")
+                }
+                Divider().padding(.vertical, 4)
+                Button {
+                    open = false
+                    showAll()
+                } label: {
+                    Text("All Machines").foregroundStyle(Theme.link).padding(.horizontal, 10).frame(height: 28)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+            .font(.subheadline)
+            .padding(.vertical, 10)
+            .frame(width: 260)
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    @ViewBuilder private var dots: some View {
+        ForEach(machines) { machine in
+            ConnectionMark(state: machine.connection)
+        }
+    }
+
+    /// A machine's line in the popover: its connection, then what runs on it.
+    nonisolated static func status(_ machine: MachineSummary) -> String {
+        guard machine.connected else { return machine.connection.label }
+        return machine.running > 0 ? "\(machine.running) running" : "Idle"
+    }
+}
+
+/// The sidebar collapsed to a rail of icons, leaving the room to the session. It lists what the
+/// sidebar does, in the same order, the quiet projects folded away.
 private struct SidebarRail: View {
     let fleet: Fleet
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
+    @Binding var sheet: AppSheet?
     @Binding var collapsed: Bool
+    let order: ProjectOrder
     let newSession: () -> Void
 
     var body: some View {
@@ -452,33 +608,45 @@ private struct SidebarRail: View {
             IconButton(symbol: "square.and.pencil", help: "New Session", action: newSession)
                 .keyboardShortcut("n")
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
-            rail("checklist", "Board", .board, badge: lists.requests.count)
-            rail(Switcher.chatSymbol, "Chats", .chats, badge: 0, state: SessionState.rollup(lists.chats.map(\.state)))
-            rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
-            rail("book.closed", "Skills", .skills, badge: 0)
-            rail("person.2", "Providers", .providers, badge: 0)
-            rail("server.rack", "Machines", .machines, badge: 0)
-            rail("archivebox", "Vault", .vault, badge: 0)
-            ForEach(lists.projects) { project in
-                rail("shippingbox", project.name, .project(project.id), badge: 0, state: project.state,
-                     icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId), size: 22))
+            rail("checklist", "Board", .board, needsYou: lists.requests.count)
+            rail(Switcher.chatSymbol, "Chats", .chats, needsYou: lists.chats.filter { $0.state == .needsYou }.count,
+                 working: lists.chats.filter { $0.state == .running }.count)
+            rail("arrow.triangle.pull", "Pull Requests", .pullRequests)
+            Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
+            rail("person.2", "Providers", .providers)
+            rail("book.closed", "Skills", .skills)
+            rail("server.rack", "Machines", .machines)
+            rail("archivebox", "Vault", .vault)
+            Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
+            ScrollView {
+                VStack(spacing: 10) {
+                    ForEach(order.folded(lists.projects, open: item).shown) { project in
+                        rail("shippingbox", project.name, .project(project.id), needsYou: project.needsYou,
+                             working: project.working,
+                             icon: ProjectIcon(projectId: project.projectId, name: project.name,
+                                               image: fleet.projectIcon(project.projectId), size: 22))
+                    }
+                }
             }
-            Spacer()
-            ForEach(lists.machines) { machine in
-                ConnectionMark(state: machine.connection).help("\(machine.name): \(machine.connection.label)")
+            .scrollIndicators(.never)
+            Spacer(minLength: 0)
+            MachinesFooter(machines: lists.machines, sheet: $sheet, compact: true) {
+                if item != .machines { session = nil }
+                item = .machines
             }
         }
         .padding(.bottom, 14)
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    /// A section or project's button; a project shows its rolled-up state when anything is
-    /// going on in it.
+    /// A section or project's button: an amber dot when something waits for the user, a
+    /// running mark when something works.
     private func rail(
-        _ symbol: String, _ title: String, _ target: SidebarItem, badge: Int, state: SessionState? = nil,
+        _ symbol: String, _ title: String, _ target: SidebarItem, needsYou: Int = 0, working: Int = 0,
         icon: ProjectIcon? = nil
     ) -> some View {
-        let shown = state.flatMap { $0.priority > SessionState.idle.priority ? $0 : nil }
+        let value = [needsYou > 0 ? "\(needsYou) need you" : nil, working > 0 ? "\(working) running" : nil]
+            .compactMap(\.self).joined(separator: ", ")
         return Button {
             if item != target { session = nil }
             item = target
@@ -490,11 +658,11 @@ private struct SidebarRail: View {
                 .frame(width: 38, height: 34)
                 .background(item == target ? Theme.raised : .clear, in: .rect(cornerRadius: 8))
                 .overlay(alignment: .topTrailing) {
-                    if badge > 0 { Circle().fill(Theme.accent).frame(width: 8, height: 8).offset(x: -4, y: 4) }
+                    if needsYou > 0 { Circle().fill(Urgency.needsYou.color).frame(width: 8, height: 8).offset(x: -4, y: 4) }
                 }
                 .overlay(alignment: .bottomTrailing) {
-                    if let shown {
-                        StatusGlyph(state: shown, size: 6, pulses: false)
+                    if working > 0 {
+                        StatusGlyph(state: .running, size: 6, pulses: false)
                             .background(Theme.surface, in: .circle)
                             .offset(x: 2, y: 2)
                     }
@@ -503,21 +671,23 @@ private struct SidebarRail: View {
         }
         .buttonStyle(.plain)
         .help(title)
-        // Named by its title, not the symbol or the state glyph it shows.
+        // Named by its title, not the symbol or the marks it shows.
         .accessibilityLabel(title)
-        .accessibilityValue(shown?.label ?? "")
+        .accessibilityValue(value)
     }
 }
 
+/// A section or project in the sidebar. It shows only what is live: an amber count of what
+/// waits for the user, a blue count of what is working, nothing when quiet.
 private struct SidebarRow: View {
     let title: String
     let symbol: String
     /// A project's tile, in the symbol's place.
     var icon: ProjectIcon?
+    /// A quiet count, for a section that lists things rather than live work.
     var badge = 0
-    var attention = false
-    /// A project's rolled-up state, in the badge's place.
-    var state: SessionState?
+    var needsYou = 0
+    var working = 0
     let selected: Bool
     /// Opens the row's settings, from a gear shown on hover and when selected.
     var settings: (() -> Void)?
@@ -541,16 +711,29 @@ private struct SidebarRow: View {
                     }
                     .buttonStyle(.plain)
                     .help("Project Settings")
-                } else if let state {
-                    StatusGlyph(state: state, size: 8, pulses: false)
-                        .help(state.label)
-                } else if badge > 0 {
-                    Text("\(badge)")
-                        .font(.caption.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(attention ? Theme.background : Theme.tertiary)
-                        .padding(.horizontal, attention ? 7 : 0)
-                        .padding(.vertical, attention ? 2 : 0)
-                        .background(attention ? Theme.accent : .clear, in: .capsule)
+                } else {
+                    HStack(spacing: 6) {
+                        if working > 0 {
+                            Text("\(working)")
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(Urgency.running.color)
+                                .help("\(working) running")
+                        }
+                        if needsYou > 0 {
+                            Text("\(needsYou)")
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(Theme.background)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(Urgency.needsYou.color, in: .capsule)
+                                .help("\(needsYou) need you")
+                        }
+                        if badge > 0 && needsYou == 0 && working == 0 {
+                            Text("\(badge)")
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(Theme.tertiary)
+                        }
+                    }
                 }
             }
             .font(.body.weight(selected ? .semibold : .regular))
