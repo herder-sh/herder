@@ -200,10 +200,9 @@ where the machine backs up (`get_vault_link`), backs it up to a connected vault 
 (`pair_vault_host` on the vault, then `link_vault` on the machine), or stops (`unlink_vault`,
 then `revoke_vault_host` on the vault when it is paired here as its owner).
 
-In `MachineSettingsSheet` an owner adds an account (`AddAccountSheet`) or edits one
-(`EditAccountSheet`). **Start Login** and the edit sheet's **Log In Again** (the provider's
-login of that account again, in its own config directory, for a login that expired) start the
-login in Activity (§4.9) and close the sheet; no sheet shows a terminal.
+On a machine's page an owner adds an account (`AddAccountSheet`); **Start Login** starts the
+login in Activity (§4.9) and closes the sheet. Each account opens its Account page (§8.6), where
+it is edited and signed in again.
 
 Providers › **Update All**, a CLI's Install or Update, and **Install & Set Up** queue each job in
 Activity with `Fleet.install`. The daemon checks the CLI's version again before it closes an
@@ -614,6 +613,31 @@ The pages' contents are today's settings, regrouped into this anatomy; P14.10–
 each one. `DetailPageScreenshotTests` draws the scaffold
 ([`screenshots/p14-9/detail-page.png`](screenshots/p14-9/detail-page.png)); `DetailPage` has an
 Xcode preview.
+
+### 8.6 Account page (P14.11)
+
+`AccountPage` is one login across the machines (`ProviderAccounts.Login`: the accounts with one
+provider and email). Its header is the provider's mark, the email or label, a "Signed out" chip
+when any machine reports the login signed out (`Account.needs_login`), and "Claude · work · on 2
+machines · primary" (or "fallback", or "fallback on trash-can-01" when machines disagree); its
+action sets the login up on the first owned machine that lacks it.
+
+- **Limits**: the session and weekly windows as large "18% left" figures, coloured by headroom,
+  over a bar and "resets 23:20 · in 2 h 10 min" (`WindowLeft.resetLine`).
+- **Last 7 days**: the login's cost and tokens at API prices, with its limit hits and failovers.
+- **Machines**: a table (a list on narrow widths) of `AccountMachine` rows: each account's
+  machine, its login state (Signed in, Signed out → **Sign in again**, Not set up → **Set up**),
+  config directory and open sessions. ⋯ signs in again at any time or changes the config
+  directory. Sign in again runs the provider's own login in the account's config directory, as
+  a job in Activity (§4.9).
+- **Settings**: the display label and Rotation (Primary / Fallback), saved as they change to the
+  login's account on every connected machine the user owns.
+- **About**: the provider, the email and the account id on each machine.
+
+The plan, a 7-day sparkline and removing the account from a machine are still to come: the
+protocol has no plan, no daily usage and no command to remove an account. Screenshot:
+[`screenshots/p14-11/account-page.png`](screenshots/p14-11/account-page.png)
+(`AccountPageScreenshotTests`).
 
 ---
 

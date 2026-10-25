@@ -112,7 +112,7 @@ struct ProviderLoginTests {
         ]
         let logins = ProviderAccounts(machines: machines, now: now).groups.flatMap(\.logins)
         let login = try #require(logins.first { $0.id == "claude/dev@example.com" })
-        #expect(login.session == WindowLeft(percentUsed: 40, resets: "2h 0m"))
+        #expect(login.session == WindowLeft(percentUsed: 40, resets: "2h 0m", resetsAt: now.addingTimeInterval(7_200)))
         #expect(login.session?.percentLeft == 60)
         #expect(login.weekly?.percentUsed == 10)
         let spare = try #require(logins.first { $0.id == "claude/id:spare" })
