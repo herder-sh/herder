@@ -63,8 +63,6 @@ struct BoardView: View {
     /// Where a tapped session opens on iPad and the Mac; `nil` pushes it.
     var selection: Binding<SessionKey?>?
     var query = ""
-    /// Leads to Pull Requests, where it has no section of its own.
-    var showsPullRequests = false
 
     var body: some View {
         let lists = fleet.lists
@@ -84,7 +82,6 @@ struct BoardView: View {
                         ForEach(lists.requests) { RequestCard(request: $0, fleet: fleet, selection: selection) }
                     }
                 }
-                if showsPullRequests { pullRequestsLink }
                 if trees.isEmpty && !lists.machines.isEmpty {
                     Text(query.isEmpty ? "No sessions yet." : "No sessions match.")
                         .foregroundStyle(Theme.tertiary)
@@ -99,25 +96,6 @@ struct BoardView: View {
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle("Board")
-    }
-
-    private var pullRequestsLink: some View {
-        NavigationLink { PullRequestsView(fleet: fleet) } label: {
-            Card(padding: 12) {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.triangle.pull").foregroundStyle(Theme.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Pull Requests").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                        let open = fleet.lists.pullRequests(openOnly: true).flatMap(\.sessions).map(\.prs.count)
-                            .reduce(0, +)
-                        Text(open == 1 ? "1 open" : "\(open) open").font(.caption).foregroundStyle(Theme.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(Theme.tertiary)
-                }
-            }
-        }
-        .buttonStyle(.plain)
     }
 }
 

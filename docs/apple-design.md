@@ -19,7 +19,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 
 ## 1. Decisions at a glance
 
-1. **One information architecture everywhere.** Board, Projects, Pull Requests, Usage, Skills,
+1. **One information architecture everywhere.** Board, Projects, Usage, Skills,
    Machines (with a vault inside), a session, and settings sheets. The Mac, the iPad and the iPhone show the
    same sections with the same names; only the navigation chrome changes (§3).
 2. **Three layouts, chosen by width, not by device.** `FleetView` picks the layout from the
@@ -53,7 +53,6 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 |---|---|---|---|
 | **Board** | request cards, then every task tree by where its work stands, across all machines | board | `BoardView` |
 | **Projects** | every project with its sessions, children under parents | sidebar *projects* tree | `ProjectsView` (iPhone), `ProjectSessions` (Mac/iPad) |
-| **Pull Requests** | PRs linked to sessions, by project | prs view | `PullRequestsView` |
 | **Usage** | tokens and API-equivalent dollars over a period, per account and model | — | `UsageView` |
 | **Skills** | the skill library on every machine, and a session's project skills | — | `SkillsView` |
 | **Machines** | each paired machine: connection, load, accounts and usage | fleet + accounts | `MachinesView`, `MachineCard` |
@@ -70,7 +69,7 @@ the project header's gear).
 
 ### 2.2 Names in the UI
 
-- Sections are written in title case in the chrome ("Pull Requests", "New Session") and as
+- Sections are written in title case in the chrome ("Add Account", "New Session") and as
   `SectionHeading` capitals inside panes ("NEEDS YOU 2", "ACTIVE", "RECENT", "ARCHIVED").
 - The product is always lowercase `herder`.
 - A session is named by its title; its branch shows in monospace (`Theme.monoSmall`) as a
@@ -98,7 +97,7 @@ Rules:
   size class is compact and `DesktopShell` otherwise, so an iPad in slide-over gets the iPhone
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
-- **The sidebar** (`Sidebar`, `SidebarRail`) lists Board, Pull Requests, Usage, Skills, Machines, Vault, then the projects, then each machine's connection at the bottom. It starts
+- **The sidebar** (`Sidebar`, `SidebarRail`) lists Board, Usage, Skills, Machines, Vault, then the projects, then each machine's connection at the bottom. It starts
   collapsed to the rail (`sidebarCollapsed`), which leaves the width to the session; ⇧⌘\
   toggles it. The window's traffic lights sit in its top bar (`Sidebar.topBar`, 52 pt on the
   Mac).
@@ -108,8 +107,7 @@ Rules:
   projects, `Switcher`), the page's live status, the pane's actions on the right (`PaneButton`,
   `IconButton`), then a search field where the pane lists sessions.
 - **The tab bar** on compact width has the same sections as the sidebar: Board (badged with the
-  request count), Projects, Usage, Machines. Pull Requests opens from the Board; Skills and a
-  vault show inside Machines. Each tab is its own `NavigationStack` (`boardPath`,
+  request count), Projects, Usage, Machines. Skills and a vault show inside Machines. Each tab is its own `NavigationStack` (`boardPath`,
   `projectsPath`), so switching tabs keeps each tab's place.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
@@ -132,10 +130,11 @@ One group per project, sorted by name, "No project yet" last. The group header i
 project's tile (`ProjectIcon`), name, machines, and its New Session and settings buttons. Inside:
 the task trees with a live session, then **Archived** (§4.7).
 
-### 4.3 Pull Requests (`PullRequestsView`)
+### 4.3 Pull Requests
 
-Open (default) or All, grouped by project, each session with its PRs (`PRRow`); tapping the
-session opens it. On iPhone it is the PRs tab.
+The apps have no Pull Requests section (unlike the TUI's prs view), and nothing counts PRs
+across sessions. A session shows its PRs as text: the chip in its header (§5.1) and the badges
+on its row.
 
 ### 4.4 Machines and vault (`MachinesView`, `VaultView`)
 
@@ -253,19 +252,15 @@ From the top: a child's `ChildBanner` ("Agent of ‹parent›", Back), then the 
 - **Left, stacked:** the title (`.title3` bold, two lines at most, then truncated), the status
   line (`StatusGlyph` + state label + `· project · machine`), the branch (monospace, one line,
   middle-truncated), and "Forked from …" when it is a fork.
-- **Right, one row of `HeaderButton`s:** PRs (when linked), Terminal / Chat (owners only, ⌘\`),
+- **Right, one row:** the PRs chip (when linked), then `HeaderButton`s: Terminal / Chat (owners only, ⌘\`),
   Inspector (ⓘ, ⌥⌘I), list toggle (Mac, ⌘\), and the ⋯ menu (Interrupt, Switch Account or
-  Model…, Link Pull Request…, Archive).
-- **The PRs button rolls up the session's tree** (`PRRollup`, `PRStrip`): its own PRs and every
+  Model…, Archive).
+- **The PRs chip rolls up the session's tree** (`PRRollup`): its own PRs and every
   descendant's (children, grandchildren), a PR linked to two of them counted once. It is one
   chip, never one per PR: a single PR shows its number ("#181"), more show the count and how
   many are open ("16 PRs · 3 open"), tinted by the most urgent state (open, draft, merged,
-  closed). Where the header drops its labels it shortens to open of all ("3/16"). Its list must hold a hundred PRs: an Open / All filter (Open while any is open),
-  grouped by session (this one first, then each descendant by title, nested), each group open,
-  draft, merged, closed, with merged and closed folded behind "n merged"; a search (number,
-  title, branch) once there are more than 10; one-line rows (`PRLine`: number, title truncated,
-  state, CI) in a capped, lazily built scroll. A descendant's group title opens that session.
-  The Pull Requests section (§4.3) stays per session.
+  closed). Where the header drops its labels it shortens to open of all ("3/16"). It is plain
+  text (`HeaderLabel`): it opens no list.
 - **On a phone** the header must fit 375 pt: the title takes the remaining width and wraps to
   two lines; the status line and branch truncate rather than wrap; the buttons drop their labels
   to icon-only before anything truncates (no "Ter…"); a child's left edge carries a 3 pt
@@ -353,7 +348,6 @@ Screenshots: `mac-session.png`, `mac-session-approval.png`, `mac-session-running
 |---|---|---|---|
 | Inspector (events, stats) | 300 pt side pane right of the chat, toggled from the header | sheet, medium and large detents | `SessionInspector` |
 | Terminal | replaces the transcript | replaces the transcript | `TerminalPane` |
-| Session PRs (with descendants', §5.1) | popover under the header button, 520 pt, scroll capped at 460 pt | sheet | `PRStrip` |
 | Model, account, machine | popover (340 pt) | popover (fits 375 pt) | `ModelPicker`, `FooterMenu` |
 | Permission mode, ⋯ | menu | menu | SwiftUI `Menu` |
 | New Session | sheet | sheet, full width | `ProjectPicker` |
@@ -444,7 +438,6 @@ blindness. No view uses a literal colour; new colours are added to `Theme` first
 | `ProjectIcon`, `ProviderLogo` | `Design/` | a project's tile; a provider's mark |
 | `Pane`, `PaneButton`, `IconButton`, `Sidebar` | `DesktopShell.swift` | the regular-width frame; `PaneButton(prominent:)` is a page's main action |
 | `HeaderButton`, `HeaderLabel` | `SessionView.swift` | the session header's buttons |
-| `PRLine` | `PullRequests.swift` | one PR on one line in the session's PR list (§5.1) |
 
 ### 8.4 Design system (P14.2)
 
@@ -502,11 +495,9 @@ iPhone layout fixes land in P7.21.
 |---|---|---|
 | Board | `mac-home.png`, `mac-sidebar-expanded.png` | `ios-home.png` |
 | Project / Projects | `mac-project.png` | `ios-projects.png` |
-| Pull Requests | `mac-pull-requests.png` | [`p7-22/ios-pull-requests.png`](screenshots/p7-22/ios-pull-requests.png), [`p7-22/ios-pull-requests-session.png`](screenshots/p7-22/ios-pull-requests-session.png) |
 | Machines, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
 | Session (idle, approval, running) | `mac-session.png`, `mac-session-approval.png`, `mac-session-running.png` | `ios-session.png`, `ios-session-keyboard.png`, `ios-session-approval.png`, `ios-session-running.png` |
 | Session menu | — | `ios-session-menu.png` |
-| Session PRs with descendants' (1, 5, 60) | [`p7-28/mac-1.png`](screenshots/p7-28/mac-1.png), [`p7-28/mac-5.png`](screenshots/p7-28/mac-5.png), [`p7-28/mac-60.png`](screenshots/p7-28/mac-60.png), [`p7-28/mac-60-all.png`](screenshots/p7-28/mac-60-all.png), [`p7-28/mac-60-search.png`](screenshots/p7-28/mac-60-search.png) | [`p7-28/ios-1.png`](screenshots/p7-28/ios-1.png), [`p7-28/ios-5.png`](screenshots/p7-28/ios-5.png), [`p7-28/ios-60.png`](screenshots/p7-28/ios-60.png), [`p7-28/ios-60-all.png`](screenshots/p7-28/ios-60-all.png) |
 | Inspector | `mac-session-inspector.png` | `ios-session-inspector.png` |
 | Terminal | `mac-session-terminal.png` | — |
 | New session | `mac-new-session.png` | `ios-new-session.png`, `ios-new-session-path.png` |
