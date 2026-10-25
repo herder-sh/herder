@@ -308,6 +308,8 @@ impl Cli {
                         session_id: session_id.clone(),
                         question_id,
                         answer,
+                        images: Vec::new(),
+                        files: Vec::new(),
                     })
                     .await?;
                 } else if let Some(prompt) = prompt {

@@ -1,0 +1,11 @@
+# A question the apps answer with text and an image: the answer says the image follows, and it
+# comes as the next prompt, so nothing is left queued.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Pick a layout."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "question_asked", "question_id": "question-1", "turn_id": "turn-1", "text": "Which layout?", "choices": []}}
+{"expect": {"type": "answer_question", "question_id": "question-1", "answer": {"type": "text", "text": "Like this.\n\n(1 attachment to this answer follows in my next message.)"}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "The attachments to my answer.", "images": [{"media_type": "image/png", "data": "iVBORw0KGgpwbmc="}]}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}
+{"expect": {"type": "shutdown"}}

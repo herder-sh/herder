@@ -623,14 +623,14 @@ impl App {
             return Vec::new();
         };
         let session_id = session.id.clone();
-        // A pending question takes the composer's text as its answer.
+        // A pending question takes the composer's text and images as its answer.
         if let Some(question) = session.questions.first() {
-            // An answer is text: the images stay for the next prompt.
-            self.compose.images = images;
             let command = CommandBody::AnswerQuestion {
                 session_id,
                 question_id: question.id.clone(),
                 answer: Answer::Text { text: prompt },
+                images,
+                files: Vec::new(),
             };
             return vec![send(&key, command, Origin::Session(key.clone()))];
         }
@@ -710,6 +710,8 @@ impl App {
             session_id: session.id.clone(),
             question_id: question.id.clone(),
             answer: Answer::Choice { index },
+            images: Vec::new(),
+            files: Vec::new(),
         };
         vec![send(key, command, Origin::Session(key.clone()))]
     }
@@ -1389,25 +1391,46 @@ mod tests {
         ]);
         // Only listed choices are answers.
         assert_eq!(press(&mut app, KeyCode::Char('3')), []);
-        let answer = |answer| {
+        let answer = |answer, images| {
             on_s2(CommandBody::AnswerQuestion {
                 session_id: SessionId::new("s2"),
                 question_id: QuestionId::new("q1"),
                 answer,
+                images,
+                files: Vec::new(),
             })
         };
         assert_eq!(
             press(&mut app, KeyCode::Char('2')),
-            [answer(Answer::Choice { index: 1 })]
+            [answer(Answer::Choice { index: 1 }, vec![])]
         );
         press(&mut app, KeyCode::Char('i'));
         type_text(&mut app, "neither");
         assert_eq!(
             press(&mut app, KeyCode::Enter),
-            [answer(Answer::Text {
-                text: "neither".into()
-            })]
+            [answer(
+                Answer::Text {
+                    text: "neither".into()
+                },
+                vec![]
+            )]
         );
+        // An attached image goes with the answer, not into a prompt queued behind it.
+        app.update(Msg::Attached {
+            word: None,
+            result: Ok(image(3)),
+        });
+        type_text(&mut app, "like this");
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [answer(
+                Answer::Text {
+                    text: "like this".into()
+                },
+                vec![image(3)]
+            )]
+        );
+        assert!(app.compose.images.is_empty());
 
         let ended = EventBody::TurnCompleted {
             turn_id: TurnId::new("turn-1"),
