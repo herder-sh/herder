@@ -631,25 +631,32 @@ pub enum CommandBody {
         /// The secret's name.
         name: String,
     },
-    /// On a vault, let a host fetch the secrets of a set for every session it runs; owners
-    /// only. Answered with `applied`; granting it again changes nothing. Refused with
-    /// `not_found` for an unknown set or a host that never replicated here, and `unsupported`
-    /// on a daemon that is not a vault.
+    /// On a vault, let a host fetch the secrets of a set for every session it runs, or, with
+    /// `host_use`, for its own use, such as a bot's token, and not its sessions'; owners only.
+    /// The two are separate grants. Answered with `applied`; granting it again changes
+    /// nothing. Refused with `not_found` for an unknown set or a host that never replicated
+    /// here, and `unsupported` on a daemon that is not a vault.
     GrantSecretSet {
         /// The set.
         set: String,
         /// The host.
         host_id: HostId,
+        /// Whether the grant is for the host's own use rather than its sessions'.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        host_use: bool,
     },
-    /// On a vault, stop a host fetching the secrets of a set; owners only. Values the host
-    /// fetched already stay in its memory until they expire. Answered with `applied`. Refused
-    /// with `not_found` when the set is not granted to the host, and `unsupported` on a daemon
-    /// that is not a vault.
+    /// On a vault, stop a host fetching the secrets of a set for its sessions, or, with
+    /// `host_use`, for its own use; owners only. Values the host fetched already stay in its
+    /// memory until they expire. Answered with `applied`. Refused with `not_found` when the set is not granted to the host that way,
+    /// and `unsupported` on a daemon that is not a vault.
     RevokeSecretSet {
         /// The set.
         set: String,
         /// The host.
         host_id: HostId,
+        /// Whether the grant is the one for the host's own use.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        host_use: bool,
     },
     /// On a vault, list every set of secrets with its grants, and every secret without its
     /// value; owners only. Answered with `secrets`. It changes nothing, so a resend is answered

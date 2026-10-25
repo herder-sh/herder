@@ -101,7 +101,7 @@
       ]
     },
     {
-      "description": "Every secret a [`HostMessage::FetchSecrets`] asked for, with its value.",
+      "description": "Every secret a [`HostMessage::FetchSecrets`] or [`HostMessage::FetchHostSecrets`] asked\nfor, with its value.",
       "type": "object",
       "properties": {
         "request_id": {
@@ -129,7 +129,7 @@
       ]
     },
     {
-      "description": "A [`HostMessage::FetchSecrets`] was refused and handed nothing out.",
+      "description": "A [`HostMessage::FetchSecrets`] or [`HostMessage::FetchHostSecrets`] was refused and\nhanded nothing out.",
       "type": "object",
       "properties": {
         "error": {

@@ -91,7 +91,7 @@ final class VaultSecrets {
 
     /// Grants `set` to `host`, or revokes it.
     func setGranted(_ granted: Bool, set: String, host: HostId) async throws {
-        try await change(granted ? .grantSecretSet(set: set, hostId: host) : .revokeSecretSet(set: set, hostId: host))
+        try await change(granted ? .grantSecretSet(set: set, hostId: host, hostUse: false) : .revokeSecretSet(set: set, hostId: host, hostUse: false))
     }
 
     /// Sends `command`, then asks for the lists again.

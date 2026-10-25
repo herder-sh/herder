@@ -92,6 +92,20 @@
       "required": [
         "type"
       ]
+    },
+    {
+      "description": "Fetch secrets' values for this host's own use, from the sets granted to it for that;\nanswered as [`HostMessage::FetchSecrets`] is. A vault older than this message skips it,\nso the host hears nothing back.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "fetch_host_secrets"
+        }
+      },
+      "$ref": "#/$defs/HostSecretFetch",
+      "required": [
+        "type"
+      ]
     }
   ],
   "$defs": {
@@ -254,6 +268,34 @@
     "HostId": {
       "description": "Identifies a host running a daemon; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "HostSecretFetch": {
+      "description": "A host's request for secrets' values for its own use.",
+      "type": "object",
+      "properties": {
+        "purpose": {
+          "description": "What the values are for, such as `bot:trip1-team`, as the vault's audit records it;\nrefused unless [`crate::is_valid_secret_purpose`] accepts it.",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "Chosen by the host to match the answer.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "secrets": {
+          "description": "The secrets, named as a session would name them among the sets granted for host use;\nat least one.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SecretRef"
+          }
+        }
+      },
+      "required": [
+        "request_id",
+        "purpose",
+        "secrets"
+      ]
     },
     "JournalRecord": {
       "description": "One event of a session's journal, exactly as the host stored it.",

@@ -132,7 +132,7 @@ struct SecretsSheet: View {
                         let host = machine?.hosts.first { $0.hostId == entry.hostId }?.hostName ?? entry.hostId
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
                             Text("\(entry.set)/\(entry.name)").font(Theme.mono).foregroundStyle(Theme.text)
-                            Text("\(host) · \(entry.sessionId)").foregroundStyle(Theme.secondary).lineLimit(1)
+                            Text("\(host) · \(entry.sessionId ?? entry.purpose ?? "")").foregroundStyle(Theme.secondary).lineLimit(1)
                             Spacer()
                             Text(Self.ago(entry.at)).foregroundStyle(Theme.tertiary).monospacedDigit()
                         }

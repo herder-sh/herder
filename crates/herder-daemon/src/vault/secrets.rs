@@ -1,5 +1,6 @@
 //! Secrets on the vault: owners manage them from clients, and hosts fetch the values of the
-//! sets granted to them over their replication connection.
+//! sets granted to them over their replication connection, for their sessions or, from the
+//! sets granted for host use, for their own.
 //!
 //! Values are encrypted at rest with ChaCha20-Poly1305 under the vault's master key
 //! ([`SecretsKey`]), which the vault reads from [`KEY_ENV`] at start: a random nonce per value,
@@ -19,14 +20,14 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use herder_protocol::{
     CommandBody, CommandResult, ErrorCode, ErrorInfo, HostId, MAX_SECRET_DESCRIPTION_CHARS,
-    SecretError, SecretErrorCode, SecretFetch, SecretValue, Timestamp, VaultMessage,
-    is_valid_secret_name, is_valid_secret_set_name,
+    SecretError, SecretErrorCode, SecretRef, SecretValue, Timestamp, VaultMessage,
+    is_valid_secret_name, is_valid_secret_purpose, is_valid_secret_set_name,
 };
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use tracing::{info, warn};
 
-use super::store::{Grant, Sealed, SetDeleted};
+use super::store::{Grant, Sealed, SecretUse, SetDeleted};
 use super::{VaultStore, blocking};
 
 /// The environment variable the vault reads its master key from: 32 bytes, base64.
@@ -227,13 +228,20 @@ pub(super) async fn command(
             }
             info!(set, name, "secret deleted");
         }
-        CommandBody::GrantSecretSet { set, host_id } => {
+        CommandBody::GrantSecretSet {
+            set,
+            host_id,
+            host_use,
+        } => {
             let granted = {
                 let (set, host_id) = (set.clone(), host_id.clone());
-                run(store, move |store| store.grant_secret_set(&set, &host_id)).await?
+                run(store, move |store| {
+                    store.grant_secret_set(&set, &host_id, host_use)
+                })
+                .await?
             };
             match granted {
-                Grant::Granted => info!(set, %host_id, "secret set granted"),
+                Grant::Granted => info!(set, %host_id, host_use, "secret set granted"),
                 Grant::NoSet => return Err(no_set(&set)),
                 Grant::NoHost => {
                     return Err(error(
@@ -245,18 +253,26 @@ pub(super) async fn command(
                 }
             }
         }
-        CommandBody::RevokeSecretSet { set, host_id } => {
+        CommandBody::RevokeSecretSet {
+            set,
+            host_id,
+            host_use,
+        } => {
             let revoked = {
                 let (set, host_id) = (set.clone(), host_id.clone());
-                run(store, move |store| store.revoke_secret_set(&set, &host_id)).await?
+                run(store, move |store| {
+                    store.revoke_secret_set(&set, &host_id, host_use)
+                })
+                .await?
             };
             if !revoked {
+                let way = if host_use { " for host use" } else { "" };
                 return Err(error(
                     ErrorCode::NotFound,
-                    format!("the set {set} is not granted to the host {host_id}"),
+                    format!("the set {set} is not granted to the host {host_id}{way}"),
                 ));
             }
-            info!(set, %host_id, "secret set revoked");
+            info!(set, %host_id, host_use, "secret set revoked");
         }
         CommandBody::ListSecrets => {
             return run(store, |store| {
@@ -299,15 +315,17 @@ pub(super) async fn list(
     })
 }
 
-/// Answers a host's `fetch_secrets`: every value it asked for, or why none goes out.
+/// Answers a host's `fetch_secrets` or `fetch_host_secrets`, request `request_id`: every value
+/// it asked for, or why none goes out.
 pub(super) async fn fetch(
     store: &Arc<Mutex<VaultStore>>,
     key: Option<&Arc<SecretsKey>>,
     host: &HostId,
-    fetch: SecretFetch,
+    request_id: u64,
+    used: SecretUse,
+    secrets: Vec<SecretRef>,
 ) -> Result<VaultMessage> {
-    let request_id = fetch.request_id;
-    Ok(match fetch_values(store, key, host, fetch).await? {
+    Ok(match fetch_values(store, key, host, used, secrets).await? {
         Ok(secrets) => VaultMessage::SecretValues {
             request_id,
             secrets,
@@ -320,7 +338,8 @@ async fn fetch_values(
     store: &Arc<Mutex<VaultStore>>,
     key: Option<&Arc<SecretsKey>>,
     host: &HostId,
-    fetch: SecretFetch,
+    used: SecretUse,
+    secrets: Vec<SecretRef>,
 ) -> Result<Result<Vec<herder_protocol::FetchedSecret>, SecretError>> {
     let Some(key) = key.cloned() else {
         return Ok(Err(refused(
@@ -331,15 +350,27 @@ async fn fetch_values(
             ),
         )));
     };
-    if fetch.secrets.is_empty() {
+    if secrets.is_empty() {
         return Ok(Err(refused(
             SecretErrorCode::Unknown,
             "name at least one secret to fetch".to_owned(),
         )));
     }
+    if let SecretUse::Host(purpose) = &used
+        && !is_valid_secret_purpose(purpose)
+    {
+        return Ok(Err(refused(
+            SecretErrorCode::Unknown,
+            format!(
+                "`{purpose}` cannot say what secrets are for: lowercase letters, digits, `-`, \
+                 `_`, `.` and `:`, at most {} bytes",
+                herder_protocol::MAX_SECRET_NAME_BYTES
+            ),
+        )));
+    }
     let owner = host.clone();
     let fetched = blocking(store, move |store| {
-        let resolved = match store.resolve_secrets(&owner, &fetch.secrets)? {
+        let resolved = match store.resolve_secrets(&owner, used.host_use(), &secrets)? {
             Ok(resolved) => resolved,
             Err(error) => return Ok(Err(error)),
         };
@@ -367,17 +398,24 @@ async fn fetch_values(
             .iter()
             .map(|value| (value.set.clone(), value.secret.name.clone()))
             .collect();
-        store.audit_secrets(&owner, &fetch.session_id, &audited, Timestamp::now())?;
-        Ok(Ok((values, fetch.session_id)))
+        store.audit_secrets(&owner, &used, &audited, Timestamp::now())?;
+        Ok(Ok((values, used)))
     })
     .await?;
     Ok(match fetched {
-        Ok((values, session_id)) => {
+        Ok((values, used)) => {
             let names: Vec<String> = values
                 .iter()
                 .map(|value| format!("{}/{}", value.set, value.secret.name))
                 .collect();
-            info!(host_id = %host, %session_id, ?names, "secrets handed out");
+            match used {
+                SecretUse::Session(session_id) => {
+                    info!(host_id = %host, %session_id, ?names, "secrets handed out");
+                }
+                SecretUse::Host(purpose) => {
+                    info!(host_id = %host, purpose, ?names, "secrets handed out for host use");
+                }
+            }
             Ok(values)
         }
         Err(error) => {
