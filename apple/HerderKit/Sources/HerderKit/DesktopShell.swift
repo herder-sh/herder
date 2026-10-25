@@ -88,10 +88,10 @@ struct DesktopShell: View {
                 }
             }
         case .skills:
-            Pane(title: "Skills", switcher: switcher) {
-                SkillsView(fleet: fleet, session: session)
+            Pane(title: "Skills", status: SkillLibrary(fleet.machines).status, switcher: switcher) {
+                SkillsView(fleet: fleet, sheet: $sheet, session: session)
             } actions: {
-                EmptyView()
+                SkillActions(fleet: fleet, sheet: $sheet)
             }
         case .providers:
             Pane(title: "Providers", switcher: switcher) {
