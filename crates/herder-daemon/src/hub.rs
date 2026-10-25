@@ -1143,6 +1143,7 @@ mod tests {
                     resets_at: None,
                 }],
                 fallback: false,
+                needs_login: None,
             }]
         };
         let failover = FailoverSettings { pin: true };

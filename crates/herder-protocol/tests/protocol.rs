@@ -1198,6 +1198,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         SessionStatus::Running,
         SessionStatus::WaitingForCapacity,
         SessionStatus::NeedsYou,
+        SessionStatus::NeedsLogin,
         SessionStatus::Error,
         SessionStatus::Archived,
         SessionStatus::Moved,
@@ -1311,6 +1312,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             config_dir: None,
             account_id: account_id(),
             label: format!("{} work", provider.as_str()),
+            needs_login: (provider == Provider::Claude).then(at),
             provider,
             email: None,
             usage: vec![
@@ -2932,6 +2934,7 @@ fn host_fixtures() -> Vec<HostMessage> {
         SessionStatus::Idle,
         SessionStatus::WaitingForCapacity,
         SessionStatus::NeedsYou,
+        SessionStatus::NeedsLogin,
         SessionStatus::Error,
         SessionStatus::Archived,
         SessionStatus::Moved,

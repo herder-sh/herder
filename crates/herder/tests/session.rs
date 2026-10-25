@@ -1,5 +1,5 @@
 //! `herder session` as a script drives it: the real binary against a daemon in this process
-//! whose sessions run the fake adapter on `fixtures/session.jsonl`, paired through
+//! whose sessions run the fake adapter on a script in `fixtures`, paired through
 //! `herder connect`, every answer read as JSON.
 
 use std::path::{Path, PathBuf};
@@ -32,7 +32,20 @@ async fn daemon(dir: &Path, shutdown: CancellationToken) -> String {
 }
 
 async fn daemon_with_switches(dir: &Path, shutdown: CancellationToken, switching: bool) -> String {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session.jsonl");
+    daemon_playing(dir, shutdown, switching, "session.jsonl").await
+}
+
+/// Starts a daemon whose sessions play `script`; with `switching`, also a second fake account
+/// and a Codex one.
+async fn daemon_playing(
+    dir: &Path,
+    shutdown: CancellationToken,
+    switching: bool,
+    script: &str,
+) -> String {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(script);
     std::fs::create_dir_all(dir.join("tls")).unwrap();
     let tls = Tls::load_or_create(&dir.join("tls"), "test-host").unwrap();
     let auth = Arc::new(Auth::open(dir).unwrap());
@@ -241,6 +254,24 @@ async fn a_script_runs_a_session_from_new_to_archive() {
     let usage = herder(&home, &["session", "wait"], "").await;
     assert_eq!(usage.status.code(), Some(64));
 
+    shutdown.cancel();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn wait_returns_needs_you_when_the_sessions_account_needs_logging_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let shutdown = CancellationToken::new();
+    let daemon = tmp.path().join("daemon");
+    let link = daemon_playing(&daemon, shutdown.clone(), false, "signed_out.jsonl").await;
+    let repo = repo(&tmp.path().join("repo"));
+    let paired = herder(&home, &["connect", &link], "").await;
+    assert!(paired.status.success(), "{paired:?}");
+
+    let created = session(&home, &["new", "--repo", &repo], "Say hello.\n", 0).await;
+    let id = created["session_id"].as_str().unwrap().to_owned();
+    let held = session(&home, &["wait", &id], "", 2).await;
+    assert_eq!(held["status"], "needs_login");
     shutdown.cancel();
 }
 

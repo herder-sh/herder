@@ -448,6 +448,7 @@ pub fn account(id: &str, label: &str) -> herder_protocol::Account {
         email: None,
         usage: Vec::new(),
         fallback: false,
+        needs_login: None,
     }
 }
 

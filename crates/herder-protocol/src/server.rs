@@ -306,7 +306,7 @@ pub struct SessionHead {
     pub chat: bool,
     /// Account the session runs on now.
     pub account_id: AccountId,
-    /// How many of this session's children are `needs_you`; 0 for a child.
+    /// How many of this session's children are `needs_you` or `needs_login`; 0 for a child.
     pub children_need_you: u32,
     /// Prompts waiting for the running turn to end, in the order they will run; a prompt
     /// leaves it as its turn starts. A vault lists none.
@@ -383,6 +383,12 @@ pub struct Account {
     /// it, or a project defaulting to it, still runs on it.
     #[serde(default)]
     pub fallback: bool,
+    /// Since when the account needs logging in again on this host: a turn on it failed as
+    /// `auth`. Its sessions hold their prompts meanwhile (`needs_login`); herder never moves
+    /// them to another account by itself. Cleared by logging in again, or by the next turn on
+    /// it that completes; absent while the account works.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_login: Option<Timestamp>,
 }
 
 /// How a daemon's sessions fail over when their account hits a limit: they rotate to the

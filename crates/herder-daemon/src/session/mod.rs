@@ -24,8 +24,22 @@
 //!
 //! `idle` → `running` when a turn starts, or `waiting_for_capacity` first while the host has no
 //! room for it (see Resources); `needs_you` while an approval or a question is
-//! pending or after a failed turn; `error` after the agent exited with an error; `idle` once a turn ends with
-//! nothing queued. Every change is journaled as `session_status_changed`.
+//! pending or after a failed turn; `needs_login` while its account needs logging in again (see
+//! Signed-out accounts); `error` after the agent exited with an error; `idle` once a turn ends
+//! with nothing queued. Every change is journaled as `session_status_changed`.
+//!
+//! # Signed-out accounts
+//!
+//! A turn that fails as `auth` marks its account as needing login on this host, with the time
+//! (`Account.needs_login`, in every account list). Every session on that account then holds
+//! its prompts, the queued ones and those sent meanwhile, instead of starting turns that would
+//! fail: it is `needs_login` with them queued. Logging the account in again
+//! ([`SessionManager::logged_in_again`]), the next turn on it that completes or a usage report
+//! from it clears the mark, and each held session runs its prompts in the order sent, or is
+//! `idle` with none. herder never moves a held session to another account itself: failover
+//! stays reactive to `limit_reached`, and the user moves it with `switch_account`, after which
+//! its prompts run on the new account. The mark is not stored; a restarted daemon learns it again
+//! from the next failed turn.
 //!
 //! # Approvals
 //!
@@ -454,20 +468,37 @@ impl Inner {
     /// account.
     /// An account reporting its usage is logged in.
     pub(super) fn report_usage(&self, account_id: &AccountId, windows: Vec<UsageWindow>) {
-        self.limits.worked(account_id);
-        if let Some(usage) = self.usage.report(account_id, windows) {
-            let accounts = crate::accounts::list(&self.accounts_lock(), &usage);
-            self.journal.sink().accounts_changed(&accounts);
+        let worked = self.limits.worked(account_id);
+        match self.usage.report(account_id, windows) {
+            Some(usage) => self.publish_accounts(&usage),
+            None if worked => self.publish_accounts(&self.usage.all()),
+            None => {}
         }
     }
 
     /// Takes a usage probe's answer, as [`Self::report_usage`] does a session's report.
     fn probed_usage(&self, account_id: &AccountId, usage: herder_adapters::AccountUsage) {
-        self.limits.worked(account_id);
-        if let Some(usage) = self.usage.probed(account_id, usage) {
-            let accounts = crate::accounts::list(&self.accounts_lock(), &usage);
-            self.journal.sink().accounts_changed(&accounts);
+        let worked = self.limits.worked(account_id);
+        match self.usage.probed(account_id, usage) {
+            Some(usage) => self.publish_accounts(&usage),
+            None if worked => self.publish_accounts(&self.usage.all()),
+            None => {}
         }
+    }
+
+    /// Notes that `account_id` works, and publishes every account when it needed logging in
+    /// until now: its sessions' held prompts start.
+    pub(super) fn worked(&self, account_id: &AccountId) {
+        if self.limits.worked(account_id) {
+            self.publish_accounts(&self.usage.all());
+        }
+    }
+
+    /// Publishes every account, with `usage`.
+    fn publish_accounts(&self, usage: &crate::usage::Known) {
+        let needs_login = self.limits.logins().borrow().clone();
+        let accounts = crate::accounts::list(&self.accounts_lock(), usage, &needs_login);
+        self.journal.sink().accounts_changed(&accounts);
     }
 
     /// Notes that `account_id` hit its limit just now; failover passes it over until it resets.
@@ -478,13 +509,16 @@ impl Inner {
     }
 
     /// Notes what the turn that ended with `end` on `account_id` says about the account: a
-    /// completed turn means it works, a failed login that failover passes it over until it
-    /// does again, a spent limit that it waits for its reset.
+    /// completed turn means it works, a failed login that it needs logging in again, which
+    /// clients see and failover passes it over for, until it works again; a spent limit that
+    /// it waits for its reset.
     pub(super) fn turn_ended_on(&self, account_id: &AccountId, end: &EventBody) {
         match end {
-            EventBody::TurnCompleted { .. } => self.limits.worked(account_id),
+            EventBody::TurnCompleted { .. } => self.worked(account_id),
             EventBody::TurnFailed { error, .. } if error.class == ErrorClass::Auth => {
-                self.limits.logged_out(account_id);
+                if self.limits.logged_out(account_id, Timestamp::now()) {
+                    self.publish_accounts(&self.usage.all());
+                }
             }
             EventBody::TurnFailed { error, .. } if error.class == ErrorClass::LimitReached => {
                 self.limit_hit(account_id);
@@ -1741,7 +1775,12 @@ impl SessionManager {
 
     /// Every account sessions may run on, as clients see them.
     pub fn accounts(&self) -> Vec<Account> {
-        crate::accounts::list(&self.inner.accounts_lock(), &self.inner.usage.all())
+        let needs_login = self.inner.limits.logins().borrow().clone();
+        crate::accounts::list(
+            &self.inner.accounts_lock(),
+            &self.inner.usage.all(),
+            &needs_login,
+        )
     }
 
     /// How the account `account_id` runs, if it is one.
@@ -1838,10 +1877,11 @@ impl SessionManager {
         self.inner.refresh_usage.stale();
     }
 
-    /// `account_id` was logged in again ([`crate::login`]): failover may choose it again, and
-    /// its usage is read at once, however lately it was read.
+    /// `account_id` was logged in again ([`crate::login`]): it no longer needs logging in, so
+    /// its sessions' held prompts start and failover may choose it again, and its usage is read
+    /// at once, however lately it was read.
     pub fn logged_in_again(&self, account_id: &AccountId) {
-        self.inner.limits.worked(account_id);
+        self.inner.worked(account_id);
         self.inner.refresh_usage.account(account_id);
     }
 
