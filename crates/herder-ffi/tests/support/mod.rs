@@ -41,6 +41,9 @@ pub const HOLD_ACCOUNT: &str = "hold";
 /// An account whose turn waits on an approval, for the apps to show a request.
 pub const APPROVAL_ACCOUNT: &str = "approval";
 
+/// An account whose turn asks a question, for the apps to answer with an image.
+pub const QUESTION_ACCOUNT: &str = "question";
+
 /// The daemon's owner, whom [`FakeDaemon::link`] pairs as.
 pub const OWNER: &str = "sample";
 
@@ -116,6 +119,7 @@ impl FakeDaemon {
             (ACCOUNT, "Fake", "hello.jsonl"),
             (HOLD_ACCOUNT, "Hold", "hold.jsonl"),
             (APPROVAL_ACCOUNT, "Approval", "approval.jsonl"),
+            (QUESTION_ACCOUNT, "Question", "question.jsonl"),
         ] {
             // Each account has a provider of its own, as a provider has one script.
             let provider = Provider::Other(account.into());
