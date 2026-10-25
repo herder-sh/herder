@@ -83,7 +83,8 @@ enum TaskState: Hashable {
     }
 }
 
-/// How the Board orders its tasks.
+/// How a task list orders its tasks: the Board by Recent, Created or Project; a project's
+/// list and Chats by Recent, Created or Name.
 enum BoardSort: String, CaseIterable, Identifiable {
     /// By last activity, a section a day.
     case recent
@@ -91,6 +92,15 @@ enum BoardSort: String, CaseIterable, Identifiable {
     case created
     /// A section a project, each by last activity.
     case project
+    /// By title, in one section.
+    case name
+
+    /// The Board's choices, and where it keeps its own.
+    static let board: [BoardSort] = [.recent, .created, .project]
+    static let boardKey = "boardSort"
+    /// A project's list's and Chats' choices, and where they keep theirs.
+    static let sessions: [BoardSort] = [.recent, .created, .name]
+    static let sessionsKey = "sessionsSort"
 
     var id: Self { self }
 
@@ -99,11 +109,13 @@ enum BoardSort: String, CaseIterable, Identifiable {
         case .recent: "Recent"
         case .created: "Created"
         case .project: "Project"
+        case .name: "Name"
         }
     }
 }
 
-/// A run of the Board's tasks under one heading: a day, or a project.
+/// A run of a task list's tasks under one heading: a day, or a project; untitled when sorted
+/// by name.
 struct BoardSection: Hashable, Identifiable {
     var id: String { title }
     let title: String
@@ -121,6 +133,12 @@ struct BoardSection: Hashable, Identifiable {
             return Dictionary(grouping: trees, by: \.project)
                 .map { BoardSection(title: $0.key.isEmpty ? "No project yet" : $0.key, trees: newest($0.value, at: \.lastActive)) }
                 .sorted { $0.title.lowercased() < $1.title.lowercased() }
+        case .name:
+            guard !trees.isEmpty else { return [] }
+            let named = newest(trees, at: \.lastActive).sorted {
+                $0.lead.title.localizedStandardCompare($1.lead.title) == .orderedAscending
+            }
+            return [BoardSection(title: "", trees: named)]
         }
     }
 
@@ -222,7 +240,7 @@ struct BoardView: View {
     /// Where an opened task opens on iPad and the Mac; `nil` pushes it.
     var selection: Binding<SessionKey?>?
     var query = ""
-    @AppStorage("boardSort") private var sort = BoardSort.recent
+    @AppStorage(BoardSort.boardKey) private var sort = BoardSort.recent
     @State private var showsArchived = false
     /// The row J and K move to, and Return and E act on, on the Mac.
     @State private var cursor: SessionKey?
@@ -237,15 +255,15 @@ struct BoardView: View {
         List {
             #if os(iOS)
             // On the phone; iPad's shell says it under the Board's title.
-            if selection == nil { ConnectionLine(machines: lists.machines).boardRow() }
+            if selection == nil { ConnectionLine(machines: lists.machines).taskListRow() }
             #endif
             if lists.machines.isEmpty {
-                EmptyFleet { sheet = .pair }.boardRow()
+                EmptyFleet { sheet = .pair }.taskListRow()
             } else if sections.isEmpty {
                 Text(query.isEmpty ? "Nothing open." : "No tasks match.")
                     .foregroundStyle(Theme.tertiary)
                     .padding(.vertical, 24)
-                    .boardRow()
+                    .taskListRow()
             }
             ForEach(sections) { section in
                 Section {
@@ -298,32 +316,8 @@ struct BoardView: View {
     }
 
     private func row(_ tree: TaskTree, in rows: [TaskTree]) -> some View {
-        let archived = tree.lead.state == .archived
-        let current = cursor == tree.id || selection?.wrappedValue == tree.id
-        return TaskRow(tree: tree, fleet: fleet, selection: selection, current: cursor == tree.id) {
+        TaskListRow(tree: tree, fleet: fleet, selection: selection, context: tree.project, current: cursor == tree.id) {
             toggle(tree, in: rows)
-        }
-        .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-        .listRowSeparator(.hidden)
-        .listRowBackground(
-            RoundedRectangle(cornerRadius: Theme.corner - 2)
-                .fill(current ? Theme.raised : .clear)
-                .padding(.horizontal, 4))
-        #if os(iOS)
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            Button(archived ? "Unarchive" : "Archive", systemImage: archived ? "tray.and.arrow.up" : "archivebox") {
-                toggle(tree, in: rows)
-            }
-            .tint(archived ? Theme.waiting : Theme.success)
-        }
-        #endif
-        .contextMenu {
-            if tree.lead.state.renamable {
-                Button("Rename…", systemImage: "pencil") { fleet.renaming = tree.lead.key }
-            }
-            Button(archived ? "Unarchive" : "Archive", systemImage: archived ? "tray.and.arrow.up" : "archivebox") {
-                toggle(tree, in: rows)
-            }
         }
     }
 
@@ -343,7 +337,7 @@ struct BoardView: View {
         .foregroundStyle(Theme.tertiary)
         .padding(.vertical, 10)
         .padding(.horizontal, 8)
-        .boardRow()
+        .taskListRow()
     }
 
     #if os(macOS)
@@ -358,7 +352,7 @@ struct BoardView: View {
         .foregroundStyle(Theme.tertiary)
         .padding(.vertical, 14)
         .padding(.horizontal, 8)
-        .boardRow()
+        .taskListRow()
     }
 
     /// Moves the cursor `by` rows, from the first row when there is none.
@@ -372,17 +366,25 @@ struct BoardView: View {
     }
     #endif
 
-    /// Archives an open task, its top session and so its tree, and brings an archived one back.
-    /// An archive can be undone, from its toast or with ⌘Z; the cursor moves on to the next row.
+    /// Archives an open task, or brings an archived one back; the cursor moves on to the next row.
     private func toggle(_ tree: TaskTree, in rows: [TaskTree]) {
         let key = tree.lead.key
-        guard tree.lead.state != .archived else {
-            Task { await fleet.unarchive(key) }
-            return
-        }
-        if cursor == key, let index = rows.firstIndex(where: { $0.id == key }) {
+        if tree.lead.state != .archived, cursor == key, let index = rows.firstIndex(where: { $0.id == key }) {
             let after = rows.dropFirst(index + 1).first { $0.lead.state != .archived } ?? rows.prefix(index).last
             cursor = after?.id
+        }
+        tree.toggleArchived(fleet: fleet, undoManager: undoManager)
+    }
+}
+
+extension TaskTree {
+    /// Archives an open task, its top session and so its tree, and brings an archived one back.
+    /// An archive can be undone, from its toast or with ⌘Z.
+    @MainActor func toggleArchived(fleet: Fleet, undoManager: UndoManager?) {
+        let key = lead.key
+        guard lead.state != .archived else {
+            Task { await fleet.unarchive(key) }
+            return
         }
         undoManager?.registerUndo(withTarget: fleet) { fleet in
             // The toast's Undo may have brought it back already.
@@ -394,31 +396,80 @@ struct BoardView: View {
     }
 }
 
-/// The Board's sort menu: Recent, Created or Project.
+/// A task list's sort menu, its choice kept under `key`: the Board's, or a project's list's
+/// and Chats'.
 struct BoardSortMenu: View {
-    @AppStorage("boardSort") private var sort = BoardSort.recent
+    let choices: [BoardSort]
+    @AppStorage private var sort: BoardSort
+
+    init(_ choices: [BoardSort] = BoardSort.board, key: String = BoardSort.boardKey) {
+        self.choices = choices
+        _sort = AppStorage(wrappedValue: .recent, key)
+    }
 
     var body: some View {
         Menu {
             Picker("Sort By", selection: $sort) {
-                ForEach(BoardSort.allCases) { Text($0.title).tag($0) }
+                ForEach(choices) { Text($0.title).tag($0) }
             }
             .pickerStyle(.inline)
         } label: {
             Label(sort.title, systemImage: "arrow.up.arrow.down")
         }
         .accessibilityIdentifier("board-sort")
-        .help("Sort the Board")
+        .help("Sort the list")
     }
 }
 
-/// A task on the Board: the circle that archives it, where it stands, its title, its project
-/// and what it is doing, how many agents work under it, and how long since it last did
-/// something. It opens its top session, into `selection` when given, else by pushing it.
+/// A task's row in a task list, as the Board and a project's list draw it: highlighted while
+/// it is the Mac's keyboard row or open, archived from its circle, a swipe on iOS or its
+/// context menu, where it is renamed too.
+struct TaskListRow: View {
+    let tree: TaskTree
+    let fleet: Fleet
+    let selection: Binding<SessionKey?>?
+    /// What its line says before what the task is doing: the Board's project, a project's
+    /// branch.
+    let context: String
+    /// Whether it is the Mac's keyboard row.
+    var current = false
+    let toggle: () -> Void
+
+    var body: some View {
+        let archived = tree.lead.state == .archived
+        let highlighted = current || selection?.wrappedValue == tree.id
+        TaskRow(tree: tree, fleet: fleet, selection: selection, context: context, current: current, toggle: toggle)
+            .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+            .listRowSeparator(.hidden)
+            .listRowBackground(
+                RoundedRectangle(cornerRadius: Theme.corner - 2)
+                    .fill(highlighted ? Theme.raised : .clear)
+                    .padding(.horizontal, 4))
+            #if os(iOS)
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button(archived ? "Unarchive" : "Archive", systemImage: archived ? "tray.and.arrow.up" : "archivebox",
+                       action: toggle)
+                    .tint(archived ? Theme.waiting : Theme.success)
+            }
+            #endif
+            .contextMenu {
+                if tree.lead.state.renamable {
+                    Button("Rename…", systemImage: "pencil") { fleet.renaming = tree.lead.key }
+                }
+                Button(archived ? "Unarchive" : "Archive", systemImage: archived ? "tray.and.arrow.up" : "archivebox",
+                       action: toggle)
+            }
+    }
+}
+
+/// A task: the circle that archives it, where it stands, its title, its context and what it
+/// is doing, how many agents work under it, and how long since it last did something. It
+/// opens its top session, into `selection` when given, else by pushing it.
 private struct TaskRow: View {
     let tree: TaskTree
     let fleet: Fleet
     let selection: Binding<SessionKey?>?
+    let context: String
     /// Whether it is the Mac's keyboard row.
     let current: Bool
     let toggle: () -> Void
@@ -447,7 +498,7 @@ private struct TaskRow: View {
 
     private var content: some View {
         let state = tree.state
-        let line = tree.project.isEmpty ? tree.activity : "\(tree.project) · \(tree.activity)"
+        let line = [context, tree.activity].filter { !$0.isEmpty }.joined(separator: " · ")
         return HStack(spacing: 10) {
             TaskGlyph(state: state)
             VStack(alignment: .leading, spacing: 2) {
@@ -536,147 +587,11 @@ private struct KeyCap: View {
 }
 #endif
 
-private extension View {
-    /// A row of the Board's list that is not a task: no inset, background or separator.
-    func boardRow() -> some View {
+extension View {
+    /// A row of a task list that is not a task: no inset, background or separator.
+    func taskListRow() -> some View {
         listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
-    }
-}
-
-/// Task trees as one card, each tree's agents folded under its top. An agent opened from
-/// elsewhere unfolds its tree.
-struct TaskTreeList: View {
-    let trees: [TaskTree]
-    let fleet: Fleet
-    /// Where a tapped session opens beside the list; `nil` pushes it.
-    let selection: Binding<SessionKey?>?
-    var showsProject = true
-    /// The trees whose agents are unfolded; every tree starts folded.
-    @State private var unfolded: Set<SessionKey> = []
-
-    var body: some View {
-        if !trees.isEmpty {
-            VStack(spacing: 0) {
-                ForEach(Array(trees.enumerated()), id: \.element.id) { index, tree in
-                    if index > 0 { Divider().overlay(Theme.stroke).padding(.leading, 42) }
-                    TaskTreeRows(tree: tree, fleet: fleet, selection: selection, showsProject: showsProject,
-                                 unfolded: unfolding(tree))
-                }
-            }
-            .padding(4)
-            .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
-            .onChange(of: selection?.wrappedValue, initial: true) { _, key in
-                guard let key, let tree = trees.first(where: { $0.children.contains { $0.key == key } }) else { return }
-                unfolded.insert(tree.id)
-            }
-        }
-    }
-
-    private func unfolding(_ tree: TaskTree) -> Binding<Bool> {
-        Binding {
-            unfolded.contains(tree.id)
-        } set: { open in
-            if open { unfolded.insert(tree.id) } else { unfolded.remove(tree.id) }
-        }
-    }
-}
-
-/// A task tree's rows: its top session's row, then one row that folds its agents, its
-/// provider's own and its herder children, the live ones before the archived.
-private struct TaskTreeRows: View {
-    let tree: TaskTree
-    let fleet: Fleet
-    let selection: Binding<SessionKey?>?
-    let showsProject: Bool
-    @Binding var unfolded: Bool
-
-    var body: some View {
-        SessionLink(session: tree.lead, fleet: fleet, selection: selection, showsProject: showsProject)
-        if tree.agentCount > 0 {
-            fold
-            if unfolded {
-                ForEach(tree.lead.agents) { agent in
-                    NativeAgentRow(agent: agent, fleet: fleet, key: tree.lead.key)
-                }
-                ForEach(tree.listed) { child in
-                    TaskChildRow(session: child, fleet: fleet, selection: selection)
-                }
-            }
-        }
-    }
-
-    private var fold: some View {
-        let count = tree.agentCount
-        let state = tree.agentsState
-        return Button { unfolded.toggle() } label: {
-            HStack(spacing: 8) {
-                TreeLine().frame(width: 14)
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.bold))
-                    .rotationEffect(.degrees(unfolded ? 90 : 0))
-                    .frame(width: 20, height: 20)
-                Text(count == 1 ? "1 agent" : "\(count) agents").font(.subheadline)
-                Spacer(minLength: 6)
-                if let state {
-                    if state == .running { ProgressView().controlSize(.mini) }
-                    Text(state.label).font(.caption.weight(.semibold)).foregroundStyle(state.tint).fixedSize()
-                }
-            }
-            .foregroundStyle(Theme.secondary)
-            .padding(.vertical, 5)
-            .padding(.horizontal, 8)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("Agents of \(tree.lead.title)")
-        .accessibilityLabel("\(unfolded ? "Hide" : "Show") \(count == 1 ? "1 agent" : "\(count) agents")"
-            + (state.map { ", \($0.label)" } ?? ""))
-    }
-}
-
-/// A herder child under the top of its task tree, drawn as a provider's agent is
-/// (`NativeAgentRow`), badged with its state. It opens the child, into `selection` when given,
-/// else by pushing it, as `SessionLink` does.
-private struct TaskChildRow: View {
-    let session: SessionSummary
-    let fleet: Fleet
-    let selection: Binding<SessionKey?>?
-    @State private var hovering = false
-
-    var body: some View {
-        if let selection {
-            Button { selection.wrappedValue = session.key } label: { row(selected: selection.wrappedValue == session.key) }
-                .buttonStyle(.plain)
-        } else {
-            NavigationLink(value: NavRoute.session(session.key)) { row(selected: false) }
-                .buttonStyle(.plain)
-        }
-    }
-
-    @ViewBuilder private func row(selected: Bool) -> some View {
-        let archived = session.state == .archived
-        HStack(spacing: 8) {
-            TreeLine().frame(width: CGFloat(max(session.depth, 1)) * 14)
-            ProviderMark(provider: fleet.session(session.key)?.provider ?? "claude", size: 11)
-                .frame(width: 20, height: 20)
-                .background(Theme.raised, in: Circle())
-                .overlay(Circle().strokeBorder(Theme.stroke))
-            Text(session.title).font(.subheadline).foregroundStyle(Theme.text).lineLimit(1)
-            Spacer(minLength: 6)
-            if session.state == .running { ProgressView().controlSize(.mini) }
-            Text(session.state.label).font(.caption.weight(.semibold))
-                .foregroundStyle(archived ? Theme.tertiary : session.state.tint)
-                .fixedSize()
-        }
-        .padding(.vertical, 5)
-        .padding(.horizontal, 8)
-        .background(selected || hovering ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
-        .contentShape(.rect)
-        .opacity(archived ? 0.75 : 1)
-        .onHover { hovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Open sub-session: \(session.title), \(session.state.label)")
     }
 }

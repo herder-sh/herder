@@ -99,6 +99,7 @@ final class ScreenshotTests: XCTestCase {
         }
         providers()
         archiving()
+        project()
         finish()
     }
 
@@ -134,6 +135,40 @@ final class ScreenshotTests: XCTestCase {
         guard wait(undo, "toast's Undo") else { return }
         press(undo)
         _ = wait(task, "back with Undo")
+    }
+
+    /// A project's tasks, as the Board's rows, then archiving one from that list and undoing it
+    /// with the toast's Undo: from its circle on the Mac, with a swipe on the iPhone.
+    private func project() {
+        #if os(iOS)
+        guard section("Projects") else { return }
+        let project = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'api'")).firstMatch
+        guard wait(project, "api in Projects") else { return }
+        press(project)
+        #else
+        guard section("api") else { return }
+        #endif
+        let title = "Rate-limit the public API per key"
+        let task = row(title)
+        guard wait(task, "\(title) in api") else { return }
+        settle()
+        shoot(platform("project"))
+        reveal(task)
+        #if os(macOS)
+        let circle = app.buttons["Archive \(title)"].firstMatch
+        guard wait(circle, "archive circle in api") else { return }
+        press(circle)
+        #else
+        task.swipeLeft()
+        let archive = app.buttons["Archive"].firstMatch
+        guard wait(archive, "swipe's Archive in api") else { return }
+        archive.tap()
+        #endif
+        guard gone(task, "archived from api") else { return }
+        let undo = app.buttons["Undo"].firstMatch
+        guard wait(undo, "toast's Undo in api") else { return }
+        press(undo)
+        _ = wait(task, "back in api with Undo")
     }
 
     /// Whether `element` goes within a few seconds; when it does not, records `what` as missed.

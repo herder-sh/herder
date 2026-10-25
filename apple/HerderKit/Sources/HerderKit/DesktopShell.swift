@@ -48,19 +48,18 @@ struct DesktopShell: View {
         case .project(let id):
             let project = lists.projects.first { $0.id == id }
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: project?.name ?? "Project", status: project?.machines.joined(separator: ", ") ?? "",
+                Pane(title: project?.name ?? "Project",
+                     status: project.map { ProjectSessions.status(live: $0.live, archived: $0.archived) } ?? "",
                      state: project?.state, icon: ProjectIcon(projectId: project?.projectId, name: project?.name, image: fleet.projectIcon(project?.projectId), size: 30),
                      switcher: switcher, query: $query) {
                     drafting({ $0.projectId == id }) {
-                        ScrollView {
-                            if let project {
-                                ProjectSessions(fleet: fleet, live: project.live, archived: project.archived,
-                                                query: query, selection: $session)
-                                    .padding(16)
-                            }
+                        if let project {
+                            ProjectSessions(fleet: fleet, live: project.live, archived: project.archived,
+                                            query: query, selection: $session)
                         }
                     }
                 } actions: {
+                    BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey).fixedSize()
                     PaneButton(title: "New Session", symbol: "plus", prominent: true) { draft = Draft.inProject(id, fleet: fleet) }
                     IconButton(symbol: "gearshape", help: "Project Settings") { sheet = .projectSettings(projectId: id) }
                 }
@@ -69,13 +68,11 @@ struct DesktopShell: View {
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
                 Pane(title: "Chats", switcher: switcher, query: $query) {
                     drafting(\.isChat) {
-                        ScrollView {
-                            ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats,
-                                            query: query, selection: $session, title: "Chats")
-                                .padding(16)
-                        }
+                        ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats,
+                                        query: query, selection: $session)
                     }
                 } actions: {
+                    BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey).fixedSize()
                     let started = Draft.chat(fleet: fleet)
                     PaneButton(title: "New Chat", symbol: "plus", prominent: true) { draft = started }
                         .disabled(started == nil)
@@ -760,8 +757,10 @@ struct IconButton: View {
     }
 }
 
-/// A project's task trees a search finds, each with its agents folded under its top: the live
-/// ones, then the archived ones, folded away until asked for.
+/// A project's tasks, or the chats, a search finds, as the Board's rows: sectioned as the sort
+/// menu orders them, a section a day by default, a dot on those waiting for you; the archived
+/// ones last, folded away until asked for. A row's line names its branch, after its machine
+/// while the list's sessions run on more than one.
 struct ProjectSessions: View {
     let fleet: Fleet
     let live: [SessionSummary]
@@ -769,42 +768,101 @@ struct ProjectSessions: View {
     let query: String
     /// Where a tapped session opens beside the list; `nil` pushes it.
     var selection: Binding<SessionKey?>?
-    var title = "Sessions"
+    @AppStorage(BoardSort.sessionsKey) private var sort = BoardSort.recent
     @State private var showsArchived = false
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        let live = TaskTree.trees(live).filter { $0.matches(query) }
-        let archived = TaskTree.trees(archived).filter { $0.matches(query) }
-        VStack(alignment: .leading, spacing: 26) {
-            if !live.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    SectionHeading(title: title, count: live.count)
-                    TaskTreeList(trees: live, fleet: fleet, selection: selection, showsProject: false)
+        let open = TaskTree.trees(live).filter { $0.matches(query) }
+        let archived = TaskTree.trees(self.archived).filter { $0.matches(query) }
+        let sections = BoardSection.sections(open, by: sort, now: .now)
+        let machines = Self.spansMachines(live + self.archived)
+        List {
+            if open.isEmpty && archived.isEmpty {
+                Text("No sessions match.")
+                    .foregroundStyle(Theme.tertiary)
+                    .padding(.vertical, 24)
+                    .taskListRow()
+            }
+            ForEach(sections) { section in
+                if section.title.isEmpty {
+                    ForEach(section.trees) { row($0, machines: machines) }
+                } else {
+                    Section {
+                        ForEach(section.trees) { row($0, machines: machines) }
+                    } header: {
+                        SectionHeading(title: section.title, count: section.trees.count)
+                    }
                 }
             }
             if !archived.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Button { showsArchived.toggle() } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.right")
-                                .font(.caption2.weight(.bold))
-                                .rotationEffect(.degrees(showsArchived ? 90 : 0))
-                            SectionHeading(title: "Archived", count: archived.count)
-                        }
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.secondary)
-                    if showsArchived {
-                        TaskTreeList(trees: archived, fleet: fleet, selection: selection, showsProject: false)
-                    }
+                archivedLine(archived.count)
+                if showsArchived {
+                    ForEach(archived) { row($0, machines: machines) }
                 }
             }
-            if live.isEmpty && archived.isEmpty {
-                Text("No sessions match.").foregroundStyle(Theme.tertiary)
-            }
         }
-        // Full width, so the scroll view around it spans the screen rather than its widest row.
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .environment(\.defaultMinListRowHeight, 0)
+        #if os(macOS)
+        .frame(maxWidth: 760)
+        .frame(maxWidth: .infinity)
+        #endif
+    }
+
+    private func row(_ tree: TaskTree, machines: Bool) -> some View {
+        TaskListRow(tree: tree, fleet: fleet, selection: selection,
+                    context: Self.context(tree.lead, machines: machines)) {
+            tree.toggleArchived(fleet: fleet, undoManager: undoManager)
+        }
+    }
+
+    /// "Archived · N", which shows or hides the archived tasks.
+    private func archivedLine(_ count: Int) -> some View {
+        Button {
+            withAnimation(.snappy) { showsArchived.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Text("Archived · \(count)")
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .rotationEffect(.degrees(showsArchived ? 90 : 0))
+                Spacer()
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .font(.caption)
+        .foregroundStyle(Theme.tertiary)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        .accessibilityLabel(showsArchived ? "Hide Archived" : "Show Archived")
+        .taskListRow()
+    }
+
+    /// Whether `sessions` run on more than one machine, so their rows name theirs.
+    nonisolated static func spansMachines(_ sessions: [SessionSummary]) -> Bool {
+        Set(sessions.map(\.machine)).count > 1
+    }
+
+    /// What a row's line says before what its task is doing: its machine when `machines`, then
+    /// its branch.
+    nonisolated static func context(_ session: SessionSummary, machines: Bool) -> String {
+        [machines ? session.machine : "", session.branch].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// The project header's live status: how many of its tasks wait for you and work, then how
+    /// many it has, archived ones too.
+    nonisolated static func status(live: [SessionSummary], archived: [SessionSummary]) -> String {
+        let open = TaskTree.trees(live)
+        let total = open.count + TaskTree.trees(archived).count
+        let waiting = open.filter { $0.state == .waitingForYou }.count
+        let working = open.filter { $0.state == .working }.count
+        return [
+            waiting > 0 ? "\(waiting) waiting for you" : "",
+            working > 0 ? "\(working) working" : "",
+            total == 1 ? "1 session" : "\(total) sessions",
+        ].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }

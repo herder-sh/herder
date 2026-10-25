@@ -200,6 +200,7 @@ struct FleetView: View {
             NavigationStack(path: $chatsPath) {
                 ChatsView(fleet: fleet)
                     .toolbar {
+                        BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey)
                         let started = Draft.chat(fleet: fleet)
                         Button("New Chat", systemImage: "plus") { draft = started }
                             .disabled(started == nil)
@@ -276,54 +277,6 @@ struct EmptyFleet: View {
     }
 }
 
-/// A session row that opens the session, into `selection` when given, else by pushing it,
-/// with archiving at hand: a button on hover, and in the context menu beside renaming.
-struct SessionLink: View {
-    let session: SessionSummary
-    let fleet: Fleet
-    let selection: Binding<SessionKey?>?
-    var showsProject = true
-    @State private var hovering = false
-
-    var body: some View {
-        Group {
-            if let selection {
-                Button { selection.wrappedValue = session.key } label: { row }
-                    .buttonStyle(.plain)
-                    .background(
-                        selection.wrappedValue == session.key || hovering ? Theme.raised : .clear,
-                        in: .rect(cornerRadius: Theme.corner - 2))
-            } else {
-                NavigationLink(value: NavRoute.session(session.key)) { row }
-                    .buttonStyle(.plain)
-            }
-        }
-        .opacity(fleet.archiving.contains(session.key) ? 0.5 : session.state == .archived ? 0.75 : 1)
-        .overlay(alignment: .topTrailing) {
-            if fleet.archiving.contains(session.key) {
-                ArchivingLabel().padding(8)
-            } else if hovering && session.state != .archived {
-                IconButton(symbol: "archivebox", help: "Archive") { Task { await fleet.archive(session.key) } }
-                    .padding(8)
-            }
-        }
-        .onHover { hovering = $0 }
-        .contextMenu {
-            if session.state.renamable {
-                Button("Rename…", systemImage: "pencil") { fleet.renaming = session.key }
-            }
-            if session.state != .archived {
-                Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(session.key) } }
-            }
-        }
-    }
-
-    private var row: some View {
-        SessionRow(session: session, showsProject: showsProject, projectIcon: fleet.projectIcon(session.projectId))
-            .padding(.horizontal, 8)
-    }
-}
-
 /// The projects as compact rows, most recently active first, each opening its own screen and
 /// starting a session from its plus. A search keeps the projects whose name or path matches,
 /// and those with sessions that match, listing those sessions under it.
@@ -362,8 +315,8 @@ struct ProjectsView: View {
         .navigationTitle("Projects")
     }
 
-    /// A project's one compact row: its icon and name, its live sessions and machines, how
-    /// long since anything happened in it, and a plus that starts a session in it.
+    /// A project's one compact row: its icon and name, its live status, how long since anything
+    /// happened in it, and a plus that starts a session in it.
     private func header(_ project: ProjectGroup) -> some View {
         HStack(spacing: 10) {
             ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId),
@@ -376,9 +329,7 @@ struct ProjectsView: View {
                         StatusGlyph(state: state, size: 7, pulses: false)
                     }
                 }
-                let count = project.live.filter { $0.state != .archived }.count
-                Text(([count == 1 ? "1 session" : "\(count) sessions"] + project.machines)
-                    .joined(separator: " · "))
+                Text(ProjectSessions.status(live: project.live, archived: project.archived))
                     .font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
             }
             Spacer(minLength: 4)
@@ -418,10 +369,9 @@ struct ProjectView: View {
 
     var body: some View {
         let project = fleet.lists.projects.first { $0.id == id }
-        ScrollView {
+        Group {
             if let project {
                 ProjectSessions(fleet: fleet, live: project.live, archived: project.archived, query: query)
-                    .padding(16)
             }
         }
         .alwaysSearchable(text: $query, prompt: "Sessions")
@@ -429,6 +379,7 @@ struct ProjectView: View {
         .refreshable { fleet.wake() }
         .navigationTitle(project?.name ?? "Project")
         .toolbar {
+            BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey)
             if let projectId = project?.projectId {
                 Button("Project Settings", systemImage: "gearshape") { sheet = .projectSettings(projectId: id) }
                 let started = Draft.inProject(projectId, fleet: fleet)
@@ -447,16 +398,13 @@ struct ChatsView: View {
     var body: some View {
         let lists = fleet.lists
         let empty = lists.chats.isEmpty && lists.archivedChats.isEmpty
-        ScrollView {
+        Group {
             // With no chats the overlay says so, rather than the list's "No sessions match."
             if !empty {
-                ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, query: query,
-                                title: "Chats")
-                    .padding(16)
+                ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, query: query)
             }
         }
-        // Empty, the scroll view is as narrow as its content; the overlay takes the screen's width.
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
             if empty {
                 ContentUnavailableView("No chats", systemImage: Switcher.chatSymbol,

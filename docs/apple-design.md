@@ -138,11 +138,25 @@ Screenshots: `mac-home.png` (rail), `mac-sidebar-expanded.png`, `mac-sidebar-mac
 
 The app opens on the Board (§4.8): it is the home screen.
 
-### 4.2 Projects (`ProjectsView`, `ProjectSessions`)
+### 4.2 Projects and Chats (`ProjectsView`, `ProjectSessions`)
 
-One group per project, sorted by name, "No project yet" last. The group header is the
-project's tile (`ProjectIcon`), name, machines, and its New Session and settings buttons. Inside:
-the task trees with a live session, then **Archived** (§4.7).
+A project's pane (Mac, iPad) or screen (iPhone), and Chats, list their tasks with the Board's
+rows (`TaskListRow`, §4.8), filtered to the project: the archive circle, the three glyphs, an
+activity line and the age. The line names the branch, after the machine while the list's
+sessions run on more than one machine (`ProjectSessions.spansMachines`), then what the task is
+doing; a waiting dot replaces the old Needs you section.
+
+- **Sections** come from the sort menu (`BoardSortMenu(BoardSort.sessions)`, kept in
+  `sessionsSort`, apart from the Board's): Recent, the default, a section a day of last
+  activity; Created, a section a day of the top session's ULID; Name, one untitled run by title.
+- **Archived · N** ends the list, collapsed; it opens to the archived tasks, dimmed, their circle
+  filled.
+- **Archiving** works as on the Board: the circle, a swipe on iOS or the context menu archives
+  the top session and so its tree, with the toast's Undo and ⌘Z.
+- **Header:** the project's tile (`ProjectIcon`), name, and its live status rather than its
+  machines (`ProjectSessions.status`): "1 waiting for you · 3 working · 156 sessions", after
+  the rolled-up state glyph, with the sort menu, settings and New Session. The iPhone's Projects
+  list says the same status under each project's name.
 
 ### 4.3 Pull Requests
 
@@ -222,23 +236,20 @@ top of Machines. Screenshots are still to come, in `docs/screenshots/p11-9`.
 
 ### 4.7 List rules (every session list)
 
-- **Order:** a session that needs you, then running and waiting, then idle and failed; newest
-  activity first within each, except Active, which holds creation order (above).
-- **Children under parents:** a child is indented under its parent with a tree line
-  (`SessionRow.depth`, `TreeLine`, 14 pt per level); a parent row shows its child count and how
-  many need you.
+- **Task lists:** the Board (§4.8), a project's list and Chats (§4.2) list top-level task
+  trees, one `TaskListRow` each, sectioned a day each by the sort menu; a child has no row of its
+  own, its parent's says "N agents" and it opens from the session (§5.6).
 - **Archiving hides a session, never its live children:** each tree is built from all of a
   project's sessions before the list splits them. A tree with any session that is not archived
   is listed with the live ones, without its archived sessions, except an archived parent, which
   stays, dimmed, to lead its live children. A parent's child count counts all its children.
-- **Archived last and collapsed:** the archived sessions go in an **Archived** group at the end
-  of their project, collapsed, showing a count; opening it shows them, dimmed, each archived
-  child no live session hangs from as a tree of its own. Archived sessions with no project are
-  not listed.
-- **One row component:** `SessionRow` everywhere: glyph, title (one line), age, activity (one
-  line, accent when it needs you), project · branch, PR badges (two at most, then `+N`),
-  machine. Rows are wrapped by `SessionLink` (Mac/iPad: selection, hover archive button,
-  context menu) or a `NavigationLink` with a trailing swipe to archive (iPhone).
+- **Archived last and collapsed:** a project's and Chats' archived tasks go in **Archived · N**
+  at the end, collapsed; opening it shows them, dimmed, each archived child no live session
+  hangs from as a tree of its own. Archived sessions with no project are not listed.
+- **One task row:** `TaskListRow` in every task list: archive circle, state glyph, title, a
+  context (the Board's project, a project's machine and branch) · activity line, "N agents" and
+  the age. A row opens its session into the selection on Mac and iPad, or pushes it on iPhone.
+  `SessionRow` remains for the iPhone's Projects search results.
 - **Search:** the pane's search field filters by title, branch, worktree, project, machine and
   PR number or title (`SessionSummary.matches`).
 
@@ -255,8 +266,8 @@ Machine.
   default; Created, by the top session's ULID; and Project, a section a project. A child never
   has a row: the row says "N agents" for its herder children and provider agents, and they open
   from the session.
-- **Row** (`TaskRow`): the archive circle, the state glyph, the title, `project ·` what the task
-  is doing, "N agents", and the age of its last activity.
+- **Row** (`TaskListRow`, shared with §4.2): the archive circle, the state glyph, the title,
+  `project ·` what the task is doing, "N agents", and the age of its last activity.
 - **Three states** (`TaskState`), read from the tree's sessions only, never from a PR, CI or a
   review: working ◐ (`Theme.running`) while one runs or waits for capacity; waiting for you, a
   small amber dot, while one waits on an approval or a question or stopped on a failed turn, the

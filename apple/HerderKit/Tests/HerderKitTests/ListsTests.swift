@@ -108,7 +108,8 @@ struct ListsTests {
             onA.key: onA.model([created()]), onB.key: onB.model([created()]),
         ])
         #expect(lists.projects.map(\.name) == ["Demo"])
-        #expect(lists.projects[0].machines == ["alpha", "beta"])
+        // Its sessions run on both machines, so its rows name theirs.
+        #expect(ProjectSessions.spansMachines(lists.projects[0].sessions))
         // Rows carry the project's id, so they can show its icon.
         #expect(lists.projects[0].sessions.map(\.projectId) == ["github.com/acme/demo", "github.com/acme/demo"])
     }

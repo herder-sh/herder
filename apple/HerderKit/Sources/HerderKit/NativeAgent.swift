@@ -242,45 +242,6 @@ struct NativeAgentCard: View {
     }
 }
 
-/// A provider agent under its session in a list: its task and how it is doing; a tap opens
-/// its sheet.
-struct NativeAgentRow: View {
-    let agent: NativeAgent
-    let fleet: Fleet
-    let key: SessionKey
-    /// Its session's depth in the task tree.
-    var depth = 0
-    @State private var showingChat = false
-    @State private var hovering = false
-
-    var body: some View {
-        Button { showingChat = true } label: {
-            HStack(spacing: 8) {
-                TreeLine().frame(width: CGFloat(depth + 1) * 14)
-                ProviderMark(provider: fleet.session(key)?.provider ?? "claude", size: 11)
-                    .frame(width: 20, height: 20)
-                    .background(Theme.raised, in: Circle())
-                    .overlay(Circle().strokeBorder(Theme.stroke))
-                Text(agent.title).font(.subheadline).foregroundStyle(Theme.text).lineLimit(1)
-                Spacer(minLength: 6)
-                if agent.outcome == .running { ProgressView().controlSize(.mini).accessibilityHidden(true) }
-                Text(agent.badge.text).font(.caption.weight(.semibold)).foregroundStyle(agent.badge.color).fixedSize()
-            }
-            .padding(.vertical, 5)
-            .padding(.horizontal, 8)
-            .background(hovering ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help(agent.prompt)
-        .accessibilityLabel("Open sub-agent: \(agent.title), \(agent.status)")
-        .sheet(isPresented: $showingChat) {
-            NativeAgentChat(reference: agent.id, fleet: fleet, key: key)
-        }
-    }
-}
-
 /// The sheet a sub-agent opens in: who it is and how it did, its task, its own transcript,
 /// and what it returned.
 struct NativeAgentChat: View {
