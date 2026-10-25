@@ -42,10 +42,8 @@ struct ProviderVersions: Equatable {
 
     struct Row: Equatable, Identifiable {
         let provider: Provider
-        /// The newest version any machine has.
+        /// The newest version there is: its vendor's newest release, or a machine's newer one.
         let latest: String?
-        /// The newest release its vendor publishes, when a machine reports one newer than its own.
-        var available: String? = nil
         let cells: [Cell]
 
         var id: Provider { provider }
@@ -66,9 +64,9 @@ struct ProviderVersions: Equatable {
             + reported.union(used).subtracting(ModelCatalog.knownProviders).sorted()
         rows = providers.map { provider in
             let statuses = machines.compactMap { machine in machine.providers.first { $0.provider == provider } }
-            let latest = Self.newest(statuses.compactMap(\.version))
-            return Row(provider: provider, latest: latest, available: Self.newest(statuses.compactMap(\.latestVersion)),
-                       cells: machines.map { machine in Self.cell(provider, on: machine, latest: latest) })
+            let installed = Self.newest(statuses.compactMap(\.version))
+            return Row(provider: provider, latest: Self.newest(statuses.compactMap(\.version) + statuses.compactMap(\.latestVersion)),
+                       cells: machines.map { machine in Self.cell(provider, on: machine, latest: installed) })
         }
     }
 

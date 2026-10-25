@@ -163,18 +163,6 @@ struct UsageCache {
 }
 
 extension UsagePeriod {
-    /// The periods in the picker, shortest first.
-    static let all: [UsagePeriod] = [.day, .week, .thirtyDays, .month]
-
-    var label: String {
-        switch self {
-        case .day: "24h"
-        case .week: "7d"
-        case .thirtyDays: "30d"
-        case .month: "Month"
-        }
-    }
-
     var title: String {
         switch self {
         case .day: "Last 24 hours"
