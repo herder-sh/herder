@@ -1,0 +1,56 @@
+{
+  "envelope_id": "e8",
+  "type": "events_api",
+  "accepts_response_payload": false,
+  "retry_attempt": 0,
+  "retry_reason": "",
+  "payload": {
+    "token": "verification-token-unused",
+    "team_id": "T0HERDER01",
+    "context_team_id": "T0HERDER01",
+    "api_app_id": "A0HERDER01",
+    "event": {
+      "user": "U0ADA00001",
+      "type": "message",
+      "ts": "1761400460.000800",
+      "text": "Looks good to me",
+      "team": "T0HERDER01",
+      "blocks": [
+        {
+          "type": "rich_text",
+          "block_id": "b1",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {
+                  "type": "text",
+                  "text": "Looks good to me"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "thread_ts": "1761400400.000700",
+      "parent_user_id": "U0ADA00001",
+      "channel": "C0TEAM0001",
+      "event_ts": "1761400460.000800",
+      "channel_type": "channel"
+    },
+    "type": "event_callback",
+    "event_id": "Ev0008",
+    "event_time": 1761400460,
+    "authorizations": [
+      {
+        "enterprise_id": null,
+        "team_id": "T0HERDER01",
+        "user_id": "U0BOT00001",
+        "is_bot": true,
+        "is_enterprise_install": false
+      }
+    ],
+    "is_ext_shared_channel": false,
+    "event_context": "4-eyJldCI6Im1lc3NhZ2UifQ"
+  }
+}

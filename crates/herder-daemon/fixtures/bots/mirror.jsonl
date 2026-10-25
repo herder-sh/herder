@@ -1,0 +1,9 @@
+# A thread's session, then a prompt sent from the app.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Fix the login bug"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Fixed it."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Also update the docs."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Updated."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}

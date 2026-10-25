@@ -1,0 +1,7 @@
+# A free-text question, answered by a reply in the thread.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Fix the login bug"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "question_asked", "question_id": "question-1", "turn_id": "turn-1", "text": "Anything else?", "choices": [], "multi_select": false}}
+{"expect": {"type": "answer_question", "question_id": "question-1", "answer": {"type": "text", "text": "Thanks, now add a test."}}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Will do."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}

@@ -1,0 +1,7 @@
+# A multi-select question, answered from the chat.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Fix the login bug"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "question_asked", "question_id": "question-1", "turn_id": "turn-1", "text": "Which checks?", "choices": ["Lint", "Tests", "Docs"], "multi_select": true}}
+{"expect": {"type": "answer_question", "question_id": "question-1", "answer": {"type": "choices", "indices": [0, 2]}}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Set up."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
