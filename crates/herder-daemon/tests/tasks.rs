@@ -146,6 +146,7 @@ impl Adapter for Echo {
                                     turn_id: turn_id.clone(),
                                     text: "A or B?".into(),
                                     choices: vec!["A".into(), "B".into()],
+                                    multi_select: false,
                                 });
                                 blocked = Some(turn_id);
                             } else {

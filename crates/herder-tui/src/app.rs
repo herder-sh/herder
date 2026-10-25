@@ -519,6 +519,7 @@ impl App {
                                 | Act::HidePopup
                                 | Act::Recall(_)
                                 | Act::Button(_)
+                                | Act::Highlight(_)
                         )
                 ) | None
             ),

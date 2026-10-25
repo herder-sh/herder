@@ -102,7 +102,8 @@ pub struct ChildStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
-    /// The child asked a question. Answer with `question_id` and `text`, or `choice` when it lists choices.
+    /// The child asked a question. Answer with `question_id` and `text`, or `choice` when it
+    /// lists choices, or `choices` when it also takes several.
     Question {
         /// The question.
         question_id: QuestionId,
@@ -110,6 +111,9 @@ pub enum Request {
         text: String,
         /// Answers to pick from by position; empty for a free-text answer.
         choices: Vec<String>,
+        /// Whether several choices may be picked, with `choices`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        multi_select: bool,
     },
     /// The child wants to run a tool call it may not run unasked. Answer with `approval_id` and `decision`.
     Approval {
@@ -194,7 +198,7 @@ pub struct AnswerArgs {
     /// The child whose question or approval request this is, as wait_for or status named it.
     #[schemars(with = "SessionId")]
     pub child: Option<SessionId>,
-    /// The question to answer. Pass it with `text` or `choice`.
+    /// The question to answer. Pass it with `text`, `choice` or `choices`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "QuestionId")]
     pub question_id: Option<QuestionId>,
@@ -210,6 +214,10 @@ pub struct AnswerArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "u32")]
     pub choice: Option<u32>,
+    /// Positions of the chosen answers in a multi-select question's `choices`, from 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Vec<u32>")]
+    pub choices: Option<Vec<u32>>,
     /// `allow` runs the tool call once, `deny` refuses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "ApprovalDecision")]
@@ -229,13 +237,19 @@ impl TryFrom<AnswerArgs> for AnswerInput {
                 approval_id: None,
                 text,
                 choice,
+                choices,
                 decision: None,
                 ..
             } => {
-                let answer = match (text, choice) {
-                    (Some(text), None) => Answer::Text { text },
-                    (None, Some(index)) => Answer::Choice { index },
-                    _ => return Err("a question takes exactly one of `text` or `choice`".into()),
+                let answer = match (text, choice, choices) {
+                    (Some(text), None, None) => Answer::Text { text },
+                    (None, Some(index), None) => Answer::Choice { index },
+                    (None, None, Some(indices)) => Answer::Choices { indices },
+                    _ => {
+                        return Err(
+                            "a question takes exactly one of `text`, `choice` or `choices`".into(),
+                        );
+                    }
                 };
                 Ok(AnswerInput::Question {
                     child,
@@ -248,6 +262,7 @@ impl TryFrom<AnswerArgs> for AnswerInput {
                 approval_id: Some(approval_id),
                 text: None,
                 choice: None,
+                choices: None,
                 decision: Some(decision),
                 ..
             } => Ok(AnswerInput::Approval {
@@ -259,12 +274,14 @@ impl TryFrom<AnswerArgs> for AnswerInput {
                 question_id: None,
                 approval_id: Some(_),
                 ..
-            } => Err("an approval takes `decision` and neither `text` nor `choice`".into()),
+            } => {
+                Err("an approval takes `decision` and none of `text`, `choice` or `choices`".into())
+            }
             AnswerArgs {
                 question_id: Some(_),
                 approval_id: None,
                 ..
-            } => Err("a question takes `text` or `choice`, not `decision`".into()),
+            } => Err("a question takes `text`, `choice` or `choices`, not `decision`".into()),
             _ => Err("pass exactly one of `question_id` or `approval_id`".into()),
         }
     }
@@ -278,15 +295,17 @@ impl From<AnswerInput> for AnswerArgs {
                 question_id,
                 answer,
             } => {
-                let (text, choice) = match answer {
-                    Answer::Text { text } => (Some(text), None),
-                    Answer::Choice { index } => (None, Some(index)),
+                let (text, choice, choices) = match answer {
+                    Answer::Text { text } => (Some(text), None, None),
+                    Answer::Choice { index } => (None, Some(index), None),
+                    Answer::Choices { indices } => (None, None, Some(indices)),
                 };
                 AnswerArgs {
                     child: Some(child),
                     question_id: Some(question_id),
                     text,
                     choice,
+                    choices,
                     ..AnswerArgs::default()
                 }
             }

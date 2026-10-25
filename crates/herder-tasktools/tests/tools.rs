@@ -191,6 +191,16 @@ fn calls_parse_validate_and_round_trip() {
             }),
         ),
         (
+            json!({ "child": "01J9CHILD", "question_id": "01J9Q", "choices": [0, 1] }),
+            ToolCall::Answer(AnswerInput::Question {
+                child: child(),
+                question_id: QuestionId::new("01J9Q"),
+                answer: Answer::Choices {
+                    indices: vec![0, 1],
+                },
+            }),
+        ),
+        (
             json!({ "child": "01J9CHILD", "approval_id": "01J9A", "decision": "allow" }),
             ToolCall::Answer(AnswerInput::Approval {
                 child: child(),
@@ -339,6 +349,10 @@ fn malformed_calls_are_invalid_arguments() {
             Tool::Answer,
             json!({ "question_id": "01J9Q", "text": "yes" }),
         ),
+        (
+            Tool::Answer,
+            json!({ "child": "01J9CHILD", "question_id": "01J9Q", "choice": 0, "choices": [1] }),
+        ),
         (Tool::Escalate, json!({ "question_id": "01J9Q" })),
         (Tool::Publish, json!({ "html": "<p>untitled</p>" })),
         (
@@ -372,6 +386,7 @@ fn outputs_match_their_schemas() {
         question_id: QuestionId::new("01J9Q"),
         text: "Which database?".into(),
         choices: vec!["Postgres".into(), "SQLite".into()],
+        multi_select: true,
     };
     let approval = || Request::Approval {
         approval_id: ApprovalId::new("01J9A"),

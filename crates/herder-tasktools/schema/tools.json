@@ -203,7 +203,7 @@
                     "description": "A child's question or approval request that waits for an answer.",
                     "oneOf": [
                       {
-                        "description": "The child asked a question. Answer with `question_id` and `text`, or `choice` when it lists choices.",
+                        "description": "The child asked a question. Answer with `question_id` and `text`, or `choice` when it\nlists choices, or `choices` when it also takes several.",
                         "type": "object",
                         "properties": {
                           "choices": {
@@ -216,6 +216,10 @@
                           "kind": {
                             "type": "string",
                             "const": "question"
+                          },
+                          "multi_select": {
+                            "description": "Whether several choices may be picked, with `choices`.",
+                            "type": "boolean"
                           },
                           "question_id": {
                             "description": "The question.",
@@ -429,7 +433,7 @@
                 "description": "What it waits for.",
                 "oneOf": [
                   {
-                    "description": "The child asked a question. Answer with `question_id` and `text`, or `choice` when it lists choices.",
+                    "description": "The child asked a question. Answer with `question_id` and `text`, or `choice` when it\nlists choices, or `choices` when it also takes several.",
                     "type": "object",
                     "properties": {
                       "choices": {
@@ -442,6 +446,10 @@
                       "kind": {
                         "type": "string",
                         "const": "question"
+                      },
+                      "multi_select": {
+                        "description": "Whether several choices may be picked, with `choices`.",
+                        "type": "boolean"
                       },
                       "question_id": {
                         "description": "The question.",
@@ -522,7 +530,7 @@
     },
     {
       "name": "answer",
-      "description": "Answer a question or approval request that a child put to you, unblocking it. Pass the `child` that asked; for a question add `question_id` with `text`, or `choice` when it lists choices; for an approval add `approval_id` with `decision`. Your answer is final and the child acts on it, so escalate instead when the decision belongs to the user. Fails with `already_resolved` when someone answered first.",
+      "description": "Answer a question or approval request that a child put to you, unblocking it. Pass the `child` that asked; for a question add `question_id` with `text`, or `choice` when it lists choices, or `choices` to pick several when it is `multi_select`; for an approval add `approval_id` with `decision`. Your answer is final and the child acts on it, so escalate instead when the decision belongs to the user. Fails with `already_resolved` when someone answered first.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -540,6 +548,15 @@
             "format": "uint32",
             "minimum": 0
           },
+          "choices": {
+            "description": "Positions of the chosen answers in a multi-select question's `choices`, from 0.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
           "decision": {
             "description": "`allow` runs the tool call once, `deny` refuses it.",
             "oneOf": [
@@ -556,7 +573,7 @@
             ]
           },
           "question_id": {
-            "description": "The question to answer. Pass it with `text` or `choice`.",
+            "description": "The question to answer. Pass it with `text`, `choice` or `choices`.",
             "type": "string"
           },
           "text": {
