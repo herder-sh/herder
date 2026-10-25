@@ -95,6 +95,25 @@ impl Bridge for FakeBridge {
         Box::pin(async move { Ok(id) })
     }
 
+    /// The direct message with `U…` is `D…`, as the recorded Slack payloads have it.
+    fn direct<'a>(
+        &'a self,
+        user_id: &'a str,
+        post: &'a Post,
+    ) -> BoxFuture<'a, bridge::Result<Place>> {
+        let id = format!("m{}", self.sent.borrow().len() + 1);
+        let place = Place {
+            channel_id: format!("D{}", user_id.trim_start_matches('U')),
+            thread_id: id.clone(),
+        };
+        self.record(Sent::Post {
+            place: place.clone(),
+            id,
+            post: post.clone(),
+        });
+        Box::pin(async move { Ok(place) })
+    }
+
     fn edit<'a>(
         &'a self,
         place: &'a Place,
