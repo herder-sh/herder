@@ -38,6 +38,7 @@ nucleo-matcher = "0.3"
 portable-pty = "0.9"
 prettyplease = "0.3"
 proptest = "1"
+pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = "0.30"
 ratatui-textarea = "0.9"
 qrcode = { version = "0.14", default-features = false }
@@ -52,6 +53,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 similar = "3"
+slack-morphism = { version = "2.31", features = ["hyper"] }
 syn = { version = "3", features = ["full"] }
 tar = "0.4"
 tempfile = "3"

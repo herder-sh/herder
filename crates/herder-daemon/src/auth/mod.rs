@@ -394,6 +394,16 @@ impl Auth {
             .map(|user| user.role)
     }
 
+    /// The name of `user_id`; `None` once no such user is paired.
+    pub fn name(&self, user_id: &UserId) -> Option<String> {
+        self.lock()
+            .users
+            .users
+            .iter()
+            .find(|user| &user.user_id == user_id)
+            .map(|user| user.name.clone())
+    }
+
     /// Every paired device with its user, oldest first.
     pub fn devices(&self) -> Vec<(Device, User)> {
         let state = self.lock();

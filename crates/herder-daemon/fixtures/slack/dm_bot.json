@@ -1,0 +1,38 @@
+{
+  "envelope_id": "e4",
+  "type": "events_api",
+  "accepts_response_payload": false,
+  "retry_attempt": 0,
+  "retry_reason": "",
+  "payload": {
+    "token": "verification-token-unused",
+    "team_id": "T0HERDER01",
+    "context_team_id": "T0HERDER01",
+    "api_app_id": "A0HERDER01",
+    "event": {
+      "type": "message",
+      "subtype": "bot_message",
+      "text": "Deploy finished",
+      "ts": "1761400180.000400",
+      "username": "deploybot",
+      "bot_id": "B0DEPLOY01",
+      "channel": "D0ADA00001",
+      "event_ts": "1761400180.000400",
+      "channel_type": "im"
+    },
+    "type": "event_callback",
+    "event_id": "Ev0004",
+    "event_time": 1761400180,
+    "authorizations": [
+      {
+        "enterprise_id": null,
+        "team_id": "T0HERDER01",
+        "user_id": "U0BOT00001",
+        "is_bot": true,
+        "is_enterprise_install": false
+      }
+    ],
+    "is_ext_shared_channel": false,
+    "event_context": "4-eyJldCI6Im1lc3NhZ2UifQ"
+  }
+}

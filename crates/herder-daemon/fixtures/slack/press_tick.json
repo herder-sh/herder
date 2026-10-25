@@ -1,0 +1,66 @@
+{
+  "envelope_id": "e12",
+  "type": "interactive",
+  "accepts_response_payload": false,
+  "payload": {
+    "type": "block_actions",
+    "user": {
+      "id": "U0ADA00001",
+      "username": "u0ada00001",
+      "name": "u0ada00001",
+      "team_id": "T0HERDER01"
+    },
+    "api_app_id": "A0HERDER01",
+    "token": "verification-token-unused",
+    "container": {
+      "type": "message",
+      "message_ts": "1761400010.000150",
+      "channel_id": "D0ADA00001",
+      "is_ephemeral": false,
+      "thread_ts": "1761400000.000100"
+    },
+    "trigger_id": "1761400600.1.abcdef",
+    "team": {
+      "id": "T0HERDER01",
+      "domain": "herder-test"
+    },
+    "enterprise": null,
+    "is_enterprise_install": false,
+    "channel": {
+      "id": "D0ADA00001",
+      "name": "directmessage"
+    },
+    "message": {
+      "user": "U0BOT00001",
+      "type": "message",
+      "ts": "1761400010.000150",
+      "bot_id": "B0HERDER01",
+      "app_id": "A0HERDER01",
+      "text": "*Approval needed:* Run cargo test",
+      "team": "T0HERDER01",
+      "thread_ts": "1761400000.000100"
+    },
+    "state": {
+      "values": {}
+    },
+    "response_url": "https://hooks.slack.com/actions/T0HERDER01/1/xyz",
+    "actions": [
+      {
+        "action_id": "choices-0",
+        "block_id": "a1",
+        "type": "checkboxes",
+        "action_ts": "1761400600.123456",
+        "selected_options": [
+          {
+            "text": {
+              "type": "mrkdwn",
+              "text": "Lint",
+              "verbatim": false
+            },
+            "value": "0"
+          }
+        ]
+      }
+    ]
+  }
+}
