@@ -65,7 +65,7 @@ struct SessionModelTests {
         var model = script.model([
             created(task: "Write tests", parent: "01P"), .sessionStatusChanged(status: .running, retryAt: nil),
             .turnStarted(turnId: "t1"),
-            .questionAsked(questionId: "q1", turnId: "t1", text: "Which?", choices: ["A", "B"], routedTo: .primary, reason: nil),
+            .questionAsked(questionId: "q1", turnId: "t1", text: "Which?", choices: ["A", "B"], multiSelect: false, routedTo: .primary, reason: nil),
         ])
         #expect(!model.needsUser)
         model.apply(script.event(.questionEscalated(questionId: "q1", reason: .timeout, note: "no idea")))
@@ -78,7 +78,7 @@ struct SessionModelTests {
         var script = Script()
         let model = script.model([
             created(), .turnStarted(turnId: "t1"),
-            .questionAsked(questionId: "q1", turnId: "t1", text: "Which?", choices: [], routedTo: .user, reason: nil),
+            .questionAsked(questionId: "q1", turnId: "t1", text: "Which?", choices: [], multiSelect: false, routedTo: .user, reason: nil),
             .turnInterrupted(turnId: "t1"), .sessionStatusChanged(status: .idle, retryAt: nil),
         ])
         #expect(model.questions.isEmpty)
@@ -99,7 +99,7 @@ struct SessionModelTests {
     @Test func questionsAskedTogetherCountTheAnsweredOnes() {
         var script = Script()
         func ask(_ id: String) -> EventBody {
-            .questionAsked(questionId: id, turnId: "t1", text: "Which?", choices: ["Red", "Blue"], routedTo: .user, reason: nil)
+            .questionAsked(questionId: id, turnId: "t1", text: "Which?", choices: ["Red", "Blue"], multiSelect: false, routedTo: .user, reason: nil)
         }
         func answer(_ id: String) -> EventBody {
             .questionAnswered(questionId: id, answer: .choice(index: 0), answeredBy: .user)
@@ -110,6 +110,31 @@ struct SessionModelTests {
         model.apply(script.event(answer("q3")))
         model.apply(script.event(ask("q4")))
         #expect(model.questionRun == 1)
+    }
+
+    @Test func aMultiSelectQuestionIsPinnedAsOne() throws {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            .questionAsked(questionId: "q1", turnId: "t1", text: "Which checks?", choices: ["Lint", "Tests"],
+                           multiSelect: true, routedTo: .user, reason: nil),
+        ])
+        let summary = SessionSummary(
+            key: SessionKey(hostId: "h1", sessionId: "s1"), title: "CI", project: "", branch: "", machine: "box",
+            state: model.state, activity: model.activity, age: "now")
+        let pinned = try #require(model.pinned(summary, userOnly: true))
+        #expect(pinned.kind == .question(text: "Which checks?", choices: ["Lint", "Tests"], multiSelect: true))
+    }
+
+    /// The card's ticks: each tap ticks or unticks a choice, and Submit sends them in order.
+    @Test func ticksOnAMultiSelectCardSubmitTogether() {
+        var picks = Picks()
+        #expect(picks.answer == nil)
+        for index in [2, 0, 1, 1] { picks.toggle(index) }
+        #expect(picks.answer == .choices(indices: [0, 2]))
+        picks.toggle(0)
+        picks.toggle(2)
+        #expect(picks.answer == nil)
     }
 
     @Test func pullRequestsAreUpsertedByNumber() {

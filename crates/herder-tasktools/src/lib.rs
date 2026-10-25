@@ -146,7 +146,8 @@ impl Tool {
             Tool::Answer => {
                 "Answer a question or approval request that a child put to you, unblocking it. \
                  Pass the `child` that asked; for a question add `question_id` with `text`, or \
-                 `choice` when it lists choices; for an approval add `approval_id` with \
+                 `choice` when it lists choices, or `choices` to pick several when it is \
+                 `multi_select`; for an approval add `approval_id` with \
                  `decision`. Your answer is \
                  final and the child acts on it, so escalate instead when the decision belongs \
                  to the user. Fails with `already_resolved` when someone answered first."

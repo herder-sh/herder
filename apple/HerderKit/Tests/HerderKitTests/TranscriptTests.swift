@@ -89,7 +89,7 @@ struct TranscriptTests {
         var script = Script()
         let model = script.model([
             created(), .turnStarted(turnId: "t1"),
-            .questionAsked(questionId: "q", turnId: "t1", text: "Which?", choices: ["Red", "Blue"], routedTo: .user, reason: nil),
+            .questionAsked(questionId: "q", turnId: "t1", text: "Which?", choices: ["Red", "Blue"], multiSelect: false, routedTo: .user, reason: nil),
             .questionAnswered(questionId: "q", answer: .choice(index: 1), answeredBy: .user),
             .modelSwitched(model: "haiku"),
             .turnFailed(turnId: "t1", error: TurnError(class: .fatal, message: "boom")),
@@ -105,7 +105,7 @@ struct TranscriptTests {
         let asked: [EventBody] = [
             created(), .turnStarted(turnId: "t1"),
             .questionAsked(questionId: "q", turnId: "t1", text: "Which?\n\n- **Red**: warm", choices: ["Red", "Blue"],
-                           routedTo: .user, reason: nil),
+                           multiSelect: false, routedTo: .user, reason: nil),
         ]
         let waiting = Transcript.blocks(script.model(asked)).compactMap { block -> AskedQuestion? in
             if case .question(let question) = block { question } else { nil }
@@ -118,8 +118,22 @@ struct TranscriptTests {
         ])).compactMap { block -> AskedQuestion? in
             if case .question(let question) = block { question } else { nil }
         }
-        #expect(answered.map(\.picked) == [1])
+        #expect(answered.map(\.picked) == [[1]])
         #expect(answered.map(\.answeredBy) == [.user])
+    }
+
+    @Test func aMultiSelectAnswerPicksEveryChoiceItNames() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            .questionAsked(questionId: "q", turnId: "t1", text: "Which checks?", choices: ["Lint", "Tests", "Docs"],
+                           multiSelect: true, routedTo: .user, reason: nil),
+            .questionAnswered(questionId: "q", answer: .choices(indices: [0, 2]), answeredBy: .user),
+        ])
+        let answered = Transcript.blocks(model).compactMap { block -> AskedQuestion? in
+            if case .question(let question) = block { question } else { nil }
+        }
+        #expect(answered.map(\.picked) == [[0, 2]])
     }
 
     @Test func switchesBecomeHandoffsFromWhatTheSessionRanOn() {
