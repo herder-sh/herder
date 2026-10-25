@@ -2273,9 +2273,9 @@ async fn compose_down_brings_down_a_project_the_session_started() {
         "working_dir": worktree,
     });
     std::fs::write(dir.path().join("ps"), line.to_string()).unwrap();
-    let program = dir.path().join("docker");
+    let source = dir.path().join("docker.sh");
     std::fs::write(
-        &program,
+        &source,
         format!(
             "#!/bin/sh\necho \"$*\" >> '{calls}'\nif [ \"$1\" = ps ]; then cat '{ps}'; fi\n",
             calls = dir.path().join("calls").display(),
@@ -2283,7 +2283,16 @@ async fn compose_down_brings_down_a_project_the_session_started() {
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Copied into place by `cp`: a file this process wrote stays open for writing in every
+    // child another test thread forks until it execs, and running it then fails with ETXTBSY.
+    let program = dir.path().join("docker");
+    let copied = std::process::Command::new("cp")
+        .arg(&source)
+        .arg(&program)
+        .status()
+        .unwrap();
+    assert!(copied.success());
     let down = |project: &str| CommandBody::ComposeDown {
         session_id: session.clone(),
         project: project.to_owned(),
