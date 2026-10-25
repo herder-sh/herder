@@ -1,7 +1,7 @@
 //! Slack bots: each its own Slack app, connected over Socket Mode with its app-level token
 //! (`xapp-`), posting with its bot token (`xoxb-`).
 //!
-//! The app needs the bot scopes `app_mentions:read`, `im:history`, `chat:write`,
+//! The app needs the bot scopes `app_mentions:read`, `im:history`, `im:write`, `chat:write`,
 //! `files:read` and `files:write`, the events `app_mention` and `message.im`, and
 //! interactivity, for its buttons.
 
@@ -233,6 +233,35 @@ impl Bridge for Slack {
                 .await
                 .map_err(failed)?;
             Ok(posted.ts.0)
+        })
+    }
+
+    fn direct<'a>(
+        &'a self,
+        user_id: &'a str,
+        post: &'a Post,
+    ) -> BoxFuture<'a, bridge::Result<Place>> {
+        Box::pin(async move {
+            let session = self.session();
+            let open =
+                SlackApiConversationsOpenRequest::new().with_users(vec![user_id.to_owned().into()]);
+            let channel_id = session
+                .conversations_open(&open)
+                .await
+                .map_err(failed)?
+                .channel
+                .id
+                .0;
+            let mut message = render::render(post);
+            message["channel"] = json!(channel_id);
+            let posted = session
+                .chat_post_message(&request(message)?)
+                .await
+                .map_err(failed)?;
+            Ok(Place {
+                channel_id,
+                thread_id: posted.ts.0,
+            })
         })
     }
 

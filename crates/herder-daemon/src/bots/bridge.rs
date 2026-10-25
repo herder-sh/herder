@@ -185,6 +185,9 @@ pub type Result<T> = std::result::Result<T, String>;
 pub trait Bridge: Send + Sync + 'static {
     /// Posts `post` in `place`; resolves to the posted message's id.
     fn post<'a>(&'a self, place: &'a Place, post: &'a Post) -> BoxFuture<'a, Result<String>>;
+    /// Posts `post` as a new thread of the direct message with `user_id`; resolves to the
+    /// thread, whose id is the posted message's too.
+    fn direct<'a>(&'a self, user_id: &'a str, post: &'a Post) -> BoxFuture<'a, Result<Place>>;
     /// Replaces the message `message_id` of `place` with `post`.
     fn edit<'a>(
         &'a self,

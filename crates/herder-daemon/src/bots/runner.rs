@@ -14,6 +14,12 @@
 //! never posted. Prompts sent from elsewhere, such as the app, post into the session's threads
 //! as "‹name› (app): …", and their answers go to every thread; a thread's own prompts are
 //! answered there only.
+//!
+//! People whose allowlist entry has `notify` get a direct message when a session of the bot's,
+//! linked to it or in one of its projects, waits for them or fails, unless they follow it in a
+//! direct message already. It carries the same buttons as a thread, and replying in its thread,
+//! or pressing one, links that thread to the session. A session that keeps waiting is notified
+//! of once; the message is edited when it is answered, saying where.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -64,8 +70,6 @@ pub struct Runner {
     working: HashMap<SessionId, Vec<(Place, String, &'static str)>>,
     /// The latest final-answer candidate of each session's running turn.
     answers: HashMap<SessionId, (ItemId, String)>,
-    /// Each session's latest prompt, for Retry.
-    prompts: HashMap<SessionId, String>,
     /// The threads of the prompts the bot sent each session that have not run yet, in order.
     sent: HashMap<SessionId, VecDeque<Place>>,
     /// The question each session waits on, which a message in its thread answers.
@@ -76,6 +80,14 @@ pub struct Runner {
     picking: HashMap<Place, Message>,
     /// Who has been told, in which thread, that they may not.
     noted: HashSet<(String, Place)>,
+    /// The direct-message thread of each notification nobody has acted in yet, and its
+    /// session; a reply or press there links it.
+    notices: HashMap<Place, SessionId>,
+    /// The notification of each waiting session: the approval request or question it is
+    /// about, and its direct messages, each with its post.
+    waiting: HashMap<SessionId, (String, Vec<(Place, Post)>)>,
+    /// Each person's direct message with the bot, by their user id, once known.
+    directs: HashMap<String, String>,
 }
 
 impl Runner {
@@ -90,12 +102,14 @@ impl Runner {
             turns: HashMap::new(),
             working: HashMap::new(),
             answers: HashMap::new(),
-            prompts: HashMap::new(),
             sent: HashMap::new(),
             questions: HashMap::new(),
             asks: HashMap::new(),
             picking: HashMap::new(),
             noted: HashSet::new(),
+            notices: HashMap::new(),
+            waiting: HashMap::new(),
+            directs: HashMap::new(),
         }
     }
 
@@ -150,6 +164,11 @@ impl Runner {
             self.refuse(&message.place, &message.user_id).await;
             return;
         };
+        if message.direct {
+            self.directs
+                .insert(message.user_id.clone(), message.place.channel_id.clone());
+        }
+        self.adopt(&message.place).await;
         let by = self.by(&user);
         if let Some(session_id) = self.links.get(&message.place).cloned() {
             match self.questions.get(&session_id).cloned() {
@@ -188,12 +207,11 @@ impl Runner {
     }
 
     async fn press(&mut self, press: Press) {
-        // Buttons act only on the bot's own sessions.
-        if press
-            .action
-            .session_id()
-            .is_some_and(|session_id| !self.threads.contains_key(session_id))
-        {
+        // Buttons act only on the bot's own sessions, and those it notified of.
+        if press.action.session_id().is_some_and(|session_id| {
+            !self.threads.contains_key(session_id)
+                && self.notices.get(&press.place) != Some(session_id)
+        }) {
             return;
         }
         let user = self.user(&press.user_id).cloned();
@@ -206,6 +224,7 @@ impl Runner {
             self.refuse(&press.place, &press.user_id).await;
             return;
         };
+        self.adopt(&press.place).await;
         let by = self.by(&user);
         let command = match press.action {
             Action::Stop { session_id } => CommandBody::Interrupt { session_id },
@@ -253,7 +272,11 @@ impl Runner {
                 return;
             }
             Action::Retry { session_id } => {
-                let Some(text) = self.prompts.get(&session_id).cloned() else {
+                let prompt = self.read_last(&session_id, |body| match body {
+                    ItemBody::UserMessage { text, .. } => Some(text),
+                    _ => None,
+                });
+                let Some(text) = prompt.await else {
                     let text = "There is no prompt to send again.";
                     self.note(&press.place, &press.user_id, text).await;
                     return;
@@ -308,6 +331,12 @@ impl Runner {
                 return;
             }
         };
+        self.link(&session_id, place).await;
+        self.prompt(&session_id, place, by, text, files).await;
+    }
+
+    /// Links `place` to `session_id`.
+    async fn link(&mut self, session_id: &SessionId, place: &Place) {
         let thread = ThreadLink {
             kind: self.bot.kind,
             bot_id: self.bot.bot_id.clone(),
@@ -315,11 +344,17 @@ impl Runner {
             thread_id: place.thread_id.clone(),
             url: self.bridge.link(place).await,
         };
-        if let Err(err) = self.host.sessions.link_thread(&session_id, thread).await {
+        if let Err(err) = self.host.sessions.link_thread(session_id, thread).await {
             warn!(%session_id, "cannot link a thread: {}", err.message);
         }
-        self.add_link(&session_id, place.clone());
-        self.prompt(&session_id, place, by, text, files).await;
+        self.add_link(session_id, place.clone());
+    }
+
+    /// Links the thread of a notification someone acts in to its session.
+    async fn adopt(&mut self, place: &Place) {
+        if let Some(session_id) = self.notices.remove(place) {
+            self.link(&session_id, place).await;
+        }
     }
 
     /// Sends `text` with `files` to `session_id` as `by`, from `place`.
@@ -448,16 +483,48 @@ impl Runner {
         }
     }
 
+    /// What `read` makes of the last top-level item of `session_id` it reads anything of.
+    async fn read_last(
+        &self,
+        session_id: &SessionId,
+        read: impl Fn(ItemBody) -> Option<String>,
+    ) -> Option<String> {
+        let mut after = 0;
+        let mut found = None;
+        loop {
+            let events = match self.host.sessions.read_since(session_id, after, 512).await {
+                Ok(events) => events,
+                Err(err) => {
+                    warn!(%session_id, "cannot read the session: {err:#}");
+                    return None;
+                }
+            };
+            let Some(last) = events.last() else {
+                return found;
+            };
+            after = last.seq;
+            for event in events {
+                if let EventBody::ItemAdded { item } = event.body
+                    && item.parent_call_id.is_none()
+                    && let Some(text) = read(item.body)
+                {
+                    found = Some(text);
+                }
+            }
+        }
+    }
+
     // Session events.
 
     async fn event(&mut self, event: Event) {
-        let session_id = event.session_id;
         if let EventBody::ThreadLinked { thread } = &event.body {
             if thread.bot_id == self.bot.bot_id {
-                self.add_link(&session_id, place_of(thread));
+                self.add_link(&event.session_id, place_of(thread));
             }
             return;
         }
+        self.follow(&event).await;
+        let session_id = event.session_id;
         if !self.threads.contains_key(&session_id) {
             return;
         }
@@ -490,69 +557,16 @@ impl Runner {
                 }
                 self.working.insert(session_id, working);
             }
-            EventBody::ApprovalRequested {
-                approval_id,
-                summary,
-                routed_to: Route::User,
-                ..
-            } => {
-                let post = Post::Approval {
-                    session_id: session_id.clone(),
-                    approval_id: approval_id.clone(),
-                    summary,
-                    resolved: None,
-                };
-                self.ask(&session_id, approval_id.to_string(), post).await;
+            body @ (EventBody::ApprovalRequested { .. } | EventBody::QuestionAsked { .. }) => {
+                if let Some((id, post)) = asked(&session_id, &body) {
+                    self.ask(&session_id, id, post).await;
+                }
             }
-            EventBody::ApprovalResolved {
-                approval_id,
-                decision,
-                ..
-            } => {
+            body @ (EventBody::ApprovalResolved { .. } | EventBody::QuestionAnswered { .. }) => {
                 let by = self.who(event.by.as_ref());
-                self.answered(approval_id.as_str(), |post| {
-                    if let Post::Approval { resolved, .. } = post {
-                        *resolved = Some((decision, by.clone()));
-                    }
-                })
-                .await;
-            }
-            EventBody::QuestionAsked {
-                question_id,
-                text,
-                choices,
-                multi_select,
-                routed_to: Route::User,
-                ..
-            } => {
-                self.questions
-                    .insert(session_id.clone(), question_id.clone());
-                let post = Post::Question {
-                    session_id: session_id.clone(),
-                    question_id: question_id.clone(),
-                    text,
-                    choices,
-                    multi_select,
-                    answered: None,
-                };
-                self.ask(&session_id, question_id.to_string(), post).await;
-            }
-            EventBody::QuestionAnswered {
-                question_id,
-                answer,
-                ..
-            } => {
-                self.questions.remove(&session_id);
-                let by = self.who(event.by.as_ref());
-                self.answered(question_id.as_str(), |post| {
-                    if let Post::Question {
-                        choices, answered, ..
-                    } = post
-                    {
-                        *answered = Some(format!("{} — {by}", answer_text(&answer, choices)));
-                    }
-                })
-                .await;
+                if let Some(id) = answer_of(&body) {
+                    self.answered(id, |post| resolve(post, &body, &by)).await;
+                }
             }
             EventBody::TurnCompleted { .. } => {
                 let post = match self.answers.remove(&session_id) {
@@ -611,9 +625,130 @@ impl Runner {
         }
     }
 
+    /// What every session's events tell the bot, linked to it or not: the question each waits
+    /// on, and when one waits for or fails the people it notifies.
+    async fn follow(&mut self, event: &Event) {
+        let session_id = &event.session_id;
+        match &event.body {
+            body @ (EventBody::ApprovalRequested { .. } | EventBody::QuestionAsked { .. }) => {
+                let Some((id, post)) = asked(session_id, body) else {
+                    return;
+                };
+                if let Post::Question { question_id, .. } = &post {
+                    self.questions
+                        .insert(session_id.clone(), question_id.clone());
+                }
+                // One notification while the session keeps waiting.
+                if self.waiting.contains_key(session_id) {
+                    return;
+                }
+                let posted = self.notify(session_id, &post).await;
+                if !posted.is_empty() {
+                    self.waiting.insert(session_id.clone(), (id, posted));
+                }
+            }
+            body @ (EventBody::ApprovalResolved { .. } | EventBody::QuestionAnswered { .. }) => {
+                if matches!(body, EventBody::QuestionAnswered { .. }) {
+                    self.questions.remove(session_id);
+                }
+                let id = answer_of(body);
+                if self
+                    .waiting
+                    .get(session_id)
+                    .is_none_or(|(asked, _)| Some(asked.as_str()) != id)
+                {
+                    return;
+                }
+                let Some((_, posted)) = self.waiting.remove(session_id) else {
+                    return;
+                };
+                let mut by = self.who(event.by.as_ref());
+                if event.by.as_ref().is_some_and(|by| !self.ours(by)) {
+                    by.push_str(" in the app");
+                }
+                for (place, mut post) in posted {
+                    resolve(&mut post, body, &by);
+                    self.edit(&place, &place.thread_id, &post).await;
+                }
+            }
+            EventBody::TurnCompleted { .. } | EventBody::TurnInterrupted { .. } => {
+                self.questions.remove(session_id);
+            }
+            EventBody::TurnFailed { error, .. } => {
+                self.questions.remove(session_id);
+                let post = self.failure(session_id, error).await;
+                self.notify(session_id, &post).await;
+            }
+            _ => {}
+        }
+    }
+
+    /// Messages `post` to each person the bot notifies, in a new thread of their direct message
+    /// with it, when `session_id` is one of the bot's and they do not follow it in a direct
+    /// message already; returns the threads, each with its post.
+    async fn notify(&mut self, session_id: &SessionId, post: &Post) -> Vec<(Place, Post)> {
+        let people: Vec<String> = self
+            .bot
+            .allow
+            .iter()
+            .filter(|user| user.notify)
+            .map(|user| user.external_user_id.clone())
+            .collect();
+        if people.is_empty() || !self.concerns(session_id).await {
+            return Vec::new();
+        }
+        let threads = self.threads.get(session_id).cloned().unwrap_or_default();
+        let mut posted = Vec::new();
+        for user_id in people {
+            let following = self.directs.get(&user_id).is_some_and(|channel_id| {
+                threads.iter().any(|place| place.channel_id == *channel_id)
+            });
+            if following {
+                continue;
+            }
+            match self.bridge.direct(&user_id, post).await {
+                Ok(place) => {
+                    self.directs.insert(user_id, place.channel_id.clone());
+                    self.notices.insert(place.clone(), session_id.clone());
+                    posted.push((place, post.clone()));
+                }
+                Err(err) => {
+                    warn!(bot_id = %self.bot.bot_id, "cannot message a person directly: {err}");
+                }
+            }
+        }
+        posted
+    }
+
+    /// Whether `session_id` is one of the bot's: linked to it, or in one of its projects.
+    async fn concerns(&self, session_id: &SessionId) -> bool {
+        if self.threads.contains_key(session_id) {
+            return true;
+        }
+        let projects: Vec<&ProjectId> = (self.bot.defaults.project_id.iter())
+            .chain(self.bot.channel_bindings.iter().map(|b| &b.project_id))
+            .collect();
+        if projects.is_empty() {
+            return false;
+        }
+        match self.host.sessions.sessions().await {
+            Ok(heads) => heads.iter().any(|head| {
+                head.session_id == *session_id
+                    && head
+                        .project_id
+                        .as_ref()
+                        .is_some_and(|project_id| projects.contains(&project_id))
+            }),
+            Err(err) => {
+                warn!(bot_id = %self.bot.bot_id, "cannot list the sessions: {err:#}");
+                false
+            }
+        }
+    }
+
     /// A turn of `session_id` started with the prompt `text` by `by`.
     async fn turn_started(&mut self, session_id: &SessionId, by: Option<&UserId>, text: String) {
-        let ours = by.is_some_and(|by| self.bot.allow.iter().any(|user| self.by(user) == *by));
+        let ours = by.is_some_and(|by| self.ours(by));
         let sent = if ours {
             self.sent.get_mut(session_id).and_then(VecDeque::pop_front)
         } else {
@@ -633,7 +768,6 @@ impl Runner {
                 places
             }
         };
-        self.prompts.insert(session_id.clone(), text);
         self.answers.remove(session_id);
         for place in &places {
             if !self.has_working(session_id, place) {
@@ -648,7 +782,6 @@ impl Runner {
     async fn turn_ended(&mut self, session_id: &SessionId, post: Post) {
         let places = self.answer_places(session_id);
         self.turns.remove(session_id);
-        self.questions.remove(session_id);
         let working = self.working.remove(session_id).unwrap_or_default();
         let (done, waiting): (Vec<_>, Vec<_>) = working
             .into_iter()
@@ -814,6 +947,11 @@ impl Runner {
         UserId::new(format!("via {}, {}", self.bot.name, user.display_name))
     }
 
+    /// Whether `by` is one of the bot's people, acting through it.
+    fn ours(&self, by: &UserId) -> bool {
+        self.bot.allow.iter().any(|user| self.by(user) == *by)
+    }
+
     /// Who did something, for the bot's posts.
     fn who(&self, by: Option<&UserId>) -> String {
         let Some(by) = by else {
@@ -880,6 +1018,73 @@ enum Pick {
     Ambiguous(Vec<(ProjectId, String)>, String),
     /// A chat, about no project.
     Chat,
+}
+
+/// The id and post of an approval request or question `body` asks of the user; `None` for
+/// anything else.
+fn asked(session_id: &SessionId, body: &EventBody) -> Option<(String, Post)> {
+    match body {
+        EventBody::ApprovalRequested {
+            approval_id,
+            summary,
+            routed_to: Route::User,
+            ..
+        } => Some((
+            approval_id.to_string(),
+            Post::Approval {
+                session_id: session_id.clone(),
+                approval_id: approval_id.clone(),
+                summary: summary.clone(),
+                resolved: None,
+            },
+        )),
+        EventBody::QuestionAsked {
+            question_id,
+            text,
+            choices,
+            multi_select,
+            routed_to: Route::User,
+            ..
+        } => Some((
+            question_id.to_string(),
+            Post::Question {
+                session_id: session_id.clone(),
+                question_id: question_id.clone(),
+                text: text.clone(),
+                choices: choices.clone(),
+                multi_select: *multi_select,
+                answered: None,
+            },
+        )),
+        _ => None,
+    }
+}
+
+/// The id of the approval request or question `body` resolves; `None` for anything else.
+fn answer_of(body: &EventBody) -> Option<&str> {
+    match body {
+        EventBody::ApprovalResolved { approval_id, .. } => Some(approval_id.as_str()),
+        EventBody::QuestionAnswered { question_id, .. } => Some(question_id.as_str()),
+        _ => None,
+    }
+}
+
+/// Marks the post of an approval request or question resolved as `body` says, by `by`.
+fn resolve(post: &mut Post, body: &EventBody, by: &str) {
+    match (post, body) {
+        (Post::Approval { resolved, .. }, EventBody::ApprovalResolved { decision, .. }) => {
+            *resolved = Some((*decision, by.to_owned()));
+        }
+        (
+            Post::Question {
+                choices, answered, ..
+            },
+            EventBody::QuestionAnswered { answer, .. },
+        ) => {
+            *answered = Some(format!("{} — {by}", answer_text(answer, choices)));
+        }
+        _ => {}
+    }
 }
 
 fn place_of(thread: &ThreadLink) -> Place {

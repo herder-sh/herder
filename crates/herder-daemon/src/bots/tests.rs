@@ -344,6 +344,11 @@ mod running {
         /// A bot whose sessions run the fake script `script`, and whose messages carry
         /// `files`, by url.
         async fn start(script: &str, files: HashMap<String, Vec<u8>>) -> Self {
+            Self::with(bot(), script, files).await
+        }
+
+        /// `bot` running, as [`Running::start`] runs the test bot.
+        async fn with(bot: Bot, script: &str, files: HashMap<String, Vec<u8>>) -> Self {
             let tmp = tempfile::tempdir().unwrap();
             let dir = tmp.path().to_owned();
             let (sessions, events) = sessions(&dir, &fixtures().join("bots").join(script)).await;
@@ -355,7 +360,7 @@ mod running {
                     (user_id.as_str() == "alice").then(|| "Alice".to_owned())
                 }),
             };
-            let runner = Runner::new(bot(), Arc::clone(&bridge) as _, host);
+            let runner = Runner::new(bot, Arc::clone(&bridge) as _, host);
             let (inbound, received) = mpsc::channel(16);
             let stop = CancellationToken::new();
             tokio::spawn(runner.run(received, events.subscribe(), stop.clone()));
@@ -427,6 +432,47 @@ mod running {
                     _ => None,
                 })
                 .collect()
+        }
+    }
+
+    /// The project `github.com/‹id›/trip1`, named trip1, in a new repository under `dir`.
+    fn project(dir: &Path, id: &str) -> herder_protocol::Project {
+        let repo = dir.join(id);
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [
+            &["init", "--quiet", "--initial-branch=main"][..],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        ] {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        herder_protocol::Project {
+            project_id: ProjectId::new(format!("github.com/{id}/trip1")),
+            name: "trip1".into(),
+            paths: vec![repo.to_str().unwrap().to_owned()],
+            remote: None,
+            default_permission_mode: None,
+            default_account: None,
+            setup_command: None,
+            icon: None,
+            icon_uploaded: false,
+            icon_background: None,
+            private_artifacts: false,
         }
     }
 
@@ -676,46 +722,7 @@ mod running {
     #[tokio::test]
     async fn a_project_named_in_the_message_is_where_the_thread_works() {
         let bot = Running::start("dm.jsonl", HashMap::new()).await;
-        let project = |id: &str| {
-            let repo = bot.dir.join(id);
-            std::fs::create_dir_all(&repo).unwrap();
-            for args in [
-                &["init", "--quiet", "--initial-branch=main"][..],
-                &[
-                    "-c",
-                    "user.name=t",
-                    "-c",
-                    "user.email=t@example.com",
-                    "commit",
-                    "--quiet",
-                    "--allow-empty",
-                    "-m",
-                    "init",
-                ],
-            ] {
-                let status = std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(&repo)
-                    .args(args)
-                    .status()
-                    .unwrap();
-                assert!(status.success());
-            }
-            herder_protocol::Project {
-                project_id: ProjectId::new(format!("github.com/{id}/trip1")),
-                name: "trip1".into(),
-                paths: vec![repo.to_str().unwrap().to_owned()],
-                remote: None,
-                default_permission_mode: None,
-                default_account: None,
-                setup_command: None,
-                icon: None,
-                icon_uploaded: false,
-                icon_background: None,
-                private_artifacts: false,
-            }
-        };
-        let projects = [project("ada"), project("team")];
+        let projects = [project(&bot.dir, "ada"), project(&bot.dir, "team")];
         bot.sessions.set_projects(&projects).await;
 
         // Two projects are named so: the bot asks which.
@@ -808,7 +815,7 @@ mod running {
     }
 
     #[tokio::test]
-    async fn a_prompt_from_the_app_is_mirrored_into_the_thread() {
+    async fn a_prompt_start_in_the_app_is_mirrored_into_the_thread() {
         let bot = Running::start("mirror.jsonl", HashMap::new()).await;
         bot.send(slack("dm_message.json")).await;
         bot.posted(&dm(), answer("Fixed it.")).await;
@@ -831,6 +838,184 @@ mod running {
         })
         .await;
         bot.posted(&dm(), answer("Updated.")).await;
+    }
+
+    /// The test bot, working on a project, with Ada asking to be notified.
+    fn notifying() -> Bot {
+        let mut bot = bot();
+        bot.allow[0].notify = true;
+        bot.defaults.project_id = Some(ProjectId::new("github.com/ada/trip1"));
+        bot
+    }
+
+    /// Ada's direct message with the bot.
+    const ADA_DM: &str = "D0ADA00001";
+
+    impl Running {
+        /// A session of the bot's project that Alice starts in the app, sending it `text`.
+        async fn start_in_the_app(&self, text: &str) -> SessionId {
+            self.sessions
+                .set_projects(&[project(&self.dir, "ada")])
+                .await;
+            let alice = UserId::new("alice");
+            let created = self
+                .sessions
+                .handle(
+                    alice.clone(),
+                    CommandBody::CreateSession {
+                        repo: None,
+                        chat: false,
+                        project_id: Some(ProjectId::new("github.com/ada/trip1")),
+                        branch: None,
+                        account_id: Some(AccountId::new("account-1")),
+                        provider: Some(Provider::Other("fake".into())),
+                        model: None,
+                        permission_mode: None,
+                        failover_pin: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let CommandResult::SessionCreated { session_id } = created else {
+                panic!("created as {created:?}");
+            };
+            let prompt = CommandBody::SendPrompt {
+                session_id: session_id.clone(),
+                text: text.into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            };
+            self.sessions.handle(alice, prompt).await.unwrap();
+            session_id
+        }
+
+        /// Waits until the bot has messaged Ada a post `matches` picks; returns its thread.
+        async fn notified(&self, matches: impl Fn(&Post) -> bool) -> Place {
+            let sent = self
+                .bridge
+                .until(|sent| {
+                    sent.iter().any(|sent| {
+                        matches!(sent, Sent::Post { place, post, .. }
+                            if place.channel_id == ADA_DM && matches(post))
+                    })
+                })
+                .await;
+            sent.into_iter()
+                .find_map(|sent| match sent {
+                    Sent::Post { place, .. } if place.channel_id == ADA_DM => Some(place),
+                    _ => None,
+                })
+                .unwrap()
+        }
+    }
+
+    /// Every direct message the bot started.
+    fn directs(sent: &[Sent]) -> Vec<&Sent> {
+        sent.iter()
+            .filter(|sent| matches!(sent, Sent::Post { place, .. } if place.channel_id.starts_with('D')))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_session_waiting_in_the_app_messages_those_who_opted_in_once() {
+        let bot = Running::with(notifying(), "reply.jsonl", HashMap::new()).await;
+        let session_id = bot.start_in_the_app("Fix the login bug").await;
+        let place = bot
+            .notified(|post| matches!(post, Post::Question { answered: None, .. }))
+            .await;
+
+        // While it keeps waiting, a second question notifies no one again.
+        bot.events
+            .send(Event {
+                session_id: session_id.clone(),
+                seq: 100,
+                at: Timestamp::now(),
+                by: None,
+                body: EventBody::QuestionAsked {
+                    question_id: herder_protocol::QuestionId::new("question-2"),
+                    turn_id: TurnId::new("turn-1"),
+                    text: "And the docs?".into(),
+                    choices: Vec::new(),
+                    multi_select: false,
+                    routed_to: herder_protocol::Route::User,
+                    reason: None,
+                },
+            })
+            .unwrap();
+
+        // Answered in the app, the message says so.
+        bot.sessions
+            .handle(
+                UserId::new("alice"),
+                CommandBody::AnswerQuestion {
+                    session_id: session_id.clone(),
+                    question_id: herder_protocol::QuestionId::new("question-1"),
+                    answer: herder_protocol::Answer::Text {
+                        text: "Thanks, now add a test.".into(),
+                    },
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let sent = bot
+            .bridge
+            .until(|sent| sent.iter().any(|sent| matches!(sent, Sent::Edit { .. })))
+            .await;
+        let edited = sent.iter().any(|sent| {
+            matches!(sent, Sent::Edit { place: at, id, post: Post::Question { answered: Some(answer), .. } }
+                if *at == place && *id == place.thread_id
+                    && answer == "Thanks, now add a test. — Alice in the app")
+        });
+        assert!(edited, "{sent:#?}");
+        // Ada got one message, and Bob, who did not opt in, none; the session stays unlinked.
+        assert_eq!(directs(&sent).len(), 1, "{sent:#?}");
+        assert!(bot.session().await.threads.is_empty());
+    }
+
+    #[tokio::test]
+    async fn replying_to_a_notification_answers_and_links_the_session() {
+        let bot = Running::with(notifying(), "reply.jsonl", HashMap::new()).await;
+        let session_id = bot.start_in_the_app("Fix the login bug").await;
+        let place = bot
+            .notified(|post| matches!(post, Post::Question { .. }))
+            .await;
+
+        bot.inbound
+            .send(Inbound::Message(super::super::bridge::Message {
+                place: place.clone(),
+                user_id: ADA.into(),
+                direct: true,
+                mentioned: false,
+                text: "Thanks, now add a test.".into(),
+                files: Vec::new(),
+            }))
+            .await
+            .unwrap();
+        bot.posted(&place, answer("Will do.")).await;
+        let head = bot.session().await;
+        assert_eq!(head.session_id, session_id);
+        assert_eq!(
+            head.threads
+                .iter()
+                .map(|thread| (thread.channel_id.as_str(), thread.thread_id.as_str()))
+                .collect::<Vec<_>>(),
+            [(ADA_DM, place.thread_id.as_str())]
+        );
+        let answered = bot.bridge.sent().into_iter().any(|sent| {
+            matches!(sent, Sent::Edit { post: Post::Question { answered: Some(answer), .. }, .. }
+                if answer == "Thanks, now add a test. — Ada")
+        });
+        assert!(answered, "{:#?}", bot.bridge.sent());
+    }
+
+    #[tokio::test]
+    async fn a_failure_messages_those_who_opted_in_with_retry() {
+        let bot = Running::with(notifying(), "failed.jsonl", HashMap::new()).await;
+        bot.start_in_the_app("Fix the login bug").await;
+        bot.notified(|post| matches!(post, Post::Failure { retry: true, .. }))
+            .await;
     }
 
     #[tokio::test]

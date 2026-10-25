@@ -1,0 +1,4 @@
+# A turn that fails.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Fix the login bug"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-1", "error": {"class": "fatal", "message": "The agent crashed. It left no output."}}}
