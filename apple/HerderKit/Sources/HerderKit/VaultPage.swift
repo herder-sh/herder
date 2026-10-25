@@ -1,18 +1,25 @@
 import Herder
 import SwiftUI
 
-/// A vault's page, for its owners: its secrets, each set with the hosts it is granted to and the secrets
-/// in it, and the latest fetches. Owners create and delete sets, add, replace and delete
-/// secrets, and grant a set to the vault's hosts or revoke it. A value is typed into a secure
-/// field and never shown again.
+/// A vault's page: how current its copy of each host is, with their sessions and whether they
+/// take handoffs, and for its owners a Secrets tab: each set with the hosts it is granted to and
+/// the secrets in it, and the latest fetches. Owners create and delete sets, add, replace and
+/// delete secrets, and grant a set to the vault's hosts or revoke it. A value is typed into a
+/// secure field and never shown again.
 struct VaultPage: View {
     let fleet: Fleet
     let vault: HostId
+    @Environment(\.pages) private var pages
+    @State private var tab = Tab.overview
     @State private var secrets: VaultSecrets
     @State private var newSet = ""
     @State private var editor: SecretEditor?
     @State private var deleting: Deleting?
     @State private var error: String?
+
+    enum Tab: Hashable {
+        case overview, secrets
+    }
 
     /// A set or a secret, asked about before it is deleted.
     private enum Deleting: Hashable {
@@ -34,27 +41,46 @@ struct VaultPage: View {
         }
     }
 
-    init(fleet: Fleet, vault: HostId) {
+    init(fleet: Fleet, vault: HostId, tab: Tab = .overview) {
         self.fleet = fleet
         self.vault = vault
+        _tab = State(initialValue: tab)
         _secrets = State(initialValue: VaultSecrets(fleet: fleet, vault: vault))
     }
 
     var body: some View {
         let machine = fleet.machines.first { $0.hostId == vault }
-        DetailPage(title: machine?.name ?? "Vault", chip: machine.map(MachinePage.chip),
-                   status: machine.map(Self.status) ?? "") {
-            IconButton(symbol: "arrow.clockwise", help: "Reload") { Task { await secrets.reload() } }
-        } content: {
-            VStack(alignment: .leading, spacing: 18) { sets(machine) }
-                .detailSection("Secrets")
-            if let error {
-                Text(error).font(.footnote).foregroundStyle(Theme.failure)
-                    .accessibilityIdentifier("secrets-error")
+        let stats = machine.flatMap { VaultStats(machine: $0, sessions: fleet.sessions) }
+        let owned = stats?.owned == true
+        // The status sentence leads with the connection, so no chip repeats it.
+        DetailPage(title: machine?.name ?? "Vault", status: stats?.status ?? "") {
+            if tab == .secrets {
+                IconButton(symbol: "arrow.clockwise", help: "Reload") { Task { await secrets.reload() } }
             }
-            audit(machine).detailSection("Recent access")
+            IconButton(symbol: "gearshape", help: "Machine Settings") { pages.open(.machine(vault)) }
+        } content: {
+            if owned {
+                Picker("View", selection: $tab) {
+                    Text("Overview").tag(Tab.overview)
+                    Text("Secrets").tag(Tab.secrets)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .accessibilityIdentifier("vault-tabs")
+            }
+            if owned && tab == .secrets {
+                VStack(alignment: .leading, spacing: 18) { sets(machine) }
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(Theme.failure)
+                        .accessibilityIdentifier("secrets-error")
+                }
+                audit(machine)
+            } else if let stats {
+                VaultOverview(fleet: fleet, vault: stats)
+            }
         }
-        .task { await secrets.reload() }
+        .task(id: tab) { if tab == .secrets { await secrets.reload() } }
         .sheet(item: Binding(get: { editor.map(EditorItem.init) }, set: { if $0 == nil { editor = nil } })) { item in
             SecretEditorSheet(editor: item.editor)
         }
@@ -74,11 +100,6 @@ struct VaultPage: View {
         } message: {
             Text(deleting?.message ?? "")
         }
-    }
-
-    /// "Secrets for 3 hosts": who the vault keeps them for.
-    static func status(_ machine: Machine) -> String {
-        machine.hosts.count == 1 ? "Secrets for 1 host" : "Secrets for \(machine.hosts.count) hosts"
     }
 
     /// The sets, each with its secrets, and a field that creates one.
@@ -319,6 +340,164 @@ private struct SecretEditorSheet: View {
             .frame(maxWidth: 200)
             .disabled(editor.sending)
             .accessibilityIdentifier("secret-save")
+        }
+    }
+}
+
+/// A vault's overview: its sessions and size as quiet chips, then a row per host with how
+/// current the vault's copy of it is.
+struct VaultOverview: View {
+    let fleet: Fleet
+    let vault: VaultStats
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            FlowLayout(spacing: 6) {
+                Chip(text: vault.sessions == 1 ? "1 session" : "\(vault.sessions) sessions")
+                    .help(Self.breakdown(vault.byState))
+                if vault.count(.idle) > 0 { Chip(text: "\(vault.count(.idle)) idle") }
+                if vault.count(.archived) > 0 { Chip(text: "\(vault.count(.archived)) archived") }
+                if let size = vault.size { Chip(text: size) }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 4) {
+                    SectionHeading(title: "Hosts", count: vault.hosts.count)
+                    InfoButton(text: "A host that takes handoffs may read other hosts' sessions from the vault, so you can hand one off to it.")
+                }
+                if vault.hosts.isEmpty {
+                    Text("No host backs up to this vault yet. Link one from its machine's Backup settings.")
+                        .font(.subheadline).foregroundStyle(Theme.tertiary)
+                } else {
+                    SortableTable("vault.hosts", rows: vault.hosts, sortedBy: TableSort(column: "Host"), columns: columns)
+                }
+            }
+        }
+    }
+
+    private var compact: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
+        #endif
+    }
+
+    private var columns: [SortableColumn<VaultStats.Host>] {
+        let now = vault.now
+        var columns: [SortableColumn<VaultStats.Host>] = [
+            SortableColumn("Host", value: \.name) { host in
+                HStack(spacing: 6) {
+                    Circle().fill(host.online ? Theme.success : Theme.failure).frame(width: 6, height: 6)
+                    Text(host.name).fontWeight(.semibold).lineLimit(1)
+                }
+            },
+            SortableColumn("Freshness", width: compact ? nil : 220, value: { $0.freshness.behind(now: now) }) { host in
+                FreshnessCell(host: host, now: now)
+            },
+        ]
+        if !compact {
+            columns += [
+                SortableColumn("Sessions", width: 70, alignment: .trailing, value: \.sessions) { host in
+                    Text("\(host.sessions)").monospacedDigit()
+                },
+                SortableColumn("Top projects") { host in
+                    Text(host.topProjects.map { "\($0.name) \($0.sessions)" }.joined(separator: " · "))
+                        .font(Theme.meta).foregroundStyle(Theme.secondary).lineLimit(1)
+                },
+            ]
+        }
+        columns.append(SortableColumn("Takes handoffs", width: 110) { host in
+            if vault.owned, let takesHandoffs = host.takesHandoffs {
+                HandoffToggle(fleet: fleet, vault: vault.hostId, host: host.id, takesHandoffs: takesHandoffs)
+            } else {
+                Text(host.takesHandoffs.map { $0 ? "On" : "Off" } ?? "–").foregroundStyle(Theme.secondary)
+            }
+        })
+        return columns
+    }
+
+    /// "3 running · 1 needs you · 49 idle": the sessions' states, on hover over their chip.
+    nonisolated static func breakdown(_ byState: [SessionState: Int]) -> String {
+        let order: [SessionState] = [.running, .needsYou, .waiting, .idle, .done, .error, .moved, .archived]
+        return order.compactMap { state in byState[state].map { "\($0) \(state.label.lowercased())" } }
+            .joined(separator: " · ")
+    }
+}
+
+/// How current the vault's copy of a host is: "✓ caught up" with its last batch, or "6 h
+/// behind" with a "Why?" that explains it.
+private struct FreshnessCell: View {
+    let host: VaultStats.Host
+    let now: Date
+    @State private var explaining = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let why = host.freshness.why(host: host.name, now: now) {
+                Chip(text: host.freshness.label(now: now), tint: Theme.accent)
+                Button("Why?") { explaining.toggle() }
+                    .buttonStyle(.plain)
+                    .font(Theme.meta)
+                    .foregroundStyle(Theme.link)
+                    .accessibilityIdentifier("freshness-why-\(host.id)")
+                    .popover(isPresented: $explaining) {
+                        Text(why)
+                            .font(Theme.body)
+                            .foregroundStyle(Theme.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: 300, alignment: .leading)
+                            .padding(14)
+                            .presentationCompactAdaptation(.popover)
+                    }
+            } else {
+                Chip(text: host.freshness.label(now: now), tint: Theme.success)
+                if let last = host.lastBatch ?? { if case .caughtUp(let last) = host.freshness { last } else { nil } }() {
+                    RelativeTime(date: last).font(Theme.meta).foregroundStyle(Theme.tertiary).lineLimit(1)
+                }
+            }
+        }
+    }
+}
+
+/// Whether a host may read the vault, so a session can be handed off to it, for the vault's
+/// owners. Shows the change at once and keeps it until the vault's status agrees.
+private struct HandoffToggle: View {
+    let fleet: Fleet
+    let vault: HostId
+    let host: HostId
+    let takesHandoffs: Bool
+    @State private var asked: Bool?
+    @State private var error: String?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Toggle("Takes handoffs", isOn: Binding(get: { asked ?? takesHandoffs }, set: { change($0) }))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.small)
+                .disabled(asked != nil)
+                .accessibilityIdentifier("takes-handoffs-\(host)")
+            if let error {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.failure).help(error)
+            }
+        }
+        .onChange(of: takesHandoffs) { asked = nil }
+    }
+
+    private func change(_ on: Bool) {
+        asked = on
+        error = nil
+        Task {
+            do {
+                try await fleet.setTakesHandoffs(on, host: host, vault: vault)
+                if on == takesHandoffs { asked = nil }
+            } catch {
+                self.error = describe(error)
+                asked = nil
+            }
         }
     }
 }

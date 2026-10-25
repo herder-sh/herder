@@ -2,7 +2,7 @@ import XCTest
 
 /// Manages a vault's secrets: against the fake vault (`fake_daemon --vault` prints its link; pass
 /// it to `xcodebuild test` as `TEST_RUNNER_HERDER_VAULT_LINK`), whose hosts are `devbox` and
-/// `laptop`, opens its page from Machines, adds a set, adds a secret to it and grants the set
+/// `laptop`, opens its page from Machines and its Secrets tab, adds a set, adds a secret to it and grants the set
 /// to a host, then goes back to Machines.
 final class SecretsUITests: XCTestCase {
     @MainActor
@@ -13,7 +13,7 @@ final class SecretsUITests: XCTestCase {
         try app.pairUnlessPaired()
 
         app.tabBars.buttons["Machines"].tap()
-        let open = app.buttons["vault-secrets"].firstMatch
+        let open = app.buttons["vault-row"].firstMatch
         if !open.waitForExistence(timeout: 5) {
             // Pairs with the vault, once: its code works once.
             app.navigationBars.buttons["Add Machine"].tap()
@@ -25,9 +25,12 @@ final class SecretsUITests: XCTestCase {
             // One machine paired closes the sheet; a list of results waits for Done.
             if app.buttons["Done"].waitForExistence(timeout: 10) { app.buttons["Done"].tap() }
         }
-        XCTAssertTrue(open.waitForExistence(timeout: 30), "the vault shows no Secrets button")
+        XCTAssertTrue(open.waitForExistence(timeout: 30), "Machines shows no vault")
         for _ in 0..<5 where !open.isHittable { app.swipeUp() }
         open.tap()
+        let secrets = app.buttons["Secrets"].firstMatch
+        XCTAssertTrue(secrets.waitForExistence(timeout: 15), "the vault's page has no Secrets tab")
+        secrets.tap()
 
         // A set, named in the field under the sets.
         let name = app.textFields["secret-set-name"]

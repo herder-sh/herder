@@ -24,27 +24,49 @@ private func vault(_ sessions: [(SessionId, host: HostId, status: SessionStatus,
 }
 
 struct VaultStatsTests {
-    @Test func emptyVaultStillShowsStorageAndReplicationStatus() throws {
+    @Test func emptyVaultStillShowsItsSize() throws {
         var machine = machine("vault", name: "vault", sessions: [])
         machine.vault = VaultStatus(sessions: 0, events: 12, storageBytes: 4096, hosts: [])
         let stats = try #require(VaultStats(machine: machine, sessions: [:]))
         #expect(stats.hosts.isEmpty)
-        #expect(stats.storedEvents == 12)
-        #expect(stats.storageBytes == 4096)
+        #expect(stats.size == ByteCountFormatter.string(fromByteCount: 4096, countStyle: .file))
+        #expect(stats.furthestBehind == nil)
     }
 
-    @Test func replicationLagUsesReportedBatchNotTimeSinceLastEvent() throws {
+    @Test func freshnessIsRelativeAndSaysWhyAHostIsBehind() async throws {
         var machine = vault([])
         machine.vault = VaultStatus(sessions: 0, events: 12, storageBytes: 4096, hosts: [
-            HostReplication(hostId: "h1", sessions: 0, events: 12, lastEventAt: "2026-01-01T00:00:00Z", lagMs: 23,
-                            read: true),
+            // builder's last batch arrived 23 ms after its newest event, three minutes ago.
+            HostReplication(hostId: "h1", sessions: 0, events: 12,
+                            lastEventAt: now.addingTimeInterval(-180).ISO8601Format(), lagMs: 23, read: true),
             HostReplication(hostId: "h2", sessions: 0, events: 0, lastEventAt: nil, lagMs: nil, read: false),
         ])
-        let stats = try #require(VaultStats(machine: machine, sessions: [:]))
-        let online = try #require(stats.hosts.first { $0.id == "h1" })
-        #expect(online.replicationSummary == "12 events · Last batch lag: 23 ms")
-        let offline = try #require(stats.hosts.first { $0.id == "h2" })
-        #expect(offline.replicationSummary.contains("No batch received since vault restart"))
+        let stats = try #require(VaultStats(machine: machine, sessions: [:], now: now))
+        let builder = try #require(stats.hosts.first { $0.id == "h1" })
+        #expect(builder.freshness.label(now: now) == "✓ caught up")
+        #expect(builder.freshness.why(host: builder.name, now: now) == nil)
+        #expect(builder.lastBatch.map { abs($0.timeIntervalSince(now.addingTimeInterval(-180))) < 1 } == true)
+        // laptop went offline two hours ago.
+        let laptop = try #require(stats.hosts.first { $0.id == "h2" })
+        #expect(laptop.freshness.label(now: now) == "2 h behind")
+        #expect(laptop.freshness.why(host: laptop.name, now: now)?.contains("laptop has not reached the vault for 2 h") == true)
+        #expect(stats.furthestBehind?.id == "h2")
+        #expect(stats.lastBatch == builder.lastBatch)
+        // Never a raw timestamp.
+        let status = await MainActor.run { stats.status }
+        #expect(status.hasPrefix("Connected · backing up 2 hosts · last batch "))
+        #expect(!status.contains("2026-"))
+    }
+
+    @Test func anOnlineHostSendingABacklogIsBehindByItsLag() {
+        let freshness = Freshness(online: true, lastSeen: now, lagMs: 6 * 3_600_000, lastEvent: nil, now: now)
+        #expect(freshness.label(now: now) == "6 h behind")
+        #expect(freshness.why(host: "work-mbp", now: now)?.contains("still sending") == true)
+        // A batch a minute late is still caught up.
+        #expect(Freshness(online: true, lastSeen: now, lagMs: 60_000, lastEvent: nil, now: now).behind(now: now) == 0)
+        #expect(Freshness.span(30) == "1 min")
+        #expect(Freshness.span(180) == "3 min")
+        #expect(Freshness.span(3 * 86400) == "3 d")
     }
 
     @Test func eachHostSaysWhetherItTakesHandoffsOnceTheStatusArrives() throws {
@@ -67,7 +89,7 @@ struct VaultStatsTests {
         #expect(VaultStats(machine: machine("host-a", name: "a", sessions: ["01A"]), sessions: [:]) == nil)
     }
 
-    @Test func totalsCountHostsSessionsByStateAndProjects() throws {
+    @Test func totalsCountSessionsByState() throws {
         var running = Script("01A", host: "vault")
         var asking = Script("01B", host: "vault")
         let machine = vault([
@@ -87,17 +109,16 @@ struct VaultStatsTests {
         let stats = try #require(VaultStats(machine: machine, sessions: sessions, now: now))
         #expect(stats.name == "home vault")
         #expect(stats.connection == .connected)
-        #expect(stats.hostsOnline == 1)
         #expect(stats.hosts.count == 2)
         #expect(stats.sessions == 4)
         #expect(stats.count(.running) == 1)
         #expect(stats.count(.needsYou) == 1)
         #expect(stats.count(.idle) == 1)
         #expect(stats.count(.archived) == 1)
-        #expect(stats.projects == 2)
+        #expect(VaultOverview.breakdown(stats.byState) == "1 running · 1 needs you · 1 idle · 1 archived")
     }
 
-    @Test func eachHostHasItsOwnCountsLastSeenAndTopProjects() throws {
+    @Test func eachHostHasItsOwnCountAndTopProjects() throws {
         let machine = vault([
             ("01A", "h1", .running, "github.com/acme/demo"),
             ("01B", "h1", .needsYou, "github.com/acme/demo"),
@@ -105,14 +126,9 @@ struct VaultStatsTests {
             ("01D", "h2", .idle, nil),
         ])
         let stats = try #require(VaultStats(machine: machine, sessions: [:], now: now))
-        // Online hosts first.
         #expect(stats.hosts.map(\.name) == ["builder", "laptop"])
         let builder = stats.hosts[0], laptop = stats.hosts[1]
-        #expect(builder.lastSeen == "now")
-        #expect(laptop.lastSeen == "2h")
         #expect(builder.sessions == 3)
-        #expect(builder.needsYou == 1)
-        #expect(builder.byState == [.running: 1, .needsYou: 1, .idle: 1])
         #expect(builder.topProjects == [
             VaultStats.ProjectCount(name: "Demo", sessions: 2), VaultStats.ProjectCount(name: "other", sessions: 1),
         ])

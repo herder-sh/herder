@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case board, chats, skills, providers, machines, vault
+    case board, chats, skills, providers, machines
     case project(String)
 }
 
@@ -18,7 +18,7 @@ enum CompactTab: Hashable, CaseIterable {
         case .project: self = .projects
         case .chats: self = .chats
         case .board: self = .board
-        case .skills, .providers, .machines, .vault: self = .machines
+        case .skills, .providers, .machines: self = .machines
         }
     }
 
@@ -244,7 +244,7 @@ struct FleetView: View {
             .environment(\.sessionPath, $boardPath)
         case .machines:
             NavigationStack(path: $machinesPath) {
-                MachinesView(fleet: fleet, sheet: $sheet, showsVaults: true, showsSections: true)
+                MachinesView(fleet: fleet, sheet: $sheet, showsSections: true)
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $machinesPath)

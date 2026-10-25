@@ -72,7 +72,6 @@ struct DesktopShell: View {
         case .skills: "Skills"
         case .providers: "Providers"
         case .machines: "Machines"
-        case .vault: "Vault"
         case .project(let id): lists.projects.first { $0.id == id }?.name ?? "Project"
         }
         return [root] + pages.pages.map { page in
@@ -142,7 +141,7 @@ struct DesktopShell: View {
                 PaneButton(title: "Add Account", symbol: "plus", prominent: true) { sheet = .addAccount }
             }
         case .machines:
-            Pane(fleet: fleet, title: "Machines", status: connectionStatus(lists), switcher: switcher) {
+            Pane(fleet: fleet, title: "Machines", status: machinesStatus(lists), switcher: switcher) {
                 MachinesView(fleet: fleet, sheet: $sheet)
             } actions: {
                 if !AwsSignIn.machines(fleet.machines).isEmpty {
@@ -150,12 +149,6 @@ struct DesktopShell: View {
                 }
                 IconButton(symbol: "qrcode", help: "Pair Another Device") { sheet = .share }
                 PaneButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair }
-            }
-        case .vault:
-            Pane(fleet: fleet, title: "Vault", switcher: switcher) {
-                VaultView(fleet: fleet, sheet: $sheet)
-            } actions: {
-                EmptyView()
             }
         }
     }
@@ -209,6 +202,14 @@ struct DesktopShell: View {
         let line = "\(tasks.count) open · \(working) working"
         let connected = lists.machines.filter(\.connected).count
         return connected < lists.machines.count || lists.machines.isEmpty ? "\(line) · \(connectionStatus(lists))" : line
+    }
+
+    /// The connections, then each vault that is behind: "All 3 machines connected · vault-0 6 h behind".
+    private func machinesStatus(_ lists: Lists) -> String {
+        let behind = fleet.vaults.compactMap { vault in
+            vault.furthestBehind.map { "\(vault.name) \($0.freshness.label(now: vault.now))" }
+        }
+        return ([connectionStatus(lists)] + behind).joined(separator: " · ")
     }
 
     private func connectionStatus(_ lists: Lists) -> String {
@@ -343,7 +344,6 @@ struct Switcher {
         Button("Providers", systemImage: "person.2") { go(.providers) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
         Button("Machines", systemImage: "server.rack") { go(.machines) }
-        Button("Vault", systemImage: "archivebox") { go(.vault) }
         Divider()
         ForEach(order.sorted(fleet.lists.projects)) { project in
             Button(project.name, systemImage: "shippingbox") { go(.project(project.id)) }
@@ -439,7 +439,6 @@ struct Sidebar: View {
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
             SidebarRow(title: "Machines", symbol: "server.rack", selected: item == .machines) { select(.machines) }
-            SidebarRow(title: "Vault", symbol: "archivebox", selected: item == .vault) { select(.vault) }
 
             heading("Projects") {
                 Menu {
@@ -663,7 +662,6 @@ private struct SidebarRail: View {
             rail("person.2", "Providers", .providers)
             rail("book.closed", "Skills", .skills)
             rail("server.rack", "Machines", .machines)
-            rail("archivebox", "Vault", .vault)
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             ScrollView {
                 VStack(spacing: 10) {
