@@ -55,8 +55,8 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 | **Projects** | every project with its sessions, children under parents | sidebar *projects* tree | `ProjectsView` (iPhone), `ProjectSessions` (Mac/iPad) |
 | **Usage** | tokens and API-equivalent dollars over a period, per account and model | — | `UsageView` |
 | **Skills** | the skill library on every machine, and a session's project skills | — | `SkillsView` |
-| **Machines** | each paired machine: connection, load, accounts and usage | fleet + accounts | `MachinesView`, `MachineCard` |
-| Vault | a vault's hosts and their sessions | fleet, host grouping | `VaultView` |
+| **Machines** | each paired machine as a table row: connection, load, CLIs, accounts, backup; then the vaults | fleet + accounts | `MachinesView` |
+| Vault (inside Machines) | a vault's hosts, how current each is, and its secrets | fleet, host grouping | `VaultPage` |
 | **Session** | one session: transcript, request, composer | session pane, chat tab | `SessionView` |
 | Terminal | owner-only shells in the session's worktree | term tab | `TerminalPane` |
 | Inspector | the session's events and stats | details panel | `SessionInspector` |
@@ -98,7 +98,7 @@ Rules:
   size class is compact and `DesktopShell` otherwise, so an iPad in slide-over gets the iPhone
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
-- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats), then **Workspace**, the setup (Providers, Skills, Machines, Vault), then the
+- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats), then **Workspace**, the setup (Providers, Skills, Machines; a vault lives inside Machines), then the
   projects, then one footer line for the machines (`MachinesFooter`). It starts collapsed to
   the rail (`sidebarCollapsed`), which leaves the width to the session and lists the same
   things in the same order; ⇧⌘\ toggles it. The window's traffic lights sit in its top bar
@@ -165,17 +165,31 @@ The apps have no Pull Requests section (unlike the TUI's prs view), and nothing 
 across sessions. A session shows its PRs as text: the chip in its header (§5.1) and the badges
 on its row.
 
-### 4.4 Machines and vault (`MachinesView`, `VaultView`)
+### 4.4 Machines and vault (`MachinesView`, `VaultPage`)
 
-A grid of `MachineCard`s (adaptive, at least 360 pt per column, so one column on iPhone): name,
-connection, role, running and total sessions, then each account with its usage windows
-(`UsageBar`). The card's gear opens `MachineSettingsSheet`. Machines fills the width on the Mac
-(no list beside it). A vault shows its hosts (`VaultSection`) here.
+Machines is a `SortableTable` of the machines that run sessions (`MachineRow`), with the columns
+you act on: machine (its role, and "this Mac" when its address is loopback or this Mac's host
+name), status and the latest ping's round trip, running sessions, load (CPU as a `UsageBar`,
+memory on hover), CLIs ("current", or "N updates" from `ProviderVersions`), accounts (with an "N
+signed out" chip) and the paired vault it backs up to. A row opens the machine's page. On compact
+width only machine, status and running show; the page has the rest. The pane's status line ends
+with each vault that is behind: "All 3 machines connected · herder-vault-0 6 h behind".
 
-Vault shows each paired vault's `VaultSection`. A vault that connected machines back up to
-(`get_vault_link`, asked of the machines this device owns) but this device is not paired with
-gets an `UnpairedVaultCard` instead: who backs up to it, and how to pair with it to see its
-statistics.
+Under the table, the **Vault** section has a `VaultRow` per paired vault: its hosts, sessions and
+size, and the host furthest behind ("work-mbp 6 h behind", or "✓ caught up"); it opens the
+vault's page. A vault that connected machines back up to (`get_vault_link`, asked of the
+machines this device owns) but this device is not paired with gets an `UnpairedVaultRow`: who
+backs up to it, and Add Machine to pair with it. Vault has no sidebar section of its own.
+
+The vault's page (`VaultPage`) reads "Connected · backing up 2 hosts · last batch 3 min. ago".
+Its owners get two tabs: **Overview** and **Secrets** (the sets, their grants and secrets, and the
+recent access). Overview is a strip of quiet chips (sessions, with the per-state breakdown on
+hover; idle; archived; size), then a hosts table: freshness, sessions, top projects and the
+Takes handoffs switch. Freshness (`Freshness`) is always relative: "✓ caught up" with the last
+batch's age, or "6 h behind" with a "Why?" popover, when the host has been offline that long or
+its last batch arrived that late (more than five minutes). The gear opens the vault's machine
+page (connection, forget). Screenshots: `machines.png`, `vault-page.png` (HerderKit's
+`MachinesScreenshotTests`).
 
 A session a paired vault replicates is listed once (`Lists.shadowed`): from its own host while
 that host is paired here and connected, else from the vault, read-only. Only the listed copy is

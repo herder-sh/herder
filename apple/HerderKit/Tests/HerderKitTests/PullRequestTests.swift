@@ -327,7 +327,5 @@ struct CompactTabTests {
         // Usage shows on Providers, inside Machines.
         #expect(CompactTab(.providers) == .machines)
         #expect(CompactTab(.machines) == .machines)
-        // A vault has no tab of its own: it shows inside Machines.
-        #expect(CompactTab(.vault) == .machines)
     }
 }
