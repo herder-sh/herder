@@ -211,10 +211,10 @@ struct NativeAgentCard: View {
     let agent: NativeAgent
     let fleet: Fleet
     let key: SessionKey
-    @State private var showingChat = false
+    @Environment(\.pages) private var pages
 
     var body: some View {
-        Button { showingChat = true } label: {
+        Button { pages.open(.agent(key, agent.id)) } label: {
             HStack(spacing: 12) {
                 ProviderMark(provider: fleet.session(key)?.provider ?? "claude", size: 20)
                     .padding(8).background(Theme.surface, in: Circle())
@@ -236,37 +236,30 @@ struct NativeAgentCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open sub-agent: \(agent.title), \(agent.status)")
-        .sheet(isPresented: $showingChat) {
-            NativeAgentChat(reference: agent.id, fleet: fleet, key: key)
-        }
     }
 }
 
-/// The sheet a sub-agent opens in: who it is and how it did, its task, its own transcript,
-/// and what it returned.
-struct NativeAgentChat: View {
+/// A sub-agent's page: who it is and how it did, its task, its own transcript, and what it
+/// returned. It opens over its conversation, as the transcript in it may open sheets.
+struct NativeAgentPage: View {
     let reference: NativeAgent.ID
     let fleet: Fleet
     let key: SessionKey
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Group {
             if let model = fleet.session(key), let agent = NativeAgent.find(reference, in: model) {
-                NativeAgentDetail(agent: agent, model: model, fleet: fleet, key: key) { dismiss() }
+                NativeAgentDetail(agent: agent, model: model, fleet: fleet, key: key)
             } else {
-                VStack(spacing: 14) {
-                    Text("This sub-agent is no longer available.").foregroundStyle(Theme.secondary)
-                    Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.background)
+                Text("This sub-agent is no longer available.").foregroundStyle(Theme.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Theme.background)
             }
         }
-        #if os(macOS)
-        .frame(minWidth: 600, idealWidth: 760, minHeight: 480, idealHeight: 700)
+        #if os(iOS)
+        .navigationTitle("Sub-agent")
+        .navigationBarTitleDisplayMode(.inline)
         #endif
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -275,7 +268,6 @@ struct NativeAgentDetail: View {
     let model: SessionModel
     let fleet: Fleet
     let key: SessionKey
-    let close: () -> Void
 
     var body: some View {
         let blocks = Transcript.blocks(model, parent: agent.id)
@@ -315,30 +307,9 @@ struct NativeAgentDetail: View {
 
     private var parentTitle: String { model.title ?? "Conversation" }
 
-    /// The way back, then the agent: its provider and state, kind and model, title, badge and run time.
+    /// The agent: its provider and state, kind and model, title, badge and run time.
     private var header: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 6) {
-                Button(action: close) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                        Text(parentTitle).lineLimit(1).truncationMode(.middle)
-                    }
-                    .foregroundStyle(Theme.text)
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                    .background(Theme.raised, in: .rect(cornerRadius: 6))
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.cancelAction)
-                .help("Back to the conversation (Esc)")
-                .accessibilityLabel("Back to \(parentTitle)")
-                Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(Theme.tertiary)
-                Text("Sub-agent").foregroundStyle(Theme.tertiary).lineLimit(1)
-                Spacer(minLength: 8)
-            }
-            .font(.caption.weight(.semibold))
             HStack(alignment: .center, spacing: 14) {
                 ProviderMark(provider: model.provider ?? "claude", size: 22)
                     .padding(10)

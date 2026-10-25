@@ -46,12 +46,15 @@ struct FleetView: View {
     let fleet: Fleet
     @State private var sheet: AppSheet?
     @State private var item: SidebarItem = .board
+    /// The pages open over the section, on the Mac and iPad.
+    @State private var pages = PageStack()
     @State private var session: SessionKey?
     @State private var draft: Draft?
     @State private var tab = CompactTab.board
     @State private var projectsPath: [NavRoute] = []
     @State private var boardPath: [NavRoute] = []
     @State private var chatsPath: [NavRoute] = []
+    @State private var machinesPath: [NavRoute] = []
     @State private var boardQuery = ""
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -75,6 +78,7 @@ struct FleetView: View {
                 if sheet == .newProject, let projectId = selection.projectId {
                     draft = nil
                     session = nil
+                    pages.back(to: 0)
                     item = .project(projectId)
                     tab = .projects
                     projectsPath = [.project(projectId)]
@@ -145,7 +149,8 @@ struct FleetView: View {
     private var showsEverySession: Bool { item == .board }
 
     private var shell: some View {
-        DesktopShell(fleet: fleet, sheet: $sheet, item: $item, session: $session, draft: $draft, opened: opened)
+        DesktopShell(fleet: fleet, sheet: $sheet, item: $item, pages: $pages, session: $session, draft: $draft,
+                     opened: opened)
     }
 
     /// Shows a session just created from a draft: beside the Board or Chats it
@@ -153,6 +158,7 @@ struct FleetView: View {
     /// started from, else on the Board.
     private func opened(_ key: SessionKey) {
         draft = nil
+        pages.back(to: 0)
         if !showsEverySession, let projectId = fleet.lists.projects.first(where: { $0.sessions.contains { $0.key == key } })?.projectId {
             item = .project(projectId)
         }
@@ -170,7 +176,7 @@ struct FleetView: View {
     /// Closes a session's pane, and pops it and what was pushed over it on every tab.
     private func close(_ key: SessionKey) {
         if session == key { session = nil }
-        for path in [$projectsPath, $boardPath, $chatsPath] {
+        for path in [$projectsPath, $boardPath, $chatsPath, $machinesPath] {
             if let index = path.wrappedValue.firstIndex(of: .session(key)) { path.wrappedValue.removeSubrange(index...) }
         }
     }
@@ -183,7 +189,19 @@ struct FleetView: View {
                     .tabItem { Label(tab.title, systemImage: tab.symbol) }
                     .badge(tab == .board ? fleet.lists.requests.count : 0)
                     .tag(tab)
+                    // A page pushes onto the tab it opens from.
+                    .environment(\.pages, PageNavigator(open: { path(tab).wrappedValue.append(.page($0)) },
+                                                         close: { _ = path(tab).wrappedValue.popLast() }))
             }
+        }
+    }
+
+    private func path(_ tab: CompactTab) -> Binding<[NavRoute]> {
+        switch tab {
+        case .board: $boardPath
+        case .chats: $chatsPath
+        case .projects: $projectsPath
+        case .machines: $machinesPath
         }
     }
 
@@ -220,14 +238,19 @@ struct FleetView: View {
             }
             .environment(\.sessionPath, $boardPath)
         case .machines:
-            NavigationStack { MachinesView(fleet: fleet, sheet: $sheet, showsVaults: true, showsSections: true) }
+            NavigationStack(path: $machinesPath) {
+                MachinesView(fleet: fleet, sheet: $sheet, showsVaults: true, showsSections: true)
+                    .navigationDestination(for: NavRoute.self, destination: destination)
+            }
+            .environment(\.sessionPath, $machinesPath)
         }
     }
 
     @ViewBuilder private func destination(_ route: NavRoute) -> some View {
         switch route {
         case .session(let key): SessionView(fleet: fleet, key: key)
-        case .project(let id): ProjectView(fleet: fleet, id: id, sheet: $sheet, draft: $draft)
+        case .project(let id): ProjectView(fleet: fleet, id: id, draft: $draft)
+        case .page(let page): page.view(fleet: fleet)
         }
     }
     #endif
@@ -363,8 +386,8 @@ struct ProjectsView: View {
 struct ProjectView: View {
     let fleet: Fleet
     let id: String
-    @Binding var sheet: AppSheet?
     @Binding var draft: Draft?
+    @Environment(\.pages) private var pages
     @State private var query = ""
 
     var body: some View {
@@ -381,7 +404,7 @@ struct ProjectView: View {
         .toolbar {
             BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey)
             if let projectId = project?.projectId {
-                Button("Project Settings", systemImage: "gearshape") { sheet = .projectSettings(projectId: id) }
+                Button("Project Settings", systemImage: "gearshape") { pages.open(.projectSettings(projectId: id)) }
                 let started = Draft.inProject(projectId, fleet: fleet)
                 Button("New Session", systemImage: "plus") { draft = started }
                     .disabled(started == nil)

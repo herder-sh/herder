@@ -140,11 +140,8 @@ struct ProvidersView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
     @State private var period = UsagePeriod.week
-    @State private var setup: Setup?
-    @State private var detail: String?
-    @State private var settingUp = false
-    @State private var adding: Provider?
-    @State private var installs: ProviderJobKey?
+    @State private var presented: Presented?
+    @Environment(\.pages) private var pages
     @State private var showsModels = false
 
     /// An account to log in to on a machine.
@@ -153,6 +150,23 @@ struct ProvidersView: View {
         let draft: AccountDraft
 
         var id: HostId { hostId }
+    }
+
+    /// The one sheet the page shows: one that leads to another replaces itself with it.
+    private enum Presented: Identifiable {
+        case setUp
+        case login(Setup)
+        case add(Provider)
+        case installs(ProviderJobKey)
+
+        var id: String {
+            switch self {
+            case .setUp: "set-up"
+            case .login(let setup): "login/\(setup.hostId)/\(setup.draft.provider)"
+            case .add(let provider): "add/\(provider)"
+            case .installs(let key): "installs/\(key.hostId)/\(key.job)"
+            }
+        }
     }
 
     /// What the usage depends on: asked again when the period or the connected machines change.
@@ -199,23 +213,16 @@ struct ProvidersView: View {
                 .filter { $0.connected && $0.hosts.isEmpty }.map(\.hostId))) {
             await fleet.refreshUsage(over: period)
         }
-        .sheet(item: $setup) { setup in
-            AddAccountSheet(fleet: fleet, hostId: setup.hostId, initialProvider: setup.draft.provider,
-                            initialDraft: setup.draft)
+        .sheet(item: $presented) { presented in
+            switch presented {
+            case .setUp: SetUpSheet(fleet: fleet) { self.presented = .login($0) }
+            case .login(let setup):
+                AddAccountSheet(fleet: fleet, hostId: setup.hostId, initialProvider: setup.draft.provider,
+                                initialDraft: setup.draft)
+            case .add(let provider): NewAccountSheet(fleet: fleet, provider: provider)
+            case .installs(let key): InstallsSheet(fleet: fleet, focus: key)
+            }
         }
-        .sheet(item: Binding(get: { detail.map(Detail.init) }, set: { detail = $0?.id })) { detail in
-            AccountDetailSheet(fleet: fleet, loginId: detail.id, period: period)
-        }
-        .sheet(isPresented: $settingUp) { SetUpSheet(fleet: fleet) }
-        .sheet(item: Binding(get: { adding.map(Detail.init) }, set: { adding = $0?.id })) { provider in
-            NewAccountSheet(fleet: fleet, provider: provider.id)
-        }
-        .sheet(item: $installs) { key in InstallsSheet(fleet: fleet, focus: key) }
-    }
-
-    /// A string as an `Identifiable`, for `sheet(item:)`.
-    private struct Detail: Identifiable {
-        let id: String
     }
 
     // MARK: Summary
@@ -283,7 +290,7 @@ struct ProvidersView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
-            PillButton(title: "Set Up…", prominent: true) { settingUp = true }
+            PillButton(title: "Set Up…", prominent: true) { presented = .setUp }
         }
         .padding(14)
         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
@@ -322,7 +329,7 @@ struct ProvidersView: View {
                     }
                 }
                 Spacer(minLength: 8)
-                PillButton(title: "Add", symbol: "plus") { adding = group.provider }
+                PillButton(title: "Add", symbol: "plus") { presented = .add(group.provider) }
                     .accessibilityLabel("Add \(ModelCatalog.providerName(group.provider)) Account")
             }
             VStack(spacing: 0) {
@@ -339,7 +346,7 @@ struct ProvidersView: View {
     /// One login: who it is and where on the left, what is left of its tightest limit and what
     /// it cost on the right; opens its details.
     private func row(_ login: ProviderAccounts.Login, usage: UsageReport.Login?, counted: Bool) -> some View {
-        Button { detail = login.id } label: {
+        Button { pages.open(.account(loginId: login.id)) } label: {
             HStack(alignment: .center, spacing: 14) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -413,7 +420,7 @@ struct ProvidersView: View {
                 let updatable = versions.updatable
                 if !updatable.isEmpty {
                     PillButton(title: "Update All (\(updatable.count))", symbol: "arrow.down.circle", prominent: true) {
-                        installs = updatable.map { fleet.install($0.provider, on: $0.hostId) }.first
+                        presented = updatable.map { fleet.install($0.provider, on: $0.hostId) }.first.map(Presented.installs)
                     }
                 } else if versions.rows.contains(where: { !$0.outdated.isEmpty }) {
                     PillButton(title: "Update All", symbol: "arrow.down.circle") {}
@@ -423,11 +430,11 @@ struct ProvidersView: View {
             }
             VersionTable(versions: versions) { cell in
                 guard cell.blocked == nil, cell.action != nil else { return }
-                installs = fleet.install(cell.provider, on: cell.hostId)
+                presented = .installs(fleet.install(cell.provider, on: cell.hostId))
             }
             let running = fleet.providerTerminals.installs
             if !running.isEmpty {
-                Button { installs = running.last } label: {
+                Button { presented = running.last.map(Presented.installs) } label: {
                     Label(running.count == 1 ? "1 install or update" : "\(running.count) installs and updates",
                           systemImage: "terminal")
                         .font(.caption).foregroundStyle(Theme.secondary)
@@ -513,10 +520,11 @@ struct SetUpGaps: Equatable {
 }
 
 /// Every login missing on a machine, each with a way to set it up there: the provider's own
-/// login on that machine, after its installer when the CLI is missing.
+/// login on that machine, after its installer when the CLI is missing. Setting one up hands
+/// it to `open`, which shows its login in this sheet's place.
 struct SetUpSheet: View {
     let fleet: Fleet
-    @State private var setup: ProvidersView.Setup?
+    let open: (ProvidersView.Setup) -> Void
 
     var body: some View {
         let gaps = SetUpGaps(ProviderAccounts(machines: fleet.machines))
@@ -541,7 +549,7 @@ struct SetUpSheet: View {
                     .padding(.vertical, 10)
                     ForEach(gap.machines) { place in
                         RowDivider()
-                        SetUpRow(fleet: fleet, login: gap.login, place: place) { setup = $0 }
+                        SetUpRow(fleet: fleet, login: gap.login, place: place, open: open)
                     }
                 }
             }
@@ -549,10 +557,6 @@ struct SetUpSheet: View {
             Text("herder runs each provider’s own login on the machine, in the account’s config directory.")
                 .font(.footnote).foregroundStyle(Theme.tertiary)
             Spacer()
-        }
-        .sheet(item: $setup) { setup in
-            AddAccountSheet(fleet: fleet, hostId: setup.hostId, initialProvider: setup.draft.provider,
-                            initialDraft: setup.draft)
         }
     }
 }
@@ -745,15 +749,14 @@ struct InstallsSheet: View {
     }
 }
 
-/// One login across the machines: what is left of its plan's limits, what it cost over the
-/// period, and each machine it is on, to edit or log in again there, or missing from, to set
-/// it up there.
-struct AccountDetailSheet: View {
+/// One login's page: what is left of its plan's limits, what it cost over the last week, and
+/// each machine it is on, to edit or log in again there, or missing from, to set it up there.
+struct AccountPage: View {
     let fleet: Fleet
     let loginId: String
-    let period: UsagePeriod
     @State private var editing: Editing?
     @State private var setup: ProvidersView.Setup?
+    private let period = UsagePeriod.week
 
     /// An account on a machine, to edit.
     struct Editing: Identifiable {
@@ -765,11 +768,15 @@ struct AccountDetailSheet: View {
 
     var body: some View {
         let login = ProviderAccounts(machines: fleet.machines).groups.flatMap(\.logins).first { $0.id == loginId }
-        SheetScaffold(title: login.map { $0.email ?? $0.account.label } ?? "Account",
-                      subtitle: login.map { ModelCatalog.providerName($0.provider) } ?? "", height: 680) {
+        DetailPage(title: login.map { $0.email ?? $0.account.label } ?? "Account",
+                   status: login.map(status) ?? "") {
+            if let login { ProviderMark(provider: login.provider, size: 28) }
+        } actions: {
+            EmptyView()
+        } content: {
             if let login {
-                limits(login)
-                usage(login)
+                limits(login).detailSection("Plan limits")
+                usage(login).detailSection(period.title)
                 SettingsList(title: "Machines") {
                     ForEach(Array(login.on.enumerated()), id: \.element.id) { index, place in
                         if index > 0 { RowDivider() }
@@ -780,14 +787,12 @@ struct AccountDetailSheet: View {
                         SetUpRow(fleet: fleet, login: login, place: place) { setup = $0 }
                     }
                 }
+                .detailSection("Machines")
             } else {
                 Text("This account is no longer on any machine.").foregroundStyle(Theme.secondary)
             }
-        } footer: {
-            Text("Accounts with the same provider and email share one login, and its limits.")
-                .font(.footnote).foregroundStyle(Theme.tertiary)
-            Spacer()
         }
+        .task { await fleet.refreshUsage(over: period) }
         .sheet(item: $editing) { editing in
             EditAccountSheet(fleet: fleet, hostId: editing.hostId, account: editing.account)
         }
@@ -795,6 +800,14 @@ struct AccountDetailSheet: View {
             AddAccountSheet(fleet: fleet, hostId: setup.hostId, initialProvider: setup.draft.provider,
                             initialDraft: setup.draft)
         }
+    }
+
+    /// "Claude · on 2 machines": accounts with the same provider and email share one login, and
+    /// its limits.
+    private func status(_ login: ProviderAccounts.Login) -> String {
+        let on = login.on.count == 1 ? "on 1 machine" : "on \(login.on.count) machines"
+        let parts: [String?] = [ModelCatalog.providerName(login.provider), on, login.fallbackOn.isEmpty ? nil : "fallback"]
+        return parts.compactMap(\.self).joined(separator: " · ")
     }
 
     @ViewBuilder private func limits(_ login: ProviderAccounts.Login) -> some View {

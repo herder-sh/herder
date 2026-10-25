@@ -89,6 +89,7 @@ the project header's gear).
 | session | fills the rest | replaces the list, with **Back** | pushed; tab bar hidden |
 | inspector | 300 pt side pane in the session | side pane | sheet (§6) |
 | new session | `ProjectPicker` sheet, draft in the session pane | same | sheet, then the draft full screen (`fullScreenCover`) |
+| object pages (§8.5) | the main area, under a breadcrumb; ⌘[ goes back | same | pushed on the tab's stack |
 | sheets | centred, 560 pt wide (`SheetScaffold`) | same | system sheet, full width |
 
 Rules:
@@ -125,7 +126,7 @@ Rules:
   `projectsPath`), so switching tabs keeps each tab's place.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
-  parent.
+  parent, a page's breadcrumb (`PageTrail`, ⌘[) to what it opened over.
 
 Screenshots: `mac-home.png` (rail), `mac-sidebar-expanded.png`, `mac-sidebar-machines.png`
 (the machines popover), `mac-narrow.png`, `ios-home.png`.
@@ -393,7 +394,8 @@ Screenshots: `mac-session.png`, `mac-session-approval.png`, `mac-session-running
 | Model, account, machine | popover (340 pt) | popover (fits 375 pt) | `ModelPicker`, `FooterMenu` |
 | Permission mode, ⋯ | menu | menu | SwiftUI `Menu` |
 | New Session | sheet | sheet, full width | `ProjectPicker` |
-| Machine and project settings, Add Machine, Switch, Fork | sheet, 560 pt (`SheetScaffold`) | system sheet, full width | `SheetScaffold` |
+| Machine, account, project settings, vault, sub-agent | page in the main area (§8.5) | pushed | `DetailPage`, `Page` |
+| Add Machine, Add Account, Switch, Fork | sheet, 560 pt (`SheetScaffold`) | system sheet, full width | `SheetScaffold` |
 | Draft session | session pane | full screen | `DraftSessionView` |
 | Toasts (archived, undo) | bottom, centred capsule | same | `ToastView` |
 
@@ -405,6 +407,10 @@ Rules:
   under `#if os(macOS)` or a regular size class only (`SheetScaffold` does this already).
 - **Every sheet uses `SheetScaffold`**: title and subtitle, a close button (Esc on the Mac),
   scrolling content, a footer with the primary action on the right.
+- **Sheets never open sheets.** A sheet is a short create flow or a confirmation. What it leads
+  to replaces it (Set Up on Other Machines hands its login to Add Account in its place; the
+  QR scanner takes Add Machine's place), or is a page. `NoNestedSheetsTests` fails on any view
+  that draws a `SheetScaffold` and presents a sheet or a full-screen cover.
 
 Screenshots: `mac-session-inspector.png`, `ios-session-inspector.png` (today's side pane on a
 phone), `mac-new-session.png`, `ios-new-session.png`, `mac-machine-settings.png`,
@@ -523,6 +529,39 @@ Xcode preview in its file.
 - **Amber means needs you** (`Theme.accent`), and nothing else uses it.
 - **Every problem carries its fix.** Anything warning- or error-coloured has its action
   button beside it.
+
+### 8.5 Detail pages (P14.9)
+
+Objects get pages, actions get sheets. A machine, an account, a project's settings, a vault and
+a provider's sub-agent are a `Page`. On the Mac and iPad a page opens over its section in the
+main area (`PageStack` in `DesktopShell`), under a breadcrumb of the section and each page on
+the way ("Machines › trash-can-01"), each crumb a way back to it and ⌘[ one step back
+(`PageTrail`); choosing a section in the sidebar, even the one shown, closes its pages. On iPhone
+the same page is pushed on the tab's `NavigationStack` (`NavRoute.page`). Views open and close
+pages through the environment's `pages` (`PageNavigator`), so they need not know which.
+
+Every page is a `DetailPage`, top to bottom:
+
+- **Header**: the name, a `StatusChip` ("● Connected · 38 ms"), the live status sentence
+  ("owner · 2 running"), the actions on the right.
+- **Needs attention** (`NeedsAttention`, `AttentionRow`), only when something is wrong, each
+  problem with its fix beside it.
+- **Settings** in `SettingsList` groups.
+- **About** (`AboutSection`): identifiers such as the fingerprint and host id, collapsed.
+- **Danger zone** (`DangerZone`, `DangerButton`): what cannot be undone, asked about first.
+
+Each part marked `detailSection(_:)` (the four above do it themselves) is listed in a section
+index on the left of a page with four or more of them, on the Mac and iPad, which scrolls to it.
+iPhone has no index.
+
+Changes save as they are made: `Autosave` runs a row's save and its `SettingRow(saved:)` shows a
+quiet "Saved" by the control for two seconds, or the error in the hint's place until the next
+change. A Save button exists only in create sheets.
+
+The pages' contents are today's settings, regrouped into this anatomy; P14.10–P14.14 redesign
+each one. `DetailPageScreenshotTests` draws the scaffold
+([`screenshots/p14-9/detail-page.png`](screenshots/p14-9/detail-page.png)); `DetailPage` has an
+Xcode preview.
 
 ---
 

@@ -25,11 +25,13 @@ struct RowDivider: View {
 }
 
 /// A setting: its name and at most one line of hint on the left, its control on the right.
-/// Longer help goes behind an ⓘ beside the name.
+/// Longer help goes behind an ⓘ beside the name. On a page that saves as it goes, `saved` puts
+/// a quiet "Saved" by the control, or the error in the hint's place (`Autosave`).
 struct SettingRow<Control: View>: View {
     let label: String
     var hint = ""
     var help = ""
+    var saved: SaveState?
     @ViewBuilder var control: Control
 
     var body: some View {
@@ -39,11 +41,14 @@ struct SettingRow<Control: View>: View {
                     Text(label).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
                     if !help.isEmpty { InfoButton(text: help) }
                 }
-                if !hint.isEmpty {
+                if case .failed(let error) = saved {
+                    Text(error).font(.caption).foregroundStyle(Theme.failure).lineLimit(2)
+                } else if !hint.isEmpty {
                     Text(hint).font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
                 }
             }
             Spacer(minLength: 12)
+            SaveMark(state: saved)
             control
         }
         .padding(.horizontal, 14)

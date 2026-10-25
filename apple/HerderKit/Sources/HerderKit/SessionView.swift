@@ -11,8 +11,8 @@ struct SessionView: View {
     @State private var pushedFork: SessionKey?
     @State private var switching = false
     @State private var showsTerminal = false
-    @State private var showsMachineSettings = false
     @AppStorage("listHidden") private var listHidden = false
+    @Environment(\.pages) private var pages
     @AppStorage("inspectorShown") private var inspectorShown = false
     /// The inspector as a sheet, on compact width; not kept, unlike the pane.
     @State private var inspectorSheet = false
@@ -85,7 +85,7 @@ struct SessionView: View {
                     }
                     if model?.loaded == true && model?.status == .waitingForCapacity {
                         let resources = fleet.machines.first { $0.hostId == key.hostId }?.resources
-                        WaitingForCapacityNote(load: resources.map(TurnLoad.init)) { showsMachineSettings = true }
+                        WaitingForCapacityNote(load: resources.map(TurnLoad.init)) { pages.open(.machine(key.hostId)) }
                     }
                 }
                 .scrollTargetLayout()
@@ -183,7 +183,6 @@ struct SessionView: View {
             if let key = pushedFork { SessionView(fleet: fleet, key: key) }
         }
         .sheet(isPresented: $switching) { SwitchSheet(fleet: fleet, key: key) }
-        .sheet(isPresented: $showsMachineSettings) { MachineSettingsSheet(fleet: fleet, hostId: key.hostId) }
         .sheet(isPresented: $inspectorSheet) {
             SessionInspector(fleet: fleet, key: key)
                 .presentationDetents([.medium, .large])
@@ -838,9 +837,15 @@ struct DraftSessionView: View {
         .onDisappear {
             if starting == nil { PromptDrafts.shared.save(draftContent, for: draft.key) }
         }
-        .sheet(isPresented: $picking) {
+        // A phone shows the draft full screen; the picker pushes there rather than open over it.
+        .sheet(isPresented: Binding(get: { picking && !compact }, set: { picking = $0 })) {
             ProjectPicker(fleet: fleet, newProject: false, picked: move(to:))
         }
+        #if os(iOS)
+        .navigationDestination(isPresented: Binding(get: { picking && compact }, set: { picking = $0 })) {
+            ProjectPicker(fleet: fleet, newProject: false, picked: move(to:))
+        }
+        #endif
     }
 
     /// What it asks, with where it runs as a button that picks another project; a chat just
