@@ -36,6 +36,9 @@ final class TerminalConnection {
     /// Output that came before the emulator was made, for it to show first: a sign-in runs
     /// before anyone opens its terminal.
     @ObservationIgnored private var backlog: [UInt8] = []
+    /// The emulator's latest size, for the terminal once it opens: it may open before the
+    /// emulator is shown, at a stand-in size.
+    @ObservationIgnored private var size = (cols: 0, rows: 0)
 
     init(hostId: HostId, terminalId: TerminalId?, account: NewAccount? = nil, relogin: AccountId? = nil,
          install: Provider? = nil, awsProfile: String? = nil) {
@@ -48,7 +51,9 @@ final class TerminalConnection {
     }
 
     /// Opens a new shell in the session's worktree, or a login, or attaches to `terminalId`.
+    /// Called again while it opens, it only takes the new size.
     func connect(client: Client, sessionId: SessionId?, cols: Int, rows: Int) {
+        size = (cols, rows)
         guard pump == nil else { return }
         pump = Task {
             do {
@@ -76,7 +81,7 @@ final class TerminalConnection {
                 }
                 self.stream = stream
                 terminalId = stream.terminalId()
-                stream.resize(cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
+                stream.resize(cols: UInt16(clamping: size.cols), rows: UInt16(clamping: size.rows))
                 state = .attached
                 while let event = await stream.next(), !Task.isCancelled {
                     switch event {
@@ -108,6 +113,7 @@ final class TerminalConnection {
     }
 
     func resize(cols: Int, rows: Int) {
+        size = (cols, rows)
         stream?.resize(cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
     }
 
@@ -200,7 +206,6 @@ struct TerminalPane: View {
                     if connections.indices.contains(store.selected) {
                         let connection = connections[store.selected]
                         TerminalSurface(connection: connection, client: fleet.client, sessionId: key.sessionId)
-                            .id(ObjectIdentifier(connection))
                     }
                 }
             }
@@ -265,6 +270,8 @@ struct TerminalSurface: View {
 
     var body: some View {
         EmulatorView(connection: connection, client: client, sessionId: sessionId)
+            // A new container per connection: the view keeps the emulator it was made with.
+            .id(ObjectIdentifier(connection))
             .padding(6)
             .overlay {
                 switch connection.state {
