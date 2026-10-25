@@ -201,10 +201,12 @@ final class ScreenshotTests: XCTestCase {
         #endif
         mcpServers()
         guard openAddAccount() else { return }
+        // Every machine it can be added on starts ticked; the rest say why not.
         shoot(platform("add-account-form"))
-        // Start Login closes the sheet: the login runs in Activity, which needs you.
-        let start = app.buttons["Start Login"].firstMatch
-        guard wait(start, "Start Login") else { return dismiss() }
+        onlyOnDevbox()
+        // Logging in closes the sheet: each machine's login runs in Activity, which needs you.
+        let start = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Log in on'")).firstMatch
+        guard wait(start, "Log in on") else { return dismiss() }
         press(start)
         settle()
         guard openActivity() else { return }
@@ -231,8 +233,9 @@ final class ScreenshotTests: XCTestCase {
         // A second login, for Codex, cancelled from its detail. Its id is `codex-2`, as devbox
         // has a `codex` account already.
         if openAddAccount() {
-            let codex = app.buttons["Codex"].firstMatch
+            let codex = app.buttons["provider-codex"].firstMatch
             if wait(codex, "Codex choice") { press(codex) }
+            onlyOnDevbox()
             press(start)
             settle()
             if openActivity() {
@@ -409,13 +412,16 @@ final class ScreenshotTests: XCTestCase {
         guard wait(add, "Add Account") else { return false }
         press(add)
         settle()
-        let sheet = app.sheets.firstMatch.exists ? app.sheets.firstMatch : app
-        let devbox = sheet.buttons.matching(NSPredicate(format: "label BEGINSWITH 'devbox'")).firstMatch
-        if devbox.waitForExistence(timeout: 3) {
-            press(devbox)
-            settle()
-        }
         return true
+    }
+
+    /// Unticks the Add Account sheet's other machines, so the login runs on `devbox` alone.
+    private func onlyOnDevbox() {
+        for name in ["studio", "laptop"] {
+            let row = app.descendants(matching: .any)["account-machine-\(name)"].firstMatch
+            if row.waitForExistence(timeout: 2), row.isEnabled { press(row) }
+        }
+        settle()
     }
 
     private func platform(_ name: String) -> String {

@@ -9,7 +9,6 @@ struct SessionView: View {
     /// Opens another session (a child); `nil` pushes it.
     var open: ((SessionKey) -> Void)?
     @State private var pushedFork: SessionKey?
-    @State private var switching = false
     @State private var showsTerminal = false
     @AppStorage("listHidden") private var listHidden = false
     @Environment(\.pages) private var pages
@@ -182,7 +181,6 @@ struct SessionView: View {
         )) {
             if let key = pushedFork { SessionView(fleet: fleet, key: key) }
         }
-        .sheet(isPresented: $switching) { SwitchSheet(fleet: fleet, key: key) }
         .sheet(isPresented: $inspectorSheet) {
             SessionInspector(fleet: fleet, key: key)
                 .presentationDetents([.medium, .large])
@@ -379,7 +377,6 @@ struct SessionView: View {
                 if model.turn != nil {
                     Button("Interrupt", systemImage: "stop.circle") { Task { await fleet.interrupt(key) } }
                 }
-                Button("Switch Account or Model…", systemImage: "arrow.left.arrow.right") { switching = true }
                 if model.state.renamable {
                     Button("Rename…", systemImage: "pencil") { fleet.renaming = key }
                 }
@@ -532,7 +529,7 @@ private struct Composer: View {
         let machine = fleet.machines.first { $0.hostId == key.hostId }
         let accounts = machine?.accounts ?? []
         let account = accounts.first { $0.accountId == model.accountId }
-        // The provider is the session's; the Switch sheet moves it to another.
+        // The provider is the session's; its account menu moves it to another provider's account.
         let current = ModelCatalog.Choice(provider: model.provider ?? "", model: model.model ?? "")
         VStack(alignment: .leading, spacing: 6) {
             if model.state == .archived {
@@ -599,11 +596,14 @@ private struct Composer: View {
         PromptDrafts.Content(text: text, images: images, files: files)
     }
 
-    /// The provider's accounts on the machine; picking one moves the session to it.
+    /// The machine's accounts, the session's provider's first; picking one moves the session to
+    /// it, onto another provider's default model when it is another provider's.
     private func accountSection(_ accounts: [Account]) -> SettingsSection {
-        SettingsSection(
+        let ordered = accounts.filter { $0.provider == model.provider } + accounts.filter { $0.provider != model.provider }
+        return SettingsSection(
             kind: .account,
-            options: SettingsOption.accounts(accounts.filter { $0.provider == model.provider }, current: model.accountId)
+            options: SettingsOption.accounts(ordered, current: model.accountId),
+            hint: ordered.contains { $0.provider != model.provider } ? "Another provider’s starts on its default model" : nil
         ) { id in
             guard let other = accounts.first(where: { $0.accountId == id }) else { return }
             Task { await fleet.switchSession(key, to: other, model: "") }
@@ -649,51 +649,6 @@ private struct Composer: View {
         } else {
             Task { await fleet.submit(text, images: images, files: files, to: key) }
         }
-    }
-}
-
-/// Moves a session to another account or model: the machine's accounts with their busiest
-/// usage window, and a model.
-struct SwitchSheet: View {
-    let fleet: Fleet
-    let key: SessionKey
-    @Environment(\.dismiss) private var dismiss
-    @State private var accountId: AccountId = ""
-    @State private var model = ""
-
-    var body: some View {
-        let session = fleet.session(key)
-        let accounts = fleet.machines.first { $0.hostId == key.hostId }?.accounts ?? []
-        let chosen = accounts.first { $0.accountId == accountId }
-        SheetScaffold(title: "Switch", subtitle: "Move the session to another account, model or provider.", height: 520) {
-            Field(label: "Account") {
-                ChoiceChips(options: accounts.map { account in
-                    let busiest = account.usage.max { $0.usedPercent < $1.usedPercent }
-                    let usage = busiest.map { "\(Lists.usageLabel($0.window)) \(Int($0.usedPercent.rounded()))%" } ?? ""
-                    let current = account.accountId == session?.accountId ? "current · " : ""
-                    return (account.accountId, account.label, "\(current)\(account.provider)\(usage.isEmpty ? "" : " · " + usage)")
-                }, selection: $accountId)
-            }
-            Field(label: "Model", hint: chosen?.provider == session?.provider
-                  ? "Blank keeps \(session?.model ?? "the model")."
-                  : "Blank uses the provider's default.") {
-                InputBox(placeholder: chosen?.provider == session?.provider ? "keep \(session?.model ?? "")" : "Provider's default",
-                         text: $model, mono: true)
-            }
-            if let refusal = fleet.refusals[key] {
-                Text(refusal).font(.footnote).foregroundStyle(Theme.failure)
-            }
-        } footer: {
-            Spacer()
-            ActionButton(title: "Switch", style: .primary) {
-                guard let chosen else { return }
-                await fleet.switchSession(key, to: chosen, model: model)
-                if fleet.refusals[key] == nil { dismiss() }
-            }
-            .frame(maxWidth: 200)
-            .keyboardShortcut(.defaultAction)
-        }
-        .onAppear { accountId = session?.accountId ?? accounts.first?.accountId ?? "" }
     }
 }
 

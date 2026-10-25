@@ -15,7 +15,7 @@ enum AppSheet: Identifiable, Hashable {
     case newSession
     /// A new project: a first session in a repository herder does not list yet.
     case newProject
-    /// A new provider account: pick its machine first.
+    /// A new provider account, on as many machines as are ticked.
     case addAccount
     /// Signs every owned machine in to AWS IAM Identity Center.
     case awsSignIn
@@ -33,7 +33,7 @@ extension AppSheet {
         case .share: ShareSheet(fleet: fleet)
         case .newSession: ProjectPicker(fleet: fleet, newProject: false, picked: drafted)
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
-        case .addAccount: NewAccountSheet(fleet: fleet)
+        case .addAccount: AddAccountSheet(fleet: fleet)
         case .awsSignIn: AwsSignInSheet(fleet: fleet)
         case .activity: ActivitySheet(fleet: fleet)
         }
@@ -67,7 +67,9 @@ struct PairSheet: View {
 
     private var form: some View {
         SheetScaffold(title: "Add Machine", subtitle: "Pair this device with a machine running herder.",
-                      height: machines == nil ? 440 : 600) {
+                      height: machines == nil ? 420 : 560,
+                      hint: results != nil ? "" : machines == nil ? "Or, on a device already paired, open Machines › Pair Another Device."
+                          : "A fingerprint must match the one `herder pair` printed.") {
             if let results {
                 Field(label: "Results") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -105,8 +107,7 @@ struct PairSheet: View {
             .padding(12)
             .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
         }
-        Field(label: scanLabel,
-              hint: "Or, on a device already paired, open Machines › Pair Another Device.") {
+        Field(label: scanLabel) {
             VStack(alignment: .trailing, spacing: 8) {
                 #if os(iOS)
                 ActionButton(title: "Scan QR Code", style: .primary) { scanning = true }
@@ -121,8 +122,7 @@ struct PairSheet: View {
             }
         }
         if let machines {
-            Field(label: machines.count == 1 ? "3 · Check it is your machine" : "3 · Check they are your \(machines.count) machines",
-                  hint: "A fingerprint must match the one `herder pair` printed on its machine.") {
+            Field(label: machines.count == 1 ? "3 · Check it is your machine" : "3 · Check they are your \(machines.count) machines") {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(Array(machines.enumerated()), id: \.offset) { _, uri in
                         VStack(alignment: .leading, spacing: 10) {
