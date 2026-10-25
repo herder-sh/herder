@@ -222,7 +222,7 @@ struct AddAccountSheet: View {
             }
             Spacer(minLength: 8)
             if status?.canInstall == true {
-                Button("Install") { shown = fleet.providerTerminals.install(draft.provider, on: hostId) }
+                Button("Install") { shown = fleet.install(draft.provider, on: hostId) }
                     .disabled(!canManage)
             }
         }
@@ -345,7 +345,8 @@ struct JobTerminal: View {
 
     var body: some View {
         if let connection = fleet.providerTerminals[key] {
-            let progress = JobProgress(connection.state, added: added)
+            let progress = if case .install = key.job { fleet.installProgress(key) }
+                else { JobProgress(connection.state, added: added) }
             HStack(spacing: 10) {
                 ProviderMark(provider: provider(connection), size: 18)
                 VStack(alignment: .leading, spacing: 2) {
@@ -385,15 +386,16 @@ struct JobTerminal: View {
             "\(connection.account?.label ?? id) · \(id)"
         case .relogin(let id): "Logging \(id) in again"
         case .install(let provider):
-            machine?.providers.first { $0.provider == provider }?.installed == true
+            fleet.providerTerminals.before(key) != nil
                 ? "Updating \(ModelCatalog.providerName(provider))" : "Installing \(ModelCatalog.providerName(provider))"
         }
     }
 
     private func guidance(_ progress: JobProgress) -> String {
         switch (key.job, progress) {
-        case (.install, .running), (.install, .starting): "The vendor’s installer runs below, on \(machine?.name ?? "the machine")."
-        case (.install, _): "Finished. The version shows once the machine checks the CLI again."
+        case (.install, .installing), (.install, .starting): "The vendor’s installer runs below, on \(machine?.name ?? "the machine")."
+        case (.install, .failed(let message)): message
+        case (.install, _): "\(progress.label) on \(machine?.name ?? "the machine")."
         case (_, .added): "The machine lists the account; sessions can use it now."
         case (_, .ended): "The login ended without the provider reporting the account logged in."
         case (_, .failed(let message)): message
@@ -456,7 +458,7 @@ struct JobBadge: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            if progress == .starting || progress == .running {
+            if !progress.finished {
                 ProgressView().controlSize(.mini)
             } else {
                 Circle().fill(progress.tint).frame(width: 6, height: 6)
@@ -475,8 +477,12 @@ extension JobProgress {
         switch self {
         case .starting: "Starting"
         case .running: "Waiting for you"
+        case .installing: "Installing"
         case .added: "Added"
         case .ended: "Ended"
+        case .installed(let version): version.isEmpty ? "Installed" : "Installed \(version)"
+        case .updated(let from, let to): from.isEmpty || to.isEmpty ? "Updated" : "Updated \(from) → \(to)"
+        case .upToDate(let version): version.isEmpty ? "Up to date" : "Up to date \(version)"
         case .failed: "Failed"
         }
     }
@@ -484,7 +490,8 @@ extension JobProgress {
     var tint: Color {
         switch self {
         case .starting, .running: Theme.accent
-        case .added: Theme.success
+        case .installing: Theme.secondary
+        case .added, .installed, .updated, .upToDate: Theme.success
         case .ended: Theme.tertiary
         case .failed: Theme.failure
         }

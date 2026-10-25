@@ -413,7 +413,7 @@ struct ProvidersView: View {
                 let updatable = versions.updatable
                 if !updatable.isEmpty {
                     PillButton(title: "Update All (\(updatable.count))", symbol: "arrow.down.circle", prominent: true) {
-                        installs = updatable.map { fleet.providerTerminals.install($0.provider, on: $0.hostId) }.first
+                        installs = updatable.map { fleet.install($0.provider, on: $0.hostId) }.first
                     }
                 } else if versions.rows.contains(where: { !$0.outdated.isEmpty }) {
                     PillButton(title: "Update All", symbol: "arrow.down.circle") {}
@@ -423,7 +423,7 @@ struct ProvidersView: View {
             }
             VersionTable(versions: versions) { cell in
                 guard cell.blocked == nil, cell.action != nil else { return }
-                installs = fleet.providerTerminals.install(cell.provider, on: cell.hostId)
+                installs = fleet.install(cell.provider, on: cell.hostId)
             }
             let running = fleet.providerTerminals.installs
             if !running.isEmpty {
@@ -575,7 +575,7 @@ struct SetUpRow: View {
             PillButton(title: place.needsInstall ? "Install & Set Up" : "Set Up") {
                 let taken = AccountDraft.taken(on: fleet.machines.first { $0.hostId == place.hostId },
                                                pending: fleet.providerTerminals.pendingIds(on: place.hostId))
-                if place.needsInstall { fleet.providerTerminals.install(login.provider, on: place.hostId) }
+                if place.needsInstall { fleet.install(login.provider, on: place.hostId) }
                 open(ProvidersView.Setup(hostId: place.hostId, draft: login.draft(taken: taken)))
             }
             .disabled(!place.connected || !place.owner)
@@ -727,13 +727,13 @@ struct InstallsSheet: View {
     private func row(_ key: ProviderJobKey, selected: Bool) -> some View {
         let name = fleet.machines.first { $0.hostId == key.hostId }?.name ?? key.hostId
         let provider: Provider = if case .install(let provider) = key.job { provider } else { "" }
-        let progress = fleet.providerTerminals[key].map { JobProgress($0.state, added: false) } ?? .ended
+        let progress = fleet.installProgress(key)
         return Button { picked = key } label: {
             HStack(spacing: 10) {
                 ProviderMark(provider: provider, size: 16)
                 Text("\(ModelCatalog.providerName(provider)) on \(name)").font(.subheadline).foregroundStyle(Theme.text)
                 Spacer()
-                JobBadge(progress: progress == .running ? .running : progress)
+                JobBadge(progress: progress)
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 40)
@@ -741,6 +741,7 @@ struct InstallsSheet: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("install-\(provider)-\(name)")
     }
 }
 
