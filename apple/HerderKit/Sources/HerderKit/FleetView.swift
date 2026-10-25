@@ -210,8 +210,11 @@ struct FleetView: View {
         case .board:
             NavigationStack(path: $boardPath) {
                 BoardView(fleet: fleet, sheet: $sheet, query: boardQuery)
-                    .alwaysSearchable(text: $boardQuery, prompt: "Sessions")
-                    .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession } }
+                    .alwaysSearchable(text: $boardQuery, prompt: "Tasks")
+                    .toolbar {
+                        BoardSortMenu()
+                        Button("New Session", systemImage: "plus") { sheet = .newSession }
+                    }
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $boardPath)

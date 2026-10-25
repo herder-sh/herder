@@ -377,7 +377,7 @@ struct Lists: Equatable {
                 projectId: projectId, branch: model.branch ?? "", worktree: model.worktree ?? "", machine: machineName,
                 machineOffline: host.map { !$0.online } ?? false,
                 state: state, activity: model.activity,
-                age: Timestamp.age(model.updatedAt, now: now), prs: model.prs,
+                age: Timestamp.age(model.updatedAt, now: now), updatedAt: model.updatedAt, prs: model.prs,
                 children: kids.count, childrenNeedYou: kids.filter(\.model.needsUser).count,
                 agents: NativeAgent.listed(in: model))
         }
