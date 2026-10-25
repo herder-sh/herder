@@ -12,7 +12,7 @@ private func pr(
 }
 
 struct BoardTests {
-    @Test func theBoardListsLiveTreesInOneListNewestFirst() {
+    @Test func theBoardListsOpenTreesNewestFirst() {
         var ready = Script("01A")
         var failing = Script("01B")
         var running = Script("01C")
@@ -29,16 +29,21 @@ struct BoardTests {
         ]
         let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B", "01C", "01D", "01E"])],
                           sessions: sessions)
-        let board = lists.board
+        let board = BoardSection.sections(lists.board(), by: .recent, now: .now).flatMap(\.trees)
         #expect(board.map(\.lead.title) == ["Running", "Failing", "Ready"])
         #expect(board[2].children.map(\.title) == ["Ready too"])
     }
 
     /// The Board of `sessions`, all in one project on one machine.
     private func board(_ sessions: [SessionModel]) -> [TaskTree] {
+        projectLists(sessions).board()
+    }
+
+    /// The lists of `sessions`, all in one project on one machine.
+    private func projectLists(_ sessions: [SessionModel]) -> Lists {
         var host = machine("host-a", name: "a", sessions: sessions.map(\.key.sessionId))
         for index in host.sessions.indices { host.sessions[index].projectId = "github.com/acme/app" }
-        return Lists(machines: [host], sessions: Dictionary(uniqueKeysWithValues: sessions.map { ($0.key, $0) })).board
+        return Lists(machines: [host], sessions: Dictionary(uniqueKeysWithValues: sessions.map { ($0.key, $0) }))
     }
 
     @Test func aChildIsListedUnderItsParentNotOnItsOwn() {
@@ -77,10 +82,10 @@ struct BoardTests {
         #expect(alone[0].agentsState == nil)
     }
 
-    @Test func archivedChildrenLeaveTheBoardAndAnArchivedParentStillLeadsItsLiveChild() {
+    @Test func anArchivedTopTakesItsTaskOffTheBoardAndArchivedChildrenGetNoRow() {
         let archive = EventBody.sessionStatusChanged(status: .archived, retryAt: nil)
         var scripts = ["01A", "01B", "01C", "01D", "01E", "01F"].map { Script($0) }
-        let columns = board([
+        let trees = board([
             scripts[0].model([created(task: "Lead")]),
             scripts[1].model([created(task: "Archived first", parent: "01A"), archive]),
             scripts[2].model([created(task: "Live", parent: "01A")]),
@@ -88,13 +93,30 @@ struct BoardTests {
             scripts[4].model([created(task: "Archived lead"), archive]),
             scripts[5].model([created(task: "Its live child", parent: "01E")]),
         ])
-        let trees = columns
-        #expect(trees.map(\.lead.title) == ["Archived lead", "Lead"])
-        #expect(trees[0].lead.state == .archived)
-        #expect(trees[0].listed.map(\.title) == ["Its live child"])
-        // Archived children no live session hangs from are in the project's Archived group.
-        #expect(trees[1].listed.map(\.title) == ["Live"])
-        #expect(trees[1].archived.isEmpty)
+        #expect(trees.map(\.lead.title) == ["Lead"])
+        #expect(trees[0].listed.map(\.title) == ["Live"])
+    }
+
+    @Test func showArchivedListsTheTasksArchivedTodayAndNoChild() {
+        let archive = EventBody.sessionStatusChanged(status: .archived, retryAt: nil)
+        var scripts = ["01A", "01B", "01C", "01D"].map { Script($0) }
+        let lists = projectLists([
+            scripts[0].model([created(task: "Open")]),
+            scripts[1].model([created(task: "Archived child", parent: "01A"), archive]),
+            scripts[2].model([created(task: "Done"), archive]),
+            scripts[3].model([created(task: "Done child", parent: "01C"), archive]),
+        ])
+        // The scripts' events are at the start of 2026, UTC.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        let today = Date(timeIntervalSince1970: 1_767_225_600 + 3600)
+        #expect(lists.board().map(\.lead.title) == ["Open"])
+        let archived = lists.archivedToday(now: today, calendar: calendar)
+        #expect(archived.map(\.lead.title) == ["Done"])
+        #expect(archived[0].children.map(\.title) == ["Done child"])
+        #expect(lists.archivedToday(matching: "nothing", now: today, calendar: calendar).isEmpty)
+        // Archived yesterday: gone from the list.
+        #expect(lists.archivedToday(now: today.addingTimeInterval(86400), calendar: calendar).isEmpty)
     }
 
     @Test func aSearchFindsATreeByAnyOfItsSessions() {
@@ -118,7 +140,7 @@ struct BoardTests {
             running.key: running.model([created(task: "Run the tests"), .sessionStatusChanged(status: .running, retryAt: nil)]),
         ]
         let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B", "01C"])], sessions: sessions)
-        #expect(lists.board(matching: "").map(\.lead.title) == ["Run the tests", "Fix the deal pages"])
+        #expect(lists.board(matching: "").map(\.lead.title).sorted() == ["Fix the deal pages", "Run the tests"])
         // A child's branch finds its whole tree.
         #expect(lists.board(matching: "CHECKOUT").map(\.lead.title) == ["Fix the deal pages"])
         #expect(lists.board(matching: "tests").map(\.lead.title) == ["Run the tests"])
@@ -147,5 +169,119 @@ struct BoardTests {
         #expect(tree?.agentCount == 2)
         // A search for a grandchild keeps its whole tree, folded under its top.
         #expect(trees.filter { $0.matches("grandchild") }.map(\.lead.title) == ["Lead"])
+    }
+
+    // MARK: Three states
+
+    @Test func everySessionStateReducesToOneOfThreeTaskStates() {
+        #expect(TaskState(.running) == .working)
+        #expect(TaskState(.waiting) == .working)
+        #expect(TaskState(.needsYou) == .waitingForYou)
+        #expect(TaskState(.error) == .waitingForYou)
+        #expect(TaskState(.idle) == .idle)
+        #expect(TaskState(.done) == .idle)
+        #expect(TaskState(.archived) == .idle)
+        #expect(TaskState(.moved) == .idle)
+    }
+
+    @Test func aTaskWaitsForYouWhenAnySessionInItDoesAndSaysWhatFor() {
+        var lead = Script("01A")
+        var asking = Script("01B")
+        var running = Script("01C")
+        let waiting = board([
+            lead.model([created(task: "Lead"), .sessionStatusChanged(status: .running, retryAt: nil)]),
+            asking.model([
+                created(task: "Asking", parent: "01A"),
+                .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "Run cargo test?",
+                                   routedTo: .user, reason: nil),
+            ]),
+            running.model([created(task: "Running", parent: "01A"), .sessionStatusChanged(status: .running, retryAt: nil)]),
+        ])[0]
+        #expect(waiting.state == .waitingForYou)
+        #expect(waiting.activity == "Run cargo test?")
+
+        var top = Script("01D")
+        var child = Script("01E")
+        let working = board([
+            top.model([created(task: "Top")]),
+            child.model([created(task: "Child", parent: "01D"), .sessionStatusChanged(status: .running, retryAt: nil)]),
+        ])[0]
+        #expect(working.state == .working)
+
+        var alone = Script("01F")
+        #expect(board([alone.model([created(task: "Alone")])])[0].state == .idle)
+    }
+
+    @Test func aTaskIgnoresItsPullRequests() {
+        var failing = Script("01A")
+        let tree = board([
+            failing.model([created(task: "Failing CI"), .prLinked(pr: pr(1, ci: .failing, review: .changesRequested))]),
+        ])[0]
+        #expect(tree.state == .idle)
+    }
+
+    // MARK: Grouping and ordering
+
+    private static let now = Date(timeIntervalSince1970: 1_767_268_800) // 2026-01-01 12:00 UTC
+    private static let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        return calendar
+    }()
+
+    /// A task whose top is `id`, last active `hoursAgo` before `now`.
+    private func task(_ id: String, _ title: String, hoursAgo: Double?, project: String = "app") -> TaskTree {
+        let lead = SessionSummary(
+            key: SessionKey(hostId: "h", sessionId: id), title: title, project: project, branch: "", machine: "m",
+            state: .idle, activity: "", age: "",
+            updatedAt: hoursAgo.map { Self.now.addingTimeInterval(-$0 * 3600) })
+        var tree = TaskTree(lead: lead, children: [])
+        tree.project = project
+        return tree
+    }
+
+    @Test func recentGroupsTasksByDayOfLastActivityNewestFirst() {
+        let trees = [
+            task("01A", "Two days ago", hoursAgo: 50),
+            task("01B", "This morning", hoursAgo: 3),
+            task("01C", "Not loaded", hoursAgo: nil),
+            task("01D", "Last night", hoursAgo: 14),
+            task("01E", "Just now", hoursAgo: 0.1),
+            task("01F", "Also two days ago", hoursAgo: 49),
+        ]
+        let sections = BoardSection.sections(trees, by: .recent, now: Self.now, calendar: Self.calendar)
+        #expect(sections.map(\.title).prefix(2) == ["Today", "Yesterday"])
+        #expect(sections.last?.title == "Earlier")
+        #expect(sections.map { $0.trees.map(\.lead.title) } == [
+            ["Just now", "This morning"], ["Last night"], ["Also two days ago", "Two days ago"], ["Not loaded"],
+        ])
+        #expect(sections[2].title.contains("30"))
+    }
+
+    @Test func createdOrdersByTheTopSessionsId() {
+        // ULIDs: the first was made a day before the second.
+        let older = task("01KDV2Q8000000000000000000", "Older", hoursAgo: 0.1)
+        let newer = task("01KDXN4C000000000000000000", "Newer", hoursAgo: 30)
+        let sections = BoardSection.sections([older, newer], by: .created, now: Self.now, calendar: Self.calendar)
+        #expect(sections.flatMap(\.trees).map(\.lead.title) == ["Newer", "Older"])
+        #expect(sections.count == 2)
+    }
+
+    @Test func projectGroupsTasksByProjectEachNewestFirst() {
+        let trees = [
+            task("01A", "Herder old", hoursAgo: 5, project: "herder"),
+            task("01B", "Trip", hoursAgo: 1, project: "trip1"),
+            task("01C", "Herder new", hoursAgo: 2, project: "herder"),
+            task("01D", "Loose", hoursAgo: 1, project: ""),
+        ]
+        let sections = BoardSection.sections(trees, by: .project, now: Self.now, calendar: Self.calendar)
+        #expect(sections.map(\.title) == ["herder", "No project yet", "trip1"])
+        #expect(sections[0].trees.map(\.lead.title) == ["Herder new", "Herder old"])
+    }
+
+    @Test func aULIDsTimeIsItsFirstTenCharacters() {
+        #expect(ULID.date("01ARZ3NDEKTSV4RRFFQ69G5FAV").map { ($0.timeIntervalSince1970 * 1000).rounded() } == 1_469_922_850_259)
+        #expect(ULID.date("01A") == nil)
+        #expect(ULID.date("0IARZ3NDEKTSV4RRFFQ69G5FAV") == nil)
     }
 }

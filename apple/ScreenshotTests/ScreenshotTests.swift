@@ -27,7 +27,7 @@ final class ScreenshotTests: XCTestCase {
         if app.windows.firstMatch.frame.width >= 1300, expand.waitForExistence(timeout: 5) { expand.click() }
         #endif
 
-        // The Board: the approval waiting on you, then every task tree with its agents folded.
+        // The Board: every open task by day, the one waiting on you an amber dot.
         guard wait(row("Upgrade date-fns to v4"), "board") else { return finish() }
         settle()
         #if os(macOS)
@@ -88,7 +88,54 @@ final class ScreenshotTests: XCTestCase {
             #endif
         }
         providers()
+        archiving()
         finish()
+    }
+
+    /// Archives a finished task from the Board, which takes its row off, then undoes it: on the
+    /// Mac from its circle and with ⌘Z, then with J and E and the toast's Undo; on the iPhone
+    /// with a swipe and the toast's Undo.
+    private func archiving() {
+        let title = "Tidy the README badges"
+        guard section("Board") else { return }
+        let task = row(title)
+        guard wait(task, "\(title) on the Board") else { return }
+        reveal(task)
+        #if os(macOS)
+        let circle = app.buttons["Archive \(title)"].firstMatch
+        guard wait(circle, "archive circle") else { return }
+        press(circle)
+        guard gone(task, "archived from its circle") else { return }
+        app.typeKey("z", modifierFlags: .command)
+        guard wait(task, "back with ⌘Z") else { return }
+        settle()
+        press(task)
+        settle()
+        app.typeKey("e", modifierFlags: [])
+        guard gone(task, "archived with E") else { return }
+        #else
+        task.swipeLeft()
+        let archive = app.buttons["Archive"].firstMatch
+        guard wait(archive, "swipe's Archive") else { return }
+        archive.tap()
+        guard gone(task, "archived with a swipe") else { return }
+        #endif
+        let undo = app.buttons["Undo"].firstMatch
+        guard wait(undo, "toast's Undo") else { return }
+        press(undo)
+        _ = wait(task, "back with Undo")
+    }
+
+    /// Whether `element` goes within a few seconds; when it does not, records `what` as missed.
+    private func gone(_ element: XCUIElement, _ what: String) -> Bool {
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
+        if XCTWaiter().wait(for: [gone], timeout: 5) == .completed { return true }
+        missed.append(what)
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "missed \(what)"
+        tree.lifetime = .keepAlways
+        add(tree)
+        return false
     }
 
     /// The Providers page, adding accounts on `devbox` (a second login while the first runs,
