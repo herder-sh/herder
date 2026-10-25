@@ -1574,7 +1574,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         .await
         .unwrap();
     let CommandResult::Secrets { sets, .. } = &listed else {
-        panic!("expected secrets: {listed:?}");
+        panic!("expected secrets");
     };
     let grants: Vec<_> = sets
         .iter()
@@ -1605,7 +1605,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         .await
         .unwrap();
     let CommandResult::SecretAudit { entries } = &audit else {
-        panic!("expected the audit: {audit:?}");
+        panic!("expected the audit");
     };
     let slack_reads = entries
         .iter()
@@ -1619,7 +1619,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
             );
         })
         .count();
-    assert!(slack_reads >= 1, "{entries:?}");
+    assert!(slack_reads >= 1, "no fetch for host use in the audit");
     let wire = serde_json::to_string(&audit).unwrap();
     assert!(!wire.contains("slack-v"), "{wire}");
 
