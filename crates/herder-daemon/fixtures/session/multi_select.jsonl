@@ -1,0 +1,7 @@
+# The agent asks a question several of whose choices may be picked; the turn continues once it is answered.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Set up CI."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "question_asked", "question_id": "question-1", "turn_id": "turn-1", "text": "Which checks?", "choices": ["Lint", "Tests", "Docs"], "multi_select": true}}
+{"expect": {"type": "answer_question", "question_id": "question-1", "answer": {"type": "choices", "indices": [0, 2]}}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Done."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}

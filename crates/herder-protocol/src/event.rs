@@ -166,6 +166,9 @@ pub enum EventBody {
         text: String,
         /// Answers to pick from; empty for a free-text answer.
         choices: Vec<String>,
+        /// Whether several choices may be picked, answered with `choices`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        multi_select: bool,
         /// Who is asked first; a user can always answer, whatever the route.
         routed_to: Route,
         /// Why a child's question went straight to the user; absent when it follows the default route.
@@ -562,6 +565,11 @@ pub enum Answer {
     Choice {
         /// Position of the choice in the question's `choices`, from 0.
         index: u32,
+    },
+    /// Several of a multi-select question's choices.
+    Choices {
+        /// Positions of the choices in the question's `choices`, from 0, in the order picked.
+        indices: Vec<u32>,
     },
 }
 

@@ -43,7 +43,7 @@ struct ListsTests {
     @Test func questionsAskedTogetherAreOneRequest() {
         var script = Script("01A")
         func ask(_ id: String) -> EventBody {
-            .questionAsked(questionId: id, turnId: "t1", text: "Which?", choices: ["Red", "Blue"], routedTo: .user, reason: nil)
+            .questionAsked(questionId: id, turnId: "t1", text: "Which?", choices: ["Red", "Blue"], multiSelect: false, routedTo: .user, reason: nil)
         }
         let model = script.model([
             created(), .turnStarted(turnId: "t1"), ask("q1"), ask("q2"), ask("q3"),
