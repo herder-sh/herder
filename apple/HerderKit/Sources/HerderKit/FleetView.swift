@@ -255,7 +255,7 @@ struct FleetView: View {
         switch route {
         case .session(let key): SessionView(fleet: fleet, key: key)
         case .project(let id): ProjectView(fleet: fleet, id: id, draft: $draft)
-        case .page(let page): page.view(fleet: fleet)
+        case .page(let page): page.view(fleet: fleet, sheet: $sheet)
         }
     }
     #endif

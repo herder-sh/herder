@@ -36,12 +36,12 @@ extension Page {
         }
     }
 
-    @MainActor @ViewBuilder func view(fleet: Fleet) -> some View {
+    @MainActor @ViewBuilder func view(fleet: Fleet, sheet: Binding<AppSheet?>) -> some View {
         switch self {
         case .machine(let hostId): MachinePage(fleet: fleet, hostId: hostId)
         case .account(let loginId): AccountPage(fleet: fleet, loginId: loginId)
         case .projectSettings(let projectId): ProjectSettingsPage(fleet: fleet, projectId: projectId)
-        case .skills: SkillsView(fleet: fleet)
+        case .skills: SkillsView(fleet: fleet, sheet: sheet)
         case .vault(let hostId): VaultPage(fleet: fleet, vault: hostId)
         case .agent(let key, let id): NativeAgentPage(reference: id, fleet: fleet, key: key)
         }

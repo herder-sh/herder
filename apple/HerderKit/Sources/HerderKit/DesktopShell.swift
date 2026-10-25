@@ -40,7 +40,7 @@ struct DesktopShell: View {
                     VStack(spacing: 0) {
                         PageTrail(crumbs: crumbs) { pages.back(to: $0) }
                             .overlay(alignment: .trailing) { ActivityChip(fleet: fleet).padding(.trailing, 20) }
-                        page.view(fleet: fleet).id(page)
+                        page.view(fleet: fleet, sheet: $sheet).id(page)
                     }
                 } else {
                     content
