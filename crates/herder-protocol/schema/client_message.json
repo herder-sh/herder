@@ -1783,12 +1783,16 @@
           ]
         },
         {
-          "description": "On a vault, let a host fetch the secrets of a set for every session it runs; owners\nonly. Answered with `applied`; granting it again changes nothing. Refused with\n`not_found` for an unknown set or a host that never replicated here, and `unsupported`\non a daemon that is not a vault.",
+          "description": "On a vault, let a host fetch the secrets of a set for every session it runs, or, with\n`host_use`, for its own use, such as a bot's token, and not its sessions'; owners only.\nThe two are separate grants. Answered with `applied`; granting it again changes\nnothing. Refused with `not_found` for an unknown set or a host that never replicated\nhere, and `unsupported` on a daemon that is not a vault.",
           "type": "object",
           "properties": {
             "host_id": {
               "description": "The host.",
               "$ref": "#/$defs/HostId"
+            },
+            "host_use": {
+              "description": "Whether the grant is for the host's own use rather than its sessions'.",
+              "type": "boolean"
             },
             "set": {
               "description": "The set.",
@@ -1806,12 +1810,16 @@
           ]
         },
         {
-          "description": "On a vault, stop a host fetching the secrets of a set; owners only. Values the host\nfetched already stay in its memory until they expire. Answered with `applied`. Refused\nwith `not_found` when the set is not granted to the host, and `unsupported` on a daemon\nthat is not a vault.",
+          "description": "On a vault, stop a host fetching the secrets of a set for its sessions, or, with\n`host_use`, for its own use; owners only. Values the host fetched already stay in its\nmemory until they expire. Answered with `applied`. Refused with `not_found` when the set is not granted to the host that way,\nand `unsupported` on a daemon that is not a vault.",
           "type": "object",
           "properties": {
             "host_id": {
               "description": "The host.",
               "$ref": "#/$defs/HostId"
+            },
+            "host_use": {
+              "description": "Whether the grant is the one for the host's own use.",
+              "type": "boolean"
             },
             "set": {
               "description": "The set.",

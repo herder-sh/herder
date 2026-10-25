@@ -739,6 +739,7 @@ fn dialog_input(
                                 CommandBody::RevokeSecretSet {
                                     set: set.clone(),
                                     host_id: host_id.clone(),
+                                    host_use: false,
                                 },
                                 format!("revoked {set} from {name}"),
                             )
@@ -747,6 +748,7 @@ fn dialog_input(
                                 CommandBody::GrantSecretSet {
                                     set: set.clone(),
                                     host_id: host_id.clone(),
+                                    host_use: false,
                                 },
                                 format!("granted {set} to {name}"),
                             )
@@ -1160,6 +1162,7 @@ mod tests {
             [CommandBody::RevokeSecretSet {
                 set: "coingate-prod".into(),
                 host_id: HostId::new("devbox"),
+                host_use: false,
             }]
         );
         // Keys wait for the vault.
@@ -1177,6 +1180,7 @@ mod tests {
             [CommandBody::GrantSecretSet {
                 set: "coingate-prod".into(),
                 host_id: HostId::new("laptop"),
+                host_use: false,
             }]
         );
         answer(&mut app, effects, Ok(CommandResult::Applied));

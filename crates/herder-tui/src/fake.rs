@@ -1627,6 +1627,7 @@ pub fn secrets() -> App {
     let set = |name: &str, hosts: &[&str]| SecretSet {
         name: name.into(),
         hosts: hosts.iter().map(|h| HostId::new(*h)).collect(),
+        host_use: Vec::new(),
     };
     let secret = |set: &str, name: &str, description: &str, secs: u64| SecretInfo {
         set: set.into(),
@@ -1639,7 +1640,8 @@ pub fn secrets() -> App {
             id,
             at: ago(secs),
             host_id: HostId::new(host),
-            session_id: SessionId::new(session),
+            session_id: Some(SessionId::new(session)),
+            purpose: None,
             set: set.into(),
             name: name.into(),
         };

@@ -9,7 +9,7 @@ struct SecretsTests {
     /// with `refusal` when set.
     @MainActor final class Vault {
         var sent: [CommandBody] = []
-        var sets: [SecretSet] = [SecretSet(name: "prod", hosts: ["devbox"])]
+        var sets: [SecretSet] = [SecretSet(name: "prod", hosts: ["devbox"], hostUse: [])]
         var secrets: [SecretInfo] = [
             SecretInfo(set: "prod", name: "API_KEY", description: "merchant api", updatedAt: "2026-10-13T08:00:00Z"),
         ]
@@ -56,8 +56,8 @@ struct SecretsTests {
         try await secrets.deleteSet("ci")
         #expect(vault.changes == [
             .createSecretSet(set: "ci"),
-            .grantSecretSet(set: "prod", hostId: "laptop"),
-            .revokeSecretSet(set: "prod", hostId: "devbox"),
+            .grantSecretSet(set: "prod", hostId: "laptop", hostUse: false),
+            .revokeSecretSet(set: "prod", hostId: "devbox", hostUse: false),
             .deleteSecret(set: "prod", name: "API_KEY"),
             .deleteSecretSet(set: "ci"),
         ])
@@ -145,7 +145,7 @@ struct SecretsTests {
             FleetHost(hostId: "devbox", hostName: "devbox", online: true, lastSeen: "", usage: nil),
             FleetHost(hostId: "laptop", hostName: "Laptop", online: false, lastSeen: "", usage: nil),
         ]
-        let listed = VaultSecrets.hosts(of: SecretSet(name: "prod", hosts: ["laptop", "gone"]), vaultHosts: hosts)
+        let listed = VaultSecrets.hosts(of: SecretSet(name: "prod", hosts: ["laptop", "gone"], hostUse: []), vaultHosts: hosts)
         #expect(listed.map(\.id) == ["devbox", "laptop", "gone"])
         #expect(listed.map(\.name) == ["devbox", "Laptop", nil])
     }
