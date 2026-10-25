@@ -5,7 +5,8 @@ use rusqlite::{Transaction, params};
 
 use crate::{Result, tag};
 
-/// Applies `event` to the `sessions`, `session_prs` and `session_branches` read models.
+/// Applies `event` to the `sessions`, `session_prs`, `session_branches` and `session_threads`
+/// read models.
 pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
     let id = event.session_id.as_str();
     match &event.body {
@@ -110,6 +111,24 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
                 id,
                 pr,
             )?;
+        }
+        EventBody::ThreadLinked { thread } => {
+            tx.prepare_cached(
+                "INSERT INTO session_threads (session_id, kind, bot_id, channel_id, thread_id,
+                     url, first_seen_seq)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT (session_id, bot_id, channel_id, thread_id)
+                     DO UPDATE SET url = excluded.url",
+            )?
+            .execute(params![
+                id,
+                tag(&thread.kind)?,
+                thread.bot_id.as_str(),
+                thread.channel_id,
+                thread.thread_id,
+                thread.url,
+                event.seq,
+            ])?;
         }
         EventBody::PrUnlinked { number } => {
             tx.prepare_cached("DELETE FROM session_prs WHERE session_id = ?1 AND number = ?2")?

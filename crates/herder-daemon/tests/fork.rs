@@ -944,8 +944,23 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
     let refused = b.handle(fork_relayed(None)).await.unwrap_err();
     assert!(refused.message.contains("vault"), "{refused:?}");
 
-    // The whole history, in two parts, the image and the file, forks onto B.
-    let (first, rest) = a_journal.split_at(2);
+    // The whole history, in two parts, the image and the file, forks onto B; a thread linked
+    // to the session stays the original's.
+    let mut linked = a_journal.clone();
+    let mut thread = a_journal[a_journal.len() - 1].clone();
+    thread.seq += 1;
+    thread.by = None;
+    thread.body = EventBody::ThreadLinked {
+        thread: herder_protocol::ThreadLink {
+            kind: herder_protocol::BotKind::Slack,
+            bot_id: herder_protocol::BotId::new("trash-can"),
+            channel_id: "C012AB3CD".into(),
+            thread_id: "1730000000.000100".into(),
+            url: None,
+        },
+    };
+    linked.push(thread);
+    let (first, rest) = linked.split_at(2);
     b.handle(upload(first.to_vec())).await.unwrap();
     b.handle(upload(rest.to_vec())).await.unwrap();
     b.handle(CommandBody::UploadHistory {
@@ -1004,6 +1019,11 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
         tail[0].body
     );
     assert_eq!(tail[0].by, Some(alice()));
+    assert!(
+        !b_journal
+            .iter()
+            .any(|event| matches!(event.body, EventBody::ThreadLinked { .. }))
+    );
     let kept = Image {
         media_type: FILE_MEDIA_TYPE.into(),
         data: csv,

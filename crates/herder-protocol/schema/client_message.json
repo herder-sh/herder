@@ -298,10 +298,196 @@
         "archive_retention_days"
       ]
     },
+    "Bot": {
+      "description": "A bot, as its `[[bots]]` entry configures it.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "The people the bot answers, each at most once; everyone else gets a note and nothing\nreaches a session.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BotUser"
+          }
+        },
+        "app_token": {
+          "description": "The machine-level secret holding Slack's app-level token (`xapp-`), which Socket Mode\nconnects with; required for Slack, refused for Telegram.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bot_id": {
+          "description": "The bot; unique on its host: ASCII letters, digits, `-`, `_` and `.`.",
+          "$ref": "#/$defs/BotId"
+        },
+        "channel_bindings": {
+          "description": "The project of new threads in each channel, each channel at most once.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChannelBinding"
+          }
+        },
+        "defaults": {
+          "description": "What a session the bot starts runs on.",
+          "$ref": "#/$defs/BotDefaults",
+          "default": {}
+        },
+        "kind": {
+          "description": "The chat it is a bot of.",
+          "$ref": "#/$defs/BotKind"
+        },
+        "name": {
+          "description": "Display name, as the chat shows the bot user.",
+          "type": "string"
+        },
+        "token": {
+          "description": "The machine-level secret holding the bot's token: Slack's bot token (`xoxb-`), or\nTelegram's bot token.",
+          "$ref": "#/$defs/SecretRef"
+        }
+      },
+      "required": [
+        "bot_id",
+        "kind",
+        "name",
+        "token"
+      ]
+    },
+    "BotDefaults": {
+      "description": "What a session a bot starts runs on; an absent value is chosen as `create_session` chooses\nit.",
+      "type": "object",
+      "properties": {
+        "account_ids": {
+          "description": "Accounts sessions start on and rotate across, all of `provider` when it is set; every\navailable account of the provider when empty.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AccountId"
+          }
+        },
+        "model": {
+          "description": "Model, in the provider's own naming.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "description": "Permission mode sessions start in.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "description": "Project of a new thread its channel binds to none and its message names none; a chat\nwhen absent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider": {
+          "description": "Provider sessions run on.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Provider"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "BotId": {
+      "description": "Identifies a chat bot on a host; the name its owner gave it, opaque to receivers.",
+      "type": "string"
+    },
+    "BotKind": {
+      "description": "The chat a bot is a bot of.",
+      "oneOf": [
+        {
+          "description": "A Slack app, connected over Socket Mode.",
+          "type": "string",
+          "const": "slack"
+        },
+        {
+          "description": "A Telegram bot.",
+          "type": "string",
+          "const": "telegram"
+        }
+      ]
+    },
+    "BotUser": {
+      "description": "A person a bot answers, and what they may do.",
+      "type": "object",
+      "properties": {
+        "approve": {
+          "description": "Whether they may answer approval requests.",
+          "type": "boolean",
+          "default": false
+        },
+        "channels": {
+          "description": "Whether they may drive sessions in channels, by mentioning the bot.",
+          "type": "boolean",
+          "default": false
+        },
+        "display_name": {
+          "description": "Their name, as herder records their actions: \"via ‹bot›, ‹name›\".",
+          "type": "string"
+        },
+        "dm": {
+          "description": "Whether they may drive sessions in direct messages with the bot.",
+          "type": "boolean",
+          "default": false
+        },
+        "external_user_id": {
+          "description": "Their user id in the chat, such as Slack's `U012AB3CD`.",
+          "type": "string"
+        },
+        "notify": {
+          "description": "Whether the bot messages them directly when a session on the host waits for them or\nfails.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "external_user_id",
+        "display_name"
+      ]
+    },
     "Bytes": {
       "description": "Raw bytes, encoded as a standard padded base64 string.",
       "type": "string",
       "contentEncoding": "base64"
+    },
+    "ChannelBinding": {
+      "description": "The project new threads of a channel work on.",
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "description": "The channel's id in the chat, such as Slack's `C012AB3CD`.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "The project.",
+          "$ref": "#/$defs/ProjectId"
+        }
+      },
+      "required": [
+        "channel_id",
+        "project_id"
+      ]
     },
     "CiStatus": {
       "description": "Combined status of a pull request's checks.",
@@ -1963,6 +2149,68 @@
           ]
         },
         {
+          "description": "List the bots this daemon's host holds, as its config's `[[bots]]` entries configure\nthem; owners only. Answered with `bots`. It changes nothing, so a resend is answered\nafresh. Refused with `unsupported` on a vault.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "list_bots"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Add a bot, or replace the one with its `bot_id`, kept as a `[[bots]]` entry of the\ndaemon's config; owners only. Answered with `applied`. Refused with `bad_request`,\nchanging nothing, when an id is not valid, Slack's `app_token` is missing or\nTelegram's given, a person or channel is listed twice, or an account is unknown or not\nof the provider; and with `unsupported` on a vault.",
+          "type": "object",
+          "properties": {
+            "bot": {
+              "description": "The bot, as it is to be.",
+              "$ref": "#/$defs/Bot"
+            },
+            "type": {
+              "type": "string",
+              "const": "put_bot"
+            }
+          },
+          "required": [
+            "type",
+            "bot"
+          ]
+        },
+        {
+          "description": "Remove a bot's `[[bots]]` entry, disconnecting it; owners only. Its tokens stay in the\nvault, and sessions keep their links to its threads. Answered with `applied`. Refused\nwith `not_found` for an unknown bot, and `unsupported` on a vault.",
+          "type": "object",
+          "properties": {
+            "bot_id": {
+              "description": "The bot.",
+              "$ref": "#/$defs/BotId"
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_bot"
+            }
+          },
+          "required": [
+            "type",
+            "bot_id"
+          ]
+        },
+        {
+          "description": "Say how each bot's connection to its chat stands; owners only. Answered with\n`bot_status`. It changes nothing, so a resend is answered afresh. Refused with\n`unsupported` on a vault.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "get_bot_status"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
           "description": "Start streaming a terminal's output; owners only.",
           "type": "object",
           "properties": {
@@ -3002,6 +3250,24 @@
             "title",
             "attachment"
           ]
+        },
+        {
+          "description": "A chat thread was linked to the session, `by` the user who linked it; absent when a\nbot did, for a thread a message in its chat started or continued. The thread's messages\nreach the session from then on, and the bot posts the session's answers there. Linking\na thread linked already changes nothing but its `url`.",
+          "type": "object",
+          "properties": {
+            "thread": {
+              "description": "The thread.",
+              "$ref": "#/$defs/ThreadLink"
+            },
+            "type": {
+              "type": "string",
+              "const": "thread_linked"
+            }
+          },
+          "required": [
+            "type",
+            "thread"
+          ]
         }
       ]
     },
@@ -3983,6 +4249,41 @@
     "TerminalId": {
       "description": "Identifies a terminal on a host; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "ThreadLink": {
+      "description": "A chat thread linked to a session: the thread's messages reach the session, and the bot\nposts the session's answers there.",
+      "type": "object",
+      "properties": {
+        "bot_id": {
+          "description": "The bot that holds the thread, on the session's host.",
+          "$ref": "#/$defs/BotId"
+        },
+        "channel_id": {
+          "description": "The channel or direct message the thread is in, as the chat names it.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The chat.",
+          "$ref": "#/$defs/BotKind"
+        },
+        "thread_id": {
+          "description": "The thread within the channel, as the chat names it: Slack's `thread_ts`.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Web link to the thread; absent when the chat gives none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "bot_id",
+        "channel_id",
+        "thread_id"
+      ]
     },
     "TitleSettings": {
       "description": "The `[titles]` table.",

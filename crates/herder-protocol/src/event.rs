@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, ApprovalId, Attachment, HostId, ItemId, PermissionMode, Provider, QuestionId, Seq,
-    SessionId, Timestamp, TurnId, TurnUsage, UserId,
+    SessionId, ThreadLink, Timestamp, TurnId, TurnUsage, UserId,
 };
 
 /// One journal record: `seq` orders it within its session, `by` names the user who caused it.
@@ -283,6 +283,14 @@ pub enum EventBody {
         /// When `url` stops working; absent when it never expires or there is no `url`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expires_at: Option<Timestamp>,
+    },
+    /// A chat thread was linked to the session, `by` the user who linked it; absent when a
+    /// bot did, for a thread a message in its chat started or continued. The thread's messages
+    /// reach the session from then on, and the bot posts the session's answers there. Linking
+    /// a thread linked already changes nothing but its `url`.
+    ThreadLinked {
+        /// The thread.
+        thread: ThreadLink,
     },
     /// An event type newer than this build; skip it.
     #[serde(other, skip_serializing)]

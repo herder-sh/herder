@@ -1,9 +1,9 @@
 //! SQLite append-only event journal and the projections derived from it.
 //!
 //! One [`Store`] owns the daemon's database file. Every durable [`Event`] is appended to the
-//! journal, and the read models it affects (the [`Session`] row with its title, the session's tracked pull
-//! requests and the branches it owns) are updated in the same transaction, so a projection is never ahead of, or behind,
-//! the journal.
+//! journal, and the read models it affects (the [`Session`] row with its title, the session's
+//! tracked pull requests, the branches it owns and the chat threads linked to it) are updated
+//! in the same transaction, so a projection is never ahead of, or behind, the journal.
 //!
 //! The API is synchronous; the daemon calls it from a dedicated thread or `spawn_blocking`.
 //! Appends take `&mut self`, so there is exactly one writer per [`Store`].
@@ -25,9 +25,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use herder_protocol::{
-    AccountId, Attachment, CommandId, CommandResult, Event, EventBody, FailoverTotal, HostId,
-    JournalRecord, PermissionMode, PromptId, Provider, PullRequest, RawEventBody, Seq, SessionId,
-    SessionStatus, Timestamp, TitleSource, TurnId, TurnUsage, UsageTotal, UserId,
+    AccountId, Attachment, BotId, CommandId, CommandResult, Event, EventBody, FailoverTotal,
+    HostId, JournalRecord, PermissionMode, PromptId, Provider, PullRequest, RawEventBody, Seq,
+    SessionId, SessionStatus, ThreadLink, Timestamp, TitleSource, TurnId, TurnUsage, UsageTotal,
+    UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -385,6 +386,30 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The chat threads linked to every session that has any, each in the order first linked.
+    pub fn threads(&self) -> Result<HashMap<SessionId, Vec<ThreadLink>>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT session_id, kind, bot_id, channel_id, thread_id, url FROM session_threads
+             ORDER BY session_id, first_seen_seq",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let thread = ThreadLink {
+                kind: get_tag(row, 1)?,
+                bot_id: BotId::new(row.get::<_, String>(2)?),
+                channel_id: row.get(3)?,
+                thread_id: row.get(4)?,
+                url: row.get(5)?,
+            };
+            Ok((SessionId::new(row.get::<_, String>(0)?), thread))
+        })?;
+        let mut threads: HashMap<SessionId, Vec<ThreadLink>> = HashMap::new();
+        for row in rows {
+            let (session, thread) = row?;
+            threads.entry(session).or_default().push(thread);
+        }
+        Ok(threads)
     }
 
     /// Every branch the session has owned, in the order first seen: the branch it was created
