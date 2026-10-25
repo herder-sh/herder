@@ -163,6 +163,16 @@ In `MachineSettingsSheet` an owner adds an account (`AddAccountSheet`) or edits 
 account again, in its own config directory, for a login that expired; both show the login
 terminal in the sheet (`TerminalSurface`), and the login keeps running if the sheet closes.
 
+Providers › **Update All**, a CLI's Install or Update, and **Install & Set Up** start each job
+with `Fleet.install`, which opens its terminal at once: every job runs whether its terminal is
+on screen or not. **Install and Update** (`InstallsSheet`) lists the jobs this device started;
+the header, the selected row and the terminal below always show the same job (the emulator is
+keyed by its connection). The daemon checks the CLI's version again before it closes an
+install's terminal, so the machine's versions are current when the job ends, and each row reads
+its outcome against the version it started from (`JobProgress(install:before:after:)`):
+"Updated 2.1.14 → 2.1.20", "Installed 0.9.4", "Up to date 2.1.20", or "Failed" on a non-zero
+exit or a CLI still missing. Screenshots: `mac-installs-running.png`, `mac-installs-finished.png`.
+
 ### 4.5 Usage (`UsageView`)
 
 Modelled on T3 Code's Usage page. A period picker (24h, 7d, 30d, month to date) and a machine

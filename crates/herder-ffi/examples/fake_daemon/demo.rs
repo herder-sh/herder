@@ -156,7 +156,7 @@ const CLIS: &[(&str, &[Cli], bool)] = &[
         "studio",
         &[
             ("claude", Some("2.1.9 (Claude Code)")),
-            ("codex", Some("codex-cli 0.46.0")),
+            ("codex", Some("codex-cli 0.44.0")),
             ("cursor", None),
         ],
         true,
