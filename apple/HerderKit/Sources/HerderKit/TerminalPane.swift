@@ -39,6 +39,11 @@ final class TerminalConnection {
     /// The emulator's latest size, for the terminal once it opens: it may open before the
     /// emulator is shown, at a stand-in size.
     @ObservationIgnored private var size = (cols: 0, rows: 0)
+    /// Everything the terminal printed, its last `logLimit` bytes, for `log`.
+    @ObservationIgnored private var output: [UInt8] = []
+    private static let logLimit = 512 * 1024
+    /// Called once the terminal has ended, or failed to open.
+    @ObservationIgnored var ended: (() -> Void)?
 
     init(hostId: HostId, terminalId: TerminalId?, account: NewAccount? = nil, relogin: AccountId? = nil,
          install: Provider? = nil, awsProfile: String? = nil) {
@@ -56,6 +61,7 @@ final class TerminalConnection {
         size = (cols, rows)
         guard pump == nil else { return }
         pump = Task {
+            defer { ended?() }
             do {
                 let stream = try await withTimeout(seconds: 10) { [hostId, terminalId, account, relogin, install, awsProfile] in
                     if let terminalId {
@@ -139,7 +145,13 @@ final class TerminalConnection {
         return view
     }
 
+    /// What the terminal printed, as plain text: its escape sequences dropped, and each line
+    /// as it was left once the program redrew it.
+    var log: String { TerminalLog.plain(output) }
+
     private func feed(_ bytes: [UInt8]) {
+        output += bytes
+        if output.count > Self.logLimit { output.removeFirst(output.count - Self.logLimit) }
         guard let emulator else {
             backlog += bytes
             return

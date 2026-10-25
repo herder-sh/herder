@@ -19,7 +19,7 @@ struct AwsSignInTests {
         let prompted = Terminal(terminalId: "t1", purpose: .awsLogin(profile: "trip1-prod", device: device))
         let other = Terminal(terminalId: "t2", purpose: .awsLogin(profile: "trip1-prod", device: nil))
         #expect(status(.attached, terminals: [other, prompted]) == .waiting(device))
-        #expect(!status(.attached, terminals: [prompted]).isFinal)
+        #expect(JobProgress(status(.attached, terminals: [prompted])).group == .needsYou)
     }
 
     @Test func theExitCodeTellsSignedInFromFailed() {
@@ -27,7 +27,7 @@ struct AwsSignInTests {
         #expect(status(.exited(1)) == .failed(1))
         #expect(status(.exited(1)).label == "Failed (exit 1)")
         #expect(status(.exited(nil)) == .failed(nil))
-        #expect(status(.exited(0)).isFinal && status(.exited(1)).isFinal)
+        #expect(JobProgress(status(.exited(0))).finished && JobProgress(status(.exited(1))).failed)
     }
 
     @Test func refusalsNameTheirCause() {

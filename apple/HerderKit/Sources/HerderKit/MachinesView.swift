@@ -49,6 +49,7 @@ struct MachinesView: View {
         .navigationTitle("Machines")
         .toolbar {
             #if os(iOS)
+            ActivityToolbarButton(fleet: fleet) { sheet = .activity }
             Button("Reconnect", systemImage: "arrow.clockwise") { fleet.wake() }
             if !AwsSignIn.machines(fleet.machines).isEmpty {
                 Button("AWS Sign-in", systemImage: "key") { sheet = .awsSignIn }

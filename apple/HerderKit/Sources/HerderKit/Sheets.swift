@@ -19,6 +19,8 @@ enum AppSheet: Identifiable, Hashable {
     case addAccount
     /// Signs every owned machine in to AWS IAM Identity Center.
     case awsSignIn
+    /// The installs, logins and sign-ins running, as a sheet on the iPhone.
+    case activity
 
     var id: Self { self }
 }
@@ -33,6 +35,7 @@ extension AppSheet {
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
         case .addAccount: NewAccountSheet(fleet: fleet)
         case .awsSignIn: AwsSignInSheet(fleet: fleet)
+        case .activity: ActivitySheet(fleet: fleet)
         }
     }
 }
