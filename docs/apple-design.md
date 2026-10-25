@@ -186,10 +186,10 @@ where the machine backs up (`get_vault_link`), backs it up to a connected vault 
 (`pair_vault_host` on the vault, then `link_vault` on the machine), or stops (`unlink_vault`,
 then `revoke_vault_host` on the vault when it is paired here as its owner).
 
-In `MachineSettingsSheet` an owner adds an account (`AddAccountSheet`) or edits one
-(`EditAccountSheet`). **Start Login** and the edit sheet's **Log In Again** (the provider's
-login of that account again, in its own config directory, for a login that expired) start the
-login in Activity (§4.9) and close the sheet; no sheet shows a terminal.
+An owner adds an account (`AddAccountSheet`, §8.6) or edits one (`EditAccountSheet`). **Log in
+on N machines** and the edit sheet's **Log In Again** (the provider's login of that account
+again, in its own config directory, for a login that expired) start the logins in Activity
+(§4.9) and close the sheet; no sheet shows a terminal.
 
 Providers › **Update All**, a CLI's Install or Update, and **Install & Set Up** queue each job in
 Activity with `Fleet.install`. The daemon checks the CLI's version again before it closes an
@@ -321,8 +321,8 @@ From the top: a child's `ChildBanner` ("Agent of ‹parent›", Back), then the 
   line (`StatusGlyph` + state label + `· project · machine`), the branch (monospace, one line,
   middle-truncated), and "Forked from …" when it is a fork.
 - **Right, one row:** the PRs chip (when linked), then `HeaderButton`s: Terminal / Chat (owners only, ⌘\`),
-  Inspector (ⓘ, ⌥⌘I), list toggle (Mac, ⌘\), and the ⋯ menu (Interrupt, Switch Account or
-  Model…, Archive).
+  Inspector (ⓘ, ⌥⌘I), list toggle (Mac, ⌘\), and the ⋯ menu (Interrupt, Rename…,
+  Archive).
 - **The PRs chip rolls up the session's tree** (`PRRollup`): its own PRs and every
   descendant's (children, grandchildren), a PR linked to two of them counted once. It is one
   chip, never one per PR: a single PR shows its number ("#181"), more show the count and how
@@ -420,7 +420,7 @@ Screenshots: `mac-session.png`, `mac-session-approval.png`, `mac-session-running
 | Permission mode, ⋯ | menu | menu | SwiftUI `Menu` |
 | New Session | sheet | sheet, full width | `ProjectPicker` |
 | Machine, account, project settings, vault, sub-agent | page in the main area (§8.5) | pushed | `DetailPage`, `Page` |
-| Add Machine, Add Account, Switch, Fork | sheet, 560 pt (`SheetScaffold`) | system sheet, full width | `SheetScaffold` |
+| Add Machine, Add Account, Add Secret, New Skill, Import Skill, Add MCP Server, Fork | sheet, 560 pt (`SheetScaffold`) | system sheet, full width | `SheetScaffold` |
 | Draft session | session pane | full screen | `DraftSessionView` |
 | Activity (installs, logins, sign-ins) | popover (560 pt) from the header chip | sheet from the toolbar | `ActivityPanel` |
 | Toasts (archived, undo) | bottom, centred capsule | same | `ToastView` |
@@ -432,7 +432,8 @@ Rules:
 - **Fixed widths only on regular width.** A sheet or popover with a fixed width applies it
   under `#if os(macOS)` or a regular size class only (`SheetScaffold` does this already).
 - **Every sheet uses `SheetScaffold`**: title and subtitle, a close button (Esc on the Mac),
-  scrolling content, a footer with the primary action on the right.
+  scrolling content, a footer with its one hint line (`hint`) and the primary action on the
+  right (§8.6).
 - **Sheets never open sheets.** A sheet is a short create flow or a confirmation. What it leads
   to replaces it (Set Up on Other Machines hands its login to Add Account in its place; the
   QR scanner takes Add Machine's place), or is a page. `NoNestedSheetsTests` fails on any view
@@ -588,6 +589,28 @@ The pages' contents are today's settings, regrouped into this anatomy; P14.10–
 each one. `DetailPageScreenshotTests` draws the scaffold
 ([`screenshots/p14-9/detail-page.png`](screenshots/p14-9/detail-page.png)); `DetailPage` has an
 Xcode preview.
+
+### 8.6 Create sheets (P14.17)
+
+A create sheet is one sheet deep and short: its fields, each a label and a control with no hint
+under it (an example goes in the placeholder), at most one line of hint beside the footer's one
+primary button (`SheetScaffold(hint:)`), and no terminal. What it starts runs in Activity, and
+the sheet closes. Add Account, Add Secret, New Skill, Import Skill, Add MCP Server, Import MCP
+Servers and Add Machine follow it.
+
+**Add Account** (`AddAccountSheet`, `AddAccountForm`) adds one login on several machines at
+once: the provider as tiles, a checklist of the machines (`AccountTarget`; every one it can be
+added on starts ticked, or only the one it was opened from; a member's machine, one not
+connected, or one without the provider's CLI is disabled with the reason, the last with
+**Install** where herder can), and the label. **Log in on N machines** starts one login per
+machine in Activity (`Fleet.addAccount(_:on:)`), each under the first id free there, named after
+the label (`claude-work`, then `claude-work-2`), and closes. The config directory stays behind a
+disclosure. `CreateSheetScreenshotTests` draws it
+([`screenshots/p14-17/add-account.png`](screenshots/p14-17/add-account.png)).
+
+The session's **Switch** sheet is gone: the composer's account menu (`FooterMenu`) lists every
+account on the machine, the session's provider's first; another provider's account moves the
+session onto its default model, and the model menu picks the model.
 
 ---
 

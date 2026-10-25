@@ -361,21 +361,20 @@ struct SkillEditorSheet: View {
 
     var body: some View {
         SheetScaffold(title: isNew ? "New Skill" : "Edit \(document.name)",
-                      subtitle: "Saved to the library on your machines") {
-            Field(label: "Name", hint: "Lowercase letters, digits and hyphens; the skill's folder. Agents use it as `$name`.") {
+                      subtitle: "Saved to the library on your machines",
+                      hint: isNew ? "Agents use it as `$name`." : "Saving replaces the skill's folder: its other files are removed.") {
+            Field(label: "Name") {
                 InputBox(placeholder: "review-pr", text: $document.name, mono: true)
                     .disabled(!isNew)
                     .accessibilityIdentifier("skill-name")
             }
-            Field(label: "Description", hint: "What the skill is for and when to use it; agents read this to pick it.") {
-                InputBox(placeholder: "Review a pull request for correctness and tests.", text: $document.description,
+            Field(label: "Description") {
+                InputBox(placeholder: "When to use it, such as reviewing a pull request", text: $document.description,
                          lines: 1...3)
                     .accessibilityIdentifier("skill-description")
             }
-            Field(label: "Instructions",
-                  hint: isNew ? "The body of SKILL.md, in Markdown."
-                              : "The body of SKILL.md, in Markdown. Saving replaces the skill's folder with this SKILL.md, so any other files in it are removed.") {
-                InputBox(placeholder: "Steps the agent follows…", text: $document.body, mono: true, lines: 8...20)
+            Field(label: "Instructions") {
+                InputBox(placeholder: "Steps the agent follows, in Markdown…", text: $document.body, mono: true, lines: 8...20)
                     .accessibilityIdentifier("skill-body")
             }
             if let error {
@@ -421,12 +420,14 @@ struct SkillImportSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        SheetScaffold(title: "Import Skill", subtitle: "Copied into the library on your machines", height: 480) {
+        SheetScaffold(title: "Import Skill", subtitle: "Copied into the library on your machines", height: 440,
+                      hint: source == .folder ? "A folder with a SKILL.md at its top; all of it is copied."
+                                              : "The machine clones it with its own git access.") {
             ChoiceChips(options: [(Source.folder, "Folder", "On this device"), (.git, "Git", "From a repository")],
                         selection: $source)
             switch source {
             case .folder:
-                Field(label: "Folder", hint: "A skill folder with a SKILL.md at its top; every file in it is copied.") {
+                Field(label: "Folder") {
                     Button { choosing = true } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "folder")
@@ -445,18 +446,18 @@ struct SkillImportSheet: View {
                     .accessibilityIdentifier("skill-import-folder")
                 }
                 if folder != nil {
-                    Field(label: "Name", hint: "Lowercase letters, digits and hyphens. Agents use it as `$name`.") {
+                    Field(label: "Name") {
                         InputBox(placeholder: "review-pr", text: $name, mono: true)
                             .accessibilityIdentifier("skill-import-name")
                     }
                 }
             case .git:
-                Field(label: "Repository", hint: "Cloned by the machine, with its own git access.") {
+                Field(label: "Repository") {
                     InputBox(placeholder: "https://github.com/you/skills.git", text: $url, mono: true)
                         .accessibilityIdentifier("skill-import-url")
                 }
-                Field(label: "Folder", hint: "The skill's folder in the repository, which names it; leave it empty when the skill is the whole repository.") {
-                    InputBox(placeholder: "skills/review-pr", text: $path, mono: true)
+                Field(label: "Folder") {
+                    InputBox(placeholder: "skills/review-pr, or empty for the whole repository", text: $path, mono: true)
                         .accessibilityIdentifier("skill-import-path")
                 }
             }

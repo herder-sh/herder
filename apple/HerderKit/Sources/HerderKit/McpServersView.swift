@@ -343,7 +343,8 @@ struct McpServerSheet: View {
     var body: some View {
         let machineName = editing.flatMap { editing in fleet.machines.first { $0.hostId == editing.host }?.name }
         SheetScaffold(title: editing == nil ? "Add MCP Server" : "Edit \(editing?.server.name ?? "")",
-                      subtitle: machineName ?? "Every session on the machines gets it", height: 720) {
+                      subtitle: machineName ?? "Every session on the machines gets it", height: 640,
+                      hint: "Values go to the machine’s daemon.toml as given; keep tokens in Vault secrets.") {
             McpServerForm(draft: $draft, projects: projects)
             if editing == nil {
                 Field(label: "Machines") { McpMachinePicker(machines: machines, selection: $targets) }
@@ -422,7 +423,7 @@ struct McpServerForm: View {
     let projects: [Project]
 
     var body: some View {
-        Field(label: "Name", hint: "Letters, digits, - and _. Agents see its tools under this name.") {
+        Field(label: "Name") {
             InputBox(placeholder: "github", text: $draft.name, mono: true)
                 .accessibilityIdentifier("mcp-name")
         }
@@ -434,17 +435,17 @@ struct McpServerForm: View {
         }
         switch draft.kind {
         case .stdio:
-            Field(label: "Command", hint: "A program on the machine’s PATH, an absolute path, or one starting with ~/.") {
-                InputBox(placeholder: "npx", text: $draft.command, mono: true)
+            Field(label: "Command") {
+                InputBox(placeholder: "npx, or a path on the machine", text: $draft.command, mono: true)
                     .accessibilityIdentifier("mcp-command")
             }
-            Field(label: "Arguments", hint: "One per line.") {
+            Field(label: "Arguments, one per line") {
                 InputBox(placeholder: "-y\n@modelcontextprotocol/server-github", text: $draft.args, mono: true, lines: 2...6)
             }
-            Field(label: "Environment", hint: "Kept in the machine’s daemon.toml as given. Put tokens in the vault instead.") {
+            Field(label: "Environment") {
                 McpPairsEditor(pairs: $draft.env, keyPlaceholder: "NAME", valuePlaceholder: "value", masked: false)
             }
-            Field(label: "Vault secrets", hint: "Each is fetched from the machine’s vault when the server starts and set as the variable of its name. Its value never reaches the config, a command line or an agent.") {
+            Field(label: "Vault secrets") {
                 McpSecretsEditor(secrets: $draft.secrets)
             }
         case .http, .sse:
@@ -453,12 +454,12 @@ struct McpServerForm: View {
                          text: $draft.url, mono: true)
                     .accessibilityIdentifier("mcp-url")
             }
-            Field(label: "Headers", hint: "Sent with every request, such as Authorization. Kept in the machine’s daemon.toml as given.") {
+            Field(label: "Headers") {
                 McpPairsEditor(pairs: $draft.headers, keyPlaceholder: "Authorization", valuePlaceholder: "Bearer …",
                                masked: true)
             }
         }
-        Field(label: "Sessions", hint: "A project’s server reaches only its sessions.") {
+        Field(label: "Sessions") {
             Picker("Sessions", selection: $draft.project) {
                 Text("Every session").tag(ProjectId?.none)
                 ForEach(projects, id: \.projectId) { project in
@@ -659,8 +660,9 @@ struct McpImportSheet: View {
 
     var body: some View {
         let parsed = parsed
-        SheetScaffold(title: "Import MCP Servers", subtitle: "From a README or Claude Desktop’s config", height: 720) {
-            Field(label: "JSON", hint: "Such as `{\"mcpServers\": {\"github\": {\"command\": \"npx\", \"args\": [...]}}}`. Entries with a `url` are HTTP unless their `type` says `sse`.") {
+        SheetScaffold(title: "Import MCP Servers", subtitle: "From a README or Claude Desktop’s config", height: 640,
+                      hint: "Entries with a `url` are HTTP unless their `type` says `sse`.") {
+            Field(label: "JSON") {
                 VStack(alignment: .leading, spacing: 8) {
                     InputBox(placeholder: "{\n  \"mcpServers\": { … }\n}", text: $text, mono: true, lines: 6...14)
                         .accessibilityIdentifier("mcp-json")
