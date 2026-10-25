@@ -107,7 +107,9 @@ struct AccountSettingsTests {
 
     @Test func anInstallReadsItsOutcomeFromTheVersionsBeforeAndAfter() {
         #expect(JobProgress(install: .connecting, before: "2.1.303", after: "2.1.303") == .starting)
-        #expect(JobProgress(install: .attached, before: "2.1.303", after: "2.1.303") == .running)
+        // Running, it needs no one: not the amber "Waiting for you" of a login.
+        let installing = JobProgress(install: .attached, before: "2.1.303", after: "2.1.303")
+        #expect(installing == .installing && installing.label == "Installing" && !installing.finished)
         let updated = JobProgress(install: .exited(0), before: "2.1.303", after: "2.1.310")
         #expect(updated == .updated(from: "2.1.303", to: "2.1.310") && updated.label == "Updated 2.1.303 → 2.1.310")
         let installed = JobProgress(install: .exited(0), before: nil, after: "0.9.4")
