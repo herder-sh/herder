@@ -127,6 +127,10 @@ pub struct PendingQuestion {
     pub text: String,
     /// Answers to pick from; empty for free text.
     pub choices: Vec<String>,
+    /// Whether several choices may be picked.
+    pub multi_select: bool,
+    /// The choices picked so far, for a multi-select question, in `choices` order.
+    pub picked: Vec<u32>,
     /// Who is asked first; a user can always answer.
     pub routed_to: Route,
     /// Why it went to the user rather than the primary session, for a child's question.
@@ -135,6 +139,29 @@ pub struct PendingQuestion {
     pub note: Option<String>,
     /// When it was put to whoever it waits on now: asked, or escalated.
     pub since: Timestamp,
+}
+
+impl PendingQuestion {
+    /// Picks choice `index` of a multi-select question, or unpicks it; ignored when the
+    /// question has no such choice.
+    pub fn toggle(&mut self, index: u32) {
+        if usize::try_from(index).map_or(true, |at| at >= self.choices.len()) {
+            return;
+        }
+        match self.picked.binary_search(&index) {
+            Ok(at) => {
+                self.picked.remove(at);
+            }
+            Err(at) => self.picked.insert(at, index),
+        }
+    }
+
+    /// The answer of the picked choices; `None` while nothing is picked.
+    pub fn picks(&self) -> Option<Answer> {
+        (self.multi_select && !self.picked.is_empty()).then(|| Answer::Choices {
+            indices: self.picked.clone(),
+        })
+    }
 }
 
 /// Where an approval for a tool call stands.
@@ -495,6 +522,7 @@ impl Session {
                 turn_id,
                 text,
                 choices,
+                multi_select,
                 routed_to,
                 reason,
             } => {
@@ -504,6 +532,8 @@ impl Session {
                     turn_id,
                     text,
                     choices,
+                    multi_select,
+                    picked: Vec::new(),
                     routed_to,
                     reason,
                     note: None,
@@ -520,10 +550,12 @@ impl Session {
                 let asked = asked.map(|at| self.questions.remove(at));
                 let answer = match answer {
                     Answer::Text { text } => text,
-                    Answer::Choice { index } => asked
-                        .as_ref()
-                        .and_then(|q| q.choices.get(index as usize).cloned())
-                        .unwrap_or_else(|| format!("choice {}", u64::from(index) + 1)),
+                    Answer::Choice { index } => choice_label(asked.as_ref(), index),
+                    Answer::Choices { indices } => indices
+                        .into_iter()
+                        .map(|index| choice_label(asked.as_ref(), index))
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 };
                 let by = match answered_by {
                     Answerer::Primary { .. } => "the primary session",
@@ -667,6 +699,13 @@ fn asked(what: &str, text: &str, routed_to: Route) -> Option<Entry> {
         text: format!("{what} for the primary session: {}", first_line(text)),
         tone: Tone::Info,
     })
+}
+
+/// Choice `index` of `asked`, or its number when the question is not known.
+fn choice_label(asked: Option<&PendingQuestion>, index: u32) -> String {
+    asked
+        .and_then(|q| q.choices.get(index as usize).cloned())
+        .unwrap_or_else(|| format!("choice {}", u64::from(index) + 1))
 }
 
 /// The first non-blank line of `text`.

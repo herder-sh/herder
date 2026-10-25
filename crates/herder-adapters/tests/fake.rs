@@ -232,6 +232,7 @@ async fn asked() -> AdapterSession {
                 turn_id: turn(),
                 text: "Which database should the migration target?".into(),
                 choices: vec!["SQLite".into(), "Postgres".into()],
+                multi_select: false,
             },
         ]
     );
