@@ -393,7 +393,7 @@ struct JobTerminal: View {
 
     private func guidance(_ progress: JobProgress) -> String {
         switch (key.job, progress) {
-        case (.install, .running), (.install, .starting): "The vendor’s installer runs below, on \(machine?.name ?? "the machine")."
+        case (.install, .installing), (.install, .starting): "The vendor’s installer runs below, on \(machine?.name ?? "the machine")."
         case (.install, .failed(let message)): message
         case (.install, _): "\(progress.label) on \(machine?.name ?? "the machine")."
         case (_, .added): "The machine lists the account; sessions can use it now."
@@ -458,7 +458,7 @@ struct JobBadge: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            if progress == .starting || progress == .running {
+            if !progress.finished {
                 ProgressView().controlSize(.mini)
             } else {
                 Circle().fill(progress.tint).frame(width: 6, height: 6)
@@ -477,6 +477,7 @@ extension JobProgress {
         switch self {
         case .starting: "Starting"
         case .running: "Waiting for you"
+        case .installing: "Installing"
         case .added: "Added"
         case .ended: "Ended"
         case .installed(let version): version.isEmpty ? "Installed" : "Installed \(version)"
@@ -489,6 +490,7 @@ extension JobProgress {
     var tint: Color {
         switch self {
         case .starting, .running: Theme.accent
+        case .installing: Theme.secondary
         case .added, .installed, .updated, .upToDate: Theme.success
         case .ended: Theme.tertiary
         case .failed: Theme.failure

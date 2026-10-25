@@ -152,8 +152,10 @@ extension Fleet {
 enum JobProgress: Equatable {
     /// Opening the terminal on the machine.
     case starting
-    /// Running: waiting on the user to finish the provider's own login, or installing.
+    /// The login runs, waiting on the user to finish the provider's own login.
     case running
+    /// The installer or updater runs; it needs no one.
+    case installing
     /// The login ended and the machine lists the account.
     case added
     /// The login's terminal ended without the account showing up.
@@ -182,7 +184,7 @@ enum JobProgress: Equatable {
     init(install state: TerminalConnection.State, before: String?, after: String?) {
         switch (state, before, after) {
         case (.connecting, _, _): self = .starting
-        case (.attached, _, _): self = .running
+        case (.attached, _, _): self = .installing
         case (.exited(0), _, nil): self = .failed("The installer finished, but the machine does not find the CLI.")
         case (.exited(0), nil, let after?): self = .installed(after)
         case (.exited(0), let before?, let after?):
@@ -195,7 +197,7 @@ enum JobProgress: Equatable {
 
     var finished: Bool {
         switch self {
-        case .starting, .running: false
+        case .starting, .running, .installing: false
         case .added, .ended, .installed, .updated, .upToDate, .failed: true
         }
     }
