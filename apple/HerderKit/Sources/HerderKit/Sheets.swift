@@ -23,6 +23,8 @@ enum AppSheet: Identifiable, Hashable {
     case addAccount
     /// Signs every owned machine in to AWS IAM Identity Center.
     case awsSignIn
+    /// The installs, logins and sign-ins running, as a sheet on the iPhone.
+    case activity
 
     var id: Self { self }
 }
@@ -40,6 +42,7 @@ extension AppSheet {
         case .secrets(let vault): SecretsSheet(fleet: fleet, vault: vault)
         case .addAccount: NewAccountSheet(fleet: fleet)
         case .awsSignIn: AwsSignInSheet(fleet: fleet)
+        case .activity: ActivitySheet(fleet: fleet)
         }
     }
 }
@@ -912,7 +915,6 @@ struct MachineSettingsSheet: View {
     @State private var showingAccountSettings = false
     @State private var addingAccount = false
     @State private var setup: ProvidersView.Setup?
-    @State private var installing: ProviderJobKey?
     @State private var confirmingForget = false
     @State private var error: String?
     /// The address a Connect is switching to, until it answers or fails.
@@ -1010,7 +1012,6 @@ struct MachineSettingsSheet: View {
         .sheet(item: $setup) { setup in
             AddAccountSheet(fleet: fleet, hostId: hostId, initialProvider: setup.draft.provider, initialDraft: setup.draft)
         }
-        .sheet(item: $installing) { key in InstallsSheet(fleet: fleet, focus: key) }
         .onAppear { name = machine?.name ?? "" }
         .confirmationDialog("Forget \(machine?.name ?? "") on this device?", isPresented: $confirmingForget,
                             titleVisibility: .visible) {
@@ -1031,7 +1032,7 @@ struct MachineSettingsSheet: View {
         let missing = SetUpGaps(ProviderAccounts(machines: fleet.machines)).gaps.compactMap { gap in
             gap.machines.first { $0.hostId == hostId }.map { (login: gap.login, place: $0) }
         }
-        let running = fleet.providerTerminals.pendingIds(on: hostId).count
+        let running = fleet.activity.pendingIds(on: hostId).count
         return VStack(alignment: .leading, spacing: 8) {
             SettingsList(title: "Accounts") {
                 if machine.accounts.isEmpty {
@@ -1095,7 +1096,7 @@ struct MachineSettingsSheet: View {
                             }
                             Spacer(minLength: 8)
                             PillButton(title: gap.place.needsInstall ? "Install & Set Up" : "Set Up") {
-                                let taken = AccountDraft.taken(on: machine, pending: fleet.providerTerminals.pendingIds(on: hostId))
+                                let taken = AccountDraft.taken(on: machine, pending: fleet.activity.pendingIds(on: hostId))
                                 if gap.place.needsInstall { fleet.install(gap.login.provider, on: hostId) }
                                 setup = ProvidersView.Setup(hostId: hostId, draft: gap.login.draft(taken: taken))
                             }
@@ -1129,7 +1130,7 @@ struct MachineSettingsSheet: View {
                                 Text("Update available → \(available)").font(.caption).foregroundStyle(Theme.accent)
                             }
                             VersionCell(cell: cell, showsAvailable: false) { cell in
-                                installing = fleet.install(cell.provider, on: cell.hostId)
+                                fleet.install(cell.provider, on: cell.hostId)
                             }
                         }
                         .padding(.horizontal, 14)

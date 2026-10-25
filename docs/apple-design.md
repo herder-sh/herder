@@ -186,19 +186,13 @@ where the machine backs up (`get_vault_link`), backs it up to a connected vault 
 then `revoke_vault_host` on the vault when it is paired here as its owner).
 
 In `MachineSettingsSheet` an owner adds an account (`AddAccountSheet`) or edits one
-(`EditAccountSheet`). The edit sheet's **Log In Again** runs the provider's login of that
-account again, in its own config directory, for a login that expired; both show the login
-terminal in the sheet (`TerminalSurface`), and the login keeps running if the sheet closes.
+(`EditAccountSheet`). **Start Login** and the edit sheet's **Log In Again** (the provider's
+login of that account again, in its own config directory, for a login that expired) start the
+login in Activity (§4.9) and close the sheet; no sheet shows a terminal.
 
-Providers › **Update All**, a CLI's Install or Update, and **Install & Set Up** start each job
-with `Fleet.install`, which opens its terminal at once: every job runs whether its terminal is
-on screen or not. **Install and Update** (`InstallsSheet`) lists the jobs this device started;
-the header, the selected row and the terminal below always show the same job (the emulator is
-keyed by its connection). The daemon checks the CLI's version again before it closes an
-install's terminal, so the machine's versions are current when the job ends, and each row reads
-its outcome against the version it started from (`JobProgress(install:before:after:)`):
-"Updated 2.1.14 → 2.1.20", "Installed 0.9.4", "Up to date 2.1.20", or "Failed" on a non-zero
-exit or a CLI still missing. Screenshots: `mac-installs-running.png`, `mac-installs-finished.png`.
+Providers › **Update All**, a CLI's Install or Update, and **Install & Set Up** queue each job in
+Activity with `Fleet.install`. The daemon checks the CLI's version again before it closes an
+install's terminal, so the machine's versions are current when the job ends.
 
 ### 4.5 Usage (`UsageView`)
 
@@ -282,6 +276,37 @@ Machine.
 - **Mac keyboard:** J and K move the highlighted row, Return opens it beside the list, E
   archives it; a legend under the list says so.
 - **Search** keeps a tree when its top or any of its children matches.
+
+### 4.9 Activity (`Activity`, `ActivityChip`, `ActivityPanel`)
+
+One place for everything long-running this device started: CLI installs and updates, account
+logins and Log In Again, AWS SSO sign-ins (`AwsSignInSheet` only picks the profile and machines,
+then hands each machine's sign-in to Activity). Starting one never opens a sheet. Jobs live
+while the app runs (`Fleet.activity`), each in its own terminal on its machine, and run whether
+their terminal is on screen or not.
+
+- **Indicator.** On the Mac and iPad, `Pane` puts `ActivityChip` in the `PageHeader`, between
+  the status and the actions: "Activity · N" (N jobs not ended) with a ring of the jobs done,
+  amber while one needs the user; a ✓ (or a red ! after a failure) once all have ended. Hidden
+  with no jobs. On the iPhone, `ActivityToolbarButton` in each tab's toolbar opens the same
+  list as a sheet (`AppSheet.activity`).
+- **List** (`ActivityList`): grouped as Needs you (a login waiting for its browser login, an AWS
+  code to approve), Running, Queued and Done (newest first). Each row: a title that says the
+  outcome once ended ("Update Codex on work-mbp", "Updated Claude on work-mbp", "OpenCode on
+  trash-can-01 failed"), a detail line (the versions, the step, or why it failed) and its
+  action: **Open login**, **Approve**, or **Retry**. **Clear finished** clears Done.
+- **Detail** (`ActivityDetail`): the outcome chip, the warnings read out of the vendor's output
+  (`VendorWarning`: a second, npm-installed Claude, with the command that removes it to copy),
+  Cancel Login or Retry, the terminal and **Copy log** (`TerminalConnection.log`, the output
+  without its escape sequences).
+- **Queue** (`Activity.startable`): installs on the same machine run one at a time, as two
+  package managers writing one prefix trip over each other; different machines run at once.
+  Logins and sign-ins start at once: they wait on the user and would hold the queue.
+
+Screenshots: [`screenshots/p14-6/activity.png`](screenshots/p14-6/activity.png)
+(`ActivityScreenshotTests`); `mac-activity-queued.png`, `mac-activity-done.png`,
+`mac-activity-detail.png`, `mac-activity-login.png`, `ios-activity-login.png` from
+ScreenshotTests.
 
 ---
 
@@ -395,6 +420,7 @@ Screenshots: `mac-session.png`, `mac-session-approval.png`, `mac-session-running
 | New Session | sheet | sheet, full width | `ProjectPicker` |
 | Machine and project settings, Add Machine, Switch, Fork | sheet, 560 pt (`SheetScaffold`) | system sheet, full width | `SheetScaffold` |
 | Draft session | session pane | full screen | `DraftSessionView` |
+| Activity (installs, logins, sign-ins) | popover (560 pt) from the header chip | sheet from the toolbar | `ActivityPanel` |
 | Toasts (archived, undo) | bottom, centred capsule | same | `ToastView` |
 
 Rules:
@@ -492,7 +518,7 @@ Xcode preview in its file.
 - **The header says what is true now** (`PageHeader`, which `Pane` draws). A title at the page
   size, a live status sentence built from the page's state ("9 open · 3 working"), then the
   page's actions, the main one `PaneButton(prominent: true)`. No subtitle explains what the
-  page is for: that goes in the empty state or an ⓘ (`InfoButton`). The Activity center (P14.6)
+  page is for: that goes in the empty state or an ⓘ (`InfoButton`). The Activity chip (§4.9)
   sits between the status and the actions.
 - **Show signal, hide zeros** (`SignalStrip`). A chip per state that is non-zero, coloured by
   its `Urgency`: needs you (amber), failing (red), running (blue), done (green), quiet (grey).

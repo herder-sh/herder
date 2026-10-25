@@ -44,7 +44,7 @@ enum AwsListProblem: Error, Equatable {
     }
 }
 
-/// Where one machine's AWS sign-in is, as the sign-in sheet shows it.
+/// Where one machine's AWS sign-in is: why it cannot start there, or how its job stands.
 enum AwsSignInStatus: Equatable {
     case starting
     /// The CLI printed its device code; the owner approves it in a browser.
@@ -81,14 +81,6 @@ enum AwsSignInStatus: Equatable {
         }
     }
 
-    /// Whether the sign-in there is over, one way or the other.
-    var isFinal: Bool {
-        switch self {
-        case .starting, .waiting: false
-        default: true
-        }
-    }
-
     var label: String {
         switch self {
         case .starting: "Starting"
@@ -104,28 +96,9 @@ enum AwsSignInStatus: Equatable {
     }
 }
 
-/// A sign-in to one AWS profile on every machine the user owns. The fleet keeps it, so closing
-/// the sheet leaves the sign-ins running and reopening it shows them.
-@MainActor
-@Observable
-final class AwsSignIn {
-    struct Row: Identifiable {
-        let hostId: HostId
-        let name: String
-        /// Why the sign-in did not start there, when it did not.
-        var skipped: AwsSignInStatus?
-        var connection: TerminalConnection?
-
-        var id: HostId { hostId }
-    }
-
-    let profile: String
-    private(set) var rows: [Row] = []
-
-    init(profile: String) {
-        self.profile = profile
-    }
-
+/// Signing the machines the user owns in to AWS: which machines, and which profiles they offer.
+/// Each sign-in runs as a job in Activity.
+enum AwsSignIn {
     /// The machines a sign-in runs on: those that run sessions and that this device owns.
     static func machines(_ machines: [Machine]) -> [Machine] {
         machines.filter { $0.hosts.isEmpty && $0.role == .owner }
@@ -157,40 +130,11 @@ final class AwsSignIn {
             !leftOut.contains($0.hostId) && blocker($0, profile: profile, profiles: profiles, problems: problems) == nil
         }.map(\.hostId))
     }
-
-    /// Starts the sign-in on `machines`, or on every owned machine, given the profiles each
-    /// connected machine listed and why the others listed none.
-    func start(fleet: Fleet, profiles: [HostId: [AwsProfile]], problems: [HostId: AwsListProblem],
-               only hosts: Set<HostId>? = nil) {
-        for machine in Self.machines(fleet.machines) where hosts?.contains(machine.hostId) ?? true {
-            var row = Row(hostId: machine.hostId, name: machine.name)
-            if let blocker = Self.blocker(machine, profile: profile, profiles: profiles, problems: problems) {
-                row.skipped = blocker
-            } else {
-                let connection = TerminalConnection(hostId: machine.hostId, terminalId: nil, awsProfile: profile)
-                connection.connect(client: fleet.client, sessionId: nil, cols: 100, rows: 30)
-                row.connection = connection
-            }
-            if let index = rows.firstIndex(where: { $0.hostId == machine.hostId }) {
-                rows[index] = row
-            } else {
-                rows.append(row)
-            }
-        }
-    }
-
-    func status(of row: Row, in fleet: Fleet) -> AwsSignInStatus {
-        if let skipped = row.skipped { return skipped }
-        guard let connection = row.connection else { return .starting }
-        let terminals = fleet.machines.first { $0.hostId == row.hostId }?.terminals ?? []
-        return AwsSignInStatus(state: connection.state, refusal: connection.refusal,
-                               terminalId: connection.terminalId, terminals: terminals)
-    }
 }
 
 /// Signs the machines the user owns in to AWS IAM Identity Center at once: the owner picks a
-/// profile and the machines to sign in, herder runs the AWS CLI's own device-code sign-in on
-/// each, and the owner approves each code in the browser.
+/// profile and the machines to sign in, and herder runs the AWS CLI's own device-code sign-in on
+/// each as a job in Activity, where the owner approves each code in the browser.
 struct AwsSignInSheet: View {
     let fleet: Fleet
     @AppStorage("awsProfile") private var picked = ""
@@ -200,72 +144,18 @@ struct AwsSignInSheet: View {
     @State private var profiles: [HostId: [AwsProfile]]?
     /// Why each owned machine listed no profiles, when it did not.
     @State private var problems: [HostId: AwsListProblem] = [:]
-    @State private var expanded: Set<HostId> = []
-    @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
 
-    private var run: AwsSignIn? { fleet.awsSignIn }
-
-    private var statuses: [(row: AwsSignIn.Row, status: AwsSignInStatus)] {
-        guard let run else { return [] }
-        return run.rows.map { ($0, run.status(of: $0, in: fleet)) }
-    }
-
-    private var finished: Bool { statuses.allSatisfy(\.status.isFinal) }
-
-    private var pending: [AwsDeviceCode] {
-        statuses.compactMap {
-            if case .waiting(let device) = $0.status { return device }
-            return nil
-        }
-    }
-
-    private var failed: Set<HostId> {
-        Set(statuses.filter { $0.status.isFinal && $0.status != .signedIn }.map(\.row.hostId))
-    }
-
     var body: some View {
-        SheetScaffold(title: "AWS Sign-in", subtitle: "IAM Identity Center on the machines you own", height: 700) {
-            if run == nil || finished { picker }
-            if let run {
-                Field(label: run.profile) {
-                    VStack(spacing: 0) {
-                        ForEach(Array(statuses.enumerated()), id: \.element.row.id) { index, item in
-                            if index > 0 { RowDivider() }
-                            row(item.row, item.status)
-                        }
-                    }
-                    .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
-                    .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
-                }
-                if finished {
-                    let signedIn = statuses.filter { $0.status == .signedIn }.count
-                    Label("\(signedIn) of \(statuses.count) machines signed in to \(run.profile).",
-                          systemImage: signedIn == statuses.count ? "checkmark.circle.fill" : "exclamationmark.circle")
-                        .font(.subheadline)
-                        .foregroundStyle(signedIn == statuses.count ? Theme.success : Theme.text)
-                } else {
-                    Text("Approve each code in the browser. herder never sees the tokens the AWS CLI caches.")
-                        .font(.footnote).foregroundStyle(Theme.tertiary)
-                }
-            }
+        SheetScaffold(title: "AWS Sign-in", subtitle: "IAM Identity Center on the machines you own", height: 600) {
+            picker
+            Text("Each sign-in runs in Activity, where you approve its code in the browser. herder never sees the tokens the AWS CLI caches.")
+                .font(.footnote).foregroundStyle(Theme.tertiary)
         } footer: {
-            if run != nil && !finished {
-                ActionButton(title: "Approve all", style: .secondary) {
-                    for device in pending { open(device) }
-                }.frame(maxWidth: 180).disabled(pending.isEmpty)
-            }
-            if run != nil && finished && !failed.isEmpty {
-                ActionButton(title: "Retry failed", style: .secondary) { await retry() }.frame(maxWidth: 180)
-            }
             Spacer()
-            if run == nil || finished {
-                let count = selected.count
-                ActionButton(title: "Sign in on \(count) machine\(count == 1 ? "" : "s")", style: .primary) { start() }
-                    .frame(maxWidth: 220).disabled(!choices.contains { $0.name == picked } || count == 0)
-            } else {
-                ActionButton(title: "Done", style: .primary) { dismiss() }.frame(maxWidth: 180)
-            }
+            let count = selected.count
+            ActionButton(title: "Sign in on \(count) machine\(count == 1 ? "" : "s")", style: .primary) { start() }
+                .frame(maxWidth: 220).disabled(!choices.contains { $0.name == picked } || count == 0)
         }
         .task { await load() }
     }
@@ -363,58 +253,6 @@ struct AwsSignInSheet: View {
         }
     }
 
-    private func row(_ row: AwsSignIn.Row, _ status: AwsSignInStatus) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Image(systemName: "desktopcomputer").foregroundStyle(Theme.secondary)
-                Text(row.name).foregroundStyle(Theme.text)
-                Spacer(minLength: 8)
-                if case .waiting(let device) = status {
-                    Text(device.userCode).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
-                    PillButton(title: "Approve", prominent: true) { open(device) }
-                }
-                statusLabel(status)
-                if row.connection != nil {
-                    Button {
-                        if expanded.contains(row.hostId) { expanded.remove(row.hostId) } else { expanded.insert(row.hostId) }
-                    } label: {
-                        Image(systemName: expanded.contains(row.hostId) ? "chevron.down" : "chevron.right")
-                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                            .frame(width: 24, height: 24).contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Show the machine’s terminal")
-                }
-            }
-            if let connection = row.connection, expanded.contains(row.hostId) {
-                TerminalSurface(connection: connection, client: fleet.client, sessionId: nil)
-                    .id(ObjectIdentifier(connection))
-                    .frame(height: 240).background(.black)
-            }
-        }
-        .font(.subheadline)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(minHeight: 44)
-    }
-
-    private func statusLabel(_ status: AwsSignInStatus) -> some View {
-        HStack(spacing: 6) {
-            switch status {
-            case .starting, .waiting: ProgressView().controlSize(.mini)
-            case .signedIn: Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.success)
-            case .offline, .noSuchProfile, .unlisted: Image(systemName: "minus.circle").foregroundStyle(Theme.tertiary)
-            default: Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.failure)
-            }
-            Text(status.label).foregroundStyle(status == .signedIn ? Theme.text : Theme.secondary).lineLimit(1)
-        }
-        .font(.caption)
-    }
-
-    private func open(_ device: AwsDeviceCode) {
-        if let url = URL(string: device.verificationUrl) { openURL(url) }
-    }
-
     /// Asks every connected machine the user owns for its profiles, keeping why each machine
     /// that listed none did not.
     private func load() async {
@@ -451,20 +289,8 @@ struct AwsSignInSheet: View {
     }
 
     private func start() {
-        guard let profiles, choices.contains(where: { $0.name == picked }) else { return }
-        let hosts = selected
-        guard !hosts.isEmpty else { return }
-        let run = AwsSignIn(profile: picked)
-        run.start(fleet: fleet, profiles: profiles, problems: problems, only: hosts)
-        fleet.awsSignIn = run
-        expanded = []
-    }
-
-    /// Runs the sign-in again where it did not succeed, with the machines' profiles listed afresh.
-    private func retry() async {
-        guard let run else { return }
-        let hosts = failed
-        await load()
-        run.start(fleet: fleet, profiles: profiles ?? [:], problems: problems, only: hosts)
+        guard choices.contains(where: { $0.name == picked }) else { return }
+        for hostId in selected { fleet.signInToAws(picked, on: hostId) }
+        dismiss()
     }
 }

@@ -86,26 +86,8 @@ struct AccountDraft {
     }
 }
 
-/// Which page the add-account sheet shows.
-enum AddAccountPage: Equatable {
-    /// The form for a new account.
-    case form
-    /// The logins this device started on the machine, to go back to one or add another.
-    case logins
-    /// One login or install, in its terminal.
-    case job(ProviderJobKey)
-
-    /// `shown` is the terminal the user opened, `adds` the logins on the machine, and
-    /// `addingAnother` whether the user asked for the form while they run.
-    static func resolve(shown: ProviderJobKey?, exists: Bool, adds: [ProviderJobKey], addingAnother: Bool) -> Self {
-        if let shown, exists { return .job(shown) }
-        return adds.isEmpty || addingAnother ? .form : .logins
-    }
-}
-
-/// Adds an account on a machine: the form, then the provider's own login in a terminal. Logins
-/// run side by side, for any providers; reopened while some run, the sheet lists them to go
-/// back to, with a way to add another.
+/// Adds an account on a machine: the form, then the provider's own login, which runs in the
+/// Activity list, so the sheet closes once it starts.
 struct AddAccountSheet: View {
     let fleet: Fleet
     let hostId: HostId
@@ -115,49 +97,41 @@ struct AddAccountSheet: View {
     var initialDraft: AccountDraft?
     @State private var draft = AccountDraft()
     @State private var started = false
-    @State private var shown: ProviderJobKey?
-    @State private var addingAnother = false
     @State private var showsAdvanced = false
+    @Environment(\.dismiss) private var dismiss
 
     private var machine: Machine? { fleet.machines.first { $0.hostId == hostId } }
-    private var adds: [ProviderJobKey] { fleet.providerTerminals.adds(on: hostId) }
     private var taken: [String] {
-        AccountDraft.taken(on: machine, pending: fleet.providerTerminals.pendingIds(on: hostId))
+        AccountDraft.taken(on: machine, pending: fleet.activity.pendingIds(on: hostId))
     }
     private var problem: String? { draft.problem(existing: taken) }
     private var canManage: Bool { machine?.role == .owner && machine?.connection == .connected }
     private var status: ProviderStatus? { machine?.providers.first { $0.provider == draft.provider } }
     /// Whether the machine reports the provider's CLI missing: its login cannot run.
     private var missing: Bool { status?.installed == false }
-    private var page: AddAccountPage {
-        AddAccountPage.resolve(shown: shown, exists: shown.map { fleet.providerTerminals[$0] != nil } ?? false,
-                               adds: adds, addingAnother: addingAnother)
+    /// Whether this provider's install runs from here on the machine.
+    private var installing: Bool {
+        fleet.activity.phase(JobKey(hostId: hostId, kind: .install(draft.provider))) != .ended
     }
 
     var body: some View {
-        let page = page
-        SheetScaffold(title: title(page), subtitle: machine?.name ?? "Machine", height: 680) {
-            switch page {
-            case .form: form
-            case .logins: logins
-            case .job(let key): JobTerminal(fleet: fleet, key: key)
-            }
+        SheetScaffold(title: "Add Account", subtitle: machine?.name ?? "Machine", height: 600) {
+            form
         } footer: {
-            switch page {
-            case .form: formFooter
-            case .logins:
-                ActionButton(title: "Add Another Account", style: .secondary) { freshForm() }
-                    .frame(maxWidth: 220)
-                Spacer()
-            case .job(let key): jobFooter(key)
+            Spacer()
+            ActionButton(title: "Start Login", style: .primary) {
+                guard canManage, problem == nil, !missing else { return }
+                fleet.addAccount(draft.submitted, on: hostId)
+                dismiss()
             }
+            .frame(maxWidth: 180)
+            .disabled(!canManage || problem != nil || missing)
         }
         .onAppear {
             guard !started else { return }
             started = true
             if let initialDraft {
                 draft = initialDraft
-                addingAnother = true
             } else {
                 draft = AccountDraft(provider: initialProvider)
                 draft.suggest(taken: taken)
@@ -165,13 +139,6 @@ struct AddAccountSheet: View {
         }
         .onChange(of: draft.provider) { draft.suggest(taken: taken) }
         .onChange(of: taken) { draft.suggest(taken: taken) }
-    }
-
-    private func title(_ page: AddAccountPage) -> String {
-        if case .job(let key) = page, case .install(let provider) = key.job {
-            return "Install \(ModelCatalog.providerName(provider))"
-        }
-        return "Add Account"
     }
 
     // MARK: Form
@@ -216,285 +183,21 @@ struct AddAccountSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(name) isn’t installed on \(machine?.name ?? "this machine")")
                     .font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
-                Text(status?.canInstall == true ? "Its login needs the CLI. herder runs the vendor’s installer, in view."
+                Text(status?.canInstall == true ? "Its login needs the CLI. herder runs the vendor’s installer in Activity."
                      : "herder has no installer for it on this machine’s OS; install it there, then add the account.")
                     .font(.caption).foregroundStyle(Theme.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            if status?.canInstall == true {
-                Button("Install") { shown = fleet.install(draft.provider, on: hostId) }
+            if installing {
+                Text("Installing…").font(.caption).foregroundStyle(Theme.secondary)
+            } else if status?.canInstall == true {
+                Button("Install") { fleet.install(draft.provider, on: hostId) }
                     .disabled(!canManage)
             }
         }
         .padding(12)
         .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
-    }
-
-    @ViewBuilder private var formFooter: some View {
-        if !adds.isEmpty {
-            ActionButton(title: adds.count == 1 ? "Show Login" : "Show \(adds.count) Logins", style: .secondary) {
-                addingAnother = false
-            }
-            .frame(maxWidth: 180)
-        }
-        Spacer()
-        ActionButton(title: "Start Login", style: .primary) {
-            guard canManage, problem == nil, !missing else { return }
-            shown = fleet.providerTerminals.add(draft.submitted, on: hostId)
-        }
-        .frame(maxWidth: 180)
-        .disabled(!canManage || problem != nil || missing)
-    }
-
-    // MARK: Logins
-
-    /// The logins this device started on the machine, newest first.
-    @ViewBuilder private var logins: some View {
-        Text("Logins you started on \(machine?.name ?? "this machine"). They keep running while this sheet is closed.")
-            .font(.footnote).foregroundStyle(Theme.secondary)
-        VStack(spacing: 0) {
-            ForEach(Array(adds.reversed().enumerated()), id: \.element) { index, key in
-                if index > 0 { RowDivider() }
-                if let connection = fleet.providerTerminals[key], let account = connection.account {
-                    let progress = JobProgress(connection.state, added: added(account.accountId))
-                    HStack(spacing: 10) {
-                        Button { shown = key } label: {
-                            HStack(spacing: 12) {
-                                ProviderMark(provider: account.provider, size: 18).frame(width: 22)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(account.label ?? account.accountId).font(.subheadline.weight(.medium))
-                                        .foregroundStyle(Theme.text)
-                                    Text("\(ModelCatalog.providerName(account.provider)) · \(account.accountId)")
-                                        .font(.caption).foregroundStyle(Theme.tertiary)
-                                }
-                                Spacer(minLength: 8)
-                                JobBadge(progress: progress)
-                            }
-                            .frame(minHeight: 52)
-                            .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("\(ModelCatalog.providerName(account.provider)) \(account.accountId), \(progress.label)")
-                        .accessibilityIdentifier("running-login-\(account.accountId)")
-                        if !progress.finished { CancelLoginButton(fleet: fleet, key: key, compact: true) }
-                        Button { shown = key } label: {
-                            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                                .frame(width: 20, height: 44).contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityHidden(true)
-                    }
-                    .padding(.horizontal, 14)
-                }
-            }
-        }
-        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
-    }
-
-    private func added(_ accountId: AccountId) -> Bool {
-        machine?.accounts.contains { $0.accountId == accountId } == true
-    }
-
-    // MARK: Terminal
-
-    @ViewBuilder private func jobFooter(_ key: ProviderJobKey) -> some View {
-        let progress = fleet.providerTerminals[key].map { JobProgress($0.state, added: jobAdded(key)) } ?? .ended
-        if progress.finished {
-            Spacer()
-            ActionButton(title: "Done", style: .primary) {
-                fleet.providerTerminals.clear(key)
-                if case .install = key.job {
-                    shown = nil
-                } else {
-                    freshForm()
-                }
-            }
-            .frame(maxWidth: 180)
-        } else {
-            if case .add = key.job {
-                ActionButton(title: "Add Another Account", style: .secondary) { freshForm() }.frame(maxWidth: 220)
-                CancelLoginButton(fleet: fleet, key: key, compact: false).frame(maxWidth: 160)
-            }
-            Spacer()
-            Text("Keeps running if you close this").font(.footnote).foregroundStyle(Theme.tertiary)
-        }
-    }
-
-    private func jobAdded(_ key: ProviderJobKey) -> Bool {
-        if case .add(let id) = key.job { return added(id) }
-        return false
-    }
-
-    /// A fresh form, while any logins run on.
-    private func freshForm() {
-        shown = nil
-        addingAnother = true
-        draft = AccountDraft(provider: draft.provider)
-        draft.suggest(taken: taken)
-    }
-}
-
-/// A login or install in its terminal, under a line saying what it is and where it stands.
-struct JobTerminal: View {
-    let fleet: Fleet
-    let key: ProviderJobKey
-
-    private var machine: Machine? { fleet.machines.first { $0.hostId == key.hostId } }
-
-    var body: some View {
-        if let connection = fleet.providerTerminals[key] {
-            let progress = if case .install = key.job { fleet.installProgress(key) }
-                else { JobProgress(connection.state, added: added) }
-            HStack(spacing: 10) {
-                ProviderMark(provider: provider(connection), size: 18)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(heading(connection)).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                    Text(guidance(progress)).font(.caption).foregroundStyle(Theme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                JobBadge(progress: progress)
-            }
-            TerminalSurface(connection: connection, client: fleet.client, sessionId: nil)
-                .frame(height: 390)
-                .background(.black, in: .rect(cornerRadius: Theme.corner))
-                .clipShape(.rect(cornerRadius: Theme.corner))
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("login-terminal")
-            if progress == .added {
-                Label("Account added", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.success)
-            }
-        }
-    }
-
-    private var added: Bool {
-        guard case .add(let id) = key.job else { return false }
-        return machine?.accounts.contains { $0.accountId == id } == true
-    }
-
-    private func provider(_ connection: TerminalConnection) -> Provider {
-        if let account = connection.account { return account.provider }
-        if let install = connection.install { return install }
-        return machine?.accounts.first { $0.accountId == connection.relogin }?.provider ?? ""
-    }
-
-    private func heading(_ connection: TerminalConnection) -> String {
-        switch key.job {
-        case .add(let id):
-            "\(connection.account?.label ?? id) · \(id)"
-        case .relogin(let id): "Logging \(id) in again"
-        case .install(let provider):
-            fleet.providerTerminals.before(key) != nil
-                ? "Updating \(ModelCatalog.providerName(provider))" : "Installing \(ModelCatalog.providerName(provider))"
-        }
-    }
-
-    private func guidance(_ progress: JobProgress) -> String {
-        switch (key.job, progress) {
-        case (.install, .installing), (.install, .starting): "The vendor’s installer runs below, on \(machine?.name ?? "the machine")."
-        case (.install, .failed(let message)): message
-        case (.install, _): "\(progress.label) on \(machine?.name ?? "the machine")."
-        case (_, .added): "The machine lists the account; sessions can use it now."
-        case (_, .ended): "The login ended without the provider reporting the account logged in."
-        case (_, .failed(let message)): message
-        default: "Finish the provider’s own login below, on \(machine?.name ?? "the machine")."
-        }
-    }
-}
-
-/// Cancels a running login, once asked to confirm: closes its terminal on the machine, which
-/// hangs up the provider's login, so it adds no account. `compact` for a row, else a footer's.
-struct CancelLoginButton: View {
-    let fleet: Fleet
-    let key: ProviderJobKey
-    let compact: Bool
-    @State private var confirming = false
-
-    private var connection: TerminalConnection? { fleet.providerTerminals[key] }
-
-    private var subject: String {
-        switch key.job {
-        case .add(let id), .relogin(let id): id
-        case .install(let provider): ModelCatalog.providerName(provider)
-        }
-    }
-
-    var body: some View {
-        Group {
-            if compact {
-                PillButton(title: "Cancel") { confirming = true }
-            } else {
-                ActionButton(title: "Cancel Login", style: .secondary) { confirming = true }
-            }
-        }
-        // The terminal has an id once the machine opened it.
-        .disabled(connection?.terminalId == nil)
-        .accessibilityLabel("Cancel Login \(subject)")
-        .confirmationDialog("Cancel the login of \(subject)?", isPresented: $confirming, titleVisibility: .visible) {
-            Button("Cancel Login", role: .destructive) {
-                Task { await cancel() }
-            }
-            Button("Keep Running", role: .cancel) {}
-        } message: {
-            Text(key.job == .relogin(subject) ? "The account keeps its current login."
-                 : "The machine closes the login’s terminal and adds no account.")
-        }
-    }
-
-    private func cancel() async {
-        do {
-            try await fleet.cancelLogin(key)
-        } catch {
-            fleet.toast = .failure("Could not cancel the login of \(subject)", error)
-        }
-    }
-}
-
-/// A login's or install's progress as a small coloured label.
-struct JobBadge: View {
-    let progress: JobProgress
-
-    var body: some View {
-        HStack(spacing: 5) {
-            if !progress.finished {
-                ProgressView().controlSize(.mini)
-            } else {
-                Circle().fill(progress.tint).frame(width: 6, height: 6)
-            }
-            Text(progress.label)
-        }
-        .font(.caption.weight(.medium))
-        .foregroundStyle(progress.tint)
-        .lineLimit(1)
-        .fixedSize()
-    }
-}
-
-extension JobProgress {
-    var label: String {
-        switch self {
-        case .starting: "Starting"
-        case .running: "Waiting for you"
-        case .installing: "Installing"
-        case .added: "Added"
-        case .ended: "Ended"
-        case .installed(let version): version.isEmpty ? "Installed" : "Installed \(version)"
-        case .updated(let from, let to): from.isEmpty || to.isEmpty ? "Updated" : "Updated \(from) → \(to)"
-        case .upToDate(let version): version.isEmpty ? "Up to date" : "Up to date \(version)"
-        case .failed: "Failed"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .starting, .running: Theme.accent
-        case .installing: Theme.secondary
-        case .added, .installed, .updated, .upToDate: Theme.success
-        case .ended: Theme.tertiary
-        case .failed: Theme.failure
-        }
     }
 }
 
@@ -550,7 +253,7 @@ struct NewAccountSheet: View {
                                 Image(systemName: "desktopcomputer").foregroundStyle(Theme.secondary)
                                 Text(target.name).foregroundStyle(Theme.text)
                                 Spacer(minLength: 8)
-                                let running = fleet.providerTerminals.pendingIds(on: target.hostId).count
+                                let running = fleet.activity.pendingIds(on: target.hostId).count
                                 if running > 0 {
                                     Text(running == 1 ? "1 login running" : "\(running) logins running")
                                         .font(.caption).foregroundStyle(Theme.accent)
@@ -602,39 +305,18 @@ struct EditAccountSheet: View {
         fleet.machines.contains { $0.hostId == hostId && $0.role == .owner && $0.connection == .connected }
     }
 
-    private var key: ProviderJobKey { ProviderJobKey(hostId: hostId, job: .relogin(account.accountId)) }
-
-    /// This account's login, when one runs again from here.
-    private var login: TerminalConnection? { fleet.providerTerminals[key] }
-
     var body: some View {
-        SheetScaffold(title: login == nil ? "Account Settings" : "Log In Again",
-                      subtitle: "\(ModelCatalog.providerName(account.provider)) · \(account.accountId)",
-                      height: login == nil ? 560 : 680) {
-            if login != nil {
-                JobTerminal(fleet: fleet, key: key)
-            } else {
-                settings
-            }
+        SheetScaffold(title: "Account Settings",
+                      subtitle: "\(ModelCatalog.providerName(account.provider)) · \(account.accountId)", height: 560) {
+            settings
         } footer: {
-            if let login {
-                if ProviderTerminals.running(login) {
-                    CancelLoginButton(fleet: fleet, key: key, compact: false).frame(maxWidth: 160)
-                    Spacer()
-                    Text("Keeps running if you close this").font(.footnote).foregroundStyle(Theme.tertiary)
-                } else {
-                    Spacer()
-                    ActionButton(title: "Done", style: .primary) { fleet.providerTerminals.clear(key) }
-                        .frame(maxWidth: 180)
-                }
-            } else {
-                ActionButton(title: "Log In Again", style: .secondary) {
-                    guard canManage else { return }
-                    fleet.providerTerminals.relogin(account.accountId, on: hostId)
-                }.frame(maxWidth: 180).disabled(!canManage)
-                Spacer()
-                save
-            }
+            ActionButton(title: "Log In Again", style: .secondary) {
+                guard canManage else { return }
+                fleet.relogin(account.accountId, on: hostId)
+                dismiss()
+            }.frame(maxWidth: 180).disabled(!canManage)
+            Spacer()
+            save
         }
         .onAppear { label = account.label; configDir = account.configDir ?? ""; fallback = account.fallback }
     }
@@ -652,7 +334,7 @@ struct EditAccountSheet: View {
             Text("Connect as the machine owner to save changes.").font(.footnote).foregroundStyle(Theme.secondary)
         }
         if let error { Text(error).font(.footnote).foregroundStyle(Theme.failure) }
-        Text("Log In Again runs the provider’s login in this account’s config directory, for a login that expired.")
+        Text("Log In Again runs the provider’s login in this account’s config directory, for a login that expired. It runs in Activity.")
             .font(.footnote).foregroundStyle(Theme.tertiary)
     }
 
