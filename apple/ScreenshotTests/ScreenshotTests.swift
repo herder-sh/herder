@@ -184,7 +184,7 @@ final class ScreenshotTests: XCTestCase {
         return false
     }
 
-    /// The Skills page: the library, a switch per machine, one skill off on `laptop`.
+    /// The Skills page: the library, a switch per machine, one skill off on `studio`.
     private func skills() {
         #if os(macOS)
         guard section("Skills") else { return }
