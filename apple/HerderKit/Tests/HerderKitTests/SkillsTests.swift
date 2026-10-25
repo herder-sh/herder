@@ -100,6 +100,60 @@ struct SkillLibraryTests {
         #expect(SkillLibrary([vault]).checkouts.isEmpty)
     }
 
+    @Test func aMachineOffTheHeadMostMachinesShareIsBehind() {
+        var desk = machine("desk", name: "desk", sessions: [])
+        desk.skills = status(head: "aaaaaaa1", skills: [skill("deploy"), skill("review-pr")])
+        var studio = machine("studio", name: "studio", sessions: [])
+        studio.skills = status(head: "aaaaaaa1", skills: [skill("deploy"), skill("review-pr")])
+        var laptop = machine("laptop", name: "laptop", sessions: [])
+        laptop.skills = status(head: "bbbbbbb2", skills: [skill("deploy")])
+        let library = SkillLibrary([desk, studio, laptop])
+
+        #expect(library.head == "aaaaaaa1")
+        #expect(library.behind.map(\.hostId) == ["laptop"])
+        #expect(library.health == "laptop is behind")
+        #expect(library.status == "2 in library · synced from git · 1 machine behind")
+
+        laptop.skills = status(head: "aaaaaaa1", skills: [skill("deploy"), skill("review-pr")])
+        let synced = SkillLibrary([desk, studio, laptop])
+        #expect(synced.behind.isEmpty)
+        #expect(synced.health == "Every machine at aaaaaaa")
+        #expect(synced.status == "2 in library · synced from git")
+    }
+
+    @Test func aMachineOfflineDuringAWriteIsBehindTheWriter() {
+        var desk = machine("desk", name: "desk", sessions: [])
+        desk.skills = status(head: "new", skills: [skill("deploy")])
+        var laptop = machine("laptop", name: "laptop", sessions: [], connection: .disconnected(error: ""))
+        laptop.skills = status(head: "old")
+        let library = SkillLibrary([desk, laptop])
+        // Only connected machines say where the library is.
+        #expect(library.head == "new")
+        #expect(library.behind.map(\.hostId) == ["laptop"])
+    }
+
+    @Test func aFailedPullOrAnotherRepositoryIsSaidOnce() {
+        var desk = machine("desk", name: "desk", sessions: [])
+        desk.skills = status()
+        var laptop = machine("laptop", name: "laptop", sessions: [])
+        laptop.skills = status(head: "fedcba9876", error: "cannot fetch: connection refused")
+        var studio = machine("studio", name: "studio", sessions: [])
+        studio.skills = status(repo: "git@example.com:other/skills.git")
+        let library = SkillLibrary([desk, laptop, studio])
+        #expect(library.stuck.map(\.hostId) == ["laptop", "studio"])
+        #expect(library.health == "laptop could not pull · studio is on another repository")
+        #expect(library.status == "0 in library · synced from git · 2 machines behind")
+    }
+
+    @Test func withoutARepositoryNothingIsBehind() {
+        var desk = machine("desk", name: "desk", sessions: [])
+        desk.skills = status(repo: nil, skills: [skill("notes")])
+        let library = SkillLibrary([desk])
+        #expect(library.behind.isEmpty && library.stuck.isEmpty)
+        #expect(library.health.isEmpty)
+        #expect(library.status == "1 in library · not synced")
+    }
+
     @Test func projectSkillsAreEachProjectsOnce() {
         var desk = machine("desk", name: "desk", sessions: ["a", "b", "c"],
                            projects: [Project(projectId: "web", name: "Web", paths: [], defaultPermissionMode: nil,
