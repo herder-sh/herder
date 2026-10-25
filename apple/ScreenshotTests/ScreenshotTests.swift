@@ -58,7 +58,7 @@ final class ScreenshotTests: XCTestCase {
                 #if os(macOS)
                 shoot("mac-subagents")
                 #endif
-                dismiss()
+                back()
             }
         }
 
@@ -266,11 +266,14 @@ final class ScreenshotTests: XCTestCase {
             press(machine)
             settle()
             shoot("mac-machine-settings")
-            // Its MCP servers, below the accounts and CLIs.
-            app.sheets.firstMatch.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -400)
-            settle()
-            shoot("mac-machine-settings-mcp")
-            dismiss()
+            // Its MCP servers, below the accounts and CLIs, from the page's section index.
+            let mcp = app.buttons["section-index-MCP servers"].firstMatch
+            if wait(mcp, "MCP servers in the section index") {
+                press(mcp)
+                settle()
+                shoot("mac-machine-settings-mcp")
+            }
+            back()
         }
         updateAll()
         #endif
@@ -516,6 +519,16 @@ final class ScreenshotTests: XCTestCase {
         if close.exists { close.click() } else { app.typeKey(.escape, modifierFlags: []) }
         #else
         app.swipeDown(velocity: .fast)
+        #endif
+        settle()
+    }
+
+    /// Back from a page: ⌘[ on the Mac, the navigation bar's back button on the iPhone.
+    private func back() {
+        #if os(macOS)
+        app.typeKey("[", modifierFlags: .command)
+        #else
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         #endif
         settle()
     }

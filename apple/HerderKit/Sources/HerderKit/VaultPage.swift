@@ -1,11 +1,11 @@
 import Herder
 import SwiftUI
 
-/// A vault's secrets, for its owners: each set with the hosts it is granted to and the secrets
+/// A vault's page, for its owners: its secrets, each set with the hosts it is granted to and the secrets
 /// in it, and the latest fetches. Owners create and delete sets, add, replace and delete
 /// secrets, and grant a set to the vault's hosts or revoke it. A value is typed into a secure
 /// field and never shown again.
-struct SecretsSheet: View {
+struct VaultPage: View {
     let fleet: Fleet
     let vault: HostId
     @State private var secrets: VaultSecrets
@@ -42,51 +42,17 @@ struct SecretsSheet: View {
 
     var body: some View {
         let machine = fleet.machines.first { $0.hostId == vault }
-        SheetScaffold(title: "Secrets", subtitle: machine?.name ?? "Vault", height: 720) {
-            switch secrets.list {
-            case .asking:
-                ProgressView().frame(maxWidth: .infinity)
-            case .failed(let why):
-                failure(why)
-            case .loaded:
-                if secrets.sets.isEmpty {
-                    Text("No sets yet. A set groups secrets you grant to hosts together; create one below.")
-                        .font(.subheadline).foregroundStyle(Theme.tertiary)
-                }
-                ForEach(secrets.sets, id: \.name) { set in
-                    SetCard(set: set, secrets: secrets, hosts: VaultSecrets.hosts(of: set, vaultHosts: machine?.hosts ?? []),
-                            add: { editor = SecretEditor(secrets: secrets, set: set.name) },
-                            replace: { editor = SecretEditor(secrets: secrets, replacing: $0) },
-                            delete: { deleting = .secret($0) },
-                            deleteSet: { deleting = .set(set.name) },
-                            failed: { error = $0 })
-                }
-                Field(label: "New set", hint: "Lowercase letters, digits and hyphens, such as `prod` or `coingate-prod`.") {
-                    HStack(spacing: 10) {
-                        InputBox(placeholder: "prod", text: $newSet, mono: true)
-                            .accessibilityIdentifier("secret-set-name")
-                        ActionButton(title: "Create", style: .secondary) {
-                            await run {
-                                try await secrets.createSet(newSet)
-                                newSet = ""
-                            }
-                        }
-                        .frame(width: 120)
-                        .disabled(newSet.trimmingCharacters(in: .whitespaces).isEmpty)
-                        .accessibilityIdentifier("secret-set-create")
-                    }
-                }
-            }
+        DetailPage(title: machine?.name ?? "Vault", chip: machine.map(MachinePage.chip),
+                   status: machine.map(Self.status) ?? "") {
+            IconButton(symbol: "arrow.clockwise", help: "Reload") { Task { await secrets.reload() } }
+        } content: {
+            VStack(alignment: .leading, spacing: 18) { sets(machine) }
+                .detailSection("Secrets")
             if let error {
                 Text(error).font(.footnote).foregroundStyle(Theme.failure)
                     .accessibilityIdentifier("secrets-error")
             }
-            audit(machine)
-        } footer: {
-            Text("Values are never shown again; replace one to change it.")
-                .font(.footnote).foregroundStyle(Theme.tertiary)
-            Spacer()
-            IconButton(symbol: "arrow.clockwise", help: "Reload") { Task { await secrets.reload() } }
+            audit(machine).detailSection("Recent access")
         }
         .task { await secrets.reload() }
         .sheet(item: Binding(get: { editor.map(EditorItem.init) }, set: { if $0 == nil { editor = nil } })) { item in
@@ -107,6 +73,53 @@ struct SecretsSheet: View {
             }
         } message: {
             Text(deleting?.message ?? "")
+        }
+    }
+
+    /// "Secrets for 3 hosts": who the vault keeps them for.
+    static func status(_ machine: Machine) -> String {
+        machine.hosts.count == 1 ? "Secrets for 1 host" : "Secrets for \(machine.hosts.count) hosts"
+    }
+
+    /// The sets, each with its secrets, and a field that creates one.
+    @ViewBuilder private func sets(_ machine: Machine?) -> some View {
+        HStack(spacing: 4) {
+            SectionHeading(title: "Secrets")
+            InfoButton(text: "Values are never shown again; replace one to change it.")
+        }
+        switch secrets.list {
+        case .asking:
+            ProgressView().frame(maxWidth: .infinity)
+        case .failed(let why):
+            failure(why)
+        case .loaded:
+            if secrets.sets.isEmpty {
+                Text("No sets yet. A set groups secrets you grant to hosts together; create one below.")
+                    .font(.subheadline).foregroundStyle(Theme.tertiary)
+            }
+            ForEach(secrets.sets, id: \.name) { set in
+                SetCard(set: set, secrets: secrets, hosts: VaultSecrets.hosts(of: set, vaultHosts: machine?.hosts ?? []),
+                        add: { editor = SecretEditor(secrets: secrets, set: set.name) },
+                        replace: { editor = SecretEditor(secrets: secrets, replacing: $0) },
+                        delete: { deleting = .secret($0) },
+                        deleteSet: { deleting = .set(set.name) },
+                        failed: { error = $0 })
+            }
+            Field(label: "New set", hint: "Lowercase letters, digits and hyphens, such as `prod` or `coingate-prod`.") {
+                HStack(spacing: 10) {
+                    InputBox(placeholder: "prod", text: $newSet, mono: true)
+                        .accessibilityIdentifier("secret-set-name")
+                    ActionButton(title: "Create", style: .secondary) {
+                        await run {
+                            try await secrets.createSet(newSet)
+                            newSet = ""
+                        }
+                    }
+                    .frame(width: 120)
+                    .disabled(newSet.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityIdentifier("secret-set-create")
+                }
+            }
         }
     }
 
@@ -243,7 +256,7 @@ private struct SecretRow: View {
                 Text(secret.name).font(Theme.mono).foregroundStyle(Theme.text)
                 Text(secret.description).font(.caption).foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Updated \(SecretsSheet.ago(secret.updatedAt))").font(.caption2).foregroundStyle(Theme.tertiary)
+                Text("Updated \(VaultPage.ago(secret.updatedAt))").font(.caption2).foregroundStyle(Theme.tertiary)
             }
             Spacer()
             IconButton(symbol: "arrow.triangle.2.circlepath", help: "Replace Value", action: replace)

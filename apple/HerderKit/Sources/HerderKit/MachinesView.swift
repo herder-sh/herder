@@ -13,6 +13,7 @@ struct MachinesView: View {
     @State private var renaming: MachineSummary?
     @State private var forgetting: MachineSummary?
     @State private var error: String?
+    @Environment(\.pages) private var pages
 
     var body: some View {
         ScrollView {
@@ -24,10 +25,10 @@ struct MachinesView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 14, alignment: .top)], spacing: 14) {
                     ForEach(fleet.lists.machines) { machine in
                         MachineCard(machine: machine, since: fleet.connectionLog[machine.hostId]?.last?.at) {
-                            sheet = .machineSettings(hostId: machine.hostId)
+                            pages.open(.machine(machine.hostId))
                         }
                             .contextMenu {
-                                Button("Settings…", systemImage: "gearshape") { sheet = .machineSettings(hostId: machine.hostId) }
+                                Button("Open", systemImage: "arrow.right.circle") { pages.open(.machine(machine.hostId)) }
                                 Button("Rename…", systemImage: "pencil") { renaming = machine }
                                 Button("Forget", systemImage: "trash", role: .destructive) { forgetting = machine }
                             }
@@ -37,7 +38,7 @@ struct MachinesView: View {
                     }
                 }
                 if showsVaults {
-                    ForEach(fleet.vaults) { VaultSection(fleet: fleet, vault: $0, sheet: $sheet) }
+                    ForEach(fleet.vaults) { VaultSection(fleet: fleet, vault: $0) }
                 }
             }
             .padding(.horizontal, 16)

@@ -3,11 +3,13 @@ import SwiftUI
 
 /// iPad and the Mac: herder's own sidebar and panes, edge to edge, with no system chrome
 /// around them. The Board and projects show their sessions beside the open one;
-/// Machines fills the width.
+/// Machines fills the width. An object opens as a page over the section, under a breadcrumb
+/// back to it.
 struct DesktopShell: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
     @Binding var item: SidebarItem
+    @Binding var pages: PageStack
     @Binding var session: SessionKey?
     @Binding var draft: Draft?
     let opened: (SessionKey) -> Void
@@ -22,24 +24,63 @@ struct DesktopShell: View {
         HStack(spacing: 0) {
             Group {
                 if sidebarCollapsed {
-                    SidebarRail(fleet: fleet, item: $item, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed,
+                    SidebarRail(fleet: fleet, item: section, session: $session, collapsed: $sidebarCollapsed,
                                 order: order, newSession: newSession)
                         .frame(width: 76)
                 } else {
-                    Sidebar(fleet: fleet, item: $item, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed,
+                    Sidebar(fleet: fleet, item: section, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed,
                             sort: $projectSort, manual: $projectOrder, newSession: newSession)
                         .frame(width: 228)
                 }
             }
             .background(Theme.surface)
             Rectangle().fill(Theme.stroke).frame(width: 1)
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Group {
+                if let page = pages.top {
+                    VStack(spacing: 0) {
+                        PageTrail(crumbs: crumbs) { pages.back(to: $0) }
+                        page.view(fleet: fleet).id(page)
+                    }
+                } else {
+                    content
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .environment(\.pages, PageNavigator(open: { pages.open($0) }, close: { pages.close() }))
         .background(Theme.background)
         #if os(macOS)
         .ignoresSafeArea(.container, edges: .top)
         #endif
+    }
+
+    /// The sidebar's selection: choosing a section, even the one shown, closes its pages.
+    private var section: Binding<SidebarItem> {
+        Binding(get: { item }, set: { next in
+            pages.back(to: 0)
+            item = next
+        })
+    }
+
+    /// The breadcrumb: the section, then each page open over it.
+    private var crumbs: [String] {
+        let lists = fleet.lists
+        let root = switch item {
+        case .board: "Board"
+        case .chats: "Chats"
+        case .skills: "Skills"
+        case .providers: "Providers"
+        case .machines: "Machines"
+        case .vault: "Vault"
+        case .project(let id): lists.projects.first { $0.id == id }?.name ?? "Project"
+        }
+        return [root] + pages.pages.map { page in
+            // A project's settings opened from elsewhere say whose they are.
+            if case .projectSettings(let id) = page, item != .project(id) {
+                return "\(lists.projects.first { $0.id == id }?.name ?? "Project") Settings"
+            }
+            return page.title(in: fleet)
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -61,7 +102,7 @@ struct DesktopShell: View {
                 } actions: {
                     BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey).fixedSize()
                     PaneButton(title: "New Session", symbol: "plus", prominent: true) { draft = Draft.inProject(id, fleet: fleet) }
-                    IconButton(symbol: "gearshape", help: "Project Settings") { sheet = .projectSettings(projectId: id) }
+                    IconButton(symbol: "gearshape", help: "Project Settings") { pages.open(.projectSettings(projectId: id)) }
                 }
             }
         case .chats:
@@ -157,7 +198,7 @@ struct DesktopShell: View {
 
     private var order: ProjectOrder { ProjectOrder(sort: projectSort, stored: projectOrder) }
 
-    private var switcher: Switcher { Switcher(fleet: fleet, item: $item, session: $session, order: order) }
+    private var switcher: Switcher { Switcher(fleet: fleet, item: section, session: $session, order: order) }
 
     /// How many tasks are open and how many of them work, then the machines while one is not
     /// connected.
@@ -356,6 +397,7 @@ struct Sidebar: View {
     @Binding var manual: String
     let newSession: () -> Void
     @State private var showsQuiet = false
+    @Environment(\.pages) private var pages
 
     private func select(_ next: SidebarItem) {
         if item != next { session = nil }
@@ -439,7 +481,7 @@ struct Sidebar: View {
                 }
             }
             Spacer(minLength: 0)
-            MachinesFooter(machines: lists.machines, sheet: $sheet) { select(.machines) }
+            MachinesFooter(machines: lists.machines) { select(.machines) }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 10)
         }
@@ -470,7 +512,10 @@ struct Sidebar: View {
             icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId)),
             needsYou: project.needsYou, working: project.working,
             selected: item == .project(project.id),
-            settings: project.projectId == nil ? nil : { sheet = .projectSettings(projectId: project.id) }
+            settings: project.projectId == nil ? nil : {
+                select(.project(project.id))
+                pages.open(.projectSettings(projectId: project.id))
+            }
         ) { select(.project(project.id)) }
         .draggable(project.id)
         .dropDestination(for: String.self) { ids, _ in
@@ -484,14 +529,14 @@ struct Sidebar: View {
 }
 
 /// The machines in one line: a dot per machine by its health and how many are not well. It
-/// opens a popover with each one's status and a way to its page.
+/// opens a popover with each one's status and a way to its page, over Machines.
 struct MachinesFooter: View {
     let machines: [MachineSummary]
-    @Binding var sheet: AppSheet?
     /// Shows only the dots, stacked, for the rail.
     var compact = false
     let showAll: () -> Void
     @State private var open = false
+    @Environment(\.pages) private var pages
 
     /// "4 machines · 1 offline": the count, then those not connected.
     nonisolated static func summary(_ machines: [MachineSummary]) -> String {
@@ -535,7 +580,8 @@ struct MachinesFooter: View {
                 ForEach(machines) { machine in
                     Button {
                         open = false
-                        sheet = .machineSettings(hostId: machine.hostId)
+                        showAll()
+                        pages.open(.machine(machine.hostId))
                     } label: {
                         HStack(spacing: 10) {
                             ConnectionMark(state: machine.connection).frame(width: 12)
@@ -590,7 +636,6 @@ private struct SidebarRail: View {
     let fleet: Fleet
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
-    @Binding var sheet: AppSheet?
     @Binding var collapsed: Bool
     let order: ProjectOrder
     let newSession: () -> Void
@@ -625,7 +670,7 @@ private struct SidebarRail: View {
             }
             .scrollIndicators(.never)
             Spacer(minLength: 0)
-            MachinesFooter(machines: lists.machines, sheet: $sheet, compact: true) {
+            MachinesFooter(machines: lists.machines, compact: true) {
                 if item != .machines { session = nil }
                 item = .machines
             }

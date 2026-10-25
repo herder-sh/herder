@@ -14,11 +14,11 @@ func pairingLink(in text: String) -> String? {
 #if os(iOS)
 import AVFoundation
 
-/// The camera, full screen, looking for the QR code `herder pair` prints or another device
-/// shares; hands over the pairing link in it.
+/// The camera, filling Add Machine's sheet in its form's place, looking for the QR code
+/// `herder pair` prints or another device shares; hands over the pairing link in it.
 struct PairScanner: View {
     let scanned: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
+    let close: () -> Void
     @State private var camera = QRCamera()
 
     var body: some View {
@@ -34,7 +34,7 @@ struct PairScanner: View {
                 HStack {
                     Text("Scan the QR code").font(.title3.weight(.bold)).foregroundStyle(Theme.text)
                     Spacer()
-                    IconButton(symbol: "xmark", help: "Close") { dismiss() }
+                    IconButton(symbol: "xmark", help: "Close", action: close)
                 }
                 .padding(20)
                 Spacer()
@@ -52,7 +52,7 @@ struct PairScanner: View {
         .task {
             await camera.start { link in
                 scanned(link)
-                dismiss()
+                close()
             }
         }
         .onDisappear { camera.stop() }

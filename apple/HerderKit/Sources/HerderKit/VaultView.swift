@@ -185,7 +185,7 @@ struct VaultView: View {
                 if vaults.isEmpty && unpaired.isEmpty {
                     Text("No vault paired.").foregroundStyle(Theme.tertiary).padding(.top, 30)
                 }
-                ForEach(vaults) { VaultSection(fleet: fleet, vault: $0, sheet: $sheet) }
+                ForEach(vaults) { VaultSection(fleet: fleet, vault: $0) }
                 ForEach(unpaired) { vault in UnpairedVaultCard(vault: vault) { sheet = .pair } }
             }
             .padding(.horizontal, 16)
@@ -228,7 +228,7 @@ private struct UnpairedVaultCard: View {
 struct VaultSection: View {
     let fleet: Fleet
     let vault: VaultStats
-    @Binding var sheet: AppSheet?
+    @Environment(\.pages) private var pages
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -266,7 +266,7 @@ struct VaultSection: View {
             }
             Spacer()
             if vault.owned {
-                PaneButton(title: "Secrets", symbol: "key") { sheet = .secrets(vault: vault.hostId) }
+                PaneButton(title: "Secrets", symbol: "key") { pages.open(.vault(vault.hostId)) }
                     .disabled(vault.connection != .connected)
                     .accessibilityIdentifier("vault-secrets")
             }
