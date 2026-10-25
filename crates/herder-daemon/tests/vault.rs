@@ -1812,6 +1812,7 @@ async fn a_host_backs_up_and_fetches_secrets_only_as_its_switches_say() {
         CommandBody::GrantSecretSet {
             set: "prod".into(),
             host_id: host_id(),
+            host_use: false,
         },
     ] {
         assert_eq!(
