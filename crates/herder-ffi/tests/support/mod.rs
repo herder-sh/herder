@@ -4,7 +4,8 @@
 //! with a project skill. Its skill library is a bare repository of its own with
 //! [`DEMO_SKILLS`], and [`FakeDaemon::skill_source`] is a repository to import a skill from.
 //! It admits [`MAX_TURNS`] turns at once on a host that always has room otherwise, and an
-//! owner may change that limit. Its owner, [`OWNER`], is set up before anyone pairs, so a member
+//! owner may change that limit. Adding an OpenCode account runs [`fake_login`], which logs in
+//! at once. Its owner, [`OWNER`], is set up before anyone pairs, so a member
 //! can pair too.
 
 use std::collections::HashMap;
@@ -16,7 +17,7 @@ use anyhow::{Context, Result, ensure};
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::PairingUri;
 use herder_daemon::auth::{Auth, PAIRING_TTL, User};
-use herder_daemon::login::Logins;
+use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
 use herder_daemon::settings::Settings;
@@ -195,7 +196,11 @@ impl FakeDaemon {
         };
         let (link, member_link) = (link(OWNER, None)?, link("guest", Some(Role::Member))?);
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
-        let logins = Logins::new(HashMap::new(), dir.join("daemon.toml"), sessions.clone());
+        let logins = Logins::new(
+            HashMap::from([(Provider::Opencode, fake_login())]),
+            dir.join("daemon.toml"),
+            sessions.clone(),
+        );
         let host = Host {
             id: HostId::new(name),
             name: name.into(),
@@ -222,6 +227,21 @@ impl FakeDaemon {
     pub async fn stop(self) -> Result<()> {
         self.shutdown.cancel();
         Ok(self.server.await?)
+    }
+}
+
+/// A login that succeeds at once: it marks the account's config dir logged in, which its status
+/// check then reports. Give it a config dir, or it logs in under the user's own home.
+fn fake_login() -> LoginProgram {
+    let script = |script: &str| vec!["-c".to_owned(), script.to_owned()];
+    LoginProgram {
+        program: PathBuf::from("/bin/sh"),
+        args: script(r#"touch "$XDG_DATA_HOME/logged-in""#),
+        config_env: vec!["XDG_DATA_HOME".into()],
+        status: LoginStatus {
+            args: script(r#"[ -e "$XDG_DATA_HOME/logged-in" ]"#),
+            logged_in_field: None,
+        },
     }
 }
 

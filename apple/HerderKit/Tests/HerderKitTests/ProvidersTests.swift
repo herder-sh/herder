@@ -76,44 +76,24 @@ struct ProvidersTests {
             machine("d", name: "vault", sessions: [], hosts: [vault]),
             machine("e", name: "never connected", sessions: [], role: nil),
         ]
-        let targets = AccountTarget.all(machines)
+        let targets = AccountTarget.all(machines, provider: "claude")
         #expect(targets == [
             .init(hostId: "a", name: "laptop", problem: nil),
-            .init(hostId: "b", name: "server", problem: "Owners only"),
+            .init(hostId: "b", name: "server", problem: "Member — can’t add accounts"),
             .init(hostId: "c", name: "mini", problem: "Not connected"),
         ])
-        // With one machine to add on, the sheet goes straight to its login.
-        #expect(AccountTarget.only(targets) == "a")
-        #expect(AccountTarget.only(AccountTarget.all(machines + [machine("f", name: "desk", sessions: [])])) == nil)
-        #expect(AccountTarget.only(Array(targets.dropFirst())) == nil)
-    }
-
-    @MainActor
-    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
-    func addingAnAccountStartsTheLoginOnThePickedMachine() async throws {
-        let daemon = try FakeDaemon()
-        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
-            Issue.record("cannot open profile")
-            return
+        // A machine without the provider's CLI offers to install it, where herder can.
+        let missing = { (canInstall: Bool) in
+            ProviderStatus(provider: "cursor", installed: false, version: nil, binary: nil, canInstall: canInstall,
+                           canUpdate: false)
         }
-        let following = Task { await fleet.follow() }
-        defer { following.cancel() }
-        let machine = try await fleet.pair(daemon)
-        try await fleet.client.synced(hostId: machine.hostId)
-        #expect(await eventually { AccountTarget.only(AccountTarget.all(fleet.machines)) != nil })
-        let hostId = try #require(AccountTarget.only(AccountTarget.all(fleet.machines)))
-        #expect(hostId == machine.hostId)
-        var draft = AccountDraft()
-        draft.provider = "codex"
-        draft.suggest(taken: fleet.machines.first { $0.hostId == hostId }?.accounts.map(\.accountId) ?? [])
-        #expect(draft.problem(existing: []) == nil)
-        // The fake daemon cannot log its fake provider in, and says so: the login reached it.
-        let connection = TerminalConnection(hostId: hostId, terminalId: nil, account: draft.account)
-        connection.connect(client: fleet.client, sessionId: nil, cols: 80, rows: 24)
-        #expect(await eventually {
-            if case .failed = connection.state { return true }
-            return false
-        })
+        let bare = [machine("f", name: "desk", sessions: [], providers: [missing(true)]),
+                    machine("g", name: "nas", sessions: [], providers: [missing(false)])]
+        #expect(AccountTarget.all(bare, provider: "cursor") == [
+            .init(hostId: "f", name: "desk", problem: "Cursor isn’t installed", installable: true),
+            .init(hostId: "g", name: "nas", problem: "Cursor isn’t installed"),
+        ])
+        #expect(AccountTarget.all(bare, provider: "claude").allSatisfy { $0.problem == nil })
     }
 }
 

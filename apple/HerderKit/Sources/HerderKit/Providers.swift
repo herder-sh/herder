@@ -72,9 +72,9 @@ struct ProviderAccounts: Equatable {
         /// names the same place there.
         func draft(taken: [String]) -> AccountDraft {
             AccountDraft(id: taken.contains(account.accountId)
-                             ? AccountDraft.nextId(provider: provider, taken: taken, email: email) : account.accountId,
+                             ? AccountDraft.nextId(provider: provider, taken: taken, name: email) : account.accountId,
                          provider: provider, label: account.label,
-                         configDir: account.configDir.flatMap { $0.hasPrefix("~/") ? $0 : nil } ?? "", idEdited: true)
+                         configDir: account.configDir.flatMap { $0.hasPrefix("~/") ? $0 : nil } ?? "")
         }
     }
 
