@@ -13,6 +13,8 @@ struct RequestCard: View {
     /// field of its own.
     var answersInComposer = false
     @State private var answer = ""
+    /// The choices ticked on a multi-select question, sent together with Submit.
+    @State private var picks = Picks()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -38,6 +40,8 @@ struct RequestCard: View {
         .padding(14)
         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.accent, lineWidth: 1.5))
+        // The next question of a batch starts with nothing ticked.
+        .onChange(of: request.requestId) { picks = Picks() }
     }
 
     private var header: some View {
@@ -69,15 +73,29 @@ struct RequestCard: View {
                     .background(Theme.raised, in: .rect(cornerRadius: 8))
                     .textSelection(.enabled)
                 reasonLines
-            case .question(let text, let labels):
+            case .question(let text, let labels, let multiSelect):
                 let question = QuestionText(text, choices: labels)
                 MarkdownText(text: question.body)
                 reasonLines
                 VStack(spacing: 6) {
                     ForEach(Array(question.choices.enumerated()), id: \.offset) { index, choice in
-                        ChoiceButton(index: index + 1, choice: choice) {
-                            await fleet.answer(request, with: .choice(index: UInt32(index)))
+                        if multiSelect {
+                            ChoiceButton(index: index + 1, choice: choice, ticked: picks.ticked.contains(index)) {
+                                picks.toggle(index)
+                            }
+                        } else {
+                            ChoiceButton(index: index + 1, choice: choice) {
+                                await fleet.answer(request, with: .choice(index: UInt32(index)))
+                            }
                         }
+                    }
+                    if multiSelect, !labels.isEmpty {
+                        ActionButton(title: "Submit", style: .primary) {
+                            if let answer = picks.answer { await fleet.answer(request, with: answer) }
+                        }
+                        .disabled(picks.answer == nil)
+                        .opacity(picks.answer == nil ? 0.5 : 1)
+                        .accessibilityIdentifier("submit-choices")
                     }
                     if !answersInComposer { answerField }
                 }
@@ -119,7 +137,7 @@ struct RequestCard: View {
     private var typed: String { answer.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private var labelsEmpty: Bool {
-        if case .question(_, let choices) = request.kind { return choices.isEmpty }
+        if case .question(_, let choices, _) = request.kind { return choices.isEmpty }
         return true
     }
 
@@ -170,6 +188,21 @@ struct RequestCard: View {
         if let note = request.note {
             Text("The primary says: \(note)").font(.footnote).italic().foregroundStyle(Theme.secondary)
         }
+    }
+}
+
+/// The choices ticked on a multi-select question.
+struct Picks: Equatable {
+    private(set) var ticked: Set<Int> = []
+
+    /// Ticks choice `index`, or unticks it.
+    mutating func toggle(_ index: Int) {
+        ticked.formSymmetricDifference([index])
+    }
+
+    /// The answer of the ticked choices, in the question's order; `nil` while none is ticked.
+    var answer: Answer? {
+        ticked.isEmpty ? nil : .choices(indices: ticked.sorted().map(UInt32.init))
     }
 }
 
@@ -267,6 +300,9 @@ private struct ChoiceButton: View {
 
     let index: Int
     let choice: QuestionText.Choice
+    /// Whether a multi-select question's choice is ticked; `nil` for a single choice, which
+    /// answers at once.
+    var ticked: Bool? = nil
     let action: () async -> Void
     @State private var hovering = false
 
@@ -275,6 +311,12 @@ private struct ChoiceButton: View {
             Task { await action() }
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
+                if let ticked {
+                    Image(systemName: ticked ? "checkmark.square.fill" : "square")
+                        .font(.body)
+                        .foregroundStyle(ticked ? Theme.accent : Theme.tertiary)
+                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                }
                 Text("\(index)")
                     .font(.caption.weight(.bold).monospacedDigit())
                     .foregroundStyle(Theme.secondary)
@@ -307,5 +349,6 @@ private struct ChoiceButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .accessibilityAddTraits(ticked == true ? .isSelected : [])
     }
 }

@@ -904,6 +904,7 @@ impl Session {
                     .iter()
                     .map(|option| option.label.clone())
                     .collect(),
+                multi_select: question.multi_select,
             })
             .await;
             asked.push(AskedQuestion {
@@ -936,11 +937,20 @@ impl Session {
         let text = match answer {
             Answer::Text { text } => text,
             Answer::Choice { index } => {
-                let option = usize::try_from(index)
-                    .ok()
-                    .and_then(|index| asked.question.options.get(index));
-                let Some(option) = option else { return };
-                option.label.clone()
+                let Some(label) = asked.question.label(index) else {
+                    return;
+                };
+                label.to_owned()
+            }
+            Answer::Choices { indices } => {
+                let labels: Option<Vec<&str>> = indices
+                    .iter()
+                    .map(|&index| asked.question.label(index))
+                    .collect();
+                match labels {
+                    Some(labels) if !labels.is_empty() => labels.join(", "),
+                    _ => return,
+                }
             }
         };
         asked.answer = Some(text);
@@ -1240,15 +1250,8 @@ fn question_text(question: &Question) -> String {
         text.push_str("\n\n");
         text.push_str(&described.join("\n"));
     }
-    if question.multi_select {
-        text.push_str(MULTI_SELECT);
-    }
     text
 }
-
-/// Ends a multi-select question, which the contract answers with one choice or free text.
-const MULTI_SELECT: &str = "\n\nMore than one may apply: to pick several, answer with their \
-                            names separated by commas.";
 
 /// The seed transcript as one context message; `None` when there is nothing to replay.
 fn seed_text(seed: &[Item]) -> Option<String> {

@@ -277,6 +277,7 @@ pub enum EventBody {
         turn_id: TurnId,
         text: String,
         choices: Vec<String>,
+        multi_select: bool,
         routed_to: Route,
         reason: Option<EscalationReason>,
     },
@@ -481,6 +482,7 @@ pub enum Answerer {
 pub enum Answer {
     Text { text: String },
     Choice { index: u32 },
+    Choices { indices: Vec<u32> },
 }
 
 #[uniffi::remote(Record)]

@@ -659,6 +659,29 @@ fn a_question_lists_its_choices() {
 }
 
 #[test]
+fn a_multi_select_question_shows_a_box_per_choice() {
+    let mut app = open_s2(vec![
+        fake::started("turn-1"),
+        fake::multi_select("q1", "Which checks should run?", &["Lint", "Tests", "Docs"]),
+    ]);
+    press(&mut app, KeyCode::Char('1'));
+    press(&mut app, KeyCode::Char('i'));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char(' '));
+    let terminal = render(&mut app, 100, 36);
+    let screen = terminal.backend().to_string();
+    assert!(
+        screen.contains("[x] Lint") && screen.contains("[x] Tests"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[ ] Docs") && screen.contains("2 picked"),
+        "{screen}"
+    );
+    insta::assert_snapshot!(terminal.backend());
+}
+
+#[test]
 fn a_prompt_sent_during_a_turn_shows_queued() {
     let mut app = open_s2(vec![fake::started("turn-1")]);
     let streaming = vec![item("i6", assistant("Working on it"))];
