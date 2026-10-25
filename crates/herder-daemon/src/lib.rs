@@ -3,6 +3,7 @@
 pub mod accounts;
 pub mod auth;
 pub mod aws;
+pub mod bots;
 mod browse;
 pub mod config;
 pub mod data_dir;
@@ -309,6 +310,7 @@ pub async fn serve(
     server.manage_aws(aws::Aws::from_env(|key| std::env::var_os(key)))?;
     server.link_vault(link)?;
     server.manage_settings(settings)?;
+    server.manage_bots(Arc::new(bots::Bots::new(config)))?;
     sessions.serve_control(server.control())?;
     server.run(listeners, shutdown).await;
     terminals.close_all();
@@ -358,6 +360,7 @@ mod tests {
             vault: None,
             retention: Default::default(),
             mcp_servers: Vec::new(),
+            bots: Vec::new(),
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

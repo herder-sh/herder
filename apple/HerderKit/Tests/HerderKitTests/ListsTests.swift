@@ -15,7 +15,8 @@ func machine(
         role: role,
         sessions: sessions.map {
             SessionHead(sessionId: $0, hostId: nil, headSeq: 0, status: .idle, parent: nil, parentHost: nil, task: nil,
-                        title: nil, projectId: nil, chat: false, accountId: "main", childrenNeedYou: 0, queue: [])
+                        title: nil, projectId: nil, chat: false, accountId: "main", childrenNeedYou: 0, queue: [],
+                        threads: [])
         },
         hosts: hosts, projects: projects, accounts: accounts, failover: FailoverSettings(pin: false),
         providers: providers, terminals: [], resources: nil, sessionUsage: [:], vault: nil)

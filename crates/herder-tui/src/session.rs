@@ -621,7 +621,8 @@ impl Session {
                 };
                 Some(notice(format!("artifact: {title} · {link}"), Tone::Info))
             }
-            EventBody::Unknown => None,
+            // Chat threads are badged by the apps; the TUI shows nothing for them.
+            EventBody::ThreadLinked { .. } | EventBody::Unknown => None,
         };
         self.entries.extend(entry);
     }

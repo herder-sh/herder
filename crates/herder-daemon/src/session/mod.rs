@@ -890,6 +890,13 @@ impl SessionManager {
                     "this daemon's settings are not changed from a client",
                 ));
             }
+            // The daemon's bots answer these ([`crate::bots`]).
+            CommandBody::ListBots
+            | CommandBody::PutBot { .. }
+            | CommandBody::RemoveBot { .. }
+            | CommandBody::GetBotStatus => {
+                return Err(error(ErrorCode::Unsupported, "this daemon holds no bots"));
+            }
             // The daemon's vault link answers these ([`crate::vault::Link`]).
             CommandBody::GetVaultLink
             | CommandBody::LinkVault { .. }
@@ -2283,6 +2290,8 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
             | CommandBody::GetVaultLink
             | CommandBody::GetUsageSummary { .. }
             | CommandBody::ListAwsProfiles
+            | CommandBody::ListBots
+            | CommandBody::GetBotStatus
     )
 }
 

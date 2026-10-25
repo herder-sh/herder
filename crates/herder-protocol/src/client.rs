@@ -4,9 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Answer, ApprovalDecision, ApprovalId, Attachment, AttachmentId, Bytes, CommandId,
-    DaemonSettings, Event, HostId, Image, PermissionMode, ProjectId, PromptFile, PromptId,
-    Provider, QuestionId, SecretValue, Seq, SessionId, TerminalId, UsagePeriod,
+    AccountId, Answer, ApprovalDecision, ApprovalId, Attachment, AttachmentId, BotId, Bytes,
+    CommandId, DaemonSettings, Event, HostId, Image, PermissionMode, ProjectId, PromptFile,
+    PromptId, Provider, QuestionId, SecretValue, Seq, SessionId, TerminalId, UsagePeriod,
 };
 
 /// A client-to-daemon message.
@@ -752,6 +752,30 @@ pub enum CommandBody {
         /// Whether it is to be enabled.
         enabled: bool,
     },
+    /// List the bots this daemon's host holds, as its config's `[[bots]]` entries configure
+    /// them; owners only. Answered with `bots`. It changes nothing, so a resend is answered
+    /// afresh. Refused with `unsupported` on a vault.
+    ListBots,
+    /// Add a bot, or replace the one with its `bot_id`, kept as a `[[bots]]` entry of the
+    /// daemon's config; owners only. Answered with `applied`. Refused with `bad_request`,
+    /// changing nothing, when an id is not valid, Slack's `app_token` is missing or
+    /// Telegram's given, a person or channel is listed twice, or an account is unknown or not
+    /// of the provider; and with `unsupported` on a vault.
+    PutBot {
+        /// The bot, as it is to be.
+        bot: Box<crate::Bot>,
+    },
+    /// Remove a bot's `[[bots]]` entry, disconnecting it; owners only. Its tokens stay in the
+    /// vault, and sessions keep their links to its threads. Answered with `applied`. Refused
+    /// with `not_found` for an unknown bot, and `unsupported` on a vault.
+    RemoveBot {
+        /// The bot.
+        bot_id: BotId,
+    },
+    /// Say how each bot's connection to its chat stands; owners only. Answered with
+    /// `bot_status`. It changes nothing, so a resend is answered afresh. Refused with
+    /// `unsupported` on a vault.
+    GetBotStatus,
     /// Start streaming a terminal's output; owners only.
     AttachTerminal {
         /// Target terminal.
