@@ -20,8 +20,7 @@ struct ProviderVersionsTests {
             status("claude", "2.1.9 (Claude Code)", latest: "2.1.20"),
         ])
         let claude = ProviderVersions(machines: [devbox, studio, laptop]).rows[0]
-        #expect(claude.latest == "2.1.14")
-        #expect(claude.available == "2.1.20")
+        #expect(claude.latest == "2.1.20")
         #expect(claude.cells.map(\.state) == [.outdated, .outdated, .outdated])
         #expect(claude.cells.map(\.available) == ["2.1.20", "2.1.14", "2.1.20"])
         #expect(claude.cells[0].action == .update)
@@ -31,9 +30,19 @@ struct ProviderVersionsTests {
         let devbox = machine("a", name: "devbox", sessions: [], providers: [status("claude", "2.1.14")])
         let studio = machine("b", name: "studio", sessions: [], providers: [status("claude", "2.1.9")])
         let claude = ProviderVersions(machines: [devbox, studio]).rows[0]
-        #expect(claude.available == nil)
+        #expect(claude.latest == "2.1.14")
         #expect(claude.cells.map(\.state) == [.current, .outdated])
         #expect(claude.cells.map(\.available) == [nil, "2.1.14"])
+    }
+
+    @Test func theLatestIsTheVendorsReleaseWhenOneMachineIsBehindIt() {
+        // work-mbp is current; trash-can-01 is behind and reports the release work-mbp has.
+        let work = machine("a", name: "work-mbp", sessions: [], providers: [status("claude", "2.1.310", latest: "2.1.310")])
+        let trash = machine("b", name: "trash-can-01", sessions: [], providers: [status("claude", "2.1.303", latest: "2.1.310")])
+        let claude = ProviderVersions(machines: [work, trash]).rows[0]
+        #expect(claude.latest == "2.1.310")
+        #expect(claude.cells.map(\.state) == [.current, .outdated])
+        #expect(claude.outdated.map(\.machine) == ["trash-can-01"])
     }
 
     @Test func eachMachineIsComparedWithTheNewestAnyHas() {
