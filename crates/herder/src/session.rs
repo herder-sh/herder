@@ -806,6 +806,7 @@ impl View {
             EventBody::TitleChanged { .. }
             | EventBody::SessionForked { .. }
             | EventBody::ArtifactPublished { .. }
+            | EventBody::ThreadLinked { .. }
             | EventBody::Unknown => {}
         }
     }
