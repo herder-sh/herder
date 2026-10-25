@@ -233,7 +233,8 @@ struct MachinesView: View {
     }
 
     private var integrationsLink: some View {
-        NavigationLink { IntegrationsView(fleet: fleet, sheet: $sheet) } label: {
+        // A page on the stack, so the bot pages it opens push over it rather than replace it.
+        Button { pages.open(.integrations) } label: {
             Card(padding: 12) {
                 HStack(spacing: 10) {
                     Image(systemName: Switcher.integrationsSymbol).foregroundStyle(Theme.secondary)

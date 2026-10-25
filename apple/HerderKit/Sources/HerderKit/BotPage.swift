@@ -118,20 +118,27 @@ struct BotPage: View {
                     personRow(user)
                 }
                 RowDivider()
-                HStack(spacing: 10) {
-                    InputBox(placeholder: "Member ID, U012AB3CD", text: $person.memberId, mono: true)
-                        .accessibilityIdentifier("bot-person-id")
-                    InputBox(placeholder: "Name", text: $person.name)
-                        .accessibilityIdentifier("bot-person-name")
-                    PillButton(title: "Add", symbol: "plus", prominent: true) { addPerson(bot) }
-                        .disabled(person.memberId.trimmingCharacters(in: .whitespaces).isEmpty
-                                  || person.name.trimmingCharacters(in: .whitespaces).isEmpty)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { personFields(bot) }
+                    VStack(alignment: .trailing, spacing: 8) { personFields(bot) }
                 }
                 .padding(10)
             }
             Text("Slack shows a member ID in their profile, under ⋯ › Copy member ID. Only people here drive sessions or press Allow; others get a note.")
                 .font(.footnote).foregroundStyle(Theme.tertiary)
         }
+    }
+
+    @ViewBuilder private func personFields(_ bot: Bot) -> some View {
+        InputBox(placeholder: "Member ID, U012AB3CD", text: $person.memberId, mono: true)
+            .frame(minWidth: 200)
+            .accessibilityIdentifier("bot-person-id")
+        InputBox(placeholder: "Name", text: $person.name)
+            .frame(minWidth: 140)
+            .accessibilityIdentifier("bot-person-name")
+        PillButton(title: "Add", symbol: "plus", prominent: true) { addPerson(bot) }
+            .disabled(person.memberId.trimmingCharacters(in: .whitespaces).isEmpty
+                      || person.name.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func personRow(_ user: BotUser) -> some View {
@@ -148,7 +155,7 @@ struct BotPage: View {
                     change(id) { $0.allow.removeAll { $0.externalUserId == id } }
                 }
             }
-            HStack(spacing: 14) {
+            FlowLayout(spacing: 14) {
                 permission("DM", user.dm, id) { $0.dm = $1 }
                 permission("Channels", user.channels, id) { $0.channels = $1 }
                 permission("Approve", user.approve, id) { $0.approve = $1 }
@@ -311,25 +318,31 @@ struct BotPage: View {
                     }
                 }
                 RowDivider()
-                HStack(spacing: 10) {
-                    InputBox(placeholder: "Channel ID, C012AB3CD", text: $channel, mono: true)
-                        .accessibilityIdentifier("bot-channel-id")
-                    FooterItem(symbol: "shippingbox", text: channelProject.map { fleet.projectName($0) } ?? "Project") {
-                        Picker("Project", selection: $channelProject) {
-                            ForEach(projects, id: \.projectId) { Text($0.name).tag(Optional($0.projectId)) }
-                        }
-                        .pickerStyle(.inline)
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondary)
-                    PillButton(title: "Bind", symbol: "plus", prominent: true) { bind(bot) }
-                        .disabled(channel.trimmingCharacters(in: .whitespaces).isEmpty || channelProject == nil)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { channelFields(bot, projects: projects) }
+                    VStack(alignment: .trailing, spacing: 8) { channelFields(bot, projects: projects) }
                 }
                 .padding(10)
             }
             Text("New threads in a bound channel work on its project. Slack shows a channel’s ID at the bottom of its details; `@bot use ‹project›` in the channel binds it too.")
                 .font(.footnote).foregroundStyle(Theme.tertiary)
         }
+    }
+
+    @ViewBuilder private func channelFields(_ bot: Bot, projects: [Project]) -> some View {
+        InputBox(placeholder: "Channel ID, C012AB3CD", text: $channel, mono: true)
+            .frame(minWidth: 200)
+            .accessibilityIdentifier("bot-channel-id")
+        FooterItem(symbol: "shippingbox", text: channelProject.map { fleet.projectName($0) } ?? "Project") {
+            Picker("Project", selection: $channelProject) {
+                ForEach(projects, id: \.projectId) { Text($0.name).tag(Optional($0.projectId)) }
+            }
+            .pickerStyle(.inline)
+        }
+        .font(.subheadline)
+        .foregroundStyle(Theme.secondary)
+        PillButton(title: "Bind", symbol: "plus", prominent: true) { bind(bot) }
+            .disabled(channel.trimmingCharacters(in: .whitespaces).isEmpty || channelProject == nil)
     }
 
     private func bind(_ bot: Bot) {
