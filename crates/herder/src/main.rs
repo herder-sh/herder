@@ -55,7 +55,7 @@ enum Command {
         #[command(subcommand)]
         command: secret::Command,
     },
-    /// Look after what the vault on this machine holds.
+    /// Run a vault on this machine, next to the daemon, and look after what it holds.
     Vault {
         #[command(subcommand)]
         command: vault::Command,
@@ -238,6 +238,19 @@ mod tests {
         let cli = Cli::try_parse_from(["herder", "vault", "forget-host", "old-box"]);
         assert!(matches!(cli.unwrap().command, Some(Command::Vault { .. })));
         assert!(Cli::try_parse_from(["herder", "vault", "forget-host"]).is_err());
+    }
+
+    #[test]
+    fn parses_vault_install_and_uninstall() {
+        for args in [
+            &["herder", "vault", "install"][..],
+            &["herder", "vault", "install", "--port", "7500"],
+            &["herder", "vault", "uninstall"],
+            &["herder", "vault", "uninstall", "--purge"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
+        }
+        assert!(Cli::try_parse_from(["herder", "vault", "install", "--port", "x"]).is_err());
     }
 
     #[test]

@@ -71,6 +71,15 @@ impl SecretsKey {
         Ok(Self::new(&bytes))
     }
 
+    /// A new random key in its base64 form, for [`KEY_ENV`].
+    pub fn generate_base64() -> Result<String> {
+        let mut bytes = [0u8; KEY_LEN];
+        SystemRandom::new()
+            .fill(&mut bytes)
+            .map_err(|_| anyhow::anyhow!("the system random number generator failed"))?;
+        Ok(STANDARD.encode(bytes))
+    }
+
     /// A key of these bytes.
     pub fn new(bytes: &[u8; KEY_LEN]) -> Self {
         // Only a key of the wrong length fails, and ChaCha20-Poly1305 takes exactly 32 bytes.
@@ -489,6 +498,15 @@ mod tests {
         let mut tampered = key.seal("prod", "TOKEN", &value("v")).unwrap();
         tampered.ciphertext[0] ^= 1;
         assert!(key.open("prod", "TOKEN", &tampered).is_none());
+    }
+
+    #[test]
+    fn a_generated_key_reads_back_and_is_new_each_time() {
+        let text = SecretsKey::generate_base64().unwrap();
+        let key = SecretsKey::from_base64(&text).unwrap();
+        let sealed = key.seal("prod", "TOKEN", &value("v")).unwrap();
+        assert_eq!(key.open("prod", "TOKEN", &sealed).unwrap().expose(), "v");
+        assert_ne!(SecretsKey::generate_base64().unwrap(), text);
     }
 
     #[test]

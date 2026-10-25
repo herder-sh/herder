@@ -53,10 +53,7 @@ pub fn run(args: Args) -> Result<()> {
         Request::PairHost { host }
     } else {
         Request::Pair {
-            user: args
-                .user
-                .or_else(|| std::env::var("USER").ok())
-                .unwrap_or_else(|| "owner".to_owned()),
+            user: args.user.unwrap_or_else(default_user),
             role: args.role.map(|role| match role {
                 RoleArg::Owner => Role::Owner,
                 RoleArg::Member => Role::Member,
@@ -79,7 +76,12 @@ pub fn run(args: Args) -> Result<()> {
     }
 }
 
-fn print_pairing(info: &PairingInfo) -> Result<()> {
+/// The user a device pairs as unless told otherwise: the login name.
+pub fn default_user() -> String {
+    std::env::var("USER").unwrap_or_else(|_| "owner".to_owned())
+}
+
+pub fn print_pairing(info: &PairingInfo) -> Result<()> {
     if info.device_role == DeviceRole::Host {
         print_host_pairing(info);
         return Ok(());

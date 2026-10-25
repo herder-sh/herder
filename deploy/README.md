@@ -1,14 +1,52 @@
 # deploy
 
-Kubernetes manifests for running the herder vault: the herder daemon in vault mode, which runs
-no sessions and keeps a durable copy of every session journal its hosts replicate to it.
+Running the herder vault: the herder daemon in vault mode, which runs no sessions and keeps a
+durable copy of every session journal its hosts replicate to it, and the secrets they use. Run
+it as a service on any machine with `herder vault install`, or on Kubernetes with the
+manifests here:
 
 - `Containerfile`: a minimal image, one static musl `herder` binary on `scratch`.
 - `vault.yaml`: a ConfigMap with the vault's `daemon.toml`, a Service, and a one-replica
   StatefulSet whose data dir (TLS identity, paired hosts, `db/vault.db`) lives on a
   10 GiB PersistentVolumeClaim.
 
-## Build the image
+## On a machine
+
+On a Mac or a Linux box with herder installed, next to its daemon or on its own:
+
+```sh
+herder vault install             # listens on port 7448; --port picks another
+```
+
+It runs the vault as its own service, a LaunchAgent (`sh.herder.vault`) on macOS and a systemd
+user unit (`herder-vault.service`) on Linux, which starts with the machine and restarts when it
+stops, apart from the daemon's `herder service`. Everything the vault keeps is in its own dir,
+`~/.local/share/herder-vault` (`$XDG_DATA_HOME/herder-vault`):
+
+- `vault.toml`: its config, `mode = "vault"` on every interface at its port; edit it and run
+  `herder vault install` again to apply.
+- `vault.env`: the secrets key (see [Secrets](#secrets)), generated at the first install and
+  readable by you only. Only the vault's service gets it; on macOS it is copied into the
+  LaunchAgent's plist, also readable by you only. Back it up with the dir.
+- its data: TLS identity, paired devices and hosts, `db/vault.db`.
+
+Once the vault is up, `install` prints a pairing code and the vault's addresses: add it in the
+app with Add Machine. It logs to `~/Library/Logs/herder/vault.log` on macOS, and to
+`journalctl --user -u herder-vault.service` on Linux.
+
+Run `herder pair --config ~/.local/share/herder-vault/vault.toml` for another pairing code, and
+use the same `--config` with every command below that runs `/herder` in the pod.
+
+```sh
+herder vault uninstall           # stops and removes the service, keeps its dir
+herder vault uninstall --purge   # deletes the dir too: its sessions, secrets and key
+```
+
+Reinstalling keeps the dir, so the vault comes back with its devices, sessions and secrets.
+
+## On Kubernetes
+
+### Build the image
 
 CI publishes a multi-arch (amd64, arm64) image to `ghcr.io/herder-sh/herder`: `:latest`
 and `:main` track `main`, `:sha-<short>` pins a commit, and a `v*` tag adds `:<version>`.
@@ -22,7 +60,7 @@ podman push registry.example.com/herder:dev
 
 `docker build` works the same way. Set the image in `vault.yaml` to the one you pushed.
 
-## Deploy
+### Deploy
 
 ```sh
 kubectl create namespace herder
@@ -129,8 +167,9 @@ command in its environment; the agent sees names only.
 
 Values are encrypted at rest under a master key the vault reads from
 `HERDER_VAULT_SECRETS_KEY` at start: 32 random bytes, base64. Without it the vault keeps
-working, and refuses every secret command. Generate one and keep it in a Kubernetes Secret,
-which `vault.yaml` reads:
+working, and refuses every secret command. `herder vault install` generates one in
+`vault.env`. On Kubernetes, generate one and keep it in a Kubernetes Secret, which `vault.yaml`
+reads:
 
 ```sh
 kubectl create secret generic -n herder herder-vault-secrets \

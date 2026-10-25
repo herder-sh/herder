@@ -28,6 +28,7 @@ sha2.workspace = true
 tar.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["fs", "io-std", "io-util", "process"] }
+toml.workspace = true
 ureq.workspace = true
 
 [dev-dependencies]
