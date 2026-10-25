@@ -152,10 +152,10 @@
 //! `choices`. The call is answered once every one of its questions is: an allow whose
 //! `updatedInput` is the call's input plus `answers`, mapping each question's text to the
 //! chosen label or the free-text answer, the shape the Agent SDK documents. Claude Code then
-//! returns the answers as the tool's result. Multi-select questions take one choice, or free
-//! text that names several, which the CLI expects joined with `", "`; their text says so. A
-//! choice the question does not have, or an answer to a question that is not open, is
-//! ignored. Input without a question to show is denied. On interrupt the CLI withdraws the
+//! returns the answers as the tool's result. A multi-select question says so with
+//! `multi_select` and is answered with `choices`, whose labels the CLI expects joined with
+//! `", "`. A choice the question does not have, an empty `choices`, or an answer to a question
+//! that is not open, is ignored. Input without a question to show is denied. On interrupt the CLI withdraws the
 //! call with `control_cancel_request`, voiding its questions.
 //!
 //! # Errors

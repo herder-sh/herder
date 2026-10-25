@@ -92,7 +92,7 @@ enum Command {
         #[arg(long, value_name = "APPROVAL", group = "reply")]
         deny: Option<String>,
         /// Answer a question instead of prompting: a choice's text or number (from 1), or
-        /// free text.
+        /// free text; a multi-select question takes several, separated by commas.
         #[arg(long, num_args = 2, value_names = ["QUESTION", "ANSWER"], group = "reply")]
         answer: Option<Vec<String>>,
     },
@@ -660,6 +660,7 @@ struct OpenQuestion {
     turn_id: TurnId,
     text: String,
     choices: Vec<String>,
+    multi_select: bool,
     routed_to: Route,
 }
 
@@ -765,6 +766,7 @@ impl View {
                 turn_id,
                 text,
                 choices,
+                multi_select,
                 routed_to,
                 ..
             } => self.questions.push(OpenQuestion {
@@ -772,6 +774,7 @@ impl View {
                 turn_id,
                 text,
                 choices,
+                multi_select,
                 routed_to,
             }),
             EventBody::QuestionEscalated { question_id, .. } => {
@@ -823,20 +826,32 @@ impl View {
     }
 
     /// `answer` to the question: one of its choices, by text or by number from 1, else text.
+    /// A multi-select question takes several, separated by commas.
     fn answer(&self, question_id: &QuestionId, answer: &str) -> Answer {
-        let choices = self
+        let question = self
             .questions
             .iter()
-            .find(|q| q.question_id == *question_id)
-            .map(|q| q.choices.as_slice())
-            .unwrap_or_default();
-        let by_text = choices.iter().position(|choice| choice == answer);
-        let by_number = answer
-            .parse::<usize>()
-            .ok()
-            .filter(|n| (1..=choices.len()).contains(n))
-            .map(|n| n - 1);
-        match by_text.or(by_number).and_then(|i| u32::try_from(i).ok()) {
+            .find(|q| q.question_id == *question_id);
+        let choices = question.map(|q| q.choices.as_slice()).unwrap_or_default();
+        let choice = |answer: &str| {
+            let by_text = choices.iter().position(|choice| choice == answer);
+            let by_number = answer
+                .parse::<usize>()
+                .ok()
+                .filter(|n| (1..=choices.len()).contains(n))
+                .map(|n| n - 1);
+            by_text.or(by_number).and_then(|i| u32::try_from(i).ok())
+        };
+        if question.is_some_and(|q| q.multi_select) {
+            let picked: Option<Vec<u32>> =
+                answer.split(',').map(|part| choice(part.trim())).collect();
+            if let Some(mut indices) = picked {
+                indices.sort_unstable();
+                indices.dedup();
+                return Answer::Choices { indices };
+            }
+        }
+        match choice(answer) {
             Some(index) => Answer::Choice { index },
             None => Answer::Text {
                 text: answer.to_owned(),
@@ -1076,6 +1091,7 @@ mod tests {
                 turn_id: TurnId::new("t1"),
                 text: "Which database?".into(),
                 choices: vec!["SQLite".into(), "Postgres".into()],
+                multi_select: false,
                 routed_to: Route::User,
                 reason: None,
             },
@@ -1103,6 +1119,33 @@ mod tests {
             },
         )]);
         assert!(view.questions.is_empty());
+    }
+
+    #[test]
+    fn a_multi_select_answer_picks_several_choices_separated_by_commas() {
+        let mut view = View::new(SessionId::new("s1"));
+        let question_id = QuestionId::new("q1");
+        view.apply(vec![event(
+            1,
+            EventBody::QuestionAsked {
+                question_id: question_id.clone(),
+                turn_id: TurnId::new("t1"),
+                text: "Which checks?".into(),
+                choices: vec!["Lint".into(), "Tests".into(), "Docs".into()],
+                multi_select: true,
+                routed_to: Route::User,
+                reason: None,
+            },
+        )]);
+        let choices = |indices: Vec<u32>| Answer::Choices { indices };
+        assert_eq!(view.answer(&question_id, "Docs, 1"), choices(vec![0, 2]));
+        assert_eq!(view.answer(&question_id, "2"), choices(vec![1]));
+        assert_eq!(
+            view.answer(&question_id, "Lint, everything else"),
+            Answer::Text {
+                text: "Lint, everything else".into()
+            }
+        );
     }
 
     #[test]

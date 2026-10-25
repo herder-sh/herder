@@ -434,9 +434,19 @@ pub fn question(id: &str, text: &str, choices: &[&str]) -> EventBody {
         turn_id: TurnId::new("turn-1"),
         text: text.to_owned(),
         choices: choices.iter().map(|c| (*c).to_owned()).collect(),
+        multi_select: false,
         routed_to: herder_protocol::Route::User,
         reason: None,
     }
+}
+
+/// A question several of whose `choices` may be picked.
+pub fn multi_select(id: &str, text: &str, choices: &[&str]) -> EventBody {
+    let mut asked = question(id, text, choices);
+    if let EventBody::QuestionAsked { multi_select, .. } = &mut asked {
+        *multi_select = true;
+    }
+    asked
 }
 
 /// An account of `host`'s machine, for the new-session dialog.

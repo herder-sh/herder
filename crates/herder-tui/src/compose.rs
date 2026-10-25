@@ -38,8 +38,13 @@ pub enum Act {
     CtrlC,
     /// Answer the open session's oldest pending approval.
     Approve(ApprovalDecision),
-    /// Answer the open session's oldest pending question with a choice, from 0.
+    /// Answer the open session's oldest pending question with a choice, from 0; for a
+    /// multi-select question, pick or unpick it.
     Choose(u32),
+    /// Move the multi-select question's highlight down (1) or up (-1).
+    Highlight(i8),
+    /// Pick or unpick the multi-select question's highlighted choice.
+    Pick,
     /// Open the command palette.
     Palette,
     /// Open the new-session dialog.
@@ -116,6 +121,8 @@ pub struct Compose {
     pub pastes: Vec<(String, String)>,
     /// The approval panel's choice: 0 allow, 1 deny.
     pub button: usize,
+    /// The highlighted choice of a multi-select question, from 0.
+    pub option: usize,
     /// Whether the pending request shows at full height.
     pub full: bool,
     /// The images the prompt carries, in the order they were attached.
@@ -143,6 +150,7 @@ impl Default for Compose {
             popup_hidden: None,
             pastes: Vec::new(),
             button: 0,
+            option: 0,
             full: false,
             images: Vec::new(),
             loading: 0,
@@ -229,6 +237,19 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Option<Action>> {
     let popup = !app.completions().is_empty();
     let row = app.compose.editor.cursor().0;
     let last = app.compose.editor.lines().len().saturating_sub(1);
+    // A multi-select question takes ↑/↓ and Space for its choices while nothing is typed.
+    let multi_select = app
+        .open_session()
+        .and_then(|session| session.questions.first())
+        .is_some_and(|question| question.multi_select && !question.choices.is_empty());
+    if app.compose.editor.is_empty() && multi_select && plain {
+        match key.code {
+            KeyCode::Up => return compose(Act::Highlight(-1)),
+            KeyCode::Down => return compose(Act::Highlight(1)),
+            KeyCode::Char(' ') => return compose(Act::Pick),
+            _ => {}
+        }
+    }
     // Digits pick a pending question's answer while nothing is typed.
     if app.compose.editor.is_empty()
         && let KeyCode::Char(digit @ '1'..='9') = key.code
@@ -326,6 +347,21 @@ impl App {
             Act::CtrlC => return self.ctrl_c(),
             Act::Approve(decision) => return self.approve(decision),
             Act::Choose(index) => return self.choose(index),
+            Act::Highlight(step) => {
+                let choices = self
+                    .open_session()
+                    .and_then(|session| session.questions.first())
+                    .map_or(0, |question| question.choices.len());
+                self.compose.option = self
+                    .compose
+                    .option
+                    .saturating_add_signed(isize::from(step))
+                    .min(choices.saturating_sub(1));
+            }
+            Act::Pick => {
+                let index = u32::try_from(self.compose.option).unwrap_or(u32::MAX);
+                return self.choose(index);
+            }
             Act::Palette => self.open_palette(),
             Act::NewSession => self.new_session(),
             Act::PasteImage => return self.attach(Source::Clipboard, None),
@@ -573,6 +609,19 @@ impl App {
         }
         let typed = text(&self.compose.editor);
         if typed.trim().is_empty() {
+            // Nothing typed sends a multi-select question's picks.
+            if let Some(session) = self.sessions.get(&key)
+                && let Some(question) = session.questions.first()
+                && let Some(answer) = question.picks()
+            {
+                self.compose.option = 0;
+                let command = CommandBody::AnswerQuestion {
+                    session_id: session.id.clone(),
+                    question_id: question.id.clone(),
+                    answer,
+                };
+                return vec![send(&key, command, Origin::Session(key.clone()))];
+            }
             // Providers take no image without a word of text.
             if !self.compose.images.is_empty() {
                 let error = "write a line to go with the image".to_owned();
@@ -697,12 +746,19 @@ impl App {
     }
 
     fn choose(&mut self, index: u32) -> Vec<Effect> {
-        let Some((key, session)) = self.open.as_ref().zip(self.open_session()) else {
+        let Some(key) = self.open.as_ref() else {
             return Vec::new();
         };
-        let Some(question) = session.questions.first() else {
+        let Some(session) = self.sessions.get_mut(key) else {
             return Vec::new();
         };
+        let Some(question) = session.questions.first_mut() else {
+            return Vec::new();
+        };
+        if question.multi_select {
+            question.toggle(index);
+            return Vec::new();
+        }
         if usize::try_from(index).map_or(true, |at| at >= question.choices.len()) {
             return Vec::new();
         }
@@ -800,7 +856,9 @@ mod tests {
 
     use super::*;
     use crate::app::Msg;
-    use crate::fake::{self, added, approval, key, question, started, type_text, update};
+    use crate::fake::{
+        self, added, approval, key, multi_select, question, started, type_text, update,
+    };
     use crate::session::Entry;
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Effect> {
@@ -1440,6 +1498,47 @@ mod tests {
         let session = &app.sessions[&key("h1", "s2")];
         assert!(session.questions.is_empty());
         assert_eq!(session.turn, None);
+    }
+
+    #[test]
+    fn a_multi_select_question_takes_several_picks_then_enter() {
+        let mut app = open_s2(vec![
+            started("turn-1"),
+            multi_select("q1", "Which checks?", &["Lint", "Tests", "Docs"]),
+        ]);
+        let answer = |answer| {
+            on_s2(CommandBody::AnswerQuestion {
+                session_id: SessionId::new("s2"),
+                question_id: QuestionId::new("q1"),
+                answer,
+            })
+        };
+        // Digits pick and unpick instead of answering at once.
+        assert_eq!(press(&mut app, KeyCode::Char('1')), []);
+        assert_eq!(press(&mut app, KeyCode::Char('3')), []);
+        assert_eq!(press(&mut app, KeyCode::Char('3')), []);
+        press(&mut app, KeyCode::Char('i'));
+        // ↓ moves the highlight, which Space picks; Enter submits the picks.
+        press(&mut app, KeyCode::Down);
+        assert_eq!(press(&mut app, KeyCode::Char(' ')), []);
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [answer(Answer::Choices {
+                indices: vec![0, 1]
+            })]
+        );
+        // The picks stay until the answer lands. With nothing picked, Enter sends nothing; a
+        // typed answer still goes as text.
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        type_text(&mut app, "all of them");
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [answer(Answer::Text {
+                text: "all of them".into()
+            })]
+        );
     }
 
     #[test]

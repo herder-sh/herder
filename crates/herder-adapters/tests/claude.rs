@@ -474,6 +474,7 @@ fn letter_question() -> [AdapterEvent; 2] {
                    **B**: Print the letter B"
                 .into(),
             choices: vec!["A".into(), "B".into()],
+            multi_select: false,
         },
     ]
 }
@@ -937,12 +938,14 @@ async fn several_questions_in_one_call_are_answered_together() {
     );
     let mut session = start_with(fixture, request(Vec::new())).await;
     session.commands.send(prompt("go")).unwrap();
-    let asked = |n: u32, text: &str, choices: [&str; 2]| AdapterEvent::QuestionAsked {
-        question_id: QuestionId::new(format!("question-{n}")),
-        turn_id: turn(),
-        text: text.into(),
-        choices: choices.map(str::to_owned).to_vec(),
-    };
+    let asked =
+        |n: u32, text: &str, choices: [&str; 2], multi_select| AdapterEvent::QuestionAsked {
+            question_id: QuestionId::new(format!("question-{n}")),
+            turn_id: turn(),
+            text: text.into(),
+            choices: choices.map(str::to_owned).to_vec(),
+            multi_select,
+        };
     let events = until(&mut session, |event| {
         matches!(event, AdapterEvent::QuestionAsked { question_id, .. } if question_id.as_str() == "question-2")
     })
@@ -954,28 +957,32 @@ async fn several_questions_in_one_call_are_answered_together() {
             asked(
                 1,
                 "Which database?\n\n- **Postgres**: Relational",
-                ["Postgres", "SQLite"]
+                ["Postgres", "SQLite"],
+                false
             ),
-            asked(
-                2,
-                "Which extras?\n\nMore than one may apply: to pick several, answer with their \
-                 names separated by commas.",
-                ["Docs", "Tests"]
-            ),
+            asked(2, "Which extras?", ["Docs", "Tests"], true),
         ]
     );
     let answer = |n: u32, answer: Answer| AdapterCommand::AnswerQuestion {
         question_id: QuestionId::new(format!("question-{n}")),
         answer,
     };
-    // A choice the question does not have is ignored; the call is answered only once every
-    // question is, which the replay checks line by line.
+    // A choice the question does not have, or no choice at all, is ignored; the call is
+    // answered only once every question is, with both picked labels, which the replay checks
+    // line by line.
     for command in [
         answer(2, Answer::Choice { index: 5 }),
         answer(
             2,
-            Answer::Text {
-                text: "Docs, Tests".into(),
+            Answer::Choices {
+                indices: vec![0, 5],
+            },
+        ),
+        answer(2, Answer::Choices { indices: vec![] }),
+        answer(
+            2,
+            Answer::Choices {
+                indices: vec![0, 1],
             },
         ),
         answer(1, Answer::Choice { index: 0 }),

@@ -203,6 +203,41 @@ struct Open {
     request: tasktools::Request,
 }
 
+/// The choices an open question offers.
+#[derive(Clone, Copy, Default)]
+struct Picks {
+    /// How many; 0 for a free-text question.
+    choices: usize,
+    /// Whether several may be picked.
+    multi_select: bool,
+}
+
+impl Picks {
+    /// Whether `answer` fits the question; `Err` says why not, to follow "question <id>".
+    fn check(self, answer: &Answer) -> Result<(), String> {
+        let indices = match answer {
+            Answer::Text { .. } => return Ok(()),
+            Answer::Choice { index } => std::slice::from_ref(index),
+            Answer::Choices { .. } if !self.multi_select => {
+                return Err("takes one choice: pass `choice`".into());
+            }
+            Answer::Choices { indices } if indices.is_empty() => {
+                return Err("needs at least one choice".into());
+            }
+            Answer::Choices { indices } => indices,
+        };
+        for (at, &index) in indices.iter().enumerate() {
+            if index as usize >= self.choices {
+                return Err(format!("has no choice {index}"));
+            }
+            if indices[..at].contains(&index) {
+                return Err(format!("has choice {index} picked twice"));
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(super) struct Actor {
     inner: Arc<Inner>,
     /// The session's projection, kept current as this actor journals changes.
@@ -232,8 +267,8 @@ pub(super) struct Actor {
     last_reply: Option<String>,
     /// Approval requests of the running turn not yet answered, oldest first.
     approvals: Vec<(ApprovalId, Open)>,
-    /// Questions of the running turn not yet answered, with how many choices each offers.
-    questions: HashMap<QuestionId, (usize, Open)>,
+    /// Questions of the running turn not yet answered, with the choices each offers.
+    questions: HashMap<QuestionId, (Picks, Open)>,
     /// A child's tool calls of the running turn, by item: what its approval requests ask for.
     tool_calls: HashMap<ItemId, (String, Value)>,
     /// The setup command, while it runs.
@@ -750,25 +785,23 @@ impl Actor {
                 images,
                 files,
             } => {
-                let Some((choices, _)) = self.questions.get(&question_id) else {
+                let Some((picks, _)) = self.questions.get(&question_id) else {
                     return Err(error(
                         ErrorCode::NotFound,
                         format!("question {question_id} is not pending"),
                     ));
                 };
-                if let Answer::Choice { index } = answer {
-                    if index as usize >= *choices {
-                        return Err(error(
-                            ErrorCode::BadRequest,
-                            format!("question {question_id} has no choice {index}"),
-                        ));
-                    }
-                    if !images.is_empty() || !files.is_empty() {
-                        return Err(error(
-                            ErrorCode::BadRequest,
-                            "only a text answer takes images and files",
-                        ));
-                    }
+                if let Err(problem) = picks.check(&answer) {
+                    return Err(error(
+                        ErrorCode::BadRequest,
+                        format!("question {question_id} {problem}"),
+                    ));
+                }
+                if !matches!(answer, Answer::Text { .. }) && (!images.is_empty() || !files.is_empty()) {
+                    return Err(error(
+                        ErrorCode::BadRequest,
+                        "only a text answer takes images and files",
+                    ));
                 }
                 let attachments = self.keep(images, files).await?;
                 self.answer_question(
@@ -937,17 +970,16 @@ impl Actor {
                 answer,
                 ..
             }) => {
-                let choices = self.questions.get(&question_id).map_or(0, |(n, _)| *n);
-                if let Answer::Choice { index } = answer
-                    && index as usize >= choices
-                {
-                    let message = if choices == 0 {
-                        format!("question {question_id} takes a free-text answer: pass `text`")
-                    } else {
-                        format!(
-                            "question {question_id} has no choice {index}; pass 0 to {}",
-                            choices - 1
-                        )
+                let picks = self
+                    .questions
+                    .get(&question_id)
+                    .map_or_else(Picks::default, |(picks, _)| *picks);
+                if let Err(problem) = picks.check(&answer) {
+                    let message = match picks.choices {
+                        0 => {
+                            format!("question {question_id} takes a free-text answer: pass `text`")
+                        }
+                        n => format!("question {question_id} {problem}; pass 0 to {}", n - 1),
                     };
                     return Err(ToolError::new(Tool::InvalidArguments, message));
                 }
@@ -2332,11 +2364,13 @@ impl Actor {
                 turn_id,
                 text,
                 choices,
+                multi_select,
             } => {
                 let request = tasktools::Request::Question {
                     question_id: question_id.clone(),
                     text: text.clone(),
                     choices: choices.clone(),
+                    multi_select,
                 };
                 let open = self.route(&request, None).await;
                 self.log(EventBody::QuestionAsked {
@@ -2344,12 +2378,17 @@ impl Actor {
                     turn_id,
                     text,
                     choices: choices.clone(),
+                    multi_select,
                     routed_to: open.route,
                     reason: None,
                 })
                 .await;
                 self.put(&open);
-                self.questions.insert(question_id, (choices.len(), open));
+                let picks = Picks {
+                    choices: choices.len(),
+                    multi_select,
+                };
+                self.questions.insert(question_id, (picks, open));
                 self.settle().await;
             }
             AdapterEvent::UsageReported { windows } => {

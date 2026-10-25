@@ -71,6 +71,16 @@ final class ScreenshotTests: XCTestCase {
             #endif
         }
 
+        // A question several of whose choices may be picked, with two of them ticked.
+        if open("Run checkout e2e in more browsers") {
+            for label in ["Firefox", "Mobile Chrome"] {
+                let choice = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", label)).firstMatch
+                if wait(choice, "\(label) choice") { press(choice) }
+            }
+            settle()
+            shoot(platform("multi-select"))
+        }
+
         #if os(macOS)
         // Failover after a limit, a handoff to another machine, a task with its children.
         if open("Move invoices onto the ledger") { shoot("mac-failover") }

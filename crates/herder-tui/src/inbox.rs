@@ -28,13 +28,14 @@ pub enum InboxAction {
     Last,
     /// Answer the selected approval.
     Approve(ApprovalDecision),
-    /// Answer the selected question with a choice, from 0.
+    /// Answer the selected question with a choice, from 0; for a multi-select question, pick
+    /// or unpick it.
     Choose(u32),
     /// Start typing an answer to the selected question.
     StartAnswer,
     /// A key for the answer being typed.
     Key(KeyEvent),
-    /// Send the typed answer.
+    /// Send the typed answer, or else the multi-select question's picks.
     Submit,
     /// Drop the typed answer.
     Cancel,
@@ -136,6 +137,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<InboxAction> {
     if !inbox {
         return None;
     }
+    let picked = app
+        .selected_request()
+        .is_some_and(|waiting| matches!(waiting.what, What::Question(q) if q.picks().is_some()));
     let action = match key.code {
         KeyCode::Char('I' | 'i') => InboxAction::Toggle,
         KeyCode::Char('k') | KeyCode::Up => InboxAction::Move(-1),
@@ -147,6 +151,7 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<InboxAction> {
         KeyCode::Char('y') => InboxAction::Approve(ApprovalDecision::Allow),
         KeyCode::Char('n') => InboxAction::Approve(ApprovalDecision::Deny),
         KeyCode::Char(digit @ '1'..='9') => InboxAction::Choose(u32::from(digit) - u32::from('1')),
+        KeyCode::Enter if picked => InboxAction::Submit,
         KeyCode::Enter | KeyCode::Char('a') => InboxAction::StartAnswer,
         KeyCode::Char('l' | 'o') | KeyCode::Right => InboxAction::OpenSession,
         KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left => {
@@ -278,6 +283,17 @@ impl App {
                 let What::Question(question) = waiting.what else {
                     return Vec::new();
                 };
+                if question.multi_select {
+                    let (key, id) = (waiting.key.clone(), question.id.clone());
+                    let question = self
+                        .sessions
+                        .get_mut(&key)
+                        .and_then(|session| session.questions.iter_mut().find(|q| q.id == id));
+                    if let Some(question) = question {
+                        question.toggle(index);
+                    }
+                    return Vec::new();
+                }
                 if usize::try_from(index).map_or(true, |at| at >= question.choices.len()) {
                     return Vec::new();
                 }
@@ -308,6 +324,23 @@ impl App {
                 }
             }
             InboxAction::Cancel => self.inbox.answer = None,
+            InboxAction::Submit if self.inbox.answer.is_none() => {
+                let Some(waiting) = self.selected_request() else {
+                    return Vec::new();
+                };
+                let What::Question(question) = waiting.what else {
+                    return Vec::new();
+                };
+                let Some(answer) = question.picks() else {
+                    return Vec::new();
+                };
+                let command = CommandBody::AnswerQuestion {
+                    session_id: waiting.key.session_id.clone(),
+                    question_id: question.id.clone(),
+                    answer,
+                };
+                return vec![send(waiting.key, command)];
+            }
             InboxAction::Submit => {
                 let text = self
                     .inbox
@@ -367,7 +400,7 @@ mod tests {
 
     use super::*;
     use crate::app::Msg;
-    use crate::fake::{self, at, key, question, to_primary, type_text, update};
+    use crate::fake::{self, at, key, multi_select, question, to_primary, type_text, update};
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Effect> {
         app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)))
@@ -476,6 +509,41 @@ mod tests {
         let list = app.waiting();
         assert_eq!(list.len(), 2);
         assert_eq!(list[app.inbox_index(&list)].request(), q1());
+    }
+
+    #[test]
+    fn a_multi_select_question_is_answered_with_its_picks_from_the_inbox() {
+        let mut app = fake::tree();
+        let asked = multi_select("q1", "Which checks?", &["Lint", "Tests", "Docs"]);
+        fake::feed(
+            &mut app,
+            "h1",
+            "s3",
+            update("s3", 3, vec![fake::started("turn-1"), asked], vec![]),
+        );
+        press(&mut app, KeyCode::Char('i'));
+        assert_eq!(app.inbox.selected, Some(q1()));
+        // Digits pick several; Enter sends them.
+        assert_eq!(press(&mut app, KeyCode::Char('3')), []);
+        assert_eq!(press(&mut app, KeyCode::Char('1')), []);
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            vec![send(
+                &key("h1", "s3"),
+                CommandBody::AnswerQuestion {
+                    session_id: SessionId::new("s3"),
+                    question_id: QuestionId::new("q1"),
+                    answer: Answer::Choices {
+                        indices: vec![0, 2]
+                    },
+                },
+            )]
+        );
+        // With nothing picked, Enter opens a typed answer instead.
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('3'));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.inbox.answer.is_some());
     }
 
     /// The node's "Done when": an escalated child question is answered from the inbox.
