@@ -1149,6 +1149,7 @@
                   "get_usage_summary",
                   "get_vault_link",
                   "link_vault",
+                  "set_vault_link",
                   "unlink_vault",
                   "pair_device",
                   "pair_vault_host",
