@@ -319,6 +319,10 @@ pub enum SessionStatus {
     WaitingForCapacity,
     /// Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.
     NeedsYou,
+    /// Its account needs logging in again (`Account.needs_login`): prompts sent meanwhile are
+    /// held in the queue instead of starting turns that would fail, and run in order once the
+    /// account is logged in again or the session switches to another account.
+    NeedsLogin,
     /// Cannot continue without intervention.
     Error,
     /// Put away by a user; read-only.

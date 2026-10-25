@@ -527,7 +527,7 @@ struct SessionModel {
     }
 
     var needsUser: Bool {
-        status == .needsYou || !forUser.isEmpty
+        status == .needsYou || status == .needsLogin || !forUser.isEmpty
     }
 
     var state: SessionState {
@@ -535,7 +535,8 @@ struct SessionModel {
         switch status {
         case .running: return .running
         case .waitingForCapacity: return .waiting
-        case .needsYou: return .needsYou
+        // A signed-out account needs the user to log it in again; its prompts wait meanwhile.
+        case .needsYou, .needsLogin: return .needsYou
         case .error: return .error
         case .archived: return .archived
         case .moved: return .moved

@@ -296,6 +296,28 @@ async fn a_different_answer_is_a_script_mismatch() {
 }
 
 #[tokio::test]
+async fn an_expired_login_fails_the_turn_as_auth() {
+    let mut session = start(fixture("auth_failed.jsonl")).await;
+    session
+        .commands
+        .send(prompt("Refactor the parser."))
+        .unwrap();
+
+    let events = until(&mut session, is_turn_end).await;
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::TurnFailed {
+            turn_id: turn(),
+            error: TurnError {
+                class: ErrorClass::Auth,
+                message: "Not logged in · Please run /login".into(),
+            },
+        })
+    );
+    assert_eq!(shutdown(session).await, [clean_exit()]);
+}
+
+#[tokio::test]
 async fn limit_reached_fails_the_turn_with_its_class() {
     let mut session = start(fixture("limit_reached.jsonl")).await;
     session

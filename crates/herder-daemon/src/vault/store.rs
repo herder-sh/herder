@@ -396,7 +396,11 @@ impl VaultStore {
         let need_you = |id: &SessionId| {
             rows.iter()
                 .filter(|(child, ..)| {
-                    child.parent.as_ref() == Some(id) && child.status == SessionStatus::NeedsYou
+                    child.parent.as_ref() == Some(id)
+                        && matches!(
+                            child.status,
+                            SessionStatus::NeedsYou | SessionStatus::NeedsLogin
+                        )
                 })
                 .count() as u32
         };
@@ -1166,6 +1170,11 @@ mod tests {
         assert_eq!(heads[0].children_need_you, 1);
         assert_eq!(heads[1].account_id.as_str(), "main");
         assert_eq!(heads[1].parent.as_ref().unwrap().as_str(), "s1");
+        // A child whose account needs logging in again needs the user too.
+        store
+            .put_summary(&host, &summary("s2", Some("s1"), SessionStatus::NeedsLogin))
+            .unwrap();
+        assert_eq!(store.fleet().unwrap()[0].children_need_you, 1);
         assert_eq!(store.host_of(&SessionId::new("s2")).unwrap(), Some(host));
         assert_eq!(store.host_of(&SessionId::new("nope")).unwrap(), None);
     }
