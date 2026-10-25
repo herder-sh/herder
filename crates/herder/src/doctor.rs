@@ -793,10 +793,9 @@ binary = "{dir}/no-codex"
     fn listen_and_vault_checks_connect() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let open = listener.local_addr().unwrap();
-        let closed = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap();
+        // Nothing can listen on port 0, so no parallel test can take it the way it could a
+        // freed port.
+        let closed = SocketAddr::from(([127, 0, 0, 1], 0));
         assert_eq!(listen_check(open).status, Status::Pass);
         assert_eq!(listen_check(closed).status, Status::Fail);
         let every = SocketAddr::from(([0, 0, 0, 0], open.port()));

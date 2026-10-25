@@ -320,21 +320,39 @@ struct ListsTests {
         #expect(login.first?.matches("login") == false)
     }
 
-    @Test func manySessionsBuildQuickly() {
+    @Test func manySessionsBuildInLinearTime() {
         // The lists are rebuilt as sessions stream; finding children over every session for
-        // each one took seconds with a few thousand and froze the app on launch.
-        let ids = (0..<3000).map { String(format: "01%05d", $0) }
-        var sessions: [SessionKey: SessionModel] = [:]
-        for id in ids {
-            var script = Script(id)
-            sessions[script.key] = script.model([created(task: id, parent: id == ids[0] ? nil : ids[0])])
+        // each one took seconds with a few thousand and froze the app on launch. Comparing
+        // sizes rather than timing one keeps this independent of the machine's speed: 4x the
+        // sessions takes about 4x as long when linear, 16x when quadratic.
+        func fleet(_ count: Int) -> ([Machine], [SessionKey: SessionModel]) {
+            let ids = (0..<count).map { String(format: "01%05d", $0) }
+            var sessions: [SessionKey: SessionModel] = [:]
+            for id in ids {
+                var script = Script(id)
+                sessions[script.key] = script.model([created(task: id, parent: id == ids[0] ? nil : ids[0])])
+            }
+            return ([machine("host-a", name: "a", sessions: ids)], sessions)
         }
-        let machines = [machine("host-a", name: "a", sessions: ids)]
-        let start = ContinuousClock.now
-        let lists = Lists(machines: machines, sessions: sessions)
-        #expect(ContinuousClock.now - start < .seconds(1))
-        #expect(lists.projects[0].live.first?.children == 2999)
-        #expect(lists.projects.flatMap(\.sessions).count == 3000)
+        let small = fleet(500)
+        let large = fleet(2000)
+        // The CPU time this thread spends, not wall-clock time, so other work on the machine
+        // does not count; the fastest of runs taken in turn, after one to warm up.
+        func cpuTime(_ build: () -> Lists) -> UInt64 {
+            let start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+            _ = build()
+            return clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start
+        }
+        _ = Lists(machines: small.0, sessions: small.1)
+        var fastest = (small: UInt64.max, large: UInt64.max)
+        for _ in 0..<5 {
+            fastest.small = min(fastest.small, cpuTime { Lists(machines: small.0, sessions: small.1) })
+            fastest.large = min(fastest.large, cpuTime { Lists(machines: large.0, sessions: large.1) })
+        }
+        #expect(fastest.large < fastest.small * 8)
+        let lists = Lists(machines: large.0, sessions: large.1)
+        #expect(lists.projects[0].live.first?.children == 1999)
+        #expect(lists.projects.flatMap(\.sessions).count == 2000)
     }
 
     @Test func usageWindowsAreLabelledAsInTheTUI() {
