@@ -1141,7 +1141,7 @@ struct MachineSettingsSheet: View {
                             Spacer(minLength: 8)
                             PillButton(title: gap.place.needsInstall ? "Install & Set Up" : "Set Up") {
                                 let taken = AccountDraft.taken(on: machine, pending: fleet.providerTerminals.pendingIds(on: hostId))
-                                if gap.place.needsInstall { fleet.providerTerminals.install(gap.login.provider, on: hostId) }
+                                if gap.place.needsInstall { fleet.install(gap.login.provider, on: hostId) }
                                 setup = ProvidersView.Setup(hostId: hostId, draft: gap.login.draft(taken: taken))
                             }
                             .disabled(!connected)
@@ -1174,7 +1174,7 @@ struct MachineSettingsSheet: View {
                                 Text("Update available → \(available)").font(.caption).foregroundStyle(Theme.accent)
                             }
                             VersionCell(cell: cell, showsAvailable: false) { cell in
-                                installing = fleet.providerTerminals.install(cell.provider, on: cell.hostId)
+                                installing = fleet.install(cell.provider, on: cell.hostId)
                             }
                         }
                         .padding(.horizontal, 14)
