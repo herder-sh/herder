@@ -20,12 +20,13 @@
 //! account the same way.
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use herder_protocol::{AccountId, Provider, Timestamp, UsageWindow};
 use serde::Deserialize;
+use tokio::sync::watch;
 
 use super::{Accounts, Adapters};
 use crate::usage::Windows;
@@ -49,11 +50,21 @@ impl FailoverConfig {
 }
 
 /// Accounts failover passes over: those that hit a limit, until they may be chosen again, and
-/// those whose CLI is logged out.
-#[derive(Debug, Default)]
+/// those that need logging in again, since when, until they work again. Sessions on an account
+/// that needs logging in hold their prompts until it is cleared ([`Limits::logins`]).
+#[derive(Debug)]
 pub(crate) struct Limits {
     until: Mutex<HashMap<AccountId, Timestamp>>,
-    logged_out: Mutex<HashSet<AccountId>>,
+    logged_out: watch::Sender<BTreeMap<AccountId, Timestamp>>,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            until: Mutex::default(),
+            logged_out: watch::Sender::new(BTreeMap::new()),
+        }
+    }
 }
 
 impl Limits {
@@ -74,19 +85,38 @@ impl Limits {
         *entry = (*entry).max(until);
     }
 
-    /// `account_id` failed to log in: it is passed over until it works again.
-    pub(crate) fn logged_out(&self, account_id: &AccountId) {
-        lock(&self.logged_out).insert(account_id.clone());
+    /// `account_id` failed to log in at `now`: it needs logging in again, and is passed over,
+    /// until it works again. Whether that is news, as it worked until now.
+    pub(crate) fn logged_out(&self, account_id: &AccountId, now: Timestamp) -> bool {
+        self.logged_out.send_if_modified(|logged_out| {
+            if logged_out.contains_key(account_id) {
+                return false;
+            }
+            logged_out.insert(account_id.clone(), now);
+            true
+        })
     }
 
-    /// `account_id` worked: a turn on it completed, or it reported its usage.
-    pub(crate) fn worked(&self, account_id: &AccountId) {
-        lock(&self.logged_out).remove(account_id);
+    /// `account_id` worked: it was logged in again, a turn on it completed, or it reported its
+    /// usage. Whether that is news, as it needed logging in until now.
+    pub(crate) fn worked(&self, account_id: &AccountId) -> bool {
+        self.logged_out
+            .send_if_modified(|logged_out| logged_out.remove(account_id).is_some())
+    }
+
+    /// Since when `account_id` needs logging in again, if it does.
+    pub(crate) fn needs_login(&self, account_id: &AccountId) -> Option<Timestamp> {
+        self.logged_out.borrow().get(account_id).copied()
+    }
+
+    /// Every account that needs logging in again, kept current as accounts fail and work.
+    pub(crate) fn logins(&self) -> watch::Receiver<BTreeMap<AccountId, Timestamp>> {
+        self.logged_out.subscribe()
     }
 
     /// Whether `account_id` is logged out, or hit a limit that has not reset by `now`.
     fn limited(&self, account_id: &AccountId, now: Timestamp) -> bool {
-        lock(&self.logged_out).contains(account_id)
+        self.needs_login(account_id).is_some()
             || lock(&self.until)
                 .get(account_id)
                 .is_some_and(|until| *until > now)
@@ -294,7 +324,7 @@ mod tests {
         // Once every rotating one is at its limit or logged out, the fallback takes over.
         case.usage("b", vec![window(100.0, "2026-10-02T15:00:00Z")]);
         assert_eq!(case.next("c").as_deref(), Some("a"));
-        case.limits.logged_out(&AccountId::new("c"));
+        case.limits.logged_out(&AccountId::new("c"), case.now);
         assert_eq!(case.any(Provider::Claude).as_deref(), Some("a"));
         // As soon as a rotating one is available again, it is preferred.
         case.limits.worked(&AccountId::new("c"));
@@ -328,8 +358,8 @@ mod tests {
         // Once it resets it is available again, behind those whose quota runs out at 15:00.
         case.usage("c", vec![window(100.0, "2026-10-02T11:00:00Z")]);
         assert_eq!(case.next("a").as_deref(), Some("d"));
-        case.limits.logged_out(&AccountId::new("b"));
-        case.limits.logged_out(&AccountId::new("d"));
+        case.limits.logged_out(&AccountId::new("b"), case.now);
+        case.limits.logged_out(&AccountId::new("d"), case.now);
         assert_eq!(case.next("a").as_deref(), Some("c"));
     }
 
@@ -435,10 +465,20 @@ mod tests {
     #[test]
     fn a_logged_out_account_waits_until_it_works_again() {
         let case = Case::new(&[("a", Provider::Claude), ("b", Provider::Claude)]);
-        case.limits.logged_out(&AccountId::new("b"));
+        let b = AccountId::new("b");
+        assert!(case.limits.logged_out(&b, case.now));
+        // A later failure is no news, and keeps the time it first failed.
+        assert!(
+            !case
+                .limits
+                .logged_out(&b, case.now + Duration::from_secs(60))
+        );
+        assert_eq!(case.limits.needs_login(&b), Some(case.now));
         assert_eq!(case.next("a"), None);
         assert_eq!(case.any(Provider::Claude).as_deref(), Some("a"));
-        case.limits.worked(&AccountId::new("b"));
+        assert!(case.limits.worked(&b));
+        assert!(!case.limits.worked(&b));
+        assert_eq!(case.limits.needs_login(&b), None);
         assert_eq!(case.next("a").as_deref(), Some("b"));
     }
 

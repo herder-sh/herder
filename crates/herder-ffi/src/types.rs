@@ -353,6 +353,7 @@ pub enum SessionStatus {
     Running,
     WaitingForCapacity,
     NeedsYou,
+    NeedsLogin,
     Error,
     Archived,
     Moved,
@@ -1117,6 +1118,8 @@ pub struct Account {
     // Defaulted, so Swift and Kotlin code that builds an account, as tests do, need not name it.
     #[uniffi(default)]
     pub fallback: bool,
+    #[uniffi(default)]
+    pub needs_login: Option<Timestamp>,
 }
 
 #[uniffi::remote(Record)]

@@ -74,6 +74,17 @@ struct SessionModelTests {
         #expect(model.title == "Write tests")
     }
 
+    @Test func aSessionWhoseAccountNeedsLoginNeedsTheUser() {
+        var script = Script()
+        let model = script.model([
+            created(), .sessionStatusChanged(status: .running, retryAt: nil), .turnStarted(turnId: "t1"),
+            .turnFailed(turnId: "t1", error: TurnError(class: .auth, message: "Not logged in")),
+            .sessionStatusChanged(status: .needsLogin, retryAt: nil),
+        ])
+        #expect(model.needsUser)
+        #expect(model.state == .needsYou)
+    }
+
     @Test func aTurnsQuestionsGoWhenItEnds() {
         var script = Script()
         let model = script.model([

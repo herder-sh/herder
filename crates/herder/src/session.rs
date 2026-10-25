@@ -535,7 +535,8 @@ impl Cli {
         loop {
             let code = match view.status {
                 SessionStatus::Idle => Some(0),
-                SessionStatus::NeedsYou => Some(NEEDS_YOU),
+                // Its prompts wait until its account is logged in again.
+                SessionStatus::NeedsYou | SessionStatus::NeedsLogin => Some(NEEDS_YOU),
                 SessionStatus::Error => Some(ERROR),
                 SessionStatus::Archived | SessionStatus::Moved => {
                     bail!("session {session_id} is {}", view.status_label())

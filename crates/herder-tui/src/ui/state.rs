@@ -50,7 +50,8 @@ impl State {
     /// last looked.
     pub fn of(status: SessionStatus, done: bool) -> Self {
         match status {
-            SessionStatus::NeedsYou => Self::NeedsYou,
+            // A signed-out account needs the user to log it in again.
+            SessionStatus::NeedsYou | SessionStatus::NeedsLogin => Self::NeedsYou,
             SessionStatus::Error => Self::Error,
             SessionStatus::Idle if done => Self::Done,
             SessionStatus::Idle => Self::Idle,
@@ -181,6 +182,7 @@ mod tests {
             State::Waiting
         );
         assert_eq!(State::of(SessionStatus::NeedsYou, true), State::NeedsYou);
+        assert_eq!(State::of(SessionStatus::NeedsLogin, false), State::NeedsYou);
         // The glyph table follows the declared order.
         for (at, state) in ALL.iter().enumerate() {
             assert_eq!(*state as usize, at);
