@@ -1,13 +1,15 @@
-//! A host's link to its vault: the `[vault]` table it replicates to, which an owner sets and
-//! clears from a client while the daemon runs (`link_vault`, `unlink_vault`).
+//! A host's link to its vault: the `[vault]` table it replicates to and fetches secrets from,
+//! which an owner sets, switches and clears from a client while the daemon runs (`link_vault`,
+//! `set_vault_link`, `unlink_vault`). A host links to one vault at most.
 //!
 //! Linking checks the vault first: the daemon connects with its device key and pairs with the
 //! host-only code the client got from the vault (`pair_vault_host`), trying the vault's
 //! addresses in order. Only once the vault said hello does it write the `[vault]` table, without
-//! the spent code, into its config file, keeping the rest of the file as written, and start
-//! replicating. Unlinking removes the table and stops replicating; what the vault holds stays
-//! there. Unpairing the host's device on the vault (`revoke_vault_host`) is the client's, as an
-//! owner of both.
+//! the spent code, into its config file, keeping the rest of the file as written, and connect:
+//! to replicate with `backup` on, to fetch secrets with `secrets` on. Switching either rewrites
+//! just those keys and reconnects; with both off the host keeps the link but does not connect.
+//! Unlinking removes the table and disconnects; what the vault holds stays there. Unpairing the
+//! host's device on the vault (`revoke_vault_host`) is the client's, as an owner of both.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -94,7 +96,7 @@ impl Link {
         })
     }
 
-    /// Applies `get_vault_link`, `link_vault` or `unlink_vault`.
+    /// Applies `get_vault_link`, `link_vault`, `set_vault_link` or `unlink_vault`.
     pub async fn command(&self, command: CommandBody) -> Result<CommandResult, ErrorInfo> {
         match command {
             CommandBody::GetVaultLink => Ok(CommandResult::VaultLink {
@@ -102,6 +104,8 @@ impl Link {
                 vault: self.vault().map(|vault| LinkedVault {
                     address: vault.address,
                     fingerprint: vault.fingerprint,
+                    backup: vault.backup,
+                    secrets: vault.secrets,
                 }),
                 volume: None,
             }),
@@ -109,7 +113,13 @@ impl Link {
                 addresses,
                 fingerprint,
                 pairing_code,
-            } => self.link(addresses, &fingerprint, pairing_code).await,
+                backup,
+                secrets,
+            } => {
+                let link = self.link(addresses, &fingerprint, pairing_code, backup, secrets);
+                link.await
+            }
+            CommandBody::SetVaultLink { backup, secrets } => self.switch(backup, secrets).await,
             CommandBody::UnlinkVault => self.unlink().await,
             _ => Err(error(
                 ErrorCode::BadRequest,
@@ -123,13 +133,15 @@ impl Link {
         addresses: Vec<String>,
         fingerprint: &str,
         pairing_code: String,
+        backup: bool,
+        secrets: bool,
     ) -> Result<CommandResult, ErrorInfo> {
         let _changing = self.changing.lock().await;
         if let Some(vault) = self.vault() {
             return Err(error(
                 ErrorCode::Conflict,
                 format!(
-                    "this host backs up to the vault at {} already; stop backing up first",
+                    "this host is linked to the vault at {} already; unlink it first",
                     vault.address
                 ),
             ));
@@ -177,21 +189,44 @@ impl Link {
         // Paired now: the spent code is not kept.
         let vault = VaultConfig {
             pairing_code: None,
+            backup,
+            secrets,
             ..vault
         };
         self.save(Some(vault.clone())).await?;
         self.replicate(vault.clone()).map_err(internal)?;
-        info!(vault = %vault.address, "backing up to the vault");
+        info!(vault = %vault.address, backup, secrets, "linked to the vault");
+        Ok(CommandResult::Applied)
+    }
+
+    /// Turns replicating and fetching secrets on or off, keeping the link.
+    async fn switch(&self, backup: bool, secrets: bool) -> Result<CommandResult, ErrorInfo> {
+        let _changing = self.changing.lock().await;
+        let Some(vault) = self.vault() else {
+            return Err(not_linked());
+        };
+        if (vault.backup, vault.secrets) == (backup, secrets) {
+            return Ok(CommandResult::Applied);
+        }
+        let file = self.setup.config_file.clone();
+        tokio::task::spawn_blocking(move || config::set_vault_switches(&file, backup, secrets))
+            .await
+            .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?
+            .map_err(internal)?;
+        let vault = VaultConfig {
+            backup,
+            secrets,
+            ..vault
+        };
+        self.replicate(vault.clone()).map_err(internal)?;
+        info!(vault = %vault.address, backup, secrets, "the vault link changed");
         Ok(CommandResult::Applied)
     }
 
     async fn unlink(&self) -> Result<CommandResult, ErrorInfo> {
         let _changing = self.changing.lock().await;
         let Some(vault) = self.vault() else {
-            return Err(error(
-                ErrorCode::NotFound,
-                "this host backs up to no vault".to_owned(),
-            ));
+            return Err(not_linked());
         };
         self.save(None).await?;
         self.configure_forks(None).map_err(internal)?;
@@ -201,7 +236,7 @@ impl Link {
             replicating.cancel();
         }
         self.setup.secrets.set_linked(false);
-        info!(vault = %vault.address, "stopped backing up to the vault");
+        info!(vault = %vault.address, "unlinked from the vault");
         Ok(CommandResult::Applied)
     }
 
@@ -214,18 +249,24 @@ impl Link {
             .map_err(internal)
     }
 
-    /// Starts replicating to `vault`, in place of any replicator running.
+    /// Connects to `vault` to do what its switches say, in place of any replicator running;
+    /// with both off, it does not connect.
     fn replicate(&self, vault: VaultConfig) -> Result<()> {
-        let replicator = self.replicator(vault.clone())?;
         self.configure_forks(Some(vault.clone()))?;
-        let stop = self.setup.shutdown.child_token();
-        tokio::spawn(replicator.run(stop.clone()));
+        let stop = if vault.backup || vault.secrets {
+            let replicator = self.replicator(vault.clone())?;
+            let stop = self.setup.shutdown.child_token();
+            tokio::spawn(replicator.run(stop.clone()));
+            Some(stop)
+        } else {
+            None
+        };
+        self.setup.secrets.set_linked(vault.secrets);
         let mut state = self.lock();
         state.vault = Some(vault);
-        if let Some(previous) = state.replicating.replace(stop) {
+        if let Some(previous) = std::mem::replace(&mut state.replicating, stop) {
             previous.cancel();
         }
-        self.setup.secrets.set_linked(true);
         Ok(())
     }
 
@@ -248,6 +289,13 @@ impl Link {
 
 fn error(code: ErrorCode, message: String) -> ErrorInfo {
     ErrorInfo { code, message }
+}
+
+fn not_linked() -> ErrorInfo {
+    error(
+        ErrorCode::NotFound,
+        "this host is linked to no vault".to_owned(),
+    )
 }
 
 fn internal(err: anyhow::Error) -> ErrorInfo {

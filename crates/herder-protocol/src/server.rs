@@ -544,12 +544,12 @@ pub enum CommandResult {
         #[serde(default)]
         failovers: Vec<FailoverTotal>,
     },
-    /// Where the daemon backs its sessions up, answering `get_vault_link`.
+    /// Which vault the daemon is linked to, answering `get_vault_link`.
     VaultLink {
-        /// Whether the daemon is a vault, which hosts back up to.
+        /// Whether the daemon is a vault, which hosts link to.
         is_vault: bool,
-        /// The vault the daemon backs up to; absent when it backs up nowhere, as a vault
-        /// never does.
+        /// The vault the daemon is linked to; absent when it is linked to none, as a vault
+        /// never is.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         vault: Option<LinkedVault>,
         /// How full a vault's disk is, as of the answer; absent from a daemon, and when the
@@ -604,13 +604,17 @@ pub enum CommandResult {
     },
 }
 
-/// The vault a host backs up to, as its `[vault]` table names it.
+/// The vault a host is linked to, as its `[vault]` table names it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct LinkedVault {
     /// The vault's address, as `host:port`.
     pub address: String,
     /// SHA-256 of the vault's TLS certificate, lowercase hex.
     pub fingerprint: String,
+    /// Whether the host replicates its sessions to the vault.
+    pub backup: bool,
+    /// Whether the host's sessions fetch secrets from the vault.
+    pub secrets: bool,
 }
 
 /// One entry of a folder.

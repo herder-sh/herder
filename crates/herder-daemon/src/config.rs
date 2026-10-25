@@ -173,14 +173,17 @@
 //!
 //! `mode = "vault"` (or `herder daemon --vault`) runs the daemon as a vault: it runs no
 //! sessions and keeps the journals hosts replicate to it; see [`crate::vault`]. The default,
-//! `mode = "host"`, runs sessions. A host replicates every session to the vault its `[vault]`
-//! table names, paired the way a client pairs with a daemon:
+//! `mode = "host"`, runs sessions. A host links to at most one vault, the one its `[vault]`
+//! table names, paired the way a client pairs with a daemon; it replicates every session there
+//! and fetches its sessions' secrets from it, each of which it can stop doing:
 //!
 //! ```toml
 //! [vault]
 //! address = "vault.example.com:7447"
 //! fingerprint = "3f9a..."    # the vault's certificate SHA-256, as `herder pair` prints it
 //! pairing_code = "ABCDE-FGHJK" # from `herder pair` on the vault; only read until paired
+//! backup = true                # replicate every session there; on by default
+//! secrets = true               # fetch the sessions' secrets from there; on by default
 //! attachments = true           # back up prompt images and files too; off by default
 //! attachments_cap = 1073741824 # most bytes of them the vault keeps; 1 GiB by default
 //! ```
@@ -293,6 +296,10 @@ pub struct VaultConfig {
     pub fingerprint: String,
     /// One-time code from `herder pair` on the vault, for the first connection.
     pub pairing_code: Option<String>,
+    /// Whether sessions are replicated to the vault.
+    pub backup: bool,
+    /// Whether sessions fetch secrets from the vault.
+    pub secrets: bool,
     /// Whether prompt images are backed up too.
     pub attachments: bool,
     /// Most bytes of this host's images the vault keeps, when `attachments` is on.
@@ -300,12 +307,15 @@ pub struct VaultConfig {
 }
 
 impl VaultConfig {
-    /// Backs up to the vault at `address`, pinned to `fingerprint`, images off.
+    /// Links to the vault at `address`, pinned to `fingerprint`: backing up and fetching
+    /// secrets, images off.
     pub fn new(address: String, fingerprint: String, pairing_code: Option<String>) -> Self {
         Self {
             address,
             fingerprint,
             pairing_code,
+            backup: true,
+            secrets: true,
             attachments: false,
             attachments_cap: DEFAULT_ATTACHMENTS_CAP,
         }
@@ -324,6 +334,8 @@ struct VaultFile {
     address: Option<String>,
     fingerprint: Option<String>,
     pairing_code: Option<String>,
+    backup: Option<bool>,
+    secrets: Option<bool>,
     attachments: Option<bool>,
     attachments_cap: Option<u64>,
     archive_retention_days: Option<u32>,
@@ -825,6 +837,8 @@ fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<(Option<VaultCo
             table.address.is_none()
                 && table.fingerprint.is_none()
                 && table.pairing_code.is_none()
+                && table.backup.is_none()
+                && table.secrets.is_none()
                 && table.attachments.is_none()
                 && table.attachments_cap.is_none(),
             "a vault does not replicate to another vault; its [vault] table takes \
@@ -849,6 +863,8 @@ fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<(Option<VaultCo
         "vault.fingerprint must be the 64 hex digits `herder pair` prints"
     );
     let vault = VaultConfig {
+        backup: table.backup.unwrap_or(true),
+        secrets: table.secrets.unwrap_or(true),
         attachments: table.attachments.unwrap_or(false),
         attachments_cap: table.attachments_cap.unwrap_or(DEFAULT_ATTACHMENTS_CAP),
         ..VaultConfig::new(
@@ -1331,6 +1347,8 @@ pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
                 let mut table = toml_edit::Table::new();
                 table.insert("address", toml_edit::value(vault.address.as_str()));
                 table.insert("fingerprint", toml_edit::value(vault.fingerprint.as_str()));
+                table.insert("backup", toml_edit::value(vault.backup));
+                table.insert("secrets", toml_edit::value(vault.secrets));
                 if vault.attachments {
                     table.insert("attachments", toml_edit::value(true));
                 }
@@ -1345,6 +1363,21 @@ pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
             }
         }
         Ok(())
+    })?;
+    Ok(())
+}
+
+/// Sets `backup` and `secrets` of the `[vault]` table of the config file at `path`, which has
+/// one, keeping the rest of the file as written; only a file that still loads replaces it.
+pub fn set_vault_switches(path: &Path, backup: bool, secrets: bool) -> Result<()> {
+    edit_file(path, |doc, _| {
+        ensure!(
+            doc.contains_table("vault"),
+            "the config has no [vault] table"
+        );
+        let mut edit = Edit { doc, path };
+        edit.set(&["vault"], "backup", Some(backup.into()))?;
+        edit.set(&["vault"], "secrets", Some(secrets.into()))
     })?;
     Ok(())
 }
@@ -2170,6 +2203,45 @@ mod tests {
         set_vault(&fresh, Some(&moved)).unwrap();
         let config = Config::load_with_env(Some(&fresh), env(&[("HOME", "/home/dev")])).unwrap();
         assert_eq!(config.vault.unwrap().address, "10.0.0.9:7447");
+    }
+
+    #[test]
+    fn the_vault_switches_round_trip_through_the_config_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        let load = || {
+            let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")]));
+            config.unwrap().vault.unwrap()
+        };
+        let vault = VaultConfig::new("vault.lan:7447".into(), "ab".repeat(32), None);
+        set_vault(&path, Some(&vault)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("backup = true\nsecrets = true\n"), "{text}");
+        assert_eq!((load().backup, load().secrets), (true, true));
+
+        // Each switch changes alone, keeping the rest of the table as written.
+        let text = text.replace("[vault]\n", "[vault]\nattachments = true # images too\n");
+        std::fs::write(&path, &text).unwrap();
+        set_vault_switches(&path, false, true).unwrap();
+        assert_eq!((load().backup, load().secrets), (false, true));
+        set_vault_switches(&path, true, false).unwrap();
+        assert_eq!((load().backup, load().secrets), (true, false));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("attachments = true # images too"), "{text}");
+        assert!(load().attachments);
+
+        // Both are on unless the table says otherwise.
+        let fingerprint = "ab".repeat(32);
+        std::fs::write(
+            &path,
+            format!("[vault]\naddress = \"vault:7447\"\nfingerprint = \"{fingerprint}\"\n"),
+        )
+        .unwrap();
+        assert_eq!((load().backup, load().secrets), (true, true));
+
+        // A host with no vault has no switches to set.
+        set_vault(&path, None).unwrap();
+        assert!(set_vault_switches(&path, true, true).is_err());
     }
 
     #[test]

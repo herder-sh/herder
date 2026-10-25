@@ -1,7 +1,8 @@
 //! Linking a running host to a vault from a client, as the TUI's machines view does: a client
 //! that owns both asks the vault for a host-only code and hands it to the host with the
 //! vault's address and fingerprint; the host keeps `[vault]` in its config and replicates
-//! without a restart. Stopping removes `[vault]` and stops replicating, and the client revokes
+//! without a restart, or only once its backup switch is turned on. Stopping removes `[vault]` and
+//! stops replicating, and the client revokes
 //! the host's device on the vault. Members can do none of it, and a host code pairs no client.
 //!
 //! The vault and the host are `herder_daemon::vault::serve` and `herder_daemon::serve`, the
@@ -285,11 +286,18 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         addresses: on_vault.addresses.clone(),
         fingerprint: on_vault.fingerprint.clone(),
         pairing_code: code,
+        backup: false,
+        secrets: true,
+    };
+    let switch = |backup| CommandBody::SetVaultLink {
+        backup,
+        secrets: true,
     };
 
     // Members can do none of it, on either daemon.
     for (machine, command) in [
         (&as_member, linking.clone()),
+        (&as_member, switch(true)),
         (&as_member, CommandBody::UnlinkVault),
         (&as_member, CommandBody::GetVaultLink),
     ] {
@@ -323,12 +331,56 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
             ErrorCode::Forbidden
         );
     }
-    // Nothing replicated meanwhile.
+    // Nothing replicated meanwhile, and there is no link to switch.
     assert!(owner.machines()[0].sessions.is_empty());
+    assert_eq!(
+        refused(&owner, &host_id, switch(true)).await,
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        refused(&owner, &vault_id, switch(true)).await,
+        ErrorCode::Unsupported
+    );
 
-    // Link: the host pairs and replicates at once, with no restart.
+    // Link with backup off: the host pairs and connects, with no restart, but replicates
+    // nothing.
     assert_eq!(
         send(&owner, &host_id, linking.clone()).await,
+        CommandResult::Applied
+    );
+    machine_when(&owner, |m| {
+        m.host_id == vault_id && m.hosts.iter().any(|h| h.host_id == host_id && h.online)
+    })
+    .await;
+    let config = std::fs::read_to_string(&host.config).unwrap();
+    assert!(
+        config.contains("backup = false\nsecrets = true\n"),
+        "{config}"
+    );
+    let linked = |backup| CommandResult::VaultLink {
+        is_vault: false,
+        vault: Some(LinkedVault {
+            address: on_vault.addresses[0].clone(),
+            fingerprint: on_vault.fingerprint.clone(),
+            backup,
+            secrets: true,
+        }),
+        volume: None,
+    };
+    assert_eq!(
+        send(&owner, &host_id, CommandBody::GetVaultLink).await,
+        linked(false)
+    );
+    assert!(
+        owner
+            .machines()
+            .iter()
+            .all(|m| m.host_id != vault_id || m.sessions.is_empty())
+    );
+
+    // Turning backup on replicates at once, without relinking.
+    assert_eq!(
+        send(&owner, &host_id, switch(true)).await,
         CommandResult::Applied
     );
     let seen = machine_when(&owner, |m| {
@@ -342,16 +394,13 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     assert!(config.starts_with(&original), "{config}");
     assert!(config.contains("[vault]"), "{config}");
     assert!(!config.contains("pairing_code"), "{config}");
+    assert!(
+        config.contains("backup = true\nsecrets = true\n"),
+        "{config}"
+    );
     assert_eq!(
         send(&owner, &host_id, CommandBody::GetVaultLink).await,
-        CommandResult::VaultLink {
-            is_vault: false,
-            vault: Some(LinkedVault {
-                address: on_vault.addresses[0].clone(),
-                fingerprint: on_vault.fingerprint.clone(),
-            }),
-            volume: None,
-        }
+        linked(true)
     );
     // The host paired as a host-only device.
     let Response::Devices { devices } = vault.control(Request::Devices).await else {

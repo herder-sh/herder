@@ -35,7 +35,7 @@ struct BackupTests {
         // A vault does not back up to itself.
         #expect(fleet.backupVaults(for: "home").isEmpty)
         // The vault a link names is found by its fingerprint, in any case.
-        #expect(fleet.pairedVault(LinkedVault(address: "x:7447", fingerprint: "FP-HOME"))?.hostId == "home")
-        #expect(fleet.pairedVault(LinkedVault(address: "x:7447", fingerprint: "fp-elsewhere")) == nil)
+        #expect(fleet.pairedVault(LinkedVault(address: "x:7447", fingerprint: "FP-HOME", backup: true, secrets: true))?.hostId == "home")
+        #expect(fleet.pairedVault(LinkedVault(address: "x:7447", fingerprint: "fp-elsewhere", backup: true, secrets: false)) == nil)
     }
 }

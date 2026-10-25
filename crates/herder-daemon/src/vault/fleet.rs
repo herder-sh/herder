@@ -415,10 +415,12 @@ impl Backend for Fleet {
             CommandBody::SetVaultHostAccess { host_id, read } => {
                 return self.set_host_access(host_id, read).await;
             }
-            CommandBody::LinkVault { .. } | CommandBody::UnlinkVault => {
+            CommandBody::LinkVault { .. }
+            | CommandBody::SetVaultLink { .. }
+            | CommandBody::UnlinkVault => {
                 return Err(error(
                     ErrorCode::Unsupported,
-                    "a vault backs up nowhere; link a host to it instead".into(),
+                    "a vault links to no vault; link a host to it instead".into(),
                 ));
             }
             CommandBody::CreateSecretSet { .. }
@@ -484,6 +486,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::GetVaultLink
         | CommandBody::GetUsageSummary { .. }
         | CommandBody::LinkVault { .. }
+        | CommandBody::SetVaultLink { .. }
         | CommandBody::UnlinkVault
         | CommandBody::PairVaultHost { .. }
         | CommandBody::RevokeVaultHost { .. }

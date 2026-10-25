@@ -1020,11 +1020,11 @@
           ]
         },
         {
-          "description": "Where the daemon backs its sessions up, answering `get_vault_link`.",
+          "description": "Which vault the daemon is linked to, answering `get_vault_link`.",
           "type": "object",
           "properties": {
             "is_vault": {
-              "description": "Whether the daemon is a vault, which hosts back up to.",
+              "description": "Whether the daemon is a vault, which hosts link to.",
               "type": "boolean"
             },
             "type": {
@@ -1032,7 +1032,7 @@
               "const": "vault_link"
             },
             "vault": {
-              "description": "The vault the daemon backs up to; absent when it backs up nowhere, as a vault\nnever does.",
+              "description": "The vault the daemon is linked to; absent when it is linked to none, as a vault\nnever is.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/LinkedVault"
@@ -2844,21 +2844,31 @@
       ]
     },
     "LinkedVault": {
-      "description": "The vault a host backs up to, as its `[vault]` table names it.",
+      "description": "The vault a host is linked to, as its `[vault]` table names it.",
       "type": "object",
       "properties": {
         "address": {
           "description": "The vault's address, as `host:port`.",
           "type": "string"
         },
+        "backup": {
+          "description": "Whether the host replicates its sessions to the vault.",
+          "type": "boolean"
+        },
         "fingerprint": {
           "description": "SHA-256 of the vault's TLS certificate, lowercase hex.",
           "type": "string"
+        },
+        "secrets": {
+          "description": "Whether the host's sessions fetch secrets from the vault.",
+          "type": "boolean"
         }
       },
       "required": [
         "address",
-        "fingerprint"
+        "fingerprint",
+        "backup",
+        "secrets"
       ]
     },
     "LogFormat": {

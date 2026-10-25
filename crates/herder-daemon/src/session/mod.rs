@@ -855,6 +855,7 @@ impl SessionManager {
             // The daemon's vault link answers these ([`crate::vault::Link`]).
             CommandBody::GetVaultLink
             | CommandBody::LinkVault { .. }
+            | CommandBody::SetVaultLink { .. }
             | CommandBody::UnlinkVault => {
                 return Err(error(
                     ErrorCode::Unsupported,
