@@ -17,7 +17,8 @@
 //! `devbox` and `studio` can install and update them, and adding an account runs a login that
 //! waits for Enter, then reports the account logged in. Claude Code's vendor publishes a newer
 //! release than any machine has ([`LATEST`]), and the machines have MCP servers of the user's
-//! ([`MCP_SERVERS`]): stdio and HTTP ones, a disabled one and one for a single project.
+//! ([`MCP_SERVERS`]): stdio and HTTP ones, a disabled one and one for a single project. Their
+//! skill library is one repository ([`SKILLS`]), with one skill turned off on `laptop`.
 //!
 //! [`Demo::start`] returns once all of it is in place, with the link a device paired with every
 //! machine shares, as `--share` prints.
@@ -47,6 +48,7 @@ use herder_daemon::providers::{InstallRecipe, Providers};
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::settings::Settings;
+use herder_daemon::skills::{Skills, SkillsSink};
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_daemon::ws::{Host, Server, Tls};
@@ -133,6 +135,29 @@ const FINISHED: &[(&str, &str, &str, &str, &str)] = &[
         "Pin every Terraform provider to a minor version.",
     ),
 ];
+
+/// The skills of the machines' library: name and description.
+const SKILLS: &[(&str, &str)] = &[
+    (
+        "release-notes",
+        "Draft release notes from the pull requests merged since the last tag.",
+    ),
+    (
+        "review-pr",
+        "Review a pull request for correctness, tests and naming.",
+    ),
+    (
+        "migrate-db",
+        "Write a reversible database migration and run it both ways.",
+    ),
+    (
+        "triage-ci",
+        "Find why a CI run failed and propose the smallest fix.",
+    ),
+];
+
+/// The skill turned off on `laptop`.
+const LAPTOP_OFF: &str = "migrate-db";
 
 /// The repositories every machine has a clone of, as `acme/<name>`.
 const REPOS: &[&str] = &["api", "web", "infra"];
@@ -428,6 +453,15 @@ impl Scenario<'_> {
             )
             .await?;
         self.prompt("laptop", &browsers, BROWSERS).await?;
+        self.client
+            .send(
+                HostId::new("laptop"),
+                CommandBody::SetSkillEnabled {
+                    name: LAPTOP_OFF.into(),
+                    enabled: false,
+                },
+            )
+            .await?;
 
         let retention = self
             .session(
@@ -679,6 +713,18 @@ impl Daemon {
             data_dir: dir.to_owned(),
             herder: PathBuf::from("herder"),
         })?;
+        let skills = Arc::new(Skills::open(
+            dir,
+            &sessions.providers(),
+            Arc::clone(&hub) as Arc<dyn SkillsSink>,
+        )?);
+        skills
+            .command(CommandBody::SetSkillsRepo {
+                url: path(&origins.join("skills.git"))?,
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("cannot set the skill library: {}", err.message))?;
+        sessions.deliver_skills(skills)?;
         let resources = ResourcesConfig {
             max_turns: Some(16),
             ..ResourcesConfig::default()
@@ -861,9 +907,28 @@ impl ReadHost for Steady {
     }
 }
 
-/// A bare origin per repository in [`REPOS`], each with a commit that holds a README.
+/// A bare origin per repository in [`REPOS`], each with a commit that holds a README, and the
+/// skill library's, `skills.git`, with a folder per skill in [`SKILLS`].
 fn origins(dir: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
+    let seed = dir.join("skills-seed");
+    std::fs::create_dir(&seed)?;
+    git(&seed, &["init", "--quiet", "--initial-branch=main"])?;
+    for (name, description) in SKILLS {
+        let folder = seed.join(name);
+        std::fs::create_dir(&folder)?;
+        std::fs::write(
+            folder.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n\n{description}\n"),
+        )?;
+    }
+    git(&seed, &["add", "--all"])?;
+    git(&seed, &["commit", "--quiet", "-m", "Add the skills"])?;
+    let bare = dir.join("skills.git");
+    git(
+        dir,
+        &["clone", "--quiet", "--bare", &path(&seed)?, &path(&bare)?],
+    )?;
     for repo in REPOS {
         let seed = dir.join(format!("{repo}-seed"));
         std::fs::create_dir(&seed)?;
