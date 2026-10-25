@@ -57,6 +57,8 @@ struct SessionModel {
     /// The title a user or the small model gave the session, from `title_changed`.
     var titled: String?
     var status: SessionStatus = .idle
+    /// When a turn that hit its usage limit runs again, while the session waits for the reset.
+    var retryAt: Date?
     var turn: TurnId?
     var approvals: [Pending] = []
     var questions: [Pending] = []
@@ -146,8 +148,9 @@ struct SessionModel {
             self.task = task
         case .branchCheckedOut(let branch):
             self.branch = branch
-        case .sessionStatusChanged(let status, _):
+        case .sessionStatusChanged(let status, let retryAt):
             self.status = status
+            self.retryAt = status == .waitingForCapacity ? retryAt.flatMap(Timestamp.date) : nil
         case .turnStarted(let turnId):
             turn = turnId
             turnStartedAt = at
@@ -239,9 +242,11 @@ struct SessionModel {
             }
         case .branchCheckedOut(let branch): notice("Checked out \(branch)")
         case .turnInterrupted: notice("Turn interrupted")
-        case .turnFailed(_, let error):
-            let summary = TurnFailure.summary(error)
-            notice("Turn failed: \(summary)", .error, detail: summary == error.message ? nil : error.message)
+        case .turnFailed(let turnId, let error): failed(turnId, error, seq: event.seq)
+        case .turnCompleted: resolveFailure(.resumed)
+        case .sessionStatusChanged(let status, _) where self.status == .needsLogin && (status == .idle || status == .running):
+            // The account was logged in again, and what it held runs.
+            resolveFailure(.signedIn)
         case .approvalRequested(_, _, _, let summary, let routedTo, let reason):
             asked("Approval", summary, routedTo, reason)
         case .questionAsked(let id, _, let text, let choices, _, let routedTo, let reason):
@@ -267,6 +272,8 @@ struct SessionModel {
         case .childReported(let child, let turnId, let summary):
             log.append(.report(ChildReport(id: event.seq, sessionId: child, turnId: turnId, summary: summary)))
         case .modelSwitched, .accountSwitched, .providerSwitched, .sessionForked:
+            if case .accountSwitched = event.body { resolveFailure(.switched) }
+            if case .providerSwitched = event.body { resolveFailure(.switched) }
             guard let handoff = handoff(event) else { break }
             if case .handoff(let fork)? = log.last, let merged = fork.joined(handoff) {
                 log[log.count - 1] = .handoff(merged)
@@ -279,10 +286,46 @@ struct SessionModel {
         case .permissionModeChanged(let mode): notice("Permission mode set to \(mode.label.lowercased())")
         case .prLinked(let pr): notice("Pull request #\(pr.number) linked: \(pr.title)")
         case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
-        case .sessionCreated, .sessionStatusChanged, .turnStarted, .turnCompleted, .prUpdated,
+        case .sessionCreated, .sessionStatusChanged, .turnStarted, .prUpdated,
              .titleChanged, .threadLinked, .unknown:
             break
         }
+    }
+
+    /// Adds a failed turn to the transcript; the same failure again, with no turn completed
+    /// since, folds into it and moves it to the end, so it reads once, after the last attempt.
+    private mutating func failed(_ turnId: TurnId, _ error: TurnError, seq: UInt64) {
+        let prompt = log.lazy.reversed().compactMap { entry -> String? in
+            guard case .item(let item) = entry, item.turnId == turnId, item.parentCallId == nil,
+                  case .userMessage(let text, _) = item.body else { return nil }
+            return text
+        }.first
+        if let index = log.lastIndex(where: { $0.openFailure != nil }), case .failure(var failure) = log[index] {
+            log.remove(at: index)
+            if failure.repeats(error) {
+                failure.count += 1
+                failure.turnId = turnId
+                failure.prompt = prompt ?? failure.prompt
+                log.append(.failure(failure))
+                return
+            }
+            failure.resolution = .superseded
+            log.insert(.failure(failure), at: index)
+        }
+        log.append(.failure(Failure(id: seq, turnId: turnId, error: error, prompt: prompt, provider: provider,
+                                    accountId: accountId)))
+    }
+
+    /// The failure that stands, if one does, is over.
+    private mutating func resolveFailure(_ resolution: Failure.Resolution) {
+        guard let index = log.lastIndex(where: { $0.openFailure != nil }), case .failure(var failure) = log[index] else { return }
+        failure.resolution = resolution
+        log[index] = .failure(failure)
+    }
+
+    /// The failure that stands: no turn has completed since, nor has the session moved on.
+    var standingFailure: Failure? {
+        log.last { $0.openFailure != nil }?.openFailure
     }
 
     /// What a switch or a fork moved the session from and to; before `apply` changes the state.
@@ -536,6 +579,11 @@ struct SessionModel {
         status == .needsYou || status == .needsLogin || !forUser.isEmpty
     }
 
+    /// The state in words, as the header says it: "Needs sign-in" while the account is signed out.
+    var stateLabel: String {
+        status == .needsLogin && forUser.isEmpty ? "Needs sign-in" : state.label
+    }
+
     var state: SessionState {
         if !forUser.isEmpty { return .needsYou }
         switch status {
@@ -574,6 +622,8 @@ struct SessionModel {
         case .error: return failure.map { "Turn failed: \(firstLine($0))" } ?? "Error"
         case .archived: return "Archived"
         case .moved: return "Moved to another host"
+        case .needsYou where status == .needsLogin:
+            return "\(provider.map(ModelCatalog.providerName) ?? "The") account needs sign-in"
         case .needsYou: return "Needs you"
         case .idle, .done: return lastMessage.map(firstLine) ?? (loaded ? "Idle" : "")
         }
@@ -709,6 +759,7 @@ struct TurnTime: Hashable {
 enum LogEntry: Hashable {
     case item(Item)
     case notice(Notice)
+    case failure(Failure)
     case handoff(Handoff)
     case child(sessionId: SessionId, task: String)
     case report(ChildReport)
@@ -735,6 +786,13 @@ struct AskedQuestion: Hashable {
         case .text?, nil: []
         }
         return Set(indices.map(Int.init).filter { $0 < choices.count })
+    }
+}
+
+extension LogEntry {
+    /// The failure this line is, while it stands.
+    var openFailure: Failure? {
+        if case .failure(let failure) = self, failure.resolution == nil { failure } else { nil }
     }
 }
 

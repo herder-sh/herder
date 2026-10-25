@@ -104,6 +104,8 @@ extension TranscriptBlock {
         case .artifact(let artifact): [artifact.title, artifact.url?.absoluteString ?? ""].joined(separator: "\n")
         case .agents(_, let agents): agents.map { [$0.title, $0.prompt, $0.result ?? ""].joined(separator: "\n") }.joined(separator: "\n")
         case .notice(let notice): [notice.text, notice.detail ?? ""].joined(separator: "\n")
+        case .failure(let failure): [failure.line, failure.error.message].joined(separator: "\n")
+        case .held(_, let text): text
         case .question(let question): ([question.text] + question.choices).joined(separator: "\n")
         case .work(let work): work.blocks.map(\.searchText).joined(separator: "\n")
         case .working, .handoff: ""

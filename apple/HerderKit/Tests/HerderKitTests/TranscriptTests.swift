@@ -95,7 +95,11 @@ struct TranscriptTests {
             .turnFailed(turnId: "t1", error: TurnError(class: .fatal, message: "boom")),
         ])
         let notices = Transcript.blocks(model).compactMap { block -> String? in
-            if case .notice(let notice) = block { notice.text } else { nil }
+            switch block {
+            case .notice(let notice): notice.text
+            case .failure(let failure): failure.line
+            default: nil
+            }
         }
         #expect(notices == ["Turn failed: boom"])
     }
@@ -330,12 +334,12 @@ struct DefaultAccountTests {
         ])
         let blocks = Transcript.collapsed(model)
         guard blocks.count == 4, case .assistant(_, "On it.", _) = blocks[1], case .work(let work) = blocks[2],
-              case .notice(let notice) = blocks[3] else {
+              case .failure(let failure) = blocks[3] else {
             Issue.record("unexpected blocks: \(blocks)")
             return
         }
         #expect(work.blocks.map(\.id) == ["tools-t1/c1"])
-        #expect(notice.text == "Turn failed: boom")
+        #expect(failure.line == "Turn failed: boom")
     }
 
     @Test func theRunningTurnFoldsItsToolCallsUnderWorkingAndKeepsItsProse() {
@@ -448,10 +452,10 @@ struct TurnFailureTests {
         var script = Script()
         let message = "spend limit · your session limit resets 9pm"
         let model = script.model([created(), .turnStarted(turnId: "t1"), .turnFailed(turnId: "t1", error: TurnError(class: .limitReached, message: message))])
-        let notice = Transcript.blocks(model).compactMap { block -> Notice? in
-            if case .notice(let notice) = block { notice } else { nil }
+        let failure = Transcript.blocks(model).compactMap { block -> Failure? in
+            if case .failure(let failure) = block { failure } else { nil }
         }.last
-        #expect(notice?.text == "Turn failed: usage limit reached · resets 9pm")
-        #expect(notice?.detail == message)
+        #expect(failure?.line == "Turn failed: usage limit reached · resets 9pm")
+        #expect(failure?.error.message == message)
     }
 }

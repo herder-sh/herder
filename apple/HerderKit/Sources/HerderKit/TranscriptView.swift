@@ -106,6 +106,10 @@ struct TranscriptBlockView: View {
             EarlierReports(id: id, reports: reports, fleet: fleet, hostId: hostId, open: open)
         case .notice(let notice):
             NoticeLine(notice: notice)
+        case .failure(let failure):
+            FailureBlock(failure: failure, fleet: fleet, key: key)
+        case .held(_, let text):
+            HeldMessage(text: text)
         case .question(let question):
             QuestionRecord(question: question)
         case .work(let work):
@@ -658,6 +662,32 @@ private struct DeliveryLine: View {
         }
         .font(.caption)
         .foregroundStyle(Theme.tertiary)
+    }
+}
+
+/// A message the session holds while its account needs signing in again: its bubble, dimmed,
+/// with "held" under it.
+struct HeldMessage: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            Text(text)
+                .font(.body)
+                .foregroundStyle(Theme.onBubble)
+                .textSelection(.enabled)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Theme.bubble, in: .rect(cornerRadius: 18))
+                .opacity(0.55)
+            Label("held", systemImage: "pause.circle")
+                .font(.caption)
+                .foregroundStyle(Theme.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 48)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("held-message")
     }
 }
 
