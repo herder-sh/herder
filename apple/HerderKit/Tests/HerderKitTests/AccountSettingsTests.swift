@@ -65,7 +65,7 @@ struct AccountSettingsTests {
         let claude = terminals.add(NewAccount(accountId: "claude-2", provider: "claude", label: nil, configDir: nil), on: "box")
         let codex = terminals.add(NewAccount(accountId: "codex", provider: "codex", label: nil, configDir: nil), on: "box")
         let elsewhere = terminals.add(NewAccount(accountId: "claude-2", provider: "claude", label: nil, configDir: nil), on: "laptop")
-        let install = terminals.install("cursor", on: "box")
+        let install = terminals.install("cursor", on: "box", from: nil)
         let relogin = terminals.relogin("claude", on: "box")
         #expect(Set([claude, codex, elsewhere, install, relogin]).count == 5)
         #expect(terminals.adds(on: "box") == [claude, codex])
@@ -103,6 +103,55 @@ struct AccountSettingsTests {
         #expect(JobProgress(.exited(0), added: false) == .ended)
         #expect(JobProgress(.failed("no"), added: false) == .failed("no"))
         #expect(!JobProgress.running.finished && JobProgress.ended.finished)
+    }
+
+    @Test func anInstallReadsItsOutcomeFromTheVersionsBeforeAndAfter() {
+        #expect(JobProgress(install: .connecting, before: "2.1.303", after: "2.1.303") == .starting)
+        #expect(JobProgress(install: .attached, before: "2.1.303", after: "2.1.303") == .running)
+        let updated = JobProgress(install: .exited(0), before: "2.1.303", after: "2.1.310")
+        #expect(updated == .updated(from: "2.1.303", to: "2.1.310") && updated.label == "Updated 2.1.303 → 2.1.310")
+        let installed = JobProgress(install: .exited(0), before: nil, after: "0.9.4")
+        #expect(installed == .installed("0.9.4") && installed.label == "Installed 0.9.4")
+        #expect(JobProgress(install: .exited(0), before: "2.1.310", after: "2.1.310") == .upToDate("2.1.310"))
+        // A non-zero exit fails, whatever the versions say; so does a CLI still missing.
+        #expect(JobProgress(install: .exited(1), before: "2.1.303", after: "2.1.310").label == "Failed")
+        #expect(JobProgress(install: .exited(nil), before: nil, after: nil).label == "Failed")
+        #expect(JobProgress(install: .exited(0), before: nil, after: nil).label == "Failed")
+        #expect(JobProgress(install: .failed("no"), before: nil, after: nil) == .failed("no"))
+        #expect(updated.finished && installed.finished)
+    }
+
+    @MainActor
+    @Test func anInstallKeepsTheVersionItStartedFrom() {
+        var terminals = ProviderTerminals()
+        let key = terminals.install("claude", on: "box", from: "2.1.303")
+        // Again while it runs: the same job, still from where it started.
+        terminals.install("claude", on: "box", from: "2.1.310")
+        #expect(terminals.before(key) == "2.1.303")
+        terminals.clear(key)
+        #expect(terminals.before(key) == nil)
+    }
+
+    @MainActor
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func everyInstallOpensItsTerminalWithoutBeingShown() async throws {
+        let daemon = try FakeDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open profile")
+            return
+        }
+        let machine = try await fleet.pair(daemon)
+        try await fleet.client.synced(hostId: machine.hostId)
+        // No emulator is ever made: Update All shows one job's terminal at most. The fake
+        // daemon installs no provider, and says so, which only an opened request learns.
+        let keys = ["claude", "codex"].map { fleet.install($0, on: machine.hostId) }
+        for key in keys {
+            let connection = try #require(fleet.providerTerminals[key])
+            #expect(await eventually {
+                if case .failed = connection.state { return true }
+                return false
+            })
+        }
     }
 
     @MainActor

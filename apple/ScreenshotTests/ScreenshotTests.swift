@@ -174,8 +174,34 @@ final class ScreenshotTests: XCTestCase {
             shoot("mac-machine-settings-mcp")
             dismiss()
         }
+        updateAll()
         #endif
     }
+
+    #if os(macOS)
+    /// Update All on the Providers page: every job runs at once and ends with its outcome, and
+    /// the one picked shows its own terminal.
+    private func updateAll() {
+        guard section("Providers") else { return }
+        let update = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Update All ('")).firstMatch
+        guard wait(update, "Update All") else { return }
+        press(update)
+        guard wait(app.descendants(matching: .any)["login-terminal"].firstMatch, "install terminal") else { return }
+        shoot("mac-installs-running")
+        // The demo's installers take two seconds; each row reads its outcome once its job ends.
+        let outcome = { (id: String) in
+            self.app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS 'Updated '", id)).firstMatch
+        }
+        for id in ["install-claude-devbox", "install-claude-studio", "install-codex-studio"] {
+            guard wait(outcome(id), "\(id) updated") else { return dismiss() }
+        }
+        // Picking a row shows that job's terminal under its header.
+        press(app.buttons["install-codex-studio"].firstMatch)
+        settle()
+        shoot("mac-installs-finished")
+        dismiss()
+    }
+    #endif
 
     /// The MCP servers on the Providers page: the list, adding one to every machine, editing
     /// one with a header, and importing a README's JSON.
