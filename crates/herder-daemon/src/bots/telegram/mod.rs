@@ -40,6 +40,7 @@ use self::api::{Api, Failure, Upload};
 use self::payload::{Me, Pressed, Threads};
 use self::render::Keys;
 use super::bridge::{self, Bridge, ChatFile, ConnectError, Connection, Inbound, Place, Post};
+use crate::session::publish::media_type;
 
 /// Messages and presses the connection holds before the runner takes them.
 const INBOUND: usize = 64;
@@ -512,11 +513,7 @@ impl Bridge for Telegram {
         data: Vec<u8>,
     ) -> BoxFuture<'a, bridge::Result<()>> {
         let media_type = media_type(name);
-        let (method, field) = if matches!(media_type, "image/png" | "image/jpeg") {
-            ("sendPhoto", "photo")
-        } else {
-            ("sendDocument", "document")
-        };
+        let (method, field) = sent_as(media_type);
         let upload = Upload {
             field,
             name,
@@ -559,14 +556,13 @@ fn link(place: &Place) -> Option<String> {
     Some(format!("https://t.me/c/{chat}/{message}"))
 }
 
-/// The media type of the file `name`, by its extension.
-fn media_type(name: &str) -> &'static str {
-    match name.rsplit_once('.').map(|(_, extension)| extension) {
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        _ => "application/octet-stream",
+/// The method and field Telegram takes a file of `media_type` with: a photo, which it shows
+/// inline, for the images it accepts as one; a document for the rest.
+fn sent_as(media_type: &str) -> (&'static str, &'static str) {
+    if matches!(media_type, "image/png" | "image/jpeg") {
+        ("sendPhoto", "photo")
+    } else {
+        ("sendDocument", "document")
     }
 }
 
@@ -593,5 +589,14 @@ mod tests {
             Some("https://t.me/c/2000000001/5".into())
         );
         assert_eq!(link(&place("700000001", "10")), None);
+    }
+
+    #[test]
+    fn photos_go_as_photos_and_other_files_as_documents() {
+        assert_eq!(sent_as(media_type("shot.PNG")), ("sendPhoto", "photo"));
+        assert_eq!(sent_as(media_type("shot.jpg")), ("sendPhoto", "photo"));
+        for name in ["report.pdf", "page.html", "flow.mov", "Makefile"] {
+            assert_eq!(sent_as(media_type(name)), ("sendDocument", "document"));
+        }
     }
 }

@@ -163,9 +163,11 @@ async fn a_session_lists_and_calls_the_tools_through_the_shim() {
     assert_eq!(init["result"]["serverInfo"]["name"], "herder");
     assert!(init["result"]["capabilities"]["tools"].is_object());
     let instructions = init["result"]["instructions"].as_str().unwrap();
-    for tool in ["`spawn`", "`wait_for`", "`send_session`"] {
+    for tool in ["`spawn`", "`wait_for`", "`send_session`", "`publish`"] {
         assert!(instructions.contains(tool), "{instructions}");
     }
+    // An agent driven from a chat knows publish delivers files into it.
+    assert!(instructions.contains("posts the file itself into the chat"));
     client
         .write(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
         .await;
