@@ -29,11 +29,13 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use herder_protocol::{CommandBody, DeviceId, ErrorCode, ErrorInfo, Role, Timestamp, UserId};
+use herder_protocol::{
+    CommandBody, DeviceId, ErrorCode, ErrorInfo, Role, Timestamp, UserDevice, UserId, UserInfo,
+};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::data_dir::write_private;
 use crate::ws::Identity;
@@ -100,6 +102,9 @@ pub struct Device {
     /// What it may connect as; devices paired before roles are clients until migrated.
     #[serde(default)]
     pub role: DeviceRole,
+    /// When it last connected; devices that have not since this was kept have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<Timestamp>,
 }
 
 /// A freshly minted pairing code.
@@ -271,7 +276,10 @@ impl Auth {
     ) -> Result<Identity, ErrorInfo> {
         let mut state = self.lock();
         let identity = match identity(&state.users, fingerprint) {
-            Some((identity, role)) if role.allows(peer) => identity,
+            Some((identity, role)) if role.allows(peer) => {
+                self.seen(&mut state, &identity.device_id);
+                identity
+            }
             Some((identity, _)) => {
                 let host = state
                     .users
@@ -348,6 +356,7 @@ impl Auth {
             fingerprint: fingerprint.to_owned(),
             paired_at: now,
             role: pending.device_role,
+            last_seen: Some(now),
         };
         users.devices.push(device.clone());
         self.save(&users).map_err(|err| {
@@ -370,6 +379,23 @@ impl Auth {
             device_id: device.device_id,
             role: user.role,
         })
+    }
+
+    /// Notes that `device_id` connected now. Failing to save only loses that note.
+    fn seen(&self, state: &mut State, device_id: &DeviceId) {
+        let mut users = state.users.clone();
+        let Some(device) = users
+            .devices
+            .iter_mut()
+            .find(|device| &device.device_id == device_id)
+        else {
+            return;
+        };
+        device.last_seen = Some(Timestamp::now());
+        match self.save(&users) {
+            Ok(()) => state.users = users,
+            Err(err) => warn!(%device_id, "cannot note when a device connected: {err:#}"),
+        }
     }
 
     /// The daemon's first owner, which the local control socket acts as: only the system user
@@ -420,6 +446,92 @@ impl Auth {
                 Some((device.clone(), user.clone()))
             })
             .collect()
+    }
+
+    /// Every user, oldest first, each with their devices, oldest first: what `list_users` and
+    /// `herder pair --list` show.
+    pub fn users(&self) -> Vec<UserInfo> {
+        let mut state = self.lock();
+        state
+            .connections
+            .retain(|_, open| open.iter().any(|(_, token)| !token.is_cancelled()));
+        let mut users: Vec<&User> = state.users.users.iter().collect();
+        users.sort_by_key(|user| user.created_at);
+        users
+            .into_iter()
+            .map(|user| UserInfo {
+                user_id: user.user_id.clone(),
+                name: user.name.clone(),
+                role: user.role,
+                devices: state
+                    .users
+                    .devices
+                    .iter()
+                    .filter(|device| device.user_id == user.user_id)
+                    .map(|device| UserDevice {
+                        device_id: device.device_id.clone(),
+                        client: device.client.clone(),
+                        paired_at: device.paired_at,
+                        last_seen: device.last_seen,
+                        online: state
+                            .connections
+                            .get(&device.device_id)
+                            .is_some_and(|open| {
+                                open.iter().any(|(_, token)| !token.is_cancelled())
+                            }),
+                        host_only: device.role == DeviceRole::Host,
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Makes `user_id` a `role`, and closes their devices' connections, which carry the old
+    /// role, so they connect again with the new one. Refuses to leave the daemon with no
+    /// owner.
+    pub fn set_role(&self, user_id: &UserId, role: Role) -> Result<(), ErrorInfo> {
+        let mut state = self.lock();
+        let mut users = state.users.clone();
+        let Some(user) = users.users.iter_mut().find(|user| &user.user_id == user_id) else {
+            return Err(ErrorInfo {
+                code: ErrorCode::NotFound,
+                message: format!("no user {user_id} on this daemon"),
+            });
+        };
+        if user.role == role {
+            return Ok(());
+        }
+        user.role = role;
+        if !users.users.iter().any(|user| user.role == Role::Owner) {
+            return Err(ErrorInfo {
+                code: ErrorCode::Conflict,
+                message: "the last owner cannot be made a member; make someone else an owner \
+                          first"
+                    .to_owned(),
+            });
+        }
+        self.save(&users).map_err(|err| {
+            tracing::error!("cannot save a user's role: {err:#}");
+            ErrorInfo {
+                code: ErrorCode::Internal,
+                message: "cannot save the user's role".to_owned(),
+            }
+        })?;
+        state.users = users;
+        let devices: Vec<DeviceId> = state
+            .users
+            .devices
+            .iter()
+            .filter(|device| &device.user_id == user_id)
+            .map(|device| device.device_id.clone())
+            .collect();
+        for device_id in devices {
+            for (_, token) in state.connections.remove(&device_id).unwrap_or_default() {
+                token.cancel();
+            }
+        }
+        info!(%user_id, ?role, "user role changed");
+        Ok(())
     }
 
     /// Makes the devices in `hosts`, which replicated to this vault as hosts, host-only, once:
@@ -528,7 +640,9 @@ impl Auth {
 /// Refuses commands `role` does not allow: terminals, and so adding accounts or
 /// logging them in again and signing the host in to AWS, bringing down containers, browsing folders, changing projects,
 /// reading or changing the daemon's settings, restarting it, backing up to a vault, forking
-/// sessions onto the host, and changing the skill library or which of its skills are enabled are for owners only.
+/// sessions onto the host, changing the skill library or which of its skills are enabled,
+/// changing users' roles, revoking devices and pairing one as anyone but the caller are for
+/// owners only.
 pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
@@ -619,6 +733,18 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     if skills && role != Role::Owner {
         return Err(forbidden(
             "changing the skill library is for the daemon's owners only",
+        ));
+    }
+    let people = matches!(
+        command,
+        CommandBody::SetUserRole { .. }
+            | CommandBody::RevokeDevice { .. }
+            | CommandBody::PairDevice { user: Some(_), .. }
+            | CommandBody::PairDevice { role: Some(_), .. }
+    );
+    if people && role != Role::Owner {
+        return Err(forbidden(
+            "changing who is on the daemon is for its owners only",
         ));
     }
     let bots = matches!(

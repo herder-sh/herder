@@ -873,7 +873,10 @@ impl SessionManager {
             | CommandBody::CloseTerminal { .. }
             | CommandBody::ResizeTerminal { .. }
             | CommandBody::TerminalInput { .. }
-            | CommandBody::PairDevice => {
+            | CommandBody::PairDevice { .. }
+            | CommandBody::ListUsers
+            | CommandBody::SetUserRole { .. }
+            | CommandBody::RevokeDevice { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "the session manager does not handle this command yet",
@@ -2305,6 +2308,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
             | CommandBody::ListAwsProfiles
             | CommandBody::ListBots
             | CommandBody::GetBotStatus
+            | CommandBody::ListUsers
     )
 }
 

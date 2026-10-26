@@ -270,7 +270,30 @@ impl<B: Backend> Shared<B> {
             CommandBody::TerminalInput { terminal_id, data } => {
                 terminals.input(&terminal_id, outbox, data.0).await?;
             }
-            CommandBody::PairDevice => return self.pair_device(identity),
+            CommandBody::PairDevice { user, role } => {
+                return self.pair_device(identity, user.as_deref(), role);
+            }
+            CommandBody::ListUsers => {
+                return Ok(CommandResult::Users {
+                    users: self.auth.users(),
+                });
+            }
+            CommandBody::SetUserRole { user_id, role } => self.auth.set_role(&user_id, role)?,
+            CommandBody::RevokeDevice { device_id } => match self.auth.revoke(&device_id) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(ErrorInfo {
+                        code: ErrorCode::NotFound,
+                        message: format!("no paired device {device_id}"),
+                    });
+                }
+                Err(err) => {
+                    return Err(ErrorInfo {
+                        code: ErrorCode::Internal,
+                        message: format!("{err:#}"),
+                    });
+                }
+            },
             command => return self.run(&identity.user_id, command_id, command).await,
         }
         Ok(CommandResult::Applied)
@@ -352,20 +375,43 @@ impl<B: Backend> Shared<B> {
 
     /// A one-time code that pairs another device as `identity`'s user, with this daemon's
     /// own addresses rather than the one the caller reached it on.
-    fn pair_device(&self, identity: &Identity) -> Result<CommandResult, ErrorInfo> {
+    /// Mints a code that pairs a device as the caller, or, given either, as `user` with
+    /// `role`, as `herder pair --user --role` does; [`auth::authorize`] lets only owners give
+    /// either.
+    fn pair_device(
+        &self,
+        identity: &Identity,
+        user: Option<&str>,
+        role: Option<Role>,
+    ) -> Result<CommandResult, ErrorInfo> {
         let Some(listen) = self.listen.get() else {
             return Err(ErrorInfo {
                 code: ErrorCode::Internal,
                 message: "the daemon is not listening yet".to_owned(),
             });
         };
-        let pairing = self
-            .auth
-            .mint_for(&identity.user_id, PAIRING_TTL)
-            .map_err(|err| ErrorInfo {
-                code: ErrorCode::Internal,
-                message: format!("{err:#}"),
-            })?;
+        let pairing = if user.is_none() && role.is_none() {
+            self.auth
+                .mint_for(&identity.user_id, PAIRING_TTL)
+                .map_err(|err| ErrorInfo {
+                    code: ErrorCode::Internal,
+                    message: format!("{err:#}"),
+                })?
+        } else {
+            let own = self.auth.name(&identity.user_id);
+            let Some(user) = user.or(own.as_deref()) else {
+                return Err(ErrorInfo {
+                    code: ErrorCode::Forbidden,
+                    message: "you are no longer paired with this daemon".to_owned(),
+                });
+            };
+            self.auth
+                .mint(user, role, PAIRING_TTL)
+                .map_err(|err| ErrorInfo {
+                    code: ErrorCode::BadRequest,
+                    message: format!("{err:#}"),
+                })?
+        };
         Ok(CommandResult::DevicePairing {
             code: pairing.code,
             fingerprint: self.tls.fingerprint().to_owned(),
@@ -471,7 +517,10 @@ impl<B: Backend> Control for AgentControl<B> {
             // A bot's allowlist grants people access, as a pairing code does.
             let pairing = matches!(
                 command,
-                CommandBody::PairDevice
+                CommandBody::PairDevice { .. }
+                    | CommandBody::ListUsers
+                    | CommandBody::SetUserRole { .. }
+                    | CommandBody::RevokeDevice { .. }
                     | CommandBody::PairVaultHost { .. }
                     | CommandBody::InstallVault
                     | CommandBody::LinkLocalVault
@@ -481,8 +530,8 @@ impl<B: Backend> Control for AgentControl<B> {
             if connection || pairing {
                 return Err(ErrorInfo {
                     code: ErrorCode::Forbidden,
-                    message: "terminals, logins, installs, pairing codes and bots are never \
-                              run for an agent; ask the user to do this in a herder app"
+                    message: "terminals, logins, installs, pairing codes, users and bots are \
+                              never run for an agent; ask the user to do this in a herder app"
                         .to_owned(),
                 });
             }

@@ -703,7 +703,15 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
         addresses,
         fingerprint,
         ..
-    }) = client.send(vault_id.clone(), CommandBody::PairDevice).await
+    }) = client
+        .send(
+            vault_id.clone(),
+            CommandBody::PairDevice {
+                user: None,
+                role: None,
+            },
+        )
+        .await
     else {
         panic!("expected a device pairing");
     };
