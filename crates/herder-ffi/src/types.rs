@@ -706,6 +706,8 @@ pub enum CommandBody {
         secrets: bool,
     },
     UnlinkVault,
+    InstallVault,
+    LinkLocalVault,
     PairDevice,
     PairVaultHost {
         host_name: String,
@@ -903,6 +905,7 @@ pub enum CommandResult {
         is_vault: bool,
         vault: Option<LinkedVault>,
         volume: Option<VaultVolume>,
+        local_vault: bool,
     },
     Settings {
         settings: Box<DaemonSettings>,

@@ -166,7 +166,7 @@ fn service() -> String {
 }
 
 pub fn install(service: &Service) -> Result<()> {
-    let exe = std::env::current_exe().context("finding the herder binary")?;
+    let exe = crate::herder_binary()?;
     let home = home()?;
     let search_path = service_path(&std::env::var("PATH").context("reading PATH")?, &home);
     let env = match &service.env_file {

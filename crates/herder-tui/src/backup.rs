@@ -511,6 +511,7 @@ mod tests {
                 is_vault: host_id.as_str() == "v",
                 vault: None,
                 volume: None,
+                local_vault: false,
             });
             app.update(Msg::Sent { origin, result });
         }
