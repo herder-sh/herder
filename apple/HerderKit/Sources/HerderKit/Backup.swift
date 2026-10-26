@@ -209,7 +209,7 @@ struct VaultLinkSwitch: View {
 
     var body: some View {
         SettingRow(label: label, hint: hint, saved: saves["switch"]) {
-            Toggle(label, isOn: Binding(get: { vault[keyPath: key] }, set: flip)).labelsHidden().toggleStyle(.switch)
+            Toggle(label, isOn: Binding(get: { vault[keyPath: key] }, set: { flip($0) })).labelsHidden().toggleStyle(.switch)
         }
     }
 
