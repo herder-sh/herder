@@ -215,6 +215,16 @@ enum Transcript {
         let items = model.log.compactMap { entry -> Item? in
             if case .item(let item) = entry { item } else { nil }
         } + model.streaming
+        // Looked up for each tool call: searching the items for each made a long session's
+        // transcript quadratic, rebuilt on every token a turn streams.
+        var results: [String: Item] = [:]
+        var parents: Set<String> = []
+        for item in items {
+            if case .toolResult(let callId, _, _) = item.body {
+                results["\(item.turnId)/\(item.parentCallId ?? "")/\(callId)"] = item
+            }
+            if let parent = item.parentCallId { parents.insert("\(item.turnId)/\(parent)") }
+        }
         func belongs(_ item: Item) -> Bool {
             if let parent { return item.turnId == parent.turnId && item.parentCallId == parent.callId }
             return item.parentCallId == nil
@@ -226,9 +236,7 @@ enum Transcript {
             switch item.body {
             case .toolCall(let name, let input):
                 flushChildren()
-                if NativeAgent.isAgent(name) || items.contains(where: {
-                    $0.turnId == item.turnId && $0.parentCallId == item.id
-                }) {
+                if NativeAgent.isAgent(name) || parents.contains("\(item.turnId)/\(item.id)") {
                     flushCalls()
                     agents.append(NativeAgent(item: item, items: items, runningTurn: model.turn,
                                               working: model.status == .running, streaming: model.streaming,
@@ -239,11 +247,8 @@ enum Transcript {
                     if calls.isEmpty { callsTurn = item.turnId }
                     var call = toolCall(id: item.id, name: name, input: input, running: streaming || model.turn == item.turnId)
                     // Results can arrive after intervening prose or another agent's output.
-                    if let result = items.last(where: { result in
-                        guard result.turnId == item.turnId, result.parentCallId == item.parentCallId,
-                              case .toolResult(let callId, _, _) = result.body else { return false }
-                        return callId == item.id
-                    }), case .toolResult(_, let output, let isError) = result.body {
+                    if let result = results["\(item.turnId)/\(item.parentCallId ?? "")/\(item.id)"],
+                       case .toolResult(_, let output, let isError) = result.body {
                         call.attach(output: output, isError: isError, streaming: model.streaming.contains(result))
                     }
                     calls.append(call)
