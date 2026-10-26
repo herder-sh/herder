@@ -166,7 +166,7 @@ fn service() -> String {
 }
 
 pub fn install(service: &Service) -> Result<()> {
-    let exe = std::env::current_exe().context("finding the herder binary")?;
+    let exe = crate::herder_binary()?;
     let home = home()?;
     let search_path = service_path(&std::env::var("PATH").context("reading PATH")?, &home);
     let env = match &service.env_file {
@@ -370,7 +370,8 @@ mod tests {
 
     #[test]
     fn vault_plist_runs_a_vault_with_its_key_in_its_environment() {
-        let service = crate::vault::service(Path::new("/Users/ann/.local/share/herder-vault"));
+        let service =
+            crate::vault::install::service(Path::new("/Users/ann/.local/share/herder-vault"));
         let home = Path::new("/Users/ann");
         let plist = plist(
             &service,

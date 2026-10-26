@@ -408,6 +408,7 @@ impl Backend for Fleet {
                     is_vault: true,
                     vault: None,
                     volume: volume.await.unwrap_or_default(),
+                    local_vault: false,
                 });
             }
             CommandBody::PairVaultHost { host_name } => return self.pair_host(&host_name),
@@ -417,7 +418,9 @@ impl Backend for Fleet {
             }
             CommandBody::LinkVault { .. }
             | CommandBody::SetVaultLink { .. }
-            | CommandBody::UnlinkVault => {
+            | CommandBody::UnlinkVault
+            | CommandBody::InstallVault
+            | CommandBody::LinkLocalVault => {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "a vault links to no vault; link a host to it instead".into(),
@@ -488,6 +491,8 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::LinkVault { .. }
         | CommandBody::SetVaultLink { .. }
         | CommandBody::UnlinkVault
+        | CommandBody::InstallVault
+        | CommandBody::LinkLocalVault
         | CommandBody::PairVaultHost { .. }
         | CommandBody::RevokeVaultHost { .. }
         | CommandBody::CreateSecretSet { .. }
