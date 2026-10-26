@@ -173,8 +173,8 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Archives a finished task from the Board, which takes its row off, then undoes it: on the
-    /// Mac from the check its row shows on hover and with ⌘Z, then with E three times, each opening
-    /// the next task, and ⌘Z; on the iPhone with a swipe and the toast's Undo.
+    /// Mac from its context menu and with ⌘Z, then with E three times, each opening the next
+    /// task, and ⌘Z; on the iPhone with a swipe and the toast's Undo.
     private func archiving() {
         let title = "Tidy the README badges"
         guard section("Board") else { return }
@@ -182,11 +182,8 @@ final class ScreenshotTests: XCTestCase {
         guard wait(task, "\(title) on the Board") else { return }
         reveal(task)
         #if os(macOS)
-        task.hover()
-        let circle = app.buttons["Archive \(title)"].firstMatch
-        guard wait(circle, "archive check") else { return }
-        press(circle)
-        guard gone(task, "archived from its check") else { return }
+        guard archiveFromMenu(task, "Archive in the menu") else { return }
+        guard gone(task, "archived from its menu") else { return }
         app.typeKey("z", modifierFlags: .command)
         guard wait(task, "back with ⌘Z") else { return }
         settle()
@@ -253,7 +250,7 @@ final class ScreenshotTests: XCTestCase {
     #endif
 
     /// A project's tasks, as the Board's rows, then archiving one from that list and undoing it
-    /// with the toast's Undo: from its check on the Mac, with a swipe on the iPhone.
+    /// with the toast's Undo: from its context menu on the Mac, with a swipe on the iPhone.
     private func project() {
         #if os(iOS)
         guard section("Projects") else { return }
@@ -270,10 +267,7 @@ final class ScreenshotTests: XCTestCase {
         shoot(platform("project"))
         reveal(task)
         #if os(macOS)
-        task.hover()
-        let circle = app.buttons["Archive \(title)"].firstMatch
-        guard wait(circle, "archive check in api") else { return }
-        press(circle)
+        guard archiveFromMenu(task, "Archive in the menu in api") else { return }
         #else
         task.swipeLeft()
         let archive = app.buttons["Archive"].firstMatch
@@ -286,6 +280,18 @@ final class ScreenshotTests: XCTestCase {
         press(undo)
         _ = wait(task, "back in api with Undo")
     }
+
+    #if os(macOS)
+    /// Archives a task from its row's context menu. The check its row shows on hover is out of
+    /// reach: the test's pointer moves without the events that make the row show it.
+    private func archiveFromMenu(_ task: XCUIElement, _ what: String) -> Bool {
+        task.rightClick()
+        let archive = app.menuItems["Archive"].firstMatch
+        guard wait(archive, what) else { return false }
+        archive.click()
+        return true
+    }
+    #endif
 
     /// Whether `element` goes within a few seconds; when it does not, records `what` as missed.
     private func gone(_ element: XCUIElement, _ what: String) -> Bool {
@@ -311,7 +317,9 @@ final class ScreenshotTests: XCTestCase {
         guard wait(link, "Integrations link") else { return }
         press(link)
         #endif
-        let bot = app.descendants(matching: .any)["bot-trash-can"].firstMatch
+        // The Mac's table names a row after its machine and bot.
+        let bot = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == 'bot-trash-can' OR identifier ENDSWITH '/trash-can'")).firstMatch
         guard wait(bot, "trash-can in Integrations") else { return }
         settle()
         shoot(platform("integrations"))
