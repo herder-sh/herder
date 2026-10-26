@@ -464,7 +464,7 @@ struct TaskListRow: View {
 
 /// A task: the circle that archives it, where it stands, its title, its context and what it
 /// is doing, how many agents work under it, and how long since it last did something. It
-/// opens its top session, into `selection` when given, else by pushing it.
+/// opens its top session, into `selection` when given, else by pushing it on `sessionPath`.
 private struct TaskRow: View {
     let tree: TaskTree
     let fleet: Fleet
@@ -473,6 +473,7 @@ private struct TaskRow: View {
     /// Whether it is the Mac's keyboard row.
     let current: Bool
     let toggle: () -> Void
+    @Environment(\.sessionPath) private var path
     @State private var hovering = false
 
     var body: some View {
@@ -484,13 +485,16 @@ private struct TaskRow: View {
             .buttonStyle(.plain)
             .help(archived ? "Unarchive" : "Archive")
             .accessibilityLabel(archived ? "Unarchive \(tree.lead.title)" : "Archive \(tree.lead.title)")
-            if let selection {
-                Button { selection.wrappedValue = tree.lead.key } label: { content }
-                    .buttonStyle(.plain)
-            } else {
-                NavigationLink(value: NavRoute.session(tree.lead.key)) { content }
-                    .buttonStyle(.plain)
-            }
+            // A button that pushes, not a NavigationLink: in a list row beside the archive
+            // button, iOS 27 draws a link as the row's own and never follows it on a tap.
+            Button {
+                if let selection {
+                    selection.wrappedValue = tree.lead.key
+                } else {
+                    path?.wrappedValue.append(.session(tree.lead.key))
+                }
+            } label: { content }
+            .buttonStyle(.plain)
         }
         .opacity(archived ? 0.6 : 1)
         .onHover { hovering = $0 }
