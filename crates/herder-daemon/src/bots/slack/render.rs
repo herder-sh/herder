@@ -187,6 +187,12 @@ pub fn render(post: &Post) -> Value {
             blocks.push(actions(elements));
             (text, blocks)
         }
+        Post::NotStarted { text, open } => {
+            let text = format!(":warning: {}", mrkdwn(text));
+            let mut blocks = sections(&text);
+            blocks.push(actions(vec![buttons.link("Open herder", open)]));
+            (text, blocks)
+        }
         Post::Picker { text, choices } => {
             let text = mrkdwn(text);
             let mut blocks = sections(&text);

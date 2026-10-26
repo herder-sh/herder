@@ -179,6 +179,12 @@ pub enum Post {
         /// Where Open in herder goes.
         open: String,
     },
+    /// A session that could not start, with what fixes it.
+    NotStarted {
+        text: String,
+        /// Where Open herder goes.
+        open: String,
+    },
     /// A choice, as one button per choice: of projects, for a name that names several, or of
     /// sessions, for a title several match.
     Picker {
