@@ -14,6 +14,20 @@ extension XCUIApplication {
         task.tap()
     }
 
+    /// Taps `add` until the pairing sheet's link field shows, and returns the field. On a cold
+    /// launch the splash still fades over the Board when its button first shows, and takes a tap
+    /// that lands then.
+    @MainActor
+    func openPairing(_ add: XCUIElement) -> XCUIElement {
+        let field = descendants(matching: .any)["pairing-link"].firstMatch
+        for _ in 0..<3 where !field.exists {
+            add.tap()
+            _ = field.waitForExistence(timeout: 5)
+        }
+        XCTAssertTrue(field.exists, "Add Machine did not open the pairing sheet")
+        return field
+    }
+
     /// The link of the fake daemons the tests run against (`fake_daemon --share` prints it; pass
     /// it to `xcodebuild test` as `TEST_RUNNER_HERDER_PAIR_LINK`).
     static func pairLink() throws -> String {
@@ -31,9 +45,7 @@ extension XCUIApplication {
         let add = buttons["Add Machine"].firstMatch
         guard add.exists else { return }
         let link = try Self.pairLink()
-        add.tap()
-        let field = descendants(matching: .any)["pairing-link"].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        let field = openPairing(add)
         field.tap()
         field.typeText(link)
         let pair = buttons["Pair"]
