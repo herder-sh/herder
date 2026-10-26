@@ -22,9 +22,7 @@ struct IntegrationsView: View {
                 Text("Each bot is its own Slack app, run by one machine over Socket Mode. People on its list drive sessions from a DM, or by mentioning it in a channel.")
                     .font(.footnote).foregroundStyle(Theme.tertiary)
             }
-            .frame(maxWidth: 860, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .pageColumn()
         }
         .background(Theme.background)
         .refreshable { await reload() }
@@ -54,12 +52,12 @@ struct IntegrationsView: View {
         SettingsList(title: machine.name) {
             switch list.bots {
             case .asking:
-                ProgressView().frame(maxWidth: .infinity, minHeight: 52)
+                ProgressView().frame(maxWidth: .infinity, minHeight: Theme.tallRowHeight)
             case .failed(let why):
-                Text(why).font(.footnote).foregroundStyle(Theme.failure).padding(14)
+                Text(why).font(.footnote).foregroundStyle(Theme.failure).padding(Theme.cellPadding)
             case .loaded(let entries) where entries.isEmpty:
                 Text("No bots").font(.subheadline).foregroundStyle(Theme.tertiary)
-                    .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .padding(.horizontal, Theme.cellPadding).frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
             case .loaded(let entries):
                 ForEach(Array(entries.enumerated()), id: \.element.botId) { index, bot in
                     if index > 0 { RowDivider() }
@@ -99,9 +97,9 @@ struct BotRow: View {
                 }
                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, Theme.cellPadding)
             .padding(.vertical, 8)
-            .frame(minHeight: 52)
+            .frame(minHeight: Theme.tallRowHeight)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -204,7 +202,7 @@ private struct TokenBox: View {
             .textInputAutocapitalization(.never)
             #endif
             .padding(12)
-            .frame(minHeight: 44)
+            .frame(minHeight: Theme.rowHeight)
             .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
@@ -262,10 +260,10 @@ struct MachineBotsSection: View {
                 }
             }
             if case .failed(let why) = bots.bots {
-                Text(why).font(.footnote).foregroundStyle(Theme.failure).padding(14)
+                Text(why).font(.footnote).foregroundStyle(Theme.failure).padding(Theme.cellPadding)
             } else if bots.list.isEmpty {
                 Text("No bots. Add one under Integrations.").font(.subheadline).foregroundStyle(Theme.tertiary)
-                    .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .padding(.horizontal, Theme.cellPadding).frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
             }
         }
         .task { await bots.reload() }

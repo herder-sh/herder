@@ -119,8 +119,7 @@ struct MachinesView: View {
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
+            .pageColumn(width: .infinity)
         }
         .background(Theme.background)
         .refreshable { fleet.wake() }
@@ -297,9 +296,9 @@ struct VaultRow: View {
                 }
                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, Theme.cellPadding)
             .padding(.vertical, 10)
-            .frame(minHeight: 52)
+            .frame(minHeight: Theme.tallRowHeight)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -331,9 +330,9 @@ private struct UnpairedVaultRow: View {
             InfoButton(text: "Its statistics show once this device is paired with it. On the vault, run `herder pair`, then add the link it prints as a machine.")
             PillButton(title: "Add Machine", symbol: "plus", action: pair)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, Theme.cellPadding)
         .padding(.vertical, 10)
-        .frame(minHeight: 52)
+        .frame(minHeight: Theme.tallRowHeight)
     }
 }
 

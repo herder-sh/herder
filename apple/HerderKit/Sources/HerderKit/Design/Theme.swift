@@ -66,6 +66,54 @@ enum Theme {
     static let monoSmall = Font.system(.caption, design: .monospaced)
 
     static let corner: CGFloat = 10
+
+    /// The layout grid every page follows. A page's header and content start `margin` from its
+    /// edges (`paneMargin` in a list pane beside a session; `pageMargin` reads the one in use),
+    /// its content at most `pageWidth` wide from the leading edge, so it lines up with the title.
+    #if os(macOS)
+    static let margin: CGFloat = 24
+    #else
+    static let margin: CGFloat = 16
+    #endif
+    static let paneMargin: CGFloat = 16
+    static let pageWidth: CGFloat = 920
+    /// A page header's height, the sidebar's top bar's on the Mac, so their lines meet.
+    static let headerHeight: CGFloat = 52
+    /// A section heading's line (TODAY, ACCOUNTS), over its rows.
+    static let sectionHeight: CGFloat = 32
+    /// A row of one line, and a row with a second line under its title. iOS rows grow from them
+    /// with Dynamic Type.
+    static let rowHeight: CGFloat = 44
+    static let tallRowHeight: CGFloat = 52
+    /// A cell's inset from its column's edge, in tables and grouped rows alike.
+    static let cellPadding: CGFloat = 14
+}
+
+extension EnvironmentValues {
+    /// The page margin in use: `Theme.margin`, or `Theme.paneMargin` in a list pane.
+    @Entry var pageMargin = Theme.margin
+}
+
+extension View {
+    /// Lays a page's scrolled content on the grid: the margin in use from its edges, at most
+    /// `width` wide, from the leading edge under the page's title.
+    func pageColumn(width: CGFloat = Theme.pageWidth) -> some View {
+        modifier(PageColumn(width: width))
+    }
+}
+
+private struct PageColumn: ViewModifier {
+    let width: CGFloat
+    @Environment(\.pageMargin) private var margin
+
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: width, alignment: .leading)
+            .padding(.horizontal, margin)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }
 
 extension Color {

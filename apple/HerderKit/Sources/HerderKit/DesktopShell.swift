@@ -249,7 +249,7 @@ private struct ListAndSession<List: View>: View {
             if geometry.size.width >= 820 {
                 HStack(spacing: 0) {
                     if !listHidden || (session == nil && draft == nil) {
-                        list.frame(width: 380)
+                        list.frame(width: 380).environment(\.pageMargin, Theme.paneMargin)
                         Rectangle().fill(Theme.stroke).frame(width: 1)
                     }
                     detail.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -268,7 +268,7 @@ private struct ListAndSession<List: View>: View {
                     detail
                 }
             } else {
-                list
+                list.environment(\.pageMargin, Theme.paneMargin)
             }
         }
     }
@@ -307,6 +307,7 @@ struct Pane<Content: View, Actions: View>: View {
     var query: Binding<String>?
     @ViewBuilder var content: Content
     @ViewBuilder var actions: Actions
+    @Environment(\.pageMargin) private var margin
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -331,7 +332,7 @@ struct Pane<Content: View, Actions: View>: View {
                 .padding(.horizontal, 12)
                 .frame(height: 34)
                 .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
-                .padding(.horizontal, 16)
+                .padding(.horizontal, margin)
                 .padding(.bottom, 8)
             }
             content
@@ -372,23 +373,24 @@ struct Switcher {
     }
 }
 
-/// A labelled header button in herder's style; just its icon where the label does not fit.
-/// `prominent` for the page's main action, in the primary style.
+/// A labelled header button in herder's style; just its icon in a narrow header
+/// (`compactActions`), its title in the tooltip. `prominent` for the page's main action, in the
+/// primary style.
 struct PaneButton: View {
     let title: String
     let symbol: String
     var prominent = false
     let action: () -> Void
+    @Environment(\.compactActions) private var compact
 
     var body: some View {
         Button(action: action) {
-            ViewThatFits(in: .horizontal) {
-                Label(title, systemImage: symbol)
-                    .lineLimit(1)
-                    .padding(.horizontal, 12)
-                    .fixedSize()
-                Image(systemName: symbol)
-                    .frame(width: 30)
+            Group {
+                if compact {
+                    Image(systemName: symbol).frame(width: 30)
+                } else {
+                    Label(title, systemImage: symbol).lineLimit(1).padding(.horizontal, 12).fixedSize()
+                }
             }
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(Theme.text)
@@ -406,10 +408,16 @@ struct PaneButton: View {
 /// the user chose, and the machines' health in one line at the bottom.
 struct Sidebar: View {
     #if os(macOS)
-    static let topBar: CGFloat = 52
+    static let topBar = Theme.headerHeight
     #else
     static let topBar: CGFloat = 44
     #endif
+    /// The sidebar's grid: a row's icon `inset` from the row's edge in a column `icon` wide, its
+    /// label `gap` after it; a heading starts where the labels do (`labelInset`).
+    static let inset: CGFloat = 10
+    static let icon: CGFloat = 20
+    static let gap: CGFloat = 10
+    static var labelInset: CGFloat { inset + icon + gap }
     let fleet: Fleet
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
@@ -484,16 +492,16 @@ struct Sidebar: View {
                     ForEach(shown) { project in row(project, among: shown + quiet) }
                     if !quiet.isEmpty {
                         Button { showsQuiet.toggle() } label: {
-                            HStack(spacing: 10) {
+                            HStack(spacing: Self.gap) {
                                 Image(systemName: "chevron.down")
                                     .rotationEffect(.degrees(showsQuiet ? 0 : -90))
-                                    .frame(width: 20)
+                                    .frame(width: Self.icon)
                                 Text(showsQuiet ? "Fewer" : "\(quiet.count) more")
                                 Spacer()
                             }
                             .font(.subheadline)
                             .foregroundStyle(Theme.secondary)
-                            .padding(.horizontal, 10)
+                            .padding(.horizontal, Self.inset)
                             .frame(height: 30)
                             .contentShape(.rect)
                         }
@@ -507,7 +515,6 @@ struct Sidebar: View {
             }
             Spacer(minLength: 0)
             MachinesFooter(machines: lists.machines) { select(.machines) }
-                .padding(.horizontal, 6)
                 .padding(.vertical, 10)
         }
         .padding(.horizontal, 8)
@@ -523,7 +530,7 @@ struct Sidebar: View {
             actions()
         }
         .frame(minHeight: 24)
-        .padding(.leading, 14)
+        .padding(.leading, Self.labelInset)
         .padding(.trailing, 6)
         .padding(.top, 18)
         .padding(.bottom, 4)
@@ -589,7 +596,7 @@ struct MachinesFooter: View {
                     }
                     .font(.footnote)
                     .foregroundStyle(Theme.secondary)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, Sidebar.inset)
                     .frame(height: 30)
                 }
             }
@@ -759,11 +766,11 @@ private struct SidebarRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: Sidebar.gap) {
                 Group {
                     if let icon { icon } else { Image(systemName: symbol) }
                 }
-                    .frame(width: 20)
+                    .frame(width: Sidebar.icon)
                     .foregroundStyle(selected ? Theme.text : Theme.secondary)
                 Text(title).foregroundStyle(Theme.text).lineLimit(1)
                 Spacer()
@@ -795,7 +802,7 @@ private struct SidebarRow: View {
                 }
             }
             .font(.body.weight(selected ? .semibold : .regular))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, Sidebar.inset)
             .frame(height: 34)
             .background(selected ? Theme.raised : hovering ? Theme.raised.opacity(0.5) : .clear,
                         in: .rect(cornerRadius: 8))
@@ -855,15 +862,10 @@ struct ProjectSessions: View {
                     .taskListRow()
             }
             ForEach(sections) { section in
-                if section.title.isEmpty {
-                    ForEach(section.trees) { row($0, machines: machines) }
-                } else {
-                    Section {
-                        ForEach(section.trees) { row($0, machines: machines) }
-                    } header: {
-                        SectionHeading(title: section.title, count: section.trees.count)
-                    }
+                if !section.title.isEmpty {
+                    TaskSectionHeading(title: section.title, count: section.trees.count)
                 }
+                ForEach(section.trees) { row($0, machines: machines) }
             }
             if !archived.isEmpty {
                 archivedLine(archived.count)
@@ -877,7 +879,7 @@ struct ProjectSessions: View {
         .environment(\.defaultMinListRowHeight, 0)
         #if os(macOS)
         .frame(maxWidth: 760)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         #endif
     }
 
@@ -906,7 +908,6 @@ struct ProjectSessions: View {
         .font(.caption)
         .foregroundStyle(Theme.tertiary)
         .padding(.vertical, 10)
-        .padding(.horizontal, 8)
         .accessibilityLabel(showsArchived ? "Hide Archived" : "Show Archived")
         .taskListRow()
     }
