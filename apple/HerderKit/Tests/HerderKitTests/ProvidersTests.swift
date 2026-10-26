@@ -67,6 +67,26 @@ struct ProvidersTests {
         #expect(logins[0].headroom == .plenty && logins[0].needsAttention)
     }
 
+    @Test func aResetAlreadyPastSaysNothing() throws {
+        let past = ISO8601DateFormatter().string(from: now.addingTimeInterval(-60))
+        let stale = Account(accountId: "stale", provider: "claude", label: "stale", configDir: nil, email: "a@example.com",
+                            usage: [UsageWindow(window: "five_hour", usedPercent: 40, resetsAt: past)], fallback: false)
+        let login = try #require(ProviderAccounts(machines: [machine("a", name: "laptop", sessions: [], accounts: [stale])],
+                                                  now: now).groups.first?.logins.first)
+        #expect(login.session?.resets == "" && login.session?.resetsAt == nil)
+        let fresh = try #require(ProviderAccounts(machines: [machine("a", name: "laptop", sessions: [], accounts: [
+            account("fresh", email: "a@example.com", used: ["five_hour": 40]),
+        ])], now: now).groups.first?.logins.first)
+        #expect(fresh.session?.resets == "1h 0m")
+    }
+
+    @Test func theMachinesCellNamesOneMachineAndCountsSeveral() throws {
+        let one = [machine("a", name: "laptop", sessions: [], accounts: [account("x", email: "a@example.com")])]
+        #expect(ProviderAccounts(machines: one, now: now).groups.first?.logins.first?.machines == "laptop")
+        let two = one + [machine("b", name: "server", sessions: [], accounts: [account("x", email: "a@example.com")])]
+        #expect(ProviderAccounts(machines: two, now: now).groups.first?.logins.first?.machines == "2 machines")
+    }
+
     @Test func accountsAreAddedOnMachinesThisDeviceOwnsAndReaches() {
         let vault = FleetHost(hostId: "a", hostName: "laptop", online: true, lastSeen: "2026-01-01T00:00:00Z")
         let machines = [
@@ -131,6 +151,19 @@ struct ProvidersOverviewTests {
         let overview = ProvidersOverview(accounts: ProviderAccounts(machines: machines),
                                          versions: ProviderVersions(machines: machines), installs: [:])
         #expect(overview.status == "1 account")
+        #expect(!overview.needsAttention)
+    }
+
+    @Test func anAccountMissingOnAMachineIsNotSomethingThatNeedsYou() {
+        let machines = [
+            machine("a", name: "laptop", sessions: [], accounts: [
+                Account(accountId: "main", provider: "claude", label: "main", configDir: nil, email: "a@example.com", usage: []),
+            ]),
+            machine("b", name: "server", sessions: []),
+        ]
+        let overview = ProvidersOverview(accounts: ProviderAccounts(machines: machines),
+                                         versions: ProviderVersions(machines: machines), installs: [:])
+        #expect(!overview.gaps.isEmpty)
         #expect(!overview.needsAttention)
     }
 }

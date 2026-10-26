@@ -52,6 +52,9 @@ struct ProviderAccounts: Equatable {
         /// Plenty until a window reports otherwise.
         var headroom: Headroom { tightest?.window.headroom ?? .plenty }
 
+        /// The machines it is on, for a cell: the one's name, or how many.
+        var machines: String { on.count == 1 ? on.map(\.name).joined() : "\(on.count) machines" }
+
         /// Whether it is signed out on every machine it is on.
         var signedOutEverywhere: Bool { !on.isEmpty && on.allSatisfy { !$0.signedOut.isEmpty } }
 
@@ -137,7 +140,8 @@ struct ProviderAccounts: Equatable {
         return windows.filter { Lists.usageLabel($0.window) == label }
             .max { (reset($0), $0.usedPercent) < (reset($1), $1.usedPercent) }
             .map { window in
-                let at = window.resetsAt.flatMap(Timestamp.date)
+                // A reset already past says nothing: the next report brings the new one.
+                let at = window.resetsAt.flatMap(Timestamp.date).flatMap { $0 > now ? $0 : nil }
                 return WindowLeft(percentUsed: window.usedPercent, resets: Timestamp.until(at, now: now), resetsAt: at)
             }
     }
@@ -208,7 +212,9 @@ struct ProvidersOverview {
         versions.updatable.filter { job($0).map(\.finished) ?? true }
     }
 
-    var needsAttention: Bool { !signedOut.isEmpty || !failedInstalls.isEmpty || !gaps.isEmpty }
+    /// Whether something stops sessions until the user acts; an account missing on a machine
+    /// does not, so the page notes it with the accounts instead.
+    var needsAttention: Bool { !signedOut.isEmpty || !failedInstalls.isEmpty }
 
     /// "5 accounts · 1 needs sign-in · 3 updates"; the counts that are zero say nothing.
     var status: String {
@@ -375,8 +381,6 @@ struct ProvidersPage: View {
     let overview: ProvidersOverview
     let report: UsageReport?
     let actions: Actions
-    @Environment(\.horizontalSizeClass) private var sizeClass
-
     var body: some View {
         VStack(alignment: .leading, spacing: 28) {
             if overview.needsAttention { attention }
@@ -384,19 +388,17 @@ struct ProvidersPage: View {
             if logins.isEmpty {
                 empty
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionHeading(title: "Accounts", count: logins.count)
-                    SortableTable("providers.accounts",
-                                  rows: logins.map { AccountRow(login: $0, usage: report?.logins[$0.id]) },
-                                  sortedBy: TableSort(column: "Session left"), columns: columns) { actions.open($0.login) }
+                ProvidersSection(title: "Accounts", count: logins.count) {
+                    let rows = logins.map { AccountRow(login: $0, usage: report?.logins[$0.id]) }
+                    ViewThatFits(in: .horizontal) {
+                        accounts(rows, narrow: false).frame(minWidth: ProvidersColumns.wideTable)
+                        accounts(rows, narrow: true)
+                    }
+                    if !overview.gaps.isEmpty { gaps }
                 }
             }
             if !overview.versions.rows.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        SectionHeading(title: "CLI versions")
-                        Text("latest from each vendor").font(.caption).foregroundStyle(Theme.tertiary)
-                    }
+                ProvidersSection(title: "CLI versions", note: "latest from each vendor") {
                     VersionMatrix(overview: overview, act: actions.install, retry: actions.retry)
                 }
             }
@@ -413,7 +415,8 @@ struct ProvidersPage: View {
                 let name = "\(ModelCatalog.providerName(signedOut.login.provider)) · \(signedOut.login.email ?? signedOut.login.account.label)"
                 problem(urgency: .needsYou, title: "\(name) is signed out on \(signedOut.place.name)") {
                     if let since = signedOut.place.signedOutSince {
-                        HStack(spacing: 0) { Text("Sessions there fail until it signs in · signed out "); RelativeTime(date: since) }
+                        // One text, so it wraps as one line does.
+                        Text("Sessions there fail until it signs in · signed out \(since, format: .relative(presentation: .named, unitsStyle: .abbreviated))")
                     } else {
                         Text("Sessions there fail until it signs in")
                     }
@@ -431,14 +434,24 @@ struct ProvidersPage: View {
                     PillButton(title: "Retry", prominent: true) { actions.retry(failed.key) }
                 }
             }
-            if !overview.gaps.isEmpty {
-                problem(urgency: .needsYou, title: overview.gaps.title) {
-                    Text(overview.gaps.detail)
-                } fix: {
-                    PillButton(title: "Set Up…", prominent: true) { actions.setUp() }
-                }
-            }
         }
+    }
+
+    /// The accounts some machines lack, under the table: worth setting up, not urgent.
+    private var gaps: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "info.circle").foregroundStyle(Theme.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(overview.gaps.title).font(Theme.body).foregroundStyle(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(overview.gaps.detail).font(.caption).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            PillButton(title: "Set Up…") { actions.setUp() }
+        }
+        .padding(.horizontal, ProvidersColumns.inset)
+        .padding(.vertical, 10)
     }
 
     private func problem<Detail: View, Fix: View>(
@@ -475,18 +488,24 @@ struct ProvidersPage: View {
 
     // MARK: Accounts
 
+    private func accounts(_ rows: [AccountRow], narrow: Bool) -> some View {
+        SortableTable("providers.accounts", rows: rows, sortedBy: TableSort(column: "Session left"),
+                      columns: columns(narrow: narrow)) { actions.open($0.login) }
+    }
+
     /// Account, machines, the session and weekly windows, and the week's cost; a narrow pane
-    /// keeps the account, its session window and its cost.
-    private var columns: [SortableColumn<AccountRow>] {
+    /// keeps the account, what its session window leaves and its cost.
+    private func columns(narrow: Bool) -> [SortableColumn<AccountRow>] {
         let all = [
             SortableColumn<AccountRow>("Account", value: { "\(ModelCatalog.providerName($0.login.provider)) \($0.login.email ?? $0.login.account.label)" }) { row in
-                account(row.login)
+                account(row.login, label: !narrow)
             },
-            SortableColumn("Machines", width: 150, value: { $0.login.on.map(\.name).joined(separator: ", ") }) { row in
-                Text(row.login.on.map(\.name).joined(separator: ", ")).foregroundStyle(Theme.secondary)
+            SortableColumn("Machines", width: ProvidersColumns.machines, value: { $0.login.machines }) { row in
+                Text(row.login.machines).foregroundStyle(Theme.secondary)
                     .lineLimit(1).truncationMode(.tail)
+                    .help(row.login.on.map(\.name).joined(separator: ", "))
             },
-            SortableColumn("Session left", width: 150, value: { Self.left($0.login, \.session) }) { row in
+            SortableColumn("Session left", width: narrow ? ProvidersColumns.narrowLimit : ProvidersColumns.wide, value: { Self.left($0.login, \.session) }) { row in
                 if row.login.signedOutEverywhere {
                     Text("Signed out").font(Theme.meta.weight(.medium)).foregroundStyle(Theme.accent)
                         .padding(.horizontal, 8).padding(.vertical, 2)
@@ -494,16 +513,16 @@ struct ProvidersPage: View {
                 } else if row.login.session == nil && row.login.weekly == nil {
                     Text("No limits reported").foregroundStyle(Theme.tertiary)
                 } else if let session = row.login.session {
-                    limit(session)
+                    limit(session, resets: !narrow)
                 } else {
                     Text("")
                 }
             },
-            SortableColumn("Week left", width: 110, value: { Self.left($0.login, \.weekly) }) { row in
+            SortableColumn("Week left", width: ProvidersColumns.narrow, value: { Self.left($0.login, \.weekly) }) { row in
                 // An empty cell would take no room, and shift the cells after it.
                 if !row.login.signedOutEverywhere, let weekly = row.login.weekly { limit(weekly, resets: false) } else { Text("") }
             },
-            SortableColumn("7 d cost", width: 72, alignment: .trailing, value: { $0.usage?.amount.costUsd ?? -1 }) { row in
+            SortableColumn("7 d cost", width: ProvidersColumns.last, alignment: .trailing, value: { $0.usage?.amount.costUsd ?? -1 }) { row in
                 Group {
                     if let usage = row.usage, usage.amount.turns > 0 {
                         Text(UsageReport.dollars(usage.amount))
@@ -514,7 +533,7 @@ struct ProvidersPage: View {
                 .monospacedDigit()
             },
         ]
-        return sizeClass == .compact ? all.filter { ["Account", "Session left", "7 d cost"].contains($0.title) } : all
+        return narrow ? all.filter { ["Account", "Session left", "7 d cost"].contains($0.title) } : all
     }
 
     /// What a window leaves, to sort by: a signed-out login first, one that reports none last.
@@ -522,11 +541,12 @@ struct ProvidersPage: View {
         login.signedOutEverywhere ? -1 : login[keyPath: window]?.percentLeft ?? 101
     }
 
-    private func account(_ login: ProviderAccounts.Login) -> some View {
+    /// The account's email, or its label without one; `label` adds the label after the email.
+    private func account(_ login: ProviderAccounts.Login, label: Bool) -> some View {
         HStack(spacing: 8) {
             ProviderMark(provider: login.provider, size: 14)
             Text(login.email ?? login.account.label).lineLimit(1).truncationMode(.middle)
-            if login.email != nil {
+            if label && login.email != nil {
                 Text(login.account.label).foregroundStyle(Theme.tertiary).lineLimit(1)
             }
             if !login.fallbackOn.isEmpty { Badge(text: "Fallback") }
@@ -535,7 +555,7 @@ struct ProvidersPage: View {
 
     private func limit(_ window: WindowLeft, resets: Bool = true) -> some View {
         HStack(spacing: 6) {
-            UsageBar(percent: window.percentUsed).frame(width: 36)
+            UsageBar(percent: window.percentUsed).frame(width: ProvidersColumns.bar)
             Text("\(Int(window.percentLeft.rounded()))%").monospacedDigit()
             if resets && !window.resets.isEmpty {
                 Text("· \(window.resets)").foregroundStyle(Theme.tertiary)
@@ -546,9 +566,63 @@ struct ProvidersPage: View {
     }
 }
 
-/// The provider CLIs as a matrix, a row per provider with the latest version beside its name
-/// and a column per machine; on narrow screens, a list per provider. `act` installs or updates
-/// one, `retry` runs a failed install again.
+/// The column widths the Providers page's tables share, so their columns line up down the page:
+/// a flexible first column, then the account table's four.
+enum ProvidersColumns {
+    static let machines: CGFloat = 110
+    static let wide: CGFloat = 190
+    static let narrow: CGFloat = 130
+    static let last: CGFloat = 72
+    /// What a limit's bar takes in a cell, and a narrow table's limit column: bar and percent.
+    static let bar: CGFloat = 80
+    static let narrowLimit: CGFloat = 124
+    /// The tables' gap between columns, and their cells' inset from the section's edges.
+    static let spacing: CGFloat = 12
+    static let inset: CGFloat = 8
+    /// The room the four take after the first column, gaps between them included.
+    static let trailing = machines + wide + narrow + last + 3 * spacing
+    /// The narrowest a table with all of them takes: below it, a table keeps fewer columns.
+    static let wideTable = 200 + spacing + trailing + 2 * inset
+
+    /// The width of each of `count` even columns in that room; never under the machines column.
+    static func even(_ count: Int) -> CGFloat {
+        guard count > 0 else { return trailing }
+        return max(machines, (trailing - CGFloat(count - 1) * spacing) / CGFloat(count))
+    }
+}
+
+/// A section of the Providers page: its heading, a quiet note beside it, its actions on the
+/// right, then its content.
+struct ProvidersSection<Actions: View, Content: View>: View {
+    let title: String
+    var count: Int?
+    var note: String?
+    @ViewBuilder var actions: Actions
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                SectionHeading(title: title, count: count)
+                if let note { Text(note).font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1) }
+                Spacer(minLength: 8)
+                actions
+            }
+            .frame(minHeight: 24)
+            content
+        }
+    }
+}
+
+extension ProvidersSection where Actions == EmptyView {
+    init(title: String, count: Int? = nil, note: String? = nil, @ViewBuilder content: () -> Content) {
+        self.init(title: title, count: count, note: note, actions: { EmptyView() }, content: content)
+    }
+}
+
+/// The provider CLIs as a table, a row per provider with the latest version beside its name
+/// and an even column per machine, lined up under the accounts table's; where that does not
+/// fit, a list per provider. `act` installs or updates one, `retry` runs a failed install again.
 struct VersionMatrix: View {
     let overview: ProvidersOverview
     let act: (ProviderVersions.Cell) -> Void
@@ -557,38 +631,29 @@ struct VersionMatrix: View {
     var body: some View {
         let machines = overview.versions.rows.first?.cells ?? []
         ViewThatFits(in: .horizontal) {
-            table(machines).frame(minWidth: CGFloat(160 + machines.count * 140), maxWidth: .infinity, alignment: .leading)
+            SortableTable("providers.versions", rows: overview.versions.rows, sortedBy: TableSort(column: "CLI"),
+                          columns: columns(machines))
+                .frame(minWidth: 160 + CGFloat(machines.count) * (ProvidersColumns.even(machines.count) + ProvidersColumns.spacing))
             list
         }
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 
-    private func table(_ machines: [ProviderVersions.Cell]) -> some View {
-        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
-            GridRow {
-                Text("")
-                ForEach(machines) { Text($0.machine) }
-            }
-            .font(Theme.meta.weight(.medium))
-            .foregroundStyle(Theme.tertiary)
-            .padding(.vertical, 8)
-            ForEach(overview.versions.rows) { row in
-                Divider().gridCellUnsizedAxes(.horizontal)
-                GridRow {
-                    provider(row)
-                    ForEach(row.cells) { cell in MatrixCell(cell: cell, job: overview.job(cell), act: act, retry: retry) }
+    private func columns(_ machines: [ProviderVersions.Cell]) -> [SortableColumn<ProviderVersions.Row>] {
+        let width = ProvidersColumns.even(machines.count)
+        return [SortableColumn("CLI") { provider($0) }]
+            + machines.indices.map { index in
+                SortableColumn<ProviderVersions.Row>(machines[index].machine, width: width) { row in
+                    if row.cells.indices.contains(index) {
+                        let cell = row.cells[index]
+                        MatrixCell(cell: cell, job: overview.job(cell), act: act, retry: retry)
+                    }
                 }
-                .padding(.vertical, 9)
             }
-        }
-        .padding(.horizontal, 14)
     }
 
     private var list: some View {
         VStack(spacing: 0) {
-            ForEach(Array(overview.versions.rows.enumerated()), id: \.element.id) { index, row in
-                if index > 0 { Divider() }
+            ForEach(overview.versions.rows) { row in
                 VStack(alignment: .leading, spacing: 8) {
                     provider(row)
                     ForEach(row.cells) { cell in
@@ -599,7 +664,9 @@ struct VersionMatrix: View {
                         }
                     }
                 }
-                .padding(14)
+                .padding(.horizontal, ProvidersColumns.inset)
+                .padding(.vertical, 12)
+                .overlay(alignment: .top) { Rectangle().fill(Theme.stroke).frame(height: 1) }
             }
         }
     }
@@ -671,14 +738,7 @@ struct MatrixCell: View {
     }
 
     @ViewBuilder private var action: some View {
-        if let action = cell.action {
-            Button(action.title) { act(cell) }
-                .buttonStyle(.plain)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(cell.blocked == nil ? Theme.link : Theme.tertiary)
-                .disabled(cell.blocked != nil)
-                .help(cell.blocked ?? "\(action.title) \(ModelCatalog.providerName(cell.provider)) on \(cell.machine)")
-        }
+        if cell.action != nil { CellAction(cell: cell, act: act) }
     }
 
     private func chip(_ text: String, _ tint: Color) -> some View {
@@ -819,17 +879,25 @@ struct VersionCell: View {
             case .current, .unknown:
                 Text(cell.version ?? "Installed").font(Theme.monoSmall).foregroundStyle(Theme.secondary)
             }
-            if let action = cell.action {
-                Button(action.title) { act(cell) }
-                    .buttonStyle(.plain)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(cell.blocked == nil ? Theme.link : Theme.tertiary)
-                    .disabled(cell.blocked != nil)
-                    .help(cell.blocked ?? "\(action.title) \(ModelCatalog.providerName(cell.provider)) on \(cell.machine)")
-            }
+            if cell.action != nil { CellAction(cell: cell, act: act) }
         }
         .lineLimit(1)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// A CLI's Install or Update, as a small button; dimmed, with why on hover, only when it
+/// cannot run.
+struct CellAction: View {
+    let cell: ProviderVersions.Cell
+    let act: (ProviderVersions.Cell) -> Void
+
+    var body: some View {
+        if let action = cell.action {
+            PillButton(title: action.title) { act(cell) }
+                .disabled(cell.blocked != nil)
+                .help(cell.blocked ?? "\(action.title) \(ModelCatalog.providerName(cell.provider)) on \(cell.machine)")
+        }
     }
 }
 
