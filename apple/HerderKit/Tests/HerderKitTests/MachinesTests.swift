@@ -139,6 +139,19 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
         #expect(!line.isOverdue)
     }
 
+    @Test func onlyOneMachineIsThisMacThoughSeveralListenOnLoopback() {
+        var machines = sampleFleetMachines()
+        machines[1].address = "127.0.0.1:7448"
+        machines[2].address = "localhost:7449"
+        let names: Set<String> = ["localhost", "127.0.0.1", "trash-can-01"]
+        // The one named after this Mac.
+        #expect(MachineRow.rows(machines, summaries: [], localNames: names).filter(\.local).map(\.name) == ["trash-can-01"])
+        // Else the first paired.
+        let loopback: Set<String> = ["localhost", "127.0.0.1"]
+        #expect(MachineRow.rows(machines, summaries: [], localNames: loopback).filter(\.local).map(\.name) == ["work-mbp"])
+        #expect(MachineRow.thisMac(machines, names: ["studio"]) == nil)
+    }
+
     @Test func thisMacIsTheOneItsAddressNames() {
         let names: Set<String> = ["localhost", "127.0.0.1", "::1", "studio"]
         #expect(MachineRow.isLocal("127.0.0.1:7447", names: names))
