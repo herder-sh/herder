@@ -61,7 +61,7 @@ pub use server::{
     Account, AwsDeviceCode, AwsProfile, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo,
     FailoverSettings, FleetHost, HostReplication, HostUsage, LinkedVault, ProviderStatus,
     QueuedPrompt, Role, ServerHello, ServerMessage, SessionHead, Terminal, TerminalPurpose,
-    UsageWindow, VaultStatus, VaultVolume,
+    UsageWindow, UserDevice, UserInfo, VaultStatus, VaultVolume,
 };
 pub use settings::{
     BackupSettings, DaemonSettings, FollowUpSettings, HERDER_MCP_SERVER, LogFormat, LogSettings,

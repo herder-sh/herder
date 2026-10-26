@@ -530,7 +530,10 @@ impl Client {
             }
             let command = Command {
                 id: new_command_id(),
-                body: CommandBody::PairDevice,
+                body: CommandBody::PairDevice {
+                    user: None,
+                    role: None,
+                },
             };
             let answer = match tokio::time::timeout(SHARE_TIMEOUT, machine.send(command)).await {
                 Err(_) => Err("did not answer in time".to_owned()),

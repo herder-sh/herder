@@ -271,6 +271,38 @@ pub enum Role {
     Member,
 }
 
+/// A user of a daemon, with their devices, answering `list_users`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UserInfo {
+    /// The user.
+    pub user_id: UserId,
+    /// Their name, unique on the daemon.
+    pub name: String,
+    /// What they may do.
+    pub role: Role,
+    /// Their paired devices, oldest first; empty once every one is revoked.
+    pub devices: Vec<UserDevice>,
+}
+
+/// A paired device of a user.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UserDevice {
+    /// The device.
+    pub device_id: DeviceId,
+    /// The client it paired with, from its hello, e.g. `herder-ios/0.6.0`.
+    pub client: String,
+    /// When it paired.
+    pub paired_at: Timestamp,
+    /// When it last connected; absent if it has not since the daemon started keeping track.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<Timestamp>,
+    /// Whether it has a connection open now.
+    pub online: bool,
+    /// Whether it is a host that only replicates to this vault and reads nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host_only: bool,
+}
+
 /// A session as lists show it, and the seq of its latest event.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionHead {
@@ -595,6 +627,11 @@ pub enum CommandResult {
         addresses: Vec<String>,
         /// When the code stops working.
         expires_at: Timestamp,
+    },
+    /// This daemon's users, answering `list_users`.
+    Users {
+        /// Oldest first.
+        users: Vec<UserInfo>,
     },
     /// A one-time code that pairs a host with this vault to replicate and only that,
     /// answering `pair_vault_host`.

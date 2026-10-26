@@ -11,10 +11,10 @@ use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Account, AccountId, AwsDeviceCode, AwsProfile, ClientHello, ClientMessage, Command,
-    CommandBody, CommandId, CommandResult, Cursor, DaemonSettings, ErrorCode, ErrorInfo, Event,
-    EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION, PermissionMode, Provider, Role,
-    Seq, ServerHello, ServerMessage, SessionHead, SessionId, Terminal, TerminalPurpose, TurnId,
-    UserId,
+    CommandBody, CommandId, CommandResult, Cursor, DaemonSettings, DeviceId, ErrorCode, ErrorInfo,
+    Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION, PermissionMode, Provider,
+    Role, Seq, ServerHello, ServerMessage, SessionHead, SessionId, Terminal, TerminalPurpose,
+    TurnId, UserId, UserInfo,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -912,7 +912,7 @@ async fn share(client: &mut Client, id: &str) -> (String, String, Vec<String>) {
                 ..
             },
         ..
-    } = client.command(id, CommandBody::PairDevice).await
+    } = client.command(id, own_pairing()).await
     else {
         panic!("expected a device pairing");
     };
@@ -1433,6 +1433,236 @@ async fn revoking_a_device_disconnects_and_refuses_it() {
     assert_eq!(error.code, ErrorCode::Forbidden);
 }
 
+/// A `pair_device` for the caller's own user and role.
+fn own_pairing() -> CommandBody {
+    CommandBody::PairDevice {
+        user: None,
+        role: None,
+    }
+}
+
+/// The users a `list_users` on `client` answers with.
+async fn users(client: &mut Client, id: &str) -> Vec<UserInfo> {
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::Users { users },
+        ..
+    } = client.command(id, CommandBody::ListUsers).await
+    else {
+        panic!("expected the users");
+    };
+    users
+}
+
+/// The refusal of `body` on `client`.
+async fn rejected(client: &mut Client, id: &str, body: CommandBody) -> ErrorInfo {
+    let ServerMessage::CommandRejected { error, .. } = client.command(id, body).await else {
+        panic!("expected a refusal");
+    };
+    error
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn everyone_lists_the_users_with_their_devices() {
+    let daemon = Daemon::start().await;
+    let mut owner = daemon.client().await;
+    let owner_hello = owner.hello(Vec::new()).await;
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut bob = daemon.client_on(&device, Some(&code)).await;
+    let bob_hello = bob.hello(Vec::new()).await;
+
+    let listed = users(&mut owner, "u1").await;
+    assert_eq!(users(&mut bob, "u1").await, listed);
+    let names: Vec<_> = listed.iter().map(|u| (u.name.as_str(), u.role)).collect();
+    assert_eq!(names, [("owner", Role::Owner), ("bob", Role::Member)]);
+    assert_eq!(listed[0].user_id, owner_hello.user_id);
+    let bobs = &listed[1].devices;
+    assert_eq!(bobs.len(), 1);
+    assert_eq!(bobs[0].device_id, bob_hello.device_id);
+    assert_eq!(bobs[0].client, "test");
+    assert!(bobs[0].online && !bobs[0].host_only);
+    assert!(bobs[0].last_seen.is_some());
+
+    drop(bob);
+    tokio::time::timeout(TIMEOUT, async {
+        while users(&mut owner, "u2").await[1].devices[0].online {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the closed connection still shows online");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_changes_roles_but_never_leaves_no_owner() {
+    let daemon = Daemon::start().await;
+    let mut owner = daemon.client().await;
+    let owner_hello = owner.hello(Vec::new()).await;
+
+    let demote_self = CommandBody::SetUserRole {
+        user_id: owner_hello.user_id.clone(),
+        role: Role::Member,
+    };
+    let error = rejected(&mut owner, "r1", demote_self.clone()).await;
+    assert_eq!(error.code, ErrorCode::Conflict);
+    assert!(error.message.contains("last owner"), "{}", error.message);
+    let nobody = CommandBody::SetUserRole {
+        user_id: UserId::new("nobody"),
+        role: Role::Owner,
+    };
+    assert_eq!(
+        rejected(&mut owner, "r2", nobody).await.code,
+        ErrorCode::NotFound
+    );
+
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut bob = daemon.client_on(&device, Some(&code)).await;
+    let bob_hello = bob.hello(Vec::new()).await;
+    assert_eq!(bob_hello.role, Role::Member);
+    let promote = CommandBody::SetUserRole {
+        user_id: bob_hello.user_id.clone(),
+        role: Role::Owner,
+    };
+    // A member changes no one's role, their own included.
+    assert_eq!(
+        rejected(&mut bob, "r3", promote.clone()).await.code,
+        ErrorCode::Forbidden
+    );
+    assert!(matches!(
+        owner.command("r4", promote).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+    // Bob's connection carried the member role, so it closes; it comes back an owner.
+    assert!(bob.try_recv().await.is_none(), "the connection stayed open");
+    let again = daemon
+        .client_on(&device, None)
+        .await
+        .hello(Vec::new())
+        .await;
+    assert_eq!(again.role, Role::Owner);
+    // With bob an owner, the first owner may step down, which closes their own connection.
+    owner
+        .send(&ClientMessage::Command(Command {
+            id: CommandId::new("r5"),
+            body: demote_self,
+        }))
+        .await;
+    while owner.try_recv().await.is_some() {}
+    assert_eq!(daemon.auth.role(&owner_hello.user_id), Some(Role::Member));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_revokes_a_device_and_it_is_disconnected() {
+    let daemon = Daemon::start().await;
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut bob = daemon.client_on(&device, Some(&code)).await;
+    let bob_hello = bob.hello(Vec::new()).await;
+    let revoke = CommandBody::RevokeDevice {
+        device_id: bob_hello.device_id.clone(),
+    };
+
+    assert_eq!(
+        rejected(&mut bob, "v1", revoke.clone()).await.code,
+        ErrorCode::Forbidden
+    );
+    assert!(matches!(
+        owner.command("v2", revoke).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+    assert!(bob.try_recv().await.is_none(), "the connection stayed open");
+    let error = refused(daemon.client_on(&device, None).await).await;
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    // Bob stays a user, with no devices.
+    let listed = users(&mut owner, "v3").await;
+    assert!(listed[1].devices.is_empty(), "{listed:?}");
+    let gone = CommandBody::RevokeDevice {
+        device_id: bob_hello.device_id,
+    };
+    assert_eq!(
+        rejected(&mut owner, "v4", gone).await.code,
+        ErrorCode::NotFound
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_mints_codes_for_others_and_a_member_only_for_themselves() {
+    let daemon = Daemon::start().await;
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    let invite = |user: &str, role| CommandBody::PairDevice {
+        user: Some(user.into()),
+        role,
+    };
+
+    for (id, user, role) in [("p1", "carol", Role::Owner), ("p2", "dave", Role::Member)] {
+        let ServerMessage::CommandAccepted {
+            result: CommandResult::DevicePairing { code, .. },
+            ..
+        } = owner.command(id, invite(user, Some(role))).await
+        else {
+            panic!("expected a device pairing");
+        };
+        let device = DeviceKey::generate().unwrap();
+        let hello = daemon
+            .client_on(&device, Some(&code))
+            .await
+            .hello(Vec::new())
+            .await;
+        assert_eq!(hello.role, role);
+        assert_eq!(daemon.auth.name(&hello.user_id).as_deref(), Some(user));
+    }
+    // An existing user keeps their role; a code cannot change it.
+    let error = rejected(&mut owner, "p3", invite("dave", Some(Role::Owner))).await;
+    assert_eq!(error.code, ErrorCode::BadRequest);
+    assert!(
+        error.message.contains("already a member"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        rejected(&mut owner, "p4", invite(" ", None)).await.code,
+        ErrorCode::BadRequest
+    );
+
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut bob = daemon.client_on(&device, Some(&code)).await;
+    bob.hello(Vec::new()).await;
+    for (id, body) in [
+        ("m1", invite("eve", None)),
+        ("m2", invite("bob", Some(Role::Member))),
+        (
+            "m3",
+            CommandBody::PairDevice {
+                user: None,
+                role: Some(Role::Owner),
+            },
+        ),
+    ] {
+        assert_eq!(
+            rejected(&mut bob, id, body).await.code,
+            ErrorCode::Forbidden
+        );
+    }
+    assert!(matches!(
+        bob.command("m4", own_pairing()).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::DevicePairing { .. },
+            ..
+        }
+    ));
+}
+
 /// The config file every test daemon starts with.
 const CONFIG: &str = "# mine\nlisten = \"0.0.0.0:7447\" # everywhere\n";
 
@@ -1652,7 +1882,18 @@ async fn agents_run_commands_as_their_user_within_its_role() {
             cols: 80,
             rows: 24,
         },
-        CommandBody::PairDevice,
+        CommandBody::PairDevice {
+            user: None,
+            role: None,
+        },
+        CommandBody::ListUsers,
+        CommandBody::SetUserRole {
+            user_id: owner.clone(),
+            role: Role::Member,
+        },
+        CommandBody::RevokeDevice {
+            device_id: DeviceId::new("d1"),
+        },
         CommandBody::PairVaultHost {
             host_name: "devbox".into(),
         },
