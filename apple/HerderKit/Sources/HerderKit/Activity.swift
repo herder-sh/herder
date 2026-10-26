@@ -2,12 +2,14 @@ import Foundation
 import Herder
 
 /// What a background job runs on a machine: an account's login, to add it or to log it in
-/// again, a provider CLI's installer or updater, or an AWS IAM Identity Center sign-in.
+/// again, a provider CLI's installer or updater, an AWS IAM Identity Center sign-in, or setting
+/// up a vault next to its daemon.
 enum JobKind: Hashable {
     case add(AccountId)
     case relogin(AccountId)
     case install(Provider)
     case awsSignIn(profile: String)
+    case vault
 }
 
 /// A background job: the machine it runs on and what it runs there. One of each per machine at
@@ -20,8 +22,8 @@ struct JobKey: Hashable, Identifiable {
 }
 
 /// The long-running jobs this device started, kept while the app runs: CLI installs and
-/// updates, account logins and AWS sign-ins. Each runs in its own terminal on its machine and
-/// stays listed until the user clears it once it has ended.
+/// updates, account logins, AWS sign-ins and vault setups. Each but a vault setup runs in its
+/// own terminal on its machine; each stays listed until the user clears it once it has ended.
 ///
 /// Installs queue per machine: one installer at a time on a machine, as two package managers
 /// writing the same prefix trip over each other, while different machines run theirs at once.
@@ -29,7 +31,10 @@ struct JobKey: Hashable, Identifiable {
 @MainActor
 struct Activity {
     struct Job {
-        let connection: TerminalConnection
+        /// Its terminal; a vault setup has none.
+        let connection: TerminalConnection?
+        /// A vault setup's step.
+        var vault: VaultSetupStep?
         /// Whether its terminal was opened; until then it is queued.
         var started = false
         /// An install's CLI version when it started, as `Fleet.cliVersion` reads it.
@@ -52,7 +57,7 @@ struct Activity {
     /// Queues `connection` as `key`, unless that job is queued or runs already; a job that has
     /// ended is replaced, to run again. Returns whether it was queued.
     @discardableResult
-    mutating func enqueue(_ key: JobKey, _ connection: TerminalConnection) -> Bool {
+    mutating func enqueue(_ key: JobKey, _ connection: TerminalConnection?) -> Bool {
         if let job = jobs[key], job.ended == nil { return false }
         jobs[key] = Job(connection: connection)
         keys.removeAll { $0 == key }
@@ -63,6 +68,10 @@ struct Activity {
     mutating func start(_ key: JobKey, before: String?) {
         jobs[key]?.started = true
         jobs[key]?.before = before
+    }
+
+    mutating func setVault(_ key: JobKey, _ step: VaultSetupStep) {
+        jobs[key]?.vault = step
     }
 
     mutating func end(_ key: JobKey, at date: Date = .now) {
@@ -145,12 +154,13 @@ extension Fleet {
 
     /// Runs an ended job again, as it was started.
     func retry(_ key: JobKey) {
-        guard let connection = activity[key]?.connection else { return }
+        guard let job = activity[key] else { return }
         switch key.kind {
         case .install(let provider): install(provider, on: key.hostId)
-        case .add: if let account = connection.account { addAccount(account, on: key.hostId) }
+        case .add: if let account = job.connection?.account { addAccount(account, on: key.hostId) }
         case .relogin(let id): relogin(id, on: key.hostId)
         case .awsSignIn(let profile): signInToAws(profile, on: key.hostId)
+        case .vault: setUpVault(on: key.hostId)
         }
     }
 
@@ -193,7 +203,8 @@ extension Fleet {
     func progress(_ key: JobKey) -> JobProgress {
         guard let job = activity[key] else { return .ended }
         guard job.started else { return .queued }
-        let connection = job.connection
+        if case .vault = key.kind { return JobProgress(vault: job.vault) }
+        guard let connection = job.connection else { return .ended }
         let machine = machines.first { $0.hostId == key.hostId }
         switch key.kind {
         case .install(let provider):
@@ -205,13 +216,15 @@ extension Fleet {
         case .awsSignIn:
             return JobProgress(AwsSignInStatus(state: connection.state, refusal: connection.refusal,
                                                terminalId: connection.terminalId, terminals: machine?.terminals ?? []))
+        case .vault:
+            return JobProgress(vault: job.vault)
         }
     }
 
     /// Cancels the login `key` runs: closes its terminal on the machine, which hangs up the
     /// provider's login, so it adds no account. Its terminal then shows it ended.
     func cancelLogin(_ key: JobKey) async throws {
-        guard let terminalId = activity[key]?.connection.terminalId else {
+        guard let terminalId = activity[key]?.connection?.terminalId else {
             throw HerderError.Local(detail: "the login has no terminal on the machine yet")
         }
         try await client.closeTerminal(hostId: key.hostId, terminalId: terminalId)
@@ -242,6 +255,14 @@ enum JobProgress: Equatable {
     case updated(from: String, to: String)
     /// The update ended, and the machine lists the CLI at the version it had.
     case upToDate(String)
+    /// The machine installs its vault, or with `install` off links to the one it has.
+    case settingUpVault(install: Bool)
+    /// This device pairs with the new vault.
+    case pairingVault
+    /// The vault is paired here, named so, and the machine linked to it.
+    case vaultReady(String)
+    /// The machine's herder cannot set up a vault from here: install it there by hand.
+    case needsNewerHerder
     case failed(String)
 
     /// A login that adds an account: `added` tells whether the machine lists it.
@@ -315,17 +336,19 @@ enum JobProgress: Equatable {
     var group: Group {
         switch self {
         case .running, .approve: .needsYou
-        case .starting, .installing: .running
+        case .starting, .installing, .settingUpVault, .pairingVault: .running
         case .queued: .queued
-        case .added, .signedIn, .ended, .installed, .updated, .upToDate, .failed: .done
+        case .added, .signedIn, .ended, .installed, .updated, .upToDate, .vaultReady, .needsNewerHerder, .failed: .done
         }
     }
 
     var finished: Bool { group == .done }
 
     var failed: Bool {
-        if case .failed = self { return true }
-        return false
+        switch self {
+        case .failed, .needsNewerHerder: true
+        default: false
+        }
     }
 }
 
@@ -349,6 +372,10 @@ extension JobKey {
         case (.awsSignIn(let profile), .signedIn): return "Signed in to AWS \(profile) on \(machine)"
         case (.awsSignIn(let profile), .failed): return "AWS sign-in to \(profile) on \(machine) failed"
         case (.awsSignIn(let profile), _): return "AWS sign-in to \(profile) on \(machine)"
+        case (.vault, .vaultReady(let name)): return "Ran \(name)"
+        case (.vault, .failed), (.vault, .needsNewerHerder): return "Running a vault on \(machine) failed"
+        case (.vault, .settingUpVault(install: false)): return "Pair and link the vault on \(machine)"
+        case (.vault, _): return "Run a vault on \(machine)"
         }
     }
 }
@@ -371,6 +398,11 @@ extension JobProgress {
         case .added: "Sessions can use it now"
         case .signedIn: "Signed in"
         case .ended: "Stopped before it signed in"
+        case .settingUpVault(install: true): "Installing the vault’s service on \(machine) and linking to it"
+        case .settingUpVault(install: false): "Linking \(machine) to the vault installed there"
+        case .pairingVault: "Pairing this device with the vault"
+        case .vaultReady: "Paired here · \(machine) fetches secrets from it"
+        case .needsNewerHerder: "Its herder cannot do this from here: run \(VaultChoices.installCommand) on \(machine)"
         case .failed(let message): message
         }
     }
@@ -389,6 +421,10 @@ extension JobProgress {
         case .installed(let version): version.isEmpty ? "Installed" : "Installed \(version)"
         case .updated(let from, let to): from.isEmpty || to.isEmpty ? "Updated" : "\(from) → \(to)"
         case .upToDate(let version): version.isEmpty ? "Up to date" : "Up to date \(version)"
+        case .settingUpVault(let install): install ? "Installing" : "Linking"
+        case .pairingVault: "Pairing"
+        case .vaultReady: "Ready"
+        case .needsNewerHerder: "Needs a newer herder"
         case .failed: "Failed"
         }
     }

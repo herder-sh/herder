@@ -1,30 +1,16 @@
-//! `herder service`: run the daemon as a service that starts with the machine: a systemd user
-//! service on Linux, a launchd LaunchAgent on macOS. `herder vault install` runs a vault the
-//! same way, as a service of its own.
+//! Services herder runs as, starting with the machine: a systemd user service on Linux, a
+//! launchd LaunchAgent on macOS. `herder service install` runs the daemon so; a vault, which
+//! `herder vault install` or an owner's `install_vault` installs, runs as a service of its own.
 
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::ExitStatus;
 
 use anyhow::{Context, Result, bail};
-use clap::Subcommand;
 
 mod launchd;
 mod systemd;
 
 const MACOS: bool = cfg!(target_os = "macos");
-
-#[derive(Subcommand)]
-pub enum Action {
-    /// Install and start the service for this herder binary, so it starts at boot (Linux) or
-    /// login (macOS).
-    Install,
-    /// Stop and remove the service.
-    Uninstall,
-    /// Show the service status.
-    Status,
-    /// Restart the service.
-    Restart,
-}
 
 /// A service herder installs: the daemon, or a vault next to it.
 pub struct Service {
@@ -110,32 +96,21 @@ fn read_env_file(path: &Path) -> Result<Vec<(String, String)>> {
     Ok(vars)
 }
 
-pub fn run(action: Action) -> Result<ExitCode> {
-    match action {
-        Action::Install => install(&Service::daemon())?,
-        Action::Uninstall => uninstall(&Service::daemon())?,
-        Action::Status => {
-            // The service manager's exit code is the answer, so pass it on.
-            let status = if MACOS {
-                launchd::status()?
-            } else {
-                systemd::status()?
-            };
-            return Ok(ExitCode::from(
-                u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
-            ));
-        }
-        Action::Restart => restart(&Service::daemon())?,
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
 /// Restarts `service`, starting it if it was stopped.
 pub fn restart(service: &Service) -> Result<()> {
     if MACOS {
         launchd::restart(service)
     } else {
         systemd::restart(service)
+    }
+}
+
+/// The herder service's status, as the service manager prints it.
+pub fn status() -> Result<ExitStatus> {
+    if MACOS {
+        launchd::status()
+    } else {
+        systemd::status()
     }
 }
 
@@ -174,6 +149,33 @@ pub fn state() -> Option<State> {
         Some(launchd::state())
     } else {
         systemd::state()
+    }
+}
+
+/// What installs services: this machine's service manager, or a fake in tests.
+pub trait Services: Send + Sync {
+    /// Installs and starts `service`.
+    fn install(&self, service: &Service) -> Result<()>;
+    /// Whether `service` is installed.
+    fn is_installed(&self, service: &Service) -> bool;
+    /// Where `service` logs, to point at when it does not come up.
+    fn log_hint(&self, service: &Service) -> String;
+}
+
+/// This machine's service manager: launchd on macOS, systemd elsewhere.
+pub struct System;
+
+impl Services for System {
+    fn install(&self, service: &Service) -> Result<()> {
+        install(service)
+    }
+
+    fn is_installed(&self, service: &Service) -> bool {
+        is_installed(service)
+    }
+
+    fn log_hint(&self, service: &Service) -> String {
+        log_hint(service).unwrap_or_else(|_| "its log".to_owned())
     }
 }
 

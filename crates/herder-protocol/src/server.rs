@@ -565,6 +565,11 @@ pub enum CommandResult {
         /// vault cannot tell.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         volume: Option<VaultVolume>,
+        /// Whether a vault is installed on this machine, next to the daemon, as
+        /// `install_vault` or `herder vault install` installs one; `link_local_vault` links to
+        /// it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        local_vault: bool,
     },
     /// The daemon's settings, answering `get_settings` and `set_settings`.
     Settings {
@@ -578,7 +583,8 @@ pub enum CommandResult {
         is_vault: bool,
     },
     /// A one-time code that pairs another device as the caller's user, answering
-    /// `pair_device`: everything a `herder://pair` link names for this daemon.
+    /// `pair_device`: everything a `herder://pair` link names for this daemon. Also the answer
+    /// to `install_vault` and `link_local_vault`, naming the vault on this machine.
     DevicePairing {
         /// The code, for the new device's hello.
         code: String,

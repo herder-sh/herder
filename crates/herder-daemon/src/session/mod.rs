@@ -900,7 +900,9 @@ impl SessionManager {
             CommandBody::GetVaultLink
             | CommandBody::LinkVault { .. }
             | CommandBody::SetVaultLink { .. }
-            | CommandBody::UnlinkVault => {
+            | CommandBody::UnlinkVault
+            | CommandBody::InstallVault
+            | CommandBody::LinkLocalVault => {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "this daemon cannot back up to a vault",
