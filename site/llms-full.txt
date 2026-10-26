@@ -1,48 +1,52 @@
 # herder
 
-> herder runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. It drives each vendor's own, unmodified CLI and never touches provider login tokens. Free and open source under Apache-2.0. Website: https://herder.sh. Source: https://github.com/herder-sh/herder.
+> herder keeps coding agents (Claude Code, Codex, Cursor and OpenCode) working across all your accounts and all your machines. It drives each vendor's own, unmodified CLI and never touches provider login tokens. Free and open source under Apache-2.0. Website: https://herder.sh. Source: https://github.com/herder-sh/herder.
 
 ## What herder is
 
 herder has three parts, all built on one shared Rust client core:
 
-- `herder daemon` runs on each Linux machine and hosts agent sessions. It runs the unmodified Claude Code, Codex, Cursor or OpenCode CLI, each account under its own config dir, and keeps every session in an append-only journal.
+- `herder daemon` runs on each Linux machine or Mac and hosts agent sessions. It runs the unmodified Claude Code, Codex, Cursor or OpenCode CLI, each account under its own config dir, and keeps every session in an append-only journal.
+- The herder Mac and iPhone apps are native apps. The Board lists every open task on every paired machine, with its agents folded under it; a session shows its transcript, questions and approvals. Providers, Machines, Skills, Integrations and Activity cover accounts, CLI versions, MCP servers, vaults, bots and every install, update and login. The Mac app is a download from GitHub; the iPhone app is in TestFlight and not on the App Store yet.
 - Bare `herder` opens the terminal UI. It works over SSH or mosh, including from a phone: below 65 columns it shows one pane at a time, and every view works with the arrow keys, Tab and Enter.
-- The herder Mac app is a native app for Apple silicon. It shows approvals, questions, pull requests and sessions on every paired machine. The iPhone app shares its code and is not on the App Store yet.
 
 herder is pre-1.0 and changes quickly.
 
 ## Install
 
-On Linux (x86_64 or arm64):
+On Linux (x86_64 or arm64) or an Apple silicon Mac:
 
 ```sh
 curl -fsSL https://herder.sh/install | sh
-herder service install   # run the daemon now and at every boot (systemd user service)
+herder service install   # run the daemon now and at every boot (systemd on Linux, launchd on macOS)
 herder update            # replace herder with the latest release
 ```
 
-The script installs a static binary to `~/.local/bin/herder` after checking its sha256. Set `HERDER_VERSION=1.2.3` to install a specific release.
+The script installs the binary to `~/.local/bin/herder` after checking its sha256. Set `HERDER_VERSION=1.2.3` to install a specific release.
 
 The Mac app is a zip on the latest GitHub release (https://github.com/herder-sh/herder/releases/latest). It is not notarized yet: move `herder.app` to Applications and run `xattr -dr com.apple.quarantine /Applications/herder.app`.
 
 ## Get started
 
-1. Install herder and run `herder service install`.
-2. Run `herder` to open the terminal UI. Add an account with `n`: the vendor's own login runs in a terminal on the machine; herder only shows you that terminal.
-3. Run `herder pair` to print a pairing link and QR code. Paste the link into the Mac app's Add Machine, or run `herder connect <link>` on another computer.
+1. Install herder and run `herder service install`. `herder doctor` checks the machine and says how to fix what is not ready.
+2. Run `herder pair` to print a pairing link and QR code. Scan it with the iPhone app, paste the link into the Mac app's Add Machine, or run `herder connect <link>` on another computer.
+3. Add an account: Add Account in the app, or `n` in the terminal UI. The vendor's own login runs in a terminal on the machine; herder only shows you that terminal.
 
 ## Features
 
 - Failover across accounts: when a session hits a usage limit, herder moves it to another account of the same provider that has room left. It only switches after a limit is hit, never pre-emptively. With no account left and a known reset time, the session waits for the reset and retries by itself.
-- A fleet of machines: run a daemon on every machine, pair once, and see every session in one list. `herder fork` continues a session's history on another host.
-- Vault: an optional herder daemon in vault mode keeps a durable copy of every session journal its hosts replicate to it, and catches up after either side was offline. A host paired with a host code can only replicate its own sessions and reads nothing else on the vault.
-- Phone and desktop: the terminal UI, the Mac app, or any phone SSH app. Allow or deny tool calls and answer agent questions from wherever you are.
-- Multi-agent tasks: an agent can spawn child sessions, prompt them, wait for them, answer their questions or escalate to you. The daemon serves these task tools to every agent over MCP.
+- A fleet of machines: run a daemon on every machine, pair once, and see every task in one Board. Machines shows each machine's load, running sessions, accounts and provider CLIs. `herder fork` continues a session's history on another host.
+- Vaults that run anywhere: a herder vault backs up every session journal its hosts replicate to it, holds secrets, and can take over a session from another machine. Run it on any machine with one click in the app or `herder vault install`, on another box, or on Kubernetes. A host paired with a host code can only replicate its own sessions and reads nothing else on the vault.
+- Mac, iPhone and terminal: the native apps or the terminal UI over SSH. Allow or deny tool calls and answer agent questions from wherever you are.
+- Multi-agent tasks: an agent can spawn child sessions, prompt them, wait for them, answer their questions or escalate to you. The daemon serves these task tools to every agent over MCP, and the Board folds the children under their task.
 - Login tokens stay yours: herder never reads, stores, copies or relays provider login tokens.
-- Terminals are owner-only: only owners of a daemon can open a shell on it; members can drive sessions but never get a shell.
-- Scriptable: `herder session new`, `send`, `wait`, `status`, `list`, `archive`. Every command takes `--json` and never prompts.
-- Coming soon: a usage view across every account and machine, and shared skills for every agent on every machine.
+- Slack and Telegram bots: a machine can run chat bots. DM one, or mention it in a channel, to start a session, chat with it and answer its questions and approvals; a thread is a session. Mentioned in a Slack thread, the bot reads the thread, and files an agent publishes are posted back into it. Each bot has an allowlist with switches per person for DMs, channels and approvals. Bots never reach terminals, logins or settings. Their tokens are secrets in the vault, which the daemon keeps in memory only.
+- Usage: every account's session and weekly windows on every machine, when each resets, tokens, API-equivalent cost and failovers.
+- Shared skills: one skill library in a git repository, checked out on every machine for every provider, with a switch per machine.
+- Providers and CLI updates: every account and provider CLI on every machine on one page, with each machine's version against the latest, and Update All. Installs, updates and logins run as jobs in Activity.
+- MCP servers and secrets: add MCP servers to every machine at once, or import a README's JSON. Secrets live in the vault in sets granted to hosts; `herder secret run NAME -- command` runs a program with them in its environment, and the agent never sees a value.
+- Owners and members: invite someone with a one-time code from a machine's People section, and change their role or revoke a device later. Only owners of a daemon can open a terminal, log in accounts or change settings; members can drive sessions but never get a shell.
+- Scriptable: `herder session new`, `send`, `wait`, `status`, `list`, `archive`. Each takes `--json` and never prompts.
 
 ## Scripting sessions
 
@@ -61,19 +65,19 @@ herder session status "$id" --json
 
 ### What is herder?
 
-herder is an open-source tool that runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. A herder daemon on each Linux machine hosts agent sessions in the vendor's own unmodified CLI, and you watch and steer every session from the herder terminal UI, the herder Mac app, or a phone over SSH.
+herder is an open-source tool that keeps coding agents (Claude Code, Codex, Cursor and OpenCode) working across all your accounts and all your machines. A herder daemon on each Linux machine or Mac hosts agent sessions in the vendor's own unmodified CLI, and you watch and steer every session from the herder Mac app, the iPhone app, the terminal UI, or Slack and Telegram.
 
 ### How do I install herder?
 
-On Linux (x86_64 or arm64), install herder with `curl -fsSL https://herder.sh/install | sh`. The script downloads a static binary, checks its sha256 and puts it in `~/.local/bin/herder`. Then `herder service install` runs the herder daemon now and at every boot, and `herder update` moves to the latest release.
+On Linux (x86_64 or arm64) or an Apple silicon Mac, install herder with `curl -fsSL https://herder.sh/install | sh`. The script downloads the binary, checks its sha256 and puts it in `~/.local/bin/herder`. Then `herder service install` runs the herder daemon now and at every boot (systemd on Linux, launchd on macOS), and `herder update` moves to the latest release. `herder doctor` checks the machine and says how to fix what is not ready.
 
 ### Which coding agents does herder support?
 
-herder supports Claude Code, Codex, Cursor and OpenCode. herder drives each vendor's own unmodified CLI, so the agent behaves exactly as it does when you run it yourself.
+herder supports Claude Code, Codex, Cursor and OpenCode. herder drives each vendor's own unmodified CLI, so the agent behaves exactly as it does when you run it yourself. The Providers page shows which CLI version each machine runs and updates them for you.
 
-### Can herder use several accounts of the same provider?
+### What happens when an account hits its usage limit?
 
-Yes. herder runs each account under its own config dir, so one machine can hold several Claude or Codex accounts. When a session hits a usage limit, herder moves it to another account of the same provider that has room left. herder only switches after a limit is hit, never ahead of time. If no account has room and the reset time is known, the session waits for the reset and carries on by itself.
+herder runs each account under its own config dir, so one machine can hold several Claude or Codex accounts. When a session hits a usage limit, herder moves it to another account of the same provider that has room left, and the agent carries on. herder only switches after a limit is hit, never ahead of time. If no account has room and the reset time is known, the session waits for the reset and carries on by itself. Providers shows how much of each account's windows is used and when they reset.
 
 ### Does herder see my Claude or OpenAI login tokens?
 
@@ -81,11 +85,23 @@ No. herder never reads, stores, copies or relays provider login tokens. You log 
 
 ### Can herder run agents on several machines?
 
-Yes. Run the herder daemon on each Linux machine, pair them with `herder pair`, and the terminal UI and the Mac app show the sessions of every machine in one list. An optional herder vault keeps a durable copy of every session journal and catches up after either side was offline.
+Yes. Run the herder daemon on each machine, pair them with `herder pair`, and the apps and the terminal UI show the tasks of every machine on one Board, with each machine's load, accounts and provider CLIs on the Machines page.
+
+### What does the herder vault do?
+
+A vault keeps a copy of every session of the machines linked to it, so a session's history survives its machine and another machine can take the session over. It also holds secrets, granted per machine: `herder secret run` hands them to a program an agent runs, without the agent seeing them. Run the vault on Kubernetes with the manifests in the repository, or on any machine with one click in the app or `herder vault install`.
+
+### Can I use herder from Slack or Telegram?
+
+Yes. A machine can run Slack and Telegram bots. Mention the Slack bot in a thread and it reads the thread, starts a session and posts the files the agent publishes back into the thread; DM a bot or mention it in a channel or group to chat with a session and answer its questions and approvals. Each bot has its own allowlist, with switches per person for DMs, channels and approvals, and never opens terminals, logins or settings. The bot's tokens are secrets in your vault, which the daemon keeps in memory only.
+
+### Can I share a machine with my team?
+
+Yes. Invite someone from the machine's People section with a one-time code, as a member or an owner. Members see and drive the machine's sessions, while terminals, provider logins and settings stay with the machine's owners. Only owners can open, attach to or see a terminal.
 
 ### Is there a herder app for Mac and iPhone?
 
-Yes for Mac: the herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app shares its code but is not on the App Store yet; until then, run `herder` over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen.
+Yes. The herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app is in TestFlight and not on the App Store yet; until then, you can also run `herder` over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen.
 
 ### Why does macOS say the herder app can't be opened?
 

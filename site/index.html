@@ -3,21 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>herder · every coding agent, every account, every machine</title>
-<meta name="description" content="herder runs Claude Code, Codex, Cursor and OpenCode across all your accounts and machines, with failover between accounts, from a terminal UI, a Mac app or your phone. Free and open source.">
+<title>herder · keep every coding agent working, on every machine</title>
+<meta name="description" content="herder keeps Claude Code, Codex, Cursor and OpenCode working across all your machines and accounts: failover when an account hits its limit, one Board for every machine, and your agents in your pocket on the Mac, iPhone, Slack or Telegram. Free and open source.">
 <link rel="canonical" href="https://herder.sh/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="herder">
 <meta property="og:url" content="https://herder.sh/">
-<meta property="og:title" content="herder · every coding agent, every account, every machine">
-<meta property="og:description" content="herder runs Claude Code, Codex, Cursor and OpenCode across all your accounts and machines, with failover between accounts, from a terminal UI, a Mac app or your phone. Free and open source.">
+<meta property="og:title" content="herder · keep every coding agent working, on every machine">
+<meta property="og:description" content="herder keeps Claude Code, Codex, Cursor and OpenCode working across all your machines and accounts: failover when an account hits its limit, one Board for every machine, and your agents in your pocket on the Mac, iPhone, Slack or Telegram. Free and open source.">
 <meta property="og:image" content="https://herder.sh/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="The herder wordmark over: every coding agent, every account, every machine.">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="herder · every coding agent, every account, every machine">
-<meta name="twitter:description" content="herder runs Claude Code, Codex, Cursor and OpenCode across all your accounts and machines, with failover between accounts, from a terminal UI, a Mac app or your phone. Free and open source.">
+<meta name="twitter:title" content="herder · keep every coding agent working, on every machine">
+<meta name="twitter:description" content="herder keeps Claude Code, Codex, Cursor and OpenCode working across all your machines and accounts: failover when an account hits its limit, one Board for every machine, and your agents in your pocket on the Mac, iPhone, Slack or Telegram. Free and open source.">
 <meta name="twitter:image" content="https://herder.sh/og.png">
 <link rel="alternate" type="text/plain" href="llms.txt" title="llms.txt">
 <script type="application/ld+json">
@@ -48,9 +48,9 @@
    "@id": "https://herder.sh/#app",
    "name": "herder",
    "url": "https://herder.sh/",
-   "description": "herder runs Claude Code, Codex, Cursor and OpenCode across all your accounts and machines, with failover between accounts, from a terminal UI, a Mac app or your phone. Free and open source.",
+   "description": "herder keeps Claude Code, Codex, Cursor and OpenCode working across all your machines and accounts: failover when an account hits its limit, one Board for every machine, and your agents in your pocket on the Mac, iPhone, Slack or Telegram. Free and open source.",
    "applicationCategory": "DeveloperApplication",
-   "operatingSystem": "Linux, macOS",
+   "operatingSystem": "Linux, macOS, iOS",
    "offers": {
     "@type": "Offer",
     "price": "0",
@@ -59,7 +59,7 @@
    "license": "https://www.apache.org/licenses/LICENSE-2.0",
    "downloadUrl": "https://github.com/herder-sh/herder/releases/latest",
    "installUrl": "https://herder.sh/install",
-   "screenshot": "https://herder.sh/img/tui-session-1600.webp",
+   "screenshot": "https://herder.sh/img/mac-hero-1440.webp",
    "publisher": {
     "@id": "https://herder.sh/#org"
    }
@@ -73,7 +73,7 @@
      "name": "What is herder?",
      "acceptedAnswer": {
       "@type": "Answer",
-      "text": "herder is an open-source tool that runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. A herder daemon on each Linux machine hosts agent sessions in the vendor's own unmodified CLI, and you watch and steer every session from the herder terminal UI, the herder Mac app, or a phone over SSH."
+      "text": "herder is an open-source tool that keeps coding agents (Claude Code, Codex, Cursor and OpenCode) working across all your accounts and all your machines. A herder daemon on each Linux machine or Mac hosts agent sessions in the vendor's own unmodified CLI, and you watch and steer every session from the herder Mac app, the iPhone app, the terminal UI, or Slack and Telegram."
      }
     },
     {
@@ -81,7 +81,7 @@
      "name": "How do I install herder?",
      "acceptedAnswer": {
       "@type": "Answer",
-      "text": "On Linux (x86_64 or arm64), install herder with curl -fsSL https://herder.sh/install | sh. The script downloads a static binary, checks its sha256 and puts it in ~/.local/bin/herder. Then herder service install runs the herder daemon now and at every boot, and herder update moves to the latest release."
+      "text": "On Linux (x86_64 or arm64) or an Apple silicon Mac, install herder with curl -fsSL https://herder.sh/install | sh. The script downloads the binary, checks its sha256 and puts it in ~/.local/bin/herder. Then herder service install runs the herder daemon now and at every boot (systemd on Linux, launchd on macOS), and herder update moves to the latest release. herder doctor checks the machine and says how to fix what is not ready."
      }
     },
     {
@@ -89,15 +89,15 @@
      "name": "Which coding agents does herder support?",
      "acceptedAnswer": {
       "@type": "Answer",
-      "text": "herder supports Claude Code, Codex, Cursor and OpenCode. herder drives each vendor's own unmodified CLI, so the agent behaves exactly as it does when you run it yourself."
+      "text": "herder supports Claude Code, Codex, Cursor and OpenCode. herder drives each vendor's own unmodified CLI, so the agent behaves exactly as it does when you run it yourself. The Providers page shows which CLI version each machine runs and updates them for you."
      }
     },
     {
      "@type": "Question",
-     "name": "Can herder use several accounts of the same provider?",
+     "name": "What happens when an account hits its usage limit?",
      "acceptedAnswer": {
       "@type": "Answer",
-      "text": "Yes. herder runs each account under its own config dir, so one machine can hold several Claude or Codex accounts. When a session hits a usage limit, herder moves it to another account of the same provider that has room left. herder only switches after a limit is hit, never ahead of time. If no account has room and the reset time is known, the session waits for the reset and carries on by itself."
+      "text": "herder runs each account under its own config dir, so one machine can hold several Claude or Codex accounts. When a session hits a usage limit, herder moves it to another account of the same provider that has room left, and the agent carries on. herder only switches after a limit is hit, never ahead of time. If no account has room and the reset time is known, the session waits for the reset and carries on by itself. Providers shows how much of each account's windows is used and when they reset."
      }
     },
     {
@@ -113,7 +113,31 @@
      "name": "Can herder run agents on several machines?",
      "acceptedAnswer": {
       "@type": "Answer",
-      "text": "Yes. Run the herder daemon on each Linux machine, pair them with herder pair, and the terminal UI and the Mac app show the sessions of every machine in one list. An optional herder vault keeps a durable copy of every session journal and catches up after either side was offline."
+      "text": "Yes. Run the herder daemon on each machine, pair them with herder pair, and the apps and the terminal UI show the tasks of every machine on one Board, with each machine's load, accounts and provider CLIs on the Machines page."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "What does the herder vault do?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "A vault keeps a copy of every session of the machines linked to it, so a session's history survives its machine and another machine can take the session over. It also holds secrets, granted per machine: herder secret run hands them to a program an agent runs, without the agent seeing them. Run the vault on Kubernetes with the manifests in the repository, or on any machine with one click in the app or herder vault install."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Can I use herder from Slack or Telegram?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Yes. A machine can run Slack and Telegram bots. Mention the Slack bot in a thread and it reads the thread, starts a session and posts the files the agent publishes back into the thread; DM a bot or mention it in a channel or group to chat with a session and answer its questions and approvals. Each bot has its own allowlist, with switches per person for DMs, channels and approvals, and never opens terminals, logins or settings. The bot's tokens are secrets in your vault, which the daemon keeps in memory only."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Can I share a machine with my team?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Yes. Invite someone from the machine's People section with a one-time code, as a member or an owner. Members see and drive the machine's sessions, while terminals, provider logins and settings stay with the machine's owners. Only owners can open, attach to or see a terminal."
      }
     },
     {
@@ -121,7 +145,7 @@
      "name": "Is there a herder app for Mac and iPhone?",
      "acceptedAnswer": {
       "@type": "Answer",
-      "text": "Yes for Mac: the herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app shares its code but is not on the App Store yet; until then, run herder over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen."
+      "text": "Yes. The herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app is in TestFlight and not on the App Store yet; until then, you can also run herder over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen."
      }
     },
     {
@@ -171,7 +195,7 @@
   </a>
   <nav aria-label="Main">
     <a href="#features">features</a>
-    <a href="#screens">screens</a>
+    <a href="#compare">compare</a>
     <a href="#start">start</a>
     <a href="#faq">faq</a>
     <a href="https://github.com/herder-sh/herder">github</a>
@@ -182,14 +206,14 @@
 <main id="main">
   <section class="hero">
     <svg class="field" viewBox="0 0 1440 280" preserveAspectRatio="xMidYMax slice" aria-hidden="true" focusable="false"><rect class="s1" x="1162" y="22" width="16" height="16"/><rect class="s5" x="202" y="62" width="16" height="16"/><rect class="s4" x="762" y="62" width="16" height="16"/><rect class="s2" x="62" y="102" width="16" height="16"/><rect class="s2" x="222" y="102" width="16" height="16"/><rect class="s4" x="242" y="102" width="16" height="16"/><rect class="s2" x="1122" y="102" width="16" height="16"/><rect class="s2" x="1222" y="102" width="16" height="16"/><rect class="s1" x="1282" y="102" width="16" height="16"/><rect class="s5" x="142" y="122" width="16" height="16"/><rect class="s1" x="462" y="122" width="16" height="16"/><rect class="s4" x="642" y="122" width="16" height="16"/><rect class="s1" x="1182" y="122" width="16" height="16"/><rect class="s3" x="22" y="142" width="16" height="16"/><rect class="s1" x="422" y="142" width="16" height="16"/><rect class="s4" x="582" y="142" width="16" height="16"/><rect class="s1" x="862" y="142" width="16" height="16"/><rect class="s4" x="1202" y="142" width="16" height="16"/><rect class="s5" x="1302" y="142" width="16" height="16"/><rect class="s2" x="322" y="162" width="16" height="16"/><rect class="s2" x="342" y="162" width="16" height="16"/><rect class="s2" x="542" y="162" width="16" height="16"/><rect class="s1" x="822" y="162" width="16" height="16"/><rect class="s2" x="922" y="162" width="16" height="16"/><rect class="s4" x="1242" y="162" width="16" height="16"/><rect class="s2" x="1342" y="162" width="16" height="16"/><rect class="s1" x="1402" y="162" width="16" height="16"/><rect class="s2" x="82" y="182" width="16" height="16"/><rect class="s3" x="302" y="182" width="16" height="16"/><rect class="s2" x="442" y="182" width="16" height="16"/><rect class="s1" x="982" y="182" width="16" height="16"/><rect class="s4" x="1202" y="182" width="16" height="16"/><rect class="s1" x="1282" y="182" width="16" height="16"/><rect class="s5" x="1362" y="182" width="16" height="16"/><rect class="s3" x="42" y="202" width="16" height="16"/><rect class="s2" x="102" y="202" width="16" height="16"/><rect class="s3" x="142" y="202" width="16" height="16"/><rect class="s1" x="202" y="202" width="16" height="16"/><rect class="s5" x="222" y="202" width="16" height="16"/><rect class="s4" x="462" y="202" width="16" height="16"/><rect class="s2" x="542" y="202" width="16" height="16"/><rect class="s1" x="922" y="202" width="16" height="16"/><rect class="s1" x="982" y="202" width="16" height="16"/><rect class="s1" x="1122" y="202" width="16" height="16"/><rect class="s5" x="1342" y="202" width="16" height="16"/><rect class="s2" x="2" y="222" width="16" height="16"/><rect class="s1" x="22" y="222" width="16" height="16"/><rect class="s5" x="162" y="222" width="16" height="16"/><rect class="s3" x="222" y="222" width="16" height="16"/><rect class="s2" x="302" y="222" width="16" height="16"/><rect class="s1" x="322" y="222" width="16" height="16"/><rect class="s3" x="522" y="222" width="16" height="16"/><rect class="s2" x="602" y="222" width="16" height="16"/><rect class="s2" x="702" y="222" width="16" height="16"/><rect class="s1" x="842" y="222" width="16" height="16"/><rect class="s1" x="922" y="222" width="16" height="16"/><rect class="s4" x="1182" y="222" width="16" height="16"/><rect class="s1" x="1202" y="222" width="16" height="16"/><rect class="s1" x="1342" y="222" width="16" height="16"/><rect class="s4" x="1422" y="222" width="16" height="16"/><rect class="s3" x="2" y="242" width="16" height="16"/><rect class="s2" x="22" y="242" width="16" height="16"/><rect class="s3" x="82" y="242" width="16" height="16"/><rect class="s1" x="142" y="242" width="16" height="16"/><rect class="s5" x="222" y="242" width="16" height="16"/><rect class="s4" x="322" y="242" width="16" height="16"/><rect class="s3" x="342" y="242" width="16" height="16"/><rect class="s2" x="402" y="242" width="16" height="16"/><rect class="s2" x="482" y="242" width="16" height="16"/><rect class="s3" x="542" y="242" width="16" height="16"/><rect class="s5" x="582" y="242" width="16" height="16"/><rect class="s3" x="602" y="242" width="16" height="16"/><rect class="s4" x="802" y="242" width="16" height="16"/><rect class="s3" x="922" y="242" width="16" height="16"/><rect class="s1" x="942" y="242" width="16" height="16"/><rect class="s3" x="982" y="242" width="16" height="16"/><rect class="s4" x="1022" y="242" width="16" height="16"/><rect class="s4" x="1042" y="242" width="16" height="16"/><rect class="s3" x="1102" y="242" width="16" height="16"/><rect class="s5" x="1162" y="242" width="16" height="16"/><rect class="s5" x="1242" y="242" width="16" height="16"/><rect class="s4" x="1322" y="242" width="16" height="16"/><rect class="s2" x="1362" y="242" width="16" height="16"/><rect class="s5" x="1402" y="242" width="16" height="16"/><rect class="s5" x="1422" y="242" width="16" height="16"/><rect class="s3" x="2" y="262" width="16" height="16"/><rect class="s2" x="42" y="262" width="16" height="16"/><rect class="s1" x="82" y="262" width="16" height="16"/><rect class="s1" x="102" y="262" width="16" height="16"/><rect class="s4" x="182" y="262" width="16" height="16"/><rect class="s3" x="202" y="262" width="16" height="16"/><rect class="s5" x="242" y="262" width="16" height="16"/><rect class="s5" x="322" y="262" width="16" height="16"/><rect class="s5" x="402" y="262" width="16" height="16"/><rect class="s4" x="502" y="262" width="16" height="16"/><rect class="s5" x="522" y="262" width="16" height="16"/><rect class="s1" x="662" y="262" width="16" height="16"/><rect class="s4" x="682" y="262" width="16" height="16"/><rect class="s2" x="762" y="262" width="16" height="16"/><rect class="s1" x="802" y="262" width="16" height="16"/><rect class="s2" x="842" y="262" width="16" height="16"/><rect class="s4" x="922" y="262" width="16" height="16"/><rect class="s5" x="962" y="262" width="16" height="16"/><rect class="s1" x="982" y="262" width="16" height="16"/><rect class="s4" x="1002" y="262" width="16" height="16"/><rect class="s1" x="1082" y="262" width="16" height="16"/><rect class="s5" x="1242" y="262" width="16" height="16"/><rect class="s3" x="1262" y="262" width="16" height="16"/><rect class="s1" x="1302" y="262" width="16" height="16"/><rect class="s3" x="1342" y="262" width="16" height="16"/><rect class="s1" x="1382" y="262" width="16" height="16"/></svg>
-    <a class="pill rise" style="--d:0" href="https://github.com/herder-sh/herder/releases/latest"><span class="dot" aria-hidden="true"></span><span data-version>v0.4.0</span> is out, Mac app included <span aria-hidden="true">→</span></a>
+    <a class="pill rise" style="--d:0" href="https://github.com/herder-sh/herder/releases/latest"><span class="dot" aria-hidden="true"></span><span data-version>v0.13.0</span>: the new Mac and iPhone apps <span aria-hidden="true">→</span></a>
 
-    <h1 class="wordmark-wrap rise" style="--d:1">
-      <svg class="wordmark" viewBox="0 0 600 140" role="img" aria-label="herder"><title>herder</title><defs><linearGradient id="bands" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="140"><stop offset="0" stop-color="var(--b1)"/><stop offset=".2857" stop-color="var(--b1)"/><stop offset=".2857" stop-color="var(--b2)"/><stop offset=".4286" stop-color="var(--b2)"/><stop offset=".4286" stop-color="var(--b3)"/><stop offset=".6429" stop-color="var(--b3)"/><stop offset=".6429" stop-color="var(--b4)"/><stop offset=".7857" stop-color="var(--b4)"/><stop offset=".7857" stop-color="var(--b5)"/><stop offset="1" stop-color="var(--b5)"/></linearGradient></defs><path fill="url(#bands)" d="M10 0h50v10h-50zM390 0h20v10h-20zM0 10h60v10h-60zM390 10h20v10h-20zM0 20h20v10h-20zM40 20h20v10h-20zM390 20h20v10h-20zM0 30h20v10h-20zM40 30h20v10h-20zM390 30h20v10h-20zM40 40h70v10h-70zM150 40h60v10h-60zM240 40h20v10h-20zM270 40h40v10h-40zM340 40h70v10h-70zM440 40h60v10h-60zM530 40h20v10h-20zM560 40h40v10h-40zM40 50h80v10h-80zM140 50h80v10h-80zM240 50h70v10h-70zM330 50h80v10h-80zM430 50h80v10h-80zM530 50h70v10h-70zM40 60h20v10h-20zM100 60h20v10h-20zM140 60h20v10h-20zM200 60h20v10h-20zM240 60h30v10h-30zM290 60h20v10h-20zM330 60h20v10h-20zM390 60h20v10h-20zM430 60h20v10h-20zM490 60h20v10h-20zM530 60h30v10h-30zM580 60h20v10h-20zM40 70h20v10h-20zM100 70h20v10h-20zM140 70h20v10h-20zM200 70h20v10h-20zM240 70h20v10h-20zM330 70h20v10h-20zM390 70h20v10h-20zM430 70h20v10h-20zM490 70h20v10h-20zM530 70h20v10h-20zM40 80h20v10h-20zM100 80h20v10h-20zM140 80h80v10h-80zM240 80h20v10h-20zM330 80h20v10h-20zM390 80h20v10h-20zM430 80h80v10h-80zM530 80h20v10h-20zM40 90h20v10h-20zM100 90h20v10h-20zM140 90h80v10h-80zM240 90h20v10h-20zM330 90h20v10h-20zM390 90h20v10h-20zM430 90h80v10h-80zM530 90h20v10h-20zM40 100h20v10h-20zM100 100h20v10h-20zM140 100h20v10h-20zM240 100h20v10h-20zM330 100h20v10h-20zM390 100h20v10h-20zM430 100h20v10h-20zM530 100h20v10h-20zM40 110h20v10h-20zM100 110h20v10h-20zM140 110h20v10h-20zM240 110h20v10h-20zM330 110h20v10h-20zM390 110h20v10h-20zM430 110h20v10h-20zM530 110h20v10h-20zM40 120h20v10h-20zM100 120h20v10h-20zM140 120h80v10h-80zM240 120h20v10h-20zM330 120h80v10h-80zM430 120h80v10h-80zM530 120h20v10h-20zM40 130h20v10h-20zM100 130h20v10h-20zM150 130h70v10h-70zM240 130h20v10h-20zM340 130h70v10h-70zM440 130h70v10h-70zM530 130h20v10h-20z"/></svg>
-    </h1>
+    <div class="wordmark-wrap rise" style="--d:1" aria-hidden="true">
+      <svg class="wordmark" viewBox="0 0 600 140" aria-hidden="true" focusable="false"><defs><linearGradient id="bands" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="140"><stop offset="0" stop-color="var(--b1)"/><stop offset=".2857" stop-color="var(--b1)"/><stop offset=".2857" stop-color="var(--b2)"/><stop offset=".4286" stop-color="var(--b2)"/><stop offset=".4286" stop-color="var(--b3)"/><stop offset=".6429" stop-color="var(--b3)"/><stop offset=".6429" stop-color="var(--b4)"/><stop offset=".7857" stop-color="var(--b4)"/><stop offset=".7857" stop-color="var(--b5)"/><stop offset="1" stop-color="var(--b5)"/></linearGradient></defs><path fill="url(#bands)" d="M10 0h50v10h-50zM390 0h20v10h-20zM0 10h60v10h-60zM390 10h20v10h-20zM0 20h20v10h-20zM40 20h20v10h-20zM390 20h20v10h-20zM0 30h20v10h-20zM40 30h20v10h-20zM390 30h20v10h-20zM40 40h70v10h-70zM150 40h60v10h-60zM240 40h20v10h-20zM270 40h40v10h-40zM340 40h70v10h-70zM440 40h60v10h-60zM530 40h20v10h-20zM560 40h40v10h-40zM40 50h80v10h-80zM140 50h80v10h-80zM240 50h70v10h-70zM330 50h80v10h-80zM430 50h80v10h-80zM530 50h70v10h-70zM40 60h20v10h-20zM100 60h20v10h-20zM140 60h20v10h-20zM200 60h20v10h-20zM240 60h30v10h-30zM290 60h20v10h-20zM330 60h20v10h-20zM390 60h20v10h-20zM430 60h20v10h-20zM490 60h20v10h-20zM530 60h30v10h-30zM580 60h20v10h-20zM40 70h20v10h-20zM100 70h20v10h-20zM140 70h20v10h-20zM200 70h20v10h-20zM240 70h20v10h-20zM330 70h20v10h-20zM390 70h20v10h-20zM430 70h20v10h-20zM490 70h20v10h-20zM530 70h20v10h-20zM40 80h20v10h-20zM100 80h20v10h-20zM140 80h80v10h-80zM240 80h20v10h-20zM330 80h20v10h-20zM390 80h20v10h-20zM430 80h80v10h-80zM530 80h20v10h-20zM40 90h20v10h-20zM100 90h20v10h-20zM140 90h80v10h-80zM240 90h20v10h-20zM330 90h20v10h-20zM390 90h20v10h-20zM430 90h80v10h-80zM530 90h20v10h-20zM40 100h20v10h-20zM100 100h20v10h-20zM140 100h20v10h-20zM240 100h20v10h-20zM330 100h20v10h-20zM390 100h20v10h-20zM430 100h20v10h-20zM530 100h20v10h-20zM40 110h20v10h-20zM100 110h20v10h-20zM140 110h20v10h-20zM240 110h20v10h-20zM330 110h20v10h-20zM390 110h20v10h-20zM430 110h20v10h-20zM530 110h20v10h-20zM40 120h20v10h-20zM100 120h20v10h-20zM140 120h80v10h-80zM240 120h20v10h-20zM330 120h80v10h-80zM430 120h80v10h-80zM530 120h20v10h-20zM40 130h20v10h-20zM100 130h20v10h-20zM150 130h70v10h-70zM240 130h20v10h-20zM340 130h70v10h-70zM440 130h70v10h-70zM530 130h20v10h-20z"/></svg>
+    </div>
 
-    <p class="tagline rise" style="--d:2">Every coding agent. Every account. Every machine.</p>
-    <p class="lede rise" style="--d:3">herder drives Claude&nbsp;Code, Codex, Cursor and OpenCode across all your accounts and all your machines. Steer them from a terminal, your Mac or your phone. When an account hits its limit, herder moves the session to the next one.</p>
+    <h1 class="headline rise" style="--d:2">Keep every coding agent working, on every machine you own.</h1>
+    <p class="lede rise" style="--d:3">herder runs your coding agents across all your machines and accounts, moves the work on when an account hits its limit, and puts every task in your pocket.</p>
 
     <div class="install rise" style="--d:4">
       <div class="cmd">
@@ -198,151 +222,193 @@
         <button class="copy" type="button" data-copy="install-cmd" aria-label="Copy the install command"><span>copy</span></button>
       </div>
       <div class="ctas">
-        <a class="btn primary" id="mac-download" href="https://github.com/herder-sh/herder/releases/download/v0.4.0/herder-app-0.4.0-macos-arm64.zip"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="2"/></svg>Download for Mac</a>
-        <a class="btn" href="https://github.com/herder-sh/herder">Source on GitHub</a>
+        <a class="btn primary" id="mac-download" href="https://github.com/herder-sh/herder/releases/download/v0.13.0/herder-app-0.13.0-macos-arm64.zip"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="2"/></svg>Download for Mac</a>
+        <a class="btn" href="#features">See how it works <span aria-hidden="true">↓</span></a>
       </div>
-      <p class="fine">Linux x86_64 and arm64 · Mac app for Apple silicon, <a href="#faq-mac">not notarized yet</a> · Apache-2.0</p>
+      <p class="fine">Linux and Apple silicon Macs · iPhone app <a href="#faq-apps">in TestFlight</a> · Mac app <a href="#faq-mac">not notarized yet</a> · free, Apache-2.0</p>
     </div>
 
-    <figure class="shot hero-shot rise" style="--d:5">
-      <img src="img/tui-session-1600.webp" srcset="img/tui-session-800.webp 800w, img/tui-session-1600.webp 1600w" sizes="(min-width: 1160px) 1100px, 94vw" width="1600" height="816" alt="The herder terminal UI: machines and sessions on the left, a Claude Code session with a diff in the middle, usage and child tasks on the right" fetchpriority="high">
-    </figure>
-  </section>
-
-  <section class="what" aria-labelledby="what-h">
-    <h2 id="what-h" class="eyebrow">what it is</h2>
-    <p class="big">One daemon per machine. Your agents run there, in the vendor's own CLI. Every screen you own is a window onto them.</p>
-    <ul class="providers" aria-label="Supported coding agents">
-      <li><span style="--c:var(--b5)"></span>Claude Code</li>
-      <li><span style="--c:var(--b4)"></span>Codex</li>
-      <li><span style="--c:var(--b3)"></span>Cursor</li>
-      <li><span style="--c:var(--b1)"></span>OpenCode</li>
-    </ul>
-    <div class="trio">
-      <div class="card">
-        <h3><code>herder daemon</code></h3>
-        <p>Hosts the sessions on each Linux box. It runs the unmodified Claude Code, Codex, Cursor or OpenCode CLI, each account under its own config dir, and keeps every session in an append-only journal.</p>
-      </div>
-      <div class="card">
-        <h3><code>herder</code></h3>
-        <p>Bare <code>herder</code> opens the terminal UI. It works over SSH or mosh from a phone: below 65 columns it shows one pane at a time, and every view works with arrows, Tab and Enter.</p>
-      </div>
-      <div class="card">
-        <h3>herder.app</h3>
-        <p>A native Mac app for Apple silicon, on the same Rust client core. Approve tool calls, follow pull requests, start sessions on any paired machine. The iPhone app shares its code and is not on the App Store yet.</p>
-      </div>
-    </div>
-  </section>
-
-  <section id="features" class="features" aria-labelledby="features-h">
-    <h2 id="features-h" class="eyebrow">features</h2>
-    <div class="grid">
-      <article class="feat">
-        <span class="tag" aria-hidden="true">01</span>
-        <h3>Failover across accounts</h3>
-        <p>A session hits a usage limit, herder rotates it to the next account of that provider. Only then, never pre-emptively. Out of accounts? The session waits for the limit reset and retries by itself.</p>
-      </article>
-      <article class="feat">
-        <span class="tag" aria-hidden="true">02</span>
-        <h3>A fleet of machines</h3>
-        <p>Run a daemon on every box you have. Pair once, see every session in one list, by machine or by project. A vault keeps a durable copy of every session journal, and catches up after either side was offline.</p>
-      </article>
-      <article class="feat">
-        <span class="tag" aria-hidden="true">03</span>
-        <h3>Phone and desktop</h3>
-        <p>The Mac app, the terminal UI, or any phone SSH app. An agent waiting on an approval lands on your Home screen. Allow, deny, answer, move on.</p>
-      </article>
-      <article class="feat">
-        <span class="tag" aria-hidden="true">04</span>
-        <h3>Multi-agent tasks</h3>
-        <p>An agent can spawn child sessions, prompt them, wait for them, answer their questions or escalate to you. herder serves the task tools to every agent over MCP.</p>
-      </article>
-      <article class="feat key">
-        <span class="tag" aria-hidden="true">05</span>
-        <h3>Never touches your login tokens</h3>
-        <p>herder only drives the vendor's unmodified CLI under a per-account config dir. It never reads, stores, copies or relays your provider login. You log in with the vendor's tool, as always.</p>
-      </article>
-      <article class="feat">
-        <span class="tag" aria-hidden="true">06</span>
-        <h3>Scriptable</h3>
-        <p><code>herder session new</code>, <code>send</code>, <code>wait</code>, <code>status</code>. Every command takes <code>--json</code> and never prompts, so scripts and other agents can drive sessions too.</p>
-      </article>
-      <article class="feat soon">
-        <span class="tag">soon</span>
-        <h3>Usage</h3>
-        <p>One view of what every account and machine has used, so you know where the headroom is before you need it.</p>
-      </article>
-      <article class="feat soon">
-        <span class="tag">soon</span>
-        <h3>Shared skills</h3>
-        <p>One library of skills for every agent on every machine. Write it once, every provider gets it.</p>
-      </article>
-    </div>
-  </section>
-
-  <section id="screens" class="screens" aria-labelledby="screens-h">
-    <h2 id="screens-h" class="eyebrow">screens</h2>
-    <div class="gallery">
-      <figure class="shot wide">
-        <img src="img/mac-approval-1600.webp" srcset="img/mac-approval-800.webp 800w, img/mac-approval-1600.webp 1600w" sizes="(min-width: 1160px) 760px, 94vw" width="1600" height="959" loading="lazy" decoding="async" alt="The herder Mac app: a Codex session asks to run cargo test, with Deny and Allow buttons, next to a list of sessions that need you">
-        <figcaption>Mac app. It asks, you allow, it carries on.</figcaption>
+    <div class="stage rise" style="--d:5">
+      <figure class="shot mac">
+        <img src="img/mac-hero-1440.webp" srcset="img/mac-hero-720.webp 720w, img/mac-hero-1440.webp 1440w" sizes="(min-width: 1160px) 1000px, 88vw" width="1440" height="900" alt="The herder Mac app: the Board lists every open task on three machines, and the open task's agent has started three sub-agents" fetchpriority="high">
       </figure>
       <figure class="shot phone">
-        <img src="img/ios-home-640.webp" srcset="img/ios-home-320.webp 320w, img/ios-home-640.webp 640w" sizes="(min-width: 1160px) 300px, 60vw" width="640" height="1391" loading="lazy" decoding="async" alt="The herder iPhone app showing an approval request with Deny and Allow buttons">
-        <figcaption>iPhone. Allow from the couch.</figcaption>
+        <img src="img/ios-board-320.webp" srcset="img/ios-board-320.webp 320w, img/ios-board-640.webp 640w" sizes="(min-width: 1160px) 230px, 24vw" width="640" height="1391" alt="The herder iPhone app: the Board, with the tasks that need you on top">
       </figure>
-      <figure class="shot half">
-        <img src="img/tui-limit-1600.webp" srcset="img/tui-limit-800.webp 800w, img/tui-limit-1600.webp 1600w" sizes="(min-width: 1160px) 540px, 94vw" width="1600" height="816" loading="lazy" decoding="async" alt="The herder terminal UI after a five-hour limit: the session waits for the limit reset">
-        <figcaption>Limit reached, no account left: it waits for the reset.</figcaption>
+    </div>
+  </section>
+
+  <section class="facts" aria-label="herder in numbers">
+    <dl>
+      <div><dt>4</dt><dd>coding agents: Claude&nbsp;Code, Codex, Cursor and OpenCode</dd></div>
+      <div><dt>5</dt><dd>ways in: Mac, iPhone, terminal, Slack and Telegram</dd></div>
+      <div><dt>0</dt><dd>provider login tokens herder reads, stores or relays</dd></div>
+      <div><dt>$0</dt><dd>free and open source under Apache-2.0</dd></div>
+    </dl>
+  </section>
+
+  <div id="features">
+    <section class="feature" id="failover" aria-labelledby="failover-h">
+      <div class="copy-col">
+        <p class="eyebrow">failover</p>
+        <h2 id="failover-h">Never blocked by a usage limit.</h2>
+        <p>Add every account you have. When a session hits a limit, herder moves it to the next account of that provider with room left, and the agent carries on where it stopped. With no account left, it waits for the reset and resumes by itself.</p>
+        <p class="how"><span>how</span> herder switches only after a limit is hit, never ahead of time. Providers shows how much of each account's session and weekly windows is left, and when they reset.</p>
+      </div>
+      <figure class="shot">
+        <img src="img/mac-failover-1440.webp" srcset="img/mac-failover-720.webp 720w, img/mac-failover-1440.webp 1440w" sizes="(min-width: 1160px) 640px, (min-width: 861px) 56vw, 94vw" width="1440" height="900" loading="lazy" decoding="async" alt="A session in the herder Mac app that hit a usage limit and continued on another account of the same provider">
       </figure>
-      <figure class="shot half">
-        <img src="img/tui-fleet-1600.webp" srcset="img/tui-fleet-800.webp 800w, img/tui-fleet-1600.webp 1600w" sizes="(min-width: 1160px) 540px, 94vw" width="1600" height="816" loading="lazy" decoding="async" alt="The herder fleet view: three connected machines, a devbox, a laptop and a vault">
-        <figcaption>The fleet: every machine, one list.</figcaption>
+    </section>
+
+    <section class="feature flip" id="fleet" aria-labelledby="fleet-h">
+      <div class="copy-col">
+        <p class="eyebrow">fleet</p>
+        <h2 id="fleet-h">One fleet, every machine.</h2>
+        <p>Put herder on your Mac, your Linux boxes and your servers, and see them all in one window: what each one runs, its load, its accounts and its provider CLIs. Start each task on the machine that suits it.</p>
+        <p class="how"><span>how</span> one daemon per machine, paired with <code>herder pair</code>. Providers updates every agent CLI on every machine at once.</p>
+      </div>
+      <figure class="shot">
+        <img src="img/mac-machines-1440.webp" srcset="img/mac-machines-720.webp 720w, img/mac-machines-1440.webp 1440w" sizes="(min-width: 1160px) 640px, (min-width: 861px) 56vw, 94vw" width="1440" height="900" loading="lazy" decoding="async" alt="The herder Mac app's Machines page: three machines with their load, running sessions, CLI updates and accounts, and the vault they back up to">
       </figure>
+    </section>
+
+    <section class="feature" id="agents" aria-labelledby="agents-h">
+      <div class="copy-col">
+        <p class="eyebrow">multi-agent tasks</p>
+        <h2 id="agents-h">Agents that run agents.</h2>
+        <p>A task's agent can start sub-agents, prompt them, wait for them and answer their questions, and escalates to you only what it can't decide. The Board shows every task on every machine, the ones that need you first, with their sub-agents a click away.</p>
+        <p class="how"><span>how</span> agents get herder's task tools over MCP. Every sub-agent is a session of its own that you can open, steer or stop.</p>
+      </div>
+      <figure class="shot">
+        <img src="img/mac-agents-1440.webp" srcset="img/mac-agents-720.webp 720w, img/mac-agents-1440.webp 1440w" sizes="(min-width: 1160px) 640px, (min-width: 861px) 56vw, 94vw" width="1440" height="900" loading="lazy" decoding="async" alt="The herder Mac app's Board with a task unfolded into its three sub-agents, and the task's session beside it">
+      </figure>
+    </section>
+
+    <section class="feature flip" id="phone" aria-labelledby="phone-h">
+      <div class="copy-col">
+        <p class="eyebrow">iphone</p>
+        <h2 id="phone-h">Answer your agents from your phone.</h2>
+        <p>When an agent asks a question or wants to run a command, it waits for you on the iPhone. Allow, deny or answer, follow any task, and start the next one from wherever you are.</p>
+        <p class="how"><span>how</span> scan the QR code <code>herder pair</code> prints. The iPhone app is in TestFlight; the terminal UI also works over SSH from a phone.</p>
+      </div>
+      <div class="phones">
+        <figure class="shot phone">
+          <img src="img/ios-request-320.webp" srcset="img/ios-request-320.webp 320w, img/ios-request-640.webp 640w" sizes="(min-width: 861px) 230px, 44vw" width="640" height="1391" loading="lazy" decoding="async" alt="The herder iPhone app asking to allow a command, with Deny and Allow buttons">
+        </figure>
+        <figure class="shot phone">
+          <img src="img/ios-session-320.webp" srcset="img/ios-session-320.webp 320w, img/ios-session-640.webp 640w" sizes="(min-width: 861px) 230px, 44vw" width="640" height="1391" loading="lazy" decoding="async" alt="A session in the herder iPhone app whose sub-agents work in parallel">
+        </figure>
+      </div>
+    </section>
+
+    <section class="feature" id="team" aria-labelledby="team-h">
+      <div class="copy-col">
+        <p class="eyebrow">slack and telegram</p>
+        <h2 id="team-h">Your team, in Slack and Telegram.</h2>
+        <p>Mention the bot in a Slack thread and it reads the thread, runs the work on your machines and posts the files it makes back into it. Questions and approvals come to the chat with Allow and Deny. In Telegram, message it or mention it in a group.</p>
+        <p class="how"><span>how</span> bots run on your own machines. Each person on a bot's allowlist gets switches for DMs, channels and approvals, and no bot opens terminals, logins or settings.</p>
+      </div>
+      <figure class="shot">
+        <img src="img/mac-integrations-1440.webp" srcset="img/mac-integrations-720.webp 720w, img/mac-integrations-1440.webp 1440w" sizes="(min-width: 1160px) 640px, (min-width: 861px) 56vw, 94vw" width="1440" height="900" loading="lazy" decoding="async" alt="The herder Mac app's Integrations page: the chat bots each machine runs, with whom they answer">
+      </figure>
+    </section>
+
+    <section class="feature flip" id="vault" aria-labelledby="vault-h">
+      <div class="copy-col">
+        <p class="eyebrow">vault</p>
+        <h2 id="vault-h">Nothing lost when a machine goes away.</h2>
+        <p>A vault keeps every session of every machine, so history survives a dead laptop and another machine can take a task over. It holds your secrets too: a program an agent runs fetches them, and the agent never sees one.</p>
+        <p class="how"><span>how</span> run it on Kubernetes with the manifests in the repo, or on any machine with one click in the app or <code>herder vault install</code>.</p>
+      </div>
+      <figure class="shot">
+        <img src="img/mac-backup-1440.webp" srcset="img/mac-backup-720.webp 720w, img/mac-backup-1440.webp 1440w" sizes="(min-width: 1160px) 640px, (min-width: 861px) 56vw, 94vw" width="1440" height="900" loading="lazy" decoding="async" alt="A machine's page in the herder Mac app: it backs up to the vault, caught up, fetches its secrets from it, and lists its bots and the people on it">
+      </figure>
+    </section>
+
+    <section class="feature" id="trust" aria-labelledby="trust-h">
+      <div class="copy-col">
+        <p class="eyebrow">roles and privacy</p>
+        <h2 id="trust-h">Share machines, keep your keys.</h2>
+        <p>Invite someone with a one-time code, as a member or an owner. Members drive sessions, while terminals, logins and settings stay with the machine's owners, who can change a role or revoke a device at any time. herder never reads, stores or relays your provider login tokens. You log in with the vendor's own tool, and the login stays where that tool keeps it.</p>
+        <p class="how"><span>how</span> herder drives each vendor's unmodified CLI, one config dir per account. It is open source, so you can read every line.</p>
+      </div>
+      <figure class="shot">
+        <img src="img/mac-member-1440.webp" srcset="img/mac-member-720.webp 720w, img/mac-member-1440.webp 1440w" sizes="(min-width: 1160px) 640px, (min-width: 861px) 56vw, 94vw" width="1440" height="900" loading="lazy" decoding="async" alt="A machine's page in the herder Mac app as a member sees it: its accounts and CLIs, with adding accounts and MCP servers left to the owner">
+      </figure>
+    </section>
+  </div>
+
+  <section id="terminal" class="terminal" aria-labelledby="terminal-h">
+    <p class="eyebrow">terminal and scripts</p>
+    <h2 id="terminal-h" class="big">Or drive it all from a terminal.</h2>
+    <p class="sub">Bare <code>herder</code> opens the terminal UI, over SSH or mosh, on any screen. <code>herder session</code> creates, prompts, waits on and archives sessions, with <code>--json</code> and never a prompt, so scripts and other agents can drive them too.</p>
+    <figure class="shot wide">
+      <img src="img/tui-session-1600.webp" srcset="img/tui-session-800.webp 800w, img/tui-session-1600.webp 1600w" sizes="(min-width: 1160px) 1110px, 94vw" width="1600" height="816" loading="lazy" decoding="async" alt="The herder terminal UI: machines and sessions on the left, a Claude Code session with a diff in the middle, usage and child tasks on the right">
+    </figure>
+    <pre class="script"><code>echo "Rate-limit the public API per key" | herder session new --project api
+herder session wait &lt;id&gt; --json
+herder session status &lt;id&gt; --json</code></pre>
+  </section>
+
+  <section id="compare" class="compare" aria-labelledby="compare-h">
+    <p class="eyebrow">compare</p>
+    <h2 id="compare-h" class="big">herder vs running the CLIs by hand.</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col"><span class="sr">When</span></th><th scope="col">By hand</th><th scope="col">With herder</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">An account hits its limit</th><td data-label="By hand">You wait, or log in to another account and start over</td><td data-label="With herder">The session moves to the next account and carries on</td></tr>
+          <tr><th scope="row">Agents on several machines</th><td data-label="By hand">An SSH and tmux session per box</td><td data-label="With herder">Every task on every machine, on one Board</td></tr>
+          <tr><th scope="row">An agent asks while you're out</th><td data-label="By hand">It waits until you're back at that terminal</td><td data-label="With herder">You answer from your iPhone, Slack or Telegram</td></tr>
+          <tr><th scope="row">A machine dies</th><td data-label="By hand">Its sessions go with it</td><td data-label="With herder">The vault has every session; another machine takes over</td></tr>
+          <tr><th scope="row">Your team wants in</th><td data-label="By hand">Share a shell, or a login</td><td data-label="With herder">Members drive sessions, with no shell and no tokens</td></tr>
+        </tbody>
+      </table>
     </div>
   </section>
 
   <section id="start" class="start" aria-labelledby="start-h">
-    <h2 id="start-h" class="eyebrow">get started</h2>
-    <p class="big">Three commands to a herd.</p>
+    <p class="eyebrow">get started</p>
+    <h2 id="start-h" class="big">Three commands to a herd.</h2>
     <ol class="steps">
       <li>
         <span class="tag">01 · install</span>
         <pre><code>curl -fsSL https://herder.sh/install | sh
 herder service install</code></pre>
-        <p>Installs herder and runs its daemon now and at every boot.</p>
+        <p>Installs herder on a Linux box or a Mac and runs its daemon now and at every boot.</p>
       </li>
       <li>
-        <span class="tag">02 · open it</span>
-        <pre><code>herder</code></pre>
-        <p>Bare <code>herder</code> is the terminal UI. Add an account with <kbd>n</kbd>: the vendor's own login runs, herder just shows you its terminal.</p>
-      </li>
-      <li>
-        <span class="tag">03 · pair</span>
+        <span class="tag">02 · pair</span>
         <pre><code>herder pair</code></pre>
-        <p>Prints a link and a QR code. Paste the link into the Mac app's Add Machine, or run <code>herder connect &lt;link&gt;</code> on another computer.</p>
+        <p>Prints a link and a QR code. Scan it with the iPhone app, paste it into the Mac app's Add Machine, or run <code>herder connect &lt;link&gt;</code> on another computer.</p>
+      </li>
+      <li>
+        <span class="tag">03 · add an account</span>
+        <pre><code>herder</code></pre>
+        <p>Add Account in the app, or <kbd>n</kbd> in the terminal UI: the vendor's own login runs on the machine, and herder just shows you its terminal.</p>
       </li>
     </ol>
   </section>
 
   <section id="faq" class="faq" aria-labelledby="faq-h">
-    <h2 id="faq-h" class="eyebrow">faq</h2>
+    <p class="eyebrow">faq</p>
+    <h2 id="faq-h" class="big">Questions.</h2>
     <div class="qs">
       <details open>
         <summary>What is herder?</summary>
-        <p>herder is an open-source tool that runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. A herder daemon on each Linux machine hosts agent sessions in the vendor's own unmodified CLI, and you watch and steer every session from the herder terminal UI, the herder Mac app, or a phone over SSH.</p>
+        <p>herder is an open-source tool that keeps coding agents (Claude Code, Codex, Cursor and OpenCode) working across all your accounts and all your machines. A herder daemon on each Linux machine or Mac hosts agent sessions in the vendor's own unmodified CLI, and you watch and steer every session from the herder Mac app, the iPhone app, the terminal UI, or Slack and Telegram.</p>
       </details>
       <details>
         <summary>How do I install herder?</summary>
-        <p>On Linux (x86_64 or arm64), install herder with <code>curl -fsSL https://herder.sh/install | sh</code>. The script downloads a static binary, checks its sha256 and puts it in <code>~/.local/bin/herder</code>. Then <code>herder service install</code> runs the herder daemon now and at every boot, and <code>herder update</code> moves to the latest release.</p>
+        <p>On Linux (x86_64 or arm64) or an Apple silicon Mac, install herder with <code>curl -fsSL https://herder.sh/install | sh</code>. The script downloads the binary, checks its sha256 and puts it in <code>~/.local/bin/herder</code>. Then <code>herder service install</code> runs the herder daemon now and at every boot (systemd on Linux, launchd on macOS), and <code>herder update</code> moves to the latest release. <code>herder doctor</code> checks the machine and says how to fix what is not ready.</p>
       </details>
       <details>
         <summary>Which coding agents does herder support?</summary>
-        <p>herder supports Claude Code, Codex, Cursor and OpenCode. herder drives each vendor's own unmodified CLI, so the agent behaves exactly as it does when you run it yourself.</p>
+        <p>herder supports Claude Code, Codex, Cursor and OpenCode. herder drives each vendor's own unmodified CLI, so the agent behaves exactly as it does when you run it yourself. The Providers page shows which CLI version each machine runs and updates them for you.</p>
       </details>
       <details>
-        <summary>Can herder use several accounts of the same provider?</summary>
-        <p>Yes. herder runs each account under its own config dir, so one machine can hold several Claude or Codex accounts. When a session hits a usage limit, herder moves it to another account of the same provider that has room left. herder only switches after a limit is hit, never ahead of time. If no account has room and the reset time is known, the session waits for the reset and carries on by itself.</p>
+        <summary>What happens when an account hits its usage limit?</summary>
+        <p>herder runs each account under its own config dir, so one machine can hold several Claude or Codex accounts. When a session hits a usage limit, herder moves it to another account of the same provider that has room left, and the agent carries on. herder only switches after a limit is hit, never ahead of time. If no account has room and the reset time is known, the session waits for the reset and carries on by itself. Providers shows how much of each account's windows is used and when they reset.</p>
       </details>
       <details>
         <summary>Does herder see my Claude or OpenAI login tokens?</summary>
@@ -350,11 +416,23 @@ herder service install</code></pre>
       </details>
       <details>
         <summary>Can herder run agents on several machines?</summary>
-        <p>Yes. Run the herder daemon on each Linux machine, pair them with <code>herder pair</code>, and the terminal UI and the Mac app show the sessions of every machine in one list. An optional herder vault keeps a durable copy of every session journal and catches up after either side was offline.</p>
+        <p>Yes. Run the herder daemon on each machine, pair them with <code>herder pair</code>, and the apps and the terminal UI show the tasks of every machine on one Board, with each machine's load, accounts and provider CLIs on the Machines page.</p>
       </details>
       <details>
+        <summary>What does the herder vault do?</summary>
+        <p>A vault keeps a copy of every session of the machines linked to it, so a session's history survives its machine and another machine can take the session over. It also holds secrets, granted per machine: <code>herder secret run</code> hands them to a program an agent runs, without the agent seeing them. Run the vault on Kubernetes with the manifests in the repository, or on any machine with one click in the app or <code>herder vault install</code>.</p>
+      </details>
+      <details>
+        <summary>Can I use herder from Slack or Telegram?</summary>
+        <p>Yes. A machine can run Slack and Telegram bots. Mention the Slack bot in a thread and it reads the thread, starts a session and posts the files the agent publishes back into the thread; DM a bot or mention it in a channel or group to chat with a session and answer its questions and approvals. Each bot has its own allowlist, with switches per person for DMs, channels and approvals, and never opens terminals, logins or settings. The bot's tokens are secrets in your vault, which the daemon keeps in memory only.</p>
+      </details>
+      <details>
+        <summary>Can I share a machine with my team?</summary>
+        <p>Yes. Invite someone from the machine's People section with a one-time code, as a member or an owner. Members see and drive the machine's sessions, while terminals, provider logins and settings stay with the machine's owners. Only owners can open, attach to or see a terminal.</p>
+      </details>
+      <details id="faq-apps">
         <summary>Is there a herder app for Mac and iPhone?</summary>
-        <p>Yes for Mac: the herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app shares its code but is not on the App Store yet; until then, run <code>herder</code> over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen.</p>
+        <p>Yes. The herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app is in TestFlight and not on the App Store yet; until then, you can also run <code>herder</code> over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen.</p>
       </details>
       <details id="faq-mac">
         <summary>Why does macOS say the herder app can't be opened?</summary>
@@ -370,6 +448,22 @@ herder service install</code></pre>
       </details>
     </div>
   </section>
+
+  <section class="final" aria-labelledby="final-h">
+    <h2 id="final-h" class="big">Put your agents to work everywhere.</h2>
+    <div class="install">
+      <div class="cmd">
+        <span class="prompt" aria-hidden="true">$</span>
+        <code id="install-cmd-2">curl -fsSL https://herder.sh/install | sh</code>
+        <button class="copy" type="button" data-copy="install-cmd-2" aria-label="Copy the install command"><span>copy</span></button>
+      </div>
+      <div class="ctas">
+        <a class="btn primary" href="https://github.com/herder-sh/herder/releases/download/v0.13.0/herder-app-0.13.0-macos-arm64.zip">Download for Mac</a>
+        <a class="btn" href="https://github.com/herder-sh/herder">Source on GitHub</a>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <footer class="foot">
