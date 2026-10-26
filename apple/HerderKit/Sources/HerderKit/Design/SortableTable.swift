@@ -119,7 +119,7 @@ struct SortableTable<Row: Identifiable>: View {
     }
 
     private func header(_ sort: TableSort) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 16) {
             ForEach(columns.indices, id: \.self) { index in
                 let column = columns[index]
                 let sorted = column.title == sort.column
@@ -153,7 +153,7 @@ struct SortableTable<Row: Identifiable>: View {
     }
 
     @ViewBuilder private func line(_ row: Row) -> some View {
-        let cells = HStack(spacing: 12) {
+        let cells = HStack(spacing: 16) {
             ForEach(columns.indices, id: \.self) { index in
                 columns[index].cell(row).cell(columns[index])
             }
