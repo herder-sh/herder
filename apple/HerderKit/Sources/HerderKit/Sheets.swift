@@ -9,6 +9,8 @@ import AppKit
 /// The sheets the app presents: short create flows only. Objects open as pages (`Page`).
 enum AppSheet: Identifiable, Hashable {
     case pair
+    /// Add Machine with a `herder://pair` link the app was opened with already filled in.
+    case pairLink(String)
     /// A link that pairs another device with this one's machines.
     case share
     /// A new session: pick its project first.
@@ -36,6 +38,7 @@ extension AppSheet {
     func view(fleet: Fleet, drafted: @escaping (Draft) -> Void) -> some View {
         switch self {
         case .pair: PairSheet(fleet: fleet)
+        case .pairLink(let link): PairSheet(fleet: fleet, link: link)
         case .share: ShareSheet(fleet: fleet)
         case .newSession: ProjectPicker(fleet: fleet, newProject: false, picked: drafted)
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
@@ -54,11 +57,16 @@ extension AppSheet {
 struct PairSheet: View {
     let fleet: Fleet
     @Environment(\.dismiss) private var dismiss
-    @State private var link = ""
+    @State private var link: String
     @State private var error: String?
     @State private var scanning = false
     /// Each machine's result, once a link of several machines, or one that failed, paired.
     @State private var results: [PairResult]?
+
+    init(fleet: Fleet, link: String = "") {
+        self.fleet = fleet
+        _link = State(initialValue: link)
+    }
 
     var body: some View {
         #if os(iOS)

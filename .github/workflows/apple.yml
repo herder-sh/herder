@@ -137,8 +137,9 @@ jobs:
           # the build: the link's codes expire 10 minutes after the daemons mint them. They run
           # until stdin closes, so keep it open for the job.
           (sleep 3600 | target/debug/examples/fake_daemon --share > "$RUNNER_TEMP/fake_daemon.out" &)
-          for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_daemon.out" ] && break; sleep 1; done
-          [ -s "$RUNNER_TEMP/fake_daemon.out" ] || { echo "the fake daemons did not start"; exit 1; }
+          # Eight lines: the link first, the id of the session waiting on an approval last.
+          for _ in $(seq 60); do [ "$(wc -l < "$RUNNER_TEMP/fake_daemon.out")" -ge 8 ] && break; sleep 1; done
+          [ "$(wc -l < "$RUNNER_TEMP/fake_daemon.out")" -ge 8 ] || { echo "the fake daemons did not start"; exit 1; }
           # And a vault that keeps secrets, for the secrets screen.
           (sleep 3600 | target/debug/examples/fake_daemon --vault > "$RUNNER_TEMP/fake_vault.out" &)
           for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_vault.out" ] && break; sleep 1; done
@@ -149,6 +150,7 @@ jobs:
           for attempt in 1 2 3; do
             rm -rf "$RUNNER_TEMP/ios-tests.xcresult"
             TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
+            TEST_RUNNER_HERDER_WAITING_SESSION=$(sed -n 8p "$RUNNER_TEMP/fake_daemon.out") \
             TEST_RUNNER_HERDER_VAULT_LINK=$(head -1 "$RUNNER_TEMP/fake_vault.out") \
               xcodebuild test-without-building -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
               -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \

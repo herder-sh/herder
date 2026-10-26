@@ -38,7 +38,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         # HerderFFI.xcframework has arm64 slices only.
         EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
-        # The launch screen is the splash's background, so the splash follows it seamlessly.
+        # The `herder` URL scheme, and the launch screen: the splash's background, so the splash
+        # follows it seamlessly.
         INFOPLIST_FILE: App/Info.plist
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: >-
@@ -128,5 +129,7 @@ targets:
         ARCHS: arm64
         CODE_SIGN_ENTITLEMENTS: App/herder.entitlements
         ENABLE_HARDENED_RUNTIME: YES
+        # The `herder` URL scheme; iOS's launch screen in it means nothing on the Mac.
+        INFOPLIST_FILE: App/Info.plist
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
     scheme: {}
