@@ -43,15 +43,11 @@ struct SessionView: View {
             if let parent = model?.parent {
                 ChildBanner(fleet: fleet, parent: SessionKey(hostId: key.hostId, sessionId: parent), open: open)
             }
-            // On a phone the navigation bar carries the title and the actions, so the
-            // transcript starts right under it.
-            if !compact {
-                header(model, summary)
-                    .overlay(alignment: .leading) {
-                        if model?.parent != nil { Rectangle().fill(Theme.child).frame(width: 3) }
-                    }
-                Rectangle().fill(Theme.stroke).frame(height: 1)
-            }
+            header(model, summary)
+                .overlay(alignment: .leading) {
+                    if model?.parent != nil { Rectangle().fill(Theme.child).frame(width: 3) }
+                }
+            Rectangle().fill(Theme.stroke).frame(height: 1)
             if showsTerminal {
                 TerminalPane(fleet: fleet, key: key)
             } else {
@@ -89,9 +85,9 @@ struct SessionView: View {
                     }
                 }
                 .scrollTargetLayout()
-                .frame(maxWidth: 760)
+                .frame(maxWidth: SessionColumn.transcript)
                 .frame(maxWidth: .infinity)
-                .padding(16)
+                .padding(SessionColumn.transcriptMargin)
                 .overlay(alignment: .bottom) { Color.clear.frame(height: 1).id(TranscriptScroll.end) }
             }
             .defaultScrollAnchor(.bottom)
@@ -192,9 +188,8 @@ struct SessionView: View {
         .toolbar(.hidden, for: .tabBar)
         .toolbar {
             if compact {
-                ToolbarItem(placement: .principal) { compactTitle(model, summary) }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    prChip(labels: false, inToolbar: true)
+                    prChip(inToolbar: true)
                     if let model { actionsMenu(model, threads: summary?.threads ?? [], inToolbar: true) }
                 }
             }
@@ -202,90 +197,89 @@ struct SessionView: View {
         #endif
     }
 
-    // MARK: Phone header
-
-    /// The title on a phone: one line of title, tail-truncated, over one caption line of the
-    /// provider, the state, the project and the machine, so it fits beside the back button.
-    private func compactTitle(_ model: SessionModel?, _ summary: SessionSummary?) -> some View {
-        VStack(spacing: 1) {
-            HStack(spacing: 5) {
-                if model?.parent != nil { ChildAvatar(session: model, size: 16, showsState: false) }
-                Text(summary?.title ?? model?.title ?? "Session")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                    .lineLimit(1).truncationMode(.tail)
-            }
-            HStack(spacing: 4) {
-                if let provider = model?.provider { ProviderMark(provider: provider, size: 10) }
-                StatusGlyph(state: model?.state ?? .idle, size: 6)
-                let detail = SessionHeading.detail(project: summary?.project, machine: summary?.machine,
-                                                   archiving: fleet.archiving.contains(key))
-                (Text(model?.stateLabel ?? "")
-                    .foregroundStyle(model?.state == .needsYou ? Theme.accent : Theme.secondary)
-                 + Text(detail.isEmpty ? "" : " · " + detail).foregroundStyle(Theme.tertiary))
-                    .lineLimit(1).truncationMode(.tail)
-            }
-            .font(.caption2.weight(.medium))
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
-    }
-
     // MARK: Header
 
-    /// The header, with the buttons' labels where they fit beside 160 points of title, else
-    /// the buttons as icons, so a label never truncates.
+    /// The header, between the transcript's left edge and the composer's right one: the title,
+    /// the status and the branch, then a row of icon buttons, labelled where they fit beside
+    /// 240 points of title. On a phone the navigation bar holds the buttons, and the title
+    /// gets the whole width.
     private func header(_ model: SessionModel?, _ summary: SessionSummary?) -> some View {
-        ViewThatFits(in: .horizontal) {
-            headerRow(model, summary, labels: true)
-            headerRow(model, summary, labels: false)
+        SessionColumnLayout {
+            if compact {
+                heading(model, summary)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    headerRow(model, summary, labels: true)
+                    headerRow(model, summary, labels: false)
+                }
+            }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.top, compact ? 4 : 14)
+        .padding(.bottom, 12)
     }
 
     private func headerRow(_ model: SessionModel?, _ summary: SessionSummary?, labels: Bool) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 10) {
-                    if model?.parent != nil { ChildAvatar(session: model, size: 26, showsState: false) }
-                    Text(summary?.title ?? model?.title ?? "Session")
-                        .font(.title3.weight(.bold)).foregroundStyle(Theme.text).lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if model?.status == .needsLogin {
-                        NeedsSignInChip()
-                    }
-                }
-                // One line, so a narrow header truncates where it runs on rather than wrapping
-                // its parts beside each other.
-                HStack(spacing: 6) {
-                    StatusGlyph(state: model?.state ?? .idle, size: 7)
+        HStack(alignment: .top, spacing: 16) {
+            heading(model, summary)
+                .frame(idealWidth: 240, maxWidth: .infinity, alignment: .leading)
+            buttons(model, summary, labels: labels)
+                // The buttons keep their size; the title, status and branch take what is left.
+                .fixedSize()
+        }
+    }
+
+    /// The title, at most two lines; the status line; the branch and where it was forked from.
+    private func heading(_ model: SessionModel?, _ summary: SessionSummary?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 8) {
+                if model?.parent != nil { ChildAvatar(session: model, size: 22, showsState: false) }
+                Text(summary?.title ?? model?.title ?? "Session")
+                    .font(Theme.page).foregroundStyle(Theme.text).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            // One line, so a narrow header truncates where it runs on rather than wrapping
+            // its parts beside each other.
+            HStack(spacing: 6) {
+                StatusGlyph(state: model?.state ?? .idle, size: 7)
+                let detail = SessionHeading.detail(project: summary?.project, machine: summary?.machine,
+                                                   archiving: fleet.archiving.contains(key))
+                if model?.status == .needsLogin {
+                    NeedsSignInChip()
+                    if !detail.isEmpty { Text(detail).foregroundStyle(Theme.tertiary).lineLimit(1) }
+                } else {
                     (Text(model?.stateLabel ?? "")
                         .foregroundStyle(model?.state == .needsYou ? Theme.accent : Theme.secondary)
-                     + Text(summary.map { " · \($0.project.isEmpty ? "" : $0.project + " · ")\($0.machine)" } ?? "")
-                        .foregroundStyle(Theme.tertiary))
+                     + Text(detail.isEmpty ? "" : " · " + detail).foregroundStyle(Theme.tertiary))
                         .lineLimit(1)
                 }
-                .font(.footnote.weight(.medium))
-                if let origin = fleet.forkOrigins[key] {
-                    Text("Forked from \(origin.sessionId) on \(origin.hostId)")
-                        .font(.caption).foregroundStyle(Theme.secondary).textSelection(.enabled)
-                }
-                if let branch = model?.branch {
-                    Text(branch).font(Theme.monoSmall).foregroundStyle(Theme.tertiary).textSelection(.enabled)
-                        .lineLimit(1).truncationMode(.middle)
-                }
             }
-            .frame(idealWidth: 160, maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 6) {
+            .font(Theme.body.weight(.medium))
+            if let branch = model?.branch {
+                Text(branch).font(Theme.monoSmall).foregroundStyle(Theme.tertiary).textSelection(.enabled)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            if let origin = fleet.forkOrigins[key] {
+                Text("Forked from \(origin.sessionId) on \(origin.hostId)")
+                    .font(Theme.meta).foregroundStyle(Theme.tertiary).textSelection(.enabled)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+        }
+    }
+
+    /// The header's buttons, 32 points square, each with its tooltip: the linked thread, the
+    /// PRs, the terminal, find, the inspector, the list (on the Mac) and the session's menu.
+    private func buttons(_ model: SessionModel?, _ summary: SessionSummary?, labels: Bool) -> some View {
+        HStack(spacing: 4) {
             if let thread = summary?.threads.last(where: { $0.url != nil }), let url = thread.url.flatMap(URL.init) {
                 Link(destination: url) {
-                    HeaderLabel(symbol: "bubble.left.and.text.bubble.right", title: labels ? thread.kind.label : nil)
+                    HeaderLabel(symbol: "bubble.left.and.text.bubble.right", title: nil)
                 }
                 .buttonStyle(.plain)
                 .help("Open the linked \(thread.kind.label) thread")
                 .accessibilityLabel("Open in \(thread.kind.label)")
             }
-            prChip(labels: labels, inToolbar: false)
+            prChip(inToolbar: false)
             if ownsTerminal, model?.state != .archived {
                 HeaderButton(symbol: showsTerminal ? "text.bubble" : "terminal",
                              title: labels ? showsTerminal ? "Chat" : "Terminal" : nil,
@@ -303,23 +297,19 @@ struct SessionView: View {
             HeaderButton(symbol: "info.circle", title: nil, selected: inspector == .pane && inspectorShown) {
                 showInspector()
             }
+                .accessibilityLabel("Events and Statistics")
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help("Events and statistics (⌥⌘I)")
             #if os(macOS)
             HeaderButton(symbol: listHidden ? "sidebar.squares.left" : "rectangle.expand.vertical",
                          title: nil) { listHidden.toggle() }
+                .accessibilityLabel(listHidden ? "Show the Session List" : "Hide the Session List")
                 .keyboardShortcut("\\", modifiers: .command)
                 .help(listHidden ? "Show the session list (⌘\\)" : "Give the session the whole width (⌘\\)")
             #endif
-            if fleet.archiving.contains(key) {
-                ArchivingLabel()
-            }
             if let model {
                 actionsMenu(model, threads: summary?.threads ?? [], inToolbar: false)
             }
-            }
-            // The buttons keep their size; the title, status and branch take what is left.
-            .fixedSize()
         }
     }
 
@@ -345,24 +335,24 @@ struct SessionView: View {
         }
     }
 
-    /// The session's pull requests as text, tinted by the most urgent.
+    /// The session tree's pull requests as a quiet chip, its text tinted by their state.
     @ViewBuilder
-    private func prChip(labels: Bool, inToolbar: Bool) -> some View {
+    private func prChip(inToolbar: Bool) -> some View {
         let rollup = PRRollup(of: key, session: fleet.session, children: fleet.lists.children)
         if !rollup.all.isEmpty {
             Group {
                 if inToolbar {
-                    Label(rollup.shortChip, systemImage: "arrow.triangle.pull")
+                    Label(rollup.chip, systemImage: "arrow.triangle.pull")
                         .labelStyle(.titleAndIcon)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(rollup.urgent?.color ?? Theme.secondary)
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(rollup.urgency.color)
                 } else {
-                    HeaderLabel(symbol: "arrow.triangle.pull", title: labels ? rollup.chip : rollup.shortChip,
-                                tint: rollup.urgent?.color ?? Theme.secondary)
+                    PRChip(text: rollup.chip, tint: rollup.urgency.color)
                 }
             }
+            .help(rollup.summary)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(rollup.chip)
+            .accessibilityLabel(rollup.summary)
         }
     }
 
@@ -371,10 +361,7 @@ struct SessionView: View {
     private func actionsMenu(_ model: SessionModel, threads: [ThreadLink], inToolbar: Bool) -> some View {
         Menu {
             if inToolbar {
-                // The branch and fork origin title the section, as the menu has no other line
-                // for them.
-                Section(SessionHeading.facts(branch: model.branch,
-                                             forkedFrom: fleet.forkOrigins[key])) {
+                Section {
                     if ownsTerminal, model.state != .archived {
                         Button(showsTerminal ? "Chat" : "Terminal",
                                systemImage: showsTerminal ? "text.bubble" : "terminal") { showsTerminal.toggle() }
@@ -409,6 +396,7 @@ struct SessionView: View {
             }
         }
         .modifier(HeaderMenuStyle(applies: !inToolbar))
+        .help("Interrupt, rename or archive")
     }
 
     // MARK: Controls
@@ -443,9 +431,9 @@ struct SessionView: View {
             }
         }
         .animation(.smooth(duration: 0.25), value: pinned(model, summary)?.requestId)
-        .frame(maxWidth: 784)
+        .frame(maxWidth: SessionColumn.composer)
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SessionColumn.composerMargin)
         .padding(.top, 8)
         .padding(.bottom, 10)
         .background(Theme.background)
@@ -671,7 +659,7 @@ private struct Composer: View {
     }
 }
 
-/// The amber "Needs sign-in" chip beside the title of a session whose account is signed out.
+/// The amber "Needs sign-in" chip on the status line of a session whose account is signed out.
 struct NeedsSignInChip: View {
     var body: some View {
         Label("Needs sign-in", systemImage: "exclamationmark.circle.fill")
@@ -1010,18 +998,12 @@ private struct HeaderMenuStyle: ViewModifier {
     }
 }
 
-/// The phone header's caption after the session's state: its project and machine, or that it
+/// The header's status line after the session's state: its project and machine, or that it
 /// is being archived.
 enum SessionHeading {
     static func detail(project: String?, machine: String?, archiving: Bool) -> String {
         let parts = archiving ? ["Archiving…"] : [project, machine].compactMap { $0 }
         return parts.filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-
-    /// What the phone's actions menu is titled with: the branch, and where it was forked from.
-    static func facts(branch: String?, forkedFrom: ForkOrigin?) -> String {
-        [branch, forkedFrom.map { "Forked from \($0.sessionId) on \($0.hostId)" }]
-            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
     }
 }
 
@@ -1041,25 +1023,87 @@ struct HeaderButton: View {
     }
 }
 
-/// What every header button and menu shows: an icon and an optional label on the chat
-/// bubble's fill, 32 points high.
+/// What every header button and menu shows: an icon, and a label where the header has room,
+/// 32 points high and at least as wide. Quiet until hovered; filled while its mode is on.
 struct HeaderLabel: View {
     let symbol: String
     let title: String?
     var tint: Color = Theme.secondary
     var selected = false
+    @State private var hovered = false
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: symbol)
             if let title { Text(title).lineLimit(1) }
         }
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(selected ? Theme.text : tint)
-        .padding(.horizontal, title == nil ? 0 : 11)
+        .font(Theme.body.weight(.semibold))
+        .foregroundStyle(selected || hovered ? Theme.text : tint)
+        .padding(.horizontal, title == nil ? 0 : 10)
         .frame(minWidth: 32, minHeight: 32, maxHeight: 32)
-        .primaryFill(in: .rect(cornerRadius: 9), on: selected, off: Theme.bubble)
+        .primaryFill(in: .rect(cornerRadius: 8), on: selected, off: hovered ? Theme.raised : .clear)
+        .onHover { hovered = $0 }
         .hitTarget()
+    }
+}
+
+/// The header's PRs chip: the pull-request mark and its count in a hairline capsule, the text
+/// tinted by their state, never filled.
+struct PRChip: View {
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "arrow.triangle.pull").imageScale(.small)
+            Text(text).lineLimit(1)
+        }
+        .font(Theme.body.weight(.semibold).monospacedDigit())
+        .foregroundStyle(tint)
+        .padding(.horizontal, 10)
+        .frame(minWidth: 32, minHeight: 32, maxHeight: 32)
+        .overlay(Capsule().strokeBorder(Theme.stroke))
+        .fixedSize()
+        .hitTarget()
+    }
+}
+
+/// The session's column: its content between the transcript's left edge and the composer's
+/// right one, at every width, so the header and a child's banner line up with both.
+enum SessionColumn {
+    /// The transcript's widest column, and its margin in a narrower pane.
+    static let transcript: CGFloat = 760
+    static let transcriptMargin: CGFloat = 16
+    /// The composer's widest column, and its margin in a narrower pane.
+    static let composer: CGFloat = 784
+    static let composerMargin: CGFloat = 12
+
+    /// How far in from a pane `width` wide the column's edges sit.
+    static func insets(in width: CGFloat) -> (leading: CGFloat, trailing: CGFloat) {
+        (max(transcriptMargin, (width - transcript) / 2), max(composerMargin, (width - composer) / 2))
+    }
+}
+
+/// Lays its content out in the `SessionColumn` of the width it is offered.
+struct SessionColumnLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        guard let width = proposal.width, width.isFinite else {
+            let ideal = content.sizeThatFits(.unspecified)
+            return CGSize(width: ideal.width + SessionColumn.transcriptMargin + SessionColumn.composerMargin,
+                          height: ideal.height)
+        }
+        let insets = SessionColumn.insets(in: width)
+        let height = content.sizeThatFits(ProposedViewSize(width: width - insets.leading - insets.trailing,
+                                                           height: proposal.height)).height
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let insets = SessionColumn.insets(in: bounds.width)
+        subviews.first?.place(at: CGPoint(x: bounds.minX + insets.leading, y: bounds.minY), anchor: .topLeading,
+                              proposal: ProposedViewSize(width: bounds.width - insets.leading - insets.trailing,
+                                                         height: bounds.height))
     }
 }
 

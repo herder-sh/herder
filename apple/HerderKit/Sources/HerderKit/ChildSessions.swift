@@ -521,37 +521,39 @@ struct ChildBanner: View {
 
     var body: some View {
         let name = fleet.session(parent)?.title ?? "Session …\(parent.sessionId.suffix(6))"
-        HStack(spacing: 10) {
-            if listed {
-                Group {
-                    if let open {
-                        Button { open(parent) } label: { back }
-                            .keyboardShortcut("[", modifiers: .command)
-                    } else if let path, path.wrappedValue.dropLast().last == .session(parent) {
-                        // Pushed from the parent: back pops to it, where it was left.
-                        Button { path.wrappedValue.removeLast() } label: { back }
-                    } else {
-                        NavigationLink(value: NavRoute.session(parent)) { back }
+        // In the session's column, so Back sits over the header's title.
+        SessionColumnLayout {
+            HStack(spacing: 10) {
+                if listed {
+                    Group {
+                        if let open {
+                            Button { open(parent) } label: { back }
+                                .keyboardShortcut("[", modifiers: .command)
+                        } else if let path, path.wrappedValue.dropLast().last == .session(parent) {
+                            // Pushed from the parent: back pops to it, where it was left.
+                            Button { path.wrappedValue.removeLast() } label: { back }
+                        } else {
+                            NavigationLink(value: NavRoute.session(parent)) { back }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Back to \(name) (⌘[)")
+                    .accessibilityLabel("Back to parent session \(name)")
+                }
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.turn.down.right").foregroundStyle(Theme.child)
+                    Text("Agent of").foregroundStyle(Theme.child)
+                    Text(name).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                    if !listed {
+                        Text("· not listed").foregroundStyle(Theme.tertiary).fixedSize()
                     }
                 }
-                .buttonStyle(.plain)
-                .help("Back to \(name) (⌘[)")
-                .accessibilityLabel("Back to parent session \(name)")
+                .accessibilityElement(children: .combine)
+                Spacer(minLength: 0)
             }
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.turn.down.right").foregroundStyle(Theme.child)
-                Text("Agent of").foregroundStyle(Theme.child)
-                Text(name).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                if !listed {
-                    Text("· not listed").foregroundStyle(Theme.tertiary).fixedSize()
-                }
-            }
-            .accessibilityElement(children: .combine)
-            Spacer(minLength: 0)
+            .frame(minHeight: 38)
         }
         .font(.caption.weight(.semibold))
-        .padding(.horizontal, 20)
-        .frame(minHeight: 38)
         .background(Theme.child.opacity(0.09))
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.child.opacity(0.22)).frame(height: 1) }
     }

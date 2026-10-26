@@ -31,20 +31,28 @@ struct PRRollup: Equatable {
 
     var open: Int { all.filter { $0.state.rank == 0 }.count }
 
-    /// The chip's text: a single PR's number, else the count and how many are open.
+    /// The chip's text: a single PR's number, else how many are open, else how many there are.
     var chip: String {
         if all.count == 1 { return "#\(all[0].number)" }
-        return open == 0 ? "\(all.count) PRs" : "\(all.count) PRs · \(open) open"
+        return open == 0 ? "\(all.count) PRs" : "\(open) open"
     }
 
-    /// The chip where the header drops its buttons' labels: open of all, as "3/16".
-    var shortChip: String {
-        if all.count == 1 { return "#\(all[0].number)" }
-        return open == 0 ? "\(all.count)" : "\(open)/\(all.count)"
+    /// The whole count, for the chip's tooltip and its accessibility label.
+    var summary: String {
+        if all.count == 1 { return "Pull request #\(all[0].number), \(all[0].state.word.lowercased())" }
+        return open == 0 ? "\(all.count) pull requests" : "\(all.count) pull requests · \(open) open"
     }
 
-    /// The most urgent state among them, which tints the chip.
-    var urgent: PrState? { all.map(\.state).min { $0.order < $1.order } }
+    /// What tints the chip: failing while an open one fails its checks, conflicts or has
+    /// changes requested; running while any is open; done once one merged; else quiet.
+    var urgency: Urgency {
+        let live = all.filter { $0.state == .open || $0.state == .draft }
+        if live.contains(where: { $0.ci == .failing || $0.mergeable == .conflicting || $0.review == .changesRequested }) {
+            return .failing
+        }
+        if !live.isEmpty { return .running }
+        return all.contains { $0.state == .merged } ? .done : .quiet
+    }
 }
 
 extension PrState {

@@ -53,19 +53,51 @@ struct PRRollupTests {
         #expect(PRRollup(of: key, sessions: [key: model]).all.map(\.number) == [5, 4, 3, 2, 1])
     }
 
-    @Test func theChipSaysTheCountAndHowManyAreOpen() {
+    @Test func theChipSaysHowManyAreOpenAndItsTooltipTheWholeCount() {
         let rollup = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01P"), sessions: tree)
-        #expect(rollup.chip == "6 PRs · 3 open")
-        #expect(rollup.shortChip == "3/6")
-        #expect(rollup.urgent == .open)
+        #expect(rollup.chip == "3 open")
+        #expect(rollup.summary == "6 pull requests · 3 open")
         let (key, model) = session("01P", task: "Primary", prs: [pr(181, .merged)])
         let single = PRRollup(of: key, sessions: [key: model])
         #expect(single.chip == "#181")
-        #expect(single.shortChip == "#181")
-        #expect(single.urgent == .merged)
+        #expect(single.summary == "Pull request #181, merged")
         let (done, finished) = session("01P", task: "Primary", prs: [pr(1, .merged), pr(2, .closed)])
         #expect(PRRollup(of: done, sessions: [done: finished]).chip == "2 PRs")
-        #expect(PRRollup(of: done, sessions: [done: finished]).shortChip == "2")
+        #expect(PRRollup(of: done, sessions: [done: finished]).summary == "2 pull requests")
+    }
+
+    @Test func theChipIsTintedByTheStateOfThePRs() {
+        func urgency(_ prs: [PullRequest]) -> Urgency {
+            let (key, model) = session("01P", task: "Primary", prs: prs)
+            return PRRollup(of: key, sessions: [key: model]).urgency
+        }
+        var failing = pr(3, .open)
+        failing.ci = .failing
+        var conflicting = pr(4, .draft)
+        conflicting.mergeable = .conflicting
+        #expect(urgency([pr(1, .merged), failing]) == .failing)
+        #expect(urgency([conflicting]) == .failing)
+        #expect(urgency([pr(1, .merged), pr(2, .draft)]) == .running)
+        #expect(urgency([pr(1, .merged), pr(2, .closed)]) == .done)
+        #expect(urgency([pr(2, .closed)]) == .quiet)
+        // A failing check on a merged PR is history: it no longer tints the chip.
+        var merged = pr(5, .merged)
+        merged.ci = .failing
+        #expect(urgency([merged]) == .done)
+    }
+}
+
+struct SessionColumnTests {
+    @Test func theColumnStartsAtTheTranscriptAndEndsAtTheComposer() {
+        // A wide pane centres both: the transcript's 760 points, the composer's 784.
+        let wide = SessionColumn.insets(in: 1060)
+        #expect(wide.leading == 150 && wide.trailing == 138)
+        // A narrow one keeps their margins.
+        let narrow = SessionColumn.insets(in: 700)
+        #expect(narrow.leading == 16 && narrow.trailing == 12)
+        // In between, the transcript is centred while the composer still keeps its margin.
+        let between = SessionColumn.insets(in: 800)
+        #expect(between.leading == 20 && between.trailing == 12)
     }
 }
 
