@@ -13,23 +13,33 @@ struct PageHeader<Actions: View>: View {
     /// Makes the title a menu of the app's sections and projects.
     var switcher: Switcher?
     @ViewBuilder var actions: Actions
+    @State private var narrow = false
+    @Environment(\.pageMargin) private var margin
+
+    /// Below this width the actions are icons, their titles in tooltips.
+    static var narrowWidth: CGFloat { 480 }
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             if let icon { icon.padding(.trailing, 4) }
-            // The status follows the title on its line, or goes under it in a narrow pane.
+            // The status follows the title on its line, or takes the line under it, never cut.
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) { titleView; statusView.fixedSize() }
-                VStack(alignment: .leading, spacing: 2) { titleView; statusView }
+                VStack(alignment: .leading, spacing: 2) {
+                    titleView
+                    statusView.lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 8)
             // The actions take their room before the title, so a label never wraps.
             HStack(spacing: 8) { actions }
+                .environment(\.compactActions, narrow)
                 .layoutPriority(1)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 22)
-        .padding(.bottom, 10)
+        .padding(.horizontal, margin)
+        .padding(.vertical, 8)
+        .frame(minHeight: Theme.headerHeight)
+        .onGeometryChange(for: Bool.self) { $0.size.width < Self.narrowWidth } action: { narrow = $0 }
     }
 
     @ViewBuilder private var statusView: some View {
@@ -41,7 +51,7 @@ struct PageHeader<Actions: View>: View {
                 }
                 if !status.isEmpty { Text(status) }
             }
-            .font(Theme.body).foregroundStyle(Theme.secondary).lineLimit(1)
+            .font(Theme.body).foregroundStyle(Theme.secondary)
         }
     }
 
@@ -62,6 +72,12 @@ struct PageHeader<Actions: View>: View {
             Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1)
         }
     }
+}
+
+extension EnvironmentValues {
+    /// Whether a page header's actions show as icons alone, in a narrow pane (`PaneButton`,
+    /// `BoardSortMenu`, `ActivityChip`).
+    @Entry var compactActions = false
 }
 
 #Preview("PageHeader") {

@@ -266,11 +266,8 @@ struct BoardView: View {
                     .taskListRow()
             }
             ForEach(sections) { section in
-                Section {
-                    ForEach(section.trees) { row($0, in: rows) }
-                } header: {
-                    SectionHeading(title: section.title, count: section.trees.count)
-                }
+                TaskSectionHeading(title: section.title, count: section.trees.count)
+                ForEach(section.trees) { row($0, in: rows) }
             }
             if !archived.isEmpty {
                 archivedLine(archived.count)
@@ -287,7 +284,7 @@ struct BoardView: View {
         .environment(\.defaultMinListRowHeight, 0)
         #if os(macOS)
         .frame(maxWidth: 760)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
@@ -336,7 +333,6 @@ struct BoardView: View {
         .font(.caption)
         .foregroundStyle(Theme.tertiary)
         .padding(.vertical, 10)
-        .padding(.horizontal, 8)
         .taskListRow()
     }
 
@@ -351,7 +347,6 @@ struct BoardView: View {
         .font(.caption)
         .foregroundStyle(Theme.tertiary)
         .padding(.vertical, 14)
-        .padding(.horizontal, 8)
         .taskListRow()
     }
 
@@ -401,6 +396,7 @@ extension TaskTree {
 struct BoardSortMenu: View {
     let choices: [BoardSort]
     @AppStorage private var sort: BoardSort
+    @Environment(\.compactActions) private var compact
 
     init(_ choices: [BoardSort] = BoardSort.board, key: String = BoardSort.boardKey) {
         self.choices = choices
@@ -414,10 +410,14 @@ struct BoardSortMenu: View {
             }
             .pickerStyle(.inline)
         } label: {
-            Label(sort.title, systemImage: "arrow.up.arrow.down")
+            if compact {
+                Image(systemName: "arrow.up.arrow.down")
+            } else {
+                Label(sort.title, systemImage: "arrow.up.arrow.down")
+            }
         }
         .accessibilityIdentifier("board-sort")
-        .help("Sort the list")
+        .help("Sort the list: \(sort.title)")
     }
 }
 
@@ -439,12 +439,7 @@ struct TaskListRow: View {
         let archived = tree.lead.state == .archived
         let highlighted = current || selection?.wrappedValue == tree.id
         TaskRow(tree: tree, fleet: fleet, selection: selection, context: context, current: current, toggle: toggle)
-            .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-            .listRowSeparator(.hidden)
-            .listRowBackground(
-                RoundedRectangle(cornerRadius: Theme.corner - 2)
-                    .fill(highlighted ? Theme.raised : .clear)
-                    .padding(.horizontal, 4))
+            .taskListRow(highlighted: highlighted)
             #if os(iOS)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 Button(archived ? "Unarchive" : "Archive", systemImage: archived ? "tray.and.arrow.up" : "archivebox",
@@ -593,10 +588,38 @@ private struct KeyCap: View {
 #endif
 
 extension View {
-    /// A row of a task list that is not a task: no inset, background or separator.
-    func taskListRow() -> some View {
-        listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+    /// A row of a task list, on the page's margins, with no separator. A task's row is
+    /// `highlighted` while it is the keyboard's or open, its fill reaching half the margin out.
+    func taskListRow(highlighted: Bool = false) -> some View {
+        modifier(TaskListInsets(highlighted: highlighted))
+    }
+}
+
+private struct TaskListInsets: ViewModifier {
+    let highlighted: Bool
+    @Environment(\.pageMargin) private var margin
+
+    func body(content: Content) -> some View {
+        content
+            .listRowInsets(EdgeInsets(top: 0, leading: margin, bottom: 0, trailing: margin))
             .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
+            .listRowBackground(
+                RoundedRectangle(cornerRadius: Theme.corner - 2)
+                    .fill(highlighted ? Theme.raised : .clear)
+                    .padding(.horizontal, margin / 2))
+    }
+}
+
+/// A task list's section heading (TODAY, RECENT) as a row of its own, on the rows' content
+/// edge: a list's section header would be a full-bleed band on the Mac.
+struct TaskSectionHeading: View {
+    let title: String
+    let count: Int
+
+    var body: some View {
+        SectionHeading(title: title, count: count)
+            .padding(.bottom, 6)
+            .frame(maxWidth: .infinity, minHeight: Theme.sectionHeight, alignment: .bottomLeading)
+            .taskListRow()
     }
 }

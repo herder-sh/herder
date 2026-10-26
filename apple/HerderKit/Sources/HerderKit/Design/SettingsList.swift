@@ -20,7 +20,7 @@ struct SettingsList<Content: View>: View {
 /// The hairline between rows of a settings group.
 struct RowDivider: View {
     var body: some View {
-        Rectangle().fill(Theme.stroke.opacity(0.6)).frame(height: 1).padding(.leading, 14)
+        Rectangle().fill(Theme.stroke.opacity(0.6)).frame(height: 1).padding(.leading, Theme.cellPadding)
     }
 }
 
@@ -51,9 +51,9 @@ struct SettingRow<Control: View>: View {
             SaveMark(state: saved)
             control
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, Theme.cellPadding)
         .padding(.vertical, 8)
-        .frame(minHeight: 52)
+        .frame(minHeight: Theme.tallRowHeight)
     }
 }
 
@@ -78,7 +78,7 @@ struct InfoButton: View {
                 .foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 280, alignment: .leading)
-                .padding(14)
+                .padding(Theme.cellPadding)
                 .presentationCompactAdaptation(.popover)
         }
     }
