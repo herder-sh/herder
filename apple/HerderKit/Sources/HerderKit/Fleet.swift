@@ -107,6 +107,12 @@ public final class Fleet {
     /// on every token another session streams.
     func session(_ key: SessionKey) -> SessionModel? { boxes[key]?.model }
 
+    /// `key`'s transcript with each turn's work folded, as its view shows it; observed as
+    /// `session(_:)` is, and built again only when the session or its queue changes.
+    func transcript(_ key: SessionKey) -> [TranscriptBlock] {
+        boxes[key]?.transcript(queue: queue(of: key)) ?? []
+    }
+
     /// Every session's state. A view that reads it redraws whenever any session changes: read
     /// one with `session(_:)` where that is all a view needs.
     var sessions: [SessionKey: SessionModel] { boxes.mapValues(\.model) }

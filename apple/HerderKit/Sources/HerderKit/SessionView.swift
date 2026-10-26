@@ -23,22 +23,16 @@ struct SessionView: View {
     private let compact = false
     #endif
     private var inspector: InspectorPresentation { InspectorPresentation(compact: compact) }
-    /// Where the transcript is scrolled, and where each session shown here was left.
-    @State private var scroll = TranscriptScroll()
     /// The block at the top of the transcript, for the checkpoint rail.
     @State private var top = TranscriptTop()
-    /// Bumped on every send, so the transcript jumps to its end.
-    @State private var sent = 0
     @State private var find = TranscriptFind()
     /// The folded blocks shown open, by id; outside the rows, so a row drawn again keeps them.
     @State private var expanded: Set<String> = []
-    /// How much of the transcript is drawn.
-    @State private var window = TranscriptWindow()
 
     var body: some View {
         let model = fleet.session(key)
         let summary = fleet.lists.projects.lazy.flatMap(\.sessions).first { $0.key == key }
-        let blocks = model.map { Transcript.collapsed($0, queue: fleet.queue(of: key)) } ?? []
+        let blocks = fleet.transcript(key)
         let matches = find.shown ? find.matches(blocks) : []
         VStack(spacing: 0) {
             if let parent = model?.parent {
@@ -58,24 +52,16 @@ struct SessionView: View {
             Color.clear.overlay {
             ScrollViewReader { proxy in
             ScrollView {
-                // Not lazy: a lazy stack places the rows it hasn't drawn by estimated heights, and
-                // as a running turn grows under the bottom anchor, the view can land on a stretch
-                // of them with nothing drawn: the transcript goes blank until something scrolls it.
-                VStack(alignment: .leading, spacing: 16) {
+                // Lazy, with each block under its own id: a long session draws only the rows in
+                // view, and rows added or grown above the reader do not move what they read.
+                LazyVStack(alignment: .leading, spacing: 16) {
                     if model?.loaded != true && blocks.isEmpty {
                         ProgressView().tint(Theme.secondary).frame(maxWidth: .infinity).padding(40)
                     } else if blocks.isEmpty && model?.status != .waitingForCapacity {
                         Text("No turns yet. Send a prompt to start.").foregroundStyle(Theme.tertiary)
                             .frame(maxWidth: .infinity).padding(40)
                     }
-                    if window.hides(blocks, of: key) {
-                        Button("Show earlier") { window.extend(key) }
-                            .buttonStyle(.borderless)
-                            .font(.footnote)
-                            .foregroundStyle(Theme.tertiary)
-                            .frame(maxWidth: .infinity)
-                    }
-                    ForEach(window.shown(blocks, of: key)) { block in
+                    ForEach(blocks) { block in
                         TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
                             .environment(\.findHighlight, find.highlight(block.id))
                     }
@@ -89,42 +75,17 @@ struct SessionView: View {
                 .frame(maxWidth: SessionColumn.transcript)
                 .frame(maxWidth: .infinity)
                 .padding(SessionColumn.transcriptMargin)
-                .overlay(alignment: .bottom) { Color.clear.frame(height: 1).id(TranscriptScroll.end) }
             }
-            .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("transcript")
-            .modifier(FollowsGrowth(key: key, scroll: scroll, top: top) { id in
-                if window.needsMore(at: id, in: blocks, of: key) { window.extend(key) }
-            })
+            .modifier(FollowsEnd(blocks: blocks, top: top))
             .id(key)
-            .onChange(of: sent) { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) }
-            // The prompt joins the transcript only once the send is under way, after `sent`.
-            .onChange(of: model?.outbox.count ?? 0) { old, new in
-                if new > old { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) }
-            }
-            .task(id: model?.loaded == true) {
-                guard model?.loaded == true else { return }
-                // Once laid out, land where it was left, else at the end.
-                await Task.yield()
-                if let top = scroll.land() {
-                    window.reveal(top, in: blocks, of: key)
-                    await Task.yield()
-                    proxy.scrollTo(top, anchor: .top)
-                } else {
-                    proxy.scrollTo(TranscriptScroll.end, anchor: .bottom)
-                }
-            }
             .environment(\.transcriptScroll) { id, anchor in proxy.scrollTo(id, anchor: anchor) }
             .onChange(of: find.current) {
                 guard let id = find.current else { return }
                 // A match in a turn's folded work, or in earlier reports, opens it.
                 if let block = blocks.first(where: { $0.id == id }) { expanded.formUnion(find.opens(block)) }
-                window.reveal(id, in: blocks, of: key)
-                Task {
-                    await Task.yield()
-                    withAnimation { proxy.scrollTo(id, anchor: .center) }
-                }
+                withAnimation { proxy.scrollTo(id, anchor: .center) }
             }
             .overlay(alignment: .topTrailing) {
                 if find.shown {
@@ -136,11 +97,7 @@ struct SessionView: View {
                 // Hover is how the rail reads; a phone has none, and no margin to spare.
                 if !compact && checkpoints.items.count > 1 {
                     CheckpointRail(checkpoints: checkpoints, top: top) { id in
-                        window.reveal(id, in: blocks, of: key)
-                        Task {
-                            await Task.yield()
-                            withAnimation { proxy.scrollTo(id, anchor: .top) }
-                        }
+                        withAnimation { proxy.scrollTo(id, anchor: .top) }
                     }
                 }
             }
@@ -164,12 +121,10 @@ struct SessionView: View {
             }
         }
         .onChange(of: key) { old, _ in
-            window.reset(old)
             showsTerminal = false
             find = TranscriptFind()
             expanded = []
             showsPRs = false
-            scroll.show(key)
             fleet.unwatch(old)
             fleet.watch(key)
         }
@@ -430,7 +385,7 @@ struct SessionView: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
             } else {
-                Composer(fleet: fleet, key: key, model: model, sent: { sent += 1 }) { host, account in
+                Composer(fleet: fleet, key: key, model: model) { host, account in
                     Task {
                         guard let fork = await fleet.handOff(key, to: host, account: account) else { return }
                         if let open { open(fork) } else { pushedFork = fork }
@@ -463,66 +418,60 @@ struct SessionView: View {
     }
 }
 
-/// Keeps the transcript at its end as it grows, and tracks where it is scrolled, where the OS
-/// supports it.
-private struct FollowsGrowth: ViewModifier {
-    let key: SessionKey
-    let scroll: TranscriptScroll
+/// Keeps the transcript at its end while the reader is there, following what comes, the
+/// session's history included as it loads. Scrolled up, nothing moves what they read: what
+/// comes below shows a "New" pill instead. Tells `top` the block at the top of the view.
+private struct FollowsEnd: ViewModifier {
+    let blocks: [TranscriptBlock]
     let top: TranscriptTop
-    /// Told the block at the top of the view as it changes.
-    let scrolled: (String?) -> Void
+    /// Not bound to a block: only the pill sets it, to the end, past the transcript's margin.
+    @State private var position = ScrollPosition()
+    @State private var atEnd = true
+    /// The transcript grew below the reader since they scrolled up.
+    @State private var unseen = false
+
+    private func grew() {
+        if !atEnd { unseen = true }
+    }
 
     func body(content: Content) -> some View {
-        if #available(iOS 18, macOS 15, *) {
-            content
-                .defaultScrollAnchor(.bottom, for: .sizeChanges)
-                .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) {
-                    scroll.saw($0.first, in: key)
-                    top.id = $0.first
-                    scrolled($0.first)
+        content
+            .scrollPosition($position)
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.bottom, for: .alignment)
+            // Anchored at the bottom, growth anywhere pushes what is read up; unanchored, the
+            // view keeps its offset, and a lazy stack keeps the rows in view where they are.
+            .defaultScrollAnchor(atEnd ? .bottom : nil, for: .sizeChanges)
+            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { top.id = $0.first }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.visibleRect.maxY >= geometry.contentSize.height + geometry.contentInsets.bottom - 40
+            } action: { _, end in
+                atEnd = end
+                if end { unseen = false }
+            }
+            // A block more, or the last one grown: a running turn's "Working" line stays last.
+            .onChange(of: blocks.count) { grew() }
+            .onChange(of: blocks.last) { grew() }
+            .overlay(alignment: .bottom) {
+                if unseen {
+                    Button {
+                        withAnimation { position.scrollTo(edge: .bottom) }
+                    } label: {
+                        Label("New", systemImage: "arrow.down")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.text)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Theme.surface, in: .capsule)
+                            .overlay(Capsule().strokeBorder(Theme.stroke))
+                            .contentShape(.capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 12)
+                    .transition(.opacity)
+                    .accessibilityIdentifier("transcript-new")
                 }
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    geometry.visibleRect.maxY >= geometry.contentSize.height - 40
-                } action: { _, atEnd in
-                    scroll.scrolled(key, atEnd: atEnd)
-                }
-        } else {
-            content
-        }
-    }
-}
-
-/// Where each session's transcript was scrolled, so coming back to one lands where it was left.
-/// It is scrolled there once, not bound as the scroll position, so the view still follows
-/// new output and sends: a bound position pins its block in place as the transcript grows.
-/// A class, not observed: it is told where the view is on every scroll, and nothing drawn reads
-/// that; as a value in the view's state, each time it was told drew the whole session again.
-final class TranscriptScroll {
-    /// The id of the transcript's end, where a send scrolls.
-    static let end = "transcript-end"
-
-    /// The block at the top of each session's view, and the sessions scrolled up from the end.
-    private var tops: [SessionKey: String] = [:]
-    private var scrolledUp: Set<SessionKey> = []
-    /// Where the session being shown again lands, until its transcript appears.
-    private var landing: String?
-
-    func saw(_ top: String?, in key: SessionKey) { tops[key] = top }
-
-    func scrolled(_ key: SessionKey, atEnd: Bool) {
-        if atEnd { scrolledUp.remove(key) } else { scrolledUp.insert(key) }
-    }
-
-    /// Shows a session again: back where it was left scrolled up, else at its end, following
-    /// what comes. Decided now, as its new transcript reports itself at the end first.
-    func show(_ key: SessionKey) {
-        landing = scrolledUp.contains(key) ? tops[key] : nil
-    }
-
-    /// The block to scroll to the top as the transcript appears, once.
-    func land() -> String? {
-        defer { landing = nil }
-        return landing
+            }
     }
 }
 
@@ -532,8 +481,6 @@ private struct Composer: View {
     let fleet: Fleet
     let key: SessionKey
     let model: SessionModel
-    /// Called on every send.
-    let sent: () -> Void
     /// Hands the session off to a machine, on an account or the machine's default.
     let handOff: (HostId, AccountId?) -> Void
     @State private var text = ""
@@ -660,7 +607,6 @@ private struct Composer: View {
         self.images = []
         self.files = []
         PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: PromptDrafts.key(key))
-        sent()
         if model.state == .archived {
             Task { await fleet.unarchiveAndSubmit(text, images: images, files: files, to: key) }
         } else {

@@ -31,10 +31,23 @@ struct Pending: Hashable {
 @MainActor
 @Observable
 final class SessionBox {
-    var model: SessionModel
+    var model: SessionModel { didSet { transcript = nil } }
+    /// The transcript as the session view shows it, for the queue it was built with: built once
+    /// per change to the session, not on each redraw of the view.
+    @ObservationIgnored private var transcript: (queue: [QueuedPrompt], blocks: [TranscriptBlock])?
 
     init(_ model: SessionModel) {
         self.model = model
+    }
+
+    /// `Transcript.collapsed` of the session with `queue`.
+    func transcript(queue: [QueuedPrompt]) -> [TranscriptBlock] {
+        // Read first, so a view that asks redraws when the session changes, cached or not.
+        let model = model
+        if let transcript, transcript.queue == queue { return transcript.blocks }
+        let blocks = Transcript.collapsed(model, queue: queue)
+        transcript = (queue, blocks)
+        return blocks
     }
 }
 
