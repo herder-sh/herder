@@ -349,11 +349,16 @@ final class ScreenshotTests: XCTestCase {
             format: "identifier == 'job-install-codex-studio' AND label ENDSWITH ', Queued'")).firstMatch
         if wait(queued, "studio's Codex queued") { shoot("mac-activity-queued", screen: true) }
         // The demo's installers take eight seconds, so the three end within about 16; Activity's
-        // chip stops counting once they have. Its popover drops out of the view tree now and then
-        // while its rows' spinners turn, so the chip, in the window, says when they are done.
+        // chip stops counting once they have. A popover open that long drops out of the view
+        // tree, though it stays on screen, so the chip, in the window, says when they are done,
+        // and Activity opens afresh to be used.
         guard wait(activityIdle(), "updates done", timeout: 40) else { return closeActivity() }
         let chip = app.descendants(matching: .any)["activity"].firstMatch
-        if !chip.isSelected { press(chip) }
+        if chip.isSelected {
+            press(chip)
+            settle()
+        }
+        press(chip)
         settle()
         shoot("mac-activity-done", screen: true)
         let claude = job("job-install-claude-studio")
