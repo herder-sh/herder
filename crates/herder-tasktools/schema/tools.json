@@ -1241,6 +1241,8 @@
                   "link_vault",
                   "set_vault_link",
                   "unlink_vault",
+                  "install_vault",
+                  "link_local_vault",
                   "pair_device",
                   "pair_vault_host",
                   "revoke_vault_host",

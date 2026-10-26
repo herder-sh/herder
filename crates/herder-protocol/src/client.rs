@@ -602,6 +602,22 @@ pub enum CommandBody {
     /// `[vault]` table of its config; owners only. What the vault holds stays there. Refused
     /// with `not_found` when it is linked to no vault.
     UnlinkVault,
+    /// Run a vault on this machine, next to this daemon, and link this host to it; owners
+    /// only. The daemon does what `herder vault install` does: writes the vault's config and
+    /// secrets key and installs and starts its service. It then links itself to the vault with
+    /// `secrets` on and `backup` off, and mints a one-time code that pairs the caller's device
+    /// with the vault as an owner. Answered with `device_pairing`, the vault's, which the
+    /// client redeems on its own. Refused with `conflict` when a vault is installed on this
+    /// machine already or this host is linked to a vault, with `unsupported` on a vault or a
+    /// daemon that installs no vault, and with `internal` when the service cannot be written or
+    /// the vault does not start.
+    InstallVault,
+    /// Pair with and link to the vault installed on this machine by hand (`herder vault
+    /// install`), as `install_vault` does once it installed one; owners only. Answered with
+    /// `device_pairing`, the vault's. Refused with `not_found` when no vault is installed on
+    /// this machine, with `conflict` when this host is linked to a vault, and with
+    /// `unsupported` on a vault.
+    LinkLocalVault,
     /// Mint a one-time code, as `herder pair` does, that pairs another device as the caller's
     /// own user with the caller's role, so a shared code never grants more than the sharer
     /// has; owners and members alike. Answered with `device_pairing`.

@@ -17,6 +17,7 @@ pub mod projects;
 pub mod providers;
 pub mod prs;
 pub mod resources;
+pub mod service;
 pub mod session;
 pub mod settings;
 pub mod skills;
@@ -74,7 +75,11 @@ pub fn run(config: Config) -> Result<Exit> {
             } else {
                 let adapters = accounts::adapters(&config.binaries);
                 let probes = accounts::probes(&config.binaries);
-                serve(&config, adapters, probes, config.accounts.clone(), shutdown).await?;
+                let local_vault = vault::install::LocalVault::system()
+                    .inspect_err(|err| warn!("cannot run a vault on this machine: {err:#}"))
+                    .ok();
+                let accounts = config.accounts.clone();
+                serve(&config, adapters, probes, accounts, local_vault, shutdown).await?;
             }
             Ok(if settings::restart_requested() {
                 Exit::Restart
@@ -86,11 +91,13 @@ pub fn run(config: Config) -> Result<Exit> {
 
 /// Opens the data dir, the journal and the TLS identity, then serves clients until `shutdown`,
 /// running sessions on `accounts` through `adapters` and reading their usage with `probes`.
+/// `local_vault` is the vault an owner may run on this machine; `None` refuses that.
 pub async fn serve(
     config: &Config,
     adapters: session::Adapters,
     probes: usage::Probes,
     accounts: session::Accounts,
+    local_vault: Option<vault::install::LocalVault>,
     shutdown: CancellationToken,
 ) -> Result<()> {
     let data_dir = DataDir::open(&config.data_dir)?;
@@ -184,6 +191,7 @@ pub async fn serve(
             data_dir: data_dir.root().to_owned(),
             shutdown: shutdown.clone(),
             secrets,
+            local: local_vault,
         },
         config.vault.clone(),
     )?);
@@ -340,7 +348,7 @@ pub async fn serve(
 
 /// The running herder binary, for session git hooks to call. After an update replaced it on
 /// disk, Linux reports the old path with ` (deleted)`; the new binary is at that path.
-fn herder_binary() -> Result<std::path::PathBuf> {
+pub(crate) fn herder_binary() -> Result<std::path::PathBuf> {
     let exe = std::env::current_exe().context("locating the herder binary")?;
     let path = exe.to_string_lossy();
     Ok(match path.strip_suffix(" (deleted)") {
@@ -391,6 +399,7 @@ mod tests {
                     session::Adapters::new(),
                     usage::Probes::new(),
                     session::Accounts::new(),
+                    None,
                     shutdown,
                 )
                 .await

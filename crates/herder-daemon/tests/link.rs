@@ -10,11 +10,14 @@
 //! their TLS WebSocket ports.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use herder_client_core::{Client, Error, Machine, PairResult, PairingUri};
 use herder_daemon::auth::DeviceRole;
 use herder_daemon::auth::control::{self, Request, Response};
+use herder_daemon::service::{Service, Services};
+use herder_daemon::vault::install::LocalVault;
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, ErrorCode, EventBody, HostId, LinkedVault,
     PermissionMode, Provider, Role, SessionId, Timestamp,
@@ -35,6 +38,11 @@ struct Daemon {
 impl Daemon {
     /// Starts a daemon on `dir` whose config file starts with `extra`; a vault if `vault`.
     async fn start(dir: &Path, extra: &str, vault: bool) -> Self {
+        Self::start_with(dir, extra, vault, None).await
+    }
+
+    /// Starts a daemon as [`Daemon::start`] does, that may run `local` on its machine.
+    async fn start_with(dir: &Path, extra: &str, vault: bool, local: Option<LocalVault>) -> Self {
         let data_dir = dir.join("data");
         let config = dir.join("daemon.toml");
         let mode = if vault { "mode = \"vault\"\n" } else { "" };
@@ -58,8 +66,15 @@ impl Daemon {
                 } else {
                     let accounts = Default::default();
                     let adapters = Default::default();
-                    herder_daemon::serve(&loaded, adapters, Default::default(), accounts, shutdown)
-                        .await
+                    herder_daemon::serve(
+                        &loaded,
+                        adapters,
+                        Default::default(),
+                        accounts,
+                        local,
+                        shutdown,
+                    )
+                    .await
                 }
             }
         });
@@ -221,6 +236,7 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         is_vault: true,
         vault: None,
         volume: Some(volume),
+        local_vault: false,
     } = linked
     else {
         panic!("expected the vault's answer, got {linked:?}");
@@ -231,7 +247,8 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         CommandResult::VaultLink {
             is_vault: false,
             vault: None,
-            volume: None
+            volume: None,
+            local_vault: false,
         }
     );
 
@@ -366,6 +383,7 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
             secrets: true,
         }),
         volume: None,
+        local_vault: false,
     };
     assert_eq!(
         send(&owner, &host_id, CommandBody::GetVaultLink).await,
@@ -534,4 +552,188 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     drop((owner, member, stranger, vault_member));
     host.stop().await;
     vault.stop().await;
+}
+
+/// A service manager that runs an installed vault in this process, on loopback, rather than as
+/// a service: what `install_vault` installs.
+struct FakeServices {
+    runtime: tokio::runtime::Handle,
+    installed: Mutex<bool>,
+    shutdown: CancellationToken,
+}
+
+impl Services for FakeServices {
+    fn install(&self, service: &Service) -> anyhow::Result<()> {
+        let config = service.args.last().expect("the vault's config");
+        let mut config = herder_daemon::Config::load_file(Path::new(config))?;
+        assert_eq!(config.mode, herder_daemon::config::Mode::Vault);
+        config.listen = vec!["127.0.0.1:0".parse().unwrap()];
+        self.runtime.spawn({
+            let shutdown = self.shutdown.clone();
+            async move { herder_daemon::vault::serve(&config, shutdown).await }
+        });
+        *self.installed.lock().unwrap() = true;
+        Ok(())
+    }
+
+    fn is_installed(&self, _: &Service) -> bool {
+        *self.installed.lock().unwrap()
+    }
+
+    fn log_hint(&self, _: &Service) -> String {
+        "the test's output".into()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_runs_a_vault_on_the_host_from_a_client() {
+    let tmp = tempfile::tempdir().unwrap();
+    let services = Arc::new(FakeServices {
+        runtime: tokio::runtime::Handle::current(),
+        installed: Mutex::new(false),
+        shutdown: CancellationToken::new(),
+    });
+    let local = LocalVault {
+        dir: tmp.path().join("herder-vault"),
+        port: Some(0),
+        services: Arc::clone(&services) as Arc<dyn Services>,
+    };
+    let host = Daemon::start_with(&tmp.path().join("host"), "", false, Some(local)).await;
+    let owner = open(&tmp.path().join("owner"));
+    let host_id = owner
+        .pair(host.link("alice", None).await)
+        .await
+        .map(one_machine)
+        .unwrap()
+        .host_id;
+    let member = open(&tmp.path().join("member"));
+    let link = host.link("bob", Some(Role::Member)).await;
+    let as_member = member.pair(link).await.map(one_machine).unwrap().host_id;
+    machine_when(&owner, |m| {
+        m.host_id == host_id && m.role == Some(Role::Owner)
+    })
+    .await;
+
+    // Members can do none of it.
+    for command in [CommandBody::InstallVault, CommandBody::LinkLocalVault] {
+        assert_eq!(
+            refused(&member, &as_member, command).await,
+            ErrorCode::Forbidden
+        );
+    }
+    let unlinked = CommandResult::VaultLink {
+        is_vault: false,
+        vault: None,
+        volume: None,
+        local_vault: false,
+    };
+    assert_eq!(
+        send(&owner, &host_id, CommandBody::GetVaultLink).await,
+        unlinked
+    );
+    // No vault to pair with yet.
+    assert_eq!(
+        refused(&owner, &host_id, CommandBody::LinkLocalVault).await,
+        ErrorCode::NotFound
+    );
+
+    // The owner has the host run one: its config and secrets key are written, its service
+    // installed, the host linked with secrets on and backup off, and the owner's device gets
+    // a code that pairs it with the vault as an owner.
+    let CommandResult::DevicePairing {
+        code,
+        fingerprint,
+        addresses,
+        ..
+    } = send(&owner, &host_id, CommandBody::InstallVault).await
+    else {
+        panic!("no pairing for the vault");
+    };
+    let vault_dir = tmp.path().join("herder-vault");
+    assert!(vault_dir.join("vault.toml").is_file());
+    assert!(vault_dir.join("vault.env").is_file());
+    assert!(*services.installed.lock().unwrap());
+    let CommandResult::VaultLink {
+        vault: Some(linked),
+        local_vault: true,
+        ..
+    } = send(&owner, &host_id, CommandBody::GetVaultLink).await
+    else {
+        panic!("the host is not linked to its vault");
+    };
+    assert_eq!(
+        (linked.fingerprint.as_str(), linked.backup, linked.secrets),
+        (fingerprint.as_str(), false, true)
+    );
+    assert!(addresses.contains(&linked.address));
+    let config = std::fs::read_to_string(&host.config).unwrap();
+    assert!(config.contains("[vault]"), "{config}");
+    assert!(!config.contains(&code), "the device's code is not kept");
+    let link = PairingUri {
+        hosts: addresses,
+        fingerprint,
+        code,
+    }
+    .to_string();
+    let on_vault = owner.pair(link).await.map(one_machine).unwrap();
+    machine_when(&owner, |m| {
+        m.host_id == on_vault.host_id && m.role == Some(Role::Owner)
+    })
+    .await;
+
+    // A second run is refused, as is pairing again while linked.
+    assert_eq!(
+        refused(&owner, &host_id, CommandBody::InstallVault).await,
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        refused(&owner, &host_id, CommandBody::LinkLocalVault).await,
+        ErrorCode::Conflict
+    );
+
+    // Unlinked, the installed vault is found and paired and linked again.
+    send(&owner, &host_id, CommandBody::UnlinkVault).await;
+    let CommandResult::VaultLink {
+        vault: None,
+        local_vault: true,
+        ..
+    } = send(&owner, &host_id, CommandBody::GetVaultLink).await
+    else {
+        panic!("the installed vault is not found");
+    };
+    assert_eq!(
+        refused(&owner, &host_id, CommandBody::InstallVault).await,
+        ErrorCode::Conflict
+    );
+    let CommandResult::DevicePairing { .. } =
+        send(&owner, &host_id, CommandBody::LinkLocalVault).await
+    else {
+        panic!("no pairing for the vault");
+    };
+    let CommandResult::VaultLink { vault: Some(_), .. } =
+        send(&owner, &host_id, CommandBody::GetVaultLink).await
+    else {
+        panic!("the host is not linked to its vault again");
+    };
+
+    host.stop().await;
+    services.shutdown.cancel();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_daemon_without_a_local_vault_refuses_to_install_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let host = Daemon::start(&tmp.path().join("host"), "", false).await;
+    let owner = open(&tmp.path().join("owner"));
+    let host_id = owner
+        .pair(host.link("alice", None).await)
+        .await
+        .map(one_machine)
+        .unwrap()
+        .host_id;
+    assert_eq!(
+        refused(&owner, &host_id, CommandBody::InstallVault).await,
+        ErrorCode::Unsupported
+    );
+    host.stop().await;
 }
