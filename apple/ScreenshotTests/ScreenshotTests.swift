@@ -98,6 +98,7 @@ final class ScreenshotTests: XCTestCase {
             settle()
         }
         #endif
+        artifact()
         agents()
 
         // The header's PR chip opens the task's PRs: a popover on the Mac, a sheet on the iPhone.
@@ -166,6 +167,31 @@ final class ScreenshotTests: XCTestCase {
         archiving()
         project()
         finish()
+    }
+
+    /// The wide mockup the ledger session published: its card in the thread, then the viewer
+    /// at Fit width with its toolbar, then at actual size.
+    private func artifact() {
+        guard open("Move invoices onto the ledger") else { return }
+        let card = app.buttons["artifact-open"].firstMatch
+        guard wait(card, "artifact card") else { return }
+        settle()
+        shoot(platform("artifact-card"))
+        press(card)
+        for label in ["Fit Width", "Zoom Out", "Actual Size", "Zoom In", "Open in Browser"] {
+            _ = wait(app.buttons[label].firstMatch, "artifact viewer's \(label)")
+        }
+        settle()
+        shoot(platform("artifact"))
+        press(app.buttons["Actual Size"].firstMatch)
+        settle()
+        shoot(platform("artifact-actual"))
+        #if os(macOS)
+        app.typeKey(.escape, modifierFlags: [])
+        #else
+        press(app.buttons["Close"].firstMatch)
+        #endif
+        settle()
     }
 
     /// A task's agents unfolded under its row on the Board, then one of them opened: beside the
