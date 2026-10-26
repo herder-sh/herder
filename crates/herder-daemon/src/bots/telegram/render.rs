@@ -221,6 +221,8 @@ pub fn render(post: &Post, keys: &Keys) -> Rendered {
             }
             (messages, rows)
         }
+        // Telegram opens no herder:// link.
+        Post::NotStarted { text, .. } => (vec![format!("⚠️ {}", html(&cut(text)))], Vec::new()),
         Post::Picker { text, choices } => {
             let rows = choices
                 .iter()
