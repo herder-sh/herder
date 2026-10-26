@@ -219,3 +219,28 @@ struct McpCopyTests {
         #expect(lists.servers(on: "studio") == [docs, linear])
     }
 }
+
+struct McpServerTableTests {
+    private func server(_ name: String, enabled: Bool = true) -> McpServerSettings {
+        McpServerSettings(name: name, enabled: enabled, project: nil, transport: .http(url: "https://\(name).example.com/mcp", headers: [:]))
+    }
+
+    @Test func aServerOnSeveralMachinesIsOneRowThatSaysWhereItIsOff() throws {
+        let servers: [HostId: [McpServerSettings]] = [
+            "a": [server("linear"), server("github")],
+            "b": [server("linear", enabled: false)],
+            "c": [server("sentry", enabled: false)],
+        ]
+        let table = McpServerTable([(hostId: "a", name: "devbox"), (hostId: "b", name: "studio"),
+                                    (hostId: "c", name: "laptop"), (hostId: "d", name: "unknown")],
+                                   servers: { servers[$0] })
+        #expect(table.rows.map(\.name) == ["github", "linear", "sentry"])
+        let linear = try #require(table.rows.first { $0.name == "linear" })
+        #expect(linear.places.map(\.machine) == ["devbox", "studio"])
+        #expect(linear.machines == "2 machines")
+        #expect(!linear.enabled && linear.partlyOff)
+        #expect(linear.status == "Off on studio")
+        #expect(table.rows[0].machines == "devbox" && table.rows[0].status == "On")
+        #expect(table.rows[2].status == "Off" && !table.rows[2].partlyOff)
+    }
+}

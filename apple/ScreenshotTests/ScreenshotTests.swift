@@ -487,6 +487,13 @@ final class ScreenshotTests: XCTestCase {
     /// one with a header, and importing a README's JSON.
     private func mcpServers() {
         let github = app.descendants(matching: .any)["mcp-server-github"].firstMatch
+        #if os(iOS)
+        // The table makes its rows as they scroll in, and the phone's screen ends above it.
+        for _ in 0..<6 where !github.exists {
+            app.swipeUp(velocity: .slow)
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        #endif
         guard wait(github, "MCP servers") else { return }
         reveal(github)
         settle()
