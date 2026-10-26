@@ -159,8 +159,9 @@ struct SortableTable<Row: Identifiable>: View {
         .foregroundStyle(Theme.text)
         .padding(.vertical, 8)
         .frame(minHeight: Theme.rowHeight)
-        // The hover fill reaches past the content edge, which stays on the page's.
-        .background((hovered == row.id ? Theme.raised : .clear).padding(.horizontal, -Theme.cellPadding / 2))
+        // Only a row that opens something lights up under the pointer; the fill reaches past
+        // the content edge, which stays on the page's.
+        .background((open != nil && hovered == row.id ? Theme.raised : .clear).padding(.horizontal, -Theme.cellPadding / 2))
         .overlay(alignment: .bottom) { Hairline() }
         .contentShape(.rect)
         .onHover { inside in
