@@ -69,8 +69,10 @@ struct SessionModel {
     /// Why the last turn failed, until the next one starts.
     var failure: String?
     var lastMessage: String?
-    /// The last tool call of the turn running now.
+    /// The last tool call of the turn running now, as its activity line says it.
     var lastTool: String?
+    /// How many agents the turn's last run of herder spawn calls started.
+    private var spawned = 0
     var streaming: [Item] = []
     var updatedAt: Date?
     /// The transcript: completed items, events worth a line, and spawned children, in order.
@@ -156,6 +158,7 @@ struct SessionModel {
             turnStartedAt = at
             turnTimes[turnId] = TurnTime(started: at)
             lastTool = nil
+            spawned = 0
             failure = nil
         case .turnCompleted(let turnId, _):
             endTurn(turnId, at: at)
@@ -170,7 +173,9 @@ struct SessionModel {
         case .itemAdded(let item) where item.parentCallId == nil:
             switch item.body {
             case .assistantMessage(let text): lastMessage = text
-            case .toolCall(let name, let input): lastTool = toolSummary(name: name, input: input)
+            case .toolCall(let name, let input):
+                spawned = name == "mcp__herder__spawn" ? spawned + 1 : 0
+                lastTool = toolActivity(name: name, input: input, spawned: spawned)
             default: break
             }
         case .approvalRequested(let id, let turnId, _, let summary, let routedTo, let reason):
@@ -709,6 +714,50 @@ func toolSummary(name: String, input: Json) -> String {
         return "\(name) \(firstLine(value))"
     }
     return name
+}
+
+/// A tool call as a session's activity line says it, in words rather than the tool's
+/// identifier: "Reading Board.swift", "Running cargo", "Starting 3 agents". `spawned` is how
+/// many agents a run of herder spawn calls has started so far.
+func toolActivity(name: String, input: Json, spawned: Int = 1) -> String {
+    let object = (try? JSONSerialization.jsonObject(with: Data(input.utf8))) as? [String: Any] ?? [:]
+    func text(_ key: String) -> String? { (object[key] as? String).map(firstLine).flatMap { $0.isEmpty ? nil : $0 } }
+    // An MCP tool is called `mcp__<server>__<tool>`.
+    let parts = name.components(separatedBy: "__")
+    if parts.count >= 3, parts[0] == "mcp" {
+        let (server, tool) = (parts[1], parts[2...].joined(separator: "__"))
+        if server == "herder" {
+            switch tool {
+            case "spawn": return spawned > 1 ? "Starting \(spawned) agents" : "Starting an agent"
+            case "wait_for": return "Waiting for agents"
+            case "status": return "Checking on agents"
+            case "send", "send_session": return "Messaging an agent"
+            case "answer": return "Answering an agent"
+            case "escalate": return "Passing a request to you"
+            case "publish": return "Publishing an artifact"
+            case "overview": return "Looking over herder"
+            case "command": return "Running a herder command"
+            case "secrets": return "Checking its secrets"
+            default: break
+            }
+        }
+        return "Using \(tool.replacingOccurrences(of: "_", with: " ")) on \(server.replacingOccurrences(of: "_", with: " "))"
+    }
+    if name == "TodoWrite" { return "Updating its plan" }
+    if NativeAgent.isAgent(name) { return text("description").map { "Starting an agent: \($0)" } ?? "Starting an agent" }
+    let file = (text("file_path") ?? text("path")).map { URL(fileURLWithPath: $0).lastPathComponent }
+    switch Transcript.kind(name) {
+    case .command:
+        let word = text("command")?.split(separator: " ").first.map(String.init)
+        return word.map { "Running \($0)" } ?? "Running a command"
+    case .edit: return file.map { "Editing \($0)" } ?? "Editing files"
+    case .read: return file.map { "Reading \($0)" } ?? "Reading files"
+    case .search: return text("pattern").map { "Searching for \($0)" } ?? "Searching the code"
+    case .web:
+        let host = text("url").flatMap { URL(string: $0)?.host() }
+        return host.map { "Fetching \($0)" } ?? text("query").map { "Searching the web for \($0)" } ?? "Searching the web"
+    case .other: return name.contains("_") ? "Using \(name.replacingOccurrences(of: "_", with: " "))" : "Using \(name)"
+    }
 }
 
 func firstLine(_ text: String) -> String {

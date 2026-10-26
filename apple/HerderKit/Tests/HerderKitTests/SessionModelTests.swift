@@ -168,7 +168,36 @@ struct SessionModelTests {
             .itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: "i2", turnId: "t1", body: .assistantMessage(text: "Done.\nMore detail."))),
             .turnCompleted(turnId: "t1", usage: nil), .sessionStatusChanged(status: .idle, retryAt: nil),
         ])
-        #expect(model.lastTool == "Bash ls -la")
+        #expect(model.lastTool == "Running ls")
         #expect(model.activity == "Done.")
+    }
+
+    @Test func aToolCallsActivityIsWordsNotItsIdentifier() {
+        #expect(toolActivity(name: "Bash", input: #"{"command":"cargo test --workspace"}"#) == "Running cargo")
+        #expect(toolActivity(name: "Bash", input: "{}") == "Running a command")
+        #expect(toolActivity(name: "Read", input: #"{"file_path":"/repo/apple/Board.swift"}"#) == "Reading Board.swift")
+        #expect(toolActivity(name: "Edit", input: #"{"file_path":"src/lib.rs"}"#) == "Editing lib.rs")
+        #expect(toolActivity(name: "Grep", input: #"{"pattern":"TaskListRow"}"#) == "Searching for TaskListRow")
+        #expect(toolActivity(name: "WebFetch", input: #"{"url":"https://docs.rs/serde"}"#) == "Fetching docs.rs")
+        #expect(toolActivity(name: "Task", input: #"{"description":"Review the diff"}"#) == "Starting an agent: Review the diff")
+        #expect(toolActivity(name: "mcp__herder__spawn", input: #"{"task":"Helm"}"#) == "Starting an agent")
+        #expect(toolActivity(name: "mcp__herder__spawn", input: "{}", spawned: 3) == "Starting 3 agents")
+        #expect(toolActivity(name: "mcp__herder__wait_for", input: "{}") == "Waiting for agents")
+        #expect(toolActivity(name: "mcp__linear__create_issue", input: "{}") == "Using create issue on linear")
+        #expect(toolActivity(name: "TodoWrite", input: "{}") == "Updating its plan")
+        #expect(toolActivity(name: "exit_plan_mode", input: "{}") == "Using exit plan mode")
+    }
+
+    @Test func aRunOfSpawnsSaysHowManyAgentsItStarted() {
+        var script = Script()
+        func spawn(_ id: String) -> EventBody {
+            .itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: id, turnId: "t1",
+                                  body: .toolCall(name: "mcp__herder__spawn", input: #"{"task":"x"}"#)))
+        }
+        var model = script.model([created(), .turnStarted(turnId: "t1"), spawn("i1"), spawn("i2"), spawn("i3")])
+        #expect(model.lastTool == "Starting 3 agents")
+        model.apply(script.event(.itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: "i4", turnId: "t1",
+                                                       body: .toolCall(name: "mcp__herder__wait_for", input: "{}")))))
+        #expect(model.lastTool == "Waiting for agents")
     }
 }
