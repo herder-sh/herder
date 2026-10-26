@@ -164,11 +164,43 @@ INSERT INTO secret_audit_new (id, at, host_id, session_id, set_name, name)
 DROP TABLE secret_audit;
 ALTER TABLE secret_audit_new RENAME TO secret_audit;
 ",
+    // An image's size comes after its bytes in its row, so reading it from the table walks
+    // every byte of the image; this index has it without.
+    "
+CREATE INDEX attachments_size ON attachments (host_id, size);
+",
 ];
 
 /// Leaves out copies of sessions another host recovered; `s` is the `sessions` row.
 const CURRENT: &str = "NOT EXISTS (SELECT 1 FROM recovered r
                        WHERE r.host_id = s.host_id AND r.session_id = s.session_id)";
+
+/// Every host with its latest name, sessions and image bytes; each device it replicated from
+/// has a row.
+const HOSTS: &str = "SELECT host_id, host_name, seen_at, attachments_cap,
+       (SELECT COUNT(*) FROM sessions s WHERE s.host_id = h.host_id),
+       (SELECT COALESCE(SUM(size), 0) FROM attachments a WHERE a.host_id = h.host_id)
+     FROM hosts h WHERE seen_at = (SELECT MAX(seen_at) FROM hosts WHERE host_id = h.host_id)
+     GROUP BY host_id ORDER BY host_id";
+
+/// The hosts other than `?1` that hold a copy of session `?2` not recovered yet. Only hosts
+/// that replicated here can hold one, so each is looked up by key: the journals are never
+/// scanned for the session.
+const OTHER_COPIES: &str = "SELECT host_id FROM sessions WHERE session_id = ?2 AND host_id != ?1
+     UNION SELECT DISTINCT h.host_id FROM hosts h WHERE h.host_id != ?1
+       AND EXISTS (SELECT 1 FROM events e WHERE e.host_id = h.host_id AND e.session_id = ?2)
+     EXCEPT SELECT host_id FROM recovered WHERE session_id = ?2";
+
+/// Each session's host and newest event, by its last seq: `at` is text, whose order is not
+/// the time's. A session's seqs run from 1 without a gap, so its last seq is its count. The
+/// cross join keeps the sessions outermost, so the journals are only looked up by key.
+const NEWEST_EVENTS: &str = "SELECT s.host_id, e.seq, e.at FROM sessions s
+     CROSS JOIN events e ON e.host_id = s.host_id AND e.session_id = s.session_id
+     WHERE e.seq = (SELECT MAX(seq) FROM events m
+                    WHERE m.host_id = s.host_id AND m.session_id = s.session_id)";
+
+/// Host `?1`'s images, oldest first, with their sizes.
+const HELD_IMAGES: &str = "SELECT rowid, size FROM attachments WHERE host_id = ?1 ORDER BY rowid";
 
 /// Event types that set the account a session runs on; each body has an `account_id`.
 const ACCOUNT_EVENTS: &str = "'session_created', 'account_switched', 'provider_switched'";
@@ -347,14 +379,7 @@ impl VaultStore {
     /// Every host that ever replicated here, with its latest name and what it takes here,
     /// ordered by host id.
     pub fn hosts(&self) -> Result<Vec<HostRecord>> {
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT host_id, host_name, seen_at, attachments_cap,
-               (SELECT COUNT(*) FROM sessions s WHERE s.host_id = h.host_id),
-               (SELECT COALESCE(SUM(size), 0) FROM attachments a WHERE a.host_id = h.host_id)
-             FROM hosts h WHERE seen_at =
-               (SELECT MAX(seen_at) FROM hosts WHERE host_id = h.host_id)
-             GROUP BY host_id ORDER BY host_id",
-        )?;
+        let mut stmt = self.conn.prepare_cached(HOSTS)?;
         let rows = stmt.query_map([], |row| {
             Ok(HostRecord {
                 host_id: HostId::new(row.get::<_, String>(0)?),
@@ -475,15 +500,7 @@ impl VaultStore {
                 (host.host_id, replication)
             })
             .collect();
-        // Each session's event count and newest event, by its last seq: `at` is text, whose
-        // order is not the time's.
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT l.host_id, l.n, e.at FROM
-               (SELECT host_id, session_id, MAX(seq) AS seq, COUNT(*) AS n FROM events
-                GROUP BY host_id, session_id) l
-             JOIN events e
-               ON e.host_id = l.host_id AND e.session_id = l.session_id AND e.seq = l.seq",
-        )?;
+        let mut stmt = self.conn.prepare_cached(NEWEST_EVENTS)?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 HostId::new(row.get::<_, String>(0)?),
@@ -552,11 +569,7 @@ impl VaultStore {
             return Ok(Vec::new());
         }
         let others = tx
-            .prepare_cached(
-                "SELECT host_id FROM sessions WHERE session_id = ?2 AND host_id != ?1
-                 UNION SELECT DISTINCT host_id FROM events WHERE session_id = ?2 AND host_id != ?1
-                 EXCEPT SELECT host_id FROM recovered WHERE session_id = ?2",
-            )?
+            .prepare_cached(OTHER_COPIES)?
             .query_map([host_id, session_id], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let now = Timestamp::now();
@@ -958,7 +971,7 @@ impl VaultStore {
 /// many went.
 fn evict(tx: &rusqlite::Transaction<'_>, host: &HostId, cap: u64, incoming: u64) -> Result<usize> {
     let held = tx
-        .prepare_cached("SELECT rowid, size FROM attachments WHERE host_id = ?1 ORDER BY rowid")?
+        .prepare_cached(HELD_IMAGES)?
         .query_map([host.as_str()], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, u64>(1)?))
         })?
@@ -1339,6 +1352,45 @@ mod tests {
         assert!(status.storage_bytes > 0);
     }
 
+    /// How SQLite reads what `sql` names: one step per table or index.
+    fn plan(store: &VaultStore, sql: &str) -> Vec<String> {
+        let mut stmt = store
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        let mut rows = stmt.raw_query();
+        let mut steps = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            steps.push(row.get::<_, String>(3).unwrap());
+        }
+        steps
+    }
+
+    /// What runs for every message a host sends and every status looks journals and images
+    /// up by key, and reads no image's bytes: scanning them made the vault spin a core once
+    /// it held a few hundred MB, too busy to answer its hosts' pings.
+    #[test]
+    fn what_runs_per_message_scans_no_journal_and_reads_no_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = VaultStore::open(dir.path().join("vault.db")).unwrap();
+        for sql in [HOSTS, OTHER_COPIES, NEWEST_EVENTS, HELD_IMAGES] {
+            let steps = plan(&store, sql);
+            for step in &steps {
+                let scanned = step
+                    .strip_prefix("SCAN ")
+                    .map(|rest| rest.split(' ').next().unwrap_or_default());
+                assert!(
+                    !matches!(scanned, Some("events" | "e" | "m" | "attachments" | "a")),
+                    "{step} in {steps:?} for {sql}"
+                );
+                assert!(
+                    !step.contains("attachments") || step.contains("COVERING INDEX"),
+                    "{step} in {steps:?} for {sql}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_host_replicates_from_one_paired_device() {
         let dir = tempfile::tempdir().unwrap();
@@ -1708,7 +1760,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("vault.db");
         let conn = Connection::open(&path).unwrap();
-        let before = MIGRATIONS.len() - 1;
+        let before = MIGRATIONS
+            .iter()
+            .position(|sql| sql.contains("secret_grants_new"))
+            .unwrap();
         for sql in &MIGRATIONS[..before] {
             conn.execute_batch(sql).unwrap();
         }
