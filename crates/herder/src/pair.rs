@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use herder_client_core::PairingUri;
 use herder_daemon::auth::DeviceRole;
-use herder_daemon::auth::control::{self, DeviceInfo, PairingInfo, Request, Response};
-use herder_protocol::{DeviceId, Role, Timestamp};
+use herder_daemon::auth::control::{self, PairingInfo, Request, Response};
+use herder_protocol::{DeviceId, Role, Timestamp, UserInfo};
 use qrcode::QrCode;
 use qrcode::render::unicode::Dense1x2;
 
@@ -22,7 +22,7 @@ pub struct Args {
     /// other hosts, sessions or devices.
     #[arg(long, value_name = "NAME", conflicts_with_all = ["list", "revoke", "role"])]
     host: Option<String>,
-    /// List the paired devices.
+    /// List the users and their paired devices.
     #[arg(long, conflicts_with = "revoke")]
     list: bool,
     /// Unpair a device and disconnect it.
@@ -44,7 +44,7 @@ enum RoleArg {
 pub fn run(args: Args) -> Result<()> {
     let config = herder_daemon::Config::load(args.config.as_deref())?;
     let request = if args.list {
-        Request::Devices
+        Request::Users
     } else if let Some(device) = args.revoke {
         Request::Revoke {
             device_id: DeviceId::new(device),
@@ -62,7 +62,7 @@ pub fn run(args: Args) -> Result<()> {
     };
     match control::request(&config.data_dir, &request)? {
         Response::Paired(info) => print_pairing(&info),
-        Response::Devices { devices } => print_devices(&devices),
+        Response::Users { users } => print_users(&users),
         Response::Revoked => {
             if let Request::Revoke { device_id } = request {
                 println!("revoked {device_id}");
@@ -139,47 +139,55 @@ fn print_host_pairing(info: &PairingInfo) {
     );
 }
 
-fn print_devices(devices: &[DeviceInfo]) -> Result<()> {
-    if devices.is_empty() {
+fn print_users(users: &[UserInfo]) -> Result<()> {
+    let rows: Vec<_> = users
+        .iter()
+        .flat_map(|user| user.devices.iter().map(move |device| (user, device)))
+        .collect();
+    if rows.is_empty() {
         println!("no paired devices; run `herder pair` to pair one");
         return Ok(());
     }
-    let user_width = devices
+    let user_width = rows
         .iter()
-        .map(|d| d.user.len())
+        .map(|(user, _)| user.name.len())
         .max()
         .unwrap_or(0)
         .max(4);
-    let client_width = devices
+    let client_width = rows
         .iter()
-        .map(|d| d.client.len())
+        .map(|(_, device)| device.client.len())
         .max()
         .unwrap_or(0)
         .max(6);
     println!(
-        "{:<26}  {:<user_width$}  {:<6}  {:<6}  {:<client_width$}  PAIRED",
-        "DEVICE", "USER", "ROLE", "ACCESS", "CLIENT"
+        "{:<26}  {:<user_width$}  {:<6}  {:<6}  {:<client_width$}  {:<20}  LAST SEEN",
+        "DEVICE", "USER", "ROLE", "ACCESS", "CLIENT", "PAIRED"
     );
-    for device in devices {
+    for (user, device) in rows {
+        let last_seen = if device.online {
+            "online".to_owned()
+        } else {
+            device
+                .last_seen
+                .map_or_else(|| "-".to_owned(), |at| at.to_string())
+        };
         println!(
-            "{:<26}  {:<user_width$}  {:<6}  {:<6}  {:<client_width$}  {}",
+            "{:<26}  {:<user_width$}  {:<6}  {:<6}  {:<client_width$}  {:<20}  {last_seen}",
             device.device_id,
-            device.user,
-            role_name(device.role),
-            access(device.device_role),
+            user.name,
+            role_name(user.role),
+            access(device.host_only),
             device.client,
-            device.paired_at
+            device.paired_at.to_string(),
         );
     }
     Ok(())
 }
 
 /// What a device may do: `client` reads everything, `host` only replicates to a vault.
-fn access(role: DeviceRole) -> &'static str {
-    match role {
-        DeviceRole::Client => "client",
-        DeviceRole::Host => "host",
-    }
+fn access(host_only: bool) -> &'static str {
+    if host_only { "host" } else { "client" }
 }
 
 fn role_name(role: Role) -> &'static str {

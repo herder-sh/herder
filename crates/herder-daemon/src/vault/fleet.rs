@@ -499,7 +499,10 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::ListSecrets
         | CommandBody::ListSecretAudit { .. }
         | CommandBody::SetVaultHostAccess { .. }
-        | CommandBody::PairDevice
+        | CommandBody::PairDevice { .. }
+        | CommandBody::ListUsers
+        | CommandBody::SetUserRole { .. }
+        | CommandBody::RevokeDevice { .. }
         | CommandBody::SetAccountSettings { .. }
         | CommandBody::SetResourceLimits { .. }
         | CommandBody::GetSettings

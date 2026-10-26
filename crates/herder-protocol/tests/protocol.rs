@@ -314,7 +314,22 @@ fn client_fixtures() -> Vec<ClientMessage> {
             secrets: true,
         }),
         command(CommandBody::UnlinkVault),
-        command(CommandBody::PairDevice),
+        command(CommandBody::PairDevice {
+            user: None,
+            role: None,
+        }),
+        command(CommandBody::PairDevice {
+            user: Some("bob".into()),
+            role: Some(Role::Member),
+        }),
+        command(CommandBody::ListUsers),
+        command(CommandBody::SetUserRole {
+            user_id: UserId::new("01J9USER"),
+            role: Role::Owner,
+        }),
+        command(CommandBody::RevokeDevice {
+            device_id: DeviceId::new("01J9DEVICE"),
+        }),
         command(CommandBody::PairVaultHost {
             host_name: "devbox".into(),
         }),
@@ -879,6 +894,34 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 fingerprint: "3f9a".repeat(16),
                 addresses: vec!["192.168.1.20:7447".into(), "[fd00::20]:7447".into()],
                 expires_at: "2026-10-03T12:10:00Z".parse().unwrap(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::Users {
+                users: vec![UserInfo {
+                    user_id: UserId::new("01J9USER"),
+                    name: "alice".into(),
+                    role: Role::Owner,
+                    devices: vec![
+                        UserDevice {
+                            device_id: DeviceId::new("01J9DEVICE"),
+                            client: "herder-ios/0.6.0".into(),
+                            paired_at: "2026-10-03T12:00:00Z".parse().unwrap(),
+                            last_seen: Some("2026-10-04T08:00:00Z".parse().unwrap()),
+                            online: true,
+                            host_only: false,
+                        },
+                        UserDevice {
+                            device_id: DeviceId::new("01J9DEVICF"),
+                            client: "herder-daemon/0.6.0".into(),
+                            paired_at: "2026-10-03T12:00:00Z".parse().unwrap(),
+                            last_seen: None,
+                            online: false,
+                            host_only: true,
+                        },
+                    ],
+                }],
             },
         },
         ServerMessage::CommandAccepted {
@@ -2903,9 +2946,25 @@ fn usage_periods_start_where_they_say() {
 
 #[test]
 fn device_pairing_has_its_wire_form() {
+    let own = CommandBody::PairDevice {
+        user: None,
+        role: None,
+    };
     assert_eq!(
-        serde_json::to_value(CommandBody::PairDevice).unwrap(),
+        serde_json::to_value(&own).unwrap(),
         json!({ "type": "pair_device" })
+    );
+    assert_eq!(
+        serde_json::from_value::<CommandBody>(json!({ "type": "pair_device" })).unwrap(),
+        own
+    );
+    assert_eq!(
+        serde_json::to_value(CommandBody::PairDevice {
+            user: Some("bob".into()),
+            role: Some(Role::Owner),
+        })
+        .unwrap(),
+        json!({ "type": "pair_device", "user": "bob", "role": "owner" })
     );
     let pairing = CommandResult::DevicePairing {
         code: "ABCDE-FGHJK".into(),

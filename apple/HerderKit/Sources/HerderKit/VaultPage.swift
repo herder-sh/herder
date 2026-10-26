@@ -2,7 +2,7 @@ import Herder
 import SwiftUI
 
 /// A vault's page: how current its copy of each host is, with their sessions and whether they
-/// take handoffs, and for its owners a Secrets tab: each set with the hosts it is granted to and
+/// take handoffs, and who is on it; for its owners a Secrets tab: each set with the hosts it is granted to and
 /// the secrets in it, and the latest fetches. Owners create and delete sets, add, replace and
 /// delete secrets, and grant a set to the vault's hosts or revoke it. A value is typed into a
 /// secure field and never shown again.
@@ -78,6 +78,9 @@ struct VaultPage: View {
                 audit(machine)
             } else if let stats {
                 VaultOverview(fleet: fleet, vault: stats)
+                if let machine, machine.connection == .connected {
+                    PeopleSection(fleet: fleet, machine: machine).id(machine.hostId)
+                }
             }
         }
         .task(id: tab) { if tab == .secrets { await secrets.reload() } }

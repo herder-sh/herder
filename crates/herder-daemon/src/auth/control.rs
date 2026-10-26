@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use herder_protocol::{DeviceId, Role, Timestamp, UserId};
+use herder_protocol::{DeviceId, Role, Timestamp, UserInfo};
 use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
 use serde::{Deserialize, Serialize};
@@ -55,8 +55,8 @@ pub enum Request {
         /// The host's name; the user its device acts as.
         host: String,
     },
-    /// List the paired devices.
-    Devices,
+    /// List the users and their paired devices.
+    Users,
     /// Unpair a device.
     Revoke {
         /// The device.
@@ -77,10 +77,10 @@ pub enum Request {
 pub enum Response {
     /// A pairing code was minted.
     Paired(PairingInfo),
-    /// The paired devices.
-    Devices {
+    /// The users and their paired devices, as `list_users` answers.
+    Users {
         /// Oldest first.
-        devices: Vec<DeviceInfo>,
+        users: Vec<UserInfo>,
     },
     /// The device was unpaired and disconnected.
     Revoked,
@@ -112,25 +112,6 @@ pub struct PairingInfo {
     pub fingerprint: String,
     /// Addresses the daemon listens on, as `host:port`, most likely reachable first.
     pub addresses: Vec<String>,
-}
-
-/// A paired device, as `herder pair --list` shows it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DeviceInfo {
-    /// The device.
-    pub device_id: DeviceId,
-    /// The client it paired with.
-    pub client: String,
-    /// When it paired.
-    pub paired_at: Timestamp,
-    /// Its user.
-    pub user_id: UserId,
-    /// The user's name.
-    pub user: String,
-    /// The user's role.
-    pub role: Role,
-    /// What the device may connect as.
-    pub device_role: DeviceRole,
 }
 
 /// What the daemon tells `herder pair` about itself, and how it forks sessions.
@@ -242,20 +223,8 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
             Ok(pairing) => paired(pairing, daemon),
             Err(err) => failed(err),
         },
-        Request::Devices => Response::Devices {
-            devices: auth
-                .devices()
-                .into_iter()
-                .map(|(device, user)| DeviceInfo {
-                    device_id: device.device_id,
-                    client: device.client,
-                    paired_at: device.paired_at,
-                    user_id: user.user_id,
-                    user: user.name,
-                    role: user.role,
-                    device_role: device.role,
-                })
-                .collect(),
+        Request::Users => Response::Users {
+            users: auth.users(),
         },
         Request::Revoke { device_id } => match auth.revoke(&device_id) {
             Ok(true) => Response::Revoked,
@@ -500,10 +469,8 @@ mod tests {
         };
         assert!(matches!(ask(member).await.unwrap(), Response::Error { .. }));
         assert_eq!(
-            ask(Request::Devices).await.unwrap(),
-            Response::Devices {
-                devices: Vec::new()
-            }
+            ask(Request::Users).await.unwrap(),
+            Response::Users { users: Vec::new() }
         );
         let host = Request::PairHost {
             host: "devbox".into(),
@@ -556,14 +523,12 @@ mod tests {
             &CancellationToken::new(),
         )
         .unwrap();
-        let Response::Devices { devices } = handle(Request::Devices, &auth, &daemon).await else {
-            panic!("expected the devices");
+        let Response::Users { users } = handle(Request::Users, &auth, &daemon).await else {
+            panic!("expected the users");
         };
-        assert_eq!(devices.len(), 1);
-        assert_eq!(
-            (devices[0].user.as_str(), devices[0].device_role),
-            ("devbox", DeviceRole::Host)
-        );
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].name, "devbox");
+        assert!(users[0].devices[0].host_only, "{users:?}");
     }
 
     /// The admin of a vault keeping its database in `dir`.

@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, Answer, ApprovalDecision, ApprovalId, Attachment, AttachmentId, BotId, Bytes,
-    CommandId, DaemonSettings, Event, HostId, Image, PermissionMode, ProjectId, PromptFile,
-    PromptId, Provider, QuestionId, SecretValue, Seq, SessionId, TerminalId, UsagePeriod,
+    CommandId, DaemonSettings, DeviceId, Event, HostId, Image, PermissionMode, ProjectId,
+    PromptFile, PromptId, Provider, QuestionId, Role, SecretValue, Seq, SessionId, TerminalId,
+    UsagePeriod, UserId,
 };
 
 /// A client-to-daemon message.
@@ -602,10 +603,38 @@ pub enum CommandBody {
     /// `[vault]` table of its config; owners only. What the vault holds stays there. Refused
     /// with `not_found` when it is linked to no vault.
     UnlinkVault,
-    /// Mint a one-time code, as `herder pair` does, that pairs another device as the caller's
-    /// own user with the caller's role, so a shared code never grants more than the sharer
-    /// has; owners and members alike. Answered with `device_pairing`.
-    PairDevice,
+    /// Mint a one-time code, as `herder pair` does, that pairs another device. Without `user`
+    /// and `role` it pairs as the caller's own user with the caller's role, so a shared code
+    /// never grants more than the sharer has; owners and members alike. With either, owners
+    /// only: it pairs as `user`, created as `role` when new, or the caller's user when absent.
+    /// Answered with `device_pairing`. Refused with `bad_request` for a name that is not 1 to
+    /// 64 printable characters, or a `role` that is not the existing user's.
+    PairDevice {
+        /// The user the device pairs as, by name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
+        /// The role of that user when new; the daemon picks when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<Role>,
+    },
+    /// List this daemon's users, each with their role and paired devices; owners and members
+    /// alike. Answered with `users`. It changes nothing, so a resend is answered afresh.
+    ListUsers,
+    /// Make `user_id` an owner or a member; owners only. Their devices' connections close, so
+    /// they reconnect with the new role. Answered with `applied`. Refused with `not_found` for
+    /// an unknown user, and `conflict` when it would leave the daemon with no owner.
+    SetUserRole {
+        /// The user.
+        user_id: UserId,
+        /// Their new role.
+        role: Role,
+    },
+    /// Unpair a device and close its connections; owners only. Its user stays. Answered with
+    /// `applied`. Refused with `not_found` when no such device is paired.
+    RevokeDevice {
+        /// The device.
+        device_id: DeviceId,
+    },
     /// On a vault, mint a one-time code that pairs a host to replicate here and only that,
     /// as `herder pair --host` does; owners only. Answered with `host_pairing`.
     PairVaultHost {
