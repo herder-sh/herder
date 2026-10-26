@@ -147,7 +147,8 @@ struct DesktopShell: View {
                 PaneButton(title: "Add Account", symbol: "plus", prominent: true) { sheet = .addAccount }
             }
         case .machines:
-            Pane(fleet: fleet, title: "Machines", status: machinesStatus(lists), switcher: switcher) {
+            Pane(fleet: fleet, title: "Machines", status: MachinesView.status(lists.machines, vaults: fleet.vaults),
+                 switcher: switcher) {
                 MachinesView(fleet: fleet, sheet: $sheet)
             } actions: {
                 if !AwsSignIn.machines(fleet.machines).isEmpty {
@@ -213,23 +214,9 @@ struct DesktopShell: View {
         let tasks = lists.board()
         let working = tasks.filter { $0.state == .working }.count
         let line = "\(tasks.count) open · \(working) working"
-        let connected = lists.machines.filter(\.connected).count
-        return connected < lists.machines.count || lists.machines.isEmpty ? "\(line) · \(connectionStatus(lists))" : line
-    }
-
-    /// The connections, then each vault that is behind: "All 3 machines connected · vault-0 6 h behind".
-    private func machinesStatus(_ lists: Lists) -> String {
-        let behind = fleet.vaults.compactMap { vault in
-            vault.furthestBehind.map { "\(vault.name) \($0.freshness.label(now: vault.now))" }
-        }
-        return ([connectionStatus(lists)] + behind).joined(separator: " · ")
-    }
-
-    private func connectionStatus(_ lists: Lists) -> String {
-        let connected = lists.machines.filter(\.connected).count
-        if lists.machines.isEmpty { return "No machines yet" }
-        if connected < lists.machines.count { return "\(connected) of \(lists.machines.count) machines connected" }
-        return lists.machines.count == 1 ? "1 machine connected" : "All \(lists.machines.count) machines connected"
+        let hosts = lists.machines.filter { !$0.vault }
+        let connected = hosts.filter(\.connected).count
+        return connected < hosts.count || hosts.isEmpty ? "\(line) · \(MachinesView.connections(lists.machines))" : line
     }
 }
 
@@ -570,14 +557,17 @@ struct MachinesFooter: View {
     @State private var open = false
     @Environment(\.pages) private var pages
 
-    /// "4 machines · 1 offline": the count, then those not connected.
+    /// "3 machines · 1 offline": the machines that run sessions, those not connected, then a
+    /// vault that is not, as Machines counts them.
     nonisolated static func summary(_ machines: [MachineSummary]) -> String {
-        guard !machines.isEmpty else { return "No machines" }
-        var parts = [machines.count == 1 ? "1 machine" : "\(machines.count) machines"]
-        let offline = machines.filter { if case .disconnected = $0.connection { true } else { false } }.count
-        let connecting = machines.filter { $0.connection == .connecting }.count
+        let hosts = machines.filter { !$0.vault }
+        guard !hosts.isEmpty else { return machines.isEmpty ? "No machines" : "No machines yet" }
+        var parts = [hosts.count == 1 ? "1 machine" : "\(hosts.count) machines"]
+        let offline = hosts.filter { if case .disconnected = $0.connection { true } else { false } }.count
+        let connecting = hosts.filter { $0.connection == .connecting }.count
         if offline > 0 { parts.append("\(offline) offline") }
         if connecting > 0 { parts.append("\(connecting) connecting") }
+        if machines.contains(where: { $0.vault && !$0.connected }) { parts.append("vault offline") }
         return parts.joined(separator: " · ")
     }
 

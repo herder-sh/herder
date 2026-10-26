@@ -309,7 +309,8 @@ struct Lists: Equatable {
                     lastSeen: Timestamp.age(Timestamp.date(host.lastSeen), now: now),
                     sessions: machine.sessions.filter { $0.hostId == host.hostId }.count)
             },
-            pinned: machine.failover.pin)
+            pinned: machine.failover.pin,
+            vault: !machine.hosts.isEmpty || machine.vault != nil)
     }
 
     /// A usage window's name as the TUI labels it (crates/herder-tui/src/account_screen.rs).
