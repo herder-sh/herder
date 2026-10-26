@@ -654,6 +654,11 @@ final class ScreenshotTests: XCTestCase {
         guard wait(row, title) else { return false }
         reveal(row)
         press(row)
+        #if os(iOS)
+        // A tap while the Board still settles can be lost; the session's composer says it opened.
+        let composer = app.descendants(matching: .any)["composer"].firstMatch
+        if !composer.waitForExistence(timeout: 3), row.isHittable { press(row) }
+        #endif
         settle()
         return true
     }
