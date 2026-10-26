@@ -275,13 +275,11 @@ final class ScreenshotTests: XCTestCase {
         // The fake login: Enter answers its prompt, and the account is added.
         press(terminal)
         app.typeKey(.return, modifierFlags: [])
-        // The job's title in its detail, or its row in Activity, open again if the login's end
-        // closed it.
+        // The job's title in its detail, or its row in Activity.
         let title = app.staticTexts.matching(NSPredicate(format: "value BEGINSWITH 'Added Claude'")).firstMatch
         let row = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH 'job-add-claude' AND label ENDSWITH ', Added'")).firstMatch
-        if !title.waitForExistence(timeout: 5), !row.exists, !app.popovers.firstMatch.exists { _ = openActivity() }
-        if title.exists || wait(row, "Account added") {
+        if title.waitForExistence(timeout: 3) || inActivity(row, "Account added") {
             settle()
             shoot("mac-activity-login-added", screen: true)
         }
@@ -356,7 +354,7 @@ final class ScreenshotTests: XCTestCase {
         for id in ["job-install-claude-devbox", "job-install-claude-studio", "job-install-codex-studio"] {
             let outcome = app.descendants(matching: .any).matching(NSPredicate(
                 format: "identifier == %@ AND label CONTAINS 'Updated '", id)).firstMatch
-            guard wait(outcome, "\(id) updated") else { return closeActivity() }
+            guard inActivity(outcome, "\(id) updated") else { return closeActivity() }
         }
         settle()
         shoot("mac-activity-done", screen: true)
@@ -393,6 +391,15 @@ final class ScreenshotTests: XCTestCase {
         return true
     }
 
+    /// Whether `element` shows up in Activity. On the Mac its popover can close by itself while
+    /// a job ends; it opens again first if it did.
+    private func inActivity(_ element: XCUIElement, _ what: String) -> Bool {
+        #if os(macOS)
+        if !element.waitForExistence(timeout: 3), !app.popovers.firstMatch.exists { _ = openActivity() }
+        #endif
+        return wait(element, what)
+    }
+
     private func closeActivity() {
         #if os(macOS)
         // Escape would go to a focused terminal; a click outside the popover closes it.
@@ -412,8 +419,15 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot(platform("cancel-login"), screen: true)
         confirmCancel()
-        let stopped = text("Stopped")
-        if wait(stopped, "cancelled login stopped") {
+        // Its detail says so; on the Mac, where Activity can close meanwhile, its row does too.
+        #if os(macOS)
+        let row = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS 'Stopped'", "job-add-\(id)-")).firstMatch
+        let stopped = text("Stopped").waitForExistence(timeout: 3) || inActivity(row, "cancelled login stopped")
+        #else
+        let stopped = wait(text("Stopped"), "cancelled login stopped")
+        #endif
+        if stopped {
             settle()
             shoot(platform("cancel-login-ended"), screen: true)
         }
