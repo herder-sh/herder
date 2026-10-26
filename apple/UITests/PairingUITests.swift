@@ -10,9 +10,7 @@ final class PairingUITests: XCTestCase {
 
         let add = app.buttons["Add Machine"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 30), "the app did not open on an empty Board")
-        add.tap()
-        let field = app.descendants(matching: .any)["pairing-link"].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        let field = app.openPairing(add)
         field.tap()
         field.typeText(link)
         XCTAssertTrue(app.staticTexts["3 · CHECK THEY ARE YOUR 2 MACHINES"].waitForExistence(timeout: 5))
