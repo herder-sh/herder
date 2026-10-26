@@ -431,6 +431,9 @@ final class ScreenshotTests: XCTestCase {
         let cancel = app.buttons.matching(NSPredicate(format: "label == %@", "Cancel Login \(id)")).firstMatch
         guard wait(cancel, "Cancel Login \(id)") else { return }
         press(cancel)
+        // A press while the terminal takes the keyboard can land as the layout moves and open
+        // nothing; one more opens the confirmation.
+        if !confirmation().waitForExistence(timeout: 3) { press(cancel) }
         settle()
         shoot(platform("cancel-login"), screen: true)
         confirmCancel()
@@ -500,8 +503,13 @@ final class ScreenshotTests: XCTestCase {
 
     /// Answers the Cancel Login confirmation.
     private func confirmCancel() {
-        let confirm = app.buttons.matching(NSPredicate(format: "label == 'Cancel Login'")).firstMatch
+        let confirm = confirmation()
         if wait(confirm, "Cancel Login confirmation") { press(confirm) }
+    }
+
+    /// The Cancel Login confirmation's button.
+    private func confirmation() -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == 'Cancel Login'")).firstMatch
     }
 
     /// Types `text` into the field with accessibility id `field`, once it has the keyboard: a
