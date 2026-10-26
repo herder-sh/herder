@@ -209,46 +209,14 @@ struct InviteSheet: View {
     }
 }
 
-/// The link an invite made, as `ShareSheet` shows its own: a QR code with its expiry, and the
-/// link to copy.
+/// The link an invite made, as the share sheet shows its own.
 struct InviteLinkView: View {
     let invite: People.Invite
     var now: Date?
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let at = now ?? context.date
-            let expired = invite.expiresAt.map { $0 <= at } ?? false
-            VStack(spacing: 12) {
-                if let code = QRCode.image(invite.link) {
-                    Image(decorative: code, scale: 1)
-                        .interpolation(.none)
-                        .resizable()
-                        .frame(width: 220, height: 220)
-                        .padding(14)
-                        .background(.white, in: .rect(cornerRadius: Theme.corner))
-                        .opacity(expired ? 0.15 : 1)
-                        .accessibilityLabel("QR code of the invite link")
-                }
-                Text(expiry(invite.expiresAt, now: at))
-                    .font(.subheadline.weight(.medium).monospacedDigit())
-                    .foregroundStyle(expired ? Theme.failure : Theme.secondary)
-            }
-            .frame(maxWidth: .infinity)
-        }
-        Field(label: "Link", hint: "It works once. Whoever uses it pairs as \(invite.name), \(invite.role == .owner ? "an owner" : "a member").") {
-            HStack(alignment: .top) {
-                Text(invite.link)
-                    .font(Theme.monoSmall)
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(3)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-                Spacer()
-                CopyButton(text: invite.link)
-            }
-            .padding(12)
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
-        }
+        PairingLinkCode(link: invite.link, expiresAt: invite.expiresAt,
+                        hint: "It works once. Whoever uses it pairs as \(invite.name), \(invite.role == .owner ? "an owner" : "a member").",
+                        now: now)
     }
 }
