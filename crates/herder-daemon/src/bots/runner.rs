@@ -21,6 +21,10 @@
 //! or pressing one, links that thread to the session. A session that keeps waiting is notified
 //! of once; the message is edited when it is answered, saying where.
 //!
+//! A mention in a reply of a channel thread carries what the thread said before it: from the
+//! thread's start the first time, then what was said since the bot's last mention there; at
+//! most [`THREAD_MESSAGES`] messages, and their files as the prompt has room for.
+//!
 //! Outside a linked thread, a message that is one of the bot's commands ([`Command`]) is
 //! answered by the bot itself: `sessions`, `continue ‹name›`, `use ‹project›`, `status` and
 //! `help`.
@@ -31,15 +35,17 @@ use std::sync::Arc;
 use herder_protocol::{
     Answer, Bot, BotUser, Bytes, CommandBody, CommandResult, ErrorClass, ErrorCode, ErrorInfo,
     Event, EventBody, HostId, IMAGE_MEDIA_TYPES, Image, ItemBody, ItemId, MAX_IMAGE_BYTES,
-    ProjectId, PromptFile, QuestionId, Route, SessionHead, SessionId, SessionStatus, ThreadLink,
-    TurnError, UserId,
+    MAX_PROMPT_ATTACHMENT_BYTES, ProjectId, PromptFile, QuestionId, Route, SessionHead, SessionId,
+    SessionStatus, ThreadLink, TurnError, UserId,
 };
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::Bindings;
-use super::bridge::{Action, Bridge, ChatFile, Inbound, Message, Place, Post, Press};
+use super::bridge::{
+    Action, Bridge, ChatFile, Earlier, HistoryError, Inbound, Message, Place, Post, Press,
+};
 use crate::session::SessionManager;
 
 /// How many lines of an answer are posted before Full answer.
@@ -47,6 +53,9 @@ pub const ANSWER_LINES: usize = 30;
 
 /// The most sessions `sessions` lists, and the most a `continue` picker offers.
 pub const SESSIONS: usize = 10;
+
+/// The most messages of a thread a mention carries: the first, and the latest.
+pub const THREAD_MESSAGES: usize = 50;
 
 /// What `help` answers.
 const HELP: &str = "**sessions**: recent sessions in my projects, and those waiting for you, \
@@ -110,6 +119,10 @@ pub struct Runner {
     waiting: HashMap<SessionId, (String, Vec<(Place, Post)>)>,
     /// Each person's direct message with the bot, by their user id, once known.
     directs: HashMap<String, String>,
+    /// The last message the bot read of each channel thread it was mentioned in.
+    seen: HashMap<Place, String>,
+    /// The threads the bot has said it cannot read.
+    unreadable: HashSet<Place>,
 }
 
 impl Runner {
@@ -133,6 +146,8 @@ impl Runner {
             notices: HashMap::new(),
             waiting: HashMap::new(),
             directs: HashMap::new(),
+            seen: HashMap::new(),
+            unreadable: HashSet::new(),
         }
     }
 
@@ -199,12 +214,14 @@ impl Runner {
                     self.reply(&session_id, question_id, &message, by).await;
                 }
                 None => {
+                    let context = self.context(&message).await;
                     self.prompt(
                         &session_id,
                         &message.place,
                         by,
                         &message.text,
                         &message.files,
+                        context,
                     )
                     .await;
                 }
@@ -233,8 +250,16 @@ impl Runner {
                 return;
             }
         };
-        self.start(project_id, &message.place, by, &text, &message.files)
-            .await;
+        let context = self.context(&message).await;
+        self.start(
+            project_id,
+            &message.place,
+            by,
+            &text,
+            &message.files,
+            context,
+        )
+        .await;
     }
 
     async fn press(&mut self, press: Press) {
@@ -312,13 +337,23 @@ impl Runner {
                     self.note(&press.place, &press.user_id, text).await;
                     return;
                 };
-                self.prompt(&session_id, &press.place, by, &text, &[]).await;
+                self.prompt(
+                    &session_id,
+                    &press.place,
+                    by,
+                    &text,
+                    &[],
+                    Context::default(),
+                )
+                .await;
                 return;
             }
             Action::Pick { project_id } => {
                 if let Some(message) = self.picking.remove(&press.place) {
-                    let place = message.place;
-                    self.start(Some(project_id), &place, by, &message.text, &message.files)
+                    let context = self.context(&message).await;
+                    let place = &message.place;
+                    let (text, files) = (&message.text, &message.files);
+                    self.start(Some(project_id), place, by, text, files, context)
                         .await;
                 }
                 return;
@@ -621,6 +656,7 @@ impl Runner {
         by: UserId,
         text: &str,
         files: &[ChatFile],
+        context: Context,
     ) {
         let defaults = &self.bot.defaults;
         let command = CommandBody::CreateSession {
@@ -651,7 +687,8 @@ impl Runner {
             }
         };
         self.link(&session_id, place).await;
-        self.prompt(&session_id, place, by, text, files).await;
+        self.prompt(&session_id, place, by, text, files, context)
+            .await;
     }
 
     /// Links `place` to `session_id`.
@@ -676,7 +713,8 @@ impl Runner {
         }
     }
 
-    /// Sends `text` with `files` to `session_id` as `by`, from `place`.
+    /// Sends `text` with `files` to `session_id` as `by`, from `place`, after what `context`
+    /// holds of the thread.
     async fn prompt(
         &mut self,
         session_id: &SessionId,
@@ -684,13 +722,17 @@ impl Runner {
         by: UserId,
         text: &str,
         files: &[ChatFile],
+        context: Context,
     ) {
-        let Some((images, files)) = self.download(place, files).await else {
+        let Some((mut images, mut files)) = self.download(place, files).await else {
             return;
         };
+        let text = self
+            .with_context(text, context, &mut images, &mut files)
+            .await;
         let command = CommandBody::SendPrompt {
             session_id: session_id.clone(),
-            text: text.to_owned(),
+            text,
             images,
             files,
         };
@@ -748,19 +790,7 @@ impl Runner {
         let mut prompt_files = Vec::new();
         for file in files {
             match self.bridge.download(file).await {
-                Ok(data)
-                    if IMAGE_MEDIA_TYPES.contains(&file.media_type.as_str())
-                        && data.len() <= MAX_IMAGE_BYTES =>
-                {
-                    images.push(Image {
-                        media_type: file.media_type.clone(),
-                        data: Bytes(data),
-                    });
-                }
-                Ok(data) => prompt_files.push(PromptFile {
-                    name: file.name.clone(),
-                    data: Bytes(data),
-                }),
+                Ok(data) => attach(file, data, &mut images, &mut prompt_files),
                 Err(err) => {
                     let text = format!("Cannot read {}: {err}", file.name);
                     self.post(place, &Post::Text(text)).await;
@@ -769,6 +799,112 @@ impl Runner {
             }
         }
         Some((images, prompt_files))
+    }
+
+    /// What the thread of `message`, a mention in a channel, said since the bot last read it,
+    /// or from its start. A direct message has none: the bot sees every one.
+    async fn context(&mut self, message: &Message) -> Context {
+        let place = &message.place;
+        if message.direct || place.thread_id == message.message_id {
+            self.seen.insert(place.clone(), message.message_id.clone());
+            return Context::default();
+        }
+        let after = self.seen.get(place).cloned();
+        let read = self
+            .bridge
+            .history(place, after.as_deref(), &message.message_id);
+        let mut earlier = match read.await {
+            Ok(earlier) => earlier,
+            Err(HistoryError::Unreadable(text)) => {
+                if self.unreadable.insert(place.clone()) {
+                    self.post(place, &Post::Text(text)).await;
+                }
+                return Context::default();
+            }
+            Err(HistoryError::Failed(err)) => {
+                warn!(bot_id = %self.bot.bot_id, "cannot read a thread: {err}");
+                return Context::default();
+            }
+        };
+        self.seen.insert(place.clone(), message.message_id.clone());
+        let cut = earlier.len() > THREAD_MESSAGES;
+        if cut {
+            earlier.drain(1..=earlier.len() - THREAD_MESSAGES);
+        }
+        let mut context = Context {
+            cut,
+            ..Context::default()
+        };
+        for Earlier {
+            user_id,
+            text,
+            files,
+            ..
+        } in earlier
+        {
+            let who = self
+                .user(&user_id)
+                .map_or(user_id, |user| user.display_name.clone());
+            let mut line = format!("{who}: {text}");
+            if !files.is_empty() {
+                let names: Vec<_> = files.iter().map(|file| file.name.as_str()).collect();
+                line.push_str(&format!(" [attached: {}]", names.join(", ")));
+            }
+            context.lines.push(line);
+            context.files.extend(files);
+        }
+        context
+    }
+
+    /// `text` after what `context` holds, whose files go into `images` and `files` as far as
+    /// [`MAX_PROMPT_ATTACHMENT_BYTES`] leaves room, the latest first.
+    async fn with_context(
+        &self,
+        text: &str,
+        context: Context,
+        images: &mut Vec<Image>,
+        files: &mut Vec<PromptFile>,
+    ) -> String {
+        if context.lines.is_empty() {
+            return text.to_owned();
+        }
+        let taken: usize = images.iter().map(|image| image.data.0.len()).sum::<usize>()
+            + files.iter().map(|file| file.data.0.len()).sum::<usize>();
+        let mut room = MAX_PROMPT_ATTACHMENT_BYTES.saturating_sub(taken);
+        let (mut earlier_images, mut earlier_files) = (Vec::new(), Vec::new());
+        let (mut unread, mut left_out) = (Vec::new(), Vec::new());
+        for file in context.files.iter().rev() {
+            match self.bridge.download(file).await {
+                Ok(data) if data.len() <= room => {
+                    room -= data.len();
+                    attach(file, data, &mut earlier_images, &mut earlier_files);
+                }
+                Ok(_) => left_out.push(file.name.as_str()),
+                Err(err) => unread.push(format!("{}: {err}", file.name)),
+            }
+        }
+        earlier_images.reverse();
+        earlier_images.append(images);
+        *images = earlier_images;
+        earlier_files.reverse();
+        earlier_files.append(files);
+        *files = earlier_files;
+        let mut lines = vec!["Earlier in this thread:".to_owned()];
+        if context.cut {
+            lines.push(format!(
+                "(It is longer: only the first of these messages and the last {} are here.)",
+                THREAD_MESSAGES - 1
+            ));
+        }
+        lines.extend(context.lines);
+        if !left_out.is_empty() {
+            left_out.reverse();
+            lines.push(format!("(Left out, for size: {}.)", left_out.join(", ")));
+        }
+        if !unread.is_empty() {
+            lines.push(format!("(Cannot read {}.)", unread.join("; ")));
+        }
+        format!("{}\n\n{text}", lines.join("\n"))
     }
 
     /// Posts the rest of the answer `item_id` of `session_id`, past its first lines.
@@ -1387,6 +1523,33 @@ impl<'a> Command<'a> {
             }
             _ => None,
         }
+    }
+}
+
+/// What a thread said before a mention, which its prompt carries.
+#[derive(Debug, Default)]
+struct Context {
+    /// Its messages, oldest first, each "‹who›: ‹text›".
+    lines: Vec<String>,
+    /// Their files, oldest first.
+    files: Vec<ChatFile>,
+    /// Whether messages between the first and the latest were left out.
+    cut: bool,
+}
+
+/// `data`, downloaded of `file`, as one of a prompt's `images` when it is one the agent sees,
+/// else as one of its `files`.
+fn attach(file: &ChatFile, data: Vec<u8>, images: &mut Vec<Image>, files: &mut Vec<PromptFile>) {
+    if IMAGE_MEDIA_TYPES.contains(&file.media_type.as_str()) && data.len() <= MAX_IMAGE_BYTES {
+        images.push(Image {
+            media_type: file.media_type.clone(),
+            data: Bytes(data),
+        });
+    } else {
+        files.push(PromptFile {
+            name: file.name.clone(),
+            data: Bytes(data),
+        });
     }
 }
 

@@ -1,13 +1,15 @@
-//! A bridge for tests: records what the bot sends, and serves the files tests give it.
+//! A bridge for tests: records what the bot sends, and serves the files and threads tests give
+//! it.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use tokio::sync::watch;
 
-use super::bridge::{self, Bridge, ChatFile, Place, Post};
+use super::bridge::{self, Bridge, ChatFile, Earlier, HistoryError, Place, Post};
 
 /// Something the bot sent.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +52,8 @@ pub struct FakeBridge {
     files: HashMap<String, Vec<u8>>,
     /// Whether it refuses uploads, as a chat that is down or full does.
     refuses_uploads: AtomicBool,
+    /// What reading each thread answers.
+    threads: Mutex<HashMap<Place, Result<Vec<Earlier>, HistoryError>>>,
 }
 
 impl FakeBridge {
@@ -58,12 +62,21 @@ impl FakeBridge {
             sent: watch::Sender::new(Vec::new()),
             files,
             refuses_uploads: AtomicBool::new(false),
+            threads: Mutex::default(),
         }
     }
 
     /// Refuses every upload from now on.
     pub fn refuse_uploads(&self) {
         self.refuses_uploads.store(true, Ordering::Relaxed);
+    }
+
+    /// Makes reading the thread `place` answer `history`: its messages, oldest first, each of
+    /// which a read gets when its id sorts after `after` and before `before`, as Slack's
+    /// timestamps of one length do; or why it cannot be read.
+    pub fn thread(&self, place: &Place, history: Result<Vec<Earlier>, HistoryError>) {
+        let mut threads = self.threads.lock().unwrap();
+        threads.insert(place.clone(), history);
     }
 
     /// Everything sent so far.
@@ -197,6 +210,26 @@ impl Bridge for FakeBridge {
     fn download<'a>(&'a self, file: &'a ChatFile) -> BoxFuture<'a, bridge::Result<Vec<u8>>> {
         let data = self.files.get(&file.url).cloned();
         Box::pin(async move { data.ok_or_else(|| "no such file".to_owned()) })
+    }
+
+    fn history<'a>(
+        &'a self,
+        place: &'a Place,
+        after: Option<&'a str>,
+        before: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<Earlier>, HistoryError>> {
+        let threads = self.threads.lock().unwrap();
+        let read = match threads.get(place).cloned().unwrap_or(Ok(Vec::new())) {
+            Ok(messages) => Ok(messages
+                .into_iter()
+                .filter(|message| {
+                    let id = message.message_id.as_str();
+                    after.is_none_or(|after| id > after) && id < before
+                })
+                .collect()),
+            Err(err) => Err(err),
+        };
+        Box::pin(async move { read })
     }
 
     fn link<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>> {

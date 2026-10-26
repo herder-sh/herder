@@ -1,0 +1,9 @@
+# A bot that may not read the thread answers from the mention alone.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "comment on the screenshot"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Which screenshot?"}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "what about Android?"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Which?"}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}

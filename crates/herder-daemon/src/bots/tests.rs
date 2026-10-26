@@ -210,10 +210,14 @@ mod running {
     use slack_morphism::prelude::{SlackInteractionEvent, SlackPushEventCallback};
     use tokio::sync::mpsc;
 
-    use super::super::bridge::{Action, Inbound, Place, Post};
+    use herder_protocol::MAX_PROMPT_ATTACHMENT_BYTES;
+    use slack_morphism::errors::{SlackClientApiError, SlackClientError};
+    use slack_morphism::prelude::SlackApiConversationsRepliesResponse;
+
+    use super::super::bridge::{Action, ChatFile, Earlier, Inbound, Place, Post};
     use super::super::fake::{FakeBridge, Sent};
     use super::super::runner::{self, Runner};
-    use super::super::slack::{payload, render};
+    use super::super::slack::{self, payload, render};
     use super::super::telegram;
     use super::super::telegram::payload::{Me, Pressed, Threads};
     use super::super::telegram::render::Keys;
@@ -1291,6 +1295,7 @@ mod running {
         bot.inbound
             .send(Inbound::Message(super::super::bridge::Message {
                 place: place.clone(),
+                message_id: "1761400990.000990".into(),
                 user_id: ADA.into(),
                 direct: true,
                 mentioned: false,
@@ -1783,6 +1788,181 @@ mod running {
         )
         .await;
         assert_eq!(bot.listed().await[0].channel_bindings, []);
+    }
+
+    /// The thread a mention in a reply is in, and where the bridge downloads its root's image.
+    fn thread() -> (Place, &'static str) {
+        (
+            Place {
+                channel_id: "C0TEAM0001".into(),
+                thread_id: "1761400600.001000".into(),
+            },
+            "https://files.slack.com/files-pri/T0HERDER01-F0THREAD01/download/image.png",
+        )
+    }
+
+    /// The recorded `conversations.replies` answer `name`, as the bot reads it: every message
+    /// but its own.
+    fn replies(name: &str) -> Vec<Earlier> {
+        let text = std::fs::read_to_string(fixtures().join("slack").join(name)).unwrap();
+        let replies: SlackApiConversationsRepliesResponse = serde_json::from_str(&text).unwrap();
+        payload::earlier(replies.messages, ME, None, "9999999999.999999")
+    }
+
+    #[test]
+    fn a_thread_is_read_without_the_bots_own_messages_and_joins() {
+        let body =
+            std::fs::read_to_string(fixtures().join("slack").join("thread_replies.json")).unwrap();
+        let answered: SlackApiConversationsRepliesResponse = serde_json::from_str(&body).unwrap();
+        // Slack answers with the thread's first message whatever the range: it is dropped.
+        let since = payload::earlier(
+            answered.messages,
+            ME,
+            Some("1761400660.001300"),
+            "1761400720.001600",
+        );
+        let said: Vec<_> = since
+            .iter()
+            .map(|message| (message.user_id.as_str(), message.text.as_str()))
+            .collect();
+        assert_eq!(said, [(BOB, "it overlaps on Android too")]);
+
+        assert_eq!(
+            ids(&replies("thread_replies.json")),
+            [
+                "1761400600.001000",
+                "1761400610.001100",
+                "1761400660.001300",
+                "1761400690.001400",
+                "1761400720.001600"
+            ]
+        );
+    }
+
+    fn ids(messages: &[Earlier]) -> Vec<&str> {
+        messages
+            .iter()
+            .map(|message| message.message_id.as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_mention_in_a_thread_reads_the_thread_and_later_only_whats_new() {
+        let png = b"\x89PNG\r\n\x1a\npng".to_vec();
+        let (place, url) = thread();
+        let bot = Running::start(
+            Chat::Slack,
+            "thread.jsonl",
+            HashMap::from([(url.to_owned(), png)]),
+        )
+        .await;
+        bot.bridge
+            .thread(&place, Ok(replies("thread_replies.json")));
+
+        // The root's screenshot reaches the agent with who said what: thread.jsonl expects it.
+        bot.send(slack("thread_mention.json")).await;
+        bot.posted(&place, answer("The button overflows its container."))
+            .await;
+        bot.send(slack("thread_mention_later.json")).await;
+        bot.posted(&place, answer("Same cause.")).await;
+    }
+
+    #[tokio::test]
+    async fn a_bot_that_may_not_read_the_thread_says_so_once_and_answers() {
+        let body = std::fs::read_to_string(
+            fixtures()
+                .join("slack")
+                .join("thread_replies_missing_scope.json"),
+        )
+        .unwrap();
+        let answered: Value = serde_json::from_str(&body).unwrap();
+        let refused = SlackClientError::ApiError(SlackClientApiError {
+            code: answered["error"].as_str().unwrap().to_owned(),
+            errors: None,
+            warnings: None,
+            http_response_body: Some(body),
+        });
+        let (place, _) = thread();
+        let bot = Running::start(Chat::Slack, "thread_unreadable.jsonl", HashMap::new()).await;
+        bot.bridge
+            .thread(&place, Err(slack::history_error(refused)));
+
+        bot.send(slack("thread_mention.json")).await;
+        bot.posted(&place, answer("Which screenshot?")).await;
+        bot.send(slack("thread_mention_later.json")).await;
+        bot.posted(&place, answer("Which?")).await;
+        let told = bot
+            .bridge
+            .sent()
+            .into_iter()
+            .filter(|sent| is_post(sent, &place, text(slack::UNREADABLE)))
+            .count();
+        assert_eq!(told, 1);
+    }
+
+    #[tokio::test]
+    async fn a_long_thread_is_cut_to_its_first_and_latest_messages_and_files_that_fit() {
+        let (place, root_url) = thread();
+        let big_url = "https://files.slack.com/files-pri/T0HERDER01-F0BIG00001/download/big.mov";
+        let png = b"\x89PNG\r\n\x1a\npng".to_vec();
+        let file = |name: &str, url: &str, media_type: &str| ChatFile {
+            name: name.into(),
+            media_type: media_type.into(),
+            url: url.into(),
+        };
+        let messages: Vec<Earlier> = (0..60)
+            .map(|i| Earlier {
+                message_id: format!("1761400600.{:06}", 1000 + i),
+                user_id: BOB.into(),
+                text: format!("message {i}"),
+                files: match i {
+                    0 => vec![file("image.png", root_url, "image/png")],
+                    59 => vec![file("big.mov", big_url, "video/quicktime")],
+                    _ => Vec::new(),
+                },
+            })
+            .collect();
+        let mut lines = vec![
+            "Earlier in this thread:".to_owned(),
+            "(It is longer: only the first of these messages and the last 49 are here.)".to_owned(),
+            "Bob: message 0 [attached: image.png]".to_owned(),
+        ];
+        lines.extend((11..59).map(|i| format!("Bob: message {i}")));
+        lines.push("Bob: message 59 [attached: big.mov]".into());
+        lines.push("(Left out, for size: big.mov.)".into());
+        let prompt = format!("{}\n\ncomment on the screenshot", lines.join("\n"));
+        let script = tempfile::NamedTempFile::new().unwrap();
+        let expect = serde_json::json!({"expect": {
+            "type": "send_prompt",
+            "turn_id": "turn-1",
+            "text": prompt,
+            "images": [{"media_type": "image/png", "data": "iVBORw0KGgpwbmc="}],
+        }});
+        let emits = [
+            serde_json::json!({"emit": {"type": "turn_started", "turn_id": "turn-1"}}),
+            serde_json::json!({"emit": {"type": "item_completed", "item": {
+                "id": "item-1", "turn_id": "turn-1",
+                "body": {"type": "assistant_message", "text": "Read it."}}}}),
+            serde_json::json!({"emit": {"type": "turn_completed", "turn_id": "turn-1"}}),
+        ];
+        let lines: Vec<String> = std::iter::once(expect)
+            .chain(emits)
+            .map(|line| line.to_string())
+            .collect();
+        std::fs::write(script.path(), lines.join("\n")).unwrap();
+
+        let bot = Running::start(
+            Chat::Slack,
+            script.path().to_str().unwrap(),
+            HashMap::from([
+                (root_url.to_owned(), png),
+                (big_url.to_owned(), vec![0; MAX_PROMPT_ATTACHMENT_BYTES + 1]),
+            ]),
+        )
+        .await;
+        bot.bridge.thread(&place, Ok(messages));
+        bot.send(slack("thread_mention.json")).await;
+        bot.posted(&place, answer("Read it.")).await;
     }
 
     #[test]

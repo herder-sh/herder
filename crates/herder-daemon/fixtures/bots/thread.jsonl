@@ -1,0 +1,10 @@
+# A mention in a thread carries what the thread said before it, the root's screenshot too;
+# a later mention carries only what was said since.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Earlier in this thread:\nAda: The login button is cut off on mobile [attached: image.png]\nU0CAROL001: same on my iPad & iPhone\n\ncomment on the screenshot", "images": [{"media_type": "image/png", "data": "iVBORw0KGgpwbmc="}]}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "The button overflows its container."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Earlier in this thread:\nBob: it overlaps on Android too\n\nwhat about Android?"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Same cause."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}
