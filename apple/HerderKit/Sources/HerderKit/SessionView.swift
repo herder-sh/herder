@@ -200,17 +200,17 @@ struct SessionView: View {
     // MARK: Header
 
     /// The header, between the transcript's left edge and the composer's right one: the title,
-    /// the status and the branch, then a row of icon buttons, labelled where they fit beside
-    /// 240 points of title. On a phone the navigation bar holds the buttons, and the title
-    /// gets the whole width.
+    /// the status and the branch, then a row of header buttons centred on the title's first
+    /// line. On a phone the navigation bar holds the buttons, and the title gets the whole width.
     private func header(_ model: SessionModel?, _ summary: SessionSummary?) -> some View {
         SessionColumnLayout {
             if compact {
                 heading(model, summary)
             } else {
-                ViewThatFits(in: .horizontal) {
-                    headerRow(model, summary, labels: true)
-                    headerRow(model, summary, labels: false)
+                HStack(alignment: .titleLine, spacing: 16) {
+                    heading(model, summary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    buttons(model, summary)
                 }
             }
         }
@@ -218,16 +218,6 @@ struct SessionView: View {
         // of the list pane's title and the sidebar's top bar.
         .padding(.vertical, compact ? 4 : 12)
         .frame(minHeight: compact ? nil : Theme.headerHeight)
-    }
-
-    private func headerRow(_ model: SessionModel?, _ summary: SessionSummary?, labels: Bool) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            heading(model, summary)
-                .frame(idealWidth: 240, maxWidth: .infinity, alignment: .leading)
-            buttons(model, summary, labels: labels)
-                // The buttons keep their size; the title, status and branch take what is left.
-                .fixedSize()
-        }
     }
 
     /// The title, at most two lines; the status line; the branch and where it was forked from.
@@ -238,6 +228,7 @@ struct SessionView: View {
                 Text(summary?.title ?? model?.title ?? "Session")
                     .font(Theme.page).foregroundStyle(Theme.text).lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
+                    .titleLine()
                     .accessibilityAddTraits(.isHeader)
             }
             // One line, so a narrow header truncates where it runs on rather than wrapping
@@ -269,13 +260,14 @@ struct SessionView: View {
         }
     }
 
-    /// The header's buttons, 32 points square, each with its tooltip: the linked thread, the
-    /// PRs, the terminal, find, the inspector, the list (on the Mac) and the session's menu.
-    private func buttons(_ model: SessionModel?, _ summary: SessionSummary?, labels: Bool) -> some View {
-        HStack(spacing: 4) {
+    /// The header's buttons, icons with their tooltips: the linked thread, the PRs, the
+    /// terminal, find, the inspector, the list (on the Mac) and the session's menu. They keep
+    /// their size; the title, status and branch take what is left.
+    private func buttons(_ model: SessionModel?, _ summary: SessionSummary?) -> some View {
+        HStack(spacing: HeaderControl.spacing) {
             if let thread = summary?.threads.last(where: { $0.url != nil }), let url = thread.url.flatMap(URL.init) {
                 Link(destination: url) {
-                    HeaderLabel(symbol: "bubble.left.and.text.bubble.right", title: nil)
+                    HeaderLabel(symbol: "bubble.left.and.text.bubble.right")
                 }
                 .buttonStyle(.plain)
                 .help("Open the linked \(thread.kind.label) thread")
@@ -283,28 +275,29 @@ struct SessionView: View {
             }
             prChip(inToolbar: false)
             if ownsTerminal, model?.state != .archived {
-                HeaderButton(symbol: showsTerminal ? "text.bubble" : "terminal",
-                             title: labels ? showsTerminal ? "Chat" : "Terminal" : nil,
-                             selected: showsTerminal) { showsTerminal.toggle() }
+                HeaderButton(symbol: showsTerminal ? "text.bubble" : "terminal", selected: showsTerminal) {
+                    showsTerminal.toggle()
+                }
                     .accessibilityLabel(showsTerminal ? "Chat" : "Terminal")
                     .keyboardShortcut("`", modifiers: .command)
                     .help(showsTerminal ? "Back to the chat (⌘`)" : "A shell in this session's worktree (⌘`)")
             }
             if !showsTerminal {
-                HeaderButton(symbol: "magnifyingglass", title: nil, selected: find.shown) { toggleFind() }
+                HeaderButton(symbol: "magnifyingglass", selected: find.shown) { toggleFind() }
                     .accessibilityLabel("Find in Transcript")
                     .keyboardShortcut("f", modifiers: .command)
                     .help("Find in the transcript (⌘F)")
             }
-            HeaderButton(symbol: "info.circle", title: nil, selected: inspector == .pane && inspectorShown) {
+            HeaderButton(symbol: "info.circle", selected: inspector == .pane && inspectorShown) {
                 showInspector()
             }
                 .accessibilityLabel("Events and Statistics")
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help("Events and statistics (⌥⌘I)")
             #if os(macOS)
-            HeaderButton(symbol: listHidden ? "sidebar.squares.left" : "rectangle.expand.vertical",
-                         title: nil) { listHidden.toggle() }
+            HeaderButton(symbol: listHidden ? "sidebar.squares.left" : "rectangle.expand.vertical") {
+                listHidden.toggle()
+            }
                 .accessibilityLabel(listHidden ? "Show the Session List" : "Hide the Session List")
                 .keyboardShortcut("\\", modifiers: .command)
                 .help(listHidden ? "Show the session list (⌘\\)" : "Give the session the whole width (⌘\\)")
@@ -313,6 +306,7 @@ struct SessionView: View {
                 actionsMenu(model, threads: summary?.threads ?? [], inToolbar: false)
             }
         }
+        .fixedSize()
     }
 
     private var ownsTerminal: Bool {
@@ -337,7 +331,7 @@ struct SessionView: View {
         }
     }
 
-    /// The session tree's pull requests as a quiet chip, its text tinted by their state.
+    /// The session tree's pull requests and their count, tinted by their state.
     @ViewBuilder
     private func prChip(inToolbar: Bool) -> some View {
         let rollup = PRRollup(of: key, session: fleet.session, children: fleet.lists.children)
@@ -349,7 +343,7 @@ struct SessionView: View {
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundStyle(rollup.urgency.color)
                 } else {
-                    PRChip(text: rollup.chip, tint: rollup.urgency.color)
+                    HeaderLabel(symbol: "arrow.triangle.pull", title: rollup.chip, tint: rollup.urgency.color)
                 }
             }
             .help(rollup.summary)
@@ -394,7 +388,7 @@ struct SessionView: View {
             if inToolbar {
                 Label("Session Actions", systemImage: "ellipsis")
             } else {
-                HeaderLabel(symbol: "ellipsis", title: nil)
+                HeaderLabel(symbol: "ellipsis")
             }
         }
         .modifier(HeaderMenuStyle(applies: !inToolbar))
@@ -982,91 +976,12 @@ enum ModePreference {
     }
 }
 
-/// The wide header's menu look: a plain button with no indicator, at its own size. A toolbar
-/// menu keeps the system's.
-private struct HeaderMenuStyle: ViewModifier {
-    let applies: Bool
-
-    func body(content: Content) -> some View {
-        if applies {
-            content
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
-        } else {
-            content
-        }
-    }
-}
-
 /// The header's status line after the session's state: its project and machine, or that it
 /// is being archived.
 enum SessionHeading {
     static func detail(project: String?, machine: String?, archiving: Bool) -> String {
         let parts = archiving ? ["Archiving…"] : [project, machine].compactMap { $0 }
         return parts.filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-}
-
-/// A header button: an icon with an optional label, filled while its mode is on.
-struct HeaderButton: View {
-    let symbol: String
-    let title: String?
-    var tint: Color = Theme.secondary
-    var selected = false
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HeaderLabel(symbol: symbol, title: title, tint: tint, selected: selected)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-/// What every header button and menu shows: an icon, and a label where the header has room,
-/// 32 points high and at least as wide. Quiet until hovered; filled while its mode is on.
-struct HeaderLabel: View {
-    let symbol: String
-    let title: String?
-    var tint: Color = Theme.secondary
-    var selected = false
-    @State private var hovered = false
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol)
-            if let title { Text(title).lineLimit(1) }
-        }
-        .font(Theme.body.weight(.semibold))
-        .foregroundStyle(selected || hovered ? Theme.text : tint)
-        .padding(.horizontal, title == nil ? 0 : 10)
-        .frame(minWidth: 32, minHeight: 32, maxHeight: 32)
-        .primaryFill(in: .rect(cornerRadius: 8), on: selected, off: hovered ? Theme.raised : .clear)
-        .onHover { hovered = $0 }
-        .hitTarget()
-    }
-}
-
-/// The header's PRs chip: the pull-request mark and its count in a hairline capsule, the text
-/// tinted by their state, never filled.
-struct PRChip: View {
-    let text: String
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "arrow.triangle.pull").imageScale(.small)
-            Text(text).lineLimit(1)
-        }
-        .font(Theme.body.weight(.semibold).monospacedDigit())
-        .foregroundStyle(tint)
-        .padding(.horizontal, 10)
-        .frame(minWidth: 32, minHeight: 32, maxHeight: 32)
-        .overlay(Capsule().strokeBorder(Theme.stroke))
-        .fixedSize()
-        .hitTarget()
     }
 }
 

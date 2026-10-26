@@ -1,11 +1,15 @@
 import SwiftUI
 
 /// A page's header: its title, a live status sentence built from the page's state ("9 open ·
-/// 3 working"), then the page's actions, the main one `prominent`. The header says what is
-/// true now; what a page is for goes in its empty state or an ⓘ, never under the title.
+/// 3 working"), then the page's actions, the main one `prominent`, centred on the title's line.
+/// The header says what is true now; what a page is for goes in its empty state or an ⓘ, never
+/// under the title.
 struct PageHeader<Actions: View>: View {
     let title: String
     var status = ""
+    /// The status for a narrow pane, where the whole one would not fit on its line ("1 needs
+    /// you · 238 tasks"): it stands for the state too.
+    var shortStatus: String?
     /// A project's rolled-up state, before the status.
     var state: SessionState?
     /// A project's tile before the title.
@@ -20,19 +24,21 @@ struct PageHeader<Actions: View>: View {
     static var narrowWidth: CGFloat { 480 }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .titleLine, spacing: 8) {
             if let icon { icon.padding(.trailing, 4) }
-            // The status follows the title on its line, or takes the line under it, never cut.
+            // The status follows the title on its line, else takes the line under it, shortened
+            // where the whole one would be cut.
             ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) { titleView; statusView.fixedSize() }
-                VStack(alignment: .leading, spacing: 2) {
-                    titleView
-                    statusView.lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 10) { titleView; statusView(status).fixedSize() }
+                VStack(alignment: .leading, spacing: 2) { titleView; statusView(status).fixedSize() }
+                if let shortStatus {
+                    VStack(alignment: .leading, spacing: 2) { titleView; statusView(shortStatus, short: true).fixedSize() }
                 }
+                VStack(alignment: .leading, spacing: 2) { titleView; statusView(shortStatus ?? status).lineLimit(1) }
             }
             Spacer(minLength: 8)
             // The actions take their room before the title, so a label never wraps.
-            HStack(spacing: 8) { actions }
+            HStack(spacing: HeaderControl.spacing) { actions }
                 .environment(\.compactActions, narrow)
                 .layoutPriority(1)
         }
@@ -42,12 +48,13 @@ struct PageHeader<Actions: View>: View {
         .onGeometryChange(for: Bool.self) { $0.size.width < Self.narrowWidth } action: { narrow = $0 }
     }
 
-    @ViewBuilder private var statusView: some View {
+    /// The state's glyph, then its label unless the status is `short`, then `status`.
+    @ViewBuilder private func statusView(_ status: String, short: Bool = false) -> some View {
         if state != nil || !status.isEmpty {
             HStack(spacing: 4) {
                 if let state {
                     StatusGlyph(state: state, size: 7, pulses: false)
-                    Text(status.isEmpty ? state.label : "\(state.label) ·")
+                    if !short { Text(status.isEmpty ? state.label : "\(state.label) ·") }
                 }
                 if !status.isEmpty { Text(status) }
             }
@@ -61,7 +68,7 @@ struct PageHeader<Actions: View>: View {
                 switcher.items
             } label: {
                 HStack(spacing: 6) {
-                    Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1)
+                    Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1).titleLine()
                     Image(systemName: "chevron.down").font(.footnote.weight(.bold)).foregroundStyle(Theme.secondary)
                 }
                 .contentShape(.rect)
@@ -69,7 +76,7 @@ struct PageHeader<Actions: View>: View {
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
             .help("Switch section or project")
         } else {
-            Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1)
+            Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1).titleLine()
         }
     }
 }

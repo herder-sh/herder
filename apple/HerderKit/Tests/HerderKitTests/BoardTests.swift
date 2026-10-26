@@ -343,9 +343,12 @@ struct BoardTests {
         ]).projects[0]
         // A child is no task of its own; an archived one counts.
         #expect(ProjectSessions.status(live: project.live, archived: project.archived)
-            == "1 waiting for you · 1 working · 4 sessions")
+            == "1 waiting for you · 1 working · 4 tasks")
+        // A narrow pane's: the state's label goes, as the count stands for it.
+        #expect(ProjectSessions.shortStatus(live: project.live, archived: project.archived) == "1 needs you · 4 tasks")
         let quiet = projectLists([idle.model([created(task: "Idle")])]).projects[0]
-        #expect(ProjectSessions.status(live: quiet.live, archived: quiet.archived) == "1 session")
+        #expect(ProjectSessions.status(live: quiet.live, archived: quiet.archived) == "1 task")
+        #expect(ProjectSessions.shortStatus(live: quiet.live, archived: quiet.archived) == "1 task")
     }
 
     @Test func aULIDsTimeIsItsFirstTenCharacters() {
