@@ -421,14 +421,14 @@ struct AccountPage: View {
     }
 
     private func saveRotation(_ rows: [AccountMachine]) {
-        let changed = editable(rows).filter { $0.1.fallback != fallback }
+        let chosen = fallback
+        let changed = editable(rows).filter { $0.1.fallback != chosen }
         guard !changed.isEmpty else { return }
-        let fallback = fallback
         Task {
             await saves.save("Rotation") {
                 for (hostId, account) in changed {
                     try await send(account, on: hostId, label: account.label, configDir: account.configDir,
-                                   fallback: fallback)
+                                   fallback: chosen)
                 }
             }
         }
