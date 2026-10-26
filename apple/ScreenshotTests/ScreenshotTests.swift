@@ -515,7 +515,14 @@ final class ScreenshotTests: XCTestCase {
     /// Answers the Cancel Login confirmation.
     private func confirmCancel() {
         let confirm = app.buttons.matching(NSPredicate(format: "label == 'Cancel Login'")).firstMatch
-        if wait(confirm, "Cancel Login confirmation") { press(confirm) }
+        guard wait(confirm, "Cancel Login confirmation") else { return }
+        // The popover can still be moving into place, over a terminal that has the keyboard, so
+        // a press can miss it and leave it open over every screen after: press until it closes.
+        for _ in 0..<3 where confirm.exists {
+            for _ in 0..<10 where !confirm.isHittable { Thread.sleep(forTimeInterval: 0.3) }
+            press(confirm)
+            settle()
+        }
     }
 
     /// Types `text` into the field with accessibility id `field`, once it has the keyboard: a
