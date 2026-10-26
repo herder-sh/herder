@@ -2,56 +2,9 @@ import CoreImage.CIFilterBuiltins
 import Herder
 import SwiftUI
 
-/// Pairs another device with every machine this one has: a one-time link from the client
-/// core's `share()`, as a QR code to scan and as text to copy, with the machines it leaves out.
-struct ShareSheet: View {
-    let fleet: Fleet
-    @Environment(\.dismiss) private var dismiss
-    @State private var shared: SharedLink?
-    @State private var error: String?
-
-    var body: some View {
-        SheetScaffold(title: "Pair Another Device",
-                      subtitle: "Scan the code with herder on the other device, or paste the link into its Add Machine.",
-                      height: 720) {
-            if let shared {
-                SharedLinkView(fleet: fleet, shared: shared)
-            } else if let error {
-                Text(error).font(.footnote).foregroundStyle(Theme.failure)
-            } else {
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text("Asking each machine for a code…").foregroundStyle(Theme.secondary)
-                }
-                .font(.subheadline)
-                .frame(maxWidth: .infinity, minHeight: 200)
-            }
-        } footer: {
-            Spacer()
-            ActionButton(title: "New Link", style: .secondary) { await share() }
-                .frame(maxWidth: 160)
-            ActionButton(title: "Done", style: .primary) { dismiss() }
-                .frame(maxWidth: 160)
-                .keyboardShortcut(.defaultAction)
-        }
-        .task { await share() }
-    }
-
-    private func share() async {
-        do {
-            shared = try await fleet.share()
-            error = nil
-        } catch HerderError.Pairing(let detail) {
-            shared = nil
-            error = "Cannot share: \(detail)."
-        } catch {
-            shared = nil
-            self.error = describe(error)
-        }
-    }
-}
-
-private struct SharedLinkView: View {
+/// The link that pairs another device with every machine this one has, from the client
+/// core's `share()`: a QR code to scan and text to copy, with the machines it leaves out.
+struct SharedLinkView: View {
     let fleet: Fleet
     let shared: SharedLink
 
