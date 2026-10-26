@@ -395,11 +395,14 @@ extension TaskTree {
 /// and Chats'.
 struct BoardSortMenu: View {
     let choices: [BoardSort]
+    /// Shows it as a header control, where a toolbar's menu keeps the system's look.
+    let inHeader: Bool
     @AppStorage private var sort: BoardSort
     @Environment(\.compactActions) private var compact
 
-    init(_ choices: [BoardSort] = BoardSort.board, key: String = BoardSort.boardKey) {
+    init(_ choices: [BoardSort] = BoardSort.board, key: String = BoardSort.boardKey, inHeader: Bool = false) {
         self.choices = choices
+        self.inHeader = inHeader
         _sort = AppStorage(wrappedValue: .recent, key)
     }
 
@@ -410,12 +413,13 @@ struct BoardSortMenu: View {
             }
             .pickerStyle(.inline)
         } label: {
-            if compact {
-                Image(systemName: "arrow.up.arrow.down")
+            if inHeader {
+                HeaderLabel(symbol: "arrow.up.arrow.down", title: compact ? nil : sort.title)
             } else {
                 Label(sort.title, systemImage: "arrow.up.arrow.down")
             }
         }
+        .modifier(HeaderMenuStyle(applies: inHeader))
         .accessibilityIdentifier("board-sort")
         .help("Sort the list: \(sort.title)")
     }
