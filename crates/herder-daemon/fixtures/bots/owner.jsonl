@@ -1,0 +1,5 @@
+# The owner's thread: a short mention under earlier messages reaches the agent with them.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Earlier in this thread:\nAda: @Mintaras Bot dar paziurek ar result cache nenuleakins closed group rates\nAda: t.y. jei as paieskau closed jie uzsicachina ir tada atsiras kitiem\n\npacheckink"}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "The cache key leaves out the group: it leaks."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}

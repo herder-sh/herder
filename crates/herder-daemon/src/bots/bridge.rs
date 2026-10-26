@@ -69,11 +69,19 @@ pub struct Earlier {
     pub message_id: String,
     /// Its writer's user id in the chat; another bot's id for a bot's.
     pub user_id: String,
-    /// Its text, as Markdown.
+    /// Its writer's name, as the chat shows it, when known.
+    pub name: Option<String>,
+    /// Its text, as Markdown, with the people it mentions by name where known.
     pub text: String,
     /// The files it carries.
     pub files: Vec<ChatFile>,
 }
+
+/// The most messages of a channel [`Bridge::recent`] reads.
+pub const RECENT_MESSAGES: usize = 20;
+
+/// How far back, in seconds, [`Bridge::recent`] reads a channel.
+pub const RECENT_SECONDS: u64 = 2 * 60 * 60;
 
 /// Why [`Bridge::history`] read nothing.
 #[derive(Clone, Debug, PartialEq)]
@@ -284,6 +292,14 @@ pub trait Bridge: Send + Sync + 'static {
         &'a self,
         place: &'a Place,
         after: Option<&'a str>,
+        before: &'a str,
+    ) -> BoxFuture<'a, std::result::Result<Vec<Earlier>, HistoryError>>;
+    /// The latest messages of the channel of `place` before the message `before`, oldest
+    /// first, without the bot's own: at most [`RECENT_MESSAGES`], of the last
+    /// [`RECENT_SECONDS`].
+    fn recent<'a>(
+        &'a self,
+        place: &'a Place,
         before: &'a str,
     ) -> BoxFuture<'a, std::result::Result<Vec<Earlier>, HistoryError>>;
     /// A web link to `place`, if the chat has one.
