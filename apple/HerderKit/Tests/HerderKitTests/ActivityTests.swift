@@ -167,6 +167,7 @@ struct ActivityTests {
                                                          stage: .restarting(from: "0.13.0", to: "0.14.0")))
     }
 
+    @MainActor
     @Test func machinesOnAnOlderHerderAreTheOnesToUpdate() {
         func machine(_ id: String, _ version: String?, role: Role = .owner) -> Machine {
             var machine = HerderKitTests.machine(id, name: id, sessions: [], role: role)

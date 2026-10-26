@@ -63,7 +63,7 @@ struct IntegrationsView: View {
                 let notes = machines.compactMap { machine in bots[machine.hostId].flatMap { BotsNote(fleet: fleet, machine: machine, bots: $0) } }
                 if !notes.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(notes, id: \.machine) { $0 }
+                        ForEach(notes, id: \.hostId) { $0 }
                     }
                 }
             }
@@ -150,11 +150,18 @@ struct BotsNote: View {
     let outdated: Bool
 
     init?(fleet: Fleet, machine: Machine, bots: MachineBots) {
-        guard case .failed(let why) = bots.bots else { return nil }
+        guard let line = Self.line(machine: machine.name, bots: bots) else { return nil }
         self.fleet = fleet
         hostId = machine.hostId
-        outdated = bots.outdated
-        text = outdated ? "\(machine.name) runs an older herder; bots need \(botsRelease)." : "\(machine.name) did not list its bots: \(why)"
+        (text, outdated) = line
+    }
+
+    /// The note's line, and whether the machine's herder is too old; `nil` when it listed its
+    /// bots.
+    static func line(machine: String, bots: MachineBots) -> (text: String, outdated: Bool)? {
+        guard case .failed(let why) = bots.bots else { return nil }
+        let text = bots.outdated ? "\(machine) runs an older herder; bots need \(botsRelease)." : "\(machine) did not list its bots: \(why)"
+        return (text, bots.outdated)
     }
 
     var body: some View {
