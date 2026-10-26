@@ -201,6 +201,7 @@ struct ArtifactBlock: View {
         #if os(iOS)
         .fullScreenCover(isPresented: $viewing) { ArtifactViewer(fleet: fleet, key: key, start: artifact.id) }
         #endif
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("artifact")
     }
 
@@ -254,27 +255,20 @@ struct ArtifactBlock: View {
         }
     }
 
+    /// The title gets the card's width: beside the buttons where it fits whole, else above them.
     private var footer: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let link = artifact.link(at: context.date)
-            HStack(spacing: 10) {
-                Image(systemName: artifact.symbol).font(.callout).foregroundStyle(Theme.tertiary)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(artifact.title).font(.callout.weight(.medium)).foregroundStyle(Theme.text).lineLimit(1)
-                    Text(meta(link: link)).font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    heading(link: link).fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 0)
+                    actions(link: link)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                if data != nil {
-                    Button("Open", action: open)
-                        .accessibilityIdentifier("artifact-open")
-                }
-                if let link {
-                    Button { openURL(link) } label: { Label("Open in browser", systemImage: "arrow.up.right.square") }
-                        .help(link.absoluteString)
-                } else if let data, ArtifactBrowser.opensFiles {
-                    Button { ArtifactBrowser.open(artifact, data) } label: {
-                        Label("Open in browser", systemImage: "arrow.up.right.square")
-                    }
+                VStack(alignment: .leading, spacing: 8) {
+                    heading(link: link)
+                    HStack(spacing: 8) { actions(link: link) }
+                        .padding(.leading, 26)
                 }
             }
             .buttonStyle(.bordered)
@@ -285,6 +279,31 @@ struct ArtifactBlock: View {
                     Button("Copy Link", systemImage: "link") { Clipboard.string = link.absoluteString }
                     ShareLink(item: link, subject: Text(artifact.title))
                 }
+            }
+        }
+    }
+
+    private func heading(link: URL?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: artifact.symbol).font(.callout).foregroundStyle(Theme.tertiary).frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(artifact.title).font(.callout.weight(.medium)).foregroundStyle(Theme.text)
+                Text(meta(link: link)).font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder private func actions(link: URL?) -> some View {
+        if data != nil {
+            Button("Open", action: open)
+                .accessibilityIdentifier("artifact-open")
+        }
+        if let link {
+            Button { openURL(link) } label: { Label("Open in browser", systemImage: "arrow.up.right.square") }
+                .help(link.absoluteString)
+        } else if let data, ArtifactBrowser.opensFiles {
+            Button { ArtifactBrowser.open(artifact, data) } label: {
+                Label("Open in browser", systemImage: "arrow.up.right.square")
             }
         }
     }
