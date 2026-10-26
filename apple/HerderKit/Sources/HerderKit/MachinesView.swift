@@ -160,9 +160,9 @@ struct MachinesView: View {
 
     /// The widths both tables share, so their first columns line up.
     private enum Width {
-        static let name: CGFloat = 200
-        static let status: CGFloat = 100
-        static let count: CGFloat = 70
+        static let name: CGFloat = 180
+        static let status: CGFloat = 90
+        static let count: CGFloat = 64
     }
 
     private var columns: [SortableColumn<MachineRow>] {
@@ -189,12 +189,12 @@ struct MachinesView: View {
         ]
         guard !compact else { return columns }
         columns += [
-            SortableColumn("Load", width: 120, alignment: .trailing, value: { $0.cpu ?? -1 }) { row in
+            SortableColumn("Load", width: 110, alignment: .trailing, value: { $0.cpu ?? -1 }) { row in
                 if let cpu = row.cpu {
                     HStack(spacing: 8) {
-                        UsageBar(percent: cpu, height: 5).frame(width: 60)
+                        UsageBar(percent: cpu, height: 5).frame(width: 56)
                         Text("\(Int(cpu.rounded()))%").monospacedDigit().foregroundStyle(Theme.secondary)
-                            .frame(width: 38, alignment: .trailing)
+                            .frame(width: 36, alignment: .trailing)
                     }
                     .help("CPU \(Int(cpu.rounded()))%" + (row.memory.map { " · memory \(Int($0.rounded()))%" } ?? ""))
                 } else {
@@ -202,7 +202,7 @@ struct MachinesView: View {
                         .help(row.connection == .connected ? "This machine does not report its load." : "Offline")
                 }
             },
-            SortableColumn("CLIs", width: 110, value: { $0.updates ?? -1 }) { row in
+            SortableColumn("CLIs", width: 96, value: { $0.updates ?? -1 }) { row in
                 switch row.updates {
                 case nil: Text("–").foregroundStyle(Theme.tertiary)
                 case 0?: Text("current").foregroundStyle(Theme.tertiary)
@@ -214,7 +214,7 @@ struct MachinesView: View {
                     .help("Update on its page")
                 }
             },
-            SortableColumn("Accounts", width: 150, alignment: .trailing, value: \.accounts) { row in
+            SortableColumn("Accounts", width: 130, alignment: .trailing, value: \.accounts) { row in
                 HStack(spacing: 8) {
                     if row.signedOut > 0 { Chip(text: "\(row.signedOut) signed out", tint: Theme.accent) }
                     Text("\(row.accounts)").monospacedDigit()
@@ -252,11 +252,11 @@ struct MachinesView: View {
                 SortableColumn("Hosts", width: Width.count, alignment: .trailing, value: \.hosts) { line in
                     Text("\(line.hosts)").monospacedDigit()
                 },
-                SortableColumn("Sessions", width: 120, alignment: .trailing, value: { $0.sessions ?? -1 }) { line in
+                SortableColumn("Sessions", width: 110, alignment: .trailing, value: { $0.sessions ?? -1 }) { line in
                     Text(line.sessions.map(String.init) ?? "–").monospacedDigit()
                         .foregroundStyle(line.sessions == nil ? Theme.tertiary : Theme.text)
                 },
-                SortableColumn("Size", width: 110, alignment: .trailing, value: { $0.bytes ?? 0 }) { line in
+                SortableColumn("Size", width: 96, alignment: .trailing, value: { $0.bytes ?? 0 }) { line in
                     Text(line.size ?? "–").monospacedDigit().foregroundStyle(line.size == nil ? Theme.tertiary : Theme.text)
                 },
             ]
