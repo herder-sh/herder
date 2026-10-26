@@ -276,12 +276,12 @@ final class ScreenshotTests: XCTestCase {
         press(terminal)
         app.typeKey(.return, modifierFlags: [])
         // The job's title in its detail, or its row in Activity, open again if the login's end
-        // closed it. A Mac static text holds its text as its value.
-        let added = app.descendants(matching: .any).matching(NSPredicate(format:
-            "value BEGINSWITH 'Added Claude' OR (identifier BEGINSWITH 'job-add-claude' AND label ENDSWITH ', Added')"))
-            .firstMatch
-        if !added.waitForExistence(timeout: 5), app.popovers.firstMatch.exists == false { _ = openActivity() }
-        if wait(added, "Account added") {
+        // closed it.
+        let title = app.staticTexts.matching(NSPredicate(format: "value BEGINSWITH 'Added Claude'")).firstMatch
+        let row = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH 'job-add-claude' AND label ENDSWITH ', Added'")).firstMatch
+        if !title.waitForExistence(timeout: 5), !row.exists, !app.popovers.firstMatch.exists { _ = openActivity() }
+        if title.exists || wait(row, "Account added") {
             settle()
             shoot("mac-activity-login-added", screen: true)
         }
@@ -369,6 +369,16 @@ final class ScreenshotTests: XCTestCase {
     }
     #endif
 
+    /// A static text that says `text`: its label on the iPhone, its value on the Mac. Only static
+    /// texts are asked: a terminal's value is all its text, too slow to compare.
+    private func text(_ text: String) -> XCUIElement {
+        #if os(macOS)
+        app.staticTexts.matching(NSPredicate(format: "value == %@", text)).firstMatch
+        #else
+        app.staticTexts[text].firstMatch
+        #endif
+    }
+
     /// A job's row in Activity, by the start of its id: `job-add-claude` for any machine.
     private func job(_ id: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", id)).firstMatch
@@ -402,7 +412,7 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot(platform("cancel-login"), screen: true)
         confirmCancel()
-        let stopped = app.staticTexts.matching(NSPredicate(format: "label == 'Stopped' OR value == 'Stopped'")).firstMatch
+        let stopped = text("Stopped")
         if wait(stopped, "cancelled login stopped") {
             settle()
             shoot(platform("cancel-login-ended"), screen: true)
