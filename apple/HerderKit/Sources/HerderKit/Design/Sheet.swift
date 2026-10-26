@@ -56,6 +56,29 @@ struct SheetScaffold<Content: View, Footer: View>: View {
     }
 }
 
+/// A numbered step of a sheet: its number in a circle, its title, then what it asks for.
+struct NumberedStep<Content: View>: View {
+    let number: Int
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text("\(number)")
+                .font(.caption.weight(.bold)).monospacedDigit()
+                .foregroundStyle(Theme.secondary)
+                .frame(width: 22, height: 22)
+                .background(Theme.raised, in: .circle)
+            VStack(alignment: .leading, spacing: 10) {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                    .frame(minHeight: 22)
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
 /// A labelled form field: a small heading, the control, and an optional hint.
 struct Field<Control: View>: View {
     let label: String

@@ -30,6 +30,7 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["fs", "io-std", "io-util", "process"] }
 toml.workspace = true
 ureq.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
