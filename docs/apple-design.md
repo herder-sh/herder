@@ -119,8 +119,9 @@ Rules:
 - **The list pane** is 380 pt (`ListAndSession`). ⌘\ hides it to give the session the whole
   width (`listHidden`); with no session open it always shows.
 - **The pane header** (`Pane`) is a `PageHeader` (§8.4): the title (a menu of sections and
-  projects, `Switcher`), the page's live status, the pane's actions on the right (`PaneButton`,
-  `IconButton`), then a search field where the pane lists sessions.
+  projects, `Switcher`), the page's live status on its own line under it (shortened in a
+  narrow pane to "1 needs you · 238 tasks", never cut), the pane's actions on the right as
+  header controls (§8.4), then a search field where the pane lists sessions.
 - **The tab bar** on compact width has the same sections as the sidebar: Board (badged with the
   request count), Projects, Usage, Machines. Skills and a vault show inside Machines. Each tab is its own `NavigationStack` (`boardPath`,
   `projectsPath`), so switching tabs keeps each tab's place.
@@ -359,13 +360,13 @@ list pane's title and the sidebar's top bar.
 - **Right, one row of 32 pt buttons, each with a tooltip:** the PRs chip (when linked), then
   `HeaderButton`s: Terminal / Chat (owners only, ⌘\`), Find (⌘F), Inspector (ⓘ, ⌥⌘I), list
   toggle (Mac, ⌘\), and the ⋯ menu (Interrupt, Rename…, Archive). They are quiet: an icon in
-  `Theme.secondary`, `Theme.raised` on hover, the primary fill while their mode is on. Only
-  Terminal has a label, and only beside 240 pt of title; below that it is an icon too.
+  `Theme.secondary`, `Theme.raised` on hover and while their mode is on, all icons with
+  tooltips, centred on the title's first line (`VerticalAlignment.titleLine`).
 - **The PRs chip rolls up the session's tree** (`PRRollup`): its own PRs and every
   descendant's (children, grandchildren), a PR linked to two of them counted once. It is one
-  chip, never one per PR (`PRChip`): a single PR shows its number ("#181"), more show how many
+  label, never one per PR (a labelled `HeaderLabel`): a single PR shows its number ("#181"), more show how many
   are open ("3 open"), or how many there are once none is ("16 PRs"); the tooltip has the
-  whole count. It is never filled: a hairline capsule whose text is tinted by `Urgency`:
+  whole count. It is a header control like the rest, borderless, its text tinted by `Urgency`:
   failing while an open one fails its checks, conflicts or has changes requested, running
   while any is open, done once one merged, else quiet. It opens no list.
 - **On a phone** the navigation bar holds Back, the PRs chip (icon and count) and the ⋯ menu,
@@ -584,7 +585,8 @@ blindness. No view uses a literal colour; new colours are added to `Theme` first
 | `Card`, `Chip`, `SectionHeading` | `Design/Theme.swift` | surfaces and headings |
 | `ProjectIcon`, `ProviderLogo` | `Design/` | a project's tile; a provider's mark |
 | `Pane`, `PaneButton`, `IconButton`, `Sidebar` | `DesktopShell.swift` | the regular-width frame; `PaneButton(prominent:)` is a page's main action |
-| `HeaderButton`, `HeaderLabel`, `PRChip`, `SessionColumn` | `SessionView.swift` | the session header's buttons and chip; the column the header, banner, transcript and composer share |
+| `HeaderButton`, `HeaderLabel`, `headerControl`, `HeaderMenuStyle`, `titleLine` | `Design/HeaderButton.swift` | every page, pane and session header's controls (§8.4) |
+| `SessionColumn` | `SessionView.swift` | the column the header, banner, transcript and composer share |
 
 ### 8.4 Design system (P14.2)
 
@@ -599,6 +601,11 @@ Xcode preview in its file.
   page's actions, the main one `PaneButton(prominent: true)`. No subtitle explains what the
   page is for: that goes in the empty state or an ⓘ (`InfoButton`). The Activity chip (§4.9)
   sits between the status and the actions.
+- **One header control** (`HeaderButton`, `HeaderLabel`, `headerControl`). Every control in a
+  page, pane or session header is 32 pt high, 4 pt apart, centred on the title's first line:
+  quiet and borderless, tinted only by state (a PR's urgency, a job needing you), `Theme.raised`
+  on hover or while its mode is on. A narrow header shows icons alone; a wide one may label
+  them, the page's main action in the primary fill (`PaneButton(prominent:)`).
 - **Show signal, hide zeros** (`SignalStrip`). A chip per state that is non-zero, coloured by
   its `Urgency`: needs you (amber), failing (red), running (blue), done (green), quiet (grey).
   A chip filters the page to its state; the chosen one clears the filter. With every count

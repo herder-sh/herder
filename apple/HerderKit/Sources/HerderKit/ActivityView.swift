@@ -43,8 +43,9 @@ extension Fleet {
     }
 }
 
-/// The page header's Activity chip, on the Mac and iPad: a ring of the jobs done while some
-/// run, amber while one needs the user, and the Activity list in a popover. Hidden with no jobs.
+/// The page header's Activity control, on the Mac and iPad: a ring of the jobs done while some
+/// run, its label amber while one needs the user, and the Activity list in a popover. Hidden
+/// with no jobs.
 struct ActivityChip: View {
     let fleet: Fleet
     @State private var open = false
@@ -58,14 +59,8 @@ struct ActivityChip: View {
                     ActivityRing(summary: summary)
                     if !compact { Text(summary.title).lineLimit(1) }
                 }
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Theme.text)
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(Theme.raised, in: .rect(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(summary.needsYou ? Theme.accent : Theme.stroke))
-                .fixedSize()
-                .hitTarget()
+                .headerControl(tint: summary.needsYou ? Theme.accent : Theme.secondary, selected: open,
+                               labelled: !compact)
             }
             .buttonStyle(.plain)
             .help(compact ? summary.title : summary.needsYou ? "A job needs you" : "Installs, logins and sign-ins")
