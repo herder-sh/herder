@@ -73,8 +73,9 @@ struct SortableColumn<Row> {
 
 /// A collection as a table: a header whose columns sort on a click, with an arrow on the sorted
 /// one, then rows split by hairlines. Each device keeps each table's sort, under its `id`.
-/// `open` makes a row a button that opens its object.
+/// `open` makes a row a button that opens its object, identified as "<id>.<row's id>".
 struct SortableTable<Row: Identifiable>: View {
+    let id: String
     let rows: [Row]
     let columns: [SortableColumn<Row>]
     var open: ((Row) -> Void)?
@@ -84,6 +85,7 @@ struct SortableTable<Row: Identifiable>: View {
 
     init(_ id: String, rows: [Row], sortedBy initial: TableSort, columns: [SortableColumn<Row>],
          open: ((Row) -> Void)? = nil) {
+        self.id = id
         self.rows = rows
         self.columns = columns
         self.open = open
@@ -168,7 +170,9 @@ struct SortableTable<Row: Identifiable>: View {
             if inside { hovered = row.id } else if hovered == row.id { hovered = nil }
         }
         if let open {
-            Button { open(row) } label: { cells }.buttonStyle(.plain)
+            Button { open(row) } label: { cells }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("\(id).\(row.id)")
         } else {
             cells
         }
