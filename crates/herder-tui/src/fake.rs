@@ -1412,6 +1412,7 @@ pub fn vault_storage(used: f64) -> App {
             is_vault: true,
             vault: None,
             volume: Some(volume),
+            local_vault: false,
         }),
     });
     for _ in 0..2 {
@@ -1469,6 +1470,7 @@ pub fn backups() -> App {
             is_vault,
             vault,
             volume: None,
+            local_vault: false,
         });
         app.update(Msg::Sent { origin, result });
     }

@@ -330,6 +330,8 @@ struct ActivityDetail: View {
                 Spacer()
                 CancelLoginButton(fleet: fleet, key: key)
             }
+        case (_, .needsNewerHerder):
+            VaultInstallCommand()
         case (_, .failed):
             PillButton(title: "Retry", symbol: "arrow.clockwise", prominent: true) { fleet.retry(key) }
         default:
@@ -381,13 +383,13 @@ extension JobText {
         let machine = found?.name ?? key.hostId
         let provider: Provider = switch key.kind {
         case .install(let provider): provider
-        case .add: job?.connection.account?.provider ?? ""
+        case .add: job?.connection?.account?.provider ?? ""
         case .relogin(let id): found?.accounts.first { $0.accountId == id }?.provider ?? ""
-        case .awsSignIn: ""
+        case .awsSignIn, .vault: ""
         }
         // Read once the installer has ended: its output is whole then, and it is not read again
         // on every redraw while it streams.
-        let warnings = if key.isInstall, progress.finished, let job { VendorWarning.read(job.connection.log, provider: provider) }
+        let warnings = if key.isInstall, progress.finished, let log = job?.connection?.log { VendorWarning.read(log, provider: provider) }
             else { [VendorWarning]() }
         self.init(machine: machine,
                   title: key.title(machine: machine, provider: provider, progress: progress, updating: job?.before != nil),
@@ -403,6 +405,7 @@ extension JobKey {
         case .add(let id): "job-add-\(id)-\(machine)"
         case .relogin(let id): "job-relogin-\(id)-\(machine)"
         case .awsSignIn(let profile): "job-aws-\(profile)-\(machine)"
+        case .vault: "job-vault-\(machine)"
         }
     }
 }
@@ -452,10 +455,10 @@ extension JobProgress {
     var tint: Color {
         switch self {
         case .queued, .ended: Theme.tertiary
-        case .starting, .installing: Theme.running
+        case .starting, .installing, .settingUpVault, .pairingVault: Theme.running
         case .running, .approve: Theme.accent
-        case .added, .signedIn, .installed, .updated, .upToDate: Theme.success
-        case .failed: Theme.failure
+        case .added, .signedIn, .installed, .updated, .upToDate, .vaultReady: Theme.success
+        case .failed, .needsNewerHerder: Theme.failure
         }
     }
 }
@@ -472,13 +475,14 @@ struct CancelLoginButton: View {
         case .add(let id), .relogin(let id): id
         case .install(let provider): ModelCatalog.providerName(provider)
         case .awsSignIn(let profile): profile
+        case .vault: "the vault"
         }
     }
 
     var body: some View {
         PillButton(title: "Cancel Login") { confirming = true }
             // The terminal has an id once the machine opened it.
-            .disabled(fleet.activity[key]?.connection.terminalId == nil)
+            .disabled(fleet.activity[key]?.connection?.terminalId == nil)
             .accessibilityLabel("Cancel Login \(subject)")
             .confirmationDialog("Cancel the login of \(subject)?", isPresented: $confirming, titleVisibility: .visible) {
                 Button("Cancel Login", role: .destructive) {

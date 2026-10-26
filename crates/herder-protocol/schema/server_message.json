@@ -1322,6 +1322,10 @@
               "description": "Whether the daemon is a vault, which hosts link to.",
               "type": "boolean"
             },
+            "local_vault": {
+              "description": "Whether a vault is installed on this machine, next to the daemon, as\n`install_vault` or `herder vault install` installs one; `link_local_vault` links to\nit.",
+              "type": "boolean"
+            },
             "type": {
               "type": "string",
               "const": "vault_link"
@@ -1388,7 +1392,7 @@
           ]
         },
         {
-          "description": "A one-time code that pairs another device as the caller's user, answering\n`pair_device`: everything a `herder://pair` link names for this daemon.",
+          "description": "A one-time code that pairs another device as the caller's user, answering\n`pair_device`: everything a `herder://pair` link names for this daemon. Also the answer\nto `install_vault` and `link_local_vault`, naming the vault on this machine.",
           "type": "object",
           "properties": {
             "addresses": {

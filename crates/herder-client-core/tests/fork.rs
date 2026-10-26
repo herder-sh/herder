@@ -193,6 +193,7 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
             data_dir: dir.to_owned(),
             shutdown: shutdown.clone(),
             secrets: Default::default(),
+            local: None,
         },
         vault,
     )

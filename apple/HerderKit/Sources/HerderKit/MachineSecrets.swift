@@ -23,7 +23,7 @@ enum MachineSecrets: Equatable {
         case .vault: self = .vault
         case .nowhere: self = .none
         case .linked(let linked):
-            let name = paired?.name ?? linked.address
+            let name = paired?.name ?? "its vault"
             self = linked.secrets
                 ? .on(vault: name, sets: sets.map { $0.filter { $0.hosts.contains(hostId) }.count })
                 : .off(vault: name)

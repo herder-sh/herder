@@ -182,7 +182,10 @@ struct UnpairedVault: Hashable, Identifiable {
 
     /// What it is called: after its machine, "draugelis’s vault", else its address without the
     /// port; never the raw address.
-    var name: String { machine.map { "\($0)’s vault" } ?? MachineRow.host(of: address) }
+    var name: String { machine.map(Self.name(machine:)) ?? MachineRow.host(of: address) }
+
+    /// A vault's name after the machine it runs on: "draugelis’s vault".
+    nonisolated static func name(machine: String) -> String { "\(machine)’s vault" }
 
     /// The vaults `links` name, each machine's by its name, without those whose fingerprint
     /// is in `paired`.
@@ -229,7 +232,7 @@ extension Fleet {
                 let (hostId, name) = (machine.hostId, machine.name)
                 group.addTask {
                     let vault = try? await answered(within: Self.vaultLinkTimeout, or: "did not say where it backs up") {
-                        guard case .vaultLink(_, let vault, _) = try await client.send(hostId: hostId, command: .getVaultLink)
+                        guard case .vaultLink(_, let vault, _, _) = try await client.send(hostId: hostId, command: .getVaultLink)
                         else { return nil as LinkedVault? }
                         return vault
                     }

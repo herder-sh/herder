@@ -22,7 +22,7 @@ import Testing
 
     @Test func drawsAnUnlinkedPage() async throws {
         let fleet = try sampleFleet()
-        fleet.backupLinks["work-mbp"] = .nowhere
+        fleet.backupLinks["work-mbp"] = .nowhere(localVault: false)
         try await shoot(MachinePage(fleet: fleet, hostId: "work-mbp", sheet: .constant(nil)),
                         crumbs: ["Machines", "work-mbp"], height: 1700, named: "machine-unlinked.png")
     }

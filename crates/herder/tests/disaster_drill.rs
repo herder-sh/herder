@@ -194,6 +194,7 @@ fn drill_host() {
             adapters,
             Default::default(),
             accounts,
+            None,
             CancellationToken::new(),
         ))
         .unwrap();

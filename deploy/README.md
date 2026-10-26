@@ -12,7 +12,12 @@ manifests here:
 
 ## On a machine
 
-On a Mac or a Linux box with herder installed, next to its daemon or on its own:
+From the app, an owner does it all with **Run a Vault on This Machine** in the machine's Backup
+section: its daemon installs the vault as below, links itself to it with Secrets on and Backup
+off, and pairs the app with it as an owner, named "‹machine›’s vault". A vault installed by hand
+and not linked yet shows **Pair and Link** there instead.
+
+By hand, on a Mac or a Linux box with herder installed, next to its daemon or on its own:
 
 ```sh
 herder vault install             # listens on port 7448; --port picks another
