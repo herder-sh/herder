@@ -51,6 +51,8 @@ pub struct FakeBridge {
     files: HashMap<String, Vec<u8>>,
     /// What reading each thread answers.
     threads: Mutex<HashMap<Place, Result<Vec<Earlier>, HistoryError>>>,
+    /// What reading each channel's latest messages answers, by channel.
+    channels: Mutex<HashMap<String, Vec<Earlier>>>,
 }
 
 impl FakeBridge {
@@ -59,7 +61,15 @@ impl FakeBridge {
             sent: watch::Sender::new(Vec::new()),
             files,
             threads: Mutex::default(),
+            channels: Mutex::default(),
         }
+    }
+
+    /// Makes reading the latest messages of `channel_id` answer `messages`, oldest first, each
+    /// of which a read gets when its id sorts before `before`.
+    pub fn channel(&self, channel_id: &str, messages: Vec<Earlier>) {
+        let mut channels = self.channels.lock().unwrap();
+        channels.insert(channel_id.to_owned(), messages);
     }
 
     /// Makes reading the thread `place` answer `history`: its messages, oldest first, each of
@@ -218,6 +228,20 @@ impl Bridge for FakeBridge {
             Err(err) => Err(err),
         };
         Box::pin(async move { read })
+    }
+
+    fn recent<'a>(
+        &'a self,
+        place: &'a Place,
+        before: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<Earlier>, HistoryError>> {
+        let channels = self.channels.lock().unwrap();
+        let messages = channels.get(&place.channel_id).cloned().unwrap_or_default();
+        let read = messages
+            .into_iter()
+            .filter(|message| message.message_id.as_str() < before)
+            .collect();
+        Box::pin(async move { Ok(read) })
     }
 
     fn link<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>> {
