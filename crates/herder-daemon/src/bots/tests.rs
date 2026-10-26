@@ -202,8 +202,8 @@ mod running {
     use frankenstein::updates::{Update, UpdateContent};
     use herder_adapters::fake::FakeAdapter;
     use herder_protocol::{
-        ApprovalOutcome, Attachment, AttachmentId, EventBody, HostId, ItemBody, SessionStatus,
-        TurnId, UserId,
+        ApprovalOutcome, Attachment, AttachmentId, EventBody, FILE_MEDIA_TYPE, HostId, ItemBody,
+        SessionStatus, TurnId, UserId,
     };
     use herder_store::Store;
     use serde_json::Value;
@@ -805,7 +805,7 @@ mod running {
         a_long_answer_posts_its_start_and_the_rest_on_full_answer,
         stop_interrupts_the_turn,
         a_prompt_start_in_the_app_is_mirrored_into_the_thread,
-        images_reach_the_agent_and_the_agents_images_are_uploaded,
+        images_reach_the_agent_and_what_it_publishes_is_uploaded,
     );
 
     async fn a_direct_message_starts_a_session_and_a_reply_continues_it(chat: Chat) {
@@ -1302,7 +1302,7 @@ mod running {
             .await;
     }
 
-    async fn images_reach_the_agent_and_the_agents_images_are_uploaded(chat: Chat) {
+    async fn images_reach_the_agent_and_what_it_publishes_is_uploaded(chat: Chat) {
         let png = b"\x89PNG\r\n\x1a\npng".to_vec();
         let (place, url) = chat.image();
         let bot = Running::start(
@@ -1314,40 +1314,76 @@ mod running {
         bot.send(chat.message("dm_image.json")).await;
         bot.posted(&place, answer("The button is cut off.")).await;
 
-        // The agent publishes a screenshot: it is uploaded into the thread.
+        // What the agent publishes is uploaded into the thread as a file, whatever its type,
+        // though publish keeps it as a plain file.
         let session_id = bot.session().await.session_id;
-        let attachment = Attachment {
-            attachment_id: AttachmentId::new("shot"),
-            media_type: "image/png".into(),
-            size: png.len() as u64,
-            name: None,
-        };
         let dir = bot.dir.join("attachments").join(session_id.as_str());
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("shot.png"), &png).unwrap();
-        bot.events
-            .send(Event {
-                session_id,
-                seq: 100,
-                at: Timestamp::now(),
-                by: None,
-                body: EventBody::ArtifactPublished {
-                    title: "Fixed layout".into(),
-                    attachment,
-                    url: None,
-                    expires_at: None,
-                },
-            })
-            .unwrap();
-        let sent = bot
-            .bridge
-            .until(|sent| sent.iter().any(|sent| matches!(sent, Sent::Upload { .. })))
-            .await;
+        let publish = |name: &str, data: &[u8], url: Option<&str>| {
+            // Each kept in a folder named after its id, as publish keeps it.
+            let id = name.split('.').next().unwrap();
+            std::fs::create_dir_all(dir.join(id)).unwrap();
+            std::fs::write(dir.join(id).join(name), data).unwrap();
+            let attachment = Attachment {
+                attachment_id: AttachmentId::new(id),
+                media_type: FILE_MEDIA_TYPE.into(),
+                size: data.len() as u64,
+                name: Some(name.into()),
+            };
+            bot.events
+                .send(Event {
+                    session_id: session_id.clone(),
+                    seq: 100,
+                    at: Timestamp::now(),
+                    by: None,
+                    body: EventBody::ArtifactPublished {
+                        title: "Fixed layout".into(),
+                        attachment,
+                        url: url.map(str::to_owned),
+                        expires_at: None,
+                    },
+                })
+                .unwrap();
+        };
+        let uploaded = |name: &str| {
+            let name = name.to_owned();
+            move |sent: &[Sent]| {
+                sent.iter()
+                    .any(|sent| matches!(sent, Sent::Upload { name: n, .. } if *n == name))
+            }
+        };
+        publish("shot.png", &png, None);
+        let sent = bot.bridge.until(uploaded("shot.png")).await;
         assert!(sent.contains(&Sent::Upload {
-            place,
-            name: "Fixed layout.png".into(),
+            place: place.clone(),
+            name: "shot.png".into(),
             data: png,
         }));
+        let pdf = b"%PDF-1.7 report".to_vec();
+        publish("report.pdf", &pdf, Some("https://krowk.com/a/art_2"));
+        let sent = bot.bridge.until(uploaded("report.pdf")).await;
+        assert!(sent.contains(&Sent::Upload {
+            place: place.clone(),
+            name: "report.pdf".into(),
+            data: pdf,
+        }));
+
+        // Its link is posted only when the upload fails.
+        let link = |sent: &Sent| matches!(sent, Sent::Post { post: Post::Text(text), .. } if text.contains("krowk.com"));
+        assert!(!bot.bridge.sent().iter().any(link));
+        bot.bridge.refuse_uploads();
+        publish(
+            "page.html",
+            b"<html></html>",
+            Some("https://krowk.com/a/art_3"),
+        );
+        bot.posted(&place, |post| {
+            *post == Post::Text("[Fixed layout](https://krowk.com/a/art_3)".into())
+        })
+        .await;
+        assert_eq!(
+            bot.bridge.sent().iter().filter(|sent| link(sent)).count(),
+            1
+        );
     }
 
     #[tokio::test]
