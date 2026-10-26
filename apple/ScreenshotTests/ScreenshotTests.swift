@@ -617,6 +617,15 @@ final class ScreenshotTests: XCTestCase {
     }
 
     #if os(macOS)
+    /// Answers macOS's "find devices on local networks" prompt, which shows over the app at some
+    /// point after it first reaches a machine.
+    private func allowLocalNetwork() {
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.UserNotificationCenter").buttons["Allow"].firstMatch
+        guard allow.exists else { return }
+        allow.click()
+        settle()
+    }
+
     /// Opens the sidebar's machines popover.
     private func openMachines() -> Bool {
         let footer = app.descendants(matching: .any)["sidebar-machines"].firstMatch
@@ -630,6 +639,7 @@ final class ScreenshotTests: XCTestCase {
     /// `screen` takes the whole screen, for what shows outside the window, such as a popover.
     private func shoot(_ name: String, screen: Bool = false) {
         #if os(macOS)
+        allowLocalNetwork()
         let screenshot = screen ? XCUIScreen.main.screenshot() : app.windows.firstMatch.screenshot()
         #else
         let screenshot = XCUIScreen.main.screenshot()
