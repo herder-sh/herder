@@ -122,8 +122,11 @@ final class ScreenshotTests: XCTestCase {
         app.typeKey("z", modifierFlags: .command)
         guard wait(task, "back with ⌘Z") else { return }
         settle()
+        // Opening the task puts its cursor on it, and its composer takes the keyboard; a click in
+        // the Board below its rows gives the keyboard back to the Board.
         press(task)
         settle()
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.29, dy: 0.95)).click()
         app.typeKey("e", modifierFlags: [])
         guard gone(task, "archived with E") else { return }
         #else
@@ -272,7 +275,12 @@ final class ScreenshotTests: XCTestCase {
         // The fake login: Enter answers its prompt, and the account is added.
         press(terminal)
         app.typeKey(.return, modifierFlags: [])
-        let added = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Added Claude'")).firstMatch
+        // The job's title in its detail, or its row in Activity, open again if the login's end
+        // closed it. A Mac static text holds its text as its value.
+        let added = app.descendants(matching: .any).matching(NSPredicate(format:
+            "value BEGINSWITH 'Added Claude' OR (identifier BEGINSWITH 'job-add-claude' AND label ENDSWITH ', Added')"))
+            .firstMatch
+        if !added.waitForExistence(timeout: 5), app.popovers.firstMatch.exists == false { _ = openActivity() }
         if wait(added, "Account added") {
             settle()
             shoot("mac-activity-login-added", screen: true)
@@ -290,7 +298,7 @@ final class ScreenshotTests: XCTestCase {
                 let second = job("job-add-codex")
                 if wait(second, "Codex login in Activity") {
                     press(second)
-                    cancelLogin(named: "codex")
+                    cancelLogin(named: "codex-2")
                 }
                 closeActivity()
             }
@@ -344,7 +352,7 @@ final class ScreenshotTests: XCTestCase {
         let queued = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier == 'job-install-codex-studio' AND label ENDSWITH ', Queued'")).firstMatch
         if wait(queued, "studio's Codex queued") { shoot("mac-activity-queued", screen: true) }
-        // The demo's installers take two seconds; each row reads its outcome once its job ends.
+        // The demo's installers take eight seconds; each row reads its outcome once its job ends.
         for id in ["job-install-claude-devbox", "job-install-claude-studio", "job-install-codex-studio"] {
             let outcome = app.descendants(matching: .any).matching(NSPredicate(
                 format: "identifier == %@ AND label CONTAINS 'Updated '", id)).firstMatch
@@ -394,7 +402,7 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot(platform("cancel-login"), screen: true)
         confirmCancel()
-        let stopped = app.staticTexts["Stopped"].firstMatch
+        let stopped = app.staticTexts.matching(NSPredicate(format: "label == 'Stopped' OR value == 'Stopped'")).firstMatch
         if wait(stopped, "cancelled login stopped") {
             settle()
             shoot(platform("cancel-login-ended"), screen: true)

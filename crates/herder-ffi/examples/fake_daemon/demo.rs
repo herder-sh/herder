@@ -1201,7 +1201,8 @@ fn clis(dir: &Path, name: &str) -> Result<(HashMap<Provider, PathBuf>, Vec<Recip
         .find(|(machine, _, _)| *machine == name)
         .context("a machine without CLIs")?;
     // Writes the version and the CLI's binary, as a vendor installer would. Claude's warns of a
-    // second, npm-installed copy, as its real updater does, for the apps to explain.
+    // second, npm-installed copy, as its real updater does, for the apps to explain. It takes
+    // long enough that a machine's second update is still queued once Activity opens.
     let install = bin.join("install.sh");
     std::fs::write(
         &install,
@@ -1212,7 +1213,7 @@ fn clis(dir: &Path, name: &str) -> Result<(HashMap<Provider, PathBuf>, Vec<Recip
          echo '- npm-global at /opt/homebrew/bin/claude'\n\
          echo '- native at ~/.local/bin/claude (currently running)'\n\
          fi\n\
-         sleep 2\n\
+         sleep 8\n\
          printf '%s\\n' \"$2\" > \"$bin/$1.version\"\n\
          printf '#!/bin/sh\\nexec /bin/sh \"%s\" \"$@\"\\n' \"$bin/$1.sh\" > \"$bin/$1\"\n\
          chmod +x \"$bin/$1\"\n\
