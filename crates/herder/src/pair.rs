@@ -86,12 +86,7 @@ pub fn print_pairing(info: &PairingInfo) -> Result<()> {
         print_host_pairing(info);
         return Ok(());
     }
-    let uri = PairingUri {
-        hosts: info.addresses.clone(),
-        fingerprint: info.fingerprint.clone(),
-        code: info.code.clone(),
-    }
-    .to_string();
+    let uri = link(info, &herder_daemon::host_name());
     let qr = QrCode::new(uri.as_bytes())?
         .render::<Dense1x2>()
         .quiet_zone(true)
@@ -113,6 +108,21 @@ pub fn print_pairing(info: &PairingInfo) -> Result<()> {
     println!("{uri}");
     println!("\nIn a terminal, run `herder connect '<link>'` with it, or paste it into herder.");
     Ok(())
+}
+
+/// The `herder://pair` link of `info`, followed by the role it grants and the machine's
+/// `name`, so the app says what pairing gets you before it pairs; the link's parser skips both.
+fn link(info: &PairingInfo, name: &str) -> String {
+    let uri = PairingUri {
+        hosts: info.addresses.clone(),
+        fingerprint: info.fingerprint.clone(),
+        code: info.code.clone(),
+    };
+    let extra = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("role", role_name(info.role))
+        .append_pair("name", name)
+        .finish();
+    format!("{uri}&{extra}")
 }
 
 fn print_host_pairing(info: &PairingInfo) {
@@ -186,5 +196,30 @@ fn role_name(role: Role) -> &'static str {
     match role {
         Role::Owner => "owner",
         Role::Member => "member",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_link_names_the_role_and_the_machine() {
+        let info = PairingInfo {
+            code: "ABCDE-FGHJK".into(),
+            user: "tomas".into(),
+            role: Role::Owner,
+            device_role: DeviceRole::Client,
+            expires_at: Timestamp::now(),
+            fingerprint: "ab".repeat(32),
+            addresses: vec!["127.0.0.1:7448".into()],
+        };
+        let link = link(&info, "draugelis");
+        assert!(link.ends_with("&role=owner&name=draugelis"), "{link}");
+        let uri: PairingUri = link.parse().unwrap();
+        assert_eq!(
+            (uri.hosts, uri.code.as_str()),
+            (info.addresses, "ABCDE-FGHJK")
+        );
     }
 }
