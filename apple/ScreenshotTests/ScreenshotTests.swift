@@ -275,11 +275,9 @@ final class ScreenshotTests: XCTestCase {
         // The fake login: Enter answers its prompt, and the account is added.
         press(terminal)
         app.typeKey(.return, modifierFlags: [])
-        // The job's title in its detail, or its row in Activity.
-        let title = app.staticTexts.matching(NSPredicate(format: "value BEGINSWITH 'Added Claude'")).firstMatch
-        let row = app.descendants(matching: .any).matching(NSPredicate(
-            format: "identifier BEGINSWITH 'job-add-claude' AND label ENDSWITH ', Added'")).firstMatch
-        if title.waitForExistence(timeout: 3) || inActivity(row, "Account added") {
+        // The account in the Providers page's list, behind Activity.
+        let account = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Claude, devbox,'")).firstMatch
+        if wait(account, "Account added") {
             settle()
             shoot("mac-activity-login-added", screen: true)
         }
@@ -350,15 +348,17 @@ final class ScreenshotTests: XCTestCase {
         let queued = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier == 'job-install-codex-studio' AND label ENDSWITH ', Queued'")).firstMatch
         if wait(queued, "studio's Codex queued") { shoot("mac-activity-queued", screen: true) }
-        // The demo's installers take eight seconds; each row reads its outcome once its job ends.
-        for id in ["job-install-claude-devbox", "job-install-claude-studio", "job-install-codex-studio"] {
-            let outcome = app.descendants(matching: .any).matching(NSPredicate(
-                format: "identifier == %@ AND label CONTAINS 'Updated '", id)).firstMatch
-            guard inActivity(outcome, "\(id) updated") else { return closeActivity() }
-        }
+        // The demo's installers take eight seconds, so the three end within about 16; Activity's
+        // chip stops counting once they have. Its popover drops out of the view tree now and then
+        // while its rows' spinners turn, so the chip, in the window, says when they are done.
+        guard wait(activityIdle(), "updates done", timeout: 40) else { return closeActivity() }
+        let chip = app.descendants(matching: .any)["activity"].firstMatch
+        if !chip.isSelected { press(chip) }
         settle()
         shoot("mac-activity-done", screen: true)
-        press(job("job-install-claude-studio"))
+        let claude = job("job-install-claude-studio")
+        guard wait(claude, "Claude on studio updated") else { return closeActivity() }
+        press(claude)
         if wait(app.descendants(matching: .any)["job-terminal"].firstMatch, "update terminal") {
             settle()
             shoot("mac-activity-detail", screen: true)
@@ -391,14 +391,13 @@ final class ScreenshotTests: XCTestCase {
         return true
     }
 
-    /// Whether `element` shows up in Activity. On the Mac its popover can close by itself while
-    /// a job ends; it opens again first if it did.
-    private func inActivity(_ element: XCUIElement, _ what: String) -> Bool {
-        #if os(macOS)
-        if !element.waitForExistence(timeout: 3), !app.popovers.firstMatch.exists { _ = openActivity() }
-        #endif
-        return wait(element, what)
+    #if os(macOS)
+    /// Activity's chip once no job runs or needs you: it no longer counts any.
+    private func activityIdle() -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'activity' AND label == 'Activity'"))
+            .firstMatch
     }
+    #endif
 
     private func closeActivity() {
         #if os(macOS)
@@ -419,11 +418,9 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot(platform("cancel-login"), screen: true)
         confirmCancel()
-        // Its detail says so; on the Mac, where Activity can close meanwhile, its row does too.
+        // Its detail says so on the iPhone; on the Mac, Activity's chip stops counting it.
         #if os(macOS)
-        let row = app.descendants(matching: .any).matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND label CONTAINS 'Stopped'", "job-add-\(id)-")).firstMatch
-        let stopped = text("Stopped").waitForExistence(timeout: 3) || inActivity(row, "cancelled login stopped")
+        let stopped = wait(activityIdle(), "cancelled login stopped")
         #else
         let stopped = wait(text("Stopped"), "cancelled login stopped")
         #endif
@@ -603,8 +600,8 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Whether `element` shows up; when it does not, records `what` as missed with the tree.
-    private func wait(_ element: XCUIElement, _ what: String) -> Bool {
-        if element.waitForExistence(timeout: 15) { return true }
+    private func wait(_ element: XCUIElement, _ what: String, timeout: TimeInterval = 15) -> Bool {
+        if element.waitForExistence(timeout: timeout) { return true }
         missed.append(what)
         let tree = XCTAttachment(string: app.debugDescription)
         tree.name = "missed \(what)"
