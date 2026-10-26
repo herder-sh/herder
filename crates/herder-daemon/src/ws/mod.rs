@@ -307,6 +307,17 @@ impl<B: Backend> Shared<B> {
             {
                 link.command(command).await
             }
+            command @ (CommandBody::InstallVault | CommandBody::LinkLocalVault)
+                if let Some(link) = self.link.get() =>
+            {
+                let Some(user) = self.auth.name(user_id) else {
+                    return Err(ErrorInfo {
+                        code: ErrorCode::Forbidden,
+                        message: "you are no longer paired with this daemon".to_owned(),
+                    });
+                };
+                link.local_vault(command, user).await
+            }
             command @ (CommandBody::GetSettings
             | CommandBody::SetSettings { .. }
             | CommandBody::SetResourceLimits { .. }
@@ -462,6 +473,8 @@ impl<B: Backend> Control for AgentControl<B> {
                 command,
                 CommandBody::PairDevice
                     | CommandBody::PairVaultHost { .. }
+                    | CommandBody::InstallVault
+                    | CommandBody::LinkLocalVault
                     | CommandBody::PutBot { .. }
                     | CommandBody::RemoveBot { .. }
             );

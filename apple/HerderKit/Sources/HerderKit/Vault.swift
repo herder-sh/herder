@@ -220,7 +220,7 @@ extension Fleet {
                 let (hostId, name) = (machine.hostId, machine.name)
                 group.addTask {
                     let vault = try? await answered(within: Self.vaultLinkTimeout, or: "did not say where it backs up") {
-                        guard case .vaultLink(_, let vault, _) = try await client.send(hostId: hostId, command: .getVaultLink)
+                        guard case .vaultLink(_, let vault, _, _) = try await client.send(hostId: hostId, command: .getVaultLink)
                         else { return nil as LinkedVault? }
                         return vault
                     }
