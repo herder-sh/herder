@@ -87,6 +87,7 @@ final class ScreenshotTests: XCTestCase {
         if open("Fix the flaky checkout e2e test") { shoot("mac-handoff") }
         if open("Roll out 30-day log retention") { shoot("mac-tasks") }
         #endif
+        agents()
 
         // The fleet.
         if section("Machines") {
@@ -109,8 +110,28 @@ final class ScreenshotTests: XCTestCase {
         finish()
     }
 
+    /// A task's agents unfolded under its row on the Board, then one of them opened: beside the
+    /// list on the Mac, pushed on the iPhone.
+    private func agents() {
+        let title = "Roll out 30-day log retention"
+        guard section("Board") else { return }
+        let task = row(title)
+        guard wait(task, "\(title) on the Board") else { return }
+        reveal(task)
+        let fold = app.buttons["Agents of \(title)"].firstMatch
+        guard wait(fold, "\(title)'s agents") else { return }
+        press(fold)
+        settle()
+        shoot(platform("task-agents"))
+        let child = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Open sub-session: '")).firstMatch
+        guard wait(child, "a sub-session row") else { return }
+        press(child)
+        settle()
+        shoot(platform("task-agent-open"))
+    }
+
     /// Archives a finished task from the Board, which takes its row off, then undoes it: on the
-    /// Mac from its circle and with ⌘Z, then with J and E and the toast's Undo; on the iPhone
+    /// Mac from the check its row shows on hover and with ⌘Z, then with J and E and the toast's Undo; on the iPhone
     /// with a swipe and the toast's Undo.
     private func archiving() {
         let title = "Tidy the README badges"
@@ -119,10 +140,11 @@ final class ScreenshotTests: XCTestCase {
         guard wait(task, "\(title) on the Board") else { return }
         reveal(task)
         #if os(macOS)
+        task.hover()
         let circle = app.buttons["Archive \(title)"].firstMatch
-        guard wait(circle, "archive circle") else { return }
+        guard wait(circle, "archive check") else { return }
         press(circle)
-        guard gone(task, "archived from its circle") else { return }
+        guard gone(task, "archived from its check") else { return }
         app.typeKey("z", modifierFlags: .command)
         guard wait(task, "back with ⌘Z") else { return }
         settle()
@@ -147,7 +169,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// A project's tasks, as the Board's rows, then archiving one from that list and undoing it
-    /// with the toast's Undo: from its circle on the Mac, with a swipe on the iPhone.
+    /// with the toast's Undo: from its check on the Mac, with a swipe on the iPhone.
     private func project() {
         #if os(iOS)
         guard section("Projects") else { return }
@@ -164,8 +186,9 @@ final class ScreenshotTests: XCTestCase {
         shoot(platform("project"))
         reveal(task)
         #if os(macOS)
+        task.hover()
         let circle = app.buttons["Archive \(title)"].firstMatch
-        guard wait(circle, "archive circle in api") else { return }
+        guard wait(circle, "archive check in api") else { return }
         press(circle)
         #else
         task.swipeLeft()
