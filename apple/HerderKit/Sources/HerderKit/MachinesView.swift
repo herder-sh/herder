@@ -52,7 +52,7 @@ struct MachineRow: Hashable, Identifiable {
     static var localNames: Set<String> {
         #if os(macOS)
         let host = ProcessInfo.processInfo.hostName.lowercased()
-        return ["localhost", "127.0.0.1", "::1", host, host.replacingOccurrences(of: ".local", with: "")]
+        return loopback.union([host, host.replacingOccurrences(of: ".local", with: "")])
         #else
         return []
         #endif
@@ -69,13 +69,20 @@ struct MachineRow: Hashable, Identifiable {
     /// Whether `address`, "host:port" or "[v6]:port", names one of `names`.
     static func isLocal(_ address: String?, names: Set<String>) -> Bool {
         guard let address else { return false }
-        let host = if address.hasPrefix("["), let close = address.firstIndex(of: "]") {
+        return names.contains(host(of: address).lowercased())
+    }
+
+    /// The host of `address`, "host:port" or "[v6]:port", without its port.
+    static func host(of address: String) -> String {
+        if address.hasPrefix("["), let close = address.firstIndex(of: "]") {
             String(address[address.index(after: address.startIndex)..<close])
         } else {
             String(address.split(separator: ":").first ?? "")
         }
-        return names.contains(host.lowercased())
     }
+
+    /// What loopback is called.
+    static let loopback: Set<String> = ["localhost", "127.0.0.1", "::1"]
 
     /// Connected first, then by round trip.
     var statusRank: Double {
@@ -118,7 +125,7 @@ struct MachinesView: View {
                     } description: {
                         Text("Run herder on a machine, then pair this device with it.")
                     } actions: {
-                        PillButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair }
+                        PillButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair(.machine) }
                     }
                     .padding(.top, 60)
                 } else {
@@ -132,7 +139,7 @@ struct MachinesView: View {
                                       columns: vaultColumns) { line in
                             switch line {
                             case .paired(let vault): pages.open(.vault(vault.hostId))
-                            case .unpaired: sheet = .pair
+                            case .unpaired(let vault): sheet = .pair(.vault, vault)
                             }
                         }
                     }
@@ -154,7 +161,7 @@ struct MachinesView: View {
             if !AwsSignIn.machines(fleet.machines).isEmpty {
                 Button("AWS Sign-in", systemImage: "key") { sheet = .awsSignIn }
             }
-            Button("Add Machine", systemImage: "plus") { sheet = .pair }
+            Button("Add Machine", systemImage: "plus") { sheet = .pair(.machine) }
             #endif
         }
     }
@@ -245,7 +252,7 @@ struct MachinesView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(line.name).fontWeight(.semibold).lineLimit(1)
                     if case .unpaired = line {
-                        Text("not paired with this device").font(Theme.meta).foregroundStyle(Theme.tertiary).lineLimit(1)
+                        Text("Pair to manage its secrets").font(Theme.meta).foregroundStyle(Theme.tertiary).lineLimit(1)
                     }
                 }
             },
@@ -273,7 +280,7 @@ struct MachinesView: View {
             ]
         }
         columns.append(SortableColumn("Backup", value: { $0.behind ?? -1 }) { line in
-            BackupCell(line: line) { sheet = .pair }
+            BackupCell(line: line) { if case .unpaired(let vault) = line { sheet = .pair(.vault, vault) } }
         })
         return columns
     }
@@ -394,7 +401,7 @@ enum VaultLine: Hashable, Identifiable {
     var name: String {
         switch self {
         case .paired(let vault): vault.name
-        case .unpaired(let vault): vault.address
+        case .unpaired(let vault): vault.name
         }
     }
 
@@ -457,7 +464,7 @@ private struct StatusCell: View {
 }
 
 /// How current a vault's backup is: neutral, amber only once overdue, and why on hover; for a
-/// vault this device is not paired with, who backs up to it and the way to pair.
+/// vault this device is not paired with, who backs up to it and its Pair button.
 private struct BackupCell: View {
     let line: VaultLine
     let pair: () -> Void
@@ -476,9 +483,9 @@ private struct BackupCell: View {
         case .unpaired(let vault):
             HStack(spacing: 6) {
                 Text(vault.backsUp).foregroundStyle(Theme.tertiary).lineLimit(1)
-                InfoButton(text: "Its statistics show once this device is paired with it. On the vault, run `herder pair`, then add the link it prints as a machine.")
                 Spacer(minLength: 0)
-                PillButton(title: "Add Machine", symbol: "plus", action: pair)
+                PillButton(title: "Pair", prominent: true, action: pair)
+                    .help("Pair this device with \(vault.name) to see its backups and manage its secrets")
             }
         }
     }

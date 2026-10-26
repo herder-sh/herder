@@ -134,7 +134,7 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
     @Test func anUnpairedVaultRowKnowsOnlyWhoBacksUpToIt() {
         let line = VaultLine.unpaired(UnpairedVault(address: "vault.lan:7447", fingerprint: "aa",
                                                     hosts: ["devbox", "laptop"]))
-        #expect(line.name == "vault.lan:7447" && line.hosts == 2)
+        #expect(line.name == "vault.lan" && line.hosts == 2)
         #expect(line.sessions == nil && line.size == nil && line.freshness == nil && line.behind == nil)
         #expect(!line.isOverdue)
     }

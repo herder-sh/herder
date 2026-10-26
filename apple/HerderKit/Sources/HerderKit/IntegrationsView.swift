@@ -314,7 +314,7 @@ struct AddBotForm: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        BotStep(number: 1, title: "Machine and kind") {
+        NumberedStep(number: 1, title: "Machine and kind") {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) { machinePicker; kindPicker }
                 VStack(alignment: .leading, spacing: 10) { machinePicker; kindPicker }
@@ -324,11 +324,11 @@ struct AddBotForm: View {
                     .font(.footnote).foregroundStyle(Theme.secondary)
             }
         }
-        BotStep(number: 2, title: "Name") {
+        NumberedStep(number: 2, title: "Name") {
             InputBox(placeholder: "trash-can", text: $setup.name).accessibilityIdentifier("bot-name")
         }
         if setup.kind == .slack {
-            BotStep(number: 3, title: "Create the Slack app") {
+            NumberedStep(number: 3, title: "Create the Slack app") {
                 Text("Create an app from this manifest at api.slack.com, then install it to your workspace.")
                     .font(.subheadline).foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -345,7 +345,7 @@ struct AddBotForm: View {
                 }
                 .tint(Theme.secondary)
             }
-            BotStep(number: 4, title: "Tokens") {
+            NumberedStep(number: 4, title: "Tokens") {
                 TokenField(label: "Bot token", hint: "OAuth & Permissions › Bot User OAuth Token",
                            placeholder: "xoxb-…", text: $setup.botToken.text)
                     .accessibilityIdentifier("bot-token")
@@ -354,13 +354,13 @@ struct AddBotForm: View {
                     .accessibilityIdentifier("bot-app-token")
             }
         } else {
-            BotStep(number: 3, title: "Create the Telegram bot") {
+            NumberedStep(number: 3, title: "Create the Telegram bot") {
                 Text("Message @BotFather, send /newbot and follow its questions.")
                     .font(.subheadline).foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 PillButton(title: "Open @BotFather", symbol: "arrow.up.right") { BotSetup.botFatherURL.map { openURL($0) } }
             }
-            BotStep(number: 4, title: "Token") {
+            NumberedStep(number: 4, title: "Token") {
                 TokenField(label: "Bot token", hint: "The token @BotFather sends once the bot is made",
                            placeholder: "123456:ABC…", text: $setup.botToken.text)
                     .accessibilityIdentifier("bot-token")
@@ -423,29 +423,6 @@ struct AddBotForm: View {
         .frame(width: 190)
         .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
-    }
-}
-
-/// A numbered step of a sheet: its number in a circle, its title, then what it asks for.
-private struct BotStep<Content: View>: View {
-    let number: Int
-    let title: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text("\(number)")
-                .font(.caption.weight(.bold)).monospacedDigit()
-                .foregroundStyle(Theme.secondary)
-                .frame(width: 22, height: 22)
-                .background(Theme.raised, in: .circle)
-            VStack(alignment: .leading, spacing: 10) {
-                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                    .frame(minHeight: 22)
-                content
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
     }
 }
 
