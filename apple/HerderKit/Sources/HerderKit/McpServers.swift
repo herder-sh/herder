@@ -376,3 +376,55 @@ final class McpServerLists {
         return failures
     }
 }
+
+/// The MCP servers across the machines, a row per name: the machines that have it, how it
+/// connects, and whether it is on. What the Providers page's table lists.
+struct McpServerTable: Equatable {
+    /// A server as one machine has it.
+    struct Place: Equatable {
+        let hostId: HostId
+        let machine: String
+        let server: McpServerSettings
+    }
+
+    struct Row: Equatable, Identifiable {
+        let name: String
+        /// How the first machine's connects; machines may differ.
+        let transport: McpTransport
+        let places: [Place]
+
+        var id: String { name }
+
+        /// The machines it is on, for a cell: the one's name, or how many.
+        var machines: String { places.count == 1 ? places.map(\.machine).joined() : "\(places.count) machines" }
+
+        var enabled: Bool { places.allSatisfy(\.server.enabled) }
+
+        /// Whether some machines have it off and others on.
+        var partlyOff: Bool { !enabled && places.contains(where: \.server.enabled) }
+
+        /// "On", "Off", or where it is off when only some machines have it off.
+        var status: String {
+            let off = places.filter { !$0.server.enabled }
+            if off.isEmpty { return "On" }
+            if !partlyOff { return "Off" }
+            return "Off on \(off.map(\.machine).joined(separator: ", "))"
+        }
+    }
+
+    let rows: [Row]
+
+    /// `machines` in order, with the servers each has said it has.
+    init(_ machines: [(hostId: HostId, name: String)], servers: (HostId) -> [McpServerSettings]?) {
+        var places: [String: [Place]] = [:]
+        for machine in machines {
+            for server in servers(machine.hostId) ?? [] {
+                places[server.name, default: []].append(Place(hostId: machine.hostId, machine: machine.name, server: server))
+            }
+        }
+        rows = places.compactMap { name, places in
+            places.first.map { Row(name: name, transport: $0.server.transport, places: places) }
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+}

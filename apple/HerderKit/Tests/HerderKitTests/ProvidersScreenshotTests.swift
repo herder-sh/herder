@@ -5,24 +5,28 @@ import Foundation
 import SwiftUI
 import Testing
 
-/// Draws the Providers page as mockup §3 has it, as the app's dark appearance shows it, and
-/// attaches it; with `HERDER_SCREENSHOT_DIR` set, also writes it there as `providers.png`.
+/// Draws the Providers page as mockup §3 has it, as the app's dark appearance shows it, full
+/// width and as narrow as the Mac's list pane, and attaches each; with `HERDER_SCREENSHOT_DIR`
+/// set, also writes them there as `providers.png` and `providers-380.png`.
 @MainActor struct ProvidersScreenshotTests {
-    @Test func drawsThePageWithItsProblemsAccountsAndVersions() throws {
-        let renderer = ImageRenderer(content: ProvidersPreview().environment(\.colorScheme, .dark))
+    @Test(arguments: [(900, "providers.png"), (380, "providers-380.png")])
+    func drawsThePageWithItsProblemsAccountsAndVersions(width: Int, name: String) throws {
+        let renderer = ImageRenderer(content: ProvidersPreview(width: CGFloat(width)).environment(\.colorScheme, .dark))
         renderer.scale = 2
         let image = try #require(renderer.nsImage)
-        #expect(image.size.width == 900 && image.size.height >= 500)
+        #expect(image.size.width == CGFloat(width) && image.size.height >= 500)
         let tiff = try #require(image.tiffRepresentation)
         let png = try #require(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
-        Attachment.record(png, named: "providers.png")
+        Attachment.record(png, named: name)
         if let dir = ProcessInfo.processInfo.environment["HERDER_SCREENSHOT_DIR"] {
-            try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("providers.png"))
+            try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
         }
     }
 }
 
 private struct ProvidersPreview: View {
+    let width: CGFloat
+
     var body: some View {
         let overview = ProvidersFixture.overview()
         VStack(alignment: .leading, spacing: 0) {
@@ -35,7 +39,7 @@ private struct ProvidersPreview: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
         }
-        .frame(width: 900)
+        .frame(width: width)
         .background(Theme.background)
     }
 }
