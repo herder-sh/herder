@@ -72,8 +72,8 @@ pub fn run(config: Config) -> Result<Exit> {
             if config.mode == config::Mode::Vault {
                 vault::serve(&config, shutdown).await?;
             } else {
-                let adapters = accounts::adapters(&config.binaries);
-                let probes = accounts::probes(&config.binaries);
+                let adapters = accounts::adapters(&config.binaries, &config.clis);
+                let probes = accounts::probes(&config.binaries, &config.clis);
                 serve(&config, adapters, probes, config.accounts.clone(), shutdown).await?;
             }
             Ok(if settings::restart_requested() {
@@ -203,7 +203,7 @@ pub async fn serve(
     sessions.configure_failover(config.failover.clone())?;
     sessions.generate_titles(
         config.titles.clone(),
-        accounts::title_clis(&config.binaries),
+        accounts::title_clis(&config.binaries, &config.clis),
     )?;
     let docker = Arc::new(resources::Docker::new("docker"));
     sessions.track_containers(Arc::clone(&docker))?;
@@ -306,11 +306,11 @@ pub async fn serve(
         "herder daemon started"
     );
     let logins = login::Logins::new(
-        login::programs(&config.binaries),
+        login::programs(&config.binaries, &config.clis),
         config.path.clone(),
         sessions.clone(),
     );
-    let providers = providers::Providers::new(config.binaries.clone());
+    let providers = providers::Providers::new(config.binaries.clone(), config.clis.clone());
     providers.publish_to(Arc::clone(&hub));
     tokio::spawn({
         let providers = providers.clone();
@@ -371,6 +371,7 @@ mod tests {
             log: config::LogConfig::default(),
             accounts: session::Accounts::new(),
             binaries: Default::default(),
+            clis: Default::default(),
             failover: Default::default(),
             titles: Default::default(),
             follow_ups: Default::default(),

@@ -36,6 +36,17 @@
 //! account's config dir, when it has one, in the session's worktree. The adapter never looks inside that dir:
 //! the CLI's own login is the only credential involved.
 //!
+//! # Qoder CLI
+//!
+//! [`Cli::Qoder`] runs Qoder CLI, which speaks the same stream-json and control protocol but
+//! differs in what it accepts (see [`Cli`]): the adapter omits `--verbose`, passes
+//! `--dangerously-skip-permissions` in `full_access` where Claude Code gets its
+//! `--allow-dangerously-skip-permissions` guard, spells `--allowedTools` `--allowed-tools`,
+//! sets `QODER_CONFIG_DIR`, drops the variables Qoder's own agent-SDK host exports (see
+//! [`Cli::env_drop`]), and reads no usage, as it answers no `get_usage` control request.
+//! Its sessions are found only by id: the CLI keeps transcripts in its own layout, so
+//! [`crate::transcript::path`] finds none of them.
+//!
 //! # herder's MCP server
 //!
 //! [`StartRequest::mcp`] is passed inline as `--mcp-config`, a stdio server named `herder`, so
@@ -217,17 +228,97 @@ use crate::{
 /// The Claude Code version the wire format and fixtures were taken from.
 pub const CLAUDE_VERSION: &str = "2.1.286";
 
-/// Runs sessions on the `claude` CLI.
+/// Which Claude-compatible CLI an adapter runs: Anthropic's Claude Code, or a CLI that speaks
+/// the same stream-json protocol but differs in a few flags, its config dir and its status
+/// check.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cli {
+    /// Claude Code, as of [`CLAUDE_VERSION`].
+    #[default]
+    Claude,
+    /// Qoder CLI: same protocol, but it rejects `--verbose`, `--safe-mode` and
+    /// `--allow-dangerously-skip-permissions`, spells `--allowedTools` `--allowed-tools`, takes
+    /// its config dir in `QODER_CONFIG_DIR`, checks a login with `status -o json`, and answers
+    /// no `get_usage` control request.
+    Qoder,
+}
+
+impl Cli {
+    /// The flags after the stream-json ones that every session of this CLI gets.
+    fn stream_flags(self) -> &'static [&'static str] {
+        match self {
+            Cli::Claude => &[
+                "--verbose",
+                "--include-partial-messages",
+                "--replay-user-messages",
+            ],
+            Cli::Qoder => &["--include-partial-messages", "--replay-user-messages"],
+        }
+    }
+
+    /// The flags that let `mode` take effect, before `--permission-mode`.
+    fn permission_flags(self, mode: PermissionMode) -> &'static [&'static str] {
+        match self {
+            // The guard lets a running session switch to `bypassPermissions`.
+            Cli::Claude => &["--allow-dangerously-skip-permissions"],
+            // Qoder CLI has no guard; its own switch is the bypass itself, so only
+            // `full_access` gets it.
+            Cli::Qoder if mode == PermissionMode::FullAccess => &["--dangerously-skip-permissions"],
+            Cli::Qoder => &[],
+        }
+    }
+
+    /// The variable that points the CLI at an account's config dir.
+    fn config_dir_env(self) -> &'static str {
+        match self {
+            Cli::Claude => "CLAUDE_CONFIG_DIR",
+            Cli::Qoder => "QODER_CONFIG_DIR",
+        }
+    }
+
+    /// The flag that allows `tools`, before them.
+    fn allowed_tools_flag(self) -> &'static str {
+        match self {
+            Cli::Claude => "--allowedTools",
+            Cli::Qoder => "--allowed-tools",
+        }
+    }
+
+    /// The inherited variables the CLI must not see.
+    ///
+    /// Qoder CLI is also what Qoder's own agent-SDK host runs, and that host exports these to
+    /// the process it starts. Inherited by a session, they make the CLI reuse the host's SDK
+    /// auth payload instead of its own login and fail before the first turn, so a session
+    /// starts self-contained, on the CLI's own login.
+    fn env_drop(self) -> &'static [&'static str] {
+        match self {
+            Cli::Claude => &[],
+            Cli::Qoder => &[
+                "QODER_AGENT_SDK_ENTRYPOINT",
+                "QODER_AGENT_SDK_VERSION",
+                "QODER_SDK_AUTH_PAYLOAD_FILE",
+                "QODER_SDK_CUSTOM_BASE_URL_BYOK",
+                "QODER_WORKER_CWD",
+                "QODER_WORKER_RUNTIME_ASSET_ROOT",
+            ],
+        }
+    }
+}
+
+/// Runs sessions on the `claude` CLI, or on a CLI [`Cli`] says speaks its protocol.
 #[derive(Clone, Debug)]
 pub struct ClaudeAdapter {
-    /// The `claude` executable, looked up on `PATH` when it is a bare name.
+    /// The executable, looked up on `PATH` when it is a bare name.
     pub program: PathBuf,
+    /// Which CLI `program` is.
+    pub cli: Cli,
 }
 
 impl Default for ClaudeAdapter {
     fn default() -> Self {
         Self {
             program: PathBuf::from("claude"),
+            cli: Cli::default(),
         }
     }
 }
@@ -239,6 +330,7 @@ impl Adapter for ClaudeAdapter {
 
     fn start(&self, request: StartRequest) -> StartFuture {
         let program = self.program.clone();
+        let cli = self.cli;
         Box::pin(async move {
             let fatal = |message: String| TurnError {
                 class: ErrorClass::Fatal,
@@ -246,7 +338,7 @@ impl Adapter for ClaudeAdapter {
             };
             let mcp_config = user_mcp_file(&request.mcp_servers)
                 .map_err(|err| fatal(format!("passing claude the MCP servers: {err}")))?;
-            let command = command(&program, &request, mcp_config.as_deref());
+            let command = command_for(cli, &program, &request, mcp_config.as_deref());
             let transport = Transport::spawn(command)
                 .map_err(|err| fatal(format!("starting claude: {err}")))?;
             session::start(transport, request, mcp_config).await
@@ -256,15 +348,24 @@ impl Adapter for ClaudeAdapter {
 
 impl ClaudeAdapter {
     /// The account's email and limit windows, read by a `claude` run for `request` that exits
-    /// once it answered; see the module docs.
+    /// once it answered; see the module docs. Only Claude Code answers; the other [`Cli`]s
+    /// report no usage.
     pub fn read_usage(
         &self,
         request: StartRequest,
     ) -> impl Future<Output = Result<AccountUsage, TurnError>> + Send + 'static {
-        let mut command = command(&self.program, &request, None);
-        // Nothing the user customized is needed to answer, and their hooks must not run.
-        command.arg("--safe-mode");
+        let program = self.program.clone();
+        let cli = self.cli;
         async move {
+            if cli != Cli::Claude {
+                return Err(TurnError {
+                    class: ErrorClass::Fatal,
+                    message: "qoder CLI reports no account usage".to_owned(),
+                });
+            }
+            let mut command = command_for(cli, &program, &request, None);
+            // Nothing the user customized is needed to answer, and their hooks must not run.
+            command.arg("--safe-mode");
             let transport = Transport::spawn(command).map_err(|err| TurnError {
                 class: ErrorClass::Fatal,
                 message: format!("starting claude: {err}"),
@@ -291,6 +392,17 @@ pub fn start(transport: Transport, request: StartRequest) -> StartFuture {
 /// herder's MCP server registered, the user's from the file `user_mcp` (see [`user_mcp_file`]), and
 /// herder's skill library added.
 pub fn command(program: &Path, request: &StartRequest, user_mcp: Option<&Path>) -> Command {
+    command_for(Cli::Claude, program, request, user_mcp)
+}
+
+/// [`command`] for `cli`, which takes its config dir in its own variable and spells the
+/// flags [`Cli`] lists.
+pub fn command_for(
+    cli: Cli,
+    program: &Path,
+    request: &StartRequest,
+    user_mcp: Option<&Path>,
+) -> Command {
     let mut command = request.command(program);
     command
         .args([
@@ -299,20 +411,19 @@ pub fn command(program: &Path, request: &StartRequest, user_mcp: Option<&Path>) 
             "stream-json",
             "--output-format",
             "stream-json",
-            "--verbose",
-            "--include-partial-messages",
-            "--replay-user-messages",
-            "--permission-prompt-tool",
-            "stdio",
-            "--allow-dangerously-skip-permissions",
-            "--permission-mode",
-            mode_flag(request.permission_mode),
         ])
+        .args(cli.stream_flags())
+        .args(["--permission-prompt-tool", "stdio"])
+        .args(cli.permission_flags(request.permission_mode))
+        .args(["--permission-mode", mode_flag(request.permission_mode)])
         .env_clear()
         .envs(&request.env)
         .current_dir(&request.cwd);
+    for var in cli.env_drop() {
+        command.env_remove(var);
+    }
     if let Some(dir) = &request.config_dir {
-        command.env("CLAUDE_CONFIG_DIR", dir);
+        command.env(cli.config_dir_env(), dir);
     }
     // Claude loads the skills in `<dir>/.claude/skills` of every added dir, as plain `/name`.
     if let Some(dir) = &request.skills {
@@ -328,7 +439,7 @@ pub fn command(program: &Path, request: &StartRequest, user_mcp: Option<&Path>) 
         command
             .arg("--mcp-config")
             .arg(mcp_config(mcp).to_string())
-            .args(["--allowedTools", "mcp__herder"])
+            .args([cli.allowed_tools_flag(), "mcp__herder"])
             .arg("--settings")
             .arg(hooks::settings(mcp).to_string());
     }
@@ -633,6 +744,102 @@ mod tests {
                 ),
                 (OsStr::new("PATH"), Some(OsStr::new("/usr/bin"))),
             ]
+        );
+    }
+
+    #[test]
+    fn command_for_qoder_cli_spells_its_flags_and_config_dir() {
+        // What Qoder's own SDK host leaves in the environment herder inherits from it.
+        let request = StartRequest {
+            config_dir: Some(PathBuf::from("/accounts/work/qoder")),
+            env: [
+                ("PATH", "/usr/bin"),
+                ("QODER_AGENT_SDK_ENTRYPOINT", "/opt/qoder/sdk.js"),
+                ("QODER_AGENT_SDK_VERSION", "1.2.3"),
+                ("QODER_SDK_AUTH_PAYLOAD_FILE", "/tmp/qoder-auth.json"),
+                ("QODER_SDK_CUSTOM_BASE_URL_BYOK", "https://proxy.example"),
+                ("QODER_WORKER_CWD", "/srv/qoder"),
+                ("QODER_WORKER_RUNTIME_ASSET_ROOT", "/opt/qoder"),
+                ("QODER_CONFIG_DIR", "/host's/own/dir"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect(),
+            cwd: PathBuf::from("/worktrees/s1"),
+            model: None,
+            permission_mode: PermissionMode::AutoEdit,
+            seed: Vec::new(),
+            resume: None,
+            mcp: None,
+            mcp_servers: Vec::new(),
+            launcher: Vec::new(),
+            skills: None,
+        };
+        let command = command_for(Cli::Qoder, Path::new("qodercli"), &request, None);
+        let command = command.as_std();
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--include-partial-messages",
+                "--replay-user-messages",
+                "--permission-prompt-tool",
+                "stdio",
+                "--permission-mode",
+                "acceptEdits",
+            ]
+            .map(OsStr::new)
+        );
+        // The host's SDK variables are dropped and its config dir replaced by the account's.
+        assert_eq!(
+            command
+                .get_envs()
+                .filter_map(|(key, value)| Some((key.to_str()?, value?.to_str()?)))
+                .collect::<Vec<_>>(),
+            [
+                ("PATH", "/usr/bin"),
+                ("QODER_CONFIG_DIR", "/accounts/work/qoder"),
+            ]
+        );
+
+        // herder's own tools are allowed by Qoder CLI's spelling.
+        let mcp = StartRequest {
+            mcp: Some(McpServer {
+                command: PathBuf::from("/usr/bin/herder"),
+                args: vec!["mcp".into()],
+            }),
+            ..request.clone()
+        };
+        let with_mcp = command_for(Cli::Qoder, Path::new("qodercli"), &mcp, None);
+        let args: Vec<_> = with_mcp.as_std().get_args().collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--allowed-tools", "mcp__herder"])
+        );
+
+        // `full_access` skips prompts through Qoder CLI's own switch, and only then.
+        let full = StartRequest {
+            permission_mode: PermissionMode::FullAccess,
+            ..request
+        };
+        let command = command_for(Cli::Qoder, Path::new("qodercli"), &full, None);
+        let args: Vec<_> = command.as_std().get_args().collect();
+        assert!(
+            args.iter()
+                .any(|arg| *arg == "--dangerously-skip-permissions")
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--permission-mode", "bypassPermissions"])
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| *arg == "--allow-dangerously-skip-permissions")
         );
     }
 
