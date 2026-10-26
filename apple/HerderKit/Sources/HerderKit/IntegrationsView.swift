@@ -91,7 +91,8 @@ struct IntegrationsView: View {
     }
 
     /// Too narrow for every column: the bot's name, its kind and machine under it, and its status.
-    private var compact: Bool { width < 720 }
+    /// Every column takes about 630 pt and the bot's name wants 200 more.
+    private var compact: Bool { width < 860 }
 
     private var columns: [SortableColumn<BotTableRow>] {
         var columns: [SortableColumn<BotTableRow>] = [
@@ -119,7 +120,7 @@ struct IntegrationsView: View {
                 },
             ]
         }
-        columns.append(SortableColumn("Status", width: compact ? 150 : 170, value: \.statusRank) { row in
+        columns.append(SortableColumn("Status", width: compact ? 190 : 170, value: \.statusRank) { row in
             if let status = row.status {
                 StatusChip(text: status.state.label, urgency: status.state.urgency)
             } else {
@@ -291,7 +292,7 @@ struct AddBotSheet: View {
     }
 
     var body: some View {
-        SheetScaffold(title: "Add Bot", height: 600, hint: "Tokens are kept in the vault, never shown again.") {
+        SheetScaffold(title: "Add Bot", height: 600, hint: "Tokens stay in the vault.") {
             AddBotForm(setup: setup)
         } footer: {
             Spacer()
@@ -458,8 +459,8 @@ private struct TokenField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 6) { title; where_ }
-                VStack(alignment: .leading, spacing: 2) { title; where_ }
+                HStack(spacing: 6) { title; place.lineLimit(1) }
+                VStack(alignment: .leading, spacing: 2) { title; place.fixedSize(horizontal: false, vertical: true) }
             }
             TokenBox(placeholder: placeholder, text: $text)
         }
@@ -469,8 +470,8 @@ private struct TokenField: View {
         Text(label).font(.footnote.weight(.semibold)).foregroundStyle(Theme.secondary)
     }
 
-    private var where_: some View {
-        Text(hint).font(.footnote).foregroundStyle(Theme.tertiary).lineLimit(1)
+    private var place: Text {
+        Text(hint).font(.footnote).foregroundColor(Theme.tertiary)
     }
 }
 
