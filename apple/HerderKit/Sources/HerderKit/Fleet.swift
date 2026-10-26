@@ -108,6 +108,9 @@ public final class Fleet {
     var sessions: [SessionKey: SessionModel] { boxes.mapValues(\.model) }
 
     /// Changes `key`'s state, when it is followed.
+    /// Closes the session's standing failure card, on this device only.
+    func dismissFailure(_ key: SessionKey) { change(key) { $0.dismissFailure() } }
+
     private func change(_ key: SessionKey, _ body: (inout SessionModel) -> Void) {
         guard let box = boxes[key] else { return }
         body(&box.model)

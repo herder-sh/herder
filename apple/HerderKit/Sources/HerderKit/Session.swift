@@ -243,6 +243,7 @@ struct SessionModel {
         case .branchCheckedOut(let branch): notice("Checked out \(branch)")
         case .turnInterrupted: notice("Turn interrupted")
         case .turnFailed(let turnId, let error): failed(turnId, error, seq: event.seq)
+        case .turnStarted: resolveFailure(.retried)
         case .turnCompleted: resolveFailure(.resumed)
         case .sessionStatusChanged(let status, _) where self.status == .needsLogin && (status == .idle || status == .running):
             // The account was logged in again, and what it held runs.
@@ -286,7 +287,7 @@ struct SessionModel {
         case .permissionModeChanged(let mode): notice("Permission mode set to \(mode.label.lowercased())")
         case .prLinked(let pr): notice("Pull request #\(pr.number) linked: \(pr.title)")
         case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
-        case .sessionCreated, .sessionStatusChanged, .turnStarted, .prUpdated,
+        case .sessionCreated, .sessionStatusChanged, .prUpdated,
              .titleChanged, .threadLinked, .unknown:
             break
         }
@@ -300,8 +301,10 @@ struct SessionModel {
                   case .userMessage(let text, _) = item.body else { return nil }
             return text
         }.first
-        if let index = log.lastIndex(where: { $0.openFailure != nil }), case .failure(var failure) = log[index] {
+        if let index = log.lastIndex(where: { $0.openFailure != nil || $0.retriedFailure != nil }),
+           case .failure(var failure) = log[index] {
             log.remove(at: index)
+            failure.resolution = nil
             if failure.repeats(error) {
                 failure.count += 1
                 failure.turnId = turnId
@@ -315,6 +318,9 @@ struct SessionModel {
         log.append(.failure(Failure(id: seq, turnId: turnId, error: error, prompt: prompt, provider: provider,
                                     accountId: accountId)))
     }
+
+    /// The user closed the standing failure's card: it reads as its quiet line from here on.
+    mutating func dismissFailure() { resolveFailure(.dismissed) }
 
     /// The failure that stands, if one does, is over.
     private mutating func resolveFailure(_ resolution: Failure.Resolution) {
@@ -791,6 +797,11 @@ struct AskedQuestion: Hashable {
 
 extension LogEntry {
     /// The failure this line is, while it stands.
+    /// A failure a later turn is retrying: it folds back in if that turn fails the same way.
+    var retriedFailure: Failure? {
+        if case .failure(let failure) = self, failure.resolution == .retried { failure } else { nil }
+    }
+
     var openFailure: Failure? {
         if case .failure(let failure) = self, failure.resolution == nil { failure } else { nil }
     }
