@@ -66,7 +66,7 @@ HERDER_FAKE_DAEMON=$PWD/target/debug/examples/fake_daemon swift test --package-p
 ```
 
 The iOS UI tests pair the app on a simulator with two running fake daemons, from the link a
-device paired with both shares (as **Machines › Pair Another Device** on the Mac does), then
+device paired with both shares (as **Add Machine › A device to this fleet** does), then
 open the session waiting on an approval on the first from its card on Home:
 
 ```sh

@@ -154,8 +154,7 @@ struct DesktopShell: View {
                 if !AwsSignIn.machines(fleet.machines).isEmpty {
                     PaneButton(title: "AWS Sign-in", symbol: "key") { sheet = .awsSignIn }
                 }
-                IconButton(symbol: "qrcode", help: "Pair Another Device") { sheet = .share }
-                PaneButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair }
+                PaneButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair(.machine) }
             }
         case .integrations:
             Pane(fleet: fleet, title: "Integrations", status: fleet.bots.status, switcher: switcher) {
