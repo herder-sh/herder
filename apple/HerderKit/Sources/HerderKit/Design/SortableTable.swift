@@ -161,7 +161,8 @@ struct SortableTable<Row: Identifiable>: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
         .frame(minHeight: 36)
-        .background(hovered == row.id ? Theme.raised : .clear)
+        // Only a row that opens something lights up under the pointer.
+        .background(open != nil && hovered == row.id ? Theme.raised : .clear)
         .overlay(alignment: .bottom) { Hairline() }
         .contentShape(.rect)
         .onHover { inside in

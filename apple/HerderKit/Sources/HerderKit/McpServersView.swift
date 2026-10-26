@@ -24,62 +24,247 @@ extension Fleet {
     var mcpEditable: [Machine] { mcpMachines.filter { $0.role == .owner && $0.connection == .connected } }
 }
 
-/// The MCP servers on the Providers page: each machine's, with a way to add one to any or all
-/// of them, or to import a JSON snippet.
+/// The MCP servers on the Providers page, as a table of every machine's, a row per name: the
+/// machines that have it, how it connects, and a switch that turns it on or off on all of them.
+/// Its header adds one to any or all of the machines, or imports a JSON snippet.
 struct McpServersSection: View {
     let fleet: Fleet
     @State private var lists: McpServerLists?
     @State private var sheet: McpSheet?
+    @State private var removing: McpServerTable.Row?
+    @State private var error: String?
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         let machines = fleet.mcpMachines
         let editable = Set(fleet.mcpEditable.map(\.hostId))
-        VStack(alignment: .leading, spacing: 10) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    heading
-                    Spacer(minLength: 8)
-                    actions(editable)
-                }
-                VStack(alignment: .leading, spacing: 10) {
-                    heading
-                    HStack(spacing: 8) { actions(editable) }
-                }
-            }
+        ProvidersSection(title: "MCP servers", note: "every session on the machine gets them") {
+            PillButton(title: "Paste JSON", symbol: "doc.on.clipboard") { sheet = .importJSON(targets: editable) }
+                .disabled(editable.isEmpty)
+            PillButton(title: "Add", symbol: "plus") { sheet = .add(targets: editable) }
+                .disabled(editable.isEmpty)
+                .accessibilityLabel("Add MCP Server")
+        } content: {
             if let lists {
-                VStack(spacing: 0) {
-                    ForEach(Array(machines.enumerated()), id: \.element.hostId) { index, machine in
-                        if index > 0 { Rectangle().fill(Theme.stroke).frame(height: 1) }
-                        McpMachineServers(fleet: fleet, lists: lists, machine: machine, showsName: true, sheet: $sheet)
+                let table = McpServerTable(machines.map { (hostId: $0.hostId, name: $0.name) }, servers: lists.servers(on:))
+                if table.rows.isEmpty {
+                    if machines.contains(where: { lists.servers(on: $0.hostId) != nil }) {
+                        note("No MCP servers yet. Add one, or paste a client’s JSON.")
                     }
+                } else {
+                    SortableTable("providers.mcp", rows: table.rows, sortedBy: TableSort(column: "Server"),
+                                  columns: columns(editable))
                 }
-                .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
-                .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+                ForEach(machines, id: \.hostId) { machine in state(machine, lists) }
             }
+            if let error { note(error, failed: true) }
             Text("Changes reach each session when its agent next starts; no restart needed.")
                 .font(.footnote).foregroundStyle(Theme.tertiary)
+                .padding(.horizontal, ProvidersColumns.inset)
         }
-        .onAppear { if lists == nil { lists = McpServerLists(fleet: fleet) } }
+        .task(id: editable) {
+            let lists = lists ?? McpServerLists(fleet: fleet)
+            self.lists = lists
+            await withTaskGroup(of: Void.self) { group in
+                for hostId in editable { group.addTask { await lists.reload(hostId) } }
+            }
+        }
         .sheet(item: $sheet) { sheet in
             if let lists { McpSheetView(fleet: fleet, lists: lists, sheet: sheet) }
         }
-    }
-
-    private var heading: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("MCP Servers").font(.headline).foregroundStyle(Theme.text)
-            Text("Every session on a machine gets these, on every provider, next to herder’s own.")
-                .font(.caption).foregroundStyle(Theme.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        .confirmationDialog("Remove \(removing?.name ?? "")?",
+                            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                            titleVisibility: .visible, presenting: removing) { row in
+            Button("Remove", role: .destructive) {
+                change(row) { servers, _ in servers.filter { $0.name != row.name } }
+            }
+        } message: { row in
+            Text("Sessions on \(row.places.map(\.machine).joined(separator: ", ")) lose it from their agent’s next start.")
         }
     }
 
-    @ViewBuilder private func actions(_ editable: Set<HostId>) -> some View {
-        PillButton(title: "Paste JSON", symbol: "doc.on.clipboard") { sheet = .importJSON(targets: editable) }
-            .disabled(editable.isEmpty)
-        PillButton(title: "Add", symbol: "plus") { sheet = .add(targets: editable) }
-            .disabled(editable.isEmpty)
-            .accessibilityLabel("Add MCP Server")
+    /// Server, machines, transport and status, lined up with the accounts table's columns; a
+    /// narrow pane keeps the server and its switch.
+    private func columns(_ editable: Set<HostId>) -> [SortableColumn<McpServerTable.Row>] {
+        let compact = sizeClass == .compact
+        var all = [
+            SortableColumn<McpServerTable.Row>("Server", value: \.name) { row in server(row, compact: compact) },
+        ]
+        if !compact {
+            all += [
+                SortableColumn("Machines", width: ProvidersColumns.machines, value: \.machines) { row in
+                    Text(row.machines).foregroundStyle(Theme.secondary).lineLimit(1)
+                        .help(row.places.map(\.machine).joined(separator: ", "))
+                },
+                SortableColumn("Transport", width: ProvidersColumns.wide, value: { McpKind($0.transport).title }) { row in
+                    HStack(spacing: 6) {
+                        Badge(text: McpKind(row.transport).title)
+                        Text(McpServers.target(row.transport)).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    .help(McpServers.target(row.transport))
+                },
+            ]
+        }
+        all += [
+            SortableColumn("Status", width: compact ? 56 : ProvidersColumns.narrow, value: \.status) { row in
+                status(row, editable, compact: compact)
+            },
+            SortableColumn("", width: compact ? 28 : ProvidersColumns.last, alignment: .trailing) { row in menu(row, editable) },
+        ]
+        return all
+    }
+
+    /// The server's name, which opens it to edit on its first machine; its project when it is
+    /// one project's, and on a narrow pane how it connects.
+    private func server(_ row: McpServerTable.Row, compact: Bool) -> some View {
+        let place = row.places.first
+        return Button { if let place { sheet = .edit(place.hostId, place.server) } } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(row.name).font(Theme.body.weight(.semibold).monospaced())
+                        .foregroundStyle(row.enabled ? Theme.text : Theme.tertiary).lineLimit(1)
+                    if let project = place?.server.project {
+                        Label(projectName(project, on: place?.hostId), systemImage: "folder")
+                            .font(.caption2.weight(.semibold)).foregroundStyle(Theme.secondary).lineLimit(1)
+                    }
+                }
+                if compact {
+                    Text("\(McpKind(row.transport).title) · \(row.machines)").font(.caption).foregroundStyle(Theme.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("mcp-server-\(row.name)")
+    }
+
+    /// A switch that turns the server on or off on every machine that has it, and where it is
+    /// off when only some have it off.
+    private func status(_ row: McpServerTable.Row, _ editable: Set<HostId>, compact: Bool) -> some View {
+        HStack(spacing: 8) {
+            Toggle("Enabled", isOn: Binding(get: { row.enabled }, set: { on in
+                change(row) { servers, _ in
+                    servers.map { $0.name == row.name ? McpServerSettings(
+                        name: $0.name, enabled: on, project: $0.project, transport: $0.transport) : $0 }
+                }
+            }))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .disabled(!row.places.contains { editable.contains($0.hostId) })
+            .accessibilityLabel("\(row.name) enabled")
+            if !compact && row.partlyOff {
+                Text(row.status).font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+                    .help(row.status)
+            }
+        }
+    }
+
+    private func menu(_ row: McpServerTable.Row, _ editable: Set<HostId>) -> some View {
+        let others = fleet.mcpEditable.filter { machine in !row.places.contains { $0.hostId == machine.hostId } }
+        return Menu {
+            if row.places.count == 1, let place = row.places.first {
+                Button("Edit…", systemImage: "pencil") { sheet = .edit(place.hostId, place.server) }
+            } else {
+                Menu("Edit on", systemImage: "pencil") {
+                    ForEach(row.places, id: \.hostId) { place in
+                        Button(place.machine) { sheet = .edit(place.hostId, place.server) }
+                    }
+                }
+            }
+            if !others.isEmpty, let server = row.places.first?.server {
+                Menu("Copy to Machine", systemImage: "square.on.square") {
+                    ForEach(others, id: \.hostId) { other in
+                        Button(other.name) { copy(server, to: [other]) }
+                    }
+                    if others.count > 1 {
+                        Divider()
+                        Button("All Other Machines") { copy(server, to: others) }
+                    }
+                }
+            }
+            Divider()
+            Button("Remove…", systemImage: "trash", role: .destructive) { removing = row }
+        } label: {
+            Image(systemName: "ellipsis").font(.callout.weight(.semibold)).foregroundStyle(Theme.secondary)
+                .frame(width: 28, height: 28).contentShape(.rect)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(!row.places.contains { editable.contains($0.hostId) })
+        .accessibilityLabel("\(row.name) actions")
+    }
+
+    /// Why a machine's servers are not in the table: it is someone else's, not connected, still
+    /// answering, or failed to.
+    @ViewBuilder private func state(_ machine: Machine, _ lists: McpServerLists) -> some View {
+        if machine.role != .owner {
+            note("Only \(machine.name)’s owner can see and change its MCP servers.")
+        } else if machine.connection != .connected, lists.servers(on: machine.hostId) == nil {
+            note("\(machine.name) is not connected.")
+        } else {
+            switch lists.lists[machine.hostId] {
+            case nil, .asking?:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Asking \(machine.name)…").font(.caption).foregroundStyle(Theme.tertiary)
+                }
+                .padding(.horizontal, ProvidersColumns.inset)
+            case .failed(let message)?:
+                note("\(machine.name): \(message)", failed: true)
+            case .loaded?:
+                EmptyView()
+            }
+        }
+    }
+
+    private func note(_ text: String, failed: Bool = false) -> some View {
+        Text(text).font(.caption).foregroundStyle(failed ? Theme.failure : Theme.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, ProvidersColumns.inset)
+    }
+
+    private func projectName(_ project: ProjectId, on hostId: HostId?) -> String {
+        fleet.machines.first { $0.hostId == hostId }?.projects.first { $0.projectId == project }?.name ?? project
+    }
+
+    /// Changes the servers on each machine that has `row`'s server and this device can change.
+    private func change(_ row: McpServerTable.Row,
+                        _ body: @escaping ([McpServerSettings], HostId) -> [McpServerSettings]) {
+        guard let lists else { return }
+        let editable = Set(fleet.mcpEditable.map(\.hostId))
+        let hosts = row.places.map(\.hostId).filter(editable.contains)
+        Task {
+            error = nil
+            for hostId in hosts {
+                do {
+                    try await lists.change(on: hostId) { body($0, hostId) }
+                } catch {
+                    let name = fleet.machines.first { $0.hostId == hostId }?.name ?? hostId
+                    self.error = "\(name): \(describe(error))"
+                    await lists.reload(hostId)
+                }
+            }
+        }
+    }
+
+    private func copy(_ server: McpServerSettings, to machines: [Machine]) {
+        guard let lists else { return }
+        Task {
+            let failures = await lists.add([server], to: machines.map(\.hostId))
+            let names = machines.map(\.name).joined(separator: ", ")
+            if let failure = failures.first {
+                let name = machines.first { $0.hostId == failure.key }?.name ?? failure.key
+                fleet.toast = Toast(text: "Could not copy \(server.name) to \(name)", detail: failure.value, failed: true)
+            } else {
+                fleet.toast = Toast(text: "Copied \(server.name) to \(names)")
+            }
+        }
     }
 }
 
@@ -105,7 +290,7 @@ struct McpMachineSettings: View {
                 }
             }
             if let lists {
-                McpMachineServers(fleet: fleet, lists: lists, machine: machine, showsName: false, sheet: $sheet)
+                McpMachineServers(fleet: fleet, lists: lists, machine: machine, sheet: $sheet)
                     .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
                     .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
             }
@@ -122,8 +307,6 @@ struct McpMachineServers: View {
     let fleet: Fleet
     let lists: McpServerLists
     let machine: Machine
-    /// Whether to head the rows with the machine's name, as the Providers page lists them all.
-    let showsName: Bool
     @Binding var sheet: McpSheet?
     @State private var removing: McpServerSettings?
     @State private var error: String?
@@ -133,19 +316,6 @@ struct McpMachineServers: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if showsName {
-                HStack(spacing: 6) {
-                    ConnectionMark(state: machine.connection)
-                    Text(machine.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                    if let servers = lists.servers(on: machine.hostId), !servers.isEmpty {
-                        Text("\(servers.count)").font(.caption).foregroundStyle(Theme.tertiary)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
-                .padding(.bottom, 4)
-            }
             content
             if let error {
                 Text(error).font(.footnote).foregroundStyle(Theme.failure)
