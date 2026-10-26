@@ -36,8 +36,7 @@ private struct ProvidersPreview: View {
             }
             ProvidersPage(overview: overview, report: ProvidersFixture.report, actions: ProvidersPage.Actions(
                 open: { _ in }, signIn: { _ in }, retry: { _ in }, install: { _ in }, setUp: {}, addAccount: {}))
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                .pageColumn()
         }
         .frame(width: width)
         .background(Theme.background)
