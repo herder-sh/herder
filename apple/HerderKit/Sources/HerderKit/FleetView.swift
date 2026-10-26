@@ -427,18 +427,15 @@ struct ChatsView: View {
         let lists = fleet.lists
         let empty = lists.chats.isEmpty && lists.archivedChats.isEmpty
         Group {
-            // With no chats the overlay says so, rather than the list's "No sessions match."
-            if !empty {
+            // With no chats it says so, rather than the list's "No sessions match."
+            if empty {
+                ContentUnavailableView("No chats", systemImage: Switcher.chatSymbol,
+                                       description: Text("Ask anything, about no project."))
+            } else {
                 ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, query: query)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay {
-            if empty {
-                ContentUnavailableView("No chats", systemImage: Switcher.chatSymbol,
-                                       description: Text("Ask anything, about no project."))
-            }
-        }
         .alwaysSearchable(text: $query, prompt: "Chats")
         .background(Theme.background)
         .refreshable { fleet.wake() }
