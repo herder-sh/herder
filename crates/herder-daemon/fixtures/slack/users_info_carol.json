@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "user": {
+    "id": "U0CAROL001",
+    "team_id": "T0HERDER01",
+    "name": "carol",
+    "deleted": false,
+    "color": "9f69e7",
+    "real_name": "Carol Jones",
+    "tz": "Europe/Vilnius",
+    "tz_label": "Eastern European Summer Time",
+    "tz_offset": 10800,
+    "profile": {
+      "title": "",
+      "phone": "",
+      "skype": "",
+      "real_name": "Carol Jones",
+      "real_name_normalized": "Carol Jones",
+      "display_name": "Carol",
+      "display_name_normalized": "Carol",
+      "fields": null,
+      "status_text": "",
+      "status_emoji": "",
+      "status_expiration": 0,
+      "avatar_hash": "g0a1b2c3d4e5",
+      "first_name": "Carol",
+      "last_name": "Jones",
+      "team": "T0HERDER01"
+    },
+    "is_admin": false,
+    "is_owner": false,
+    "is_primary_owner": false,
+    "is_restricted": false,
+    "is_ultra_restricted": false,
+    "is_bot": false,
+    "is_app_user": false,
+    "updated": 1761300000,
+    "is_email_confirmed": true,
+    "who_can_share_contact_card": "EVERYONE"
+  }
+}

@@ -21,9 +21,11 @@
 //! or pressing one, links that thread to the session. A session that keeps waiting is notified
 //! of once; the message is edited when it is answered, saying where.
 //!
-//! A mention in a reply of a channel thread carries what the thread said before it: from the
-//! thread's start the first time, then what was said since the bot's last mention there; at
-//! most [`THREAD_MESSAGES`] messages, and their files as the prompt has room for.
+//! A mention in a channel carries what was said before it, with the files, as far as the
+//! prompt has room for them: in a thread, from the thread's start the first time, then what
+//! was said since the bot's last mention there, at most [`THREAD_MESSAGES`] messages; outside
+//! one, the channel's latest messages ([`RECENT_MESSAGES`](super::bridge::RECENT_MESSAGES) of
+//! the last two hours).
 //!
 //! Outside a linked thread, a message that is one of the bot's commands ([`Command`]) is
 //! answered by the bot itself: `sessions`, `continue ‹name›`, `use ‹project›`, `status` and
@@ -797,18 +799,22 @@ impl Runner {
         Some((images, prompt_files))
     }
 
-    /// What the thread of `message`, a mention in a channel, said since the bot last read it,
-    /// or from its start. A direct message has none: the bot sees every one.
+    /// What was said before `message`, a mention in a channel: in its thread, since the bot
+    /// last read it, or from its start; for one that starts a thread, the channel's latest
+    /// messages. A direct message has none: the bot sees every one.
     async fn context(&mut self, message: &Message) -> Context {
         let place = &message.place;
-        if message.direct || place.thread_id == message.message_id {
-            self.seen.insert(place.clone(), message.message_id.clone());
+        if message.direct {
             return Context::default();
         }
+        let starts = place.thread_id == message.message_id;
         let after = self.seen.get(place).cloned();
-        let read = self
-            .bridge
-            .history(place, after.as_deref(), &message.message_id);
+        let read = if starts {
+            self.bridge.recent(place, &message.message_id)
+        } else {
+            self.bridge
+                .history(place, after.as_deref(), &message.message_id)
+        };
         let mut earlier = match read.await {
             Ok(earlier) => earlier,
             Err(HistoryError::Unreadable(text)) => {
@@ -818,7 +824,7 @@ impl Runner {
                 return Context::default();
             }
             Err(HistoryError::Failed(err)) => {
-                warn!(bot_id = %self.bot.bot_id, "cannot read a thread: {err}");
+                warn!(bot_id = %self.bot.bot_id, "cannot read a channel: {err}");
                 return Context::default();
             }
         };
@@ -828,19 +834,26 @@ impl Runner {
             earlier.drain(1..=earlier.len() - THREAD_MESSAGES);
         }
         let mut context = Context {
+            heading: if starts {
+                "Earlier in this channel:"
+            } else {
+                "Earlier in this thread:"
+            },
             cut,
             ..Context::default()
         };
         for Earlier {
             user_id,
+            name,
             text,
             files,
             ..
         } in earlier
         {
-            let who = self
-                .user(&user_id)
-                .map_or(user_id, |user| user.display_name.clone());
+            let who = match self.user(&user_id) {
+                Some(user) => user.display_name.clone(),
+                None => name.unwrap_or(user_id),
+            };
             let mut line = format!("{who}: {text}");
             if !files.is_empty() {
                 let names: Vec<_> = files.iter().map(|file| file.name.as_str()).collect();
@@ -885,7 +898,7 @@ impl Runner {
         earlier_files.reverse();
         earlier_files.append(files);
         *files = earlier_files;
-        let mut lines = vec!["Earlier in this thread:".to_owned()];
+        let mut lines = vec![context.heading.to_owned()];
         if context.cut {
             lines.push(format!(
                 "(It is longer: only the first of these messages and the last {} are here.)",
@@ -1495,6 +1508,8 @@ impl<'a> Command<'a> {
 /// What a thread said before a mention, which its prompt carries.
 #[derive(Debug, Default)]
 struct Context {
+    /// What it is, for the prompt: "Earlier in this thread:" or "… channel:".
+    heading: &'static str,
     /// Its messages, oldest first, each "‹who›: ‹text›".
     lines: Vec<String>,
     /// Their files, oldest first.

@@ -366,6 +366,7 @@ final class BotSetup {
               - im:history
               - im:write
               - mpim:history
+              - users:read
         settings:
           event_subscriptions:
             bot_events:
