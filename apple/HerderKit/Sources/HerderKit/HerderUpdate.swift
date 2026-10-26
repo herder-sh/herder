@@ -139,7 +139,7 @@ struct HerderVersionsSection: View {
 
     /// The connected machines the user owns that run sessions on a herder older than the
     /// newest of theirs, which a machine too old to say its version is.
-    static func behind(_ machines: [Machine]) -> [(machine: Machine, newest: String)] {
+    nonisolated static func behind(_ machines: [Machine]) -> [(machine: Machine, newest: String)] {
         let owned = machines.filter { $0.role == .owner && $0.hosts.isEmpty && $0.connection == .connected }
         guard let newest = owned.compactMap(\.herderVersion).max(by: { ProviderVersions.version($1, isNewerThan: $0) })
         else { return [] }
