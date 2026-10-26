@@ -10,6 +10,7 @@ struct SessionView: View {
     var open: ((SessionKey) -> Void)?
     @State private var pushedFork: SessionKey?
     @State private var showsTerminal = false
+    @State private var showsPRs = false
     @AppStorage("listHidden") private var listHidden = false
     @Environment(\.pages) private var pages
     @AppStorage("inspectorShown") private var inspectorShown = false
@@ -167,6 +168,7 @@ struct SessionView: View {
             showsTerminal = false
             find = TranscriptFind()
             expanded = []
+            showsPRs = false
             scroll.show(key)
             fleet.unwatch(old)
             fleet.watch(key)
@@ -331,24 +333,36 @@ struct SessionView: View {
         }
     }
 
-    /// The session tree's pull requests and their count, tinted by their state.
+    /// The session tree's pull requests and their count, tinted by their state, opening their
+    /// list.
     @ViewBuilder
     private func prChip(inToolbar: Bool) -> some View {
         let rollup = PRRollup(of: key, session: fleet.session, children: fleet.lists.children)
         if !rollup.all.isEmpty {
             Group {
                 if inToolbar {
-                    Label(rollup.chip, systemImage: "arrow.triangle.pull")
-                        .labelStyle(.titleAndIcon)
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(rollup.urgency.color)
+                    Button { showsPRs.toggle() } label: {
+                        Label(rollup.chip, systemImage: "arrow.triangle.pull")
+                            .labelStyle(.titleAndIcon)
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(rollup.urgency.color)
+                    }
                 } else {
-                    HeaderLabel(symbol: "arrow.triangle.pull", title: rollup.chip, tint: rollup.urgency.color)
+                    HeaderButton(symbol: "arrow.triangle.pull", title: rollup.chip, tint: rollup.urgency.color,
+                                 selected: showsPRs) { showsPRs.toggle() }
                 }
             }
             .help(rollup.summary)
-            .accessibilityElement(children: .ignore)
             .accessibilityLabel(rollup.summary)
+            .accessibilityIdentifier("pr-chip")
+            // On compact width the popover adapts to a sheet, which PRList then frames.
+            .popover(isPresented: $showsPRs, arrowEdge: .bottom) {
+                PRList(fleet: fleet, key: key, rollup: rollup, presentation: PRListPresentation(compact: compact)) { child in
+                    showsPRs = false
+                    if let open { open(child) } else { pushedFork = child }
+                }
+                .presentationCompactAdaptation(.sheet)
+            }
         }
     }
 
