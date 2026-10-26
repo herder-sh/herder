@@ -470,6 +470,7 @@ private struct TaskRow: View {
     let toggle: () -> Void
     @State private var hovering = false
     @Environment(\.sessionPath) private var path
+    @Environment(\.minimumHitSize) private var hitSize
 
     var body: some View {
         let archived = tree.lead.state == .archived
@@ -478,6 +479,8 @@ private struct TaskRow: View {
                 ArchiveCircle(archived: archived, hovering: hovering).hitTarget()
             }
             .buttonStyle(.plain)
+            // The circle, not its hit area, sits on the content edge; the area reaches into the margin.
+            .padding(.leading, -max(hitSize - ArchiveCircle.size, 0) / 2)
             .help(archived ? "Unarchive" : "Archive")
             .accessibilityLabel(archived ? "Unarchive \(tree.lead.title)" : "Archive \(tree.lead.title)")
             if let selection {
@@ -555,6 +558,7 @@ struct TaskGlyph: View {
 
 /// The circle that archives a task: a check shows in it on hover, and fills it once archived.
 private struct ArchiveCircle: View {
+    static let size: CGFloat = 16
     let archived: Bool
     let hovering: Bool
 
@@ -567,7 +571,7 @@ private struct ArchiveCircle: View {
                     .foregroundStyle(archived ? Theme.background : Theme.secondary)
             }
         }
-        .frame(width: 16, height: 16)
+        .frame(width: Self.size, height: Self.size)
     }
 }
 
@@ -598,10 +602,17 @@ extension View {
 private struct TaskListInsets: ViewModifier {
     let highlighted: Bool
     @Environment(\.pageMargin) private var margin
+    /// The Mac's list insets each row by this much more than its row insets say.
+    #if os(macOS)
+    private let listInset: CGFloat = 8
+    #else
+    private let listInset: CGFloat = 0
+    #endif
 
     func body(content: Content) -> some View {
+        let inset = margin - listInset
         content
-            .listRowInsets(EdgeInsets(top: 0, leading: margin, bottom: 0, trailing: margin))
+            .listRowInsets(EdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset))
             .listRowSeparator(.hidden)
             .listRowBackground(
                 RoundedRectangle(cornerRadius: Theme.corner - 2)
