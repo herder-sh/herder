@@ -30,7 +30,8 @@
 //! machine shares, as `--share` prints.
 //!
 //! `fake_daemon --busy` adds the load the apps are profiled under (`apple/scripts/profile-mac.sh`):
-//! on `devbox`, a session with [`BUSY_TURNS`] finished turns whose next turn keeps streaming.
+//! on `devbox`, a session with [`BUSY_TURNS`] finished turns, about 2,000 items, whose next turn
+//! keeps streaming.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -99,9 +100,10 @@ const FLAKY: &str = "The checkout e2e test fails about one CI run in five. Find 
 const SAFARI: &str = "Carry on here: fix it and run the checkout suite in WebKit until it passes \
                       20 times in a row.";
 
-/// The busy session's turns: each [`NEXT_STEP`] plays one round of work and finishes, then
-/// [`KEEP_GOING`] plays a round every second for an hour.
-const BUSY_TURNS: usize = 30;
+/// The busy session's turns: each [`NEXT_STEP`] plays [`BUSY_ROUNDS`] rounds of work and
+/// finishes, then [`KEEP_GOING`] plays a round every second for an hour.
+const BUSY_TURNS: usize = 100;
+const BUSY_ROUNDS: usize = 7;
 const NEXT_STEP: &str = "Next step.";
 const KEEP_GOING: &str = "Keep going.";
 
@@ -1546,7 +1548,7 @@ async fn run(
 /// `$in_<n>m` by the time `n` minutes from now, else a short reply.
 fn script(dir: &Path, account: &str, text: &str, turn_id: &TurnId) -> Result<Vec<Step>> {
     match text {
-        NEXT_STEP => return Ok(work(turn_id, 1, 0)),
+        NEXT_STEP => return Ok(work(turn_id, BUSY_ROUNDS, 0)),
         KEEP_GOING => return Ok(work(turn_id, 3600, 1000)),
         _ => {}
     }
