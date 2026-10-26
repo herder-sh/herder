@@ -142,7 +142,7 @@ fn env_unit_path(unit: &str) -> Result<PathBuf> {
 }
 
 pub fn install(service: &Service) -> Result<()> {
-    let exe = std::env::current_exe().context("finding the herder binary")?;
+    let exe = crate::herder_binary()?;
     let search_path = std::env::var("PATH").context("reading PATH")?;
     let path = env_unit_path(service.unit)?;
     let dir = path.parent().context("unit path has no parent")?;
@@ -289,7 +289,7 @@ WantedBy=default.target
 
     #[test]
     fn vault_unit_runs_a_vault_with_its_own_config_and_key() {
-        let service = crate::vault::service(Path::new("/home/ann/.local/share/herder-vault"));
+        let service = crate::vault::install::service(Path::new("/home/ann/.local/share/herder-vault"));
         let unit = unit_file(
             &service,
             Path::new("/home/ann/.local/bin/herder"),
@@ -322,7 +322,7 @@ WantedBy=default.target
 
     #[test]
     fn vault_paths_are_quoted_for_systemd() {
-        let service = crate::vault::service(Path::new("/home/a b/100%"));
+        let service = crate::vault::install::service(Path::new("/home/a b/100%"));
         let unit = unit_file(&service, Path::new("/bin/herder"), "/usr/bin").unwrap();
         assert!(
             unit.contains("EnvironmentFile=/home/a b/100%%/vault.env\n"),

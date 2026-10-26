@@ -39,6 +39,7 @@ mod host_secrets;
 mod link;
 mod replicator;
 mod retention;
+pub mod install;
 mod secrets;
 mod store;
 
