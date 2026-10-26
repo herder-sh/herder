@@ -916,8 +916,11 @@ impl Runner {
                 self.turn_ended(&session_id, post).await;
             }
             EventBody::ArtifactPublished {
-                title, attachment, ..
-            } if IMAGE_MEDIA_TYPES.contains(&attachment.media_type.as_str()) => {
+                title,
+                attachment,
+                url,
+                ..
+            } => {
                 let data = match self
                     .host
                     .sessions
@@ -926,17 +929,21 @@ impl Runner {
                 {
                     Ok(data) => data.0,
                     Err(err) => {
-                        warn!(%session_id, "cannot read a published image: {}", err.message);
+                        warn!(%session_id, "cannot read a published file: {}", err.message);
                         return;
                     }
                 };
-                let name = attachment.name.clone().unwrap_or_else(|| {
-                    let extension = attachment.media_type.trim_start_matches("image/");
-                    format!("{title}.{extension}")
-                });
+                // Its stored media type says only that it is a file: the bridge tells an image
+                // from the rest by its name.
+                let name = attachment.name.clone().unwrap_or_else(|| title.clone());
                 for place in self.answer_places(&session_id) {
-                    if let Err(err) = self.bridge.upload(&place, &name, data.clone()).await {
-                        warn!(bot_id = %self.bot.bot_id, "cannot upload an image: {err}");
+                    let Err(err) = self.bridge.upload(&place, &name, data.clone()).await else {
+                        continue;
+                    };
+                    warn!(bot_id = %self.bot.bot_id, "cannot upload a published file: {err}");
+                    if let Some(url) = &url {
+                        self.post(&place, &Post::Text(format!("[{title}]({url})")))
+                            .await;
                     }
                 }
             }
