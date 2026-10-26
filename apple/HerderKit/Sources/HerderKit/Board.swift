@@ -532,7 +532,7 @@ struct TaskListRow: View {
 /// A task: where it stands, its title over the full width, two lines at most, and how long
 /// since it last did something; under them its context, what it is doing, and how many agents
 /// work under it, which unfold under it. On hover the age gives way to the check that archives
-/// it. It opens its top session, into `selection` when given, else by pushing it.
+/// it. A tap anywhere else opens its top session.
 private struct TaskRow: View {
     let tree: TaskTree
     let fleet: Fleet
@@ -550,7 +550,7 @@ private struct TaskRow: View {
         let state = tree.state
         let line = tree.line(context: context)
         HStack(alignment: .top, spacing: 10) {
-            TaskGlyph(state: state).padding(.top, 1)
+            TaskGlyph(state: state).padding(.top, 1).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(tree.lead.title)
@@ -558,6 +558,12 @@ private struct TaskRow: View {
                         .foregroundStyle(Theme.text)
                         .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        // The row's one element for VoiceOver and UI tests; the agents and the
+                        // check stay buttons of their own.
+                        .accessibilityLabel("\(state.label), \(tree.lead.title), \(line)"
+                            + (tree.lastActive.map { ", \(RelativeTime.text($0))" } ?? ""))
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction { open() }
                     trailing
                 }
                 HStack(spacing: 6) {
@@ -566,6 +572,7 @@ private struct TaskRow: View {
                             .font(Theme.body)
                             .foregroundStyle(state == .waitingForYou ? Theme.secondary : Theme.tertiary)
                             .lineLimit(1)
+                            .accessibilityHidden(true)
                     }
                     if tree.agentCount > 0 { agents(after: !line.isEmpty) }
                 }
@@ -573,9 +580,17 @@ private struct TaskRow: View {
         }
         .padding(.vertical, 8)
         .opacity(tree.lead.state == .archived ? 0.6 : 1)
-        .background { opener(label: "\(state.label), \(tree.lead.title), \(line)"
-            + (tree.lastActive.map { ", \(RelativeTime.text($0))" } ?? "")) }
+        // A tap anywhere on the row opens it; the agents' and the check's own buttons take theirs
+        // first.
+        .contentShape(.rect)
+        .onTapGesture(perform: open)
         .onHover { hovering = $0 }
+    }
+
+    /// Opens the task's top session: into `selection` on the Mac and iPad, else pushed onto the
+    /// tab's path on the iPhone.
+    private func open() {
+        sessionOpener(selection: selection, path: path)?(tree.lead.key)
     }
 
     /// The age, or on hover the check that archives the task, or brings it back once archived.
@@ -622,20 +637,11 @@ private struct TaskRow: View {
         .accessibilityIdentifier("Agents of \(tree.lead.title)")
         .accessibilityLabel("\(unfolded ? "Hide" : "Show") \(tree.agentsLabel)")
     }
-
-    /// The row's open action, behind its title and lines, so the agents and the check stay
-    /// buttons of their own.
-    private func opener(label: String) -> some View {
-        SessionButton(key: tree.lead.key, open: sessionOpener(selection: selection, path: path)) {
-            Color.clear.contentShape(.rect)
-        }
-        .accessibilityLabel(label)
-    }
 }
 
-/// How a task row opens a session: into `selection` on the Mac and iPad, else pushed onto the
+/// How a task list opens a session: into `selection` on the Mac and iPad, else pushed onto the
 /// tab's `path` on the iPhone, where a NavigationLink in the row never fires; `nil` when neither
-/// is given, for a NavigationLink.
+/// is given.
 private func sessionOpener(selection: Binding<SessionKey?>?, path: Binding<[NavRoute]>?) -> ((SessionKey) -> Void)? {
     if let selection { return { selection.wrappedValue = $0 } }
     if let path { return { path.wrappedValue.append(.session($0)) } }
