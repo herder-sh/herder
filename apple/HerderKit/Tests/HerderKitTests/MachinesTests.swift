@@ -152,6 +152,18 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
         #expect(MachineRow.thisMac(machines, names: ["studio"]) == nil)
     }
 
+    @Test func thePageCountsItsMachinesApartFromTheVault() throws {
+        let now = Date.now
+        var machines = sampleFleetMachines(now: now)
+        let summaries = Lists(machines: machines, sessions: [:]).machines
+        let behind = try #require(VaultStats(machine: machines[3], sessions: [:], now: now))
+        #expect(MachinesView.status(summaries, vaults: [behind]) == "All 3 machines connected · vault 6 h behind")
+        machines[3].hosts[0].online = true
+        let caughtUp = try #require(VaultStats(machine: machines[3], sessions: [:], now: now))
+        #expect(MachinesView.status(summaries, vaults: [caughtUp]) == "All 3 machines connected · vault caught up")
+        #expect(MachinesView.status([], vaults: []) == "No machines yet")
+    }
+
     @Test func thisMacIsTheOneItsAddressNames() {
         let names: Set<String> = ["localhost", "127.0.0.1", "::1", "studio"]
         #expect(MachineRow.isLocal("127.0.0.1:7447", names: names))

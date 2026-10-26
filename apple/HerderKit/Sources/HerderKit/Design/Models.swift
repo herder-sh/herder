@@ -120,6 +120,8 @@ struct MachineSummary: Hashable, Identifiable {
     let accounts: [AccountSummary]
     let hosts: [FleetHostSummary]
     let pinned: Bool
+    /// Whether it is a vault, which backs up the machines rather than running sessions.
+    var vault = false
 
     var connected: Bool { connection == .connected }
 }

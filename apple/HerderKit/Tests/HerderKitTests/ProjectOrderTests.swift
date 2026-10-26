@@ -100,6 +100,13 @@ struct ProjectOrderTests {
             summary("a", .connected), summary("b", .disconnected(error: "gone")), summary("c", .connecting),
             summary("d", .connected),
         ]) == "4 machines · 1 offline · 1 connecting")
+        // A vault is no machine: counted only once it is offline.
+        var vault = summary("v", .connected)
+        vault.vault = true
+        #expect(MachinesFooter.summary([summary("a", .connected), vault]) == "1 machine")
+        vault = summary("v", .disconnected(error: "gone"))
+        vault.vault = true
+        #expect(MachinesFooter.summary([summary("a", .connected), vault]) == "1 machine · vault offline")
         #expect(MachinesFooter.status(summary("a", .connected, running: 2)) == "2 running")
         #expect(MachinesFooter.status(summary("a", .connected)) == "Idle")
     }
