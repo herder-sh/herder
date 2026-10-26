@@ -1,15 +1,15 @@
 # herder
 
-> herder runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. A daemon on each Linux machine drives each vendor's own, unmodified CLI; you watch and steer every session from a terminal UI, a Mac app, or a phone over SSH. When an account hits its usage limit, herder moves the session to another account of the same provider. herder never reads, stores, copies or relays provider login tokens. Free and open source, Apache-2.0, pre-1.0.
+> herder runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. A daemon on each Linux machine or Mac drives each vendor's own, unmodified CLI; you watch and steer every session from the Mac app, the iPhone app, a terminal UI, or Slack and Telegram bots. When an account hits its usage limit, herder moves the session to another account of the same provider. herder never reads, stores, copies or relays provider login tokens. Free and open source, Apache-2.0, pre-1.0.
 
-Install on Linux (x86_64 or arm64): `curl -fsSL https://herder.sh/install | sh`, then `herder service install` to run the daemon at boot. Bare `herder` opens the terminal UI.
+Install on Linux (x86_64 or arm64) or an Apple silicon Mac: `curl -fsSL https://herder.sh/install | sh`, then `herder service install` to run the daemon at boot. Bare `herder` opens the terminal UI; `herder pair` pairs the Mac and iPhone apps.
 
 ## Docs
 
 - [Full description for LLMs](https://herder.sh/llms-full.txt): what herder does, install, features, scripting and FAQ in one file
 - [README](https://github.com/herder-sh/herder/blob/main/README.md): install, using herder from a phone, building from source
 - [Scripting sessions](https://github.com/herder-sh/herder/blob/main/crates/herder/README.md): `herder session new`, `send`, `wait`, `status`, with `--json`
-- [Vault](https://github.com/herder-sh/herder/blob/main/deploy/README.md): running the herder vault on Kubernetes and pairing hosts with it
+- [Vault](https://github.com/herder-sh/herder/blob/main/deploy/README.md): running the herder vault on any machine (`herder vault install`) or on Kubernetes, pairing hosts with it, and secrets
 - [Mac and iPhone app](https://github.com/herder-sh/herder/blob/main/apple/README.md): building and installing the Apple apps
 
 ## Optional
