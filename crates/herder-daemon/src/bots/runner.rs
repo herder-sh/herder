@@ -29,9 +29,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use herder_protocol::{
-    Answer, Bot, BotUser, Bytes, CommandBody, CommandResult, ErrorClass, Event, EventBody, HostId,
-    IMAGE_MEDIA_TYPES, Image, ItemBody, ItemId, MAX_IMAGE_BYTES, ProjectId, PromptFile, QuestionId,
-    Route, SessionHead, SessionId, SessionStatus, ThreadLink, TurnError, UserId,
+    Answer, Bot, BotUser, Bytes, CommandBody, CommandResult, ErrorClass, ErrorCode, ErrorInfo,
+    Event, EventBody, HostId, IMAGE_MEDIA_TYPES, Image, ItemBody, ItemId, MAX_IMAGE_BYTES,
+    ProjectId, PromptFile, QuestionId, Route, SessionHead, SessionId, SessionStatus, ThreadLink,
+    TurnError, UserId,
 };
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -640,8 +641,12 @@ impl Runner {
                 return;
             }
             Err(err) => {
-                let text = format!("Cannot start a session: {}", err.message);
-                self.post(place, &Post::Text(text)).await;
+                warn!(bot_id = %self.bot.bot_id, "cannot start a session: {}", err.message);
+                let post = Post::NotStarted {
+                    text: self.not_started(&err),
+                    open: format!("herder://host?host={}", self.host.host_id),
+                };
+                self.post(place, &post).await;
                 return;
             }
         };
@@ -1164,6 +1169,29 @@ impl Runner {
             text,
             retry,
             open: self.open(session_id),
+        }
+    }
+
+    /// Why a session could not start, as `err` says, in plain words with what fixes it.
+    fn not_started(&self, err: &ErrorInfo) -> String {
+        let signed_in = self
+            .host
+            .sessions
+            .accounts()
+            .iter()
+            .any(|account| account.needs_login.is_none());
+        if !signed_in {
+            "No signed-in account on this machine: an owner can sign one in under Providers in \
+             the herder app."
+                .into()
+        } else if err.code == ErrorCode::Conflict {
+            "Every account on this machine is at its usage limit: try again once one resets, or \
+             an owner can add one under Providers in the herder app."
+                .into()
+        } else {
+            "A session cannot start on this machine as this bot is set up: an owner can check \
+             its accounts, projects and bots in the herder app."
+                .into()
         }
     }
 

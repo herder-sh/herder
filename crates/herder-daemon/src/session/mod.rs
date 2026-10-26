@@ -676,8 +676,7 @@ impl SessionManager {
                 } else {
                     self.resolve_repo(repo, project_id)?
                 };
-                let place = (!chat).then_some((repo.as_str(), project.as_ref()));
-                let account_id = self.pick_account(account_id, provider, place)?;
+                let account_id = self.pick_account(account_id, provider, project.as_ref())?;
                 let permission_mode = permission_mode
                     .or(project.and_then(|project| project.default_permission_mode))
                     .unwrap_or(PermissionMode::Ask);
@@ -1952,15 +1951,14 @@ impl SessionManager {
     }
 
     /// The account a `create_session` runs on: `account_id`, which must be of `provider` when
-    /// both are given; else the available account of `provider` with the most room left; else,
-    /// for a session in `repo`, the default account of its project, `None` when discovery
-    /// knows none; else, for a chat (`repo` `None`), the available account with the most room
-    /// left of the first provider, in account order, that has one.
+    /// both are given; else the available account of `provider` with the most room left; else
+    /// the default account of `project`; else the available account with the most room left of
+    /// the first provider, in account order, that has one.
     fn pick_account(
         &self,
         account_id: Option<AccountId>,
         provider: Option<Provider>,
-        repo: Option<(&str, Option<&Project>)>,
+        project: Option<&Project>,
     ) -> Result<AccountId, ErrorInfo> {
         let inner = &self.inner;
         match (account_id, provider) {
@@ -2008,18 +2006,10 @@ impl SessionManager {
                 })
             }
             (None, None) => {
-                if let Some((repo, project)) = repo {
-                    return project
-                        .and_then(|project| project.default_account.clone())
-                        .ok_or_else(|| {
-                            error(
-                                ErrorCode::BadRequest,
-                                format!(
-                                    "pick an account or a provider: the project of {repo} has \
-                                     no default_account"
-                                ),
-                            )
-                        });
+                if let Some(account_id) =
+                    project.and_then(|project| project.default_account.clone())
+                {
+                    return Ok(account_id);
                 }
                 let providers: Vec<Provider> = inner
                     .accounts_lock()

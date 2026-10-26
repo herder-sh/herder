@@ -518,9 +518,24 @@ mod running {
 
         /// `bot` running, as [`Running::start`] runs the test bot.
         async fn with(bot: Bot, script: &str, files: HashMap<String, Vec<u8>>) -> Self {
+            Self::open(bot, script, files, true).await
+        }
+
+        /// `bot` running on a machine with no account at all.
+        async fn without_accounts(bot: Bot) -> Self {
+            Self::open(bot, "dm.jsonl", HashMap::new(), false).await
+        }
+
+        async fn open(
+            bot: Bot,
+            script: &str,
+            files: HashMap<String, Vec<u8>>,
+            accounts: bool,
+        ) -> Self {
             let tmp = tempfile::tempdir().unwrap();
             let dir = tmp.path().to_owned();
-            let (sessions, events) = sessions(&dir, &fixtures().join("bots").join(script)).await;
+            let script = fixtures().join("bots").join(script);
+            let (sessions, events) = sessions(&dir, &script, accounts).await;
             let bridge = Arc::new(FakeBridge::new(files));
             let host = runner::Host {
                 host_id: HostId::new("host-1"),
@@ -732,22 +747,28 @@ mod running {
         move |post| matches!(post, Post::Answer { text: answer, .. } if answer == text)
     }
 
-    /// A session manager on `dir` running `script` for the fake provider, publishing its events
-    /// to the returned broadcast.
-    async fn sessions(dir: &Path, script: &Path) -> (SessionManager, broadcast::Sender<Event>) {
+    /// A session manager on `dir` running `script` for the fake provider, with its one account
+    /// if `with_account`, publishing its events to the returned broadcast.
+    async fn sessions(
+        dir: &Path,
+        script: &Path,
+        with_account: bool,
+    ) -> (SessionManager, broadcast::Sender<Event>) {
         let fake = Provider::Other("fake".into());
         let mut adapters = Adapters::new();
         adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script)));
         let mut accounts = Accounts::new();
-        accounts.insert(
-            AccountId::new("account-1"),
-            AccountConfig {
-                provider: fake,
-                label: "Account 1".into(),
-                config_dir: Some(dir.join("account")),
-                fallback: false,
-            },
-        );
+        if with_account {
+            accounts.insert(
+                AccountId::new("account-1"),
+                AccountConfig {
+                    provider: fake,
+                    label: "Account 1".into(),
+                    config_dir: Some(dir.join("account")),
+                    fallback: false,
+                },
+            );
+        }
         let (events, _) = broadcast::channel(EVENTS);
         let turns = AtomicU64::new(0);
         let setup = Setup {
@@ -806,6 +827,7 @@ mod running {
         stop_interrupts_the_turn,
         a_prompt_start_in_the_app_is_mirrored_into_the_thread,
         images_reach_the_agent_and_the_agents_images_are_uploaded,
+        a_session_that_cannot_start_says_why_and_links_the_app,
     );
 
     async fn a_direct_message_starts_a_session_and_a_reply_continues_it(chat: Chat) {
@@ -1355,7 +1377,7 @@ mod running {
         let tmp = tempfile::tempdir().unwrap();
         let (path, bots) = super::bots(&tmp);
         let (sessions, events) =
-            sessions(tmp.path(), &fixtures().join("bots").join("dm.jsonl")).await;
+            sessions(tmp.path(), &fixtures().join("bots").join("dm.jsonl"), true).await;
         let shutdown = CancellationToken::new();
         bots.start(
             Runtime {
@@ -1421,6 +1443,63 @@ mod running {
         let mut bot = bot();
         bot.defaults.project_id = Some(project_id.clone());
         bot
+    }
+
+    /// [`bot_on`] `project_id`, with no default account or provider.
+    fn bot_on_any_account(project_id: &ProjectId) -> Bot {
+        let mut bot = bot_on(project_id);
+        bot.defaults.account_ids.clear();
+        bot.defaults.provider = None;
+        bot
+    }
+
+    #[tokio::test]
+    async fn a_mention_on_a_project_without_a_default_account_starts_a_session() {
+        let trip1 = ProjectId::new("github.com/ada/trip1");
+        let bot = Running::with(bot_on_any_account(&trip1), "channel.jsonl", HashMap::new()).await;
+        let project = bot.project("ada", "trip1");
+        assert_eq!(project.default_account, None);
+        bot.sessions.set_projects(&[project]).await;
+
+        bot.send(slack("channel_mention.json")).await;
+        bot.posted(&channel(), answer("It answers.")).await;
+        let head = bot.session().await;
+        assert_eq!(head.project_id.as_ref(), Some(&trip1));
+        assert_eq!(head.account_id, AccountId::new("account-1"));
+    }
+
+    async fn a_session_that_cannot_start_says_why_and_links_the_app(chat: Chat) {
+        let mut bot = chat.bot();
+        bot.defaults.account_ids.clear();
+        bot.defaults.provider = None;
+        let bot = Running::without_accounts(bot).await;
+        bot.send(chat.message("dm_message.json")).await;
+
+        let posted = bot
+            .posted(&chat.dm(), |post| matches!(post, Post::NotStarted { .. }))
+            .await;
+        assert_eq!(
+            posted,
+            Post::NotStarted {
+                text: "No signed-in account on this machine: an owner can sign one in under \
+                       Providers in the herder app."
+                    .into(),
+                open: "herder://host?host=host-1".into(),
+            }
+        );
+        let shown = chat.shown(&posted);
+        assert!(
+            shown.contains("No signed-in account on this machine"),
+            "{shown}"
+        );
+        assert!(!shown.contains("pick an account"), "{shown}");
+        // Telegram opens no herder:// link.
+        if chat == Chat::Slack {
+            let rendered = render::render(&posted).to_string();
+            assert!(rendered.contains("Open herder"), "{rendered}");
+            assert!(rendered.contains("herder://host?host=host-1"), "{rendered}");
+        }
+        assert!(bot.sessions.sessions().await.unwrap().is_empty());
     }
 
     #[tokio::test]
