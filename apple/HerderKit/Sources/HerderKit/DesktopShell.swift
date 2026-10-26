@@ -232,6 +232,9 @@ private struct ListAndSession<List: View>: View {
     let opened: (SessionKey) -> Void
     @ViewBuilder var list: List
     @AppStorage("listHidden") private var listHidden = false
+    /// The session the list moved on to after archiving the open one: it opens with the keyboard
+    /// left on the list, for E to archive it in turn.
+    @State private var movedOn: SessionKey?
 
     var body: some View {
         GeometryReader { geometry in
@@ -239,6 +242,7 @@ private struct ListAndSession<List: View>: View {
                 HStack(spacing: 0) {
                     if !listHidden || (session == nil && draft == nil) {
                         list.frame(width: 380).environment(\.pageMargin, Theme.paneMargin)
+                            .environment(\.openNextTask, openNext)
                         Rectangle().fill(Theme.stroke).frame(width: 1)
                     }
                     detail.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -258,8 +262,17 @@ private struct ListAndSession<List: View>: View {
                 }
             } else {
                 list.environment(\.pageMargin, Theme.paneMargin)
+                    .environment(\.openNextTask, openNext)
             }
         }
+        .onChange(of: session) { _, key in
+            if key != movedOn { movedOn = nil }
+        }
+    }
+
+    private func openNext(_ key: SessionKey?) {
+        movedOn = key
+        session = key
     }
 
     @ViewBuilder private var detail: some View {
@@ -268,6 +281,7 @@ private struct ListAndSession<List: View>: View {
                 .id(draft.id)
         } else if let session {
             SessionView(fleet: fleet, key: session) { self.session = $0 }
+                .environment(\.focusesPrompt, session != movedOn)
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "text.bubble").font(.largeTitle).foregroundStyle(Theme.tertiary)
@@ -832,7 +846,7 @@ struct IconButton: View {
 /// A project's tasks, or the chats, a search finds, as the Board's rows: sectioned as the sort
 /// menu orders them, a section a day by default, a dot on those waiting for you; the archived
 /// ones last, folded away until asked for. A row's line names its branch, after its machine
-/// while the list's sessions run on more than one.
+/// while the list's sessions run on more than one. Archiving the open task opens the next.
 struct ProjectSessions: View {
     let fleet: Fleet
     let live: [SessionSummary]
@@ -848,6 +862,7 @@ struct ProjectSessions: View {
         let open = TaskTree.trees(live).filter { $0.matches(query) }
         let archived = TaskTree.trees(self.archived).filter { $0.matches(query) }
         let sections = BoardSection.sections(open, by: sort, now: .now)
+        let rows = sections.flatMap(\.trees) + (showsArchived ? archived : [])
         let machines = Self.spansMachines(live + self.archived)
         List {
             if open.isEmpty && archived.isEmpty {
@@ -876,6 +891,9 @@ struct ProjectSessions: View {
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity, alignment: .leading)
         #endif
+        .modifier(TaskListNavigation(fleet: fleet, rows: rows, selection: selection) {
+            $0.toggleArchived(fleet: fleet, undoManager: undoManager)
+        })
     }
 
     private func row(_ tree: TaskTree, machines: Bool) -> some View {

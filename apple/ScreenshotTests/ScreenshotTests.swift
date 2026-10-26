@@ -170,8 +170,8 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Archives a finished task from the Board, which takes its row off, then undoes it: on the
-    /// Mac from the check its row shows on hover and with ⌘Z, then with J and E and the toast's Undo; on the iPhone
-    /// with a swipe and the toast's Undo.
+    /// Mac from the check its row shows on hover and with ⌘Z, then with E three times, each opening
+    /// the next task, and ⌘Z; on the iPhone with a swipe and the toast's Undo.
     private func archiving() {
         let title = "Tidy the README badges"
         guard section("Board") else { return }
@@ -192,20 +192,62 @@ final class ScreenshotTests: XCTestCase {
         press(task)
         settle()
         app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.29, dy: 0.95)).click()
-        app.typeKey("e", modifierFlags: [])
-        guard gone(task, "archived with E") else { return }
+        // E three times walks down the list: each archive opens the next task, the keyboard left
+        // on the Board for the next E.
+        var archived = task
+        for step in 1...3 {
+            guard let next = rowAfter(archived) else { return }
+            app.typeKey("e", modifierFlags: [])
+            guard gone(archived, "archived with E, \(step)"), selected(next, "next task opened, \(step)") else { return }
+            archived = next
+        }
+        for _ in 1...3 { app.typeKey("z", modifierFlags: .command) }
+        _ = wait(task, "back with ⌘Z")
         #else
         task.swipeLeft()
         let archive = app.buttons["Archive"].firstMatch
         guard wait(archive, "swipe's Archive") else { return }
         archive.tap()
         guard gone(task, "archived with a swipe") else { return }
-        #endif
         let undo = app.buttons["Undo"].firstMatch
         guard wait(undo, "toast's Undo") else { return }
         press(undo)
         _ = wait(task, "back with Undo")
+        #endif
     }
+
+    #if os(macOS)
+    /// The task row that opens once `row` is archived, as its label begins: the one below it,
+    /// else the one above.
+    private func rowAfter(_ row: XCUIElement) -> XCUIElement? {
+        let rows = app.buttons.matching(NSPredicate(format: "label MATCHES '(Working|Waiting for you|Idle), .*'"))
+            .allElementsBoundByIndex.sorted { $0.frame.minY < $1.frame.minY }
+        guard let index = rows.firstIndex(where: { $0.label == row.label }) else {
+            missed.append("\(row.label) among the task rows")
+            return nil
+        }
+        let next = index + 1 < rows.count ? rows[index + 1] : index > 0 ? rows[index - 1] : nil
+        guard let next else {
+            missed.append("a task after \(row.label)")
+            return nil
+        }
+        // Its state and title: what it is doing and how long ago may change as it opens.
+        let prefix = next.label.components(separatedBy: ", ").prefix(2).joined(separator: ", ")
+        return app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", prefix + ",")).firstMatch
+    }
+
+    /// Whether `row`'s task is the open one; when it is not, records `what` as missed.
+    private func selected(_ row: XCUIElement, _ what: String) -> Bool {
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: row)
+        if XCTWaiter().wait(for: [selected], timeout: 5) == .completed { return true }
+        missed.append(what)
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "missed \(what)"
+        tree.lifetime = .keepAlways
+        add(tree)
+        return false
+    }
+    #endif
 
     /// A project's tasks, as the Board's rows, then archiving one from that list and undoing it
     /// with the toast's Undo: from its check on the Mac, with a swipe on the iPhone.
