@@ -13,7 +13,7 @@ final class PairingUITests: XCTestCase {
         let field = app.openPairing(add)
         field.tap()
         field.typeText(link)
-        XCTAssertTrue(app.staticTexts["3 · CHECK THEY ARE YOUR 2 MACHINES"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Check these 2 machines, then pair"].waitForExistence(timeout: 5))
         app.buttons["Pair"].tap()
 
         // Each machine's result.
