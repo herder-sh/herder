@@ -474,6 +474,7 @@ private struct TaskRow: View {
     let current: Bool
     let toggle: () -> Void
     @State private var hovering = false
+    @Environment(\.sessionPath) private var path
 
     var body: some View {
         let archived = tree.lead.state == .archived
@@ -486,6 +487,10 @@ private struct TaskRow: View {
             .accessibilityLabel(archived ? "Unarchive \(tree.lead.title)" : "Archive \(tree.lead.title)")
             if let selection {
                 Button { selection.wrappedValue = tree.lead.key } label: { content }
+                    .buttonStyle(.plain)
+            } else if let path {
+                // On the iPhone a NavigationLink in this row never fires; push onto the tab instead.
+                Button { path.wrappedValue.append(.session(tree.lead.key)) } label: { content }
                     .buttonStyle(.plain)
             } else {
                 NavigationLink(value: NavRoute.session(tree.lead.key)) { content }
