@@ -1100,8 +1100,12 @@ impl Daemon {
         };
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
         let (binaries, recipes) = clis(dir, name)?;
-        let logins = Logins::new(login::programs(&binaries), config_file, sessions.clone());
-        let mut providers = Providers::new(binaries);
+        let logins = Logins::new(
+            login::programs(&binaries, &Default::default()),
+            config_file,
+            sessions.clone(),
+        );
+        let mut providers = Providers::new(binaries, Default::default());
         for (provider, recipe) in recipes {
             providers = providers.with_recipe(provider, recipe);
         }

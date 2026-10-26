@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use herder_adapters::Adapter;
 use herder_adapters::acp::{AcpAdapter, AgentProfile};
-use herder_adapters::claude::ClaudeAdapter;
+use herder_adapters::claude::{ClaudeAdapter, Cli};
 use herder_adapters::codex::CodexAdapter;
 use herder_protocol::{Account, AccountId, Provider, Timestamp};
 
@@ -33,20 +33,34 @@ pub fn runs(provider: &Provider) -> bool {
     PROVIDERS.contains(provider)
 }
 
+/// The [`Cli`] each provider runs, by provider; one absent runs its provider's own CLI.
+pub type Clis = HashMap<Provider, Cli>;
+
+/// The [`Cli`] `provider` runs, its provider's own when `clis` names none.
+fn cli(clis: &Clis, provider: &Provider) -> Cli {
+    clis.get(provider).copied().unwrap_or_default()
+}
+
 /// The adapter for every provider herder runs, each running the binary `binaries` names for
-/// it, else the provider's own CLI on `PATH`; ready for accounts added later.
-pub fn adapters(binaries: &HashMap<Provider, PathBuf>) -> Adapters {
+/// it, else the provider's own CLI on `PATH`, as the [`Cli`] `clis` names for it; ready for
+/// accounts added later.
+pub fn adapters(binaries: &HashMap<Provider, PathBuf>, clis: &Clis) -> Adapters {
     let mut adapters = Adapters::new();
     for provider in PROVIDERS {
-        if let Some(adapter) = adapter(&provider, binaries.get(&provider).cloned()) {
+        let adapter = adapter(
+            &provider,
+            binaries.get(&provider).cloned(),
+            cli(clis, &provider),
+        );
+        if let Some(adapter) = adapter {
             adapters.register(provider, adapter);
         }
     }
     adapters
 }
 
-/// The adapter that runs `provider` on `binary`; `None` when herder cannot run it.
-fn adapter(provider: &Provider, binary: Option<PathBuf>) -> Option<Arc<dyn Adapter>> {
+/// The adapter that runs `provider` on `binary`, as `cli`; `None` when herder cannot run it.
+fn adapter(provider: &Provider, binary: Option<PathBuf>, cli: Cli) -> Option<Arc<dyn Adapter>> {
     let acp = |mut profile: AgentProfile| {
         if let Some(binary) = &binary {
             profile.program = binary.to_string_lossy().into_owned();
@@ -55,8 +69,11 @@ fn adapter(provider: &Provider, binary: Option<PathBuf>) -> Option<Arc<dyn Adapt
     };
     Some(match provider {
         Provider::Claude => Arc::new(match binary {
-            Some(program) => ClaudeAdapter { program },
-            None => ClaudeAdapter::default(),
+            Some(program) => ClaudeAdapter { program, cli },
+            None => ClaudeAdapter {
+                cli,
+                ..Default::default()
+            },
         }),
         Provider::Codex => Arc::new(match binary {
             Some(program) => CodexAdapter { program },
@@ -89,14 +106,20 @@ pub fn program(provider: &Provider, binaries: &HashMap<Provider, PathBuf>) -> Op
 }
 
 /// The usage probe ([`crate::usage`]) for every provider that has one, running the same binary
-/// as its adapter; ready for accounts added later.
-pub fn probes(binaries: &HashMap<Provider, PathBuf>) -> Probes {
+/// as its adapter; ready for accounts added later. A [`Cli`] that reports no usage gets none.
+pub fn probes(binaries: &HashMap<Provider, PathBuf>, clis: &Clis) -> Probes {
     let mut probes = Probes::new();
     for provider in &PROVIDERS {
+        if cli(clis, provider) != Cli::Claude {
+            continue;
+        }
         let binary = binaries.get(provider).cloned();
         let probe: Arc<dyn Probe> = match provider {
             Provider::Claude => Arc::new(match binary {
-                Some(program) => ClaudeAdapter { program },
+                Some(program) => ClaudeAdapter {
+                    program,
+                    cli: Cli::Claude,
+                },
                 None => ClaudeAdapter::default(),
             }),
             Provider::Codex => Arc::new(match binary {
@@ -111,15 +134,15 @@ pub fn probes(binaries: &HashMap<Provider, PathBuf>) -> Probes {
 }
 
 /// The CLI each provider that can title sessions titles them with ([`crate::session::titles`]),
-/// the same binary as its adapter.
-pub fn title_clis(binaries: &HashMap<Provider, PathBuf>) -> TitleClis {
+/// the same binary as its adapter; a [`Cli`] that titles none gets none.
+pub fn title_clis(binaries: &HashMap<Provider, PathBuf>, clis: &Clis) -> TitleClis {
     let program = |provider: &Provider, name: &str| {
         binaries
             .get(provider)
             .cloned()
             .unwrap_or_else(|| PathBuf::from(name))
     };
-    TitleClis::from([
+    let mut titles = TitleClis::from([
         (
             Provider::Claude,
             TitleCli::claude(program(&Provider::Claude, "claude")),
@@ -128,7 +151,11 @@ pub fn title_clis(binaries: &HashMap<Provider, PathBuf>) -> TitleClis {
             Provider::Codex,
             TitleCli::codex(program(&Provider::Codex, "codex")),
         ),
-    ])
+    ]);
+    if cli(clis, &Provider::Claude) != Cli::Claude {
+        titles.remove(&Provider::Claude);
+    }
+    titles
 }
 
 /// `accounts` as clients see them, ordered by id, each with the email and windows `usage`
@@ -235,7 +262,7 @@ mod tests {
             (Provider::Claude, cli.clone()),
             (Provider::Codex, cli.clone()),
         ]);
-        let adapters = adapters(&binaries);
+        let adapters = adapters(&binaries, &Clis::new());
 
         let out = |provider: &str| format!("OUT={}/{provider}.env", dir.path().display());
         assert_eq!(
@@ -254,12 +281,24 @@ mod tests {
 
     #[test]
     fn adapters_cover_every_provider() {
-        let adapters = adapters(&HashMap::new());
+        let adapters = adapters(&HashMap::new(), &Clis::new());
         for provider in PROVIDERS {
             assert!(adapters.get(&provider).is_some(), "{}", provider.as_str());
         }
         assert!(adapters.get(&Provider::Gemini).is_none());
-        assert!(super::adapter(&Provider::Gemini, None).is_none());
+        assert!(super::adapter(&Provider::Gemini, None, Cli::Claude).is_none());
+    }
+
+    #[test]
+    fn a_qoder_cli_gets_no_usage_probe_and_no_titles() {
+        let clis = Clis::from([(Provider::Claude, Cli::Qoder)]);
+        let probes = probes(&HashMap::new(), &clis);
+        assert!(!probes.contains_key(&Provider::Claude));
+        assert!(probes.contains_key(&Provider::Codex));
+
+        let titles = title_clis(&HashMap::new(), &clis);
+        assert!(!titles.contains_key(&Provider::Claude));
+        assert!(titles.contains_key(&Provider::Codex));
     }
 
     #[test]
@@ -281,7 +320,7 @@ mod tests {
     #[test]
     fn claude_and_codex_title_with_the_configured_binary_and_a_small_model() {
         let binaries = HashMap::from([(Provider::Codex, PathBuf::from("/opt/codex"))]);
-        let clis = title_clis(&binaries);
+        let clis = title_clis(&binaries, &Clis::new());
         assert_eq!(clis.len(), 2);
         let claude = &clis[&Provider::Claude];
         assert_eq!(claude.program, Path::new("claude"));
@@ -343,7 +382,7 @@ mod tests {
 
     #[test]
     fn probes_cover_claude_and_codex_only() {
-        let probes = probes(&HashMap::new());
+        let probes = probes(&HashMap::new(), &Clis::new());
         let mut providers: Vec<_> = probes.keys().map(Provider::as_str).collect();
         providers.sort_unstable();
         assert_eq!(providers, ["claude", "codex"]);
