@@ -278,6 +278,27 @@ struct MachinesView: View {
         return columns
     }
 
+    /// The page's status, counting as the page shows: "All 3 machines connected · vault
+    /// caught up", or the vault furthest behind and by how much.
+    static func status(_ machines: [MachineSummary], vaults: [VaultStats]) -> String {
+        let backup: [String] = vaults.map { vault in
+            let name = vaults.count == 1 ? "vault" : vault.name
+            if vault.connection != .connected { return "\(name) offline" }
+            guard let host = vault.furthestBehind else { return "\(name) caught up" }
+            return "\(name) \(host.freshness.label(now: vault.now))"
+        }
+        return ([connections(machines)] + backup).joined(separator: " · ")
+    }
+
+    /// How many of the machines that run sessions are connected: "2 of 3 machines connected".
+    static func connections(_ machines: [MachineSummary]) -> String {
+        let hosts = machines.filter { !$0.vault }
+        let connected = hosts.filter(\.connected).count
+        if hosts.isEmpty { return "No machines yet" }
+        if connected < hosts.count { return "\(connected) of \(hosts.count) machines connected" }
+        return hosts.count == 1 ? "1 machine connected" : "All \(hosts.count) machines connected"
+    }
+
     /// "12 ms" while connected, else the connection's state in a word or two.
     static func status(_ row: MachineRow) -> String {
         status(row.connection, latencyMs: row.latencyMs)
