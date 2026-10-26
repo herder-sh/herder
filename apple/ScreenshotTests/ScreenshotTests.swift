@@ -813,6 +813,11 @@ final class ScreenshotTests: XCTestCase {
         let tab = app.tabBars.buttons[name].firstMatch
         guard wait(tab, "\(name) tab") else { return false }
         tab.tap()
+        // A tap while a toast still animates away can be lost: the tab says when it took.
+        for _ in 0..<2 where !tab.isSelected {
+            settle()
+            tab.tap()
+        }
         #else
         let row = app.buttons.matching(NSPredicate(
             format: "label == %@ OR label BEGINSWITH %@", name, "\(name), ")).firstMatch
