@@ -290,15 +290,15 @@ Machine.
   kept on the device (`UnfoldedTasks`).
 - **Row** (`TaskListRow`, shared with §4.2): one leading glyph, the state; the title over the
   full width, two lines at most; under it `project ·` what the task is doing `· ▸ N agents`; the
-  trailing column holds only the age of its last activity, which gives way on hover to the check
-  that archives the task. The line truncates before the title does.
+  trailing column holds only the age of its last activity, which on the Mac gives way to the
+  check that archives the task while the row is hovered or the keyboard's. The line truncates before the title does.
 - **Three states** (`TaskState`), read from the tree's sessions only, never from a PR, CI or a
   review: working ◐ (`Theme.running`) while one runs or waits for capacity; waiting for you, a
   small amber dot, while one waits on an approval or a question or stopped on a failed turn, the
   line then saying what it waits for; idle ○ otherwise. There are no request cards on the Board:
   approvals and questions are answered in the session (§5.3); the sidebar's Board badge counts
   them.
-- **Archiving completes a task:** the check on hover, E on the Mac, a swipe on iOS, or the context menu
+- **Archiving completes a task:** the check on the Mac, E on the Mac, a swipe on iOS, or the context menu
   archives the top session, and with it the tree (the daemon archives children first). The row
   goes at once; the toast's Undo stays 5 s, and ⌘Z (the window's undo manager) undoes too.
   "Archived today · N" ends the list, with Show Archived listing the tasks archived today,

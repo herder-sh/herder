@@ -464,7 +464,7 @@ extension TaskState {
 /// A task's rows in a task list, as the Board, Chats and a project's list draw them: the task,
 /// highlighted while it is the Mac's keyboard row or open, then, when unfolded, each of its
 /// agents, a row of its own that opens it. Which tasks are unfolded is kept on this device. A
-/// task is archived from the check its row shows on hover, a swipe on iOS or its context menu,
+/// task is archived from the check its row shows on the Mac, a swipe on iOS or its context menu,
 /// where it is renamed too.
 struct TaskListRow: View {
     let tree: TaskTree
@@ -531,8 +531,8 @@ struct TaskListRow: View {
 
 /// A task: where it stands, its title over the full width, two lines at most, and how long
 /// since it last did something; under them its context, what it is doing, and how many agents
-/// work under it, which unfold under it. On hover the age gives way to the check that archives
-/// it. A tap anywhere else opens its top session.
+/// work under it, which unfold under it. On the Mac, hovering it gives the age's place to the
+/// check that archives it. A tap anywhere else opens its top session.
 private struct TaskRow: View {
     let tree: TaskTree
     let fleet: Fleet
@@ -593,27 +593,35 @@ private struct TaskRow: View {
         sessionOpener(selection: selection, path: path)?(tree.lead.key)
     }
 
-    /// The age, or on hover the check that archives the task, or brings it back once archived.
+    /// The age, or on the Mac the check that archives the task, or brings it back once archived,
+    /// in its place while the row is hovered or the keyboard's. The check stays in the view while
+    /// hidden: moving onto it can end the row's hover, which would take it away under the click.
     private var trailing: some View {
-        let archived = tree.lead.state == .archived
+        #if os(macOS)
+        let shown = hovering || current
+        #else
+        let shown = false
+        #endif
         return ZStack(alignment: .trailing) {
             if let lastActive = tree.lastActive {
                 RelativeTime(date: lastActive)
                     .font(Theme.meta)
                     .foregroundStyle(Theme.tertiary)
                     .fixedSize()
-                    .opacity(hovering ? 0 : 1)
+                    .opacity(shown ? 0 : 1)
                     .accessibilityHidden(true)
             }
-            if hovering {
-                Button(action: toggle) {
-                    ArchiveCircle(archived: archived)
-                        .contentShape(.rect.inset(by: -6))
-                }
-                .buttonStyle(.plain)
-                .help(archived ? "Unarchive" : "Archive")
-                .accessibilityLabel(archived ? "Unarchive \(tree.lead.title)" : "Archive \(tree.lead.title)")
+            #if os(macOS)
+            let archived = tree.lead.state == .archived
+            Button(action: toggle) {
+                ArchiveCircle(archived: archived)
+                    .contentShape(.rect.inset(by: -6))
             }
+            .buttonStyle(.plain)
+            .opacity(shown ? 1 : 0)
+            .help(archived ? "Unarchive" : "Archive")
+            .accessibilityLabel(archived ? "Unarchive \(tree.lead.title)" : "Archive \(tree.lead.title)")
+            #endif
         }
     }
 
@@ -629,7 +637,7 @@ private struct TaskRow: View {
             }
             .font(Theme.body)
             .foregroundStyle(Theme.secondary)
-            .contentShape(.rect.inset(by: -6))
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .fixedSize()
