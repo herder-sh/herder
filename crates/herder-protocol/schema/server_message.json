@@ -1425,6 +1425,27 @@
           ]
         },
         {
+          "description": "This daemon's users, answering `list_users`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "users"
+            },
+            "users": {
+              "description": "Oldest first.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/UserInfo"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "users"
+          ]
+        },
+        {
           "description": "A one-time code that pairs a host with this vault to replicate and only that,\nanswering `pair_vault_host`.",
           "type": "object",
           "properties": {
@@ -4860,9 +4881,81 @@
         "used_percent"
       ]
     },
+    "UserDevice": {
+      "description": "A paired device of a user.",
+      "type": "object",
+      "properties": {
+        "client": {
+          "description": "The client it paired with, from its hello, e.g. `herder-ios/0.6.0`.",
+          "type": "string"
+        },
+        "device_id": {
+          "description": "The device.",
+          "$ref": "#/$defs/DeviceId"
+        },
+        "host_only": {
+          "description": "Whether it is a host that only replicates to this vault and reads nothing.",
+          "type": "boolean"
+        },
+        "last_seen": {
+          "description": "When it last connected; absent if it has not since the daemon started keeping track.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "online": {
+          "description": "Whether it has a connection open now.",
+          "type": "boolean"
+        },
+        "paired_at": {
+          "description": "When it paired.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "device_id",
+        "client",
+        "paired_at",
+        "online"
+      ]
+    },
     "UserId": {
       "description": "Identifies a named user of a daemon; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "UserInfo": {
+      "description": "A user of a daemon, with their devices, answering `list_users`.",
+      "type": "object",
+      "properties": {
+        "devices": {
+          "description": "Their paired devices, oldest first; empty once every one is revoked.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UserDevice"
+          }
+        },
+        "name": {
+          "description": "Their name, unique on the daemon.",
+          "type": "string"
+        },
+        "role": {
+          "description": "What they may do.",
+          "$ref": "#/$defs/Role"
+        },
+        "user_id": {
+          "description": "The user.",
+          "$ref": "#/$defs/UserId"
+        }
+      },
+      "required": [
+        "user_id",
+        "name",
+        "role",
+        "devices"
+      ]
     },
     "VaultStatus": {
       "description": "What a vault holds, in total and per host.",
