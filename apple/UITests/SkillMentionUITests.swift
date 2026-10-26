@@ -21,9 +21,7 @@ final class SkillMentionUITests: XCTestCase {
             app.buttons["Done"].tap()
         }
 
-        let session = app.descendants(matching: .any)["request-session"].firstMatch
-        XCTAssertTrue(session.waitForExistence(timeout: 15))
-        session.tap()
+        app.openWaitingTask()
         let composer = app.descendants(matching: .any)["composer"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         composer.tap()
@@ -58,9 +56,7 @@ final class SkillMentionUITests: XCTestCase {
         app.launch()
         try app.pairUnlessPaired()
 
-        let session = app.descendants(matching: .any)["request-session"].firstMatch
-        XCTAssertTrue(session.waitForExistence(timeout: 15))
-        session.tap()
+        app.openWaitingTask()
         let composer = app.descendants(matching: .any)["composer"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         composer.tap()

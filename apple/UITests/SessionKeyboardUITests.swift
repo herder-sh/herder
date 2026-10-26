@@ -10,9 +10,7 @@ final class SessionKeyboardUITests: XCTestCase {
         app.launch()
         try app.pairUnlessPaired()
 
-        let session = app.descendants(matching: .any)["request-session"].firstMatch
-        XCTAssertTrue(session.waitForExistence(timeout: 15))
-        session.tap()
+        app.openWaitingTask()
         // With the approval pinned, the transcript still shows.
         let transcript = app.descendants(matching: .any)["transcript"].firstMatch
         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
