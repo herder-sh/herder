@@ -29,7 +29,8 @@ const DEFAULT_VERSION: &str = "2025-06-18";
 
 /// The `initialize` result's `instructions`, which clients such as Claude Code show the model
 /// up front, so it delegates through `spawn` before trying a built-in subagent that the Claude
-/// adapter's PreToolUse hook would deny, and proves its work with `publish` unasked.
+/// adapter's PreToolUse hook would deny, proves its work with `publish` unasked, and knows
+/// `publish` delivers the file itself into a chat that drives the session.
 const INSTRUCTIONS: &str = "herder runs this session. To delegate work that edits files, \
 builds, or opens pull requests, call `spawn`: one child per independent piece of work, each \
 with a complete prompt, then collect results with `wait_for`. Use `send_session` for \
@@ -43,7 +44,11 @@ localhost URL is useless to them. Whenever your work has an observable result, p
 without being asked: publish a screenshot or screen recording of a UI change, the captured \
 output of a CLI or API change, or the test run of a refactor with `publish`, before your \
 final reply. It shows the artifact in this thread and returns a public link; put that link \
-in your reply as a Markdown link, never a local path.";
+in your reply as a Markdown link, never a local path.
+
+When this session is driven from a chat, such as Slack or Telegram, `publish` also posts the \
+file itself into the chat's thread: images show as images, other files as files. You can send \
+images and files there, not only text.";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
