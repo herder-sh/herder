@@ -122,8 +122,11 @@ final class ScreenshotTests: XCTestCase {
         app.typeKey("z", modifierFlags: .command)
         guard wait(task, "back with ⌘Z") else { return }
         settle()
+        // Opening the task puts its cursor on it, and its composer takes the keyboard; a click in
+        // the Board below its rows gives the keyboard back to the Board.
         press(task)
         settle()
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.29, dy: 0.95)).click()
         app.typeKey("e", modifierFlags: [])
         guard gone(task, "archived with E") else { return }
         #else
@@ -272,8 +275,9 @@ final class ScreenshotTests: XCTestCase {
         // The fake login: Enter answers its prompt, and the account is added.
         press(terminal)
         app.typeKey(.return, modifierFlags: [])
-        let added = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Added Claude'")).firstMatch
-        if wait(added, "Account added") {
+        // The account in the Providers page's list, behind Activity.
+        let account = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Claude, devbox,'")).firstMatch
+        if wait(account, "Account added") {
             settle()
             shoot("mac-activity-login-added", screen: true)
         }
@@ -290,7 +294,7 @@ final class ScreenshotTests: XCTestCase {
                 let second = job("job-add-codex")
                 if wait(second, "Codex login in Activity") {
                     press(second)
-                    cancelLogin(named: "codex")
+                    cancelLogin(named: "codex-2")
                 }
                 closeActivity()
             }
@@ -344,15 +348,22 @@ final class ScreenshotTests: XCTestCase {
         let queued = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier == 'job-install-codex-studio' AND label ENDSWITH ', Queued'")).firstMatch
         if wait(queued, "studio's Codex queued") { shoot("mac-activity-queued", screen: true) }
-        // The demo's installers take two seconds; each row reads its outcome once its job ends.
-        for id in ["job-install-claude-devbox", "job-install-claude-studio", "job-install-codex-studio"] {
-            let outcome = app.descendants(matching: .any).matching(NSPredicate(
-                format: "identifier == %@ AND label CONTAINS 'Updated '", id)).firstMatch
-            guard wait(outcome, "\(id) updated") else { return closeActivity() }
+        // The demo's installers take eight seconds, so the three end within about 16; Activity's
+        // chip stops counting once they have. A popover open that long drops out of the view
+        // tree, though it stays on screen, so the chip, in the window, says when they are done,
+        // and Activity opens afresh to be used.
+        guard wait(activityIdle(), "updates done", timeout: 40) else { return closeActivity() }
+        let chip = app.descendants(matching: .any)["activity"].firstMatch
+        if chip.isSelected {
+            press(chip)
+            settle()
         }
+        press(chip)
         settle()
         shoot("mac-activity-done", screen: true)
-        press(job("job-install-claude-studio"))
+        let claude = job("job-install-claude-studio")
+        guard wait(claude, "Claude on studio updated") else { return closeActivity() }
+        press(claude)
         if wait(app.descendants(matching: .any)["job-terminal"].firstMatch, "update terminal") {
             settle()
             shoot("mac-activity-detail", screen: true)
@@ -360,6 +371,16 @@ final class ScreenshotTests: XCTestCase {
         closeActivity()
     }
     #endif
+
+    /// A static text that says `text`: its label on the iPhone, its value on the Mac. Only static
+    /// texts are asked: a terminal's value is all its text, too slow to compare.
+    private func text(_ text: String) -> XCUIElement {
+        #if os(macOS)
+        app.staticTexts.matching(NSPredicate(format: "value == %@", text)).firstMatch
+        #else
+        app.staticTexts[text].firstMatch
+        #endif
+    }
 
     /// A job's row in Activity, by the start of its id: `job-add-claude` for any machine.
     private func job(_ id: String) -> XCUIElement {
@@ -374,6 +395,14 @@ final class ScreenshotTests: XCTestCase {
         settle()
         return true
     }
+
+    #if os(macOS)
+    /// Activity's chip once no job runs or needs you: it no longer counts any.
+    private func activityIdle() -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'activity' AND label == 'Activity'"))
+            .firstMatch
+    }
+    #endif
 
     private func closeActivity() {
         #if os(macOS)
@@ -394,8 +423,13 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot(platform("cancel-login"), screen: true)
         confirmCancel()
-        let stopped = app.staticTexts["Stopped"].firstMatch
-        if wait(stopped, "cancelled login stopped") {
+        // Its detail says so on the iPhone; on the Mac, Activity's chip stops counting it.
+        #if os(macOS)
+        let stopped = wait(activityIdle(), "cancelled login stopped")
+        #else
+        let stopped = wait(text("Stopped"), "cancelled login stopped")
+        #endif
+        if stopped {
             settle()
             shoot(platform("cancel-login-ended"), screen: true)
         }
@@ -571,8 +605,8 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Whether `element` shows up; when it does not, records `what` as missed with the tree.
-    private func wait(_ element: XCUIElement, _ what: String) -> Bool {
-        if element.waitForExistence(timeout: 15) { return true }
+    private func wait(_ element: XCUIElement, _ what: String, timeout: TimeInterval = 15) -> Bool {
+        if element.waitForExistence(timeout: timeout) { return true }
         missed.append(what)
         let tree = XCTAttachment(string: app.debugDescription)
         tree.name = "missed \(what)"
@@ -617,6 +651,15 @@ final class ScreenshotTests: XCTestCase {
     }
 
     #if os(macOS)
+    /// Answers macOS's "find devices on local networks" prompt, which shows over the app at some
+    /// point after it first reaches a machine.
+    private func allowLocalNetwork() {
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.UserNotificationCenter").buttons["Allow"].firstMatch
+        guard allow.exists else { return }
+        allow.click()
+        settle()
+    }
+
     /// Opens the sidebar's machines popover.
     private func openMachines() -> Bool {
         let footer = app.descendants(matching: .any)["sidebar-machines"].firstMatch
@@ -630,6 +673,7 @@ final class ScreenshotTests: XCTestCase {
     /// `screen` takes the whole screen, for what shows outside the window, such as a popover.
     private func shoot(_ name: String, screen: Bool = false) {
         #if os(macOS)
+        allowLocalNetwork()
         let screenshot = screen ? XCUIScreen.main.screenshot() : app.windows.firstMatch.screenshot()
         #else
         let screenshot = XCUIScreen.main.screenshot()
