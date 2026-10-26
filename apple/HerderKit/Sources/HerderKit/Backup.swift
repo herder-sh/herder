@@ -250,12 +250,12 @@ struct VaultChoices: View {
         if vaults.isEmpty {
             RowDivider()
             SettingRow(label: "Use a vault you have", hint: "Pair it with this device as its owner") {
-                PillButton(title: "Pair Vault…") { sheet = .pair }
+                PillButton(title: "Pair Vault…") { sheet = .pair(.vault) }
             }
         }
         RowDivider()
         SettingRow(label: "Run a vault on \(machine.name)", hint: "Run this there, then pair with the code it prints") {
-            if !vaults.isEmpty { PillButton(title: "Pair Vault…") { sheet = .pair } }
+            if !vaults.isEmpty { PillButton(title: "Pair Vault…") { sheet = .pair(.vault) } }
         }
         HStack(spacing: 8) {
             Text(Self.installCommand).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
