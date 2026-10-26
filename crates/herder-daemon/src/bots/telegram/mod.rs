@@ -553,6 +553,15 @@ impl Bridge for Telegram {
         Box::pin(async { Ok(Vec::new()) })
     }
 
+    /// Telegram has no way for a bot to read a chat's history.
+    fn recent<'a>(
+        &'a self,
+        _place: &'a Place,
+        _before: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<Earlier>, HistoryError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
     fn link<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>> {
         Box::pin(async move { link(place) })
     }

@@ -3,15 +3,16 @@
 //!
 //! The app needs the bot scopes `app_mentions:read`, `im:history`, `im:write`, `chat:write`,
 //! `files:read` and `files:write`, the events `app_mention` and `message.im`, and
-//! interactivity, for its buttons. To read the thread it is mentioned in, it needs
-//! `channels:history`, `groups:history` and `mpim:history` too; without them it answers
-//! still, from the mention alone.
+//! interactivity, for its buttons. To read the thread or channel it is mentioned in, it needs
+//! `channels:history`, `groups:history` and `mpim:history` too, and `users:read` to name who
+//! wrote there; without them it answers still, from the mention alone.
 
 pub mod mrkdwn;
 pub mod payload;
 pub mod render;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 use herder_protocol::{MAX_PROMPT_ATTACHMENT_BYTES, SecretValue};
@@ -23,6 +24,7 @@ use tokio::sync::mpsc;
 
 use super::bridge::{
     self, Bridge, ChatFile, ConnectError, Connection, Earlier, HistoryError, Inbound, Place, Post,
+    RECENT_MESSAGES,
 };
 use crate::session::publish::media_type;
 
@@ -83,7 +85,12 @@ pub async fn connect(
         .map_err(|err| refused("the app-level token", err))?;
     listener.start().await;
     Ok(Connection {
-        bridge: Arc::new(Slack { client, token, me }),
+        bridge: Arc::new(Slack {
+            client,
+            token,
+            me,
+            names: Mutex::default(),
+        }),
         inbound,
         close: Box::pin(async move { listener.shutdown().await }),
     })
@@ -151,11 +158,38 @@ struct Slack {
     token: SlackApiToken,
     /// The bot's user id.
     me: String,
+    /// The names of the people the bot has looked up, by user id.
+    names: Mutex<HashMap<String, String>>,
 }
 
 impl Slack {
     fn session(&self) -> SlackClientSession<'_, SlackClientHyperHttpsConnector> {
         self.client.open_session(&self.token)
+    }
+
+    /// `messages` with their writers named, and the people they mention, as far as Slack
+    /// tells the bot their names.
+    async fn named(&self, mut messages: Vec<Earlier>) -> Vec<Earlier> {
+        let known = |id: &String| self.names.lock().is_ok_and(|names| names.contains_key(id));
+        let unknown: Vec<_> = payload::unnamed(&messages)
+            .into_iter()
+            .filter(|id| !known(id))
+            .collect();
+        for id in unknown {
+            let ask = SlackApiUsersInfoRequest::new(id.clone().into());
+            match self.session().users_info(&ask).await {
+                Ok(info) => {
+                    if let Ok(mut names) = self.names.lock() {
+                        names.insert(id, payload::display_name(info.user));
+                    }
+                }
+                Err(err) => tracing::debug!("cannot look up a Slack user's name: {err}"),
+            }
+        }
+        if let Ok(names) = self.names.lock() {
+            payload::named(&mut messages, &names);
+        }
+        messages
     }
 
     /// Uploads `data` as the file `name` into `place`, as a snippet with `snippet`.
@@ -377,7 +411,29 @@ impl Bridge for Slack {
                     _ => break,
                 }
             }
-            Ok(payload::earlier(messages, &self.me, after, before))
+            let earlier = payload::earlier(messages, &self.me, after, before);
+            Ok(self.named(earlier).await)
+        })
+    }
+
+    fn recent<'a>(
+        &'a self,
+        place: &'a Place,
+        before: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<Earlier>, HistoryError>> {
+        Box::pin(async move {
+            let ask = SlackApiConversationsHistoryRequest::new()
+                .with_channel(place.channel_id.clone().into())
+                .with_latest(before.to_owned().into())
+                .with_inclusive(false)
+                .with_limit(RECENT_MESSAGES as u16);
+            let page = self
+                .session()
+                .conversations_history(&ask)
+                .await
+                .map_err(history_error)?;
+            let recent = payload::recent(page.messages, &self.me, before);
+            Ok(self.named(recent).await)
         })
     }
 

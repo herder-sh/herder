@@ -212,7 +212,10 @@ mod running {
 
     use herder_protocol::MAX_PROMPT_ATTACHMENT_BYTES;
     use slack_morphism::errors::{SlackClientApiError, SlackClientError};
-    use slack_morphism::prelude::SlackApiConversationsRepliesResponse;
+    use slack_morphism::prelude::{
+        SlackApiConversationsHistoryResponse, SlackApiConversationsRepliesResponse,
+        SlackApiUsersInfoResponse,
+    };
 
     use super::super::bridge::{Action, ChatFile, Earlier, Inbound, Place, Post};
     use super::super::fake::{FakeBridge, Sent};
@@ -1802,11 +1805,93 @@ mod running {
     }
 
     /// The recorded `conversations.replies` answer `name`, as the bot reads it: every message
-    /// but its own.
+    /// but its own, named as the recorded `users.info` answers name them.
     fn replies(name: &str) -> Vec<Earlier> {
         let text = std::fs::read_to_string(fixtures().join("slack").join(name)).unwrap();
         let replies: SlackApiConversationsRepliesResponse = serde_json::from_str(&text).unwrap();
-        payload::earlier(replies.messages, ME, None, "9999999999.999999")
+        let mut earlier = payload::earlier(replies.messages, ME, None, "9999999999.999999");
+        payload::named(&mut earlier, &names());
+        earlier
+    }
+
+    /// The names of the people the recorded `users.info` answers are of, by user id.
+    fn names() -> HashMap<String, String> {
+        ["users_info_carol.json", "users_info_mintaras.json"]
+            .into_iter()
+            .map(|name| {
+                let text = std::fs::read_to_string(fixtures().join("slack").join(name)).unwrap();
+                let info: SlackApiUsersInfoResponse = serde_json::from_str(&text).unwrap();
+                (info.user.id.0.clone(), payload::display_name(info.user))
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_owners_short_mention_reaches_the_agent_with_the_thread_before_it() {
+        let place = Place {
+            channel_id: "C0TEAM0001".into(),
+            thread_id: "1761401000.002000".into(),
+        };
+        let bot = Running::start(Chat::Slack, "owner.jsonl", HashMap::new()).await;
+        bot.bridge.thread(&place, Ok(replies("owner_replies.json")));
+        bot.send(slack("owner_mention.json")).await;
+        bot.posted(
+            &place,
+            answer("The cache key leaves out the group: it leaks."),
+        )
+        .await;
+        let session_id = bot.session().await.session_id;
+        let prompts = bot.prompts(&session_id).await;
+        assert!(
+            prompts[0]
+                .1
+                .contains("dar paziurek ar result cache nenuleakins")
+                && prompts[0].1.contains("t.y. jei as paieskau closed")
+                && prompts[0].1.ends_with("\n\npacheckink"),
+            "{prompts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mention_that_starts_a_thread_reads_the_channels_latest_messages() {
+        let png = b"\x89PNG\r\n\x1a\npng".to_vec();
+        let (_, url) = thread();
+        let bot = Running::start(
+            Chat::Slack,
+            "channel_recent.jsonl",
+            HashMap::from([(url.to_owned(), png)]),
+        )
+        .await;
+        let text =
+            std::fs::read_to_string(fixtures().join("slack").join("channel_history.json")).unwrap();
+        let history: SlackApiConversationsHistoryResponse = serde_json::from_str(&text).unwrap();
+        // The mention is at 1761400400: a message of three hours before it is too old.
+        let mut recent = payload::recent(history.messages, ME, &channel().thread_id);
+        payload::named(&mut recent, &names());
+        bot.bridge.channel(&channel().channel_id, recent);
+
+        bot.send(slack("channel_mention.json")).await;
+        bot.posted(&channel(), answer("It answers.")).await;
+    }
+
+    #[test]
+    fn a_channel_is_read_as_its_latest_messages_oldest_first() {
+        let messages: Vec<_> = (0..30)
+            .rev()
+            .map(|i| {
+                serde_json::from_value(serde_json::json!({
+                    "type": "message",
+                    "user": BOB,
+                    "text": format!("message {i}"),
+                    "ts": format!("1761400{:03}.000100", i),
+                }))
+                .unwrap()
+            })
+            .collect();
+        let recent = payload::recent(messages, ME, "1761400100.000100");
+        let said: Vec<_> = recent.iter().map(|message| message.text.as_str()).collect();
+        let latest: Vec<_> = (10..30).map(|i| format!("message {i}")).collect();
+        assert_eq!(said, latest);
     }
 
     #[test]
@@ -1914,6 +1999,7 @@ mod running {
             .map(|i| Earlier {
                 message_id: format!("1761400600.{:06}", 1000 + i),
                 user_id: BOB.into(),
+                name: None,
                 text: format!("message {i}"),
                 files: match i {
                     0 => vec![file("image.png", root_url, "image/png")],
