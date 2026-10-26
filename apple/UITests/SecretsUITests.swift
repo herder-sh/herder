@@ -13,7 +13,7 @@ final class SecretsUITests: XCTestCase {
         try app.pairUnlessPaired()
 
         app.tabBars.buttons["Machines"].tap()
-        let open = app.buttons["vault-row"].firstMatch
+        let open = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'vaults.paired.'")).firstMatch
         if !open.waitForExistence(timeout: 5) {
             // Pairs with the vault, once: its code works once.
             app.navigationBars.buttons["Add Machine"].tap()
