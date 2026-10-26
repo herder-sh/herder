@@ -69,14 +69,19 @@ struct PageStackTests {
     }
 
     @Test func aLaterChangeKeepsItsOwnSaved() async {
+        // Each moment ends when its task is cancelled, not after a time a busy runner can miss.
         let saves = Autosave()
-        saves.lingers = .milliseconds(80)
+        saves.lingers = .seconds(60)
         let first = Task { await saves.save("Name") {} }
-        try? await Task.sleep(for: .milliseconds(40))
-        let second = Task { await saves.save("Name") {} }
+        for _ in 0..<100 where saves["Name"] != .saved { await Task.yield() }
+        var started = false
+        let second = Task { await saves.save("Name") { started = true } }
+        for _ in 0..<100 where !started { await Task.yield() }
+        first.cancel()
         await first.value
         // The first change's moment is over, but the second one's is not.
         #expect(saves["Name"] == .saved)
+        second.cancel()
         await second.value
         #expect(saves["Name"] == nil)
     }

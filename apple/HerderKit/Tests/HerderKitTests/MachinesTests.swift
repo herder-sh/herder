@@ -107,6 +107,63 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
         #expect(row.statusRank > MachineRow.rows(machines, summaries: [])[0].statusRank)
     }
 
+    @Test func aVaultRowNeedsYouOnlyOnceItsBackupIsAnHourBehind() throws {
+        let now = Date.now
+        var machines = sampleFleetMachines(now: now)
+        let behind = try #require(VaultStats(machine: machines[3], sessions: [:], now: now))
+        let line = VaultLine.paired(behind)
+        #expect(line.name == "herder-vault-0")
+        #expect(line.hosts == 2 && line.sessions == 7)
+        #expect(line.size == behind.size)
+        // work-mbp went offline six hours ago.
+        #expect(line.freshness == "work-mbp 6 h behind")
+        #expect(line.isOverdue)
+        #expect(line.why?.contains("work-mbp has not reached the vault for 6 h") == true)
+
+        // Back 27 minutes ago: behind, but not yet something to act on.
+        machines[3].hosts[0].lastSeen = now.addingTimeInterval(-27 * 60).ISO8601Format()
+        let recent = VaultLine.paired(try #require(VaultStats(machine: machines[3], sessions: [:], now: now)))
+        #expect(recent.freshness == "work-mbp 27 min behind")
+        #expect(!recent.isOverdue)
+
+        machines[3].hosts[0].online = true
+        let caughtUp = VaultLine.paired(try #require(VaultStats(machine: machines[3], sessions: [:], now: now)))
+        #expect(caughtUp.freshness == "✓ caught up" && caughtUp.behind == 0 && caughtUp.why == nil)
+    }
+
+    @Test func anUnpairedVaultRowKnowsOnlyWhoBacksUpToIt() {
+        let line = VaultLine.unpaired(UnpairedVault(address: "vault.lan:7447", fingerprint: "aa",
+                                                    hosts: ["devbox", "laptop"]))
+        #expect(line.name == "vault.lan:7447" && line.hosts == 2)
+        #expect(line.sessions == nil && line.size == nil && line.freshness == nil && line.behind == nil)
+        #expect(!line.isOverdue)
+    }
+
+    @Test func onlyOneMachineIsThisMacThoughSeveralListenOnLoopback() {
+        var machines = sampleFleetMachines()
+        machines[1].address = "127.0.0.1:7448"
+        machines[2].address = "localhost:7449"
+        let names: Set<String> = ["localhost", "127.0.0.1", "trash-can-01"]
+        // The one named after this Mac.
+        #expect(MachineRow.rows(machines, summaries: [], localNames: names).filter(\.local).map(\.name) == ["trash-can-01"])
+        // Else the first paired.
+        let loopback: Set<String> = ["localhost", "127.0.0.1"]
+        #expect(MachineRow.rows(machines, summaries: [], localNames: loopback).filter(\.local).map(\.name) == ["work-mbp"])
+        #expect(MachineRow.thisMac(machines, names: ["studio"]) == nil)
+    }
+
+    @Test func thePageCountsItsMachinesApartFromTheVault() throws {
+        let now = Date.now
+        var machines = sampleFleetMachines(now: now)
+        let summaries = Lists(machines: machines, sessions: [:]).machines
+        let behind = try #require(VaultStats(machine: machines[3], sessions: [:], now: now))
+        #expect(MachinesView.status(summaries, vaults: [behind]) == "All 3 machines connected · vault 6 h behind")
+        machines[3].hosts[0].online = true
+        let caughtUp = try #require(VaultStats(machine: machines[3], sessions: [:], now: now))
+        #expect(MachinesView.status(summaries, vaults: [caughtUp]) == "All 3 machines connected · vault caught up")
+        #expect(MachinesView.status([], vaults: []) == "No machines yet")
+    }
+
     @Test func thisMacIsTheOneItsAddressNames() {
         let names: Set<String> = ["localhost", "127.0.0.1", "::1", "studio"]
         #expect(MachineRow.isLocal("127.0.0.1:7447", names: names))

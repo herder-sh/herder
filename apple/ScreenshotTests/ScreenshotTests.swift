@@ -114,6 +114,12 @@ final class ScreenshotTests: XCTestCase {
             settle()
             #if os(macOS)
             shoot("mac-machines")
+            // A narrower window, where the table must still fit without gaps.
+            resize(to: CGSize(width: 1000, height: 900))
+            settle()
+            shoot("mac-machines-narrow")
+            resize(to: CGSize(width: 1440, height: 900))
+            settle()
             #else
             shoot("ios-machines")
             #endif
@@ -468,6 +474,9 @@ final class ScreenshotTests: XCTestCase {
         let cancel = app.buttons.matching(NSPredicate(format: "label == %@", "Cancel Login \(id)")).firstMatch
         guard wait(cancel, "Cancel Login \(id)") else { return }
         press(cancel)
+        // A press while the terminal takes the keyboard can land as the layout moves and open
+        // nothing; one more opens the confirmation.
+        if !confirmation().waitForExistence(timeout: 3) { press(cancel) }
         settle()
         shoot(platform("cancel-login"), screen: true)
         confirmCancel()
@@ -544,7 +553,7 @@ final class ScreenshotTests: XCTestCase {
 
     /// Answers the Cancel Login confirmation.
     private func confirmCancel() {
-        let confirm = app.buttons.matching(NSPredicate(format: "label == 'Cancel Login'")).firstMatch
+        let confirm = confirmation()
         guard wait(confirm, "Cancel Login confirmation") else { return }
         // The popover can still be moving into place, over a terminal that has the keyboard, so
         // a press can miss it and leave it open over every screen after: press until it closes.
@@ -553,6 +562,11 @@ final class ScreenshotTests: XCTestCase {
             press(confirm)
             settle()
         }
+    }
+
+    /// The Cancel Login confirmation's button.
+    private func confirmation() -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == 'Cancel Login'")).firstMatch
     }
 
     /// Types `text` into the field with accessibility id `field`, once it has the keyboard: a
