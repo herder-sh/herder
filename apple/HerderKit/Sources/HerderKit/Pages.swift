@@ -12,8 +12,8 @@ enum Page: Hashable {
     case projectSettings(projectId: String)
     /// The skills screen, opened from a project's settings.
     case skills
-    /// A vault, for its owners.
-    case vault(HostId)
+    /// A vault, for its owners, on one of its tabs.
+    case vault(HostId, tab: VaultPage.Tab = .overview)
     /// A provider's own sub-agent, in its session.
     case agent(SessionKey, NativeAgent.ID)
     /// Every bot on every machine, opened from Machines on iPhone, where it is no tab.
@@ -26,7 +26,7 @@ extension Page {
     /// The page's name in a breadcrumb.
     @MainActor func title(in fleet: Fleet) -> String {
         switch self {
-        case .machine(let hostId), .vault(let hostId):
+        case .machine(let hostId), .vault(let hostId, _):
             return fleet.machines.first { $0.hostId == hostId }?.name ?? "Machine"
         case .account(let loginId):
             let login = ProviderAccounts(machines: fleet.machines).groups.flatMap(\.logins).first { $0.id == loginId }
@@ -46,11 +46,11 @@ extension Page {
 
     @MainActor @ViewBuilder func view(fleet: Fleet, sheet: Binding<AppSheet?>) -> some View {
         switch self {
-        case .machine(let hostId): MachinePage(fleet: fleet, hostId: hostId)
+        case .machine(let hostId): MachinePage(fleet: fleet, hostId: hostId, sheet: sheet)
         case .account(let loginId): AccountPage(fleet: fleet, loginId: loginId)
         case .projectSettings(let projectId): ProjectSettingsPage(fleet: fleet, projectId: projectId)
         case .skills: SkillsView(fleet: fleet, sheet: sheet)
-        case .vault(let hostId): VaultPage(fleet: fleet, vault: hostId)
+        case .vault(let hostId, let tab): VaultPage(fleet: fleet, vault: hostId, tab: tab)
         case .agent(let key, let id): NativeAgentPage(reference: id, fleet: fleet, key: key)
         case .integrations: IntegrationsView(fleet: fleet, sheet: sheet)
         case .bot(let hostId, let botId): BotPage(fleet: fleet, hostId: hostId, botId: botId)

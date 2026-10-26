@@ -8,19 +8,27 @@ import Testing
 
 /// Draws the machine page as the app's dark appearance shows it, for a machine the user owns
 /// (a signed-out account, two CLI updates, a login missing there, backing up to a vault) and
-/// for one they are a member on, and attaches each; with `HERDER_SCREENSHOT_DIR` set, also
-/// writes them there as `machine-owner.png` and `machine-member.png`.
+/// for one they are a member on, and one they own linked to no vault, and attaches each; with
+/// `HERDER_SCREENSHOT_DIR` set, also writes them there as `machine-owner.png`,
+/// `machine-member.png` and `machine-unlinked.png`.
 @MainActor struct MachinePageScreenshotTests {
     @Test func drawsTheOwnersPage() async throws {
         let fleet = try sampleFleet()
         fleet.backupLinks["trash-can-01"] = .linked(LinkedVault(address: "10.0.0.9:7447", fingerprint: "ab12",
                                                                 backup: true, secrets: true))
-        try await shoot(MachinePage(fleet: fleet, hostId: "trash-can-01"), crumbs: ["Machines", "trash-can-01"],
-                        height: 1600, named: "machine-owner.png")
+        try await shoot(MachinePage(fleet: fleet, hostId: "trash-can-01", sheet: .constant(nil)),
+                        crumbs: ["Machines", "trash-can-01"], height: 1900, named: "machine-owner.png")
+    }
+
+    @Test func drawsAnUnlinkedPage() async throws {
+        let fleet = try sampleFleet()
+        fleet.backupLinks["work-mbp"] = .nowhere
+        try await shoot(MachinePage(fleet: fleet, hostId: "work-mbp", sheet: .constant(nil)),
+                        crumbs: ["Machines", "work-mbp"], height: 1700, named: "machine-unlinked.png")
     }
 
     @Test func drawsAMembersPage() async throws {
-        try await shoot(MachinePage(fleet: try sampleFleet(), hostId: "team-box"), crumbs: ["Machines", "team-box"],
+        try await shoot(MachinePage(fleet: try sampleFleet(), hostId: "team-box", sheet: .constant(nil)), crumbs: ["Machines", "team-box"],
                         height: 1000, named: "machine-member.png")
     }
 

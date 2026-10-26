@@ -44,9 +44,10 @@ extension Fleet {
         return link
     }
 
-    /// Links `host` to `vault` from now on, backing up and fetching secrets: a host-only code
-    /// from the vault, named after the host, handed to the host with the vault's addresses.
-    func backUp(_ host: Machine, to vault: Machine) async throws {
+    /// Links `host` to `vault` from now on, backing it up there or not and fetching secrets from
+    /// it or not: a host-only code from the vault, named after the host, handed to the host with
+    /// the vault's addresses.
+    func link(_ host: Machine, to vault: Machine, backup: Bool, secrets: Bool) async throws {
         let name = String(host.name.trimmingCharacters(in: .whitespaces).prefix(Self.maxVaultHostName))
         guard case .hostPairing(let code, _) = try await client.send(
             hostId: vault.hostId, command: .pairVaultHost(hostName: name))
@@ -55,7 +56,7 @@ extension Fleet {
             hostId: host.hostId,
             command: .linkVault(
                 addresses: vault.addresses, fingerprint: vault.fingerprint, pairingCode: code,
-                backup: true, secrets: true))
+                backup: backup, secrets: secrets))
     }
 
     /// Sets whether `hostId` backs up to the vault it is linked to, and fetches secrets from
@@ -87,12 +88,13 @@ extension Fleet {
     nonisolated static let caughtUpLagMs: UInt64 = 60_000
 }
 
-/// A machine's Backup section: the vault it backs up to and how far that got, its Back up and
-/// Secrets switches, whether it takes handoffs, and stopping; or linking it to a vault this
-/// device owns. It shows where the machine last said it backs up while it asks again.
+/// A machine's Backup section: the vault it backs up to and how far that got, its Back up
+/// switch, whether it takes handoffs, and stopping; or the ways to get a vault to back up to.
+/// It shows where the machine last said it backs up while it asks again.
 struct BackupSection: View {
     let fleet: Fleet
     let machine: Machine
+    @Binding var sheet: AppSheet?
     @State private var working = false
     @State private var confirmingStop = false
     @State private var error: String?
@@ -111,19 +113,9 @@ struct BackupSection: View {
             case .linked(let vault):
                 linked(vault)
             case .nowhere:
-                let vaults = fleet.backupVaults(for: machine.hostId)
-                SettingRow(label: "Backs up nowhere",
-                           hint: vaults.isEmpty ? "Pair this device with a vault as its owner to back this machine up" : "") {
-                    EmptyView()
-                }
-                ForEach(vaults, id: \.hostId) { vault in
-                    RowDivider()
-                    SettingRow(label: vault.name, hint: "A vault you own") {
-                        PillButton(title: "Back Up Here", prominent: true) {
-                            run { try await fleet.backUp(machine, to: vault) }
-                        }
-                        .disabled(working)
-                    }
+                SettingRow(label: "Not backed up", hint: "Its sessions live only on \(machine.name)") { EmptyView() }
+                VaultChoices(fleet: fleet, machine: machine, sheet: $sheet, use: "Back Up Here", working: working) { vault in
+                    run { try await fleet.link(machine, to: vault, backup: true, secrets: true) }
                 }
             }
             if let error {
@@ -134,34 +126,30 @@ struct BackupSection: View {
         }
         .task(id: machine.hostId) { await refresh() }
         .confirmationDialog("Stop backing \(machine.name) up?", isPresented: $confirmingStop, titleVisibility: .visible) {
-            Button("Stop Backing Up", role: .destructive) {
+            Button("Unlink", role: .destructive) {
                 guard case .linked(let vault) = fleet.backupLinks[machine.hostId] else { return }
                 run { try await fleet.stopBackingUp(machine.hostId, from: vault) }
             }
         } message: {
-            Text("What the vault holds stays there.")
+            Text("It no longer backs up there nor fetches secrets from it. What the vault holds stays there.")
         }
     }
 
-    /// The vault, how far it got with this machine, the switches, and Stop. The paired vault
-    /// reports how far it got and whether the machine takes handoffs; one not paired here, nothing.
+    /// The vault, how far it got with this machine, the Back up switch, and Stop. The paired
+    /// vault reports how far it got and whether the machine takes handoffs; one not paired here,
+    /// nothing.
     @ViewBuilder private func linked(_ vault: LinkedVault) -> some View {
         let paired = fleet.pairedVault(vault)
         let replication = paired?.vault?.hosts.first { $0.hostId == machine.hostId }
-        SettingRow(label: "Backs up to \(paired?.name ?? vault.address)",
-                   hint: Fleet.freshness(replication, now: .now)) {
-            PillButton(title: "Stop…") { confirmingStop = true }.disabled(working)
+        let name = paired?.name ?? vault.address
+        SettingRow(label: vault.backup ? "Backs up to \(name)" : "Not backed up",
+                   hint: vault.backup ? Fleet.freshness(replication, now: .now) : "Linked to \(name) for secrets only") {
+            PillButton(title: "Unlink…") { confirmingStop = true }.disabled(working)
         }
         RowDivider()
-        SettingRow(label: "Back up sessions", hint: "Every session is replicated to the vault", saved: saves["backup"]) {
-            Toggle("Back up sessions", isOn: switchBinding(vault, \.backup, row: "backup")).labelsHidden().toggleStyle(.switch)
-                .disabled(working)
-        }
-        RowDivider()
-        SettingRow(label: "Secrets", hint: "Sessions here fetch secrets from the vault", saved: saves["secrets"]) {
-            Toggle("Secrets", isOn: switchBinding(vault, \.secrets, row: "secrets")).labelsHidden().toggleStyle(.switch)
-                .disabled(working)
-        }
+        VaultLinkSwitch(fleet: fleet, hostId: machine.hostId, vault: vault, key: \.backup, label: "Back up sessions",
+                        hint: "Every session is replicated to the vault")
+            .disabled(working)
         if let paired, paired.role == .owner, let replication {
             RowDivider()
             SettingRow(label: "Takes handoffs from other machines",
@@ -182,24 +170,6 @@ struct BackupSection: View {
             // The vault's status follows the change; until then the switch shows it.
             .onChange(of: replication.read) { handoffs = nil }
         }
-    }
-
-    /// One of `vault`'s switches, set on the machine when flipped; back as the machine has it
-    /// if that fails.
-    private func switchBinding(_ vault: LinkedVault, _ key: WritableKeyPath<LinkedVault, Bool>, row: String) -> Binding<Bool> {
-        Binding(
-            get: { vault[keyPath: key] },
-            set: { on in
-                var switched = vault
-                switched[keyPath: key] = on
-                fleet.backupLinks[machine.hostId] = .linked(switched)
-                Task {
-                    await saves.save(row) {
-                        try await fleet.setVaultLink(machine.hostId, backup: switched.backup, secrets: switched.secrets)
-                    }
-                    if case .failed = saves[row] { await refresh() }
-                }
-            })
     }
 
     /// Asks the machine again; a failure shows only while there is nothing known to show.
@@ -223,5 +193,80 @@ struct BackupSection: View {
             }
             working = false
         }
+    }
+}
+
+/// One of a linked machine's switches, Back up or Secrets, set on the machine when flipped;
+/// back as the machine has it if that fails.
+struct VaultLinkSwitch: View {
+    let fleet: Fleet
+    let hostId: HostId
+    let vault: LinkedVault
+    let key: WritableKeyPath<LinkedVault, Bool>
+    let label: String
+    let hint: String
+    @State private var saves = Autosave()
+
+    var body: some View {
+        SettingRow(label: label, hint: hint, saved: saves["switch"]) {
+            Toggle(label, isOn: Binding(get: { vault[keyPath: key] }, set: flip)).labelsHidden().toggleStyle(.switch)
+        }
+    }
+
+    private func flip(_ on: Bool) {
+        var switched = vault
+        switched[keyPath: key] = on
+        fleet.backupLinks[hostId] = .linked(switched)
+        Task {
+            await saves.save("switch") {
+                try await fleet.setVaultLink(hostId, backup: switched.backup, secrets: switched.secrets)
+            }
+            if case .failed = saves["switch"] { _ = try? await fleet.backupLink(of: hostId) }
+        }
+    }
+}
+
+/// The ways to give a machine linked to no vault one: each connected vault this device owns,
+/// with `use` linking to it, or pairing one; and running a vault on the machine itself with
+/// `herder vault install`, then pairing it.
+struct VaultChoices: View {
+    let fleet: Fleet
+    let machine: Machine
+    @Binding var sheet: AppSheet?
+    let use: String
+    let working: Bool
+    let link: (Machine) -> Void
+
+    static let installCommand = "herder vault install"
+
+    var body: some View {
+        let vaults = fleet.backupVaults(for: machine.hostId)
+        ForEach(vaults, id: \.hostId) { vault in
+            RowDivider()
+            SettingRow(label: vault.name, hint: "A vault you own") {
+                PillButton(title: use, prominent: true) { link(vault) }.disabled(working)
+            }
+        }
+        if vaults.isEmpty {
+            RowDivider()
+            SettingRow(label: "Use a vault you have", hint: "Pair it with this device as its owner") {
+                PillButton(title: "Pair Vault…") { sheet = .pair }
+            }
+        }
+        RowDivider()
+        SettingRow(label: "Run a vault on \(machine.name)", hint: "Run this there, then pair with the code it prints") {
+            if !vaults.isEmpty { PillButton(title: "Pair Vault…") { sheet = .pair } }
+        }
+        HStack(spacing: 8) {
+            Text(Self.installCommand).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
+            Spacer(minLength: 0)
+            IconButton(symbol: "doc.on.doc", help: "Copy") { Clipboard.string = Self.installCommand }
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+        .background(Theme.raised, in: .rect(cornerRadius: 8))
+        .padding(.horizontal, Theme.cellPadding)
+        .padding(.bottom, 10)
     }
 }
