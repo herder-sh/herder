@@ -38,4 +38,29 @@ struct BackupTests {
         #expect(fleet.pairedVault(LinkedVault(address: "x:7447", fingerprint: "FP-HOME", backup: true, secrets: true))?.hostId == "home")
         #expect(fleet.pairedVault(LinkedVault(address: "x:7447", fingerprint: "fp-elsewhere", backup: true, secrets: false)) == nil)
     }
+
+    @Test func aMachinesSecretsComeFromTheVaultItIsLinkedToWithSecretsOn() {
+        let home = vault("home")
+        let link = LinkedVault(address: "10.0.0.9:7447", fingerprint: "fp-home", backup: false, secrets: true)
+        let sets = [SecretSet(name: "prod", hosts: ["devbox", "other"], hostUse: []),
+                    SecretSet(name: "staging", hosts: ["devbox"], hostUse: []),
+                    SecretSet(name: "bot", hosts: [], hostUse: ["devbox"])]
+        func secrets(_ link: BackupLink?, paired: Machine? = nil, sets: [SecretSet]? = nil) -> MachineSecrets {
+            MachineSecrets(hostId: "devbox", link: link, paired: paired, sets: sets)
+        }
+        #expect(secrets(nil) == .asking)
+        #expect(secrets(.vault) == .vault)
+        #expect(secrets(.nowhere) == .none)
+        // Sets granted to the host only for its own use give its sessions nothing.
+        #expect(secrets(.linked(link), paired: home, sets: sets) == .on(vault: "home", sets: 2))
+        // A vault not paired here is named by its address, and its sets are unknown.
+        #expect(secrets(.linked(link)) == .on(vault: "10.0.0.9:7447", sets: nil))
+        var off = link
+        off.secrets = false
+        #expect(secrets(.linked(off), paired: home, sets: sets) == .off(vault: "home"))
+        #expect(MachineSecrets.granted(nil).isEmpty)
+        #expect(MachineSecrets.granted(0) == "No sets granted to this machine yet")
+        #expect(MachineSecrets.granted(1) == "1 set granted to this machine")
+        #expect(MachineSecrets.granted(2) == "2 sets granted to this machine")
+    }
 }

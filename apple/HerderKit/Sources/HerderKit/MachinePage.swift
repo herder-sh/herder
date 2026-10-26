@@ -61,11 +61,12 @@ struct MachineAttention: Equatable {
 }
 
 /// A machine's page: what needs fixing there first, then its accounts, provider CLIs, MCP
-/// servers, turn limit, backup and connection, its identifiers, and forgetting it. Each section
+/// servers, turn limit, backup, secrets and connection, its identifiers, and forgetting it. Each section
 /// is its own view below, listed once in `body`.
 struct MachinePage: View {
     let fleet: Fleet
     let hostId: HostId
+    @Binding var sheet: AppSheet?
     @Environment(\.pages) private var pages
     @State private var name = ""
     @State private var newAddress = ""
@@ -96,8 +97,11 @@ struct MachinePage: View {
                     capacity(machine, resources).detailSection("Capacity")
                 }
                 if runsSessions && machine.role == .owner && machine.connection == .connected {
-                    BackupSection(fleet: fleet, machine: machine).detailSection("Backup")
+                    BackupSection(fleet: fleet, machine: machine, sheet: $sheet).detailSection("Backup")
+                    SecretsSection(fleet: fleet, machine: machine, sheet: $sheet).detailSection("Secrets")
                     MachineBotsSection(fleet: fleet, machine: machine).detailSection("Bots")
+                } else if runsSessions && machine.role == .member {
+                    SecretsSection(fleet: fleet, machine: machine, sheet: $sheet).detailSection("Secrets")
                 }
                 connection(machine).detailSection("Connection")
                 if let error {
