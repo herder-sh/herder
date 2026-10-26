@@ -108,6 +108,8 @@ struct BotsTests {
             ["devbox": list, "trash": empty], projectName: { $0 })
         #expect(rows.map(\.id) == ["devbox/trash-can"])
         #expect(rows[0].status?.state == .waitingForVault)
+        // The machine retries on its own: neutral, not amber.
+        #expect(rows[0].status?.state.urgency == .quiet)
     }
 
     @Test func addBotOffersOnlyMachinesThatCanRunABotAndSaysWhyNot() async {

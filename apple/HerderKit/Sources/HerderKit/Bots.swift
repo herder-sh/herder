@@ -143,11 +143,12 @@ extension BotState {
         }
     }
 
+    /// The machine retries while it waits for the vault, so that is not the user's to act on.
     var urgency: Urgency {
         switch self {
         case .connected: .done
         case .connecting: .running
-        case .waitingForVault, .unknown: .needsYou
+        case .waitingForVault, .unknown: .quiet
         case .tokenRejected, .unsupported: .failing
         }
     }
