@@ -112,6 +112,18 @@ struct BotsTests {
         #expect(rows[0].status?.state.urgency == .quiet)
     }
 
+    @Test func theHeaderCountsTheBotsAndHowEachStandsLeavingOutZeros() async {
+        let fleet = FleetBots()
+        fleet.keep(["devbox", "old"]) { hostId in
+            hostId == "old" ? MachineBots(hostId: hostId) { _ in throw Self.unknownCommand } : Machine().model()
+        }
+        #expect(fleet.status == "")
+        await fleet.reload()
+        #expect(fleet.status == "1 bot · 1 waiting for the vault · 1 machine needs a newer herder")
+        fleet.keep([]) { _ in Machine().model() }
+        #expect(fleet.status == "")
+    }
+
     @Test func addBotOffersOnlyMachinesThatCanRunABotAndSaysWhyNot() async {
         let targets = BotTarget.all([
             machine("member", name: "member", sessions: [], role: .member),

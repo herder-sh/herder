@@ -30,6 +30,8 @@ public final class Fleet {
     var toast: Toast?
     /// The installs, logins and AWS sign-ins this device started; see `Activity`.
     var activity = Activity()
+    /// Every owned machine's bots, as Integrations last asked; see `FleetBots`.
+    var bots = FleetBots()
     /// Each session's open shells, kept while the app runs; see `SessionTerminals`.
     @ObservationIgnored var sessionTerminals: [SessionKey: SessionTerminals] = [:]
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
