@@ -54,7 +54,7 @@ private struct AddMachinePreview: View {
     var body: some View {
         // The Mac's scaffold is 560 wide; at the iPhone's width, the form as its sheet lays it out.
         ViewThatFits(in: .horizontal) {
-            SheetScaffold(title: "Add Machine", height: height, hint: "The fingerprint must match the one `herder pair` printed.") {
+            SheetScaffold(title: "Add Machine", height: height, hint: "Check the fingerprint `herder pair` printed.") {
                 form
             } footer: {
                 Spacer()
