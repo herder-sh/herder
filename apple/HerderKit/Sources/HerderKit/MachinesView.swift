@@ -29,13 +29,15 @@ struct MachineRow: Hashable, Identifiable {
     static func rows(_ machines: [Machine], summaries: [MachineSummary], localNames: Set<String> = localNames) -> [MachineRow] {
         let versions = ProviderVersions(machines: machines)
         let vaults = machines.filter { !$0.hosts.isEmpty || $0.vault != nil }
-        return machines.filter { $0.hosts.isEmpty && $0.vault == nil }.map { machine in
+        let machines = machines.filter { $0.hosts.isEmpty && $0.vault == nil }
+        let local = thisMac(machines, names: localNames)
+        return machines.map { machine in
             let summary = summaries.first { $0.hostId == machine.hostId }
             let clis = versions.rows.flatMap(\.cells).filter { $0.hostId == machine.hostId && $0.state != .missing }
             return MachineRow(
                 hostId: machine.hostId, name: machine.name,
                 role: machine.role.map { $0 == .owner ? "owner" : "member" },
-                local: isLocal(machine.address, names: localNames),
+                local: machine.hostId == local,
                 connection: machine.connection,
                 latencyMs: machine.connection == .connected ? machine.quality.lastRttMs : nil,
                 running: summary?.running ?? 0, cpu: summary?.cpu, memory: summary?.memory,
@@ -54,6 +56,14 @@ struct MachineRow: Hashable, Identifiable {
         #else
         return []
         #endif
+    }
+
+    /// The machine whose daemon runs on this Mac: of those reached at an address that names it,
+    /// the one named after it, else the first paired. Several daemons can listen on loopback (a
+    /// demo fleet, a tunnel), and only one of them is this Mac's.
+    static func thisMac(_ machines: [Machine], names: Set<String>) -> HostId? {
+        let local = machines.filter { isLocal($0.address, names: names) }
+        return (local.first { names.contains($0.name.lowercased()) } ?? local.first)?.hostId
     }
 
     /// Whether `address`, "host:port" or "[v6]:port", names one of `names`.
@@ -159,8 +169,8 @@ struct MachinesView: View {
 
     /// The widths both tables share, so their first columns line up.
     private enum Width {
-        static let name: CGFloat = 180
-        static let status: CGFloat = 90
+        static let name: CGFloat = 160
+        static let status: CGFloat = 80
         static let count: CGFloat = 64
     }
 
@@ -188,10 +198,10 @@ struct MachinesView: View {
         ]
         guard !compact else { return columns }
         columns += [
-            SortableColumn("Load", width: 110, alignment: .trailing, value: { $0.cpu ?? -1 }) { row in
+            SortableColumn("Load", width: 96, alignment: .trailing, value: { $0.cpu ?? -1 }) { row in
                 if let cpu = row.cpu {
                     HStack(spacing: 8) {
-                        UsageBar(percent: cpu, height: 5).frame(width: 56)
+                        UsageBar(percent: cpu, height: 5).frame(width: 48)
                         Text("\(Int(cpu.rounded()))%").monospacedDigit().foregroundStyle(Theme.secondary)
                             .frame(width: 36, alignment: .trailing)
                     }
@@ -201,7 +211,7 @@ struct MachinesView: View {
                         .help(row.connection == .connected ? "This machine does not report its load." : "Offline")
                 }
             },
-            SortableColumn("CLIs", width: 96, value: { $0.updates ?? -1 }) { row in
+            SortableColumn("CLIs", width: 88, value: { $0.updates ?? -1 }) { row in
                 switch row.updates {
                 case nil: Text("–").foregroundStyle(Theme.tertiary)
                 case 0?: Text("current").foregroundStyle(Theme.tertiary)
@@ -213,11 +223,13 @@ struct MachinesView: View {
                     .help("Update on its page")
                 }
             },
-            SortableColumn("Accounts", width: 130, alignment: .trailing, value: \.accounts) { row in
-                HStack(spacing: 8) {
-                    if row.signedOut > 0 { Chip(text: "\(row.signedOut) signed out", tint: Theme.accent) }
+            SortableColumn("Accounts", width: Width.count, alignment: .trailing, value: \.accounts) { row in
+                // Signed out needs you: an amber dot, as Running marks its count with a blue one.
+                HStack(spacing: 5) {
+                    if row.signedOut > 0 { Circle().fill(Theme.accent).frame(width: 6, height: 6) }
                     Text("\(row.accounts)").monospacedDigit()
                 }
+                .help(row.signedOut > 0 ? "\(row.signedOut) signed out" : "")
             },
             SortableColumn("Backs up to", value: { $0.backsUpTo ?? "" }) { row in
                 Text(row.backsUpTo ?? "–").foregroundStyle(row.backsUpTo == nil ? Theme.tertiary : Theme.secondary)
@@ -251,11 +263,11 @@ struct MachinesView: View {
                 SortableColumn("Hosts", width: Width.count, alignment: .trailing, value: \.hosts) { line in
                     Text("\(line.hosts)").monospacedDigit()
                 },
-                SortableColumn("Sessions", width: 110, alignment: .trailing, value: { $0.sessions ?? -1 }) { line in
+                SortableColumn("Sessions", width: 96, alignment: .trailing, value: { $0.sessions ?? -1 }) { line in
                     Text(line.sessions.map(String.init) ?? "–").monospacedDigit()
                         .foregroundStyle(line.sessions == nil ? Theme.tertiary : Theme.text)
                 },
-                SortableColumn("Size", width: 96, alignment: .trailing, value: { $0.bytes ?? 0 }) { line in
+                SortableColumn("Size", width: 88, alignment: .trailing, value: { $0.bytes ?? 0 }) { line in
                     Text(line.size ?? "–").monospacedDigit().foregroundStyle(line.size == nil ? Theme.tertiary : Theme.text)
                 },
             ]
