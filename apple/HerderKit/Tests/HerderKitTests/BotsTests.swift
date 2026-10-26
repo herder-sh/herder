@@ -156,6 +156,31 @@ struct BotsTests {
         #expect(setup.actionTitle == "Add trash-can bot")
     }
 
+    @Test func withNoNameTypedTheBotIsNamedAfterItsMachine() async {
+        let sent = Sent()
+        let setup = sent.setup()
+        await setup.check(BotTarget.all([
+            machine("devbox", name: "devbox", sessions: []), machine("old", name: "draugelis", sessions: []),
+        ]))
+        #expect(setup.machineName == "devbox")
+        #expect(setup.actionTitle == "Add devbox bot")
+        setup.hostId = "old"
+        #expect(setup.botName == "draugelis")
+        #expect(setup.actionTitle == "Add draugelis bot")
+        #expect(setup.secretSet == "bot-draugelis")
+        setup.botToken.text = "xoxb-1"
+        setup.appToken.text = "xapp-2"
+        #expect(await setup.save())
+        guard case .putSecret(_, _, let description, _) = sent.commands.first(where: {
+            if case .putSecret = $0.1 { true } else { false }
+        })?.1 else { Issue.record("no bot token"); return }
+        #expect(description == "Slack bot token of the bot draugelis")
+        guard case .putBot(let bot) = sent.commands.last?.1 else { Issue.record("no bot"); return }
+        #expect([bot.botId, bot.name] == ["draugelis", "draugelis"])
+        setup.name = " trash-can "
+        #expect(setup.botName == "trash-can")
+    }
+
     /// Records what Add Bot sends to the vault and the machine.
     @MainActor final class Sent {
         var commands: [(HostId, CommandBody)] = []

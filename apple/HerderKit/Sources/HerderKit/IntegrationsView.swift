@@ -325,7 +325,7 @@ struct AddBotForm: View {
             }
         }
         BotStep(number: 2, title: "Name") {
-            InputBox(placeholder: "trash-can", text: $setup.name).accessibilityIdentifier("bot-name")
+            InputBox(placeholder: setup.machineName ?? "trash-can", text: $setup.name).accessibilityIdentifier("bot-name")
         }
         if setup.kind == .slack {
             BotStep(number: 3, title: "Create the Slack app") {
@@ -333,13 +333,13 @@ struct AddBotForm: View {
                     .font(.subheadline).foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
-                    CopyPill(title: "Copy manifest", text: BotSetup.slackManifest(name: setup.name), prominent: true)
+                    CopyPill(title: "Copy manifest", text: BotSetup.slackManifest(name: setup.botName), prominent: true)
                     PillButton(title: "Open api.slack.com", symbol: "arrow.up.right") {
                         BotSetup.slackAppsURL.map { openURL($0) }
                     }
                 }
                 DisclosureGroup(isExpanded: $showsManifest) {
-                    ManifestBox(text: BotSetup.slackManifest(name: setup.name)).padding(.top, 6)
+                    ManifestBox(text: BotSetup.slackManifest(name: setup.botName)).padding(.top, 6)
                 } label: {
                     Text("Show manifest").font(.subheadline).foregroundStyle(Theme.secondary)
                 }

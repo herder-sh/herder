@@ -259,14 +259,20 @@ final class BotSetup {
         }
     }
 
-    /// What the primary button does: "Add trash-can bot".
-    var actionTitle: String {
+    /// The name of the machine picked to run the bot.
+    var machineName: String? { targets.first { $0.hostId == hostId }?.name }
+
+    /// The bot's name: the one typed, else its machine's.
+    var botName: String {
         let name = name.trimmingCharacters(in: .whitespaces)
-        return name.isEmpty ? "Add Bot" : "Add \(name) bot"
+        return name.isEmpty ? machineName ?? "" : name
     }
 
+    /// What the primary button does: "Add trash-can bot".
+    var actionTitle: String { botName.isEmpty ? "Add Bot" : "Add \(botName) bot" }
+
     /// The bot's id, from its name: lowercase letters, digits and single hyphens.
-    var botId: String { Self.slug(name) }
+    var botId: String { Self.slug(botName) }
 
     /// The vault set that keeps its tokens.
     var secretSet: String { "bot-\(botId)" }
@@ -298,7 +304,7 @@ final class BotSetup {
         error = nil
         sending = true
         defer { sending = false }
-        let name = name.trimmingCharacters(in: .whitespaces)
+        let name = botName
         let set = secretSet
         do {
             let vault = try await vaultOf(hostId)
