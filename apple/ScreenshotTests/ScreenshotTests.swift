@@ -354,8 +354,10 @@ final class ScreenshotTests: XCTestCase {
             let codex = app.buttons["provider-codex"].firstMatch
             if wait(codex, "Codex choice") { press(codex) }
             onlyOnDevbox()
-            press(start)
-            settle()
+            if wait(start, "Log in on, for Codex") {
+                press(start)
+                settle()
+            }
             if openActivity() {
                 let second = job("job-add-codex")
                 if wait(second, "Codex login in Activity") {
@@ -599,9 +601,13 @@ final class ScreenshotTests: XCTestCase {
     private func openAddAccount() -> Bool {
         let add = app.buttons.matching(NSPredicate(format: "label == 'Add Account'")).firstMatch
         guard wait(add, "Add Account") else { return false }
-        press(add)
-        settle()
-        return true
+        // A click that only closes an open popover leaves the sheet shut; press it again then.
+        let sheet = app.descendants(matching: .any)["account-label"].firstMatch
+        for _ in 0..<2 where !sheet.exists {
+            press(add)
+            settle()
+        }
+        return wait(sheet, "Add Account sheet")
     }
 
     /// Unticks the Add Account sheet's other machines, so the login runs on `devbox` alone.
@@ -648,6 +654,11 @@ final class ScreenshotTests: XCTestCase {
         guard wait(row, title) else { return false }
         reveal(row)
         press(row)
+        #if os(iOS)
+        // A tap while the Board still settles can be lost; the session's composer says it opened.
+        let composer = app.descendants(matching: .any)["composer"].firstMatch
+        if !composer.waitForExistence(timeout: 3), row.isHittable { press(row) }
+        #endif
         settle()
         return true
     }
