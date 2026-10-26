@@ -50,6 +50,7 @@ struct ComposerBox<Footer: View>: View {
     @State private var importing = false
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
+    @Environment(\.focusesPrompt) private var focusesPrompt
 
     var body: some View {
         VStack(spacing: 0) {
@@ -237,13 +238,15 @@ struct ComposerBox<Footer: View>: View {
         #endif
     }
 
-    /// The prompt takes focus as it appears on the Mac and on an iPad with a hardware keyboard.
+    /// The prompt takes focus as it appears on the Mac and on an iPad with a hardware keyboard,
+    /// unless the session opened in place of one archived from its list, whose keyboard it keeps.
     /// On iPhone the session opens on its transcript: the keyboard waits for a tap on the prompt.
     private var focusesOnAppear: Bool {
+        guard focusesPrompt else { return false }
         #if os(macOS)
-        true
+        return true
         #else
-        UIDevice.current.userInterfaceIdiom == .pad && GCKeyboard.coalesced != nil
+        return UIDevice.current.userInterfaceIdiom == .pad && GCKeyboard.coalesced != nil
         #endif
     }
 
@@ -478,4 +481,9 @@ extension Fleet {
     func draftChoice(_ choice: ModelCatalog.Choice, movedTo hostId: HostId, projectId: String?) -> ModelCatalog.Choice {
         providers(on: hostId).contains(choice.provider) ? choice : draftChoice(on: hostId, projectId: projectId)
     }
+}
+
+extension EnvironmentValues {
+    /// Whether a session's prompt takes the keyboard as it appears (`ComposerBox`).
+    @Entry var focusesPrompt = true
 }

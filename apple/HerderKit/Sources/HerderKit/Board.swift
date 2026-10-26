@@ -233,7 +233,8 @@ extension Lists {
 
 /// The app's home: every open task, a task tree with its agents folded under its row, in
 /// sections a day, newest first. Archiving a task completes it: the check on its row, E on the
-/// Mac or a swipe on iOS, with Undo in the toast and on ⌘Z. A task opens beside the list, or is pushed.
+/// Mac or a swipe on iOS, with Undo in the toast and on ⌘Z; archiving the open task opens the next.
+/// A task opens beside the list, or is pushed.
 struct BoardView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
@@ -242,9 +243,6 @@ struct BoardView: View {
     var query = ""
     @AppStorage(BoardSort.boardKey) private var sort = BoardSort.recent
     @State private var showsArchived = false
-    /// The row J and K move to, and Return and E act on, on the Mac.
-    @State private var cursor: SessionKey?
-    @FocusState private var focused: Bool
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
@@ -267,12 +265,12 @@ struct BoardView: View {
             }
             ForEach(sections) { section in
                 TaskSectionHeading(title: section.title, count: section.trees.count)
-                ForEach(section.trees) { row($0, in: rows) }
+                ForEach(section.trees, content: row)
             }
             if !archived.isEmpty {
                 archivedLine(archived.count)
                 if showsArchived {
-                    ForEach(archived) { row($0, in: rows) }
+                    ForEach(archived, content: row)
                 }
             }
             #if os(macOS)
@@ -285,36 +283,18 @@ struct BoardView: View {
         #if os(macOS)
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .focusable()
-        .focusEffectDisabled()
-        .focused($focused)
-        .onAppear { focused = true }
-        .onKeyPress(characters: .init(charactersIn: "jke"), phases: .down) { press in
-            guard press.modifiers.isEmpty else { return .ignored }
-            switch press.characters {
-            case "j": move(1, in: rows)
-            case "k": move(-1, in: rows)
-            default: if let tree = rows.first(where: { $0.id == cursor }) { toggle(tree, in: rows) }
-            }
-            return .handled
-        }
-        .onKeyPress(.return) {
-            guard let cursor else { return .ignored }
-            selection?.wrappedValue = cursor
-            return .handled
-        }
         #endif
-        .onChange(of: selection?.wrappedValue) { _, key in
-            if let key { cursor = key }
-        }
+        .modifier(TaskListNavigation(fleet: fleet, rows: rows, selection: selection) {
+            $0.toggleArchived(fleet: fleet, undoManager: undoManager)
+        })
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle("Board")
     }
 
-    private func row(_ tree: TaskTree, in rows: [TaskTree]) -> some View {
-        TaskListRow(tree: tree, fleet: fleet, selection: selection, context: tree.project, current: cursor == tree.id) {
-            toggle(tree, in: rows)
+    private func row(_ tree: TaskTree) -> some View {
+        TaskListRow(tree: tree, fleet: fleet, selection: selection, context: tree.project) {
+            tree.toggleArchived(fleet: fleet, undoManager: undoManager)
         }
     }
 
@@ -349,27 +329,7 @@ struct BoardView: View {
         .padding(.vertical, 14)
         .taskListRow()
     }
-
-    /// Moves the cursor `by` rows, from the first row when there is none.
-    private func move(_ by: Int, in rows: [TaskTree]) {
-        guard !rows.isEmpty else { return }
-        guard let index = rows.firstIndex(where: { $0.id == cursor }) else {
-            cursor = rows[0].id
-            return
-        }
-        cursor = rows[min(max(index + by, 0), rows.count - 1)].id
-    }
     #endif
-
-    /// Archives an open task, or brings an archived one back; the cursor moves on to the next row.
-    private func toggle(_ tree: TaskTree, in rows: [TaskTree]) {
-        let key = tree.lead.key
-        if tree.lead.state != .archived, cursor == key, let index = rows.firstIndex(where: { $0.id == key }) {
-            let after = rows.dropFirst(index + 1).first { $0.lead.state != .archived } ?? rows.prefix(index).last
-            cursor = after?.id
-        }
-        tree.toggleArchived(fleet: fleet, undoManager: undoManager)
-    }
 }
 
 extension TaskTree {
@@ -389,6 +349,124 @@ extension TaskTree {
         undoManager?.setActionName("Archive")
         Task { await fleet.archive(key) }
     }
+}
+
+extension TaskTree {
+    /// The task that opens once `key` leaves a list ordered as `keys`: the one below it, else, when
+    /// it was last, the one above; `nil` when it was the only one or is not listed.
+    static func next(after key: SessionKey, in keys: [SessionKey]) -> SessionKey? {
+        guard let index = keys.firstIndex(of: key) else { return nil }
+        if index + 1 < keys.count { return keys[index + 1] }
+        return index > 0 ? keys[index - 1] : nil
+    }
+}
+
+extension EnvironmentValues {
+    /// The task list's keyboard row on the Mac.
+    @Entry var taskListCursor: SessionKey?
+    /// Opens the task a list moves on to after its open one is archived, leaving the keyboard on
+    /// the list; `nil` where the list's selection is all there is.
+    @Entry var openNextTask: ((SessionKey?) -> Void)?
+}
+
+/// How a task list follows its open task through archiving: once the open task is archived,
+/// from its check, E, a swipe or its session's menu, the next one in the list's order opens in
+/// its place, beside the list or on the iPhone's navigation stack, and the archived one opens
+/// again once it is back, from Undo. On the Mac, J and K move the keyboard row, Return opens it
+/// and E archives it, the row moving on as the open one does.
+struct TaskListNavigation: ViewModifier {
+    let fleet: Fleet
+    /// The list's rows in order, the archived ones it shows among them.
+    let rows: [TaskTree]
+    let selection: Binding<SessionKey?>?
+    /// Archives a task, or brings an archived one back.
+    let toggle: (TaskTree) -> Void
+    @State private var cursor: SessionKey?
+    /// The archived task the list moved on from, to open again once it is back.
+    @State private var left: SessionKey?
+    @FocusState private var focused: Bool
+    @Environment(\.sessionPath) private var path
+    @Environment(\.openNextTask) private var openNext
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.taskListCursor, cursor)
+            .onChange(of: rows.filter { $0.lead.state != .archived }.map(\.id)) { old, new in
+                follow(from: old, to: new)
+            }
+            .onChange(of: selection?.wrappedValue) { _, key in
+                if let key { cursor = key }
+            }
+            #if os(macOS)
+            .focusable()
+            .focusEffectDisabled()
+            .focused($focused)
+            .onAppear { focused = true }
+            .onKeyPress(characters: .init(charactersIn: "jke"), phases: .down) { press in
+                guard press.modifiers.isEmpty else { return .ignored }
+                switch press.characters {
+                case "j": move(1)
+                case "k": move(-1)
+                default: if let tree = rows.first(where: { $0.id == cursor }) { toggle(tree) }
+                }
+                return .handled
+            }
+            .onKeyPress(.return) {
+                guard let cursor else { return .ignored }
+                selection?.wrappedValue = cursor
+                return .handled
+            }
+            #endif
+    }
+
+    /// The task open from this list: beside it, or on top of the iPhone's navigation stack.
+    private var shown: SessionKey? {
+        if let selection { return selection.wrappedValue }
+        if case .session(let key) = path?.wrappedValue.last { return key }
+        return nil
+    }
+
+    /// As the open tasks go from `old` to `new`: the keyboard row leaving moves on to the next,
+    /// the open task archived opens the next, and the task moved on from opens again once back.
+    private func follow(from old: [SessionKey], to new: [SessionKey]) {
+        func next(after key: SessionKey) -> SessionKey? {
+            TaskTree.next(after: key, in: old.filter { $0 == key || new.contains($0) })
+        }
+        if let cursor, old.contains(cursor), !new.contains(cursor) { self.cursor = next(after: cursor) }
+        if let shown, old.contains(shown), !new.contains(shown),
+           fleet.archiving.contains(shown) || fleet.session(shown)?.status == .archived {
+            left = shown
+            show(next(after: shown))
+        } else if let left, new.contains(left), !old.contains(left) {
+            self.left = nil
+            show(left)
+        }
+    }
+
+    /// Opens `key` in place of the open task, or with none closes it: the list's empty state.
+    private func show(_ key: SessionKey?) {
+        if let selection {
+            if let openNext { openNext(key) } else { selection.wrappedValue = key }
+            #if os(macOS)
+            focused = true
+            #endif
+        } else if let path, case .session = path.wrappedValue.last {
+            path.wrappedValue.removeLast()
+            if let key { path.wrappedValue.append(.session(key)) }
+        }
+    }
+
+    #if os(macOS)
+    /// Moves the keyboard row `by` rows, from the first row when there is none.
+    private func move(_ by: Int) {
+        guard !rows.isEmpty else { return }
+        guard let index = rows.firstIndex(where: { $0.id == cursor }) else {
+            cursor = rows[0].id
+            return
+        }
+        cursor = rows[min(max(index + by, 0), rows.count - 1)].id
+    }
+    #endif
 }
 
 /// A task list's sort menu, its choice kept under `key`: the Board's, or a project's list's
@@ -473,15 +551,15 @@ struct TaskListRow: View {
     /// What its line says before what the task is doing: the Board's project, a project's
     /// branch.
     let context: String
-    /// Whether it is the Mac's keyboard row.
-    var current = false
     let toggle: () -> Void
     @AppStorage(UnfoldedTasks.key) private var unfolded = ""
+    @Environment(\.taskListCursor) private var cursor
     @Environment(\.pages) private var pages
     @Environment(\.sessionPath) private var path
 
     var body: some View {
         let archived = tree.lead.state == .archived
+        let current = cursor == tree.id
         let open = tree.agentCount > 0 && UnfoldedTasks(unfolded).contains(tree.id)
         TaskRow(tree: tree, fleet: fleet, selection: selection, context: context, current: current,
                 unfolded: open, unfold: unfold, toggle: toggle)
@@ -562,7 +640,7 @@ private struct TaskRow: View {
                         // check stay buttons of their own.
                         .accessibilityLabel("\(state.label), \(tree.lead.title), \(line)"
                             + (tree.lastActive.map { ", \(RelativeTime.text($0))" } ?? ""))
-                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAddTraits(selection?.wrappedValue == tree.id ? [.isButton, .isSelected] : .isButton)
                         .accessibilityAction { open() }
                     trailing
                 }
