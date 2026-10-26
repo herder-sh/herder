@@ -36,6 +36,7 @@ mod conn;
 mod fleet;
 pub mod fork;
 mod host_secrets;
+pub mod install;
 mod link;
 mod replicator;
 mod retention;

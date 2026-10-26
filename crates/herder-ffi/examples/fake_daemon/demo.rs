@@ -1087,6 +1087,7 @@ impl Daemon {
                 data_dir: dir.to_owned(),
                 shutdown: shutdown.clone(),
                 secrets: Arc::clone(&secrets),
+                local: None,
             },
             None,
         )?);
