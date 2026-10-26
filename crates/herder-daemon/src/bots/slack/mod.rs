@@ -20,6 +20,7 @@ use slack_morphism::prelude::*;
 use tokio::sync::mpsc;
 
 use super::bridge::{self, Bridge, ChatFile, ConnectError, Connection, Inbound, Place, Post};
+use crate::session::publish::media_type;
 
 /// Messages and presses the connection holds before the runner takes them.
 const INBOUND: usize = 64;
@@ -342,17 +343,6 @@ impl Bridge for Slack {
             let link = self.session().chat_get_permalink(&ask).await.ok()?;
             Some(link.permalink.to_string())
         })
-    }
-}
-
-/// The media type of the file `name`, by its extension.
-fn media_type(name: &str) -> &'static str {
-    match name.rsplit_once('.').map(|(_, extension)| extension) {
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        _ => "application/octet-stream",
     }
 }
 

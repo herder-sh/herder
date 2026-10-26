@@ -1,6 +1,7 @@
 //! A bridge for tests: records what the bot sends, and serves the files tests give it.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
@@ -47,6 +48,8 @@ pub struct FakeBridge {
     sent: watch::Sender<Vec<Sent>>,
     /// Files messages carry, by url.
     files: HashMap<String, Vec<u8>>,
+    /// Whether it refuses uploads, as a chat that is down or full does.
+    refuses_uploads: AtomicBool,
 }
 
 impl FakeBridge {
@@ -54,7 +57,13 @@ impl FakeBridge {
         Self {
             sent: watch::Sender::new(Vec::new()),
             files,
+            refuses_uploads: AtomicBool::new(false),
         }
+    }
+
+    /// Refuses every upload from now on.
+    pub fn refuse_uploads(&self) {
+        self.refuses_uploads.store(true, Ordering::Relaxed);
     }
 
     /// Everything sent so far.
@@ -174,6 +183,9 @@ impl Bridge for FakeBridge {
         name: &'a str,
         data: Vec<u8>,
     ) -> BoxFuture<'a, bridge::Result<()>> {
+        if self.refuses_uploads.load(Ordering::Relaxed) {
+            return Box::pin(async { Err("the upload was refused".to_owned()) });
+        }
         self.record(Sent::Upload {
             place: place.clone(),
             name: name.into(),
