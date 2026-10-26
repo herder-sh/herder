@@ -202,8 +202,21 @@ const NEWEST_EVENTS: &str = "SELECT s.host_id, e.seq, e.at FROM sessions s
 /// Host `?1`'s images, oldest first, with their sizes.
 const HELD_IMAGES: &str = "SELECT rowid, size FROM attachments WHERE host_id = ?1 ORDER BY rowid";
 
-/// Event types that set the account a session runs on; each body has an `account_id`.
-const ACCOUNT_EVENTS: &str = "'session_created', 'account_switched', 'provider_switched'";
+/// Every current session's summary, host, last seq and the body of its latest event that set
+/// its account: `session_created`, `account_switched` or `provider_switched`. That event is
+/// looked up by type: walking the journal back by seq to it instead, as SQLite chooses on its
+/// own to skip a sort, reads every event the vault holds.
+const FLEET: &str = "SELECT s.summary, s.host_id,
+       (SELECT MAX(seq) FROM events e
+        WHERE e.host_id = s.host_id AND e.session_id = s.session_id),
+       (SELECT body FROM events e INDEXED BY events_type
+        WHERE e.host_id = s.host_id AND e.session_id = s.session_id
+          AND e.event_type IN ('session_created', 'account_switched', 'provider_switched')
+        ORDER BY seq DESC LIMIT 1)
+     FROM sessions s
+     WHERE NOT EXISTS (SELECT 1 FROM recovered r
+                       WHERE r.host_id = s.host_id AND r.session_id = s.session_id)
+     ORDER BY s.session_id, s.host_id";
 
 /// A host that replicated here.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -422,16 +435,7 @@ impl VaultStore {
     /// Every replicated session of every host as clients list it, ordered by session id. `head_seq` is the last seq held here; a session is listed
     /// once its creation is held.
     pub fn fleet(&self) -> Result<Vec<SessionHead>> {
-        let mut stmt = self.conn.prepare_cached(&format!(
-            "SELECT s.summary, s.host_id,
-               (SELECT MAX(seq) FROM events e
-                WHERE e.host_id = s.host_id AND e.session_id = s.session_id),
-               (SELECT body FROM events e
-                WHERE e.host_id = s.host_id AND e.session_id = s.session_id
-                  AND e.event_type IN ({ACCOUNT_EVENTS})
-                ORDER BY seq DESC LIMIT 1)
-             FROM sessions s WHERE {CURRENT} ORDER BY s.session_id, s.host_id"
-        ))?;
+        let mut stmt = self.conn.prepare_cached(FLEET)?;
         let rows = stmt.query_map([], |row| {
             let summary: String = row.get(0)?;
             let summary: SessionSummary = serde_json::from_str(&summary).map_err(|err| {
@@ -1388,6 +1392,60 @@ mod tests {
                     "{step} in {steps:?} for {sql}"
                 );
             }
+        }
+    }
+
+    /// The steps SQLite takes to run `sql` with `params` to its last row.
+    fn steps(store: &VaultStore, sql: &str, params: &[&str]) -> i32 {
+        let mut stmt = store.conn.prepare(sql).unwrap();
+        let mut rows = stmt.query(rusqlite::params_from_iter(params)).unwrap();
+        while rows.next().unwrap().is_some() {}
+        drop(rows);
+        stmt.get_status(rusqlite::StatementStatus::VmStep)
+    }
+
+    /// What runs for every message a host sends and every status takes as many steps however
+    /// long the sessions' journals are: walking a journal for each session made the vault
+    /// read every event it held for every message, and spin a core once it held a few
+    /// hundred MB.
+    #[test]
+    fn what_runs_per_message_takes_the_same_steps_however_long_the_journals() {
+        let steps_with = |events: usize| {
+            let dir = tempfile::tempdir().unwrap();
+            let mut store = VaultStore::open(dir.path().join("vault.db")).unwrap();
+            let (host, device) = (HostId::new("h1"), DeviceId::new("d1"));
+            assert!(
+                store
+                    .bind(&device, &host, "box", CAP, std::slice::from_ref(&device))
+                    .unwrap()
+            );
+            let mut records = vec![event(1, created())];
+            records.extend((2..=events as Seq).map(|seq| record(seq, "x")));
+            for chunk in records.chunks(MAX_BATCH_EVENTS) {
+                let batch = Batch {
+                    session_id: SessionId::new("s1"),
+                    events: chunk.to_vec(),
+                };
+                store.append(&host, &batch).unwrap();
+            }
+            store
+                .put_summary(&host, &summary("s1", None, SessionStatus::Running))
+                .unwrap();
+            [
+                (FLEET, &[][..]),
+                (HOSTS, &[]),
+                (NEWEST_EVENTS, &[]),
+                (OTHER_COPIES, &["h2", "s1"]),
+                (HELD_IMAGES, &["h1"]),
+            ]
+            .map(|(sql, params)| (sql, steps(&store, sql, params)))
+        };
+        let (short, long) = (steps_with(2), steps_with(2000));
+        for ((sql, short), (_, long)) in short.into_iter().zip(long) {
+            assert!(
+                long <= short + 20,
+                "{short} steps with 2 events, {long} with 2000: {sql}"
+            );
         }
     }
 
