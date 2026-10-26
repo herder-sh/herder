@@ -342,7 +342,9 @@ ScreenshotTests.
 
 From the top: a child's `ChildBanner` ("Agent of ‹parent›", Back), then the header. Both sit
 in the session's column (`SessionColumn`, P16.4): their left edge on the transcript's, their
-right edge on the composer's, at every width.
+right edge on the composer's, at every width; in a narrow pane the transcript keeps
+`Theme.paneMargin`. The header is at least `Theme.headerHeight`, its title on the line of the
+list pane's title and the sidebar's top bar.
 
 - **Left, stacked:** the title (`Theme.page`, as a `PageHeader`'s, two lines at most), the
   status line (`StatusGlyph` + state label + `· project · machine`, in `Theme.body`), the
