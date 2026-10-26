@@ -311,3 +311,36 @@ async fn closing_a_login_hangs_it_up_and_runs_its_exit() {
     let err = f.terminals.close(&terminal_id).unwrap_err();
     assert_eq!(err.code, ErrorCode::NotFound);
 }
+
+#[tokio::test]
+async fn an_install_prints_its_command_before_its_output() {
+    let f = fixture();
+    let outbox = Arc::new(Outbox::default());
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.args(["-c", "echo \"it's installing\"; exit 1"]);
+    f.terminals
+        .open_install(
+            Provider::Codex,
+            command,
+            80,
+            24,
+            &outbox,
+            Box::new(|_| String::new()),
+        )
+        .unwrap();
+    let output = read_until(&outbox, "it's installing\r\n").await;
+    assert!(
+        output.starts_with("$ /bin/sh -c 'echo \"it'\\''s installing\"; exit 1'\r\n"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn a_command_line_quotes_what_the_shell_would_split() {
+    let argv =
+        ["npm", "install", "-g", "@openai/codex@latest", "a b", ""].map(std::ffi::OsString::from);
+    assert_eq!(
+        command_line(&argv),
+        "npm install -g @openai/codex@latest 'a b' ''"
+    );
+}

@@ -2,7 +2,8 @@
 //!
 //! A shell terminal runs the user's login shell (`$SHELL -l`, or `/bin/sh -l`) in a session's
 //! worktree; a login terminal runs a provider's own login for an account being added
-//! ([`crate::login`]), an install terminal a provider's installer, and an AWS sign-in terminal
+//! ([`crate::login`]), an install terminal a provider's installer, its first line the command
+//! it runs (`$ npm install -g …`) so the owner can tell what failed, and an AWS sign-in terminal
 //! `aws sso login` ([`crate::aws`]). All get `TERM=xterm-256color`. A terminal outlives the clients that use it: detaching, or disconnecting,
 //! leaves the shell running. Everything it writes is kept in a scrollback ring of the last
 //! [`SCROLLBACK`] bytes; attaching replays the scrollback as one `terminal_output` message,
@@ -62,6 +63,8 @@ pub(crate) type Watch = Box<dyn FnMut(&[u8]) -> Option<TerminalPurpose> + Send>;
 struct Hooks {
     on_exit: Option<OnExit>,
     watch: Option<Watch>,
+    /// Written to the terminal's output before anything its program prints.
+    first: Vec<u8>,
 }
 
 /// What a login terminal does besides relaying the login.
@@ -160,7 +163,7 @@ impl Terminals {
         let purpose = TerminalPurpose::Login { account_id };
         let hooks = Hooks {
             on_exit: Some(on_exit),
-            watch: None,
+            ..Hooks::default()
         };
         let terminal_id = self.spawn(purpose, command, cols, rows, outbox, hooks)?;
         let inner = Arc::clone(&self.inner);
@@ -196,9 +199,11 @@ impl Terminals {
         outbox: &Arc<Outbox>,
         on_exit: OnExit,
     ) -> Result<TerminalId, ErrorInfo> {
+        let first = format!("$ {}\r\n", command_line(command.get_argv())).into_bytes();
         let hooks = Hooks {
             on_exit: Some(on_exit),
             watch: None,
+            first,
         };
         let purpose = TerminalPurpose::Install { provider };
         self.spawn(purpose, command, cols, rows, outbox, hooks)
@@ -226,6 +231,7 @@ impl Terminals {
         let hooks = Hooks {
             on_exit: None,
             watch: Some(watch),
+            ..Hooks::default()
         };
         let purpose = TerminalPurpose::AwsLogin {
             profile,
@@ -241,7 +247,7 @@ impl Terminals {
         cols: u16,
         rows: u16,
         outbox: &Arc<Outbox>,
-        hooks: Hooks,
+        mut hooks: Hooks,
     ) -> Result<TerminalId, ErrorInfo> {
         let size = size(cols, rows)?;
         let pair = native_pty_system()
@@ -276,6 +282,11 @@ impl Terminals {
             self.inner.hub.terminals_changed(&list(&open));
         }
         lock(&term.output).attached.push(Arc::clone(outbox));
+        // Before the reader starts, so it comes before the program's output.
+        let first = std::mem::take(&mut hooks.first);
+        if !first.is_empty() {
+            term.publish(&terminal_id, &first);
+        }
         info!(%terminal_id, ?purpose, "terminal opened");
         let terminals = self.clone();
         let id = terminal_id.clone();
@@ -406,7 +417,9 @@ impl Terminals {
         mut child: Box<dyn portable_pty::Child + Send + Sync>,
         hooks: Hooks,
     ) {
-        let Hooks { on_exit, mut watch } = hooks;
+        let Hooks {
+            on_exit, mut watch, ..
+        } = hooks;
         let mut buf = vec![0; READ_CHUNK];
         loop {
             match reader.read(&mut buf) {
@@ -592,6 +605,25 @@ fn list(open: &BTreeMap<TerminalId, Arc<Term>>) -> Vec<Terminal> {
             purpose: lock(&term.purpose).clone(),
         })
         .collect()
+}
+
+/// `argv` as a shell would take it, each argument but plain words in single quotes.
+fn command_line(argv: &[std::ffi::OsString]) -> String {
+    argv.iter()
+        .map(|arg| {
+            let arg = arg.to_string_lossy();
+            let plain = !arg.is_empty()
+                && arg
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_./=:@+,".contains(c));
+            if plain {
+                arg.into_owned()
+            } else {
+                format!("'{}'", arg.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn size(cols: u16, rows: u16) -> Result<PtySize, ErrorInfo> {
