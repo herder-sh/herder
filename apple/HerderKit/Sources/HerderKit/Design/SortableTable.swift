@@ -72,7 +72,7 @@ struct SortableColumn<Row> {
 }
 
 /// A collection as a table: a header whose columns sort on a click, with an arrow on the sorted
-/// one, then rows split by hairlines. Each device keeps each table's sort, under its `id`.
+/// one, then rows split by hairlines, its first column on the page's content edge. Each device keeps each table's sort, under its `id`.
 /// `open` makes a row a button that opens its object.
 struct SortableTable<Row: Identifiable>: View {
     let rows: [Row]
@@ -117,7 +117,7 @@ struct SortableTable<Row: Identifiable>: View {
     }
 
     private func header(_ sort: TableSort) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Theme.cellPadding) {
             ForEach(columns.indices, id: \.self) { index in
                 let column = columns[index]
                 let sorted = column.title == sort.column
@@ -145,23 +145,22 @@ struct SortableTable<Row: Identifiable>: View {
                 .cell(column)
             }
         }
-        .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .overlay(alignment: .bottom) { Hairline() }
     }
 
     @ViewBuilder private func line(_ row: Row) -> some View {
-        let cells = HStack(spacing: 12) {
+        let cells = HStack(spacing: Theme.cellPadding) {
             ForEach(columns.indices, id: \.self) { index in
                 columns[index].cell(row).cell(columns[index])
             }
         }
         .font(Theme.body)
         .foregroundStyle(Theme.text)
-        .padding(.horizontal, 8)
         .padding(.vertical, 8)
-        .frame(minHeight: 36)
-        .background(hovered == row.id ? Theme.raised : .clear)
+        .frame(minHeight: Theme.rowHeight)
+        // The hover fill reaches past the content edge, which stays on the page's.
+        .background((hovered == row.id ? Theme.raised : .clear).padding(.horizontal, -Theme.cellPadding / 2))
         .overlay(alignment: .bottom) { Hairline() }
         .contentShape(.rect)
         .onHover { inside in

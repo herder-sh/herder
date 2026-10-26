@@ -283,10 +283,7 @@ struct ProvidersView: View {
                 if !fleet.mcpMachines.isEmpty { McpServersSection(fleet: fleet) }
                 if let report, !report.models.isEmpty { models(report.models) }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            .frame(maxWidth: 920, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .pageColumn()
         }
         .background(Theme.background)
         .navigationTitle("Providers")
@@ -340,7 +337,7 @@ struct ProvidersView: View {
                         }
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(Theme.text)
-                        .padding(.horizontal, 14)
+                        .padding(.horizontal, Theme.cellPadding)
                         .padding(.vertical, 10)
                     }
                 }
@@ -455,7 +452,7 @@ struct ProvidersPage: View {
             Spacer(minLength: 12)
             fix()
         }
-        .padding(14)
+        .padding(Theme.cellPadding)
         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(urgency.color.opacity(0.45)))
     }
@@ -582,7 +579,7 @@ struct VersionMatrix: View {
                 .padding(.vertical, 9)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, Theme.cellPadding)
     }
 
     private var list: some View {
@@ -599,7 +596,7 @@ struct VersionMatrix: View {
                         }
                     }
                 }
-                .padding(14)
+                .padding(Theme.cellPadding)
             }
         }
     }
@@ -750,7 +747,7 @@ struct SetUpSheet: View {
                         }
                         Spacer()
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, Theme.cellPadding)
                     .padding(.vertical, 10)
                     ForEach(gap.machines) { place in
                         RowDivider()
@@ -789,9 +786,9 @@ struct SetUpRow: View {
             }
             .disabled(!place.connected || !place.owner)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, Theme.cellPadding)
         .padding(.vertical, 8)
-        .frame(minHeight: 44)
+        .frame(minHeight: Theme.rowHeight)
     }
 }
 

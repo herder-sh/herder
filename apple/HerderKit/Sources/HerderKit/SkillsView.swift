@@ -33,10 +33,7 @@ struct SkillsView: View {
     var body: some View {
         ScrollView {
             SkillsPage(fleet: fleet, sheet: $sheet, session: session)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
-                .frame(maxWidth: 920, alignment: .leading)
-                .frame(maxWidth: .infinity)
+                .pageColumn()
         }
         .background(Theme.background)
         .navigationTitle("Skills")
@@ -484,7 +481,7 @@ struct SkillImportSheet: View {
                         .font(.subheadline)
                         .foregroundStyle(Theme.text)
                         .padding(.horizontal, 12)
-                        .frame(minHeight: 44)
+                        .frame(minHeight: Theme.rowHeight)
                         .background(Theme.raised, in: .rect(cornerRadius: Theme.corner))
                         .contentShape(.rect)
                     }

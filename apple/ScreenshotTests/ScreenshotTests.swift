@@ -97,6 +97,11 @@ final class ScreenshotTests: XCTestCase {
             shoot("ios-machines")
             #endif
         }
+        #if os(macOS)
+        // The other pages on the layout grid: a list pane, and a page of grouped rows.
+        if section("Chats") { shoot("mac-chats") }
+        if section("Integrations") { shoot("mac-integrations") }
+        #endif
         skills()
         providers()
         integrations()

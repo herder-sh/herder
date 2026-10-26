@@ -546,8 +546,18 @@ blindness. No view uses a literal colour; new colours are added to `Theme` first
   Fixed point sizes only for glyphs and the draft's 30 pt question.
 - Corners: `Theme.corner` (10 pt) for cards and fields, 8–9 pt for buttons, 18 pt bubbles,
   22 pt composer, capsules for chips and badges.
-- Spacing: 16 pt screen margins on iOS, 20 pt pane margins on the Mac; 22 pt between
-  groups; content columns 760 pt (transcript, Board) and 784 pt (composer).
+- Spacing: one layout grid in `Theme` (P16.3). A page's header and content start
+  `Theme.margin` from its edges: 24 pt on the Mac, 16 pt on iOS, 16 pt in the 380 pt list
+  pane (`Theme.paneMargin`, which `ListAndSession` sets as the `pageMargin` in use). Page
+  content runs from the leading edge under the title (`pageColumn()`), at most 920 pt wide;
+  the page header is 52 pt high, the sidebar's top bar's height; a section heading's line is
+  32 pt; rows are 44 pt with one line and 52 pt with two (iOS rows grow from them); cells sit
+  `Theme.cellPadding` (14 pt) from their column's edge. 22 pt between groups; content columns
+  760 pt (transcript, Board) and 784 pt (composer).
+- The page header fits its pane: below 480 pt its actions are icons with their titles in
+  tooltips, and a status that does not fit beside the title takes the line under it, never
+  cut. Section headings (TODAY, ACCOUNTS) sit on the rows' content edge, never a full-width
+  band. The sidebar's icons share one column and its headings start where the labels do.
 
 ### 8.3 Components
 
