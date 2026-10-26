@@ -169,12 +169,22 @@ final class ScreenshotTests: XCTestCase {
         finish()
     }
 
-    /// The wide mockup the ledger session published: its card in the thread, then the viewer
-    /// at Fit width with its toolbar, then at actual size.
+    /// The wide mockup the ledger session published during its turn: its card in the thread,
+    /// then the viewer at Fit width with its toolbar, then at actual size.
     private func artifact() {
         guard open("Move invoices onto the ledger") else { return }
         let card = app.buttons["artifact-open"].firstMatch
         guard wait(card, "artifact card") else { return }
+        // Published during the turn, the card sits above the reply the transcript opens on.
+        for _ in 0..<8 where !card.isHittable {
+            #if os(iOS)
+            app.swipeDown(velocity: .slow)
+            #else
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5))
+                .scroll(byDeltaX: 0, deltaY: 250)
+            #endif
+            Thread.sleep(forTimeInterval: 0.5)
+        }
         settle()
         shoot(platform("artifact-card"))
         press(card)

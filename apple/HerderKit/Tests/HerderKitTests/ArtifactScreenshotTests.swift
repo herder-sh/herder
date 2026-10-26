@@ -13,7 +13,7 @@ import WebKit
 /// its card in the thread. Attaches each, and with `HERDER_SCREENSHOT_DIR` set, also writes them
 /// there as `artifact-mac.png`, `artifact-narrow.png` and `artifact-card.png`. A page renders out
 /// of process, so these capture the window with ScreenCaptureKit, which needs the screen
-/// recording permission; without it they are skipped.
+/// recording permission and an unlocked screen; without them they are skipped.
 @MainActor @Suite(.serialized) struct ArtifactScreenshotTests {
     @Test func showsTheWideMockupWholeAtFitWidth() async throws {
         let (fleet, key) = try sampleFleet()
@@ -60,19 +60,26 @@ import WebKit
             host.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(100))
         }
-        let shareable = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        let target = try #require(shareable.windows.first { $0.windowID == CGWindowID(window.windowNumber) })
-        let config = SCStreamConfiguration()
-        config.width = Int(window.frame.width * 2)
-        config.height = Int(window.frame.height * 2)
-        config.showsCursor = false
-        let image = try await SCScreenshotManager.captureImage(
-            contentFilter: SCContentFilter(desktopIndependentWindow: target), configuration: config)
+        guard let image = await capture(window) else { return }
         let png = try #require(try await withPages(of: window, on: image).representation(using: .png, properties: [:]))
         Attachment.record(png, named: name)
         if let dir = ProcessInfo.processInfo.environment["HERDER_SCREENSHOT_DIR"] {
             try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
         }
+    }
+
+    /// The window as the screen shows it; `nil` where nothing can be captured: without the screen
+    /// recording permission, or with the screen locked.
+    private func capture(_ window: NSWindow) async -> CGImage? {
+        guard let shareable = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+              let target = shareable.windows.first(where: { $0.windowID == CGWindowID(window.windowNumber) })
+        else { return nil }
+        let config = SCStreamConfiguration()
+        config.width = Int(window.frame.width * 2)
+        config.height = Int(window.frame.height * 2)
+        config.showsCursor = false
+        return try? await SCScreenshotManager.captureImage(
+            contentFilter: SCContentFilter(desktopIndependentWindow: target), configuration: config)
     }
 
     /// The capture with each page drawn in: WebKit paints no window hidden behind others, as

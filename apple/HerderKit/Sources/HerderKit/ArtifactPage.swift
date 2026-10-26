@@ -201,7 +201,7 @@ struct SandboxedWebView {
                 web.evaluateJavaScript(script, in: nil, in: .defaultClient) { [weak self] _ in
                     guard let self, zoom == .fit else { return }
                     web.scrollView.setZoomScale(fit, animated: false)
-                    scaled(web.scrollView.zoomScale)
+                    layOut()
                 }
             }
             #endif

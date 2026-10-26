@@ -13,7 +13,7 @@
 //!   where it finished the work;
 //! - on `laptop`, a finished session and a Claude session waiting on a multi-select question.
 //!
-//! The ledger session, once finished, publishes a wide HTML mockup ([`MOCKUP`]) with a public
+//! The ledger session publishes a wide HTML mockup during its turn ([`MOCKUP`]) with a public
 //! link from a krowk of the demo's own ([`DemoKrowk`]).
 //!
 //! The subagents' session and the primary have pull requests ([`PRS`]), which a GitHub of the
@@ -586,6 +586,24 @@ impl Scenario<'_> {
             )
             .await?;
         self.prompt("devbox", &ledger, LEDGER).await?;
+        // Published during its turn, before any other session exists: its last activity stays
+        // the turn's end, so the Board orders every task as it would without it. Its MCP server
+        // answers once the turn has started.
+        let devbox = self.daemon("devbox")?;
+        devbox
+            .until(&ledger, |events| {
+                events
+                    .iter()
+                    .any(|body| matches!(body, EventBody::TurnStarted { .. }))
+            })
+            .await?;
+        devbox
+            .tool(
+                &ledger,
+                "publish",
+                json!({ "title": "Invoices on the ledger — list (mockup)", "html": MOCKUP }),
+            )
+            .await?;
         let flaky = self
             .session(
                 "devbox",
@@ -691,13 +709,6 @@ impl Scenario<'_> {
         }
 
         devbox.until(&ledger, finished(1)).await?;
-        devbox
-            .tool(
-                &ledger,
-                "publish",
-                json!({ "title": "Invoices on the ledger — list (mockup)", "html": MOCKUP }),
-            )
-            .await?;
         devbox.until(&flaky, finished(1)).await?;
         let forked = self
             .client
