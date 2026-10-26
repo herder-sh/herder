@@ -19,16 +19,15 @@ command -v magick >/dev/null || { echo "magick is missing: brew install imagemag
 # site name <- the name ScreenshotTests gives the shot.
 shots=(
     mac-hero:mac-tasks
-    mac-board:mac-home
-    mac-question:mac-multi-select
-    mac-providers:mac-providers
+    mac-failover:mac-failover
     mac-machines:mac-machines
-    mac-activity:mac-activity-done
+    mac-agents:mac-task-agents
     mac-integrations:mac-integrations
+    mac-backup:mac-machine-backup
+    mac-member:mac-machine-member
     ios-board:ios-home
     ios-session:ios-session
     ios-request:ios-approval
-    ios-activity:ios-activity-login
 )
 
 work=$(mktemp -d)
