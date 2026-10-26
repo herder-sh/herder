@@ -56,11 +56,46 @@ struct FleetView: View {
     @State private var chatsPath: [NavRoute] = []
     @State private var machinesPath: [NavRoute] = []
     @State private var boardQuery = ""
+    /// The session a `herder://session` link asked for, until its machine says whether it has it.
+    @State private var linked: SessionKey?
+    /// Why a link's session did not open, for the alert that says so.
+    @State private var linkProblem: SessionLinkTarget?
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
     var body: some View {
+        screens
+            .onOpenURL(perform: open)
+            #if os(macOS)
+            // A link opens in the one window rather than a new one.
+            .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+            #endif
+            .onChange(of: fleet.machines) { resolveLink() }
+            // A machine that never connects leaves the link unanswered; say so rather than wait on.
+            .task(id: linked) {
+                guard linked != nil else { return }
+                try? await Task.sleep(for: .seconds(15))
+                if linked != nil {
+                    linked = nil
+                    linkProblem = .connecting
+                }
+            }
+            .alert(linkProblem.map(\.title) ?? "", isPresented: Binding(get: { linkProblem != nil }, set: { if !$0 { linkProblem = nil } }),
+                   presenting: linkProblem) { problem in
+                switch problem {
+                case .unpaired:
+                    Button("Add Machine") { sheet = .pair }
+                    Button("Cancel", role: .cancel) {}
+                default:
+                    Button("OK", role: .cancel) {}
+                }
+            } message: { problem in
+                Text(problem.message)
+            }
+    }
+
+    private var screens: some View {
         Group {
             #if os(iOS)
             if sizeClass == .compact { tabs } else { shell }
@@ -171,6 +206,47 @@ struct FleetView: View {
             tab = .board
             boardPath = [.session(key)]
         }
+    }
+
+    /// Opens what a `herder://` link names; one herder cannot read says so.
+    private func open(_ url: URL) {
+        // An earlier link's alert would keep this one's sheet from showing.
+        linkProblem = nil
+        switch AppLink(url: url) {
+        case .session(let key):
+            linked = key
+            resolveLink()
+        case .pair(let link):
+            sheet = .pairLink(link)
+        case nil:
+            fleet.toast = Toast(text: "herder cannot open that link", failed: true)
+        }
+    }
+
+    /// Opens the linked session once its machine lists it, or says why it cannot.
+    private func resolveLink() {
+        guard let key = linked else { return }
+        let target = SessionLinkTarget(key, machines: fleet.machines)
+        if target == .connecting { return }
+        linked = nil
+        if target == .open {
+            show(key)
+        } else {
+            linkProblem = target
+        }
+    }
+
+    /// Brings a session forward: selected beside the Board, or Chats for a chat, on the Mac and
+    /// iPad; pushed on the Board tab on iPhone.
+    private func show(_ key: SessionKey) {
+        sheet = nil
+        draft = nil
+        pages.back(to: 0)
+        let chat = fleet.machines.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }?.chat
+        item = chat == true ? .chats : .board
+        session = key
+        tab = .board
+        boardPath = [.session(key)]
     }
 
     /// Closes a session's pane, and pops it and what was pushed over it on every tab.
