@@ -201,7 +201,7 @@ struct AddMachineSheet: View {
 
     private var hint: String {
         switch kind {
-        case .machine, .vault: input != nil && results == nil ? "The fingerprint must match the one `herder pair` printed." : ""
+        case .machine, .vault: input != nil && results == nil ? "Check the fingerprint `herder pair` printed." : ""
         default: ""
         }
     }
