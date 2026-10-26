@@ -40,6 +40,14 @@ enum ProvidersFixture {
             JobKey(hostId: "b", kind: .install("codex")): .queued,
             JobKey(hostId: "a", kind: .install("grok")): .updated(from: "0.9.1", to: "0.9.4"),
             JobKey(hostId: "b", kind: .install("opencode")): .failed("npm: EACCES on /usr/local/lib · exit 243"),
+        ], fixable: [JobKey(hostId: "b", kind: .install("opencode"))], outputs: [
+            JobKey(hostId: "b", kind: .install("opencode")): """
+                $ npm install -g opencode-ai@latest
+                npm error code EACCES
+                npm error syscall mkdir
+                npm error path /usr/local/lib/node_modules/opencode-ai
+                npm error errno -13
+                """,
         ])
     }
 

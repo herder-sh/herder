@@ -166,6 +166,8 @@ struct ProvidersOverview {
         let provider: Provider
         let machine: String
         let message: String
+        /// The installer's last lines of output, for the card's details.
+        var output = ""
 
         var id: JobKey { key }
     }
@@ -176,12 +178,16 @@ struct ProvidersOverview {
     let installs: [JobKey: JobProgress]
     let signedOut: [SignedOut]
     let failedInstalls: [FailedInstall]
+    /// The failed installs Fix with AI is offered for.
+    let fixable: Set<JobKey>
     let gaps: SetUpGaps
 
-    init(accounts: ProviderAccounts, versions: ProviderVersions, installs: [JobKey: JobProgress]) {
+    init(accounts: ProviderAccounts, versions: ProviderVersions, installs: [JobKey: JobProgress],
+         fixable: Set<JobKey> = [], outputs: [JobKey: String] = [:]) {
         self.accounts = accounts
         self.versions = versions
         self.installs = installs
+        self.fixable = fixable
         signedOut = accounts.groups.flatMap(\.logins).flatMap { login in
             login.on.flatMap { place in
                 place.signedOut.map { SignedOut(login: login, place: place, accountId: $0) }
@@ -190,16 +196,20 @@ struct ProvidersOverview {
         let machines = Dictionary(versions.rows.flatMap(\.cells).map { ($0.hostId, $0.machine) }) { first, _ in first }
         failedInstalls = installs.compactMap { key, progress in
             guard case .failed(let message) = progress, case .install(let provider) = key.kind else { return nil }
-            return FailedInstall(key: key, provider: provider, machine: machines[key.hostId] ?? key.hostId, message: message)
+            return FailedInstall(key: key, provider: provider, machine: machines[key.hostId] ?? key.hostId, message: message,
+                                 output: outputs[key] ?? "")
         }
         .sorted { ($0.machine, $0.provider) < ($1.machine, $1.provider) }
         gaps = SetUpGaps(accounts)
     }
 
     @MainActor init(fleet: Fleet) {
-        let installs = fleet.activity.keys.filter(\.isInstall).map { ($0, fleet.progress($0)) }
+        let keys = fleet.activity.keys.filter(\.isInstall)
+        let installs = keys.map { ($0, fleet.progress($0)) }
+        let failed = keys.filter { fleet.progress($0).failed }
         self.init(accounts: ProviderAccounts(machines: fleet.machines), versions: ProviderVersions(machines: fleet.machines),
-                  installs: Dictionary(installs) { _, last in last })
+                  installs: Dictionary(installs) { _, last in last }, fixable: Set(failed.filter(fleet.canFix)),
+                  outputs: Dictionary(failed.map { ($0, fleet.failureOutput($0)) }) { _, last in last })
     }
 
     /// The install job for `cell`, while this device runs or keeps one.
@@ -283,6 +293,7 @@ struct ProvidersView: View {
                     open: { pages.open(.account(loginId: $0.id)) },
                     signIn: { fleet.relogin($0.accountId, on: $0.place.hostId) },
                     retry: { fleet.retry($0) },
+                    fix: { key in Task { await fleet.fix(key) } },
                     install: { fleet.install($0.provider, on: $0.hostId) },
                     setUp: { presented = .setUp },
                     addAccount: { sheet = .addAccount }))
@@ -363,6 +374,8 @@ struct ProvidersPage: View {
         let open: (ProviderAccounts.Login) -> Void
         let signIn: (ProvidersOverview.SignedOut) -> Void
         let retry: (JobKey) -> Void
+        /// Starts a session on the machine that fixes a failed install.
+        let fix: (JobKey) -> Void
         let install: (ProviderVersions.Cell) -> Void
         let setUp: () -> Void
         let addAccount: () -> Void
@@ -379,6 +392,9 @@ struct ProvidersPage: View {
     let overview: ProvidersOverview
     let report: UsageReport?
     let actions: Actions
+    /// The failed installs whose output is shown.
+    @State private var details: Set<JobKey> = []
+
     var body: some View {
         VStack(alignment: .leading, spacing: 28) {
             if overview.needsAttention { attention }
@@ -397,7 +413,7 @@ struct ProvidersPage: View {
             }
             if !overview.versions.rows.isEmpty {
                 ProvidersSection(title: "CLI versions", note: "latest from each vendor") {
-                    VersionMatrix(overview: overview, act: actions.install, retry: actions.retry)
+                    VersionMatrix(overview: overview, act: actions.install, retry: actions.retry, fix: actions.fix)
                 }
             }
         }
@@ -427,9 +443,24 @@ struct ProvidersPage: View {
             }
             ForEach(overview.failedInstalls) { failed in
                 problem(urgency: .failing, title: "\(ModelCatalog.providerName(failed.provider)) failed to install on \(failed.machine)") {
-                    Text(failed.message)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(failed.message)
+                        if !failed.output.isEmpty {
+                            Button(details.contains(failed.key) ? "Hide details" : "Details") {
+                                if details.contains(failed.key) { details.remove(failed.key) } else { details.insert(failed.key) }
+                            }
+                            .buttonStyle(.plain).foregroundStyle(Theme.text)
+                        }
+                    }
                 } fix: {
-                    PillButton(title: "Retry", prominent: true) { actions.retry(failed.key) }
+                    HStack(spacing: 8) {
+                        if overview.fixable.contains(failed.key) {
+                            PillButton(title: "Fix with AI", symbol: "sparkles") { actions.fix(failed.key) }
+                        }
+                        PillButton(title: "Retry", prominent: true) { actions.retry(failed.key) }
+                    }
+                } more: {
+                    if details.contains(failed.key) { FailureOutput(text: failed.output) }
                 }
             }
         }
@@ -451,23 +482,41 @@ struct ProvidersPage: View {
         .padding(.vertical, 10)
     }
 
-    private func problem<Detail: View, Fix: View>(
-        urgency: Urgency, title: String, @ViewBuilder detail: () -> Detail, @ViewBuilder fix: () -> Fix
+    private func problem<Detail: View, Fix: View, More: View>(
+        urgency: Urgency, title: String, @ViewBuilder detail: () -> Detail, @ViewBuilder fix: () -> Fix,
+        @ViewBuilder more: () -> More = { EmptyView() }
     ) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: urgency == .failing ? "xmark.octagon.fill" : "exclamationmark.circle.fill")
-                .font(.title3).foregroundStyle(urgency.color)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                detail().font(.caption).foregroundStyle(Theme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 10) {
+            // Its fix beside the text while the text fits on its lines, else under it.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 12) {
+                    problemText(urgency: urgency, title: title, detail: detail)
+                    Spacer(minLength: 12)
+                    fix()
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    problemText(urgency: urgency, title: title, detail: detail).fixedSize(horizontal: false, vertical: true)
+                    fix().padding(.leading, 36)
+                }
             }
-            Spacer(minLength: 12)
-            fix()
+            more()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Theme.cellPadding)
         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(urgency.color.opacity(0.45)))
+    }
+
+    private func problemText<Detail: View>(urgency: Urgency, title: String, detail: () -> Detail) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: urgency == .failing ? "xmark.octagon.fill" : "exclamationmark.circle.fill")
+                .font(.title3).foregroundStyle(urgency.color)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                detail().font(.caption).foregroundStyle(Theme.secondary)
+            }
+        }
     }
 
     private var empty: some View {
@@ -629,6 +678,7 @@ struct VersionMatrix: View {
     let overview: ProvidersOverview
     let act: (ProviderVersions.Cell) -> Void
     let retry: (JobKey) -> Void
+    let fix: (JobKey) -> Void
 
     var body: some View {
         let machines = overview.versions.rows.first?.cells ?? []
@@ -647,7 +697,7 @@ struct VersionMatrix: View {
                 SortableColumn<ProviderVersions.Row>(machines[index].machine, width: width) { row in
                     if row.cells.indices.contains(index) {
                         let cell = row.cells[index]
-                        MatrixCell(cell: cell, job: overview.job(cell), act: act, retry: retry)
+                        MatrixCell(cell: cell, job: overview.job(cell), act: act, retry: retry, fix: fixer(cell))
                     }
                 }
             }
@@ -662,7 +712,7 @@ struct VersionMatrix: View {
                         HStack {
                             Text(cell.machine).font(.caption).foregroundStyle(Theme.secondary)
                             Spacer()
-                            MatrixCell(cell: cell, job: overview.job(cell), act: act, retry: retry)
+                            MatrixCell(cell: cell, job: overview.job(cell), act: act, retry: retry, fix: fixer(cell))
                         }
                     }
                 }
@@ -670,6 +720,11 @@ struct VersionMatrix: View {
                 .overlay(alignment: .top) { Rectangle().fill(Theme.stroke).frame(height: 1) }
             }
         }
+    }
+
+    /// Fix with AI for the cell's failed install, where it is offered.
+    private func fixer(_ cell: ProviderVersions.Cell) -> ((JobKey) -> Void)? {
+        overview.fixable.contains(JobKey(hostId: cell.hostId, kind: .install(cell.provider))) ? fix : nil
     }
 
     private func provider(_ row: ProviderVersions.Row) -> some View {
@@ -689,6 +744,8 @@ struct MatrixCell: View {
     let job: JobProgress?
     let act: (ProviderVersions.Cell) -> Void
     let retry: (JobKey) -> Void
+    /// Fix with AI for a failed install; nil where it is not offered.
+    var fix: ((JobKey) -> Void)?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -702,11 +759,21 @@ struct MatrixCell: View {
                 Text(cell.state == .missing ? "Installing" : "Updating").font(.caption.weight(.medium))
                     .foregroundStyle(Urgency.running.color)
             case .failed(let message)?:
-                Button { retry(JobKey(hostId: cell.hostId, kind: .install(cell.provider))) } label: {
+                let key = JobKey(hostId: cell.hostId, kind: .install(cell.provider))
+                Button { retry(key) } label: {
                     chip("Failed · Retry", Urgency.failing.color)
                 }
                 .buttonStyle(.plain)
                 .help(message)
+                if let fix {
+                    Button { fix(key) } label: {
+                        Image(systemName: "sparkles").font(.caption.weight(.semibold)).foregroundStyle(Theme.text)
+                            .frame(width: 22, height: 22).contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Fix with AI")
+                    .accessibilityLabel("Fix with AI")
+                }
             case .installed?, .updated?, .upToDate?:
                 check
                 Text("just now").font(.caption).foregroundStyle(Theme.tertiary)
@@ -969,5 +1036,21 @@ struct HeadroomMeter: View {
         }
         .frame(height: 6)
         .accessibilityHidden(true)
+    }
+}
+
+/// A failed job's last lines of output, as its card's details show them.
+struct FailureOutput: View {
+    let text: String
+
+    var body: some View {
+        ScrollView {
+            Text(text).font(Theme.monoSmall).foregroundStyle(Theme.secondary).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+        }
+        .defaultScrollAnchor(.bottom)
+        .frame(maxHeight: 220)
+        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
     }
 }

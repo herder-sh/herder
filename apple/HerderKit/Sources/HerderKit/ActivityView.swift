@@ -26,6 +26,8 @@ struct ActivityItem: Identifiable {
     let text: JobText
     /// When it ended, once it has.
     var ended: Date?
+    /// Whether Fix with AI is offered for it.
+    var fixable = false
 
     var id: JobKey { key }
 }
@@ -38,7 +40,7 @@ extension Fleet {
         activity.keys.map { key in
             let progress = progress(key)
             return ActivityItem(key: key, progress: progress, text: JobText(fleet: self, key: key, progress: progress),
-                                ended: activity[key]?.ended)
+                                ended: activity[key]?.ended, fixable: canFix(key))
         }
     }
 }
@@ -128,7 +130,7 @@ struct ActivityPanel: View {
             ActivityDetail(fleet: fleet, key: picked) { self.picked = nil }
         } else {
             ActivityList(items: fleet.activityItems, clear: fleet.clearFinished, close: close,
-                         open: { picked = $0 }, retry: fleet.retry)
+                         open: { picked = $0 }, retry: fleet.retry, fix: { key in Task { await fleet.fix(key) } })
         }
     }
 }
@@ -140,6 +142,7 @@ struct ActivityList: View {
     var close: (() -> Void)?
     let open: (JobKey) -> Void
     let retry: (JobKey) -> Void
+    var fix: (JobKey) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -187,7 +190,7 @@ struct ActivityList: View {
                 .padding(.top, 12)
                 .padding(.bottom, 2)
                 ForEach(members) { item in
-                    ActivityRow(item: item, open: { open(item.key) }, retry: { retry(item.key) })
+                    ActivityRow(item: item, open: { open(item.key) }, retry: { retry(item.key) }, fix: { fix(item.key) })
                 }
             }
         }
@@ -210,6 +213,7 @@ struct ActivityRow: View {
     let item: ActivityItem
     let open: () -> Void
     let retry: () -> Void
+    var fix: () -> Void = {}
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -252,7 +256,9 @@ struct ActivityRow: View {
                 PillButton(title: "Approve", prominent: true) {
                     if let url = URL(string: device.verificationUrl) { openURL(url) }
                 }
-            case .failed: PillButton(title: "Retry", action: retry)
+            case .failed:
+                if item.fixable { PillButton(title: "Fix with AI", symbol: "sparkles", action: fix) }
+                PillButton(title: "Retry", action: retry)
             default: EmptyView()
             }
             Button(action: open) {
@@ -339,7 +345,12 @@ struct ActivityDetail: View {
                 PillButton(title: "Update now") { fleet.updateHerder(on: key.hostId, when: .now) }
             }
         case (_, .failed):
-            PillButton(title: "Retry", symbol: "arrow.clockwise", prominent: true) { fleet.retry(key) }
+            HStack(spacing: 8) {
+                PillButton(title: "Retry", symbol: "arrow.clockwise", prominent: true) { fleet.retry(key) }
+                if fleet.canFix(key) {
+                    PillButton(title: "Fix with AI", symbol: "sparkles") { Task { await fleet.fix(key) } }
+                }
+            }
         default:
             EmptyView()
         }

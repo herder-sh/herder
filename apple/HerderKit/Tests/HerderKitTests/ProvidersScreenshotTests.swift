@@ -35,7 +35,7 @@ private struct ProvidersPreview: View {
                 PaneButton(title: "Add Account", symbol: "plus", prominent: true) {}
             }
             ProvidersPage(overview: overview, report: ProvidersFixture.report, actions: ProvidersPage.Actions(
-                open: { _ in }, signIn: { _ in }, retry: { _ in }, install: { _ in }, setUp: {}, addAccount: {}))
+                open: { _ in }, signIn: { _ in }, retry: { _ in }, fix: { _ in }, install: { _ in }, setUp: {}, addAccount: {}))
                 .pageColumn()
         }
         .frame(width: width)

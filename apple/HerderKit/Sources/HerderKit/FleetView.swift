@@ -72,6 +72,14 @@ struct FleetView: View {
             .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
             #endif
             .onChange(of: fleet.machines) { resolveLink() }
+            // As a link does: the new session shows once its machine lists it.
+            .onChange(of: fleet.revealed) {
+                guard let key = fleet.revealed else { return }
+                fleet.revealed = nil
+                linkProblem = nil
+                linked = key
+                resolveLink()
+            }
             // A machine that never connects leaves the link unanswered; say so rather than wait on.
             .task(id: linked) {
                 guard linked != nil else { return }
