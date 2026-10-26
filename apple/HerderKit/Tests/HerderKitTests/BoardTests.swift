@@ -12,6 +12,35 @@ private func pr(
 }
 
 struct BoardTests {
+    @Test func archivingATaskOpensTheOneBelowElseTheOneAbove() {
+        let (a, b, c) = (SessionKey(hostId: "h", sessionId: "01A"), SessionKey(hostId: "h", sessionId: "01B"),
+                         SessionKey(hostId: "h", sessionId: "01C"))
+        // In the middle and first: the one below.
+        #expect(TaskTree.next(after: b, in: [a, b, c]) == c)
+        #expect(TaskTree.next(after: a, in: [a, b, c]) == b)
+        // Last: the one above.
+        #expect(TaskTree.next(after: c, in: [a, b, c]) == b)
+        // The only one, or one the list does not show: nothing.
+        #expect(TaskTree.next(after: a, in: [a]) == nil)
+        #expect(TaskTree.next(after: a, in: [b, c]) == nil)
+        // A search hiding B: the next the list shows, not the next of all.
+        #expect(TaskTree.next(after: a, in: [a, c]) == c)
+    }
+
+    @Test func theNextTaskFollowsTheBoardsSearchAndSort() {
+        var alpha = Script("01A")
+        var beta = Script("01B")
+        var alphaToo = Script("01C")
+        let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B", "01C"])], sessions: [
+            alpha.key: alpha.model([created(task: "Alpha fix")]),
+            beta.key: beta.model([created(task: "Beta")]),
+            alphaToo.key: alphaToo.model([created(task: "Alpha docs")]),
+        ])
+        let shown = BoardSection.sections(lists.board(matching: "alpha"), by: .recent, now: .now).flatMap(\.trees)
+        #expect(shown.map(\.lead.title) == ["Alpha docs", "Alpha fix"])
+        #expect(TaskTree.next(after: alphaToo.key, in: shown.map(\.id)) == alpha.key)
+    }
+
     @Test func theBoardListsOpenTreesNewestFirst() {
         var ready = Script("01A")
         var failing = Script("01B")
