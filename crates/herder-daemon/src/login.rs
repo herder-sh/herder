@@ -53,10 +53,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use herder_adapters::acp::AgentProfile;
+use herder_adapters::claude::Cli;
 use herder_protocol::{Account, AccountId, ErrorCode, ErrorInfo, Provider};
 use portable_pty::CommandBuilder;
 use tracing::{info, warn};
 
+use crate::accounts::Clis;
 use crate::config::{self, ID_RULE, resolve_path, valid_id};
 use crate::session::{AccountConfig, SessionManager};
 
@@ -88,8 +90,11 @@ pub struct LoginStatus {
 }
 
 /// The login of each provider herder can add accounts of, running the binary `binaries` names
-/// for it, else the provider's own CLI on `PATH`.
-pub fn programs(binaries: &HashMap<Provider, PathBuf>) -> HashMap<Provider, LoginProgram> {
+/// for it, else the provider's own CLI on `PATH`, and logging a `clis` CLI in its own way.
+pub fn programs(
+    binaries: &HashMap<Provider, PathBuf>,
+    clis: &Clis,
+) -> HashMap<Provider, LoginProgram> {
     let login = |provider: Provider,
                  default: &str,
                  args: &[&str],
@@ -111,13 +116,28 @@ pub fn programs(binaries: &HashMap<Provider, PathBuf>) -> HashMap<Provider, Logi
         };
         (provider, program)
     };
+    let claude = clis.get(&Provider::Claude).copied().unwrap_or_default();
+    let (claude_args, claude_env, claude_status) = match claude {
+        Cli::Claude => (
+            &[][..],
+            &["CLAUDE_CONFIG_DIR"][..],
+            (&["auth", "status", "--json"][..], Some("loggedIn")),
+        ),
+        // `qodercli` walks through its login from its own command, and reports a login as
+        // JSON with a `logged_in` field.
+        Cli::Qoder => (
+            &["login"][..],
+            &["QODER_CONFIG_DIR"][..],
+            (&["status", "-o", "json"][..], Some("logged_in")),
+        ),
+    };
     HashMap::from([
         login(
             Provider::Claude,
             "claude",
-            &[],
-            &["CLAUDE_CONFIG_DIR"],
-            (&["auth", "status", "--json"], Some("loggedIn")),
+            claude_args,
+            claude_env,
+            claude_status,
         ),
         login(
             Provider::Codex,
@@ -683,7 +703,7 @@ mod tests {
     /// Status checks standing in for the providers' own: codex's answers with its exit status,
     /// claude's with JSON, both from whether the login left `logged-in` in the config dir.
     fn fake_programs() -> HashMap<Provider, LoginProgram> {
-        let mut programs = programs(&HashMap::new());
+        let mut programs = programs(&HashMap::new(), &Clis::new());
         let fake = |program: &mut LoginProgram, script: &str| {
             program.program = PathBuf::from("/bin/sh");
             program.status.args = vec!["-c".into(), script.into()];
@@ -889,7 +909,7 @@ mod tests {
 
     #[test]
     fn status_check_runs_in_the_config_dir_or_the_clis_default_location() {
-        let mut program = programs(&HashMap::new())[&Provider::Codex].clone();
+        let mut program = programs(&HashMap::new(), &Clis::new())[&Provider::Codex].clone();
         program.program = PathBuf::from("/bin/sh");
         program.status.args = vec!["-c".into(), r#"[ "$CODEX_HOME" = "$PWD" ]"#.into()];
         let dir = tempfile::tempdir().unwrap();
@@ -905,9 +925,21 @@ mod tests {
     }
 
     #[test]
+    fn a_compat_qoder_cli_logs_in_and_reports_its_login_its_own_way() {
+        let clis = Clis::from([(Provider::Claude, Cli::Qoder)]);
+        let programs = programs(&HashMap::new(), &clis);
+        let claude = &programs[&Provider::Claude];
+        assert_eq!(claude.program, Path::new("claude"));
+        assert_eq!(claude.args, ["login"]);
+        assert_eq!(claude.config_env, ["QODER_CONFIG_DIR"]);
+        assert_eq!(claude.status.args, ["status", "-o", "json"]);
+        assert_eq!(claude.status.logged_in_field.as_deref(), Some("logged_in"));
+    }
+
+    #[test]
     fn each_provider_logs_in_with_its_own_cli_and_config_dir_variables() {
         let binaries = HashMap::from([(Provider::Codex, PathBuf::from("/opt/codex"))]);
-        let programs = programs(&binaries);
+        let programs = programs(&binaries, &Clis::new());
         let argv = |provider: &Provider| {
             let program = &programs[provider];
             let mut argv = vec![program.program.to_string_lossy().into_owned()];

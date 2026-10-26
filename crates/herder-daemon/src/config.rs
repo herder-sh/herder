@@ -241,6 +241,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
+use herder_adapters::claude::Cli;
 use herder_protocol::{
     AccountId, BackupSettings, Bot, BotId, BotKind, DaemonSettings, FollowUpSettings, LogSettings,
     McpServerSettings, McpTransport, PermissionMode, ProjectDiscovery, ProjectId, Provider,
@@ -271,6 +272,8 @@ pub struct Config {
     pub accounts: Accounts,
     /// The CLI to run per provider, where it is not the provider's own name on `PATH`.
     pub binaries: HashMap<Provider, PathBuf>,
+    /// The kind of CLI each provider runs, where it is not the provider's own.
+    pub clis: HashMap<Provider, Cli>,
     /// How sessions fail over when their account hits a limit.
     pub failover: FailoverConfig,
     /// How sessions are titled.
@@ -607,6 +610,17 @@ enum McpTransportFile {
 #[serde(deny_unknown_fields)]
 struct ProviderFile {
     binary: PathBuf,
+    /// Another vendor's CLI that speaks this provider's protocol, where it is not the
+    /// provider's own.
+    compat: Option<Compat>,
+}
+
+/// The `compat` value of a `[providers.<name>]` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+enum Compat {
+    /// Qoder CLI speaks Claude Code's stream-json protocol.
+    #[serde(rename = "qodercli")]
+    Qodercli,
 }
 
 impl Config {
@@ -725,13 +739,15 @@ fn resolve(
     let (vault, retention) = resolve_vault(file.mode, file.vault)?;
     let mcp_servers = resolve_mcp_servers(file.mcp_servers, env)?;
     validate_bots(&file.bots, &accounts)?;
+    let (binaries, clis) = resolve_providers(file.providers, env)?;
     Ok(Config {
         path,
         listen,
         data_dir,
         log: file.log,
         accounts,
-        binaries: resolve_binaries(file.providers, env)?,
+        binaries,
+        clis,
         failover: file.failover,
         titles,
         follow_ups: file.follow_ups,
@@ -2089,25 +2105,37 @@ pub(crate) fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
-/// Validates the `[providers.<name>]` tables into the binary each provider runs.
-fn resolve_binaries(
+/// Validates the `[providers.<name>]` tables into the binary each provider runs and, where it
+/// names one, the [`Cli`] that binary is.
+fn resolve_providers(
     tables: BTreeMap<String, ProviderFile>,
     env: &impl Fn(&str) -> Option<OsString>,
-) -> Result<HashMap<Provider, PathBuf>> {
-    tables
-        .into_iter()
-        .map(|(name, table)| {
-            let provider = supported(name)?;
-            let binary = if table.binary.components().count() == 1 {
-                // A bare name, looked up on `PATH`.
-                table.binary
-            } else {
-                resolve_path(&table.binary, env)
-                    .with_context(|| format!("providers.{}.binary", provider.as_str()))?
+) -> Result<(HashMap<Provider, PathBuf>, HashMap<Provider, Cli>)> {
+    let mut binaries = HashMap::new();
+    let mut clis = HashMap::new();
+    for (name, table) in tables {
+        let provider = supported(name)?;
+        let binary = if table.binary.components().count() == 1 {
+            // A bare name, looked up on `PATH`.
+            table.binary
+        } else {
+            resolve_path(&table.binary, env)
+                .with_context(|| format!("providers.{}.binary", provider.as_str()))?
+        };
+        if let Some(compat) = table.compat {
+            ensure!(
+                provider == Provider::Claude,
+                "providers.{}: only claude runs a compat CLI",
+                provider.as_str()
+            );
+            let cli = match compat {
+                Compat::Qodercli => Cli::Qoder,
             };
-            Ok((provider, binary))
-        })
-        .collect()
+            clis.insert(provider.clone(), cli);
+        }
+        binaries.insert(provider, binary);
+    }
+    Ok((binaries, clis))
 }
 
 /// The provider named `name`, if herder can run its sessions.
@@ -2322,6 +2350,7 @@ mod tests {
                 },
                 accounts: Accounts::new(),
                 binaries: HashMap::new(),
+                clis: HashMap::new(),
                 failover: FailoverConfig { pin: true },
                 titles: TitlesConfig::default(),
                 follow_ups: FollowUpsConfig {
@@ -2784,6 +2813,36 @@ mod tests {
                 (Provider::Opencode, PathBuf::from("/opt/opencode")),
             ])
         );
+    }
+
+    #[test]
+    fn a_compat_cli_runs_under_the_provider_whose_protocol_it_speaks() {
+        let home = tempfile::tempdir().unwrap();
+        let config = load(
+            home.path(),
+            r#"
+            [providers.claude]
+            binary = "~/bin/qodercli"
+            compat = "qodercli"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.binaries,
+            HashMap::from([(Provider::Claude, home.path().join("bin/qodercli"))])
+        );
+        assert_eq!(config.clis, HashMap::from([(Provider::Claude, Cli::Qoder)]));
+
+        let error = load(
+            home.path(),
+            r#"
+            [providers.codex]
+            binary = "codex"
+            compat = "qodercli"
+            "#,
+        )
+        .unwrap_err();
+        assert!(error.contains("only claude runs a compat CLI"), "{error}");
     }
 
     #[test]

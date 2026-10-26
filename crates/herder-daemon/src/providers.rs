@@ -15,11 +15,12 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use herder_adapters::claude::Cli;
 use herder_protocol::{ErrorCode, ErrorInfo, Provider, ProviderStatus};
 use portable_pty::CommandBuilder;
 use tracing::debug;
 
-use crate::accounts;
+use crate::accounts::{self, Clis};
 use crate::hub::Hub;
 
 /// How often the daemon re-probes CLIs that may have appeared or been updated outside herder.
@@ -52,6 +53,7 @@ pub struct Providers {
 
 struct Inner {
     binaries: HashMap<Provider, PathBuf>,
+    clis: Clis,
     recipes: HashMap<Provider, InstallRecipe>,
     /// The newest release of each provider, as last checked.
     latest: Mutex<HashMap<Provider, String>>,
@@ -60,11 +62,13 @@ struct Inner {
 }
 
 impl Providers {
-    /// Probes the five runnable providers using `binaries` or each CLI on `PATH`.
-    pub fn new(binaries: HashMap<Provider, PathBuf>) -> Self {
+    /// Probes the five runnable providers using `binaries` or each CLI on `PATH`, as the
+    /// [`Cli`] `clis` names for it.
+    pub fn new(binaries: HashMap<Provider, PathBuf>, clis: Clis) -> Self {
         let recipes = HashMap::new();
         let inner = Inner {
             binaries,
+            clis,
             recipes,
             latest: Mutex::new(HashMap::new()),
             current: Mutex::new(Vec::new()),
@@ -87,6 +91,7 @@ impl Providers {
         let providers = Self {
             inner: Arc::new(Inner {
                 binaries: self.inner.binaries.clone(),
+                clis: self.inner.clis.clone(),
                 recipes,
                 latest: Mutex::new(latest),
                 current: Mutex::new(current),
@@ -119,7 +124,12 @@ impl Providers {
     /// Re-runs `--version` for each runnable provider and announces a change.
     pub fn refresh(&self) {
         let latest = lock(&self.inner.latest).clone();
-        let next = probe(&self.inner.binaries, &self.inner.recipes, &latest);
+        let next = probe(
+            &self.inner.binaries,
+            &self.inner.clis,
+            &self.inner.recipes,
+            &latest,
+        );
         let mut current = lock(&self.inner.current);
         if *current == next {
             return;
@@ -140,7 +150,8 @@ impl Providers {
             .collect();
         for provider in installed {
             let program = accounts::program(&provider, &self.inner.binaries);
-            match latest_release(&provider, program.as_deref(), registry) {
+            let cli = self.inner.clis.get(&provider).copied().unwrap_or_default();
+            match latest_release(&provider, cli, program.as_deref(), registry) {
                 Ok(Some(version)) => {
                     lock(&self.inner.latest).insert(provider, version);
                 }
@@ -167,10 +178,12 @@ impl Providers {
             .into_iter()
             .find(|status| status.provider == *provider);
         let installed = status.as_ref().is_some_and(|status| status.installed);
+        let cli = self.inner.clis.get(provider).copied().unwrap_or_default();
         recipe(
             provider,
             installed,
             &self.inner.binaries,
+            cli,
             &self.inner.recipes,
         )
         .ok_or_else(|| ErrorInfo {
@@ -226,18 +239,23 @@ impl Providers {
 /// whether `latest` is newer.
 pub fn probe(
     binaries: &HashMap<Provider, PathBuf>,
+    clis: &Clis,
     recipes: &HashMap<Provider, InstallRecipe>,
     latest: &HashMap<Provider, String>,
 ) -> Vec<ProviderStatus> {
     accounts::PROVIDERS
         .iter()
-        .map(|provider| status(provider, binaries, recipes, latest.get(provider)))
+        .map(|provider| {
+            let cli = clis.get(provider).copied().unwrap_or_default();
+            status(provider, binaries, cli, recipes, latest.get(provider))
+        })
         .collect()
 }
 
 fn status(
     provider: &Provider,
     binaries: &HashMap<Provider, PathBuf>,
+    cli: Cli,
     recipes: &HashMap<Provider, InstallRecipe>,
     latest: Option<&String>,
 ) -> ProviderStatus {
@@ -258,8 +276,8 @@ fn status(
         (Some(version), Some(latest)) if newer(latest, version) => Some(latest.clone()),
         _ => None,
     };
-    let can_install = recipe(provider, false, binaries, recipes).is_some();
-    let can_update = installed && recipe(provider, true, binaries, recipes).is_some();
+    let can_install = recipe(provider, false, binaries, cli, recipes).is_some();
+    let can_update = installed && recipe(provider, true, binaries, cli, recipes).is_some();
     ProviderStatus {
         provider: provider.clone(),
         installed,
@@ -313,9 +331,14 @@ fn output_of(program: &Path, args: &[&str]) -> std::io::Result<String> {
 /// Cursor, which publishes no version a client can ask for.
 fn latest_release(
     provider: &Provider,
+    cli: Cli,
     program: Option<&Path>,
     registry: &str,
 ) -> Result<Option<String>, String> {
+    // Only the provider's own CLI is published under its package name.
+    if cli != Cli::Claude {
+        return Ok(None);
+    }
     let package = match provider {
         Provider::Claude => "@anthropic-ai/claude-code",
         Provider::Codex => "@openai/codex",
@@ -370,6 +393,7 @@ fn recipe(
     provider: &Provider,
     installed: bool,
     binaries: &HashMap<Provider, PathBuf>,
+    cli: Cli,
     recipes: &HashMap<Provider, InstallRecipe>,
 ) -> Option<InstallRecipe> {
     if let Some(recipe) = recipes.get(provider) {
@@ -378,6 +402,10 @@ fn recipe(
     if installed {
         let program = accounts::program(provider, binaries)?;
         return update(provider, &program);
+    }
+    // Another vendor's CLI installs its own way, which herder does not know.
+    if cli != Cli::Claude {
+        return None;
     }
     match provider {
         Provider::Claude => Some(shell("curl -fsSL https://claude.ai/install.sh | bash")),
@@ -493,7 +521,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl Default for Providers {
     fn default() -> Self {
-        Self::new(HashMap::new())
+        Self::new(HashMap::new(), Clis::new())
     }
 }
 
@@ -521,7 +549,7 @@ mod tests {
             "#!/bin/sh\n[ \"$1\" = --version ] && { echo '2.1.0 (Claude Code)'; exit 0; }\nexit 1\n",
         );
         let binaries = HashMap::from([(Provider::Claude, path.clone())]);
-        let statuses = probe(&binaries, &HashMap::new(), &HashMap::new());
+        let statuses = probe(&binaries, &Clis::new(), &HashMap::new(), &HashMap::new());
         let claude = statuses
             .iter()
             .find(|status| status.provider == Provider::Claude)
@@ -538,7 +566,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("no-such-claude");
         let binaries = HashMap::from([(Provider::Claude, missing)]);
-        let statuses = probe(&binaries, &HashMap::new(), &HashMap::new());
+        let statuses = probe(&binaries, &Clis::new(), &HashMap::new(), &HashMap::new());
         let claude = statuses
             .iter()
             .find(|status| status.provider == Provider::Claude)
@@ -553,11 +581,25 @@ mod tests {
     fn grok_installs_with_the_xai_installer() {
         let tmp = tempfile::tempdir().unwrap();
         let binaries = HashMap::from([(Provider::Grok, tmp.path().join("no-such-grok"))]);
-        let providers = Providers::new(binaries);
+        let providers = Providers::new(binaries, Clis::new());
         let recipe = providers.recipe(&Provider::Grok).unwrap();
         assert_eq!(
             recipe,
             shell("curl -fsSL https://x.ai/cli/install.sh | bash")
+        );
+    }
+
+    #[test]
+    fn a_compat_cli_gets_no_install_recipe_or_release() {
+        let tmp = tempfile::tempdir().unwrap();
+        let clis = Clis::from([(Provider::Claude, Cli::Qoder)]);
+        let binaries = HashMap::from([(Provider::Claude, tmp.path().join("no-such-qodercli"))]);
+        let providers = Providers::new(binaries, clis);
+        let error = providers.recipe(&Provider::Claude).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!(
+            latest_release(&Provider::Claude, Cli::Qoder, None, "http://127.0.0.1:9"),
+            Ok(None)
         );
     }
 
@@ -582,7 +624,7 @@ mod tests {
             ),
         );
         let binaries = HashMap::from([(Provider::Claude, cli.clone())]);
-        let providers = Providers::new(binaries).with_recipe(
+        let providers = Providers::new(binaries, Clis::new()).with_recipe(
             Provider::Claude,
             InstallRecipe {
                 program: installer,
@@ -758,7 +800,7 @@ mod tests {
             cli.display()
         );
         script(tmp.path(), "opencode", &body);
-        let providers = Providers::new(HashMap::from([(Provider::Opencode, cli)]));
+        let providers = Providers::new(HashMap::from([(Provider::Opencode, cli)]), Clis::new());
         let recipe = providers.recipe(&Provider::Opencode).unwrap();
         assert_eq!(recipe.args, ["upgrade"]);
         let status = Command::new(&recipe.program)
@@ -810,10 +852,13 @@ mod tests {
     fn the_newest_release_comes_from_npm_or_grok() {
         let registry = registry(r#"{"name":"@openai/codex","version":"0.47.0"}"#);
         assert_eq!(
-            latest_release(&Provider::Codex, None, &registry),
+            latest_release(&Provider::Codex, Cli::Claude, None, &registry),
             Ok(Some("0.47.0".into()))
         );
-        assert_eq!(latest_release(&Provider::Cursor, None, &registry), Ok(None));
+        assert_eq!(
+            latest_release(&Provider::Cursor, Cli::Claude, None, &registry),
+            Ok(None)
+        );
 
         let tmp = tempfile::tempdir().unwrap();
         let grok = script(
@@ -822,7 +867,12 @@ mod tests {
             "#!/bin/sh\n[ \"$*\" = 'update --check --json' ] || exit 1\necho '{\"currentVersion\":\"1.0.62\",\"latestVersion\":\"1.0.63\",\"updateAvailable\":true}'\n",
         );
         assert_eq!(
-            latest_release(&Provider::Grok, Some(&grok), "http://127.0.0.1:9"),
+            latest_release(
+                &Provider::Grok,
+                Cli::Claude,
+                Some(&grok),
+                "http://127.0.0.1:9"
+            ),
             Ok(Some("1.0.63".into()))
         );
     }
@@ -835,7 +885,7 @@ mod tests {
             "claude",
             "#!/bin/sh\necho '2.1.0 (Claude Code)'\n",
         );
-        let providers = Providers::new(HashMap::from([(Provider::Claude, claude)]));
+        let providers = Providers::new(HashMap::from([(Provider::Claude, claude)]), Clis::new());
         let claude = |providers: &Providers| {
             providers
                 .snapshot()

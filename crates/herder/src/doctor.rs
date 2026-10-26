@@ -198,7 +198,7 @@ fn provider_checks(config: &Config) -> Vec<Check> {
         .values()
         .map(|account| (account.provider.as_str(), &account.provider))
         .collect();
-    let logins = login::programs(&config.binaries);
+    let logins = login::programs(&config.binaries, &config.clis);
     let mut checks = Vec::new();
     for (name, provider) in providers {
         let cli = cli_check(config, provider);
@@ -720,7 +720,7 @@ binary = "{dir}/no-codex"
 
     #[test]
     fn login_commands_quote_what_the_shell_would_split() {
-        let login = &login::programs(&Default::default())[&Provider::Codex];
+        let login = &login::programs(&Default::default(), &Default::default())[&Provider::Codex];
         assert_eq!(
             login_command(login, Some(Path::new("/home/ann/my codex"))),
             "CODEX_HOME='/home/ann/my codex' codex login --device-auth"
