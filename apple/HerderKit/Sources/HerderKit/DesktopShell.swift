@@ -92,6 +92,7 @@ struct DesktopShell: View {
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
                 Pane(fleet: fleet, title: project?.name ?? "Project",
                      status: project.map { ProjectSessions.status(live: $0.live, archived: $0.archived) } ?? "",
+                     shortStatus: project.map { ProjectSessions.shortStatus(live: $0.live, archived: $0.archived) },
                      state: project?.state, icon: ProjectIcon(projectId: project?.projectId, name: project?.name, image: fleet.projectIcon(project?.projectId), size: 30),
                      switcher: switcher, query: $query) {
                     drafting({ $0.projectId == id }) {
@@ -101,9 +102,11 @@ struct DesktopShell: View {
                         }
                     }
                 } actions: {
-                    BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey).fixedSize()
+                    BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey, inHeader: true)
                     PaneButton(title: "New Session", symbol: "plus", prominent: true) { draft = Draft.inProject(id, fleet: fleet) }
-                    IconButton(symbol: "gearshape", help: "Project Settings") { pages.open(.projectSettings(projectId: id)) }
+                    HeaderButton(symbol: "gearshape") { pages.open(.projectSettings(projectId: id)) }
+                        .help("Project Settings")
+                        .accessibilityLabel("Project Settings")
                 }
             }
         case .chats:
@@ -114,7 +117,7 @@ struct DesktopShell: View {
                                         query: query, selection: $session)
                     }
                 } actions: {
-                    BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey).fixedSize()
+                    BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey, inHeader: true)
                     let started = Draft.chat(fleet: fleet)
                     PaneButton(title: "New Chat", symbol: "plus", prominent: true) { draft = started }
                         .disabled(started == nil)
@@ -125,7 +128,7 @@ struct DesktopShell: View {
                 Pane(fleet: fleet, title: "Board", status: boardStatus(lists), switcher: switcher, query: $query) {
                     drafting { BoardView(fleet: fleet, sheet: $sheet, selection: $session, query: query) }
                 } actions: {
-                    BoardSortMenu().fixedSize()
+                    BoardSortMenu(inHeader: true)
                     PaneButton(title: "New Session", symbol: "plus", prominent: true) { sheet = .newSession }
                 }
             }
@@ -154,7 +157,9 @@ struct DesktopShell: View {
                 if !AwsSignIn.machines(fleet.machines).isEmpty {
                     PaneButton(title: "AWS Sign-in", symbol: "key") { sheet = .awsSignIn }
                 }
-                IconButton(symbol: "qrcode", help: "Pair Another Device") { sheet = .share }
+                HeaderButton(symbol: "qrcode") { sheet = .share }
+                    .help("Pair Another Device")
+                    .accessibilityLabel("Pair Another Device")
                 PaneButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair }
             }
         case .integrations:
@@ -284,6 +289,8 @@ struct Pane<Content: View, Actions: View>: View {
     let title: String
     /// The page's live status sentence (`PageHeader.status`).
     var status = ""
+    /// The status shortened for a narrow pane (`PageHeader.shortStatus`).
+    var shortStatus: String?
     /// A project's rolled-up state, before the status.
     var state: SessionState?
     /// A project's tile before the title.
@@ -298,7 +305,8 @@ struct Pane<Content: View, Actions: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: title, status: status, state: state, icon: icon, switcher: switcher) {
+            PageHeader(title: title, status: status, shortStatus: shortStatus, state: state, icon: icon,
+                       switcher: switcher) {
                 ActivityChip(fleet: fleet)
                 actions
             }
@@ -360,9 +368,9 @@ struct Switcher {
     }
 }
 
-/// A labelled header button in herder's style; just its icon in a narrow header
-/// (`compactActions`), its title in the tooltip. `prominent` for the page's main action, in the
-/// primary style.
+/// A labelled button in herder's style, as tall as a header control; in a narrow header
+/// (`compactActions`) a `HeaderLabel` of its icon alone, its title in the tooltip. `prominent`
+/// for the page's main action, in the primary style while it is labelled.
 struct PaneButton: View {
     let title: String
     let symbol: String
@@ -372,18 +380,18 @@ struct PaneButton: View {
 
     var body: some View {
         Button(action: action) {
-            Group {
-                if compact {
-                    Image(systemName: symbol).frame(width: 30)
-                } else {
-                    Label(title, systemImage: symbol).lineLimit(1).padding(.horizontal, 12).fixedSize()
-                }
+            if compact {
+                HeaderLabel(symbol: symbol)
+            } else {
+                Label(title, systemImage: symbol).lineLimit(1)
+                    .font(Theme.body.weight(.semibold))
+                    .foregroundStyle(Theme.text)
+                    .padding(.horizontal, 12)
+                    .frame(height: HeaderControl.height)
+                    .primaryFill(in: .rect(cornerRadius: 8), on: prominent)
+                    .fixedSize()
+                    .hitTarget()
             }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Theme.text)
-            .frame(height: 30)
-            .primaryFill(in: .rect(cornerRadius: 8), on: prominent)
-            .hitTarget()
         }
         .buttonStyle(.plain)
         .help(title)
@@ -923,7 +931,17 @@ struct ProjectSessions: View {
         return [
             waiting > 0 ? "\(waiting) waiting for you" : "",
             working > 0 ? "\(working) working" : "",
-            total == 1 ? "1 session" : "\(total) sessions",
+            tasks(total),
         ].filter { !$0.isEmpty }.joined(separator: " · ")
     }
+
+    /// The status for a narrow pane: how many tasks wait for you, then how many there are.
+    nonisolated static func shortStatus(live: [SessionSummary], archived: [SessionSummary]) -> String {
+        let open = TaskTree.trees(live)
+        let waiting = open.filter { $0.state == .waitingForYou }.count
+        let total = open.count + TaskTree.trees(archived).count
+        return [waiting > 0 ? "\(waiting) needs you" : "", tasks(total)].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    private nonisolated static func tasks(_ count: Int) -> String { count == 1 ? "1 task" : "\(count) tasks" }
 }

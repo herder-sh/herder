@@ -32,5 +32,23 @@ import Testing
         #expect(size(DictationButton(listening: false) {}, ios: false) == CGSize(width: 30, height: 30))
         #expect(size(FooterMenu(section: SettingsSection(kind: .machine, options: [], choose: { _ in }), text: "studio"), ios: false).height < 44)
     }
+
+    /// A header's controls share one height, so they share a centre line.
+    @Test func everyHeaderControlIsOneHeightOnTheMac() {
+        let controls: [(String, AnyView)] = [
+            ("HeaderButton", AnyView(HeaderButton(symbol: "info.circle") {})),
+            ("labelled HeaderLabel", AnyView(HeaderLabel(symbol: "arrow.triangle.pull", title: "1 open"))),
+            ("PaneButton", AnyView(PaneButton(title: "New Session", symbol: "plus", prominent: true) {})),
+            ("narrow PaneButton", AnyView(PaneButton(title: "New Session", symbol: "plus", prominent: true) {}
+                .environment(\.compactActions, true))),
+            ("BoardSortMenu", AnyView(BoardSortMenu(inHeader: true))),
+            ("narrow BoardSortMenu", AnyView(BoardSortMenu(inHeader: true).environment(\.compactActions, true))),
+        ]
+        for (name, control) in controls {
+            #expect(size(control, ios: false).height == HeaderControl.height, "\(name) is \(size(control, ios: false))")
+        }
+        #expect(size(PaneButton(title: "New Session", symbol: "plus") {}.environment(\.compactActions, true), ios: false)
+            == CGSize(width: HeaderControl.height, height: HeaderControl.height))
+    }
 }
 #endif
