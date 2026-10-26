@@ -118,7 +118,7 @@ struct AddMachineSheet: View {
     let fleet: Fleet
     @State private var kind: PairKind
     @State private var vault: UnpairedVault?
-    @State private var text = ""
+    @State private var text: String
     @State private var vaults: [UnpairedVault] = []
     @State private var error: String?
     @State private var scanning = false
@@ -128,10 +128,11 @@ struct AddMachineSheet: View {
     @State private var shareError: String?
     @Environment(\.dismiss) private var dismiss
 
-    init(fleet: Fleet, kind: PairKind, vault: UnpairedVault?) {
+    init(fleet: Fleet, kind: PairKind, vault: UnpairedVault?, text: String = "") {
         self.fleet = fleet
         _kind = State(initialValue: kind)
         _vault = State(initialValue: vault)
+        _text = State(initialValue: text)
     }
 
     var body: some View {

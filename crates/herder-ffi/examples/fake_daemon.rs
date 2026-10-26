@@ -6,7 +6,8 @@
 //! `fake_daemon [NAME]` names the host (`fake-host` by default), to run several side by side.
 //! `fake_daemon --share` runs two, `fake-host-1` and `fake-host-2`, and prints instead the link
 //! a device paired with both shares (`Client::share`), which pairs with both at once; the
-//! repository is the first's, and the first has a session waiting on an approval.
+//! repository is the first's, and the first has a session waiting on an approval, whose id it
+//! prints last.
 //! `fake_daemon --demo` runs the demo fleet of the site's screenshots ([`demo`]) and prints
 //! only the link a device paired with all of it shares; `fake_daemon --busy` adds the load the
 //! apps are profiled under.
@@ -24,12 +25,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use herder_client_core::{Client, ConnectionState, PairResult};
-use herder_protocol::{AccountId, CommandBody, CommandResult, HostId};
+use herder_protocol::{AccountId, CommandBody, CommandResult, HostId, SessionId};
 use tokio::io::AsyncReadExt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let (daemons, link) = match std::env::args().nth(1).as_deref() {
+    let (daemons, link, waiting) = match std::env::args().nth(1).as_deref() {
         Some(flag @ ("--demo" | "--busy")) => {
             let demo = demo::Demo::start(flag == "--busy").await?;
             println!("{}", demo.link);
@@ -47,13 +48,13 @@ async fn main() -> Result<()> {
                 support::FakeDaemon::start("fake-host-1").await?,
                 support::FakeDaemon::start("fake-host-2").await?,
             ];
-            let link = share(&daemons).await?;
-            (daemons, link)
+            let (link, waiting) = share(&daemons).await?;
+            (daemons, link, Some(waiting))
         }
         name => {
             let daemon = support::FakeDaemon::start(name.unwrap_or("fake-host")).await?;
             let link = daemon.link.clone();
-            (vec![daemon], link)
+            (vec![daemon], link, None)
         }
     };
     println!(
@@ -65,6 +66,9 @@ async fn main() -> Result<()> {
         daemons[0].skill_source
     );
     println!("{}", support::QUESTION_ACCOUNT);
+    if let Some(waiting) = waiting {
+        println!("{waiting}");
+    }
     tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
     for daemon in daemons {
         daemon.stop().await?;
@@ -73,8 +77,8 @@ async fn main() -> Result<()> {
 }
 
 /// Pairs a device with every daemon, starts a session on the first that waits on an approval,
-/// and returns the link the device shares.
-async fn share(daemons: &[support::FakeDaemon]) -> Result<String> {
+/// and returns the link the device shares and that session's id.
+async fn share(daemons: &[support::FakeDaemon]) -> Result<(String, SessionId)> {
     let profile = tempfile::tempdir()?;
     let client = Client::open(profile.path().display().to_string(), "fake-daemon".into())?;
     for daemon in daemons {
@@ -122,7 +126,7 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<String> {
         .send(
             host,
             CommandBody::SendPrompt {
-                session_id,
+                session_id: session_id.clone(),
                 text: "Run the tests.".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -133,5 +137,5 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<String> {
     if let Some(skipped) = shared.skipped.first() {
         bail!("{} was not shared: {}", skipped.host_id, skipped.error);
     }
-    Ok(shared.link.to_string())
+    Ok((shared.link.to_string(), session_id))
 }
