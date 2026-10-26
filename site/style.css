@@ -147,8 +147,13 @@ main { overflow-x: clip; }
 
 .shot { margin: 0; }
 .shot img { border: 1px solid var(--line); background: #000; }
-.hero-shot { margin: 72px auto 0; max-width: 1100px; }
-.hero-shot img { box-shadow: 0 40px 120px -40px color-mix(in srgb, var(--b2) 35%, transparent); }
+.mac img { border-radius: 10px; }
+.phone img { border-radius: 34px; border-width: 3px; }
+/* The hero: the Mac app, with the iPhone standing in front of its bottom-right corner. */
+.stage { position: relative; margin: 72px auto 0; max-width: 1100px; padding: 0 9% 6% 0; }
+.stage .mac img { box-shadow: 0 40px 120px -40px color-mix(in srgb, var(--b2) 35%, transparent); }
+.stage .phone { position: absolute; right: 0; bottom: 0; width: 22%; }
+.stage .phone img { box-shadow: -24px 30px 60px -20px rgba(0, 0, 0, .7); border-radius: 26px; }
 
 /* sections */
 section { max-width: 1160px; margin: 0 auto; padding: 120px 24px 0; }
@@ -183,12 +188,12 @@ section { max-width: 1160px; margin: 0 auto; padding: 120px 24px 0; }
 .feat.soon .tag { color: var(--bg); background: var(--dim); padding: 1px 7px; }
 .feat.soon h3, .feat.soon p { opacity: .85; }
 
-.gallery { display: grid; grid-template-columns: 1fr 1fr 300px; grid-template-areas: "w w p" "a b p"; gap: 28px 24px; align-items: start; }
-.gallery .wide { grid-area: w; }
-.gallery .phone { grid-area: p; }
-.gallery .half:nth-of-type(3) { grid-area: a; }
-.gallery .half:nth-of-type(4) { grid-area: b; }
-.phone img { border-radius: 34px; }
+.screens .big { margin-bottom: 48px; }
+.gallery, .terms { display: grid; grid-template-columns: 1fr 1fr; gap: 36px 24px; align-items: start; }
+.gallery .wide, .terms .wide { grid-column: 1 / -1; }
+.gallery > *, .terms > *, .phones > * { min-width: 0; }
+.gallery img { border-radius: 10px; }
+.phones { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; align-items: start; }
 figcaption { font-size: 13px; color: var(--dim); margin-top: 12px; }
 
 .steps { list-style: none; padding: 0; margin: 48px 0 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
@@ -236,8 +241,7 @@ details p { margin: -4px 0 22px; color: var(--muted); max-width: 760px; }
 @media (max-width: 960px) {
   .grid { grid-template-columns: repeat(2, 1fr); }
   .trio, .steps { grid-template-columns: 1fr; }
-  .gallery { grid-template-columns: 1fr 1fr; grid-template-areas: "w w" "a b" "p p"; }
-  .gallery .phone { max-width: 300px; margin: 0 auto; }
+  .phones { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 640px) {
   body { font-size: 16px; }
@@ -255,11 +259,15 @@ details p { margin: -4px 0 22px; color: var(--muted); max-width: 760px; }
   .copy { min-width: 0; padding: 8px 10px; }
   .steps pre { font-size: 12px; padding: 14px; }
   .btn { flex: 1 1 100%; justify-content: center; }
-  .hero-shot { margin-top: 48px; }
+  .stage { margin-top: 48px; padding: 0 12% 10% 0; }
+  .stage .phone { width: 30%; }
+  .stage .phone img { border-radius: 14px; border-width: 2px; }
   section { padding: 88px 18px 0; }
   .grid { grid-template-columns: 1fr; }
-  .gallery { grid-template-columns: 1fr; grid-template-areas: "w" "p" "a" "b"; }
-  .gallery .phone { max-width: 260px; }
+  .gallery, .terms { grid-template-columns: 1fr; }
+  /* The phones scroll sideways, one and a bit on screen. */
+  .phones { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 16px; margin: 0 -18px; padding: 0 18px 8px; scrollbar-width: thin; }
+  .phones .phone { flex: 0 0 62%; scroll-snap-align: center; }
   .foot { padding: 0 18px 40px; margin-top: 100px; }
   .hint { margin-left: 0; width: 100%; }
 }
