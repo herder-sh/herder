@@ -94,7 +94,7 @@ struct ArtifactTests {
 
     @Test func aPageWithoutAViewportLaysOutAtDesktopWidth() {
         let page = SandboxedPage.wrapped("<!doctype html><p>hi</p>")
-        #expect(page.contains(#"<meta name="viewport" content="width=1280">"#))
+        #expect(page.contains(#"<meta name="viewport" id="herder-viewport" content="width=1280">"#))
         // A page's own viewport stands.
         let own = SandboxedPage.wrapped(#"<meta name="viewport" content="width=device-width"><p>hi</p>"#)
         #expect(!own.contains("width=1280"))

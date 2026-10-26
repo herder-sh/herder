@@ -11,9 +11,12 @@ enum SandboxedPage {
     /// doctype so it keeps standards mode. A page that declares no viewport gets the desktop
     /// width it was made at, which iOS then fits to the screen; the Mac ignores viewports and
     /// fits it with its page zoom instead.
+    /// The viewport herder gives a page without one, which iOS widens to content wider still.
+    static let viewportId = "herder-viewport"
+
     static func wrapped(_ html: String) -> String {
         let viewport = PageLayout.declared(html) == nil
-            ? "<meta name=\"viewport\" content=\"width=\(Int(PageLayout.defaultWidth))\">\n" : ""
+            ? "<meta name=\"viewport\" id=\"\(viewportId)\" content=\"width=\(Int(PageLayout.defaultWidth))\">\n" : ""
         let head = """
             <meta http-equiv="Content-Security-Policy" content="\(policy)">
             <meta name="color-scheme" content="dark">
@@ -100,9 +103,8 @@ struct SandboxedWebView {
                 MainActor.assumeIsolated { self?.magnified(web) }
             }
             #else
-            observation = web.scrollView.observe(\.zoomScale) { [weak self] scroll, _ in
-                MainActor.assumeIsolated { self?.scaled(scroll.zoomScale) }
-            }
+            // The scroll view's zoom scale is not observable: its pinch reports it instead.
+            web.scrollView.pinchGestureRecognizer?.addTarget(self, action: #selector(pinched))
             #endif
         }
 
@@ -113,7 +115,15 @@ struct SandboxedWebView {
             layOut()
             #else
             guard let web else { return }
-            web.scrollView.setZoomScale(zoom.scale(fit: fit), animated: true)
+            // Zoomed about the top-left corner in view, where reading starts, not the centre.
+            let scroll = web.scrollView
+            let (old, new) = (scroll.zoomScale, zoom.scale(fit: fit))
+            let inset = scroll.adjustedContentInset
+            let corner = CGPoint(x: scroll.contentOffset.x + inset.left, y: scroll.contentOffset.y + inset.top)
+            scroll.setZoomScale(new, animated: false)
+            scroll.setContentOffset(CGPoint(x: corner.x * new / old - inset.left, y: corner.y * new / old - inset.top),
+                                    animated: false)
+            scaled(scroll.zoomScale)
             #endif
         }
 
@@ -130,9 +140,19 @@ struct SandboxedWebView {
                 web.setMagnification(magnification, centeredAt: CGPoint(x: web.bounds.midX, y: web.bounds.midY))
             }
             scaled(magnification)
+            #else
+            // Fitted, WebKit settles its scale after a viewport change without a word: the fit
+            // is what shows.
+            scaled(zoom == .fit ? fit : web.scrollView.zoomScale)
             #endif
             if content.height > 0 { measured(content.height * fit) }
         }
+
+        #if os(iOS)
+        @objc private func pinched() {
+            if let web { scaled(web.scrollView.zoomScale) }
+        }
+        #endif
 
         #if os(macOS)
         /// A pinch magnified the page: it stays at that scale as the window resizes.
@@ -173,6 +193,18 @@ struct SandboxedWebView {
             let measured = CGSize(width: width, height: height)
             guard measured != content else { return }
             content = measured
+            #if os(iOS)
+            // iOS fits the viewport, not what overflows it: a page wider than the width herder
+            // gave it gets a viewport as wide, then fits whole.
+            if declared == nil, measured.width > PageLayout.defaultWidth + 0.5, let web {
+                let script = "document.getElementById('\(SandboxedPage.viewportId)')?.setAttribute('content', 'width=\(Int(measured.width.rounded(.up)))')"
+                web.evaluateJavaScript(script, in: nil, in: .defaultClient) { [weak self] _ in
+                    guard let self, zoom == .fit else { return }
+                    web.scrollView.setZoomScale(fit, animated: false)
+                    scaled(web.scrollView.zoomScale)
+                }
+            }
+            #endif
             layOut()
         }
     }
