@@ -231,9 +231,9 @@ extension Lists {
     }
 }
 
-/// The app's home: every open task, a task tree with its agents folded into its row, in
-/// sections a day, newest first. Archiving a task completes it: its circle, E on the Mac or a
-/// swipe on iOS, with Undo in the toast and on ⌘Z. A task opens beside the list, or is pushed.
+/// The app's home: every open task, a task tree with its agents folded under its row, in
+/// sections a day, newest first. Archiving a task completes it: the check on its row, E on the
+/// Mac or a swipe on iOS, with Undo in the toast and on ⌘Z. A task opens beside the list, or is pushed.
 struct BoardView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
@@ -421,9 +421,51 @@ struct BoardSortMenu: View {
     }
 }
 
-/// A task's row in a task list, as the Board and a project's list draw it: highlighted while
-/// it is the Mac's keyboard row or open, archived from its circle, a swipe on iOS or its
-/// context menu, where it is renamed too.
+/// The tasks whose agents are unfolded under their row, as this device remembers them, one
+/// "host/session" a line.
+struct UnfoldedTasks {
+    static let key = "unfoldedTasks"
+
+    private(set) var stored: String
+
+    init(_ stored: String) { self.stored = stored }
+
+    private static func line(_ key: SessionKey) -> String { "\(key.hostId)/\(key.sessionId)" }
+
+    func contains(_ key: SessionKey) -> Bool {
+        stored.split(separator: "\n").contains { $0 == Self.line(key) }
+    }
+
+    /// Folds `key`'s agents when they are unfolded, else unfolds them.
+    mutating func toggle(_ key: SessionKey) {
+        var lines = stored.split(separator: "\n").map(String.init)
+        if let index = lines.firstIndex(of: Self.line(key)) { lines.remove(at: index) } else { lines.append(Self.line(key)) }
+        stored = lines.joined(separator: "\n")
+    }
+}
+
+extension TaskTree {
+    /// What its row's second line says: `context`, then what the task is doing.
+    func line(context: String) -> String {
+        [context, activity].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// "1 agent", "3 agents".
+    var agentsLabel: String { agentCount == 1 ? "1 agent" : "\(agentCount) agents" }
+}
+
+extension TaskState {
+    /// Where a provider's agent stands: working while it runs, else idle.
+    init(_ outcome: ToolCall.Outcome) {
+        self = outcome == .running ? .working : .idle
+    }
+}
+
+/// A task's rows in a task list, as the Board, Chats and a project's list draw them: the task,
+/// highlighted while it is the Mac's keyboard row or open, then, when unfolded, each of its
+/// agents, a row of its own that opens it. Which tasks are unfolded is kept on this device. A
+/// task is archived from the check its row shows on hover, a swipe on iOS or its context menu,
+/// where it is renamed too.
 struct TaskListRow: View {
     let tree: TaskTree
     let fleet: Fleet
@@ -434,17 +476,17 @@ struct TaskListRow: View {
     /// Whether it is the Mac's keyboard row.
     var current = false
     let toggle: () -> Void
+    @AppStorage(UnfoldedTasks.key) private var unfolded = ""
+    @Environment(\.pages) private var pages
 
     var body: some View {
         let archived = tree.lead.state == .archived
-        let highlighted = current || selection?.wrappedValue == tree.id
-        TaskRow(tree: tree, fleet: fleet, selection: selection, context: context, current: current, toggle: toggle)
+        let open = tree.agentCount > 0 && UnfoldedTasks(unfolded).contains(tree.id)
+        TaskRow(tree: tree, fleet: fleet, selection: selection, context: context, current: current,
+                unfolded: open, unfold: unfold, toggle: toggle)
             .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
             .listRowSeparator(.hidden)
-            .listRowBackground(
-                RoundedRectangle(cornerRadius: Theme.corner - 2)
-                    .fill(highlighted ? Theme.raised : .clear)
-                    .padding(.horizontal, 4))
+            .listRowBackground(highlight(current || selection?.wrappedValue == tree.id))
             #if os(iOS)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 Button(archived ? "Unarchive" : "Archive", systemImage: archived ? "tray.and.arrow.up" : "archivebox",
@@ -459,12 +501,45 @@ struct TaskListRow: View {
                 Button(archived ? "Unarchive" : "Archive", systemImage: archived ? "tray.and.arrow.up" : "archivebox",
                        action: toggle)
             }
+        if open {
+            let provider = fleet.session(tree.lead.key)?.provider ?? "claude"
+            ForEach(tree.lead.agents) { agent in
+                TaskAgentRow(title: agent.title, provider: provider, state: TaskState(agent.outcome), depth: 1,
+                             label: "Open sub-agent: \(agent.title), \(agent.status)") {
+                    pages.open(.agent(tree.lead.key, agent.id))
+                }
+                .help(agent.prompt)
+                .agentListRow(highlight(false))
+            }
+            ForEach(tree.listed) { child in
+                SessionButton(key: child.key, open: selection.map { selection in { selection.wrappedValue = $0 } }) {
+                    TaskAgentRow(title: child.title, provider: fleet.session(child.key)?.provider ?? "claude",
+                                 state: TaskState(child.state), depth: max(child.depth, 1),
+                                 label: "Open sub-session: \(child.title), \(child.state.label)")
+                        .opacity(child.state == .archived ? 0.6 : 1)
+                }
+                .agentListRow(highlight(selection?.wrappedValue == child.key))
+            }
+        }
+    }
+
+    private func unfold() {
+        var tasks = UnfoldedTasks(unfolded)
+        tasks.toggle(tree.id)
+        withAnimation(.snappy) { unfolded = tasks.stored }
+    }
+
+    private func highlight(_ on: Bool) -> some View {
+        RoundedRectangle(cornerRadius: Theme.corner - 2)
+            .fill(on ? Theme.raised : .clear)
+            .padding(.horizontal, 4)
     }
 }
 
-/// A task: the circle that archives it, where it stands, its title, its context and what it
-/// is doing, how many agents work under it, and how long since it last did something. It
-/// opens its top session, into `selection` when given, else by pushing it.
+/// A task: where it stands, its title over the full width, two lines at most, and how long
+/// since it last did something; under them its context, what it is doing, and how many agents
+/// work under it, which unfold under it. On hover the age gives way to the check that archives
+/// it. It opens its top session, into `selection` when given, else by pushing it.
 private struct TaskRow: View {
     let tree: TaskTree
     let fleet: Fleet
@@ -472,63 +547,134 @@ private struct TaskRow: View {
     let context: String
     /// Whether it is the Mac's keyboard row.
     let current: Bool
+    let unfolded: Bool
+    let unfold: () -> Void
     let toggle: () -> Void
     @State private var hovering = false
 
     var body: some View {
-        let archived = tree.lead.state == .archived
-        HStack(spacing: 10) {
-            Button(action: toggle) {
-                ArchiveCircle(archived: archived, hovering: hovering).hitTarget()
-            }
-            .buttonStyle(.plain)
-            .help(archived ? "Unarchive" : "Archive")
-            .accessibilityLabel(archived ? "Unarchive \(tree.lead.title)" : "Archive \(tree.lead.title)")
-            if let selection {
-                Button { selection.wrappedValue = tree.lead.key } label: { content }
-                    .buttonStyle(.plain)
-            } else {
-                NavigationLink(value: NavRoute.session(tree.lead.key)) { content }
-                    .buttonStyle(.plain)
+        let state = tree.state
+        let line = tree.line(context: context)
+        HStack(alignment: .top, spacing: 10) {
+            TaskGlyph(state: state).padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(tree.lead.title)
+                        .font(Theme.title)
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    trailing
+                }
+                HStack(spacing: 6) {
+                    if !line.isEmpty {
+                        Text(line)
+                            .font(Theme.body)
+                            .foregroundStyle(state == .waitingForYou ? Theme.secondary : Theme.tertiary)
+                            .lineLimit(1)
+                    }
+                    if tree.agentCount > 0 { agents(after: !line.isEmpty) }
+                }
             }
         }
-        .opacity(archived ? 0.6 : 1)
+        .padding(.vertical, 8)
+        .opacity(tree.lead.state == .archived ? 0.6 : 1)
+        .background { opener(label: "\(state.label), \(tree.lead.title), \(line)"
+            + (tree.lastActive.map { ", \(RelativeTime.text($0))" } ?? "")) }
         .onHover { hovering = $0 }
     }
 
-    private var content: some View {
-        let state = tree.state
-        let line = [context, tree.activity].filter { !$0.isEmpty }.joined(separator: " · ")
-        return HStack(spacing: 10) {
-            TaskGlyph(state: state)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(tree.lead.title)
-                    .font(Theme.title)
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                Text(line)
-                    .font(Theme.body)
-                    .foregroundStyle(state == .waitingForYou ? Theme.secondary : Theme.tertiary)
-                    .lineLimit(1)
+    /// The age, or on hover the check that archives the task, or brings it back once archived.
+    private var trailing: some View {
+        let archived = tree.lead.state == .archived
+        return ZStack(alignment: .trailing) {
+            if let lastActive = tree.lastActive {
+                RelativeTime(date: lastActive)
+                    .font(Theme.meta)
+                    .foregroundStyle(Theme.tertiary)
+                    .fixedSize()
+                    .opacity(hovering ? 0 : 1)
+                    .accessibilityHidden(true)
             }
-            Spacer(minLength: 8)
-            Group {
-                #if os(macOS)
-                if current { Text("E archive") }
-                #endif
-                if tree.agentCount > 0 {
-                    Text(tree.agentCount == 1 ? "1 agent" : "\(tree.agentCount) agents")
+            if hovering {
+                Button(action: toggle) {
+                    ArchiveCircle(archived: archived)
+                        .contentShape(.rect.inset(by: -6))
                 }
-                if let lastActive = tree.lastActive { RelativeTime(date: lastActive) }
+                .buttonStyle(.plain)
+                .help(archived ? "Unarchive" : "Archive")
+                .accessibilityLabel(archived ? "Unarchive \(tree.lead.title)" : "Archive \(tree.lead.title)")
             }
-            .font(Theme.meta)
-            .foregroundStyle(Theme.tertiary)
         }
-        .padding(.vertical, 8)
+    }
+
+    /// "· ▸ 3 agents", which unfolds the task's agents under its row.
+    private func agents(after line: Bool) -> some View {
+        Button(action: unfold) {
+            HStack(spacing: 4) {
+                if line { Text("·") }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .rotationEffect(.degrees(unfolded ? 90 : 0))
+                Text(tree.agentsLabel)
+            }
+            .font(Theme.body)
+            .foregroundStyle(Theme.secondary)
+            .contentShape(.rect.inset(by: -6))
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .layoutPriority(1)
+        .accessibilityIdentifier("Agents of \(tree.lead.title)")
+        .accessibilityLabel("\(unfolded ? "Hide" : "Show") \(tree.agentsLabel)")
+    }
+
+    /// The row's open action, behind its title and lines, so the agents and the check stay
+    /// buttons of their own.
+    private func opener(label: String) -> some View {
+        SessionButton(key: tree.lead.key, open: selection.map { selection in { selection.wrappedValue = $0 } }) {
+            Color.clear.contentShape(.rect)
+        }
+        .accessibilityLabel(label)
+    }
+}
+
+/// One of a task's agents under its row: the line that ties it to the task, its provider's
+/// mark, its title and where it stands.
+private struct TaskAgentRow: View {
+    let title: String
+    let provider: Provider
+    let state: TaskState
+    let depth: Int
+    let label: String
+    var open: (() -> Void)?
+    @State private var hovering = false
+
+    var body: some View {
+        if let open {
+            Button(action: open) { row }.buttonStyle(.plain)
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
+        HStack(spacing: 8) {
+            TreeLine().frame(width: CGFloat(depth) * 14)
+            ProviderMark(provider: provider, size: 11)
+                .frame(width: 20, height: 20)
+                .background(Theme.raised, in: Circle())
+                .overlay(Circle().strokeBorder(Theme.stroke))
+            Text(title).font(Theme.body).foregroundStyle(Theme.text).lineLimit(1)
+            Spacer(minLength: 8)
+            TaskGlyph(state: state)
+        }
+        .padding(.vertical, 4)
+        .background(hovering ? Theme.raised.opacity(0.6) : .clear, in: .rect(cornerRadius: 7))
         .contentShape(.rect)
+        .onHover { hovering = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(state.label), \(tree.lead.title), \(line)"
-            + (tree.lastActive.map { ", \(RelativeTime.text($0))" } ?? ""))
+        .accessibilityLabel(label)
     }
 }
 
@@ -553,19 +699,16 @@ struct TaskGlyph: View {
     }
 }
 
-/// The circle that archives a task: a check shows in it on hover, and fills it once archived.
+/// The check that archives a task, filled once archived.
 private struct ArchiveCircle: View {
     let archived: Bool
-    let hovering: Bool
 
     var body: some View {
         ZStack {
-            Circle().fill(archived ? Theme.idle : .clear)
-            Circle().strokeBorder(hovering || archived ? Theme.secondary : Theme.idle, lineWidth: 1.5)
-            if hovering || archived {
-                Image(systemName: "checkmark").font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(archived ? Theme.background : Theme.secondary)
-            }
+            Circle().fill(archived ? Theme.secondary : .clear)
+            Circle().strokeBorder(Theme.secondary, lineWidth: 1.5)
+            Image(systemName: "checkmark").font(.system(size: 8, weight: .bold))
+                .foregroundStyle(archived ? Theme.background : Theme.secondary)
         }
         .frame(width: 16, height: 16)
     }
@@ -588,6 +731,13 @@ private struct KeyCap: View {
 #endif
 
 extension View {
+    /// A row of a task's agent under the task: no separator, the task's insets.
+    fileprivate func agentListRow(_ background: some View) -> some View {
+        listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+            .listRowSeparator(.hidden)
+            .listRowBackground(background)
+    }
+
     /// A row of a task list that is not a task: no inset, background or separator.
     func taskListRow() -> some View {
         listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))

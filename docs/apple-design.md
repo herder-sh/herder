@@ -142,8 +142,8 @@ The app opens on the Board (§4.8): it is the home screen.
 ### 4.2 Projects and Chats (`ProjectsView`, `ProjectSessions`)
 
 A project's pane (Mac, iPad) or screen (iPhone), and Chats, list their tasks with the Board's
-rows (`TaskListRow`, §4.8), filtered to the project: the archive circle, the three glyphs, an
-activity line and the age. The line names the branch, after the machine while the list's
+rows (`TaskListRow`, §4.8), filtered to the project: the state glyph, the title, an activity
+line with the agents that unfold under it, and the age. The line names the branch, after the machine while the list's
 sessions run on more than one machine (`ProjectSessions.spansMachines`), then what the task is
 doing; a waiting dot replaces the old Needs you section.
 
@@ -266,9 +266,9 @@ fills the width on the Mac; on iPhone it opens from the top of Machines. Screens
 - **Archived last and collapsed:** a project's and Chats' archived tasks go in **Archived · N**
   at the end, collapsed; opening it shows them, dimmed, each archived child no live session
   hangs from as a tree of its own. Archived sessions with no project are not listed.
-- **One task row:** `TaskListRow` in every task list: archive circle, state glyph, title, a
-  context (the Board's project, a project's machine and branch) · activity line, "N agents" and
-  the age. A row opens its session into the selection on Mac and iPad, or pushes it on iPhone.
+- **One task row:** `TaskListRow` in every task list: the state glyph, the title, a context
+  (the Board's project, a project's machine and branch) · activity · "▸ N agents" line, and the
+  age. A row opens its session into the selection on Mac and iPad, or pushes it on iPhone.
   `SessionRow` remains for the iPhone's Projects search results.
 - **Search:** the pane's search field filters by title, branch, worktree, project, machine and
   PR number or title (`SessionSummary.matches`).
@@ -284,17 +284,21 @@ Machine.
   Yesterday, then the date; Earlier for a tree whose events have not loaded), newest first
   (`BoardSection`). The sort menu (`BoardSortMenu`, kept in `boardSort`) offers Recent, the
   default; Created, by the top session's ULID; and Project, a section a project. A child never
-  has a row: the row says "N agents" for its herder children and provider agents, and they open
-  from the session.
-- **Row** (`TaskListRow`, shared with §4.2): the archive circle, the state glyph, the title,
-  `project ·` what the task is doing, "N agents", and the age of its last activity.
+  is a task of its own: "▸ N agents" on its task's line unfolds its herder children and provider
+  agents under the row, each with the tree line, its provider's mark, its title and its own
+  state glyph; tapping one opens it (a provider agent as its page). Which tasks are unfolded is
+  kept on the device (`UnfoldedTasks`).
+- **Row** (`TaskListRow`, shared with §4.2): one leading glyph, the state; the title over the
+  full width, two lines at most; under it `project ·` what the task is doing `· ▸ N agents`; the
+  trailing column holds only the age of its last activity, which gives way on hover to the check
+  that archives the task. The line truncates before the title does.
 - **Three states** (`TaskState`), read from the tree's sessions only, never from a PR, CI or a
   review: working ◐ (`Theme.running`) while one runs or waits for capacity; waiting for you, a
   small amber dot, while one waits on an approval or a question or stopped on a failed turn, the
   line then saying what it waits for; idle ○ otherwise. There are no request cards on the Board:
   approvals and questions are answered in the session (§5.3); the sidebar's Board badge counts
   them.
-- **Archiving completes a task:** the circle, E on the Mac, a swipe on iOS, or the context menu
+- **Archiving completes a task:** the check on hover, E on the Mac, a swipe on iOS, or the context menu
   archives the top session, and with it the tree (the daemon archives children first). The row
   goes at once; the toast's Undo stays 5 s, and ⌘Z (the window's undo manager) undoes too.
   "Archived today · N" ends the list, with Show Archived listing the tasks archived today,

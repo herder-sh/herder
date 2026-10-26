@@ -353,4 +353,38 @@ struct BoardTests {
         #expect(ULID.date("01A") == nil)
         #expect(ULID.date("0IARZ3NDEKTSV4RRFFQ69G5FAV") == nil)
     }
+
+    @Test func aRowsLineSaysItsContextThenItsActivityAndHowManyAgents() {
+        let lead = SessionSummary(
+            key: SessionKey(hostId: "h", sessionId: "01A"), title: "Lead", project: "app", branch: "", machine: "m",
+            state: .running, activity: "Editing Board.swift", age: "")
+        let child = SessionSummary(
+            key: SessionKey(hostId: "h", sessionId: "01B"), title: "Child", project: "app", branch: "", machine: "m",
+            state: .idle, activity: "", age: "", depth: 1)
+        let tree = TaskTree(lead: lead, children: [child])
+        #expect(tree.line(context: "herder") == "herder · Editing Board.swift")
+        #expect(tree.line(context: "") == "Editing Board.swift")
+        #expect(tree.agentsLabel == "1 agent")
+        #expect(TaskTree(lead: lead, children: [child, child]).agentsLabel == "2 agents")
+    }
+
+    @Test func unfoldedTasksAreRememberedOneALine() {
+        let a = SessionKey(hostId: "h", sessionId: "01A")
+        let b = SessionKey(hostId: "h2", sessionId: "01A")
+        var tasks = UnfoldedTasks("")
+        tasks.toggle(a)
+        tasks.toggle(b)
+        #expect(tasks.stored == "h/01A\nh2/01A")
+        #expect(UnfoldedTasks(tasks.stored).contains(a))
+        tasks.toggle(a)
+        #expect(!tasks.contains(a))
+        #expect(tasks.contains(b))
+        #expect(tasks.stored == "h2/01A")
+    }
+
+    @Test func aProviderAgentWorksWhileItRuns() {
+        #expect(TaskState(ToolCall.Outcome.running) == .working)
+        #expect(TaskState(ToolCall.Outcome.ok) == .idle)
+        #expect(TaskState(ToolCall.Outcome.failed) == .idle)
+    }
 }
