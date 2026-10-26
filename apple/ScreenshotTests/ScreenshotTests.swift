@@ -173,8 +173,8 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Archives a finished task from the Board, which takes its row off, then undoes it: on the
-    /// Mac from its context menu and with ⌘Z, then with E three times, each opening the next
-    /// task, and ⌘Z; on the iPhone with a swipe and the toast's Undo.
+    /// Mac from its context menu and with ⌘Z, then with E three times down finished tasks, each
+    /// opening the next task, and ⌘Z; on the iPhone with a swipe and the toast's Undo.
     private func archiving() {
         let title = "Tidy the README badges"
         guard section("Board") else { return }
@@ -187,14 +187,18 @@ final class ScreenshotTests: XCTestCase {
         app.typeKey("z", modifierFlags: .command)
         guard wait(task, "back with ⌘Z") else { return }
         settle()
+        // E three times walks down the list from a finished task: each archive opens the next
+        // task, the last the one above it, as it is the list's last. The tasks below it are
+        // finished too; a running task's archive is refused.
+        let first = row("Pin the Terraform providers")
+        guard wait(first, "Pin the Terraform providers on the Board") else { return }
+        reveal(first)
         // Opening the task puts its cursor on it, and its composer takes the keyboard; a click in
         // the Board below its rows gives the keyboard back to the Board.
-        press(task)
+        press(first)
         settle()
         app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.29, dy: 0.95)).click()
-        // E three times walks down the list: each archive opens the next task, the keyboard left
-        // on the Board for the next E.
-        var archived = task
+        var archived = first
         for step in 1...3 {
             guard let next = rowAfter(archived) else { return }
             app.typeKey("e", modifierFlags: [])
@@ -202,7 +206,7 @@ final class ScreenshotTests: XCTestCase {
             archived = next
         }
         for _ in 1...3 { app.typeKey("z", modifierFlags: .command) }
-        _ = wait(task, "back with ⌘Z")
+        _ = wait(first, "back with ⌘Z")
         #else
         task.swipeLeft()
         let archive = app.buttons["Archive"].firstMatch
