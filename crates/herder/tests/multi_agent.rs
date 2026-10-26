@@ -461,7 +461,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
     let daemon = tokio::spawn({
         let shutdown = shutdown.clone();
         async move {
-            herder_daemon::serve(&config, adapters, Default::default(), accounts, shutdown).await
+            herder_daemon::serve(&config, adapters, Default::default(), accounts, None, shutdown).await
         }
     });
     wait_for(&data_dir.join("control.sock")).await;

@@ -314,6 +314,8 @@ fn client_fixtures() -> Vec<ClientMessage> {
             secrets: true,
         }),
         command(CommandBody::UnlinkVault),
+        command(CommandBody::InstallVault),
+        command(CommandBody::LinkLocalVault),
         command(CommandBody::PairDevice),
         command(CommandBody::PairVaultHost {
             host_name: "devbox".into(),
@@ -762,6 +764,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     secrets: false,
                 }),
                 volume: None,
+                local_vault: false,
             },
         },
         ServerMessage::CommandAccepted {
@@ -773,6 +776,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     total_bytes: 500_000_000_000,
                     used_bytes: 420_000_000_000,
                 }),
+                local_vault: false,
             },
         },
         ServerMessage::CommandAccepted {
@@ -2727,6 +2731,7 @@ fn vault_link_commands_have_their_wire_form() {
             secrets: true,
         }),
         volume: None,
+        local_vault: false,
     };
     assert_eq!(
         serde_json::to_value(&linked).unwrap(),
@@ -2745,10 +2750,24 @@ fn vault_link_commands_have_their_wire_form() {
         is_vault: false,
         vault: None,
         volume: None,
+        local_vault: false,
     };
     assert_eq!(
         serde_json::to_value(&unlinked).unwrap(),
         json!({ "type": "vault_link", "is_vault": false })
+    );
+    // A vault installed on the machine but not linked yet, for the client to offer pairing it.
+    let installed = CommandResult::VaultLink {
+        is_vault: false,
+        vault: None,
+        volume: None,
+        local_vault: true,
+    };
+    let json = json!({ "type": "vault_link", "is_vault": false, "local_vault": true });
+    assert_eq!(serde_json::to_value(&installed).unwrap(), json);
+    assert_eq!(
+        serde_json::from_value::<CommandResult>(json).unwrap(),
+        installed
     );
 }
 
