@@ -177,16 +177,25 @@ struct UnpairedVault: Hashable, Identifiable {
     let fingerprint: String
     /// The machines that back up to it, by name.
     let hosts: [String]
+    /// The machine it runs on, when a machine backing up to it reaches it on loopback.
+    var machine: String?
+
+    /// What it is called: after its machine, "draugelis’s vault", else its address without the
+    /// port; never the raw address.
+    var name: String { machine.map { "\($0)’s vault" } ?? MachineRow.host(of: address) }
 
     /// The vaults `links` name, each machine's by its name, without those whose fingerprint
     /// is in `paired`.
     static func from(_ links: [(host: String, vault: LinkedVault)], paired: Set<String>) -> [UnpairedVault] {
         Dictionary(grouping: links.filter { !paired.contains($0.vault.fingerprint) }, by: { $0.vault.fingerprint })
             .map { fingerprint, links in
-                UnpairedVault(address: links[0].vault.address, fingerprint: fingerprint,
-                              hosts: links.map { $0.host }.sorted { $0.lowercased() < $1.lowercased() })
+                // Only the machine it runs on reaches it on loopback.
+                let local = links.first { MachineRow.isLocal($0.vault.address, names: MachineRow.loopback) }?.host
+                return UnpairedVault(address: links[0].vault.address, fingerprint: fingerprint,
+                                     hosts: links.map { $0.host }.sorted { $0.lowercased() < $1.lowercased() },
+                                     machine: local)
             }
-            .sorted { $0.address < $1.address }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
     }
 
     var backsUp: String {
