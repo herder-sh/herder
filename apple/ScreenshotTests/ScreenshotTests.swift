@@ -97,6 +97,10 @@ final class ScreenshotTests: XCTestCase {
             shoot("ios-machines")
             #endif
         }
+        #if os(macOS)
+        // Chats, a list pane on the layout grid as the Board is.
+        if section("Chats") { shoot("mac-chats") }
+        #endif
         skills()
         providers()
         integrations()
@@ -406,8 +410,9 @@ final class ScreenshotTests: XCTestCase {
 
     private func closeActivity() {
         #if os(macOS)
-        // Escape would go to a focused terminal; a click outside the popover closes it.
-        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.9)).click()
+        // Escape would go to a focused terminal; a click outside the popover closes it, on the
+        // sidebar's empty space under the projects, as a page's rows reach any spot of the pane.
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.75)).click()
         #else
         app.swipeDown(velocity: .fast)
         #endif

@@ -192,9 +192,9 @@ struct AttentionRow<Fix: View>: View {
             Spacer(minLength: 12)
             fix
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, Theme.cellPadding)
         .padding(.vertical, 8)
-        .frame(minHeight: 52)
+        .frame(minHeight: Theme.tallRowHeight)
     }
 }
 
@@ -221,7 +221,7 @@ struct AboutSection<Content: View>: View {
             .accessibilityLabel(expanded ? "Hide About" : "Show About")
             if expanded {
                 VStack(alignment: .leading, spacing: 10) { content }
-                    .padding(14)
+                    .padding(Theme.cellPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
                     .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))

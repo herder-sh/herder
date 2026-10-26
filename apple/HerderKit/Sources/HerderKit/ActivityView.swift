@@ -48,6 +48,7 @@ extension Fleet {
 struct ActivityChip: View {
     let fleet: Fleet
     @State private var open = false
+    @Environment(\.compactActions) private var compact
 
     var body: some View {
         let summary = fleet.activitySummary
@@ -55,7 +56,7 @@ struct ActivityChip: View {
             Button { open.toggle() } label: {
                 HStack(spacing: 6) {
                     ActivityRing(summary: summary)
-                    Text(summary.title).lineLimit(1)
+                    if !compact { Text(summary.title).lineLimit(1) }
                 }
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Theme.text)
@@ -67,7 +68,7 @@ struct ActivityChip: View {
                 .hitTarget()
             }
             .buttonStyle(.plain)
-            .help(summary.needsYou ? "A job needs you" : "Installs, logins and sign-ins")
+            .help(compact ? summary.title : summary.needsYou ? "A job needs you" : "Installs, logins and sign-ins")
             .accessibilityIdentifier("activity")
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 ActivityPanel(fleet: fleet).frame(width: 560)
