@@ -598,8 +598,14 @@ struct ProvidersSection<Actions: View, Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 8) {
-                SectionHeading(title: title, count: count)
-                if let note { Text(note).font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1) }
+                // The heading keeps its line; the note goes where the actions leave no room for it.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        SectionHeading(title: title, count: count).fixedSize()
+                        if let note { Text(note).font(.caption).foregroundStyle(Theme.tertiary).fixedSize() }
+                    }
+                    SectionHeading(title: title, count: count).fixedSize()
+                }
                 Spacer(minLength: 8)
                 actions
             }
