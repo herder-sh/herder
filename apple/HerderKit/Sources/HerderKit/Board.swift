@@ -566,7 +566,7 @@ private struct TaskRow: View {
                         .accessibilityAction { open() }
                     trailing
                 }
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     if !line.isEmpty {
                         Text(line)
                             .font(Theme.body)
