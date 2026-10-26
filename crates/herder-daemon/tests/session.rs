@@ -1495,7 +1495,7 @@ async fn commands_for_unknown_sessions_and_accounts_are_not_found() {
 }
 
 #[tokio::test]
-async fn create_by_project_or_repo_falls_back_to_the_projects_default_account() {
+async fn create_by_project_or_repo_runs_on_the_projects_default_account_else_an_available_one() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
     let repo = daemon.repo.to_str().unwrap().to_owned();
@@ -1524,34 +1524,7 @@ async fn create_by_project_or_repo_falls_back_to_the_projects_default_account() 
         chat: false,
     };
     let code = |result: Result<CommandResult, ErrorInfo>| result.unwrap_err().code;
-
-    daemon.manager.set_projects(&[project(None)]).await;
-    let refused = daemon
-        .manager
-        .handle(alice(), create(Some(repo.clone()), None))
-        .await;
-    assert_eq!(code(refused), ErrorCode::BadRequest);
-    let refused = daemon.manager.handle(alice(), create(None, None)).await;
-    assert_eq!(code(refused), ErrorCode::BadRequest);
-    let both = create(Some(repo.clone()), Some("github.com/org/app"));
-    assert_eq!(
-        code(daemon.manager.handle(alice(), both).await),
-        ErrorCode::BadRequest
-    );
-    let unknown = create(None, Some("github.com/org/other"));
-    assert_eq!(
-        code(daemon.manager.handle(alice(), unknown).await),
-        ErrorCode::NotFound
-    );
-
-    daemon
-        .manager
-        .set_projects(&[project(Some(account()))])
-        .await;
-    for create in [
-        create(None, Some("github.com/org/app")),
-        create(Some(repo.clone()), None),
-    ] {
+    let account_of = async |create: CommandBody| {
         let Ok(CommandResult::SessionCreated { session_id }) =
             daemon.manager.handle(alice(), create).await
         else {
@@ -1566,7 +1539,52 @@ async fn create_by_project_or_repo_falls_back_to_the_projects_default_account() 
         else {
             panic!("expected session_created");
         };
-        assert_eq!((created_in, account_id), (&repo, &account()));
+        assert_eq!(created_in, &repo);
+        account_id.clone()
+    };
+    // A fallback-only account, which only naming it, or a project defaulting to it, runs on.
+    let spare = AccountId::new("account-2");
+    assert!(daemon.manager.add_account(
+        spare.clone(),
+        AccountConfig {
+            provider: fake(),
+            label: "Account 2".into(),
+            config_dir: Some(dir.path().join("account-2")),
+            fallback: true,
+        },
+    ));
+
+    // Without a default account, the project runs on the available account a chat would.
+    daemon.manager.set_projects(&[project(None)]).await;
+    for create in [
+        create(None, Some("github.com/org/app")),
+        create(Some(repo.clone()), None),
+    ] {
+        assert_eq!(account_of(create).await, account());
+    }
+    let refused = daemon.manager.handle(alice(), create(None, None)).await;
+    assert_eq!(code(refused), ErrorCode::BadRequest);
+    let both = create(Some(repo.clone()), Some("github.com/org/app"));
+    assert_eq!(
+        code(daemon.manager.handle(alice(), both).await),
+        ErrorCode::BadRequest
+    );
+    let unknown = create(None, Some("github.com/org/other"));
+    assert_eq!(
+        code(daemon.manager.handle(alice(), unknown).await),
+        ErrorCode::NotFound
+    );
+
+    // A project's default account wins.
+    daemon
+        .manager
+        .set_projects(&[project(Some(spare.clone()))])
+        .await;
+    for create in [
+        create(None, Some("github.com/org/app")),
+        create(Some(repo.clone()), None),
+    ] {
+        assert_eq!(account_of(create).await, spare);
     }
     let heads = daemon.manager.sessions().await.unwrap();
     assert!(
