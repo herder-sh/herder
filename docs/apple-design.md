@@ -340,27 +340,34 @@ ScreenshotTests.
 
 ### 5.1 Header
 
-From the top: a child's `ChildBanner` ("Agent of ‹parent›", Back), then the header:
+From the top: a child's `ChildBanner` ("Agent of ‹parent›", Back), then the header. Both sit
+in the session's column (`SessionColumn`, P16.4): their left edge on the transcript's, their
+right edge on the composer's, at every width; in a narrow pane the transcript keeps
+`Theme.paneMargin`. The header is at least `Theme.headerHeight`, its title on the line of the
+list pane's title and the sidebar's top bar.
 
-- **Left, stacked:** the title (`.title3` bold, two lines at most, then truncated), the status
-  line (`StatusGlyph` + state label + `· project · machine`), the branch (monospace, one line,
-  middle-truncated), and "Forked from …" when it is a fork. While the session's account is
-  signed out, an amber "Needs sign-in" chip sits beside the title and the status line says
-  "Needs sign-in" (on a phone too); its Board row shows the waiting dot and "Claude account
-  needs sign-in".
-- **Right, one row:** the PRs chip (when linked), then `HeaderButton`s: Terminal / Chat (owners only, ⌘\`),
-  Inspector (ⓘ, ⌥⌘I), list toggle (Mac, ⌘\), and the ⋯ menu (Interrupt, Rename…,
-  Archive).
+- **Left, stacked:** the title (`Theme.page`, as a `PageHeader`'s, two lines at most), the
+  status line (`StatusGlyph` + state label + `· project · machine`, in `Theme.body`), the
+  branch (monospace, one line, middle-truncated), and "Forked from …" when it is a fork. While
+  the session's account is signed out, the amber "Needs sign-in" chip takes the state label's
+  place on the status line; its Board row shows the waiting dot and "Claude account needs
+  sign-in".
+- **Right, one row of 32 pt buttons, each with a tooltip:** the PRs chip (when linked), then
+  `HeaderButton`s: Terminal / Chat (owners only, ⌘\`), Find (⌘F), Inspector (ⓘ, ⌥⌘I), list
+  toggle (Mac, ⌘\), and the ⋯ menu (Interrupt, Rename…, Archive). They are quiet: an icon in
+  `Theme.secondary`, `Theme.raised` on hover, the primary fill while their mode is on. Only
+  Terminal has a label, and only beside 240 pt of title; below that it is an icon too.
 - **The PRs chip rolls up the session's tree** (`PRRollup`): its own PRs and every
   descendant's (children, grandchildren), a PR linked to two of them counted once. It is one
-  chip, never one per PR: a single PR shows its number ("#181"), more show the count and how
-  many are open ("16 PRs · 3 open"), tinted by the most urgent state (open, draft, merged,
-  closed). Where the header drops its labels it shortens to open of all ("3/16"). It is plain
-  text (`HeaderLabel`): it opens no list.
-- **On a phone** the header must fit 375 pt: the title takes the remaining width and wraps to
-  two lines; the status line and branch truncate rather than wrap; the buttons drop their labels
-  to icon-only before anything truncates (no "Ter…"); a child's left edge carries a 3 pt
-  `Theme.child` bar.
+  chip, never one per PR (`PRChip`): a single PR shows its number ("#181"), more show how many
+  are open ("3 open"), or how many there are once none is ("16 PRs"); the tooltip has the
+  whole count. It is never filled: a hairline capsule whose text is tinted by `Urgency`:
+  failing while an open one fails its checks, conflicts or has changes requested, running
+  while any is open, done once one merged, else quiet. It opens no list.
+- **On a phone** the navigation bar holds Back, the PRs chip (icon and count) and the ⋯ menu,
+  which also has Terminal, Find and the inspector. The title, status line and branch sit under
+  it at the full 375 pt: the title wraps to two lines, the status line and branch truncate
+  rather than wrap; a child's left edge carries a 3 pt `Theme.child` bar.
 
 ### 5.2 Transcript
 
@@ -573,7 +580,7 @@ blindness. No view uses a literal colour; new colours are added to `Theme` first
 | `Card`, `Chip`, `SectionHeading` | `Design/Theme.swift` | surfaces and headings |
 | `ProjectIcon`, `ProviderLogo` | `Design/` | a project's tile; a provider's mark |
 | `Pane`, `PaneButton`, `IconButton`, `Sidebar` | `DesktopShell.swift` | the regular-width frame; `PaneButton(prominent:)` is a page's main action |
-| `HeaderButton`, `HeaderLabel` | `SessionView.swift` | the session header's buttons |
+| `HeaderButton`, `HeaderLabel`, `PRChip`, `SessionColumn` | `SessionView.swift` | the session header's buttons and chip; the column the header, banner, transcript and composer share |
 
 ### 8.4 Design system (P14.2)
 

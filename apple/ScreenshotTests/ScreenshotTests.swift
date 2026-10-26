@@ -85,8 +85,28 @@ final class ScreenshotTests: XCTestCase {
         // Failover after a limit, a handoff to another machine, a task with its children.
         if open("Move invoices onto the ledger") { shoot("mac-failover") }
         if open("Fix the flaky checkout e2e test") { shoot("mac-handoff") }
-        if open("Roll out 30-day log retention") { shoot("mac-tasks") }
+        if open("Roll out 30-day log retention") {
+            shoot("mac-tasks")
+            // The session header at the window's full width, the list hidden with ⌘\.
+            app.typeKey("\\", modifierFlags: .command)
+            settle()
+            shoot("mac-session-wide")
+            app.typeKey("\\", modifierFlags: .command)
+            settle()
+        }
         #endif
+
+        // A child session: its banner back to the parent over the header.
+        if open("Roll out 30-day log retention") {
+            let child = app.buttons.matching(NSPredicate(
+                format: "label BEGINSWITH 'Open child session: Terraform'")).firstMatch
+            if wait(child, "child session") {
+                reveal(child)
+                press(child)
+                settle()
+                shoot(platform("child-session"))
+            }
+        }
 
         // The fleet.
         if section("Machines") {
@@ -495,7 +515,14 @@ final class ScreenshotTests: XCTestCase {
     /// Answers the Cancel Login confirmation.
     private func confirmCancel() {
         let confirm = app.buttons.matching(NSPredicate(format: "label == 'Cancel Login'")).firstMatch
-        if wait(confirm, "Cancel Login confirmation") { press(confirm) }
+        guard wait(confirm, "Cancel Login confirmation") else { return }
+        // The popover can still be moving into place, over a terminal that has the keyboard, so
+        // a press can miss it and leave it open over every screen after: press until it closes.
+        for _ in 0..<3 where confirm.exists {
+            for _ in 0..<10 where !confirm.isHittable { Thread.sleep(forTimeInterval: 0.3) }
+            press(confirm)
+            settle()
+        }
     }
 
     /// Types `text` into the field with accessibility id `field`, once it has the keyboard: a
