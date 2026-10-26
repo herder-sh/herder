@@ -50,11 +50,12 @@ struct BackupTests {
         }
         #expect(secrets(nil) == .asking)
         #expect(secrets(.vault) == .vault)
-        #expect(secrets(.nowhere) == .none)
+        #expect(secrets(.nowhere(localVault: false)) == .none)
+        #expect(secrets(.nowhere(localVault: true)) == .none)
         // Sets granted to the host only for its own use give its sessions nothing.
         #expect(secrets(.linked(link), paired: home, sets: sets) == .on(vault: "home", sets: 2))
-        // A vault not paired here is named by its address, and its sets are unknown.
-        #expect(secrets(.linked(link)) == .on(vault: "10.0.0.9:7447", sets: nil))
+        // A vault not paired here is never named by a raw address, and its sets are unknown.
+        #expect(secrets(.linked(link)) == .on(vault: "its vault", sets: nil))
         var off = link
         off.secrets = false
         #expect(secrets(.linked(off), paired: home, sets: sets) == .off(vault: "home"))

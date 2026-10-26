@@ -150,7 +150,7 @@ extension Fleet {
                 throw HerderError.Local(detail: "The machine fetches no secrets from its vault. Turn on Secrets under Backup on its page.")
             }
             guard let vault = pairedVault(link), vault.role == .owner else {
-                throw HerderError.Local(detail: "Pair this device with the machine’s vault, at \(link.address), as its owner.")
+                throw HerderError.Local(detail: "Pair this device with the machine’s vault as its owner.")
             }
             return vault.hostId
         }

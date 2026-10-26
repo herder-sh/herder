@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use semver::Version;
 use sha2::{Digest, Sha256};
 
-use crate::service::{self, Service};
+use herder_daemon::service::{self, Service};
 
 const DEFAULT_DOWNLOAD_BASE: &str = "https://github.com/herder-sh/herder/releases";
 
@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn an_update_restarts_an_installed_vault_with_the_daemon() {
-        let vault = || Some(crate::vault::service(Path::new("/v")));
+        let vault = || Some(herder_daemon::vault::install::service(Path::new("/v")));
         let labels = |services: Vec<Service>| -> Vec<&str> {
             services.iter().map(|service| service.label).collect()
         };

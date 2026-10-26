@@ -7,8 +7,9 @@ enum BackupLink: Equatable {
     case vault
     /// It backs up to this vault.
     case linked(LinkedVault)
-    /// It backs up nowhere.
-    case nowhere
+    /// It backs up nowhere; `localVault` when a vault is installed on its machine, to pair
+    /// and link.
+    case nowhere(localVault: Bool)
 }
 
 extension Fleet {
@@ -36,10 +37,10 @@ extension Fleet {
         let answer = try await answered(within: Self.vaultLinkTimeout, or: "did not say where it backs up") {
             try await client.send(hostId: hostId, command: .getVaultLink)
         }
-        guard case .vaultLink(let isVault, let vault, _) = answer else {
+        guard case .vaultLink(let isVault, let vault, _, let localVault) = answer else {
             throw HerderError.Local(detail: "the machine did not say where it backs up")
         }
-        let link: BackupLink = isVault ? .vault : vault.map(BackupLink.linked) ?? .nowhere
+        let link: BackupLink = isVault ? .vault : vault.map(BackupLink.linked) ?? .nowhere(localVault: localVault)
         backupLinks[hostId] = link
         return link
     }
@@ -141,7 +142,7 @@ struct BackupSection: View {
     @ViewBuilder private func linked(_ vault: LinkedVault) -> some View {
         let paired = fleet.pairedVault(vault)
         let replication = paired?.vault?.hosts.first { $0.hostId == machine.hostId }
-        let name = paired?.name ?? vault.address
+        let name = paired?.name ?? "a vault not paired with this device"
         SettingRow(label: vault.backup ? "Backs up to \(name)" : "Not backed up",
                    hint: vault.backup ? Fleet.freshness(replication, now: .now) : "Linked to \(name) for secrets only") {
             PillButton(title: "Unlink…") { confirmingStop = true }.disabled(working)
@@ -254,19 +255,54 @@ struct VaultChoices: View {
             }
         }
         RowDivider()
-        SettingRow(label: "Run a vault on \(machine.name)", hint: "Run this there, then pair with the code it prints") {
-            if !vaults.isEmpty { PillButton(title: "Pair Vault…") { sheet = .pair } }
+        runVault
+    }
+
+    /// Running a vault on the machine, or pairing and linking the one installed there by hand,
+    /// as an Activity job: its step while it runs; the command to run there by hand when its
+    /// herder cannot do it.
+    @ViewBuilder private var runVault: some View {
+        let installed = fleet.backupLinks[machine.hostId] == .nowhere(localVault: true)
+        let key = JobKey(hostId: machine.hostId, kind: .vault)
+        let progress = fleet.activity[key] == nil ? nil : fleet.progress(key)
+        SettingRow(label: installed ? "A vault is installed on \(machine.name)" : "Run a vault on \(machine.name)",
+                   hint: progress.map { $0.detail(machine: machine.name, before: nil) }
+                       ?? (installed ? "Pair this device with it and link \(machine.name) to it"
+                           : "It runs next to the daemon, and this device pairs with it")) {
+            if let progress, !progress.finished {
+                JobBadge(progress: progress)
+            } else {
+                PillButton(title: installed ? "Pair and Link" : "Run a Vault on This Machine", prominent: true) {
+                    fleet.setUpVault(on: machine.hostId)
+                }
+                .disabled(working)
+                .accessibilityIdentifier("run-vault")
+            }
         }
+        if progress == .needsNewerHerder {
+            VaultInstallCommand()
+                .padding(.horizontal, Theme.cellPadding)
+                .padding(.bottom, 10)
+            RowDivider()
+            SettingRow(label: "Then pair with the vault", hint: "With the code it prints") {
+                PillButton(title: "Pair Vault…") { sheet = .pair }
+            }
+        }
+    }
+}
+
+/// `herder vault install`, to copy and run on a machine whose herder cannot install a vault
+/// from here; it prints the code to pair with the vault.
+struct VaultInstallCommand: View {
+    var body: some View {
         HStack(spacing: 8) {
-            Text(Self.installCommand).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
+            Text(VaultChoices.installCommand).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
             Spacer(minLength: 0)
-            IconButton(symbol: "doc.on.doc", help: "Copy") { Clipboard.string = Self.installCommand }
+            IconButton(symbol: "doc.on.doc", help: "Copy") { Clipboard.string = VaultChoices.installCommand }
         }
         .padding(.leading, 10)
         .padding(.trailing, 4)
         .padding(.vertical, 4)
         .background(Theme.raised, in: .rect(cornerRadius: 8))
-        .padding(.horizontal, Theme.cellPadding)
-        .padding(.bottom, 10)
     }
 }
