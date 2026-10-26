@@ -10,18 +10,25 @@
 //! just those keys and reconnects; with both off the host keeps the link but does not connect.
 //! Unlinking removes the table and disconnects; what the vault holds stays there. Unpairing the
 //! host's device on the vault (`revoke_vault_host`) is the client's, as an owner of both.
+//!
+//! An owner may also have the daemon run a vault on its own machine (`install_vault`), or pair
+//! with one installed there by hand (`link_local_vault`). The daemon asks that vault, over its
+//! control socket, for a host code to link with, secrets on and backup off, and then for a code
+//! that pairs the owner's device with it as an owner, which the client redeems.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use anyhow::Result;
-use herder_protocol::{CommandBody, CommandResult, ErrorCode, ErrorInfo, LinkedVault};
+use herder_protocol::{CommandBody, CommandResult, ErrorCode, ErrorInfo, LinkedVault, Role};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::fork::FromVault;
+use super::install::LocalVault;
 use super::{HostSecrets, Replicator};
+use crate::auth::control::Request;
 use crate::config::{self, VaultConfig};
 use crate::session::SessionManager;
 use crate::session::fork::Forks;
@@ -43,6 +50,9 @@ pub struct Setup {
     pub shutdown: CancellationToken,
     /// What the host's sessions get of the vault's secrets.
     pub secrets: Arc<HostSecrets>,
+    /// The vault this machine runs or may run next to the daemon; `None` where the daemon
+    /// installs no vault.
+    pub local: Option<LocalVault>,
 }
 
 /// The vault this host replicates to, if any, and the replicator streaming there.
@@ -108,6 +118,11 @@ impl Link {
                     secrets: vault.secrets,
                 }),
                 volume: None,
+                local_vault: self
+                    .setup
+                    .local
+                    .as_ref()
+                    .is_some_and(LocalVault::is_installed),
             }),
             CommandBody::LinkVault {
                 addresses,
@@ -128,6 +143,86 @@ impl Link {
         }
     }
 
+    /// Applies `install_vault` or `link_local_vault` for the owner named `user`, answering
+    /// with a code that pairs their device with the vault.
+    pub async fn local_vault(
+        &self,
+        command: CommandBody,
+        user: String,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let _changing = self.changing.lock().await;
+        self.unlinked()?;
+        let Some(local) = self.setup.local.clone() else {
+            return Err(error(
+                ErrorCode::Unsupported,
+                "this daemon does not run a vault on its machine".to_owned(),
+            ));
+        };
+        let installed = local.is_installed();
+        match command {
+            CommandBody::InstallVault if installed => {
+                return Err(error(
+                    ErrorCode::Conflict,
+                    "a vault is installed on this machine already; pair and link it instead"
+                        .to_owned(),
+                ));
+            }
+            CommandBody::InstallVault => {
+                let local = local.clone();
+                blocking(move || local.install(&mut |step| info!("installing the vault: {step}")))
+                    .await?;
+            }
+            CommandBody::LinkLocalVault if !installed => {
+                return Err(error(
+                    ErrorCode::NotFound,
+                    "no vault is installed on this machine".to_owned(),
+                ));
+            }
+            CommandBody::LinkLocalVault => {}
+            _ => {
+                return Err(error(
+                    ErrorCode::BadRequest,
+                    "not a local vault command".to_owned(),
+                ));
+            }
+        }
+        let host = Request::PairHost {
+            host: self.setup.host.name.clone(),
+        };
+        let vault = local.clone();
+        let host = blocking(move || vault.pair(&host)).await?;
+        // The vault's own addresses, not loopback: the host keeps the first that answers, and
+        // devices are told where it is from there.
+        self.link_unlocked(host.addresses, &host.fingerprint, host.code, false, true)
+            .await?;
+        let owner = Request::Pair {
+            user,
+            role: Some(Role::Owner),
+        };
+        let device = blocking(move || local.pair(&owner)).await?;
+        info!(vault = %device.fingerprint, "paired a device with the vault on this machine");
+        Ok(CommandResult::DevicePairing {
+            code: device.code,
+            fingerprint: device.fingerprint,
+            addresses: device.addresses,
+            expires_at: device.expires_at,
+        })
+    }
+
+    /// Refuses a new link while this host is linked to a vault.
+    fn unlinked(&self) -> Result<(), ErrorInfo> {
+        match self.vault() {
+            Some(vault) => Err(error(
+                ErrorCode::Conflict,
+                format!(
+                    "this host is linked to the vault at {} already; unlink it first",
+                    vault.address
+                ),
+            )),
+            None => Ok(()),
+        }
+    }
+
     async fn link(
         &self,
         addresses: Vec<String>,
@@ -137,15 +232,20 @@ impl Link {
         secrets: bool,
     ) -> Result<CommandResult, ErrorInfo> {
         let _changing = self.changing.lock().await;
-        if let Some(vault) = self.vault() {
-            return Err(error(
-                ErrorCode::Conflict,
-                format!(
-                    "this host is linked to the vault at {} already; unlink it first",
-                    vault.address
-                ),
-            ));
-        }
+        self.unlinked()?;
+        self.link_unlocked(addresses, fingerprint, pairing_code, backup, secrets)
+            .await
+    }
+
+    /// Links to the vault; the caller holds `changing` and checked this host is unlinked.
+    async fn link_unlocked(
+        &self,
+        addresses: Vec<String>,
+        fingerprint: &str,
+        pairing_code: String,
+        backup: bool,
+        secrets: bool,
+    ) -> Result<CommandResult, ErrorInfo> {
         let fingerprint: String = fingerprint
             .chars()
             .filter(|c| !c.is_whitespace() && *c != ':')
@@ -296,6 +396,16 @@ fn not_linked() -> ErrorInfo {
         ErrorCode::NotFound,
         "this host is linked to no vault".to_owned(),
     )
+}
+
+/// Runs `call`, which waits on files, services or the vault's socket, on the blocking pool.
+async fn blocking<T: Send + 'static>(
+    call: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T, ErrorInfo> {
+    tokio::task::spawn_blocking(call)
+        .await
+        .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?
+        .map_err(internal)
 }
 
 fn internal(err: anyhow::Error) -> ErrorInfo {
