@@ -93,6 +93,12 @@ final class ScreenshotTests: XCTestCase {
             settle()
             #if os(macOS)
             shoot("mac-machines")
+            // A narrower window, where the table must still fit without gaps.
+            resize(to: CGSize(width: 1000, height: 900))
+            settle()
+            shoot("mac-machines-narrow")
+            resize(to: CGSize(width: 1440, height: 900))
+            settle()
             #else
             shoot("ios-machines")
             #endif
