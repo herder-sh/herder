@@ -1552,6 +1552,24 @@
           ]
         },
         {
+          "description": "Update the daemon's herder to the latest release, as `herder update` does, and restart\nonto it; owners only, never an agent. Answered with `applied` once it started: its\nprogress and outcome arrive as `daemon_update`, `restarting` before the daemon restarts\nits own service, and an installed vault's next to it. No new turn starts until then.\nRefused with `unsupported` when the daemon does not run as the service herder installed,\nor cannot write its binary, and with `conflict` while an update waits or runs already;\na `now` sent while one waits for its turns to end starts it at once instead.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "update_daemon"
+            },
+            "when": {
+              "description": "When to restart, which ends the turns running then.",
+              "$ref": "#/$defs/UpdateWhen"
+            }
+          },
+          "required": [
+            "type",
+            "when"
+          ]
+        },
+        {
           "description": "List a folder on the host, to pick a repository; owners only. Answered with\n`directory`. It changes nothing, so a resend is answered afresh.",
           "type": "object",
           "properties": {
@@ -4620,6 +4638,21 @@
         "cache_read",
         "cache_write",
         "cost_estimated"
+      ]
+    },
+    "UpdateWhen": {
+      "description": "When `update_daemon` restarts the daemon onto its new herder.",
+      "oneOf": [
+        {
+          "description": "At once, ending the turns running then.",
+          "type": "string",
+          "const": "now"
+        },
+        {
+          "description": "Once no turn runs; no new turn starts meanwhile.",
+          "type": "string",
+          "const": "idle"
+        }
       ]
     },
     "UsagePeriod": {

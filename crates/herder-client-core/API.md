@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 12`
+`CLIENT_API_VERSION = 13`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -178,15 +178,17 @@ everything stops once the last clone is dropped.
 
 - `Machine` — `host_id`, `name`, `addresses` (in order of preference), `address:
   Option<String>` (the one the current connection uses; `None` while not connected),
-  `fingerprint`, `connection`, `quality`, `role`,
-  `sessions`, `hosts`, `projects`, `accounts`, `failover`, `providers` (`Vec<ProviderStatus>`:
+  `fingerprint`, `connection`, `quality`, `role`, `herder_version` (`Option<String>`: the
+  daemon's herder version from its latest hello; `None` before the first connection and from
+  daemons before `UpdateDaemon`), `sessions`, `hosts`, `projects`, `accounts`, `failover`, `providers` (`Vec<ProviderStatus>`:
   each runnable provider's CLI on the machine, as last listed; `latest_version` when a newer
   release is out), `terminals`, `resources`,
   `session_usage`, `vault` (`Option<VaultStatus>`: a vault's totals and per-host replication;
   `None` for a daemon and while not connected), `skills` (`Option<SkillsStatus>`: the skill
   library as the daemon has it; `None` until it sends it and while not connected),
   `session_skills` (`HashMap<SessionId, Vec<SessionSkill>>`: the skills each live session's
-  agent may use; empty while not connected).
+  agent may use; empty while not connected), `update` (`Option<UpdateStage>`: where an
+  owner's `UpdateDaemon` stands; `None` until one starts and while not connected).
 - `ConnectionQuality` — `connected_since: Option<Timestamp>` (when the current connection
   was established; `None` while not connected), `reconnects: u32` (connections established
   after the first, since the client opened), `last_rtt_ms`, `average_rtt_ms`, `min_rtt_ms`,
@@ -293,6 +295,13 @@ sharer may do; members still get no terminals) and the addresses that daemon adv
 not the ones the sharer reached it on. The new device gets its own key on every machine,
 revocable on its own; the sharer's keys never leave it. The share is one-time: machines
 paired later are not passed on.
+
+## Changes in version 13
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Machine::herder_version: Option<String>` (`ServerHello.herder_version`) | Apps tell a daemon that updates from a client from one too old to, and confirm the version an update restarted on. |
+| — | `Machine::update: Option<UpdateStage>` | Owners update a machine's herder from the app (`send(host, UpdateDaemon { when })`) and follow it: waiting for turns to end, downloading, restarting, up to date or failed. A new field breaks code that builds a `Machine`. |
 
 ## Changes in version 12
 
@@ -501,6 +510,22 @@ several hosts serves all of them. A malformed placeholder is refused with `bad_r
 server whose secrets the vault does not hand out is left out of that run, and the session's
 transcript says so with a `herder_mcp` tool call and its failed result, naming the server and
 the secret, never a value.
+
+### Updating a machine's herder (client API 13)
+
+`send(host, UpdateDaemon { when })` updates the daemon's herder to the latest release, as
+`herder update` does on the machine, and restarts it, and an installed vault next to it,
+onto the new binary; owners only, and never an agent. It answers `Applied` once the update
+started, or is refused with `unsupported` when the daemon does not run as the service herder
+installed or cannot write its binary, and with `conflict` while an update runs. Its stages
+arrive in `Machine::update`: `WaitingForIdle { running_turns }` (with `when: Idle`, until no
+turn runs; no new turn starts meanwhile), `Downloading { from, to }`, `Restarting { from, to }`
+just before the restart, `UpToDate { version }`, or `Failed { reason }`, which changed nothing.
+`UpdateDaemon { when: Now }` sent while one waits for its turns starts it at once. After the
+restart the client reconnects as after any, and `Machine::herder_version` shows the version it
+runs: a daemon's hello names it in `herder_version`, which daemons before `UpdateDaemon` leave
+out, so a client knows to offer `herder update` on the machine instead.
+The wire change is additive (protocol 5).
 
 ### Turn usage (client API 10)
 

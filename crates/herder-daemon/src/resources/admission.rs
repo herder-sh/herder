@@ -31,6 +31,9 @@
 //! admits waiting turns at once, a lower one stops no running turn, only new ones from
 //! starting until the host is back under it.
 //!
+//! [`Admission::hold`] starts no new turn while the hold lives, whatever room the host has, for
+//! an update that waits for the running turns to end; a parked turn still takes its slot back.
+//!
 //! [`Admission::run`] publishes
 //! [`ServerMessage::HostResources`](herder_protocol::ServerMessage::HostResources) through the
 //! [`Hub`] each [`RECHECK_INTERVAL`] when it changed, and at once when the turn limit does.
@@ -166,6 +169,8 @@ struct Shared {
     host: Box<dyn ReadHost>,
     /// Wakes [`Admission::run`] to publish a new turn limit at once.
     limit_changed: Notify,
+    /// Wakes every [`Hold::turns_changed`] when a turn ends.
+    turn_ended: Notify,
     /// Whether a failed reading was logged already; later ones are not.
     read_failed: AtomicBool,
     state: Mutex<State>,
@@ -182,6 +187,8 @@ struct State {
     waiting: VecDeque<(SessionId, oneshot::Sender<Permit>)>,
     /// What clients were sent last.
     published: Option<HostResources>,
+    /// Holds alive: while any is, no turn is admitted.
+    holds: u32,
 }
 
 /// Whether a turn may start now.
@@ -208,6 +215,7 @@ impl Drop for Permit {
                 state.running = state.running.saturating_sub(1);
             }
             shared.admit(&mut state);
+            shared.turn_ended.notify_waiters();
         }
     }
 }
@@ -232,6 +240,41 @@ impl Drop for Parked {
     }
 }
 
+/// Keeps new turns from starting while it lives; dropping it admits the turns that waited.
+pub struct Hold {
+    shared: Arc<Shared>,
+}
+
+impl Hold {
+    /// The turns running now, parked ones too.
+    pub fn turns(&self) -> u32 {
+        u32::try_from(self.shared.lock().holders.len()).unwrap_or(u32::MAX)
+    }
+
+    /// Waits until no turn runs, calling `running` with the number running first and each
+    /// time it changes.
+    pub async fn idle(&self, mut running: impl FnMut(u32)) {
+        loop {
+            // Registered before the count is read, so a turn ending in between still wakes it.
+            let ended = self.shared.turn_ended.notified();
+            let turns = self.turns();
+            if turns == 0 {
+                return;
+            }
+            running(turns);
+            ended.await;
+        }
+    }
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        let mut state = self.shared.lock();
+        state.holds = state.holds.saturating_sub(1);
+        self.shared.admit(&mut state);
+    }
+}
+
 impl Admission {
     /// Admission within `budget`, reading the host from `host`.
     pub fn new(budget: Budget, host: Box<dyn ReadHost>) -> Self {
@@ -239,6 +282,7 @@ impl Admission {
             shared: Arc::new(Shared {
                 host,
                 limit_changed: Notify::new(),
+                turn_ended: Notify::new(),
                 read_failed: AtomicBool::new(false),
                 state: Mutex::new(State {
                     budget,
@@ -246,6 +290,7 @@ impl Admission {
                     holders: HashMap::new(),
                     waiting: VecDeque::new(),
                     published: None,
+                    holds: 0,
                 }),
             }),
         }
@@ -277,6 +322,7 @@ impl Admission {
         shared.admit(&mut state);
         let reading = shared.read();
         if state.waiting.is_empty()
+            && state.holds == 0
             && state
                 .budget
                 .constraint(state.running, reading.as_ref())
@@ -309,6 +355,14 @@ impl Admission {
             shared: Arc::clone(shared),
             session: session.clone(),
         })
+    }
+
+    /// Starts no new turn until the hold drops; turns asking meanwhile wait in line.
+    pub fn hold(&self) -> Hold {
+        self.shared.lock().holds += 1;
+        Hold {
+            shared: Arc::clone(&self.shared),
+        }
     }
 
     /// What about the host itself, its memory, load or pressure, keeps it from starting another
@@ -379,8 +433,12 @@ impl Admission {
 }
 
 impl Shared {
-    /// Hands permits to waiting turns, oldest first, while the host has room.
+    /// Hands permits to waiting turns, oldest first, while the host has room and nothing holds
+    /// them.
     fn admit(self: &Arc<Self>, state: &mut State) {
+        if state.holds > 0 {
+            return;
+        }
         while let Some((_, waiting)) = state.waiting.front() {
             if waiting.is_closed() {
                 state.waiting.pop_front();

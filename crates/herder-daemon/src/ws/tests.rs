@@ -1769,6 +1769,31 @@ async fn a_restart_is_answered_before_the_daemon_stops() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn updates_are_refused_for_members_and_where_no_service_restarts_the_daemon() {
+    let daemon = Daemon::start().await;
+    let update = CommandBody::UpdateDaemon {
+        when: herder_protocol::UpdateWhen::Idle,
+    };
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut member = daemon.client_on(&device, Some(&code)).await;
+    member.hello(Vec::new()).await;
+    assert!(matches!(
+        member.command("m1", update.clone()).await,
+        ServerMessage::CommandRejected { error, .. } if error.code == ErrorCode::Forbidden
+    ));
+
+    // This daemon runs in a test, not as the service herder installed.
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    assert!(matches!(
+        owner.command("c1", update).await,
+        ServerMessage::CommandRejected { error, .. }
+            if error.code == ErrorCode::Unsupported && error.message.contains("herder update")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn owners_put_and_list_bots_and_members_are_refused() {
     let daemon = Daemon::start().await;
     let mut owner = daemon.client().await;
@@ -1899,6 +1924,9 @@ async fn agents_run_commands_as_their_user_within_its_role() {
         },
         CommandBody::RemoveBot {
             bot_id: herder_protocol::BotId::new("trash-can"),
+        },
+        CommandBody::UpdateDaemon {
+            when: herder_protocol::UpdateWhen::Now,
         },
     ];
     for command in refused {

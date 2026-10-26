@@ -245,3 +245,49 @@ mod tests {
         }
     }
 }
+
+/// When `update_daemon` restarts the daemon onto its new herder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateWhen {
+    /// At once, ending the turns running then.
+    Now,
+    /// Once no turn runs; no new turn starts meanwhile.
+    Idle,
+}
+
+/// Where an owner's `update_daemon` stands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum UpdateStage {
+    /// Waiting for turns to end before it downloads; no new turn starts meanwhile.
+    WaitingForIdle {
+        /// Turns running now.
+        running_turns: u32,
+    },
+    /// Downloading the release and checking it against its checksum.
+    Downloading {
+        /// The version running now.
+        from: String,
+        /// The version being installed.
+        to: String,
+    },
+    /// The new binary is in place; the daemon restarts onto it now. Clients that reconnect
+    /// find it on `to`.
+    Restarting {
+        /// The version that ran.
+        from: String,
+        /// The version it restarts on.
+        to: String,
+    },
+    /// The latest release runs already; nothing changed.
+    UpToDate {
+        /// The version running.
+        version: String,
+    },
+    /// It failed and changed nothing; held turns start.
+    Failed {
+        /// Why.
+        reason: String,
+    },
+}

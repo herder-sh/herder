@@ -244,6 +244,11 @@ pub fn is_installed(service: &Service) -> bool {
     home().is_ok_and(|home| plist_path(&home, service.label).is_file())
 }
 
+/// Whether launchd runs this process as `service`: it names the job in `XPC_SERVICE_NAME`.
+pub fn runs_this_process(service: &Service) -> bool {
+    std::env::var("XPC_SERVICE_NAME").is_ok_and(|name| name == service.label)
+}
+
 /// Whether the herder service is running right now.
 pub fn is_active() -> bool {
     print(LABEL).is_some_and(|out| running(&out))

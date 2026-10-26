@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true
+flate2.workspace = true
 frankenstein.workspace = true
 futures-util.workspace = true
 herder-adapters.workspace = true
@@ -33,6 +34,8 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 slack-morphism.workspace = true
+tar.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-std", "io-util", "net", "process", "sync", "time"] }
 tokio-rustls.workspace = true
@@ -48,7 +51,6 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]

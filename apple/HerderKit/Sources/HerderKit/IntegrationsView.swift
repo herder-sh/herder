@@ -60,7 +60,7 @@ struct IntegrationsView: View {
                 } else {
                     BotsEmptyState(canAdd: machines.contains { !(bots[$0.hostId]?.outdated ?? false) }) { sheet = .addBot }
                 }
-                let notes = machines.compactMap { machine in bots[machine.hostId].flatMap { BotsNote(machine: machine.name, bots: $0) } }
+                let notes = machines.compactMap { machine in bots[machine.hostId].flatMap { BotsNote(fleet: fleet, machine: machine, bots: $0) } }
                 if !notes.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(notes, id: \.machine) { $0 }
@@ -143,16 +143,18 @@ struct IntegrationsView: View {
 /// Why a machine's bots are not in the table, in one calm line: its herder is too old for bots,
 /// or it refused to list them.
 struct BotsNote: View {
-    let machine: String
+    let fleet: Fleet
+    let hostId: HostId
     let text: String
-    /// Whether the machine's herder is too old, which `herder update` there fixes.
+    /// Whether the machine's herder is too old, which updating it fixes.
     let outdated: Bool
 
-    init?(machine: String, bots: MachineBots) {
+    init?(fleet: Fleet, machine: Machine, bots: MachineBots) {
         guard case .failed(let why) = bots.bots else { return nil }
-        self.machine = machine
+        self.fleet = fleet
+        hostId = machine.hostId
         outdated = bots.outdated
-        text = outdated ? "\(machine) runs an older herder; bots need \(botsRelease)." : "\(machine) did not list its bots: \(why)"
+        text = outdated ? "\(machine.name) runs an older herder; bots need \(botsRelease)." : "\(machine.name) did not list its bots: \(why)"
     }
 
     var body: some View {
@@ -162,10 +164,7 @@ struct BotsNote: View {
             Text(text).font(.subheadline).foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            if outdated {
-                CopyPill(title: "herder update", text: "herder update")
-                    .help("Run it on \(machine) to update herder there")
-            }
+            if outdated { HerderUpdateButton(fleet: fleet, hostId: hostId) }
         }
         .padding(.horizontal, 8)
         .frame(minHeight: 36)
@@ -514,7 +513,7 @@ struct MachineBotsSection: View {
                     pages.open(.bot(hostId: machine.hostId, botId: bot.botId))
                 }
             }
-            if let note = BotsNote(machine: machine.name, bots: bots) {
+            if let note = BotsNote(fleet: fleet, machine: machine, bots: bots) {
                 note.padding(.horizontal, 6).padding(.vertical, 4)
             } else if bots.list.isEmpty {
                 Text("No bots. Add one under Integrations.").font(.subheadline).foregroundStyle(Theme.tertiary)

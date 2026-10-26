@@ -82,6 +82,12 @@ pub enum ServerMessage {
         /// Its skills, ordered by name, then library before project, then by path.
         skills: Vec<crate::SessionSkill>,
     },
+    /// Where an owner's `update_daemon` stands; ephemeral, never journaled. Sent whenever it
+    /// moves on, and its latest stage after hello until the daemon restarts.
+    DaemonUpdate {
+        /// The stage it reached.
+        stage: crate::UpdateStage,
+    },
     /// A durable journal event of a subscribed session.
     Event(Event),
     /// The full current state of an in-progress item; later deltas apply on top of it.
@@ -162,6 +168,10 @@ pub struct ServerHello {
     pub device_id: DeviceId,
     /// The user's role on this daemon.
     pub role: Role,
+    /// The daemon's herder version, as `herder --version` prints it; absent from daemons
+    /// before `update_daemon`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herder_version: Option<String>,
 }
 
 /// A host that replicates to a vault, as the vault lists it.

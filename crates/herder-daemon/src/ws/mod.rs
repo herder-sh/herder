@@ -344,8 +344,12 @@ impl<B: Backend> Shared<B> {
             command @ (CommandBody::GetSettings
             | CommandBody::SetSettings { .. }
             | CommandBody::SetResourceLimits { .. }
-            | CommandBody::RestartDaemon) => match self.settings.get() {
-                Some(settings) => settings.command(command).await,
+            | CommandBody::RestartDaemon
+            | CommandBody::UpdateDaemon { .. }) => match self.settings.get() {
+                Some(settings) => match command {
+                    CommandBody::UpdateDaemon { when } => settings.update(when, &self.hub),
+                    command => settings.command(command).await,
+                },
                 None => Err(ErrorInfo {
                     code: ErrorCode::Unsupported,
                     message: "this daemon's settings are not changed from a client".to_owned(),
@@ -514,7 +518,8 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::ListAwsProfiles
                     | CommandBody::AwsSsoLogin { .. }
             );
-            // A bot's allowlist grants people access, as a pairing code does.
+            // A bot's allowlist grants people access, as a pairing code does. An update
+            // restarts the daemon, ending the turn that asked for it.
             let pairing = matches!(
                 command,
                 CommandBody::PairDevice { .. }
@@ -526,12 +531,14 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::LinkLocalVault
                     | CommandBody::PutBot { .. }
                     | CommandBody::RemoveBot { .. }
+                    | CommandBody::UpdateDaemon { .. }
             );
             if connection || pairing {
                 return Err(ErrorInfo {
                     code: ErrorCode::Forbidden,
-                    message: "terminals, logins, installs, pairing codes, users and bots are \
-                              never run for an agent; ask the user to do this in a herder app"
+                    message: "terminals, logins, installs, pairing codes, users, bots and \
+                              updates are never run for an agent; ask the user to do this in a \
+                              herder app"
                         .to_owned(),
                 });
             }
