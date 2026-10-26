@@ -97,8 +97,24 @@ final class ScreenshotTests: XCTestCase {
         #endif
         agents()
 
-        // A child session: its banner back to the parent over the header.
+        // The header's PR chip opens the task's PRs: a popover on the Mac, a sheet on the iPhone.
+        // Then a child session: its banner back to the parent over the header.
         if open("Roll out 30-day log retention") {
+            let chip = app.buttons["pr-chip"].firstMatch
+            if wait(chip, "PR chip") {
+                press(chip)
+                if wait(app.buttons.matching(NSPredicate(
+                    format: "label BEGINSWITH 'Pull request 214'")).firstMatch, "a PR in the PR list") {
+                    settle()
+                    shoot(platform("pr-list"), screen: true)
+                }
+                #if os(macOS)
+                app.typeKey(.escape, modifierFlags: [])
+                settle()
+                #else
+                dismiss()
+                #endif
+            }
             let child = app.buttons.matching(NSPredicate(
                 format: "label BEGINSWITH 'Open child session: Terraform'")).firstMatch
             if wait(child, "child session") {

@@ -47,6 +47,39 @@ struct PRRollupTests {
         #expect(child.all.map(\.number) == [191, 190, 201, 200])
     }
 
+    @Test func theListGroupsThePRsBySessionUnderTheirDepth() {
+        let rollup = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01P"), sessions: tree)
+        #expect(rollup.groups.map(\.title) == ["Primary", "Child a", "Child b", "Grandchild"])
+        #expect(rollup.groups.map(\.depth) == [0, 1, 1, 2])
+        #expect(rollup.groups.map { $0.prs.map(\.number) } == [[181], [185], [191, 190], [201, 200]])
+        #expect(rollup.groups[2].finished.map(\.number) == [190])
+        #expect(PRRollup.folded([pr(1, .merged), pr(2, .closed)]) == "1 merged · 1 closed")
+        #expect(PRRollup.folded([pr(7, .merged), pr(8, .merged)]) == "2 merged")
+    }
+
+    @Test func theListFiltersToOpenAndSearchesNumberTitleAndBranch() {
+        let rollup = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01P"), sessions: tree)
+        let open = rollup.shown(openOnly: true, query: "")
+        #expect(open.map(\.title) == ["Primary", "Child b", "Grandchild"])
+        #expect(open.flatMap { $0.prs.map(\.number) } == [181, 191, 201])
+        #expect(rollup.shown(openOnly: false, query: "#19").flatMap { $0.prs.map(\.number) } == [191, 190])
+        #expect(rollup.shown(openOnly: false, query: "PR 200").flatMap { $0.prs.map(\.number) } == [200])
+        #expect(rollup.shown(openOnly: false, query: "b185").map(\.title) == ["Child a"])
+        #expect(rollup.shown(openOnly: true, query: "nothing").isEmpty)
+    }
+
+    @Test func aPRIsLinkedByNumberOrLinkAsInTheTUI() {
+        #expect(prNumber(in: "123") == 123)
+        #expect(prNumber(in: " #42 ") == 42)
+        #expect(prNumber(in: "https://github.com/herder-sh/herder/pull/96/files") == 96)
+        #expect(prNumber(in: "pull request") == nil)
+    }
+
+    @Test func thePRListIsASheetOnCompactWidthAsThePopoverIsWiderThanAPhone() {
+        #expect(PRListPresentation(compact: true) == .sheet)
+        #expect(PRListPresentation(compact: false) == .popover)
+    }
+
     @Test func eachSessionsPRsSortOpenDraftMergedClosed() {
         let (key, model) = session("01P", task: "Primary",
                                    prs: [pr(1, .closed), pr(2, .merged), pr(3, .draft), pr(4, .open), pr(5, .open)])

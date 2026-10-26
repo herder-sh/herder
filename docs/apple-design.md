@@ -364,11 +364,14 @@ list pane's title and the sidebar's top bar.
   tooltips, centred on the title's first line (`VerticalAlignment.titleLine`).
 - **The PRs chip rolls up the session's tree** (`PRRollup`): its own PRs and every
   descendant's (children, grandchildren), a PR linked to two of them counted once. It is one
-  label, never one per PR (a labelled `HeaderLabel`): a single PR shows its number ("#181"), more show how many
+  button, never one per PR (a labelled `HeaderButton`): a single PR shows its number ("#181"), more show how many
   are open ("3 open"), or how many there are once none is ("16 PRs"); the tooltip has the
   whole count. It is a header control like the rest, borderless, its text tinted by `Urgency`:
   failing while an open one fails its checks, conflicts or has changes requested, running
-  while any is open, done once one merged, else quiet. It opens no list.
+  while any is open, done once one merged, else quiet. It opens the tree's PRs (`PRList`): a
+  popover on the Mac and iPad, a sheet on a phone, grouped by session (a descendant's heading
+  opens it), Open / All once both differ, a search past ten, merged and closed folded. A PR
+  opens in the browser; its context menu copies its link or unlinks it; Link PR… links one.
 - **On a phone** the navigation bar holds Back, the PRs chip (icon and count) and the ⋯ menu,
   which also has Terminal, Find and the inspector. The title, status line and branch sit under
   it at the full 375 pt: the title wraps to two lines, the status line and branch truncate
