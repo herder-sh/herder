@@ -3,13 +3,16 @@
 //!
 //! The app needs the bot scopes `app_mentions:read`, `im:history`, `im:write`, `chat:write`,
 //! `files:read` and `files:write`, the events `app_mention` and `message.im`, and
-//! interactivity, for its buttons.
+//! interactivity, for its buttons. To read the thread or channel it is mentioned in, it needs
+//! `channels:history`, `groups:history` and `mpim:history` too, and `users:read` to name who
+//! wrote there; without them it answers still, from the mention alone.
 
 pub mod mrkdwn;
 pub mod payload;
 pub mod render;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 use herder_protocol::{MAX_PROMPT_ATTACHMENT_BYTES, SecretValue};
@@ -19,11 +22,21 @@ use slack_morphism::errors::SlackClientError;
 use slack_morphism::prelude::*;
 use tokio::sync::mpsc;
 
-use super::bridge::{self, Bridge, ChatFile, ConnectError, Connection, Inbound, Place, Post};
+use super::bridge::{
+    self, Bridge, ChatFile, ConnectError, Connection, Earlier, HistoryError, Inbound, Place, Post,
+    RECENT_MESSAGES,
+};
 use crate::session::publish::media_type;
 
 /// Messages and presses the connection holds before the runner takes them.
 const INBOUND: usize = 64;
+
+/// The most messages one `conversations.replies` call answers with.
+const REPLIES_PAGE: u16 = 200;
+
+/// What the bot says when Slack will not let it read a thread.
+pub const UNREADABLE: &str = "I can't read this thread: add the history scopes in \
+                              api.slack.com and reinstall the app";
 
 /// What the Socket Mode callbacks need, kept as the listener's user state.
 struct Listening {
@@ -54,7 +67,7 @@ pub async fn connect(
             .with_error_handler(on_error)
             .with_user_state(Listening {
                 inbound: sender,
-                me,
+                me: me.clone(),
             }),
     );
     let callbacks = SlackSocketModeListenerCallbacks::new()
@@ -72,7 +85,12 @@ pub async fn connect(
         .map_err(|err| refused("the app-level token", err))?;
     listener.start().await;
     Ok(Connection {
-        bridge: Arc::new(Slack { client, token }),
+        bridge: Arc::new(Slack {
+            client,
+            token,
+            me,
+            names: Mutex::default(),
+        }),
         inbound,
         close: Box::pin(async move { listener.shutdown().await }),
     })
@@ -138,11 +156,40 @@ fn on_error(
 struct Slack {
     client: Arc<SlackHyperClient>,
     token: SlackApiToken,
+    /// The bot's user id.
+    me: String,
+    /// The names of the people the bot has looked up, by user id.
+    names: Mutex<HashMap<String, String>>,
 }
 
 impl Slack {
     fn session(&self) -> SlackClientSession<'_, SlackClientHyperHttpsConnector> {
         self.client.open_session(&self.token)
+    }
+
+    /// `messages` with their writers named, and the people they mention, as far as Slack
+    /// tells the bot their names.
+    async fn named(&self, mut messages: Vec<Earlier>) -> Vec<Earlier> {
+        let known = |id: &String| self.names.lock().is_ok_and(|names| names.contains_key(id));
+        let unknown: Vec<_> = payload::unnamed(&messages)
+            .into_iter()
+            .filter(|id| !known(id))
+            .collect();
+        for id in unknown {
+            let ask = SlackApiUsersInfoRequest::new(id.clone().into());
+            match self.session().users_info(&ask).await {
+                Ok(info) => {
+                    if let Ok(mut names) = self.names.lock() {
+                        names.insert(id, payload::display_name(info.user));
+                    }
+                }
+                Err(err) => tracing::debug!("cannot look up a Slack user's name: {err}"),
+            }
+        }
+        if let Ok(names) = self.names.lock() {
+            payload::named(&mut messages, &names);
+        }
+        messages
     }
 
     /// Uploads `data` as the file `name` into `place`, as a snippet with `snippet`.
@@ -334,6 +381,62 @@ impl Bridge for Slack {
         })
     }
 
+    fn history<'a>(
+        &'a self,
+        place: &'a Place,
+        after: Option<&'a str>,
+        before: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<Earlier>, HistoryError>> {
+        Box::pin(async move {
+            let session = self.session();
+            let mut ask = SlackApiConversationsRepliesRequest::new(
+                place.channel_id.clone().into(),
+                place.thread_id.clone().into(),
+            )
+            .with_latest(before.to_owned().into())
+            .with_inclusive(false)
+            .with_limit(REPLIES_PAGE);
+            if let Some(after) = after {
+                ask = ask.with_oldest(after.to_owned().into());
+            }
+            let mut messages = Vec::new();
+            loop {
+                let page = session
+                    .conversations_replies(&ask)
+                    .await
+                    .map_err(history_error)?;
+                messages.extend(page.messages);
+                match page.response_metadata.and_then(|meta| meta.next_cursor) {
+                    Some(cursor) if !cursor.0.is_empty() => ask = ask.with_cursor(cursor),
+                    _ => break,
+                }
+            }
+            let earlier = payload::earlier(messages, &self.me, after, before);
+            Ok(self.named(earlier).await)
+        })
+    }
+
+    fn recent<'a>(
+        &'a self,
+        place: &'a Place,
+        before: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<Earlier>, HistoryError>> {
+        Box::pin(async move {
+            let ask = SlackApiConversationsHistoryRequest::new()
+                .with_channel(place.channel_id.clone().into())
+                .with_latest(before.to_owned().into())
+                .with_inclusive(false)
+                .with_limit(RECENT_MESSAGES as u16);
+            let page = self
+                .session()
+                .conversations_history(&ask)
+                .await
+                .map_err(history_error)?;
+            let recent = payload::recent(page.messages, &self.me, before);
+            Ok(self.named(recent).await)
+        })
+    }
+
     fn link<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>> {
         Box::pin(async move {
             let ask = SlackApiChatGetPermalinkRequest::new(
@@ -349,6 +452,16 @@ impl Bridge for Slack {
 /// A Web API request, from its JSON as Slack documents it.
 fn request<T: DeserializeOwned>(value: Value) -> bridge::Result<T> {
     serde_json::from_value(value).map_err(|err| format!("cannot build the Slack request: {err}"))
+}
+
+/// Why `conversations.replies` failed: the app lacks a history scope, or anything else.
+pub fn history_error(err: SlackClientError) -> HistoryError {
+    match &err {
+        SlackClientError::ApiError(api) if api.code == "missing_scope" => {
+            HistoryError::Unreadable(UNREADABLE.to_owned())
+        }
+        _ => HistoryError::Failed(failed(err)),
+    }
 }
 
 fn failed(err: SlackClientError) -> String {

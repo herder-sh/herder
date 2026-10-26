@@ -39,7 +39,9 @@ use tracing::warn;
 use self::api::{Api, Failure, Upload};
 use self::payload::{Me, Pressed, Threads};
 use self::render::Keys;
-use super::bridge::{self, Bridge, ChatFile, ConnectError, Connection, Inbound, Place, Post};
+use super::bridge::{
+    self, Bridge, ChatFile, ConnectError, Connection, Earlier, HistoryError, Inbound, Place, Post,
+};
 use crate::session::publish::media_type;
 
 /// Messages and presses the connection holds before the runner takes them.
@@ -539,6 +541,25 @@ impl Bridge for Telegram {
                 .await
                 .map_err(|err| format!("cannot download it from Telegram: {err}"))
         })
+    }
+
+    /// Telegram has no way for a bot to read a chat's history: it sees only what is sent to it.
+    fn history<'a>(
+        &'a self,
+        _place: &'a Place,
+        _after: Option<&'a str>,
+        _before: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<Earlier>, HistoryError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Telegram has no way for a bot to read a chat's history.
+    fn recent<'a>(
+        &'a self,
+        _place: &'a Place,
+        _before: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<Earlier>, HistoryError>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 
     fn link<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>> {

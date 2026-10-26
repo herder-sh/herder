@@ -1,0 +1,55 @@
+{
+  "envelope_id": "e22",
+  "type": "events_api",
+  "accepts_response_payload": false,
+  "retry_attempt": 0,
+  "retry_reason": "",
+  "payload": {
+    "token": "verification-token-unused",
+    "team_id": "T0HERDER01",
+    "context_team_id": "T0HERDER01",
+    "api_app_id": "A0HERDER01",
+    "event": {
+      "type": "app_mention",
+      "user": "U0ADA00001",
+      "ts": "1761401060.002200",
+      "client_msg_id": "c0ffee00-0000-4000-8000-000000002200",
+      "text": "<@U0BOT00001> pacheckink",
+      "team": "T0HERDER01",
+      "blocks": [
+        {
+          "type": "rich_text",
+          "block_id": "b1",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {
+                  "type": "text",
+                  "text": "<@U0BOT00001> pacheckink"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "channel": "C0TEAM0001",
+      "event_ts": "1761401060.002200",
+      "thread_ts": "1761401000.002000"
+    },
+    "type": "event_callback",
+    "event_id": "Ev2200",
+    "event_time": 1761401060,
+    "authorizations": [
+      {
+        "enterprise_id": null,
+        "team_id": "T0HERDER01",
+        "user_id": "U0BOT00001",
+        "is_bot": true,
+        "is_enterprise_install": false
+      }
+    ],
+    "is_ext_shared_channel": false,
+    "event_context": "4-eyJldCI6Im1lc3NhZ2UifQ"
+  }
+}

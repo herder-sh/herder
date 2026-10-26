@@ -37,6 +37,8 @@ pub enum Inbound {
 pub struct Message {
     /// Where it was written: the thread it replies in, or the thread it starts.
     pub place: Place,
+    /// Its id, as the chat names it: Slack's `ts`.
+    pub message_id: String,
     /// Its writer's user id in the chat.
     pub user_id: String,
     /// Whether it is a direct message with the bot.
@@ -58,6 +60,36 @@ pub struct ChatFile {
     pub media_type: String,
     /// Where the bridge downloads it from.
     pub url: String,
+}
+
+/// A message of a thread, as [`Bridge::history`] reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Earlier {
+    /// Its id, as the chat names it.
+    pub message_id: String,
+    /// Its writer's user id in the chat; another bot's id for a bot's.
+    pub user_id: String,
+    /// Its writer's name, as the chat shows it, when known.
+    pub name: Option<String>,
+    /// Its text, as Markdown, with the people it mentions by name where known.
+    pub text: String,
+    /// The files it carries.
+    pub files: Vec<ChatFile>,
+}
+
+/// The most messages of a channel [`Bridge::recent`] reads.
+pub const RECENT_MESSAGES: usize = 20;
+
+/// How far back, in seconds, [`Bridge::recent`] reads a channel.
+pub const RECENT_SECONDS: u64 = 2 * 60 * 60;
+
+/// Why [`Bridge::history`] read nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub enum HistoryError {
+    /// The bot may not read the thread; what to tell its people, which says what fixes it.
+    Unreadable(String),
+    /// Anything else, as the chat says it.
+    Failed(String),
 }
 
 /// A press of one of the bot's buttons.
@@ -260,6 +292,22 @@ pub trait Bridge: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<()>>;
     /// The bytes of a file a message carried.
     fn download<'a>(&'a self, file: &'a ChatFile) -> BoxFuture<'a, Result<Vec<u8>>>;
+    /// The messages of the thread `place` after the message `after`, or from its start, and
+    /// before the message `before`, oldest first; without the bot's own.
+    fn history<'a>(
+        &'a self,
+        place: &'a Place,
+        after: Option<&'a str>,
+        before: &'a str,
+    ) -> BoxFuture<'a, std::result::Result<Vec<Earlier>, HistoryError>>;
+    /// The latest messages of the channel of `place` before the message `before`, oldest
+    /// first, without the bot's own: at most [`RECENT_MESSAGES`], of the last
+    /// [`RECENT_SECONDS`].
+    fn recent<'a>(
+        &'a self,
+        place: &'a Place,
+        before: &'a str,
+    ) -> BoxFuture<'a, std::result::Result<Vec<Earlier>, HistoryError>>;
     /// A web link to `place`, if the chat has one.
     fn link<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>>;
 }

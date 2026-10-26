@@ -1,0 +1,83 @@
+{
+  "ok": true,
+  "messages": [
+    {
+      "type": "message",
+      "user": "U0BOT00001",
+      "text": "Done.",
+      "ts": "1761400390.000690",
+      "team": "T0HERDER01",
+      "bot_id": "B0BOT00001",
+      "app_id": "A0HERDER01",
+      "bot_profile": {
+        "id": "B0BOT00001",
+        "name": "trash-can",
+        "app_id": "A0HERDER01",
+        "deleted": false,
+        "team_id": "T0HERDER01"
+      }
+    },
+    {
+      "type": "message",
+      "user": "U0BOB00001",
+      "text": "I see it on staging too",
+      "ts": "1761400380.000680",
+      "team": "T0HERDER01"
+    },
+    {
+      "type": "message",
+      "user": "U0CAROL001",
+      "text": "the login button is cut off on mobile",
+      "ts": "1761400370.000670",
+      "team": "T0HERDER01",
+      "files": [
+        {
+          "id": "F0THREAD01",
+          "created": 1761400299,
+          "timestamp": 1761400299,
+          "name": "image.png",
+          "title": "image.png",
+          "mimetype": "image/png",
+          "filetype": "png",
+          "pretty_type": "PNG",
+          "user": "U0ADA00001",
+          "user_team": "T0HERDER01",
+          "editable": false,
+          "size": 12,
+          "mode": "hosted",
+          "is_external": false,
+          "external_type": "",
+          "is_public": false,
+          "public_url_shared": false,
+          "display_as_bot": false,
+          "username": "",
+          "url_private": "https://files.slack.com/files-pri/T0HERDER01-F0THREAD01/image.png",
+          "url_private_download": "https://files.slack.com/files-pri/T0HERDER01-F0THREAD01/download/image.png",
+          "permalink": "https://herder-test.slack.com/files/U0ADA00001/F0THREAD01/image.png",
+          "has_rich_preview": false
+        }
+      ],
+      "upload": false
+    },
+    {
+      "type": "message",
+      "user": "U0DAVE0001",
+      "text": "<@U0DAVE0001> has joined the channel",
+      "ts": "1761400360.000660",
+      "team": "T0HERDER01",
+      "subtype": "channel_join"
+    },
+    {
+      "type": "message",
+      "user": "U0CAROL001",
+      "text": "good morning, three hours ago",
+      "ts": "1761392000.000500",
+      "team": "T0HERDER01"
+    }
+  ],
+  "has_more": true,
+  "pin_count": 0,
+  "response_metadata": {
+    "next_cursor": "bmV4dF90czoxNzYxMzkyMDAwMDAwNTAw"
+  }
+}

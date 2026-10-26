@@ -1,0 +1,5 @@
+# A mention that starts a thread carries the channel's latest messages, by name, with files.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Earlier in this channel:\nCarol: the login button is cut off on mobile [attached: image.png]\nBob: I see it on staging too\n\nWhat does the bot do?", "images": [{"media_type": "image/png", "data": "iVBORw0KGgpwbmc="}]}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "It answers."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}

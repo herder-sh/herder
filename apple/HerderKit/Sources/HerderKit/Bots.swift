@@ -364,11 +364,15 @@ final class BotSetup {
           scopes:
             bot:
               - app_mentions:read
+              - channels:history
               - chat:write
               - files:read
               - files:write
+              - groups:history
               - im:history
               - im:write
+              - mpim:history
+              - users:read
         settings:
           event_subscriptions:
             bot_events:
