@@ -411,3 +411,35 @@ fn this_host_reads_from_proc() {
     let pressure = std::path::Path::new("/proc/pressure/memory").exists();
     assert_eq!(reading.pressure.is_some(), pressure);
 }
+
+#[tokio::test]
+async fn a_hold_starts_no_turn_and_sees_the_running_ones_end() {
+    let (admission, _host) = admission(4);
+    let running = admitted(admission.request(&turn()));
+    let parked_turn = turn();
+    let parked = admitted(admission.request(&parked_turn));
+    let _call = admission.park(&parked_turn).unwrap();
+
+    let hold = admission.hold();
+    let mut held = waiting(admission.request(&turn()));
+    assert_eq!(hold.turns(), 2, "a parked turn still runs");
+
+    let mut seen = Vec::new();
+    let ends = async {
+        tokio::task::yield_now().await;
+        drop(running);
+        tokio::task::yield_now().await;
+        drop(parked);
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(hold.idle(|turns| seen.push(turns)), ends)
+    })
+    .await
+    .expect("idle once both turns ended");
+    assert_eq!(seen, [2, 1]);
+    assert!(held.try_recv().is_err(), "no turn starts while held");
+
+    drop(hold);
+    held.try_recv()
+        .expect("the held turn starts once the hold drops");
+}

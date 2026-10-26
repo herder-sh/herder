@@ -93,7 +93,7 @@ struct BotsTests {
         let bots = MachineBots(hostId: "draugelis") { _ in throw Self.unknownCommand }
         await bots.reload()
         #expect(bots.outdated)
-        let note = try #require(BotsNote(machine: "draugelis", bots: bots))
+        let note = try #require(BotsNote.line(machine: "draugelis", bots: bots))
         #expect(note.outdated)
         #expect(note.text == "draugelis runs an older herder; bots need 0.12.0.")
     }

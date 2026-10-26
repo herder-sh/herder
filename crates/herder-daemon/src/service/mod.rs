@@ -114,6 +114,15 @@ pub fn status() -> Result<ExitStatus> {
     }
 }
 
+/// Whether the service manager runs this process as `service`.
+pub fn runs_this_process(service: &Service) -> bool {
+    if MACOS {
+        launchd::runs_this_process(service)
+    } else {
+        systemd::runs_this_process(service)
+    }
+}
+
 /// Whether `service`'s service file is installed.
 pub fn is_installed(service: &Service) -> bool {
     if MACOS {

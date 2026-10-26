@@ -2,14 +2,15 @@ import Foundation
 import Herder
 
 /// What a background job runs on a machine: an account's login, to add it or to log it in
-/// again, a provider CLI's installer or updater, an AWS IAM Identity Center sign-in, or setting
-/// up a vault next to its daemon.
+/// again, a provider CLI's installer or updater, an AWS IAM Identity Center sign-in, setting
+/// up a vault next to its daemon, or an update of the machine's herder.
 enum JobKind: Hashable {
     case add(AccountId)
     case relogin(AccountId)
     case install(Provider)
     case awsSignIn(profile: String)
     case vault
+    case updateHerder
 }
 
 /// A background job: the machine it runs on and what it runs there. One of each per machine at
@@ -22,8 +23,9 @@ struct JobKey: Hashable, Identifiable {
 }
 
 /// The long-running jobs this device started, kept while the app runs: CLI installs and
-/// updates, account logins, AWS sign-ins and vault setups. Each but a vault setup runs in its
-/// own terminal on its machine; each stays listed until the user clears it once it has ended.
+/// updates, account logins, AWS sign-ins, vault setups and herder updates. Each but a vault
+/// setup or a herder update runs in its own terminal on its machine; each stays listed until the
+/// user clears it once it has ended.
 ///
 /// Installs queue per machine: one installer at a time on a machine, as two package managers
 /// writing the same prefix trip over each other, while different machines run theirs at once.
@@ -31,7 +33,7 @@ struct JobKey: Hashable, Identifiable {
 @MainActor
 struct Activity {
     struct Job {
-        /// Its terminal; a vault setup has none.
+        /// Its terminal; a vault setup or a herder update has none.
         let connection: TerminalConnection?
         /// A vault setup's step.
         var vault: VaultSetupStep?
@@ -39,8 +41,10 @@ struct Activity {
         var started = false
         /// An install's CLI version when it started, as `Fleet.cliVersion` reads it.
         var before: String?
-        /// When its terminal ended.
+        /// When its terminal ended, or a herder update finished.
         var ended: Date?
+        /// A herder update's own state.
+        var update: HerderUpdateJob?
     }
 
     /// Where a job stands in the queue.
@@ -63,6 +67,23 @@ struct Activity {
         keys.removeAll { $0 == key }
         keys.append(key)
         return true
+    }
+
+    /// Adds the herder update `key`, which starts at once; one that has ended is replaced.
+    mutating func enqueue(_ key: JobKey, update: HerderUpdateJob) {
+        jobs[key] = Job(connection: nil, started: true, update: update)
+        keys.removeAll { $0 == key }
+        keys.append(key)
+    }
+
+    /// Notes whether the machine took the herder update `key`.
+    mutating func answer(_ key: JobKey, _ answer: HerderUpdateJob.Answer) {
+        jobs[key]?.update?.answer = answer
+    }
+
+    /// Keeps the stage the herder update `key` reported last.
+    mutating func record(_ key: JobKey, _ stage: UpdateStage) {
+        jobs[key]?.update?.stage = stage
     }
 
     mutating func start(_ key: JobKey, before: String?) {
@@ -161,6 +182,7 @@ extension Fleet {
         case .relogin(let id): relogin(id, on: key.hostId)
         case .awsSignIn(let profile): signInToAws(profile, on: key.hostId)
         case .vault: setUpVault(on: key.hostId)
+        case .updateHerder: updateHerder(on: key.hostId, when: job.update?.when ?? .idle)
         }
     }
 
@@ -204,8 +226,12 @@ extension Fleet {
         guard let job = activity[key] else { return .ended }
         guard job.started else { return .queued }
         if case .vault = key.kind { return JobProgress(vault: job.vault) }
-        guard let connection = job.connection else { return .ended }
         let machine = machines.first { $0.hostId == key.hostId }
+        guard let connection = job.connection else {
+            guard let update = job.update else { return .ended }
+            return JobProgress(herder: update, update: machine?.update, connected: machine?.connection == .connected,
+                               version: machine?.herderVersion)
+        }
         switch key.kind {
         case .install(let provider):
             return JobProgress(install: connection.state, before: job.before, after: cliVersion(provider, on: key.hostId))
@@ -218,6 +244,8 @@ extension Fleet {
                                                terminalId: connection.terminalId, terminals: machine?.terminals ?? []))
         case .vault:
             return JobProgress(vault: job.vault)
+        case .updateHerder:
+            return .ended
         }
     }
 
@@ -263,6 +291,12 @@ enum JobProgress: Equatable {
     case vaultReady(String)
     /// The machine's herder cannot set up a vault from here: install it there by hand.
     case needsNewerHerder
+    /// A herder update waits for this many running turns to end; no new one starts meanwhile.
+    case waitingForTurns(Int)
+    /// A herder update downloads this version.
+    case downloading(String)
+    /// A herder update restarts the machine on this version, until it is back on it.
+    case restarting(String)
     case failed(String)
 
     /// A login that adds an account: `added` tells whether the machine lists it.
@@ -336,7 +370,7 @@ enum JobProgress: Equatable {
     var group: Group {
         switch self {
         case .running, .approve: .needsYou
-        case .starting, .installing, .settingUpVault, .pairingVault: .running
+        case .starting, .installing, .settingUpVault, .pairingVault, .waitingForTurns, .downloading, .restarting: .running
         case .queued: .queued
         case .added, .signedIn, .ended, .installed, .updated, .upToDate, .vaultReady, .needsNewerHerder, .failed: .done
         }
@@ -376,6 +410,10 @@ extension JobKey {
         case (.vault, .failed), (.vault, .needsNewerHerder): return "Running a vault on \(machine) failed"
         case (.vault, .settingUpVault(install: false)): return "Pair and link the vault on \(machine)"
         case (.vault, _): return "Run a vault on \(machine)"
+        case (.updateHerder, .updated): return "Updated herder on \(machine)"
+        case (.updateHerder, .upToDate): return "herder on \(machine) is up to date"
+        case (.updateHerder, .failed): return "Updating herder on \(machine) failed"
+        case (.updateHerder, _): return "Update herder on \(machine)"
         }
     }
 }
@@ -395,6 +433,10 @@ extension JobProgress {
         case .installed(let version): version.isEmpty ? "Installed" : version
         case .updated(let from, let to): from.isEmpty || to.isEmpty ? "Updated" : "\(from) → \(to)"
         case .upToDate(let version): version.isEmpty ? "Already the latest" : "Already at \(version)"
+        case .waitingForTurns(let turns):
+            "Waiting for \(turns == 1 ? "a running turn" : "\(turns) running turns") to end · no new turn starts"
+        case .downloading(let version): "Downloading herder \(version)"
+        case .restarting(let version): "Restarting on \(version) · it reconnects on its own"
         case .added: "Sessions can use it now"
         case .signedIn: "Signed in"
         case .ended: "Stopped before it signed in"
@@ -425,6 +467,9 @@ extension JobProgress {
         case .pairingVault: "Pairing"
         case .vaultReady: "Ready"
         case .needsNewerHerder: "Needs a newer herder"
+        case .waitingForTurns: "Waiting for turns"
+        case .downloading: "Downloading"
+        case .restarting: "Restarting"
         case .failed: "Failed"
         }
     }

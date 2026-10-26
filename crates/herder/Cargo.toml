@@ -13,7 +13,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-flate2.workspace = true
 herder-adapters.workspace = true
 herder-client-core.workspace = true
 herder-daemon.workspace = true
@@ -24,18 +23,15 @@ qrcode.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
-tar.workspace = true
-tempfile.workspace = true
 tokio = { workspace = true, features = ["fs", "io-std", "io-util", "process"] }
 toml.workspace = true
-ureq.workspace = true
 url.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
 herder-store.workspace = true
 rustls.workspace = true
+tempfile.workspace = true
 tokio-rustls.workspace = true
 tokio-tungstenite.workspace = true
 tokio-util.workspace = true

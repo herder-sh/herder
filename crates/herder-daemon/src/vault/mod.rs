@@ -331,6 +331,7 @@ mod tests {
             retention: Default::default(),
             mcp_servers: Vec::new(),
             bots: Vec::new(),
+            self_update: None,
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

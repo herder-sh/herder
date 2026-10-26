@@ -1229,6 +1229,7 @@
                   "get_settings",
                   "set_settings",
                   "restart_daemon",
+                  "update_daemon",
                   "list_directory",
                   "add_project",
                   "clone_project",

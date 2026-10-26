@@ -159,6 +159,7 @@ async fn read<B: Backend>(
         user_id: identity.user_id.clone(),
         device_id: identity.device_id.clone(),
         role: identity.role,
+        herder_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
     }));
     shared.hub.connect(outbox, identity.role);
     match shared.backend.sessions().await {

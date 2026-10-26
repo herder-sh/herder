@@ -7,7 +7,7 @@ use crate::{
     AccountId, Answer, ApprovalDecision, ApprovalId, Attachment, AttachmentId, BotId, Bytes,
     CommandId, DaemonSettings, DeviceId, Event, HostId, Image, PermissionMode, ProjectId,
     PromptFile, PromptId, Provider, QuestionId, Role, SecretValue, Seq, SessionId, TerminalId,
-    UsagePeriod, UserId,
+    UpdateWhen, UsagePeriod, UserId,
 };
 
 /// A client-to-daemon message.
@@ -476,6 +476,17 @@ pub enum CommandBody {
     /// owners only. Answered with `applied` before it stops; clients reconnect as after any
     /// restart, and turns that were running resume as they do then.
     RestartDaemon,
+    /// Update the daemon's herder to the latest release, as `herder update` does, and restart
+    /// onto it; owners only, never an agent. Answered with `applied` once it started: its
+    /// progress and outcome arrive as `daemon_update`, `restarting` before the daemon restarts
+    /// its own service, and an installed vault's next to it. No new turn starts until then.
+    /// Refused with `unsupported` when the daemon does not run as the service herder installed,
+    /// or cannot write its binary, and with `conflict` while an update waits or runs already;
+    /// a `now` sent while one waits for its turns to end starts it at once instead.
+    UpdateDaemon {
+        /// When to restart, which ends the turns running then.
+        when: UpdateWhen,
+    },
     /// List a folder on the host, to pick a repository; owners only. Answered with
     /// `directory`. It changes nothing, so a resend is answered afresh.
     ListDirectory {

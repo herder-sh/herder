@@ -35,7 +35,7 @@ use std::time::Duration;
 use herder_protocol::{
     Account, Event, EventBody, FailoverSettings, FleetHost, HostResources, Item, ItemBody, ItemId,
     Project, ProviderStatus, Role, Seq, ServerMessage, SessionHead, SessionId, SessionSkill,
-    SessionUsage, SkillsStatus, Terminal, TerminalId, VaultStatus,
+    SessionUsage, SkillsStatus, Terminal, TerminalId, UpdateStage, VaultStatus,
 };
 
 use crate::session::EventSink;
@@ -73,6 +73,8 @@ struct State {
     usage: HashMap<SessionId, SessionUsage>,
     /// The host's latest resources.
     host: Option<HostResources>,
+    /// Where an owner's update stands, once one started.
+    update: Option<UpdateStage>,
     /// A vault's latest host list; `None` on a daemon.
     fleet: Option<Vec<FleetHost>>,
     /// A vault's latest status; `None` on a daemon.
@@ -211,6 +213,11 @@ impl Hub {
         if let Some(host) = &state.host {
             inner.push(ServerMessage::HostResources(host.clone()));
         }
+        if let Some(stage) = &state.update {
+            inner.push(ServerMessage::DaemonUpdate {
+                stage: stage.clone(),
+            });
+        }
         if let Some(hosts) = &state.fleet {
             inner.push(ServerMessage::Hosts {
                 hosts: hosts.clone(),
@@ -263,6 +270,17 @@ impl Hub {
         let mut state = self.lock();
         state.host = Some(resources.clone());
         let message = ServerMessage::HostResources(resources);
+        for outbox in &state.outboxes {
+            outbox.lock().push(message.clone());
+            outbox.wake();
+        }
+    }
+
+    /// Sends where an owner's update stands to every client, and to clients that connect later.
+    pub fn daemon_update(&self, stage: UpdateStage) {
+        let mut state = self.lock();
+        state.update = Some(stage.clone());
+        let message = ServerMessage::DaemonUpdate { stage };
         for outbox in &state.outboxes {
             outbox.lock().push(message.clone());
             outbox.wake();

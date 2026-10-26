@@ -63,7 +63,7 @@ struct ActivityChip: View {
                                labelled: !compact)
             }
             .buttonStyle(.plain)
-            .help(compact ? summary.title : summary.needsYou ? "A job needs you" : "Installs, logins and sign-ins")
+            .help(compact ? summary.title : summary.needsYou ? "A job needs you" : "Installs, logins, sign-ins and updates")
             .accessibilityIdentifier("activity")
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 ActivityPanel(fleet: fleet).frame(width: 560)
@@ -332,6 +332,12 @@ struct ActivityDetail: View {
             }
         case (_, .needsNewerHerder):
             VaultInstallCommand()
+        case (.updateHerder, .waitingForTurns):
+            HStack(spacing: 10) {
+                Text("Updating now ends the running turns.").font(.footnote).foregroundStyle(Theme.tertiary)
+                Spacer()
+                PillButton(title: "Update now") { fleet.updateHerder(on: key.hostId, when: .now) }
+            }
         case (_, .failed):
             PillButton(title: "Retry", symbol: "arrow.clockwise", prominent: true) { fleet.retry(key) }
         default:
@@ -385,7 +391,7 @@ extension JobText {
         case .install(let provider): provider
         case .add: job?.connection?.account?.provider ?? ""
         case .relogin(let id): found?.accounts.first { $0.accountId == id }?.provider ?? ""
-        case .awsSignIn, .vault: ""
+        case .awsSignIn, .vault, .updateHerder: ""
         }
         // Read once the installer has ended: its output is whole then, and it is not read again
         // on every redraw while it streams.
@@ -406,6 +412,7 @@ extension JobKey {
         case .relogin(let id): "job-relogin-\(id)-\(machine)"
         case .awsSignIn(let profile): "job-aws-\(profile)-\(machine)"
         case .vault: "job-vault-\(machine)"
+        case .updateHerder: "job-herder-\(machine)"
         }
     }
 }
@@ -455,7 +462,7 @@ extension JobProgress {
     var tint: Color {
         switch self {
         case .queued, .ended: Theme.tertiary
-        case .starting, .installing, .settingUpVault, .pairingVault: Theme.running
+        case .starting, .installing, .settingUpVault, .pairingVault, .waitingForTurns, .downloading, .restarting: Theme.running
         case .running, .approve: Theme.accent
         case .added, .signedIn, .installed, .updated, .upToDate, .vaultReady: Theme.success
         case .failed, .needsNewerHerder: Theme.failure
@@ -476,6 +483,7 @@ struct CancelLoginButton: View {
         case .install(let provider): ModelCatalog.providerName(provider)
         case .awsSignIn(let profile): profile
         case .vault: "the vault"
+        case .updateHerder: "herder"
         }
     }
 

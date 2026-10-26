@@ -242,7 +242,13 @@ struct AwsSignInSheet: View {
         if !unlisted.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(unlisted, id: \.hostId) { item in
-                    Text("\(item.name): \(item.problem.label)")
+                    HStack(spacing: 8) {
+                        Text("\(item.name): \(item.problem.label)")
+                        if item.problem == .outdated {
+                            Spacer(minLength: 8)
+                            HerderUpdateButton(fleet: fleet, hostId: item.hostId)
+                        }
+                    }
                 }
             }
             .font(.footnote)

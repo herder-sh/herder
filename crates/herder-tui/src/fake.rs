@@ -40,6 +40,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         connection: ConnectionState::Connected,
         quality: Default::default(),
         role: Some(Role::Owner),
+        herder_version: Some("0.14.0".to_owned()),
         sessions: sessions.iter().map(|id| head(id, None)).collect(),
         hosts: Vec::new(),
         projects: Vec::new(),
@@ -52,6 +53,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         vault: None,
         skills: None,
         session_skills: Default::default(),
+        update: None,
     }
 }
 

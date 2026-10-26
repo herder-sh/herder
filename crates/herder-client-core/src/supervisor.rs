@@ -148,6 +148,7 @@ struct State {
     connection: Option<ConnectionState>,
     quality: Quality,
     role: Option<Role>,
+    herder_version: Option<String>,
     sessions: Vec<herder_protocol::SessionHead>,
     hosts: Vec<herder_protocol::FleetHost>,
     projects: Vec<Project>,
@@ -160,6 +161,7 @@ struct State {
     vault: Option<herder_protocol::VaultStatus>,
     skills: Option<herder_protocol::SkillsStatus>,
     session_skills: HashMap<SessionId, Vec<herder_protocol::SessionSkill>>,
+    update: Option<herder_protocol::UpdateStage>,
     logs: HashMap<SessionId, Log>,
     /// Subscribers per session; the daemon streams the sessions with at least one.
     wanted: HashMap<SessionId, usize>,
@@ -473,6 +475,7 @@ impl Supervisor {
                 .unwrap_or(ConnectionState::Connecting),
             quality: state.quality.view(),
             role: state.role,
+            herder_version: state.herder_version.clone(),
             sessions: state.sessions.clone(),
             hosts: state.hosts.clone(),
             projects: state.projects.clone(),
@@ -485,6 +488,7 @@ impl Supervisor {
             vault: state.vault.clone(),
             skills: state.skills.clone(),
             session_skills: state.session_skills.clone(),
+            update: state.update.clone(),
         }
     }
 
@@ -806,6 +810,7 @@ impl Supervisor {
             state.vault = None;
             state.skills = None;
             state.session_skills.clear();
+            state.update = None;
             state.address = None;
             state.quality.disconnected();
         }
@@ -913,6 +918,10 @@ impl Supervisor {
             }
             ServerMessage::HostResources(resources) => {
                 state.resources = Some(resources);
+                return self.notify_after(state);
+            }
+            ServerMessage::DaemonUpdate { stage } => {
+                state.update = Some(stage);
                 return self.notify_after(state);
             }
             ServerMessage::VaultStatus(status) => {
@@ -1121,6 +1130,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
                 {
                     let mut state = supervisor.lock();
                     state.role = Some(hello.role);
+                    state.herder_version = hello.herder_version;
                     state.address = Some(address.clone());
                     state.dirty = true;
                 }
