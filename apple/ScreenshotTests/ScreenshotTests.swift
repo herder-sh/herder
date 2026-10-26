@@ -98,9 +98,8 @@ final class ScreenshotTests: XCTestCase {
             #endif
         }
         #if os(macOS)
-        // The other pages on the layout grid: a list pane, and a page of grouped rows.
+        // Chats, a list pane on the layout grid as the Board is.
         if section("Chats") { shoot("mac-chats") }
-        if section("Integrations") { shoot("mac-integrations") }
         #endif
         skills()
         providers()
