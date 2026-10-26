@@ -1,20 +1,5 @@
 import SwiftUI
 
-/// "Archiving…" with a spinner, while the machine archives a session.
-struct ArchivingLabel: View {
-    var body: some View {
-        HStack(spacing: 6) {
-            ProgressView().controlSize(.small).tint(Theme.secondary)
-            Text("Archiving…")
-        }
-        .font(.caption.weight(.medium))
-        .foregroundStyle(Theme.secondary)
-        .padding(.horizontal, 10)
-        .frame(height: 28)
-        .background(Theme.raised, in: .capsule)
-    }
-}
-
 /// The fleet's current toast at the bottom of the window. A success is gone after a few
 /// seconds; a failure stays until dismissed, and a tap shows its whole error.
 struct ToastView: View {

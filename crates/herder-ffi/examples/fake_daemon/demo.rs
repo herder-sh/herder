@@ -13,6 +13,9 @@
 //!   where it finished the work;
 //! - on `laptop`, a finished session and a Claude session waiting on a multi-select question.
 //!
+//! The subagents' session and the primary have pull requests ([`PRS`]), which a GitHub of the
+//! demo's own serves ([`DemoGitHub`]).
+//!
 //! Each machine also has fake provider CLIs ([`CLIS`]): their versions differ between machines,
 //! `devbox` and `studio` can install and update them, and adding an account runs a login that
 //! waits for Enter, then reports the account logged in. Claude Code's vendor publishes a newer
@@ -50,6 +53,7 @@ use herder_daemon::projects::{
     Discovery, OnSessionsChanged, Overrides, ProjectEntry, ProjectsConfig,
 };
 use herder_daemon::providers::{InstallRecipe, Providers};
+use herder_daemon::prs::{self, Fetched, GetFuture, GitHub, GraphqlFuture};
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::settings::Settings;
@@ -102,6 +106,41 @@ const NEXT_STEP: &str = "Next step.";
 const KEEP_GOING: &str = "Keep going.";
 
 /// The script each prompt plays, by account; other prompts get a short reply.
+/// The pull requests [`DemoGitHub`] serves: number, title, head branch and state (`open`,
+/// `draft`, `merged` or `closed`).
+const PRS: &[(u64, &str, &str, &str)] = &[
+    (
+        208,
+        "Cap webhook retries and persist before acking",
+        "webhook-retries",
+        "open",
+    ),
+    (
+        212,
+        "Log bucket: 30-day lifecycle",
+        "log-retention-terraform",
+        "merged",
+    ),
+    (
+        214,
+        "Loki: retention_period to 30 days",
+        "log-retention-helm",
+        "open",
+    ),
+    (
+        215,
+        "Runbook: restoring logs from cold storage",
+        "log-retention-runbook",
+        "open",
+    ),
+    (
+        216,
+        "Log retention: staging first",
+        "log-retention",
+        "draft",
+    ),
+];
+
 const SCRIPTS: &[(&str, &str, &str)] = &[
     ("claude-personal", AGENTS, "agents.jsonl"),
     ("claude-work", LEDGER, "limit.jsonl"),
@@ -607,6 +646,28 @@ impl Scenario<'_> {
             )
             .await?;
         self.prompt("devbox", &retention, RETENTION).await?;
+        for (session_id, number) in [
+            (&agents, 208),
+            (&retention, 212),
+            (&retention, 214),
+            (&retention, 215),
+            (&retention, 216),
+        ] {
+            let linked = self
+                .client
+                .send(
+                    HostId::new("devbox"),
+                    CommandBody::LinkPr {
+                        session_id: session_id.clone(),
+                        number,
+                    },
+                )
+                .await?;
+            ensure!(
+                matches!(linked, CommandResult::Applied),
+                "devbox did not link #{number}: {linked:?}"
+            );
+        }
         let devbox = self.daemon("devbox")?;
         devbox
             .until(&retention, |events| {
@@ -923,6 +984,16 @@ impl Daemon {
             data_dir: dir.to_owned(),
             herder: PathBuf::from("herder"),
         })?;
+        sessions
+            .track_prs(prs::Config {
+                data_dir: dir.to_owned(),
+                herder: PathBuf::from("herder"),
+                github: Arc::new(DemoGitHub),
+                fast: prs::FAST,
+                slow: prs::SLOW,
+                follow_ups: false,
+            })
+            .await?;
         let skills = Arc::new(Skills::open(
             dir,
             &sessions.providers(),
@@ -1590,4 +1661,57 @@ fn work(turn_id: &TurnId, rounds: usize, pause_ms: u64) -> Vec<Step> {
         usage: None,
     }));
     steps
+}
+
+/// GitHub as the demo has it: `acme`'s repositories with the pull requests in [`PRS`], their
+/// checks passing and no review threads.
+struct DemoGitHub;
+
+impl DemoGitHub {
+    fn body(path: &str) -> Option<Value> {
+        let parts: Vec<&str> = path.strip_prefix("repos/acme/")?.split('/').collect();
+        match parts.as_slice() {
+            [repo, "pulls", number] => {
+                let number: u64 = number.parse().ok()?;
+                let (_, title, branch, state) = PRS.iter().find(|pr| pr.0 == number)?;
+                Some(json!({
+                    "number": number,
+                    "html_url": format!("https://github.com/acme/{repo}/pull/{number}"),
+                    "title": title,
+                    "state": if matches!(*state, "open" | "draft") { "open" } else { "closed" },
+                    "draft": *state == "draft",
+                    "merged_at": (*state == "merged").then_some("2026-10-20T09:00:00Z"),
+                    "mergeable": true,
+                    "created_at": "2026-10-20T08:00:00Z",
+                    "head": {"sha": format!("{number:040x}"), "ref": branch},
+                }))
+            }
+            [_, "commits", _, runs] if runs.starts_with("check-runs") => Some(json!({
+                "total_count": 1,
+                "check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}],
+            })),
+            _ => None,
+        }
+    }
+}
+
+impl GitHub for DemoGitHub {
+    fn get<'a>(&'a self, _host: &'a str, path: &'a str, _etag: Option<&'a str>) -> GetFuture<'a> {
+        let fetched = match Self::body(path) {
+            Some(body) => Fetched::Modified { etag: None, body },
+            None => Fetched::NotFound,
+        };
+        Box::pin(async move { Ok(fetched) })
+    }
+
+    fn graphql<'a>(
+        &'a self,
+        _host: &'a str,
+        _query: &'a str,
+        _variables: &'a Value,
+    ) -> GraphqlFuture<'a> {
+        Box::pin(async {
+            Ok(json!({"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}))
+        })
+    }
 }
