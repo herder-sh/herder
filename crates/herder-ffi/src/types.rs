@@ -13,7 +13,7 @@ use herder_protocol::{
     ApprovalId, ApprovalOutcome, Attachment, AttachmentId, AwsDeviceCode, AwsProfile,
     BackupSettings, Bot, BotDefaults, BotError, BotId, BotKind, BotState, BotStatus, BotUser,
     Bytes, ChannelBinding, CiStatus, CommandBody, CommandResult, Constraint, Container,
-    ContainerState, DaemonSettings, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
+    ContainerState, DaemonSettings, DeviceId, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
     EscalationReason, Event, EventBody, FailoverSettings, FailoverTotal, FleetHost, FollowUp,
     FollowUpReason, FollowUpSettings, HistoryPart, HostId, HostReplication, HostResources,
     HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill, LinkedVault, LogFormat, LogSettings,
@@ -23,8 +23,8 @@ use herder_protocol::{
     Role, Route, SecretAccess, SecretInfo, SecretRef, SecretSet, SecretValue, SessionHead,
     SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource,
     SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings,
-    TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId,
-    VaultStatus, VaultVolume,
+    TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserDevice,
+    UserId, UserInfo, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -47,6 +47,7 @@ string_ids!(
     HostId,
     AccountId,
     UserId,
+    DeviceId,
     TerminalId,
     ProjectId,
     AttachmentId,
@@ -706,7 +707,18 @@ pub enum CommandBody {
         secrets: bool,
     },
     UnlinkVault,
-    PairDevice,
+    PairDevice {
+        user: Option<String>,
+        role: Option<Role>,
+    },
+    ListUsers,
+    SetUserRole {
+        user_id: UserId,
+        role: Role,
+    },
+    RevokeDevice {
+        device_id: DeviceId,
+    },
     PairVaultHost {
         host_name: String,
     },
@@ -916,6 +928,9 @@ pub enum CommandResult {
         addresses: Vec<String>,
         expires_at: Timestamp,
     },
+    Users {
+        users: Vec<UserInfo>,
+    },
     HostPairing {
         code: String,
         expires_at: Timestamp,
@@ -1015,6 +1030,24 @@ pub struct ThreadLink {
     pub channel_id: String,
     pub thread_id: String,
     pub url: Option<String>,
+}
+
+#[uniffi::remote(Record)]
+pub struct UserInfo {
+    pub user_id: UserId,
+    pub name: String,
+    pub role: Role,
+    pub devices: Vec<UserDevice>,
+}
+
+#[uniffi::remote(Record)]
+pub struct UserDevice {
+    pub device_id: DeviceId,
+    pub client: String,
+    pub paired_at: Timestamp,
+    pub last_seen: Option<Timestamp>,
+    pub online: bool,
+    pub host_only: bool,
 }
 
 #[uniffi::remote(Record)]

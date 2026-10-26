@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use herder_client_core::{Client, Error, Machine, PairResult, PairingUri};
-use herder_daemon::auth::DeviceRole;
 use herder_daemon::auth::control::{self, Request, Response};
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, ErrorCode, EventBody, HostId, LinkedVault,
@@ -403,14 +402,14 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         linked(true)
     );
     // The host paired as a host-only device.
-    let Response::Devices { devices } = vault.control(Request::Devices).await else {
-        panic!("no devices");
+    let Response::Users { users } = vault.control(Request::Users).await else {
+        panic!("no users");
     };
     assert!(
-        devices
+        users
             .iter()
-            .any(|d| d.user == "devbox" && d.device_role == DeviceRole::Host),
-        "{devices:?}"
+            .any(|u| u.name == "devbox" && u.devices.iter().any(|d| d.host_only)),
+        "{users:?}"
     );
     // Fork lookup now reaches the vault without restarting. This host-only device cannot
     // read other sessions as a client, so the vault refuses the read.
@@ -513,12 +512,12 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         send(&owner, &vault_id, revoke.clone()).await,
         CommandResult::Applied
     );
-    let Response::Devices { devices } = vault.control(Request::Devices).await else {
-        panic!("no devices");
+    let Response::Users { users } = vault.control(Request::Users).await else {
+        panic!("no users");
     };
     assert!(
-        devices.iter().all(|d| d.device_role != DeviceRole::Host),
-        "{devices:?}"
+        users.iter().flat_map(|u| &u.devices).all(|d| !d.host_only),
+        "{users:?}"
     );
     assert_eq!(
         refused(&owner, &vault_id, revoke).await,

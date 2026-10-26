@@ -1851,16 +1851,88 @@
           ]
         },
         {
-          "description": "Mint a one-time code, as `herder pair` does, that pairs another device as the caller's\nown user with the caller's role, so a shared code never grants more than the sharer\nhas; owners and members alike. Answered with `device_pairing`.",
+          "description": "Mint a one-time code, as `herder pair` does, that pairs another device. Without `user`\nand `role` it pairs as the caller's own user with the caller's role, so a shared code\nnever grants more than the sharer has; owners and members alike. With either, owners\nonly: it pairs as `user`, created as `role` when new, or the caller's user when absent.\nAnswered with `device_pairing`. Refused with `bad_request` for a name that is not 1 to\n64 printable characters, or a `role` that is not the existing user's.",
           "type": "object",
           "properties": {
+            "role": {
+              "description": "The role of that user when new; the daemon picks when absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Role"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "type": "string",
               "const": "pair_device"
+            },
+            "user": {
+              "description": "The user the device pairs as, by name.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
             "type"
+          ]
+        },
+        {
+          "description": "List this daemon's users, each with their role and paired devices; owners and members\nalike. Answered with `users`. It changes nothing, so a resend is answered afresh.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "list_users"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Make `user_id` an owner or a member; owners only. Their devices' connections close, so\nthey reconnect with the new role. Answered with `applied`. Refused with `not_found` for\nan unknown user, and `conflict` when it would leave the daemon with no owner.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "description": "Their new role.",
+              "$ref": "#/$defs/Role"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_user_role"
+            },
+            "user_id": {
+              "description": "The user.",
+              "$ref": "#/$defs/UserId"
+            }
+          },
+          "required": [
+            "type",
+            "user_id",
+            "role"
+          ]
+        },
+        {
+          "description": "Unpair a device and close its connections; owners only. Its user stays. Answered with\n`applied`. Refused with `not_found` when no such device is paired.",
+          "type": "object",
+          "properties": {
+            "device_id": {
+              "description": "The device.",
+              "$ref": "#/$defs/DeviceId"
+            },
+            "type": {
+              "type": "string",
+              "const": "revoke_device"
+            }
+          },
+          "required": [
+            "type",
+            "device_id"
           ]
         },
         {
@@ -2495,6 +2567,10 @@
         "projects",
         "backup"
       ]
+    },
+    "DeviceId": {
+      "description": "Identifies a paired client device; a ULID string, opaque to receivers.",
+      "type": "string"
     },
     "ErrorClass": {
       "description": "Kind of turn failure.",
@@ -4234,6 +4310,21 @@
           "description": "A reviewer requested changes.",
           "type": "string",
           "const": "changes_requested"
+        }
+      ]
+    },
+    "Role": {
+      "description": "A user's role on a daemon.",
+      "oneOf": [
+        {
+          "description": "Full control, including terminals.",
+          "type": "string",
+          "const": "owner"
+        },
+        {
+          "description": "Drives sessions; never sees or opens a terminal.",
+          "type": "string",
+          "const": "member"
         }
       ]
     },
