@@ -18,7 +18,7 @@ use herder_daemon::login::{self, LoginProgram};
 use herder_daemon::session::AccountConfig;
 use herder_protocol::{AccountId, Provider};
 
-use crate::service;
+use herder_daemon::service;
 
 /// How long a CLI's `--version` or `gh auth status` may take.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);

@@ -7,8 +7,9 @@ enum BackupLink: Equatable {
     case vault
     /// It backs up to this vault.
     case linked(LinkedVault)
-    /// It backs up nowhere.
-    case nowhere
+    /// It backs up nowhere; `localVault` when a vault is installed on its machine, to pair
+    /// and link.
+    case nowhere(localVault: Bool)
 }
 
 extension Fleet {
@@ -36,10 +37,10 @@ extension Fleet {
         let answer = try await answered(within: Self.vaultLinkTimeout, or: "did not say where it backs up") {
             try await client.send(hostId: hostId, command: .getVaultLink)
         }
-        guard case .vaultLink(let isVault, let vault, _) = answer else {
+        guard case .vaultLink(let isVault, let vault, _, let localVault) = answer else {
             throw HerderError.Local(detail: "the machine did not say where it backs up")
         }
-        let link: BackupLink = isVault ? .vault : vault.map(BackupLink.linked) ?? .nowhere
+        let link: BackupLink = isVault ? .vault : vault.map(BackupLink.linked) ?? .nowhere(localVault: localVault)
         backupLinks[hostId] = link
         return link
     }
@@ -89,7 +90,7 @@ extension Fleet {
 
 /// A machine's Backup section: the vault it backs up to and how far that got, its Back up and
 /// Secrets switches, whether it takes handoffs, and stopping; or linking it to a vault this
-/// device owns. It shows where the machine last said it backs up while it asks again.
+/// device owns, or running one on the machine. It shows where the machine last said it backs up while it asks again.
 struct BackupSection: View {
     let fleet: Fleet
     let machine: Machine
@@ -110,7 +111,11 @@ struct BackupSection: View {
                 SettingRow(label: "This machine is a vault") { EmptyView() }
             case .linked(let vault):
                 linked(vault)
-            case .nowhere:
+            case .nowhere(let localVault):
+                if machine.role == .owner {
+                    runVault(installed: localVault)
+                    RowDivider()
+                }
                 let vaults = fleet.backupVaults(for: machine.hostId)
                 SettingRow(label: "Backs up nowhere",
                            hint: vaults.isEmpty ? "Pair this device with a vault as its owner to back this machine up" : "") {
@@ -148,7 +153,7 @@ struct BackupSection: View {
     @ViewBuilder private func linked(_ vault: LinkedVault) -> some View {
         let paired = fleet.pairedVault(vault)
         let replication = paired?.vault?.hosts.first { $0.hostId == machine.hostId }
-        SettingRow(label: "Backs up to \(paired?.name ?? vault.address)",
+        SettingRow(label: paired.map { "Backs up to \($0.name)" } ?? "Backs up to a vault not paired with this device",
                    hint: Fleet.freshness(replication, now: .now)) {
             PillButton(title: "Stop…") { confirmingStop = true }.disabled(working)
         }
@@ -181,6 +186,31 @@ struct BackupSection: View {
             }
             // The vault's status follows the change; until then the switch shows it.
             .onChange(of: replication.read) { handoffs = nil }
+        }
+    }
+
+    /// Running a vault on this machine, or pairing and linking the one installed there by
+    /// hand, as an Activity job: its step while it runs, the command to run by hand when the
+    /// machine's herder cannot do it.
+    @ViewBuilder private func runVault(installed: Bool) -> some View {
+        let key = JobKey(hostId: machine.hostId, kind: .vault)
+        let progress = fleet.activity[key] == nil ? nil : fleet.progress(key)
+        SettingRow(label: installed ? "A vault is installed on this machine" : "No vault",
+                   hint: progress.map { $0.detail(machine: machine.name, before: nil) }
+                       ?? (installed ? "Pair this device with it and link the machine to it"
+                           : "Keeps this machine’s secrets; it runs next to its daemon")) {
+            if let progress, !progress.finished {
+                JobBadge(progress: progress)
+            } else {
+                PillButton(title: installed ? "Pair and Link" : "Run a Vault on This Machine", prominent: true) {
+                    fleet.setUpVault(on: machine.hostId)
+                }
+                .accessibilityIdentifier("run-vault")
+            }
+        }
+        if progress == .needsNewerHerder {
+            RowDivider()
+            VaultInstallCommand().padding(.horizontal, 14).frame(minHeight: 36)
         }
     }
 
