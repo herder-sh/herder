@@ -7,6 +7,10 @@ struct Failure: Hashable {
     enum Resolution: Hashable {
         /// A later turn completed.
         case resumed
+        /// A later turn started; the failure folds back in if that turn fails the same way.
+        case retried
+        /// The user closed the card.
+        case dismissed
         /// The account was logged in again, and what it held runs.
         case signedIn
         /// The session moved to another account or provider.
@@ -39,6 +43,7 @@ struct Failure: Hashable {
         let text = switch (error.class, resolution) {
         case (.auth, .signedIn), (.auth, .resumed): "Signed in again · resumed"
         case (_, .switched): "Turn failed: \(TurnFailure.summary(error)) · continued on another account"
+        case (_, .retried): "Turn failed: \(TurnFailure.summary(error)) · retried"
         default: "Turn failed: \(TurnFailure.summary(error))"
         }
         return count > 1 ? "\(text) ×\(count)" : text
@@ -209,6 +214,14 @@ struct FailureCardView: View {
                     Text(card.message).font(.footnote).foregroundStyle(Theme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                Spacer(minLength: 0)
+                Button { fleet.dismissFailure(key) } label: {
+                    Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                        .frame(width: 24, height: 24).contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help("Close; it stays in the transcript as a line")
+                .accessibilityLabel("Close")
             }
             FlowLayout(spacing: 8) {
                 ForEach(Array(card.actions.enumerated()), id: \.offset) { _, action in button(action) }

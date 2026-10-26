@@ -149,6 +149,34 @@ struct FailureCardTests {
         #expect(failure?.line == "Signed in again · resumed")
     }
 
+    @Test func aNewTurnStartingClearsTheCardUntilItFailsTheSameWay() {
+        let limit = TurnError(class: .limitReached, message: "You've hit your limit · resets 4:10am (Europe/Vilnius)")
+        var script = Script()
+        let retrying = script.model([created()] + failedTurn("t1", "go", limit) + [.turnStarted(turnId: "t2")])
+        #expect(retrying.standingFailure == nil)
+        let line = Transcript.blocks(retrying).compactMap { block -> Failure? in
+            if case .failure(let failure) = block { failure } else { nil }
+        }.first
+        #expect(line?.resolution == .retried)
+        #expect(line?.line.hasSuffix("· retried") == true)
+        var again = Script()
+        let failedAgain = again.model([created()] + failedTurn("t1", "go", limit) + failedTurn("t2", "go on", limit))
+        #expect(failedAgain.standingFailure?.count == 2)
+    }
+
+    @Test func closingTheCardLeavesItsLine() throws {
+        var script = Script()
+        var model = script.model([created()] + failedTurn("t1", "go", TurnError(class: .fatal, message: "boom")))
+        try #require(model.standingFailure != nil)
+        model.dismissFailure()
+        #expect(model.standingFailure == nil)
+        let failure = Transcript.blocks(model).compactMap { block -> Failure? in
+            if case .failure(let failure) = block { failure } else { nil }
+        }.first
+        #expect(failure?.resolution == .dismissed)
+        #expect(failure?.line == "Turn failed: boom")
+    }
+
     @Test func aCompletedTurnOrASwitchEndsTheFailure() {
         var script = Script()
         let completed = script.model([created()] + failedTurn("t1", "go", TurnError(class: .fatal, message: "boom"))
