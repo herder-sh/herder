@@ -47,11 +47,14 @@ final class ScreenshotTests: XCTestCase {
             #if os(iOS)
             shoot("ios-session")
             #endif
-            // A running turn folds its tool calls, the agents among them, under Working.
-            let work = app.buttons["turn-work"].firstMatch
-            if wait(work, "working") { press(work) }
+            // A running turn folds its tool calls, the agents among them, under Working; unfold it
+            // unless the agent's row already shows.
             let agent = app.buttons.matching(
                 NSPredicate(format: "label BEGINSWITH 'Open sub-agent: Review retry backoff'")).firstMatch
+            if !agent.waitForExistence(timeout: 3) {
+                let work = app.buttons["turn-work"].firstMatch
+                if wait(work, "working") { press(work) }
+            }
             if wait(agent, "subagent row") {
                 press(agent)
                 settle()
