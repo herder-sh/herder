@@ -11,19 +11,18 @@ final class SessionSearchUITests: XCTestCase {
         app.tabBars.buttons["Board"].tap()
 
         // In sight without pulling the Board down.
-        let field = app.searchFields.matching(NSPredicate(format: "placeholderValue == %@", "Sessions")).firstMatch
+        let field = app.searchFields.matching(NSPredicate(format: "placeholderValue == %@", "Tasks")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 15))
         field.tap()
-        field.typeText("no such session")
-        XCTAssertTrue(app.staticTexts["No sessions match."].waitForExistence(timeout: 5))
-        let session = app.buttons.containing(NSPredicate(format: "label CONTAINS 'fake-host-1'"))
-        XCTAssertEqual(session.count, 0)
+        field.typeText("no such task")
+        XCTAssertTrue(app.staticTexts["No tasks match."].waitForExistence(timeout: 5))
+        let task = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Waiting for you, '"))
+        XCTAssertEqual(task.count, 0)
 
+        // A task is found by its machine's name too.
         field.buttons["Clear text"].tap()
         field.typeText("fake-host-1")
-        XCTAssertTrue(session.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["No sessions match."].exists)
-        // Requests make way for what the search finds.
-        XCTAssertFalse(app.descendants(matching: .any)["request-session"].exists)
+        XCTAssertTrue(task.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["No tasks match."].exists)
     }
 }

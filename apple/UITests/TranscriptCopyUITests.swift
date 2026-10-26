@@ -11,9 +11,7 @@ final class TranscriptCopyUITests: XCTestCase {
         app.launch()
         try app.pairUnlessPaired()
 
-        let session = app.descendants(matching: .any)["request-session"].firstMatch
-        XCTAssertTrue(session.waitForExistence(timeout: 15))
-        session.tap()
+        app.openWaitingTask()
         let message = app.message("Run the tests.")
         XCTAssertTrue(message.waitForExistence(timeout: 10))
 

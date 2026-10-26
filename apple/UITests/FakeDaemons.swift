@@ -6,6 +6,14 @@ extension XCUIApplication {
         textViews.matching(NSPredicate(format: "value == %@", text)).firstMatch
     }
 
+    /// Opens the task waiting on you from its Board row: `fake-host-1`'s session with an approval.
+    @MainActor
+    func openWaitingTask() {
+        let task = buttons.matching(NSPredicate(format: "label BEGINSWITH 'Waiting for you, '")).firstMatch
+        XCTAssertTrue(task.waitForExistence(timeout: 15))
+        task.tap()
+    }
+
     /// The link of the fake daemons the tests run against (`fake_daemon --share` prints it; pass
     /// it to `xcodebuild test` as `TEST_RUNNER_HERDER_PAIR_LINK`).
     static func pairLink() throws -> String {

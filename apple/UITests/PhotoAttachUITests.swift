@@ -10,9 +10,7 @@ final class PhotoAttachUITests: XCTestCase {
         app.launch()
         try app.pairUnlessPaired()
 
-        let session = app.descendants(matching: .any)["request-session"].firstMatch
-        XCTAssertTrue(session.waitForExistence(timeout: 15))
-        session.tap()
+        app.openWaitingTask()
         let attach = app.descendants(matching: .any)["attach"].firstMatch
         XCTAssertTrue(attach.waitForExistence(timeout: 10))
         attach.tap()
