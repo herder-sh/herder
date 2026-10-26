@@ -75,6 +75,42 @@ final class MachineBots {
     }
 }
 
+/// Every owned machine's bots, kept while the app runs so Integrations and its header share
+/// them.
+@MainActor @Observable
+final class FleetBots {
+    private(set) var lists: [HostId: MachineBots] = [:]
+
+    /// Keeps a list for each of `hostIds` and none other, making those it lacks with `make`.
+    func keep(_ hostIds: [HostId], make: (HostId) -> MachineBots) {
+        lists = Dictionary(uniqueKeysWithValues: hostIds.map { ($0, lists[$0] ?? make($0)) })
+    }
+
+    func reload() async {
+        for list in lists.values { await list.reload() }
+    }
+
+    func reloadStatus() async {
+        for list in lists.values { await list.reloadStatus() }
+    }
+
+    /// "2 bots · 2 waiting for the vault": how many, then how many stand each way but connected,
+    /// then the machines too old for bots; zeros left out.
+    /// Empty until every machine has answered.
+    var status: String {
+        if lists.isEmpty || lists.values.contains(where: { if case .asking = $0.bots { true } else { false } }) { return "" }
+        let bots = lists.values.flatMap { list in list.list.map { list.statuses[$0.botId]?.state } }
+        let outdated = lists.values.filter(\.outdated).count
+        var parts = [bots.isEmpty ? "No bots yet" : bots.count == 1 ? "1 bot" : "\(bots.count) bots"]
+        for state in [BotState.connecting, .waitingForVault, .tokenRejected, .unsupported] {
+            let count = bots.filter { $0 == state }.count
+            if count > 0 { parts.append("\(count) \(state.label.lowercased())") }
+        }
+        if outdated > 0 { parts.append(outdated == 1 ? "1 machine needs a newer herder" : "\(outdated) machines need a newer herder") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// The herder release that runs bots.
 let botsRelease = "0.12.0"
 

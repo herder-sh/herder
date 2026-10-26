@@ -40,13 +40,13 @@ struct BotTableRow: Identifiable {
 struct IntegrationsView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
-    @State private var bots: [HostId: MachineBots] = [:]
     /// The table's width, which decides its columns.
     @State private var width: CGFloat = 0
     @Environment(\.pages) private var pages
 
     var body: some View {
         let machines = fleet.botMachines
+        let bots = fleet.bots.lists
         let rows = BotTableRow.rows(machines, bots, projectName: fleet.projectName)
         let asking = machines.contains { bots[$0.hostId].map { if case .asking = $0.bots { true } else { false } } ?? true }
         ScrollView {
@@ -72,7 +72,7 @@ struct IntegrationsView: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .background(Theme.background)
-        .refreshable { await reload() }
+        .refreshable { await fleet.bots.reload() }
         .navigationTitle("Integrations")
         #if os(iOS)
         .toolbar {
@@ -80,19 +80,15 @@ struct IntegrationsView: View {
         }
         #endif
         .task(id: machines.map(\.hostId)) {
-            bots = Dictionary(uniqueKeysWithValues: machines.map { ($0.hostId, bots[$0.hostId] ?? MachineBots(fleet: fleet, hostId: $0.hostId)) })
-            await reload()
+            fleet.bots.keep(machines.map(\.hostId)) { MachineBots(fleet: fleet, hostId: $0) }
+            await fleet.bots.reload()
             // Statuses change with no event, so they are asked again while the list shows.
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
-                for list in bots.values { await list.reloadStatus() }
+                await fleet.bots.reloadStatus()
             }
         }
-        .onChange(of: sheet) { if sheet == nil { Task { await reload() } } }
-    }
-
-    private func reload() async {
-        for list in bots.values { await list.reload() }
+        .onChange(of: sheet) { if sheet == nil { Task { await fleet.bots.reload() } } }
     }
 
     /// Too narrow for every column: the bot's name, its kind and machine under it, and its status.
@@ -260,7 +256,7 @@ struct BotRow: View {
     }
 }
 
-/// A chat's mark: a speech bubble with the chat's initial.
+/// A chat's mark: its initial on a neutral tile.
 struct BotMark: View {
     let kind: BotKind
     var size: CGFloat = 28
@@ -268,9 +264,10 @@ struct BotMark: View {
     var body: some View {
         Text(kind.label.prefix(1))
             .font(.system(size: size * 0.5, weight: .bold, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(Theme.secondary)
             .frame(width: size, height: size)
-            .background(kind == .slack ? Theme.accent : Theme.running, in: .rect(cornerRadius: size * 0.28))
+            .background(Theme.raised, in: .rect(cornerRadius: size * 0.28))
+            .overlay(RoundedRectangle(cornerRadius: size * 0.28).strokeBorder(Theme.stroke))
             .accessibilityHidden(true)
     }
 }
@@ -295,7 +292,7 @@ struct AddBotSheet: View {
     }
 
     var body: some View {
-        SheetScaffold(title: "Add Bot", height: 600, hint: "The tokens go into the machine’s vault and are never shown again.") {
+        SheetScaffold(title: "Add Bot", height: 600, hint: "Tokens are kept in the vault, never shown again.") {
             AddBotForm(setup: setup)
         } footer: {
             Spacer()
@@ -405,14 +402,27 @@ struct AddBotForm: View {
         .accessibilityIdentifier("bot-machine")
     }
 
+    /// Slack or Telegram, as two segments in the sheet's dark style.
     private var kindPicker: some View {
-        Picker("Kind", selection: $setup.kind) {
-            Text("Slack").tag(BotKind.slack)
-            Text("Telegram").tag(BotKind.telegram)
+        HStack(spacing: 2) {
+            ForEach([BotKind.slack, .telegram], id: \.self) { kind in
+                let selected = setup.kind == kind
+                Button { setup.kind = kind } label: {
+                    Text(kind.label)
+                        .font(.subheadline.weight(selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? Theme.text : Theme.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 30)
+                        .primaryFill(in: .rect(cornerRadius: Theme.corner - 2), on: selected, off: .clear)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
+        .padding(2)
         .frame(width: 190)
+        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }
 
