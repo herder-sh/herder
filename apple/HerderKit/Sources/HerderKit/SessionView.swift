@@ -214,8 +214,10 @@ struct SessionView: View {
                 }
             }
         }
-        .padding(.top, compact ? 4 : 14)
-        .padding(.bottom, 12)
+        // 12 points over the 28 point title line centre it in `Theme.headerHeight`, on the line
+        // of the list pane's title and the sidebar's top bar.
+        .padding(.vertical, compact ? 4 : 12)
+        .frame(minHeight: compact ? nil : Theme.headerHeight)
     }
 
     private func headerRow(_ model: SessionModel?, _ summary: SessionSummary?, labels: Bool) -> some View {
@@ -1071,9 +1073,9 @@ struct PRChip: View {
 /// The session's column: its content between the transcript's left edge and the composer's
 /// right one, at every width, so the header and a child's banner line up with both.
 enum SessionColumn {
-    /// The transcript's widest column, and its margin in a narrower pane.
+    /// The transcript's widest column, and its margin in a narrower pane: a list pane's.
     static let transcript: CGFloat = 760
-    static let transcriptMargin: CGFloat = 16
+    static let transcriptMargin = Theme.paneMargin
     /// The composer's widest column, and its margin in a narrower pane.
     static let composer: CGFloat = 784
     static let composerMargin: CGFloat = 12
