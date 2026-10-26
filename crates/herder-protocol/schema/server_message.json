@@ -240,6 +240,24 @@
       ]
     },
     {
+      "description": "Where an owner's `update_daemon` stands; ephemeral, never journaled. Sent whenever it\nmoves on, and its latest stage after hello until the daemon restarts.",
+      "type": "object",
+      "properties": {
+        "stage": {
+          "description": "The stage it reached.",
+          "$ref": "#/$defs/UpdateStage"
+        },
+        "type": {
+          "type": "string",
+          "const": "daemon_update"
+        }
+      },
+      "required": [
+        "type",
+        "stage"
+      ]
+    },
+    {
       "description": "A durable journal event of a subscribed session.",
       "type": "object",
       "properties": {
@@ -4101,6 +4119,13 @@
           "description": "The paired device this connection comes from.",
           "$ref": "#/$defs/DeviceId"
         },
+        "herder_version": {
+          "description": "The daemon's herder version, as `herder --version` prints it; absent from daemons\nbefore `update_daemon`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "host_id": {
           "description": "The host this daemon runs on.",
           "$ref": "#/$defs/HostId"
@@ -4737,6 +4762,113 @@
         "cache_read",
         "cache_write",
         "cost_estimated"
+      ]
+    },
+    "UpdateStage": {
+      "description": "Where an owner's `update_daemon` stands.",
+      "oneOf": [
+        {
+          "description": "Waiting for turns to end before it downloads; no new turn starts meanwhile.",
+          "type": "object",
+          "properties": {
+            "running_turns": {
+              "description": "Turns running now.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "stage": {
+              "type": "string",
+              "const": "waiting_for_idle"
+            }
+          },
+          "required": [
+            "stage",
+            "running_turns"
+          ]
+        },
+        {
+          "description": "Downloading the release and checking it against its checksum.",
+          "type": "object",
+          "properties": {
+            "from": {
+              "description": "The version running now.",
+              "type": "string"
+            },
+            "stage": {
+              "type": "string",
+              "const": "downloading"
+            },
+            "to": {
+              "description": "The version being installed.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "stage",
+            "from",
+            "to"
+          ]
+        },
+        {
+          "description": "The new binary is in place; the daemon restarts onto it now. Clients that reconnect\nfind it on `to`.",
+          "type": "object",
+          "properties": {
+            "from": {
+              "description": "The version that ran.",
+              "type": "string"
+            },
+            "stage": {
+              "type": "string",
+              "const": "restarting"
+            },
+            "to": {
+              "description": "The version it restarts on.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "stage",
+            "from",
+            "to"
+          ]
+        },
+        {
+          "description": "The latest release runs already; nothing changed.",
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string",
+              "const": "up_to_date"
+            },
+            "version": {
+              "description": "The version running.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "stage",
+            "version"
+          ]
+        },
+        {
+          "description": "It failed and changed nothing; held turns start.",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "stage": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "stage",
+            "reason"
+          ]
+        }
       ]
     },
     "UsagePeriod": {

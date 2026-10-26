@@ -291,6 +291,9 @@ pub struct Config {
     pub mcp_servers: Vec<McpServerSettings>,
     /// The chat bots this host holds, in file order, as written.
     pub bots: Vec<Bot>,
+    /// What `update_daemon` replaces, when the herder binary runs the daemon as the service
+    /// herder installed; never from the file.
+    pub self_update: Option<crate::update::SelfUpdate>,
 }
 
 /// The projects dir unless the `[projects]` table names another.
@@ -742,6 +745,7 @@ fn resolve(
         retention,
         mcp_servers,
         bots: file.bots,
+        self_update: None,
     })
 }
 
@@ -2349,6 +2353,7 @@ mod tests {
                 retention: Retention::default(),
                 mcp_servers: Vec::new(),
                 bots: Vec::new(),
+                self_update: None,
             }
         );
     }

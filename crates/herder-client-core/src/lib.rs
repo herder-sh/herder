@@ -140,7 +140,7 @@ use herder_protocol::{
     Account, AccountId, AwsProfile, ClientHello, Command, CommandBody, CommandId, CommandResult,
     ErrorInfo, Event, FailoverSettings, FleetHost, HostId, HostResources, Item, PROTOCOL_VERSION,
     Project, Provider, Role, SessionHead, SessionId, SessionSkill, SessionUsage, SkillsStatus,
-    Terminal, TerminalId, Timestamp, VaultStatus,
+    Terminal, TerminalId, Timestamp, UpdateStage, VaultStatus,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -159,7 +159,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 12;
+pub const CLIENT_API_VERSION: u32 = 13;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,6 +240,9 @@ pub struct Machine {
     pub quality: ConnectionQuality,
     /// This device's user's role, from the latest hello; `None` until the first connection.
     pub role: Option<Role>,
+    /// The daemon's herder version, from the latest hello; `None` until the first connection,
+    /// and from daemons too old to update from a client (before `UpdateDaemon`).
+    pub herder_version: Option<String>,
     /// The daemon's sessions, as last listed. A vault's are every host's, each naming its
     /// host in `host_id`, and all read-only.
     pub sessions: Vec<SessionHead>,
@@ -270,6 +273,9 @@ pub struct Machine {
     pub skills: Option<SkillsStatus>,
     /// The skills each live session's agent may use, as last sent; empty while not connected.
     pub session_skills: HashMap<SessionId, Vec<SessionSkill>>,
+    /// Where an owner's `update_daemon` stands, as last sent; `None` until one starts, and
+    /// while not connected, so after the restart it ends with.
+    pub update: Option<UpdateStage>,
 }
 
 /// What pairing with one machine of a link came to; see [`Client::pair`].

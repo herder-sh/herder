@@ -121,6 +121,64 @@ struct ActivityTests {
             == "The installer exited with 243.")
     }
 
+    @Test func aHerderUpdateFollowsItsStagesUntilTheMachineIsBackOnTheNewVersion() {
+        var job = HerderUpdateJob(when: .idle)
+        let progress = { (update: UpdateStage?, connected: Bool, version: String?) in
+            JobProgress(herder: job, update: update, connected: connected, version: version)
+        }
+        #expect(progress(nil, true, "0.13.0") == .starting, "until the machine answers")
+        job.answer = .refused("this daemon does not run as the service herder installed")
+        #expect(progress(nil, true, "0.13.0") == .failed("this daemon does not run as the service herder installed"))
+
+        job.answer = .accepted
+        #expect(progress(nil, true, "0.13.0") == .starting)
+        #expect(progress(.waitingForIdle(runningTurns: 2), true, "0.13.0") == .waitingForTurns(2))
+        #expect(progress(.downloading(from: "0.13.0", to: "0.14.0"), true, "0.13.0") == .downloading("0.14.0"))
+        let restarting = UpdateStage.restarting(from: "0.13.0", to: "0.14.0")
+        #expect(progress(restarting, true, "0.13.0") == .restarting("0.14.0"))
+        // The machine forgets the update as it restarts; the job keeps its last stage.
+        job.stage = restarting
+        #expect(progress(nil, false, "0.13.0") == .restarting("0.14.0"))
+        #expect(progress(nil, true, "0.14.0") == .updated(from: "0.13.0", to: "0.14.0"))
+        #expect(progress(.upToDate(version: "0.14.0"), true, "0.14.0") == .upToDate("0.14.0"))
+        #expect(progress(.failed(reason: "checksum mismatch"), true, "0.13.0") == .failed("checksum mismatch"))
+
+        for running in [JobProgress.waitingForTurns(1), .downloading("0.14.0"), .restarting("0.14.0")] {
+            #expect(running.group == .running && !running.finished)
+        }
+        #expect(JobProgress.waitingForTurns(2).detail(machine: "box", before: nil)
+            == "Waiting for 2 running turns to end · no new turn starts")
+        let key = JobKey(hostId: "box", kind: .updateHerder)
+        #expect(key.title(machine: "box", provider: "", progress: .updated(from: "0.13.0", to: "0.14.0"), updating: false)
+            == "Updated herder on box")
+        #expect(key.title(machine: "box", provider: "", progress: .waitingForTurns(1), updating: false)
+            == "Update herder on box")
+    }
+
+    @MainActor
+    @Test func aHerderUpdateRunsNoTerminalAndKeepsWhatTheMachineSaid() {
+        var activity = Activity()
+        let key = JobKey(hostId: "box", kind: .updateHerder)
+        activity.enqueue(key, update: HerderUpdateJob(when: .now))
+        #expect(activity.phase(key) == .running && activity.startable.isEmpty && activity[key]?.connection == nil)
+        activity.answer(key, .accepted)
+        activity.record(key, .restarting(from: "0.13.0", to: "0.14.0"))
+        #expect(activity[key]?.update == HerderUpdateJob(when: .now, answer: .accepted,
+                                                         stage: .restarting(from: "0.13.0", to: "0.14.0")))
+    }
+
+    @Test func machinesOnAnOlderHerderAreTheOnesToUpdate() {
+        func machine(_ id: String, _ version: String?, role: Role = .owner) -> Machine {
+            var machine = HerderKitTests.machine(id, name: id, sessions: [], role: role)
+            machine.herderVersion = version
+            return machine
+        }
+        let fleet = [machine("new", "0.14.0"), machine("old", "0.13.10"), machine("ancient", nil),
+                     machine("shared", "0.9.0", role: .member)]
+        #expect(HerderVersionsSection.behind(fleet).map(\.machine.hostId) == ["old", "ancient"])
+        #expect(HerderVersionsSection.behind([machine("a", "0.14.0"), machine("b", "0.14.0")]).isEmpty)
+    }
+
     @Test func doneListsNewestFirstAndOtherGroupsInTheirOrder() {
         let text = JobText(machine: "box", title: "", detail: "")
         let old = ActivityItem(key: install("claude", on: "box"), progress: .installed("1"), text: text,

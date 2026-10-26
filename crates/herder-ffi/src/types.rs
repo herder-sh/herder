@@ -23,8 +23,8 @@ use herder_protocol::{
     Role, Route, SecretAccess, SecretInfo, SecretRef, SecretSet, SecretValue, SessionHead,
     SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource,
     SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings,
-    TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId,
-    VaultStatus, VaultVolume,
+    TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal,
+    UsageWindow, UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -109,6 +109,8 @@ pub struct Machine {
     pub connection: ConnectionState,
     pub quality: ConnectionQuality,
     pub role: Option<Role>,
+    #[uniffi(default = None)]
+    pub herder_version: Option<String>,
     pub sessions: Vec<SessionHead>,
     pub hosts: Vec<FleetHost>,
     pub projects: Vec<Project>,
@@ -127,6 +129,8 @@ pub struct Machine {
     pub skills: Option<SkillsStatus>,
     #[uniffi(default)]
     pub session_skills: HashMap<SessionId, Vec<SessionSkill>>,
+    #[uniffi(default = None)]
+    pub update: Option<UpdateStage>,
 }
 
 #[uniffi::remote(Enum)]
@@ -780,6 +784,9 @@ pub enum CommandBody {
         settings: Box<DaemonSettings>,
     },
     RestartDaemon,
+    UpdateDaemon {
+        when: UpdateWhen,
+    },
     AddAccount {
         account_id: AccountId,
         provider: Provider,
@@ -1478,6 +1485,21 @@ pub struct Pressure {
     pub memory_some: f64,
     pub memory_full: f64,
     pub io_some: f64,
+}
+
+#[uniffi::remote(Enum)]
+pub enum UpdateWhen {
+    Now,
+    Idle,
+}
+
+#[uniffi::remote(Enum)]
+pub enum UpdateStage {
+    WaitingForIdle { running_turns: u32 },
+    Downloading { from: String, to: String },
+    Restarting { from: String, to: String },
+    UpToDate { version: String },
+    Failed { reason: String },
 }
 
 #[uniffi::remote(Enum)]

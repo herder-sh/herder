@@ -505,6 +505,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::GetSettings
         | CommandBody::SetSettings { .. }
         | CommandBody::RestartDaemon
+        | CommandBody::UpdateDaemon { .. }
         | CommandBody::SetSkillsRepo { .. }
         | CommandBody::PutSkill { .. }
         | CommandBody::DeleteSkill { .. }

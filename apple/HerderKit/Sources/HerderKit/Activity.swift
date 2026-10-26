@@ -2,12 +2,14 @@ import Foundation
 import Herder
 
 /// What a background job runs on a machine: an account's login, to add it or to log it in
-/// again, a provider CLI's installer or updater, or an AWS IAM Identity Center sign-in.
+/// again, a provider CLI's installer or updater, an AWS IAM Identity Center sign-in, or an
+/// update of the machine's herder.
 enum JobKind: Hashable {
     case add(AccountId)
     case relogin(AccountId)
     case install(Provider)
     case awsSignIn(profile: String)
+    case updateHerder
 }
 
 /// A background job: the machine it runs on and what it runs there. One of each per machine at
@@ -20,8 +22,9 @@ struct JobKey: Hashable, Identifiable {
 }
 
 /// The long-running jobs this device started, kept while the app runs: CLI installs and
-/// updates, account logins and AWS sign-ins. Each runs in its own terminal on its machine and
-/// stays listed until the user clears it once it has ended.
+/// updates, account logins, AWS sign-ins and herder updates. Each but a herder update runs in
+/// its own terminal on its machine; each stays listed until the user clears it once it has
+/// ended.
 ///
 /// Installs queue per machine: one installer at a time on a machine, as two package managers
 /// writing the same prefix trip over each other, while different machines run theirs at once.
@@ -29,13 +32,16 @@ struct JobKey: Hashable, Identifiable {
 @MainActor
 struct Activity {
     struct Job {
-        let connection: TerminalConnection
+        /// Its terminal; a herder update runs none.
+        let connection: TerminalConnection?
         /// Whether its terminal was opened; until then it is queued.
         var started = false
         /// An install's CLI version when it started, as `Fleet.cliVersion` reads it.
         var before: String?
-        /// When its terminal ended.
+        /// When its terminal ended, or a herder update finished.
         var ended: Date?
+        /// A herder update's own state.
+        var update: HerderUpdateJob?
     }
 
     /// Where a job stands in the queue.
@@ -58,6 +64,23 @@ struct Activity {
         keys.removeAll { $0 == key }
         keys.append(key)
         return true
+    }
+
+    /// Adds the herder update `key`, which starts at once; one that has ended is replaced.
+    mutating func enqueue(_ key: JobKey, update: HerderUpdateJob) {
+        jobs[key] = Job(connection: nil, started: true, update: update)
+        keys.removeAll { $0 == key }
+        keys.append(key)
+    }
+
+    /// Notes whether the machine took the herder update `key`.
+    mutating func answer(_ key: JobKey, _ answer: HerderUpdateJob.Answer) {
+        jobs[key]?.update?.answer = answer
+    }
+
+    /// Keeps the stage the herder update `key` reported last.
+    mutating func record(_ key: JobKey, _ stage: UpdateStage) {
+        jobs[key]?.update?.stage = stage
     }
 
     mutating func start(_ key: JobKey, before: String?) {
@@ -145,12 +168,13 @@ extension Fleet {
 
     /// Runs an ended job again, as it was started.
     func retry(_ key: JobKey) {
-        guard let connection = activity[key]?.connection else { return }
+        guard let job = activity[key] else { return }
         switch key.kind {
         case .install(let provider): install(provider, on: key.hostId)
-        case .add: if let account = connection.account { addAccount(account, on: key.hostId) }
+        case .add: if let account = job.connection?.account { addAccount(account, on: key.hostId) }
         case .relogin(let id): relogin(id, on: key.hostId)
         case .awsSignIn(let profile): signInToAws(profile, on: key.hostId)
+        case .updateHerder: updateHerder(on: key.hostId, when: job.update?.when ?? .idle)
         }
     }
 
@@ -193,8 +217,12 @@ extension Fleet {
     func progress(_ key: JobKey) -> JobProgress {
         guard let job = activity[key] else { return .ended }
         guard job.started else { return .queued }
-        let connection = job.connection
         let machine = machines.first { $0.hostId == key.hostId }
+        guard let connection = job.connection else {
+            guard let update = job.update else { return .ended }
+            return JobProgress(herder: update, update: machine?.update, connected: machine?.connection == .connected,
+                               version: machine?.herderVersion)
+        }
         switch key.kind {
         case .install(let provider):
             return JobProgress(install: connection.state, before: job.before, after: cliVersion(provider, on: key.hostId))
@@ -205,13 +233,15 @@ extension Fleet {
         case .awsSignIn:
             return JobProgress(AwsSignInStatus(state: connection.state, refusal: connection.refusal,
                                                terminalId: connection.terminalId, terminals: machine?.terminals ?? []))
+        case .updateHerder:
+            return .ended
         }
     }
 
     /// Cancels the login `key` runs: closes its terminal on the machine, which hangs up the
     /// provider's login, so it adds no account. Its terminal then shows it ended.
     func cancelLogin(_ key: JobKey) async throws {
-        guard let terminalId = activity[key]?.connection.terminalId else {
+        guard let terminalId = activity[key]?.connection?.terminalId else {
             throw HerderError.Local(detail: "the login has no terminal on the machine yet")
         }
         try await client.closeTerminal(hostId: key.hostId, terminalId: terminalId)
@@ -242,6 +272,12 @@ enum JobProgress: Equatable {
     case updated(from: String, to: String)
     /// The update ended, and the machine lists the CLI at the version it had.
     case upToDate(String)
+    /// A herder update waits for this many running turns to end; no new one starts meanwhile.
+    case waitingForTurns(Int)
+    /// A herder update downloads this version.
+    case downloading(String)
+    /// A herder update restarts the machine on this version, until it is back on it.
+    case restarting(String)
     case failed(String)
 
     /// A login that adds an account: `added` tells whether the machine lists it.
@@ -315,7 +351,7 @@ enum JobProgress: Equatable {
     var group: Group {
         switch self {
         case .running, .approve: .needsYou
-        case .starting, .installing: .running
+        case .starting, .installing, .waitingForTurns, .downloading, .restarting: .running
         case .queued: .queued
         case .added, .signedIn, .ended, .installed, .updated, .upToDate, .failed: .done
         }
@@ -349,6 +385,10 @@ extension JobKey {
         case (.awsSignIn(let profile), .signedIn): return "Signed in to AWS \(profile) on \(machine)"
         case (.awsSignIn(let profile), .failed): return "AWS sign-in to \(profile) on \(machine) failed"
         case (.awsSignIn(let profile), _): return "AWS sign-in to \(profile) on \(machine)"
+        case (.updateHerder, .updated): return "Updated herder on \(machine)"
+        case (.updateHerder, .upToDate): return "herder on \(machine) is up to date"
+        case (.updateHerder, .failed): return "Updating herder on \(machine) failed"
+        case (.updateHerder, _): return "Update herder on \(machine)"
         }
     }
 }
@@ -368,6 +408,10 @@ extension JobProgress {
         case .installed(let version): version.isEmpty ? "Installed" : version
         case .updated(let from, let to): from.isEmpty || to.isEmpty ? "Updated" : "\(from) → \(to)"
         case .upToDate(let version): version.isEmpty ? "Already the latest" : "Already at \(version)"
+        case .waitingForTurns(let turns):
+            "Waiting for \(turns == 1 ? "a running turn" : "\(turns) running turns") to end · no new turn starts"
+        case .downloading(let version): "Downloading herder \(version)"
+        case .restarting(let version): "Restarting on \(version) · it reconnects on its own"
         case .added: "Sessions can use it now"
         case .signedIn: "Signed in"
         case .ended: "Stopped before it signed in"
@@ -389,6 +433,9 @@ extension JobProgress {
         case .installed(let version): version.isEmpty ? "Installed" : "Installed \(version)"
         case .updated(let from, let to): from.isEmpty || to.isEmpty ? "Updated" : "\(from) → \(to)"
         case .upToDate(let version): version.isEmpty ? "Up to date" : "Up to date \(version)"
+        case .waitingForTurns: "Waiting for turns"
+        case .downloading: "Downloading"
+        case .restarting: "Restarting"
         case .failed: "Failed"
         }
     }

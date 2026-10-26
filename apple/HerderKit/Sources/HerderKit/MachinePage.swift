@@ -107,6 +107,9 @@ struct MachinePage: View {
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(Theme.failure)
                 }
+                if runsSessions && machine.role == .owner {
+                    herder(machine).detailSection("herder")
+                }
                 AboutSection {
                     DetailRow(label: "Fingerprint", value: grouped(machine.fingerprint), mono: true)
                     DetailRow(label: "Host id", value: machine.hostId, mono: true)
@@ -331,6 +334,17 @@ struct MachinePage: View {
                 }
             }
             .detailSection("Provider CLIs")
+        }
+    }
+
+    // MARK: herder
+
+    /// The herder the machine runs, and its Update.
+    private func herder(_ machine: Machine) -> some View {
+        SettingsList(title: "herder") {
+            SettingRow(label: "Version", hint: machine.herderVersion ?? "Too old to say") {
+                HerderUpdateButton(fleet: fleet, hostId: hostId)
+            }
         }
     }
 

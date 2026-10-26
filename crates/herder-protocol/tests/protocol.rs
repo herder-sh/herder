@@ -491,6 +491,12 @@ fn client_fixtures() -> Vec<ClientMessage> {
             }),
         }),
         command(CommandBody::RestartDaemon),
+        command(CommandBody::UpdateDaemon {
+            when: UpdateWhen::Idle,
+        }),
+        command(CommandBody::UpdateDaemon {
+            when: UpdateWhen::Now,
+        }),
         command(CommandBody::SetSkillsRepo {
             url: "git@github.com:you/herder-skills.git".into(),
         }),
@@ -612,6 +618,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             user_id: UserId::new("01J9OWNER"),
             device_id: DeviceId::new("01J9DEVICE"),
             role: Role::Owner,
+            herder_version: Some("0.14.0".into()),
         }),
         ServerMessage::Sessions {
             sessions: vec![
@@ -689,6 +696,31 @@ fn server_fixtures() -> Vec<ServerMessage> {
         },
         ServerMessage::Synced {
             token: "01J9SYNC".into(),
+        },
+        ServerMessage::DaemonUpdate {
+            stage: UpdateStage::WaitingForIdle { running_turns: 2 },
+        },
+        ServerMessage::DaemonUpdate {
+            stage: UpdateStage::Downloading {
+                from: "0.13.0".into(),
+                to: "0.14.0".into(),
+            },
+        },
+        ServerMessage::DaemonUpdate {
+            stage: UpdateStage::Restarting {
+                from: "0.13.0".into(),
+                to: "0.14.0".into(),
+            },
+        },
+        ServerMessage::DaemonUpdate {
+            stage: UpdateStage::UpToDate {
+                version: "0.14.0".into(),
+            },
+        },
+        ServerMessage::DaemonUpdate {
+            stage: UpdateStage::Failed {
+                reason: "checksum mismatch".into(),
+            },
         },
         ServerMessage::Snapshot {
             session_id: session_id(),
@@ -1497,6 +1529,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         user_id: UserId::new("01J9MEMBER"),
         device_id: DeviceId::new("01J9DEVICE"),
         role: Role::Member,
+        herder_version: None,
     }));
     messages
 }

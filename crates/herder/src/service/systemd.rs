@@ -187,6 +187,19 @@ pub fn is_installed(service: &Service) -> bool {
     env_unit_path(service.unit).is_ok_and(|path| path.is_file())
 }
 
+/// Whether systemd runs this process as `service`: its cgroup is the unit's.
+pub fn runs_this_process(service: &Service) -> bool {
+    std::fs::read_to_string("/proc/self/cgroup")
+        .is_ok_and(|cgroups| in_unit(&cgroups, service.unit))
+}
+
+/// Whether a `/proc/self/cgroup` puts its process in `unit`'s cgroup.
+fn in_unit(cgroups: &str, unit: &str) -> bool {
+    cgroups
+        .lines()
+        .any(|line| line.rsplit('/').next() == Some(unit))
+}
+
 /// Whether the herder service is running right now.
 pub fn is_active() -> bool {
     Command::new("systemctl")
@@ -256,6 +269,15 @@ fn enable_linger() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_units_cgroup_runs_it() {
+        let cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/herder.service\n";
+        assert!(in_unit(cgroup, "herder.service"));
+        assert!(!in_unit(cgroup, "herder-vault.service"));
+        let shell = "0::/user.slice/user-1000.slice/session-3.scope\n";
+        assert!(!in_unit(shell, "herder.service"));
+    }
 
     #[test]
     fn unit_runs_the_daemon_and_restarts_on_failure() {

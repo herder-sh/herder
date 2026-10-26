@@ -1455,7 +1455,6 @@ version = "0.13.0"
 dependencies = [
  "anyhow",
  "clap",
- "flate2",
  "futures-util",
  "herder-adapters",
  "herder-client-core",
@@ -1469,8 +1468,6 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2 0.11.1",
- "tar",
  "tempfile",
  "tokio",
  "tokio-rustls",
@@ -1479,7 +1476,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "ureq",
  "url",
 ]
 
@@ -1534,6 +1530,7 @@ version = "0.13.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "flate2",
  "frankenstein",
  "futures-util",
  "herder-adapters",
@@ -1558,6 +1555,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "slack-morphism",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

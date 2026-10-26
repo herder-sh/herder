@@ -22,6 +22,7 @@ pub mod settings;
 pub mod skills;
 pub mod stalls;
 pub mod terminal;
+pub mod update;
 pub mod usage;
 pub mod vault;
 pub mod worktree;
@@ -46,9 +47,13 @@ pub enum Exit {
     Stopped,
     /// An owner asked it to start again ([`settings`]).
     Restart,
+    /// An owner updated its binary ([`update`]): it starts again on the new one, and so does
+    /// the service of the vault or daemon next to it.
+    Updated,
 }
 
-/// Runs the daemon until SIGTERM, Ctrl-C or an owner's restart, then shuts down cleanly.
+/// Runs the daemon until SIGTERM, Ctrl-C or an owner's restart or update, then shuts down
+/// cleanly.
 pub fn run(config: Config) -> Result<Exit> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -76,7 +81,9 @@ pub fn run(config: Config) -> Result<Exit> {
                 let probes = accounts::probes(&config.binaries);
                 serve(&config, adapters, probes, config.accounts.clone(), shutdown).await?;
             }
-            Ok(if settings::restart_requested() {
+            Ok(if update::updated() {
+                Exit::Updated
+            } else if settings::restart_requested() {
                 Exit::Restart
             } else {
                 Exit::Stopped
@@ -381,6 +388,7 @@ mod tests {
             retention: Default::default(),
             mcp_servers: Vec::new(),
             bots: Vec::new(),
+            self_update: None,
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

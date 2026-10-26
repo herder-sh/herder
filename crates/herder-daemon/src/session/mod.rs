@@ -883,7 +883,8 @@ impl SessionManager {
             CommandBody::GetSettings
             | CommandBody::SetSettings { .. }
             | CommandBody::SetResourceLimits { .. }
-            | CommandBody::RestartDaemon => {
+            | CommandBody::RestartDaemon
+            | CommandBody::UpdateDaemon { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "this daemon's settings are not changed from a client",

@@ -286,6 +286,7 @@ struct ProvidersView: View {
                     install: { fleet.install($0.provider, on: $0.hostId) },
                     setUp: { presented = .setUp },
                     addAccount: { sheet = .addAccount }))
+                HerderVersionsSection(fleet: fleet)
                 if !fleet.mcpMachines.isEmpty { McpServersSection(fleet: fleet) }
                 if let report, !report.models.isEmpty { models(report.models) }
             }

@@ -347,6 +347,8 @@ mod tests {
             vault: None,
             skills: None,
             session_skills: Default::default(),
+            update: None,
+            herder_version: None,
         }
     }
 

@@ -202,6 +202,7 @@ impl Fake {
             user_id: UserId::new("alice"),
             device_id: DeviceId::new("device"),
             role: self.role,
+            herder_version: None,
         });
         let mut changed = self.changed.subscribe();
         changed.mark_changed();

@@ -149,6 +149,7 @@ public final class Fleet {
 
     private func update(_ machines: [Machine]) {
         self.machines = machines
+        settleUpdates()
         fetchProjectIcons(machines)
         for machine in machines {
             recordRoundTrip(machine)

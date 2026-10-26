@@ -13,15 +13,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use herder_protocol::{CommandBody, CommandResult, DaemonSettings, ErrorCode, ErrorInfo};
+use herder_protocol::{
+    CommandBody, CommandResult, DaemonSettings, ErrorCode, ErrorInfo, UpdateWhen,
+};
 use nix::ifaddrs::getifaddrs;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::config::{self, Config, Mode};
+use crate::hub::Hub;
 use crate::mcp::servers::UserServers;
 use crate::resources::{self, Admission};
+use crate::update::Updater;
 
 /// Set once an owner asked the daemon to restart; [`crate::run`] reports it when it returns.
 static RESTART: AtomicBool = AtomicBool::new(false);
@@ -48,6 +52,8 @@ pub struct Settings {
     mcp_servers: Arc<UserServers>,
     /// Stops the daemon, for a restart.
     shutdown: CancellationToken,
+    /// Updates the daemon's herder.
+    updater: Arc<Updater>,
 }
 
 impl Settings {
@@ -63,10 +69,20 @@ impl Settings {
             data_dir: config.data_dir.clone(),
             is_vault: config.mode == Mode::Vault,
             running: Mutex::new(config.settings()),
-            admission,
             mcp_servers: Arc::new(UserServers::new(config.mcp_servers.clone())),
+            updater: Arc::new(Updater::new(
+                config.self_update.clone(),
+                admission.clone(),
+                shutdown.clone(),
+            )),
+            admission,
             shutdown,
         }
+    }
+
+    /// Answers `update_daemon`, telling `hub` how the update goes ([`crate::update`]).
+    pub fn update(&self, when: UpdateWhen, hub: &Arc<Hub>) -> Result<CommandResult, ErrorInfo> {
+        self.updater.start(when, hub)
     }
 
     /// The user's MCP servers as the settings have them now, for sessions' CLIs.

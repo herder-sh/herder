@@ -563,6 +563,7 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             | CommandBody::SetSettings { .. }
             | CommandBody::SetResourceLimits { .. }
             | CommandBody::RestartDaemon
+            | CommandBody::UpdateDaemon { .. }
     );
     if settings && role != Role::Owner {
         return Err(forbidden("the daemon's settings are for its owners only"));
@@ -1128,6 +1129,9 @@ mod tests {
             },
             CommandBody::SetResourceLimits { max_turns: 4 },
             CommandBody::RestartDaemon,
+            CommandBody::UpdateDaemon {
+                when: herder_protocol::UpdateWhen::Idle,
+            },
         ];
         for command in &commands {
             assert!(authorize(alice.role, command).is_ok());
