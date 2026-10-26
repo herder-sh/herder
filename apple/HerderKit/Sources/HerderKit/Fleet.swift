@@ -28,6 +28,8 @@ public final class Fleet {
     var renaming: SessionKey?
     /// A short note about something that just finished, shown briefly.
     var toast: Toast?
+    /// A session started away from its list, as Fix with AI starts one, for the window to show.
+    var revealed: SessionKey?
     /// The installs, logins and AWS sign-ins this device started; see `Activity`.
     var activity = Activity()
     /// Every owned machine's bots, as Integrations last asked; see `FleetBots`.
@@ -245,7 +247,12 @@ public final class Fleet {
            provider == nil || account.provider == provider {
             return account
         }
-        let candidates = machine.accounts.filter { provider == nil || $0.provider == provider }
+        return pick(machine.accounts.filter { provider == nil || $0.provider == provider })
+    }
+
+    /// Of `candidates`, the one with the most room left, a fallback-only one only once every
+    /// other is used up.
+    func pick(_ candidates: [Account]) -> Account? {
         let rotating = candidates.filter { !$0.fallback && busiest($0) < 100 }
         return (rotating.isEmpty ? candidates : rotating).min { busiest($0) < busiest($1) }
     }
