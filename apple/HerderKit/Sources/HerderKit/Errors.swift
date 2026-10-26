@@ -9,10 +9,19 @@ extension HerderError {
         case .Pairing(let detail): "Pairing failed: \(detail)"
         case .Unreachable(let detail): "No address answered: \(detail)"
         case .UnknownMachine(let hostId): "No paired machine \(hostId)."
-        case .Rejected(let info): info.message
+        case .Rejected(let info): needsNewerHerder ? Self.newerHerder : info.message
         case .Closed: "herder stopped."
         }
     }
+
+    /// Whether the machine refused a command it does not know: its herder is older than this
+    /// app, and says so with the serde error that lists every command it does know.
+    public var needsNewerHerder: Bool {
+        guard case .Rejected(let info) = self else { return false }
+        return info.code == .badRequest && info.message.contains("unknown variant `")
+    }
+
+    static let newerHerder = "This needs a newer herder on that machine."
 }
 
 /// Any error as a sentence for the UI.

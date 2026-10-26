@@ -192,8 +192,8 @@ final class ScreenshotTests: XCTestCase {
         return false
     }
 
-    /// Integrations: every machine's bots, then `trash-can`'s page, then Add Bot with its Slack
-    /// app manifest. The demo's bots wait for a vault, so none reaches Slack.
+    /// Integrations: every machine's bots in one table, then `trash-can`'s page, then Add Bot's
+    /// steps. The demo's bots wait for a vault, so none reaches Slack.
     private func integrations() {
         #if os(macOS)
         guard section("Integrations") else { return }
@@ -208,6 +208,13 @@ final class ScreenshotTests: XCTestCase {
         guard wait(bot, "trash-can in Integrations") else { return }
         settle()
         shoot(platform("integrations"))
+        #if os(macOS)
+        // Narrow, the table keeps the bot's name and status and folds the rest under the name.
+        resize(to: CGSize(width: 720, height: 900))
+        settle()
+        shoot("mac-integrations-narrow")
+        resize(to: CGSize(width: 1440, height: 900))
+        #endif
         press(bot)
         guard wait(app.staticTexts["U04SAM0001"].firstMatch, "trash-can's people") else { return }
         settle()
@@ -216,7 +223,13 @@ final class ScreenshotTests: XCTestCase {
         let add = app.buttons["Add Bot"].firstMatch
         guard wait(add, "Add Bot") else { return }
         press(add)
+        // Return would press the sheet's default button on the Mac; on the iPhone it puts the
+        // keyboard away.
+        #if os(macOS)
+        type("trip1-team", into: "bot-name")
+        #else
         type("trip1-team\n", into: "bot-name")
+        #endif
         settle()
         shoot(platform("add-bot"))
         dismiss()

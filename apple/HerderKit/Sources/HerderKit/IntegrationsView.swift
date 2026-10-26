@@ -1,29 +1,75 @@
 import Herder
 import SwiftUI
 
-/// Every bot on every machine this device owns: its kind and machine, how its connection
-/// stands, how many people it answers and its default project. A bot opens as its page.
+/// A bot as a row of the Integrations table.
+struct BotTableRow: Identifiable {
+    var id: String { "\(hostId)/\(bot.botId)" }
+    let hostId: HostId
+    let machine: String
+    let bot: Bot
+    let status: BotStatus?
+    /// Its default project's name; `nil` for chats.
+    let project: String?
+
+    /// Machines with no bot have no row.
+    @MainActor static func rows(_ machines: [Machine], _ bots: [HostId: MachineBots], projectName: (ProjectId) -> String) -> [BotTableRow] {
+        machines.flatMap { machine in
+            (bots[machine.hostId]?.list ?? []).map { bot in
+                BotTableRow(hostId: machine.hostId, machine: machine.name, bot: bot,
+                            status: bots[machine.hostId]?.statuses[bot.botId],
+                            project: bot.defaults.projectId.map(projectName))
+            }
+        }
+    }
+
+    /// Connected first, then those on their way, then those that need something.
+    var statusRank: Int {
+        switch status?.state {
+        case .connected: 0
+        case .connecting: 1
+        case nil, .unknown: 2
+        case .waitingForVault: 3
+        case .tokenRejected, .unsupported: 4
+        }
+    }
+}
+
+/// Every bot on every machine this device owns, as one table: its kind and machine, how its
+/// connection stands, how many people it answers and its default project. A bot opens as its
+/// page. Machines that can't list their bots say why under it, in a line each.
 struct IntegrationsView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
     @State private var bots: [HostId: MachineBots] = [:]
+    /// The table's width, which decides its columns.
+    @State private var width: CGFloat = 0
     @Environment(\.pages) private var pages
 
     var body: some View {
         let machines = fleet.botMachines
+        let rows = BotTableRow.rows(machines, bots, projectName: fleet.projectName)
+        let asking = machines.contains { bots[$0.hostId].map { if case .asking = $0.bots { true } else { false } } ?? true }
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                if machines.isEmpty {
-                    Text("No machine you own is connected.").foregroundStyle(Theme.tertiary).padding(.top, 30)
+            VStack(alignment: .leading, spacing: 16) {
+                if !rows.isEmpty {
+                    SortableTable("bots", rows: rows, sortedBy: TableSort(column: "Bot"), columns: columns) {
+                        pages.open(.bot(hostId: $0.hostId, botId: $0.bot.botId))
+                    }
+                } else if asking {
+                    ProgressView().frame(maxWidth: .infinity, minHeight: 120)
+                } else {
+                    BotsEmptyState(canAdd: machines.contains { !(bots[$0.hostId]?.outdated ?? false) }) { sheet = .addBot }
                 }
-                ForEach(machines, id: \.hostId) { machine in
-                    if let list = bots[machine.hostId] { section(machine, list) }
+                let notes = machines.compactMap { machine in bots[machine.hostId].flatMap { BotsNote(machine: machine.name, bots: $0) } }
+                if !notes.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(notes, id: \.machine) { $0 }
+                    }
                 }
-                Text("Each bot is its own Slack app, run by one machine over Socket Mode. People on its list drive sessions from a DM, or by mentioning it in a channel.")
-                    .font(.footnote).foregroundStyle(Theme.tertiary)
             }
-            .pageColumn()
+            .pageColumn(width: .infinity)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .background(Theme.background)
         .refreshable { await reload() }
         .navigationTitle("Integrations")
@@ -48,26 +94,132 @@ struct IntegrationsView: View {
         for list in bots.values { await list.reload() }
     }
 
-    @ViewBuilder private func section(_ machine: Machine, _ list: MachineBots) -> some View {
-        SettingsList(title: machine.name) {
-            switch list.bots {
-            case .asking:
-                ProgressView().frame(maxWidth: .infinity, minHeight: Theme.tallRowHeight)
-            case .failed(let why):
-                Text(why).font(.footnote).foregroundStyle(Theme.failure).padding(Theme.cellPadding)
-            case .loaded(let entries) where entries.isEmpty:
-                Text("No bots").font(.subheadline).foregroundStyle(Theme.tertiary)
-                    .padding(.horizontal, Theme.cellPadding).frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
-            case .loaded(let entries):
-                ForEach(Array(entries.enumerated()), id: \.element.botId) { index, bot in
-                    if index > 0 { RowDivider() }
-                    BotRow(bot: bot, machine: machine.name, status: list.statuses[bot.botId],
-                           project: bot.defaults.projectId.map { fleet.projectName($0) }) {
-                        pages.open(.bot(hostId: machine.hostId, botId: bot.botId))
+    /// Too narrow for every column: the bot's name, its kind and machine under it, and its status.
+    private var compact: Bool { width < 720 }
+
+    private var columns: [SortableColumn<BotTableRow>] {
+        var columns: [SortableColumn<BotTableRow>] = [
+            SortableColumn("Bot", value: \.bot.name) { row in
+                HStack(spacing: 10) {
+                    BotMark(kind: row.bot.kind, size: 22)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(row.bot.name).fontWeight(.semibold).lineLimit(1)
+                        if compact {
+                            Text([row.bot.kind.label, row.machine].joined(separator: " · "))
+                                .font(Theme.meta).foregroundStyle(Theme.tertiary).lineLimit(1)
+                        }
                     }
                 }
+                .accessibilityIdentifier("bot-\(row.bot.botId)")
+            },
+        ]
+        if !compact {
+            columns += [
+                SortableColumn("Kind", width: 80, value: \.bot.kind.label) { row in
+                    Text(row.bot.kind.label).foregroundStyle(Theme.secondary).lineLimit(1)
+                },
+                SortableColumn("Machine", width: 150, value: \.machine) { row in
+                    Text(row.machine).foregroundStyle(Theme.secondary).lineLimit(1)
+                },
+            ]
+        }
+        columns.append(SortableColumn("Status", width: compact ? 150 : 170, value: \.statusRank) { row in
+            if let status = row.status {
+                StatusChip(text: status.state.label, urgency: status.state.urgency)
+            } else {
+                Text("–").foregroundStyle(Theme.tertiary)
+            }
+        })
+        guard !compact else { return columns }
+        columns += [
+            SortableColumn("People", width: 60, alignment: .trailing, value: \.bot.allow.count) { row in
+                Text("\(row.bot.allow.count)").monospacedDigit().foregroundStyle(Theme.secondary)
+            },
+            SortableColumn("Project", width: 170, value: { $0.project ?? "" }) { row in
+                Text(row.project ?? "Chats").foregroundStyle(row.project == nil ? Theme.tertiary : Theme.secondary).lineLimit(1)
+            },
+        ]
+        return columns
+    }
+}
+
+/// Why a machine's bots are not in the table, in one calm line: its herder is too old for bots,
+/// or it refused to list them.
+struct BotsNote: View {
+    let machine: String
+    let text: String
+    /// Whether the machine's herder is too old, which `herder update` there fixes.
+    let outdated: Bool
+
+    init?(machine: String, bots: MachineBots) {
+        guard case .failed(let why) = bots.bots else { return nil }
+        self.machine = machine
+        outdated = bots.outdated
+        text = outdated ? "\(machine) runs an older herder; bots need \(botsRelease)." : "\(machine) did not list its bots: \(why)"
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: outdated ? "arrow.up.circle" : "exclamationmark.circle")
+                .foregroundStyle(outdated ? Theme.secondary : Theme.failure)
+            Text(text).font(.subheadline).foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if outdated {
+                CopyPill(title: "herder update", text: "herder update")
+                    .help("Run it on \(machine) to update herder there")
             }
         }
+        .padding(.horizontal, 8)
+        .frame(minHeight: 36)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A pill that copies `text`, and says so for a moment.
+struct CopyPill: View {
+    let title: String
+    let text: String
+    var prominent = false
+    @State private var copied = false
+
+    var body: some View {
+        PillButton(title: copied ? "Copied" : title, symbol: copied ? "checkmark" : "doc.on.doc", prominent: prominent) {
+            Clipboard.string = text
+            copied = true
+        }
+        .fixedSize()
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            copied = false
+        }
+    }
+}
+
+/// Integrations with no bot: what a bot is, and the button that adds one.
+struct BotsEmptyState: View {
+    /// Whether a machine could run one.
+    let canAdd: Bool
+    let add: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: -6) {
+                BotMark(kind: .slack, size: 36)
+                BotMark(kind: .telegram, size: 36)
+            }
+            Text("No bots yet").font(.headline).foregroundStyle(Theme.text)
+            Text("A bot lets the people on its list drive sessions from Slack or Telegram: a DM or a mention starts or continues one. Each bot runs on one of your machines.")
+                .font(.subheadline).foregroundStyle(Theme.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 440)
+            PillButton(title: "Add Bot", symbol: "plus", prominent: true, action: add)
+                .disabled(!canAdd)
+                .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
     }
 }
 
@@ -129,7 +281,8 @@ extension Fleet {
     }
 }
 
-/// Adds a bot: the machine and the kind, the Slack app's manifest to copy, then its tokens.
+/// Adds a bot in four short steps: where it runs and its kind, its name, the chat's app to
+/// create, then its tokens.
 struct AddBotSheet: View {
     let fleet: Fleet
     @State private var setup: BotSetup
@@ -141,49 +294,173 @@ struct AddBotSheet: View {
     }
 
     var body: some View {
-        @Bindable var setup = setup
-        SheetScaffold(title: "Add Bot", subtitle: "Run a chat bot on one of your machines", height: 760) {
-            Field(label: "Machine", hint: "It holds the bot’s connection and runs the sessions it starts.") {
-                ChoiceChips(options: fleet.botMachines.map { (value: Optional($0.hostId), label: $0.name, detail: "") },
-                            selection: $setup.hostId)
-            }
-            Field(label: "Kind") {
-                ChoiceChips(options: [(value: BotKind.slack, label: "Slack", detail: "Socket Mode"),
-                                      (value: BotKind.telegram, label: "Telegram", detail: "Bot API")],
-                            selection: $setup.kind)
-            }
-            Field(label: "Name", hint: "As the chat shows the bot user, such as trash-can.") {
-                InputBox(placeholder: "trash-can", text: $setup.name).accessibilityIdentifier("bot-name")
-            }
-            if setup.kind == .slack {
-                Field(label: "1 · Create the Slack app",
-                      hint: "At api.slack.com/apps choose **Create New App › From a manifest**, pick the workspace and paste this. Then install it to the workspace.") {
-                    ManifestBox(text: BotSetup.slackManifest(name: setup.name))
-                }
-                Field(label: "2 · Bot token",
-                      hint: "**OAuth & Permissions › Bot User OAuth Token**, starting xoxb-.") {
-                    TokenBox(placeholder: "xoxb-…", text: $setup.botToken.text).accessibilityIdentifier("bot-token")
-                }
-                Field(label: "3 · App-level token",
-                      hint: "**Basic Information › App-Level Tokens › Generate**, with the connections:write scope; it starts xapp-.") {
-                    TokenBox(placeholder: "xapp-…", text: $setup.appToken.text).accessibilityIdentifier("bot-app-token")
-                }
-            } else {
-                Field(label: "Bot token", hint: "From @BotFather.") {
-                    TokenBox(placeholder: "123456:ABC…", text: $setup.botToken.text).accessibilityIdentifier("bot-token")
-                }
-            }
-            Text("The tokens go into the machine’s vault as secrets of the set \(setup.botId.isEmpty ? "bot-‹name›" : setup.secretSet), and are never shown again.")
-                .font(.footnote).foregroundStyle(Theme.tertiary)
-            if let error = setup.error {
-                Text(error).font(.footnote).foregroundStyle(Theme.failure).accessibilityIdentifier("bot-error")
-            }
+        SheetScaffold(title: "Add Bot", height: 600, hint: "The tokens go into the machine’s vault and are never shown again.") {
+            AddBotForm(setup: setup)
         } footer: {
-            ActionButton(title: "Add Bot", style: .primary) {
+            Spacer()
+            ActionButton(title: setup.actionTitle, style: .primary) {
                 if await setup.save() { dismiss() }
             }
-            .disabled(setup.sending)
+            .frame(width: 220)
+            .disabled(setup.sending || setup.hostId == nil)
+            .keyboardShortcut(.defaultAction)
         }
+        .task { await setup.check(BotTarget.all(fleet.machines)) }
+    }
+}
+
+/// The add-bot steps, on a `BotSetup` alone so they can be drawn without a fleet.
+struct AddBotForm: View {
+    @Bindable var setup: BotSetup
+    @State private var showsManifest = false
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        BotStep(number: 1, title: "Machine and kind") {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { machinePicker; kindPicker }
+                VStack(alignment: .leading, spacing: 10) { machinePicker; kindPicker }
+            }
+            if setup.hostId == nil, let problem = setup.targets.first?.problem {
+                Text(setup.targets.count == 1 ? problem : "No machine can run a bot now. \(setup.targets[0].name): \(problem)")
+                    .font(.footnote).foregroundStyle(Theme.secondary)
+            }
+        }
+        BotStep(number: 2, title: "Name") {
+            InputBox(placeholder: "trash-can", text: $setup.name).accessibilityIdentifier("bot-name")
+        }
+        if setup.kind == .slack {
+            BotStep(number: 3, title: "Create the Slack app") {
+                Text("Create an app from this manifest at api.slack.com, then install it to your workspace.")
+                    .font(.subheadline).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    CopyPill(title: "Copy manifest", text: BotSetup.slackManifest(name: setup.name), prominent: true)
+                    PillButton(title: "Open api.slack.com", symbol: "arrow.up.right") {
+                        BotSetup.slackAppsURL.map { openURL($0) }
+                    }
+                }
+                DisclosureGroup(isExpanded: $showsManifest) {
+                    ManifestBox(text: BotSetup.slackManifest(name: setup.name)).padding(.top, 6)
+                } label: {
+                    Text("Show manifest").font(.subheadline).foregroundStyle(Theme.secondary)
+                }
+                .tint(Theme.secondary)
+            }
+            BotStep(number: 4, title: "Tokens") {
+                TokenField(label: "Bot token", hint: "OAuth & Permissions › Bot User OAuth Token",
+                           placeholder: "xoxb-…", text: $setup.botToken.text)
+                    .accessibilityIdentifier("bot-token")
+                TokenField(label: "App-level token", hint: "Basic Information › App-Level Tokens, with connections:write",
+                           placeholder: "xapp-…", text: $setup.appToken.text)
+                    .accessibilityIdentifier("bot-app-token")
+            }
+        } else {
+            BotStep(number: 3, title: "Create the Telegram bot") {
+                Text("Message @BotFather, send /newbot and follow its questions.")
+                    .font(.subheadline).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                PillButton(title: "Open @BotFather", symbol: "arrow.up.right") { BotSetup.botFatherURL.map { openURL($0) } }
+            }
+            BotStep(number: 4, title: "Token") {
+                TokenField(label: "Bot token", hint: "The token @BotFather sends once the bot is made",
+                           placeholder: "123456:ABC…", text: $setup.botToken.text)
+                    .accessibilityIdentifier("bot-token")
+            }
+        }
+        if let error = setup.error {
+            Text(error).font(.footnote).foregroundStyle(Theme.failure).accessibilityIdentifier("bot-error")
+        }
+    }
+
+    private var machinePicker: some View {
+        Menu {
+            ForEach(setup.targets) { target in
+                Button { setup.hostId = target.hostId } label: {
+                    Text(target.name)
+                    if let problem = target.problem { Text(problem) }
+                }
+                .disabled(target.problem != nil)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "desktopcomputer").foregroundStyle(Theme.tertiary)
+                Text(setup.targets.first { $0.hostId == setup.hostId }?.name ?? (setup.targets.isEmpty ? "Checking machines…" : "No machine"))
+                    .foregroundStyle(setup.hostId == nil ? Theme.tertiary : Theme.text)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.up.chevron.down").imageScale(.small).foregroundStyle(Theme.tertiary)
+            }
+            .font(.subheadline)
+            .padding(.horizontal, 12)
+            .frame(minWidth: 200, minHeight: 36)
+            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+            .contentShape(.rect)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .accessibilityIdentifier("bot-machine")
+    }
+
+    private var kindPicker: some View {
+        Picker("Kind", selection: $setup.kind) {
+            Text("Slack").tag(BotKind.slack)
+            Text("Telegram").tag(BotKind.telegram)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 190)
+    }
+}
+
+/// A numbered step of a sheet: its number in a circle, its title, then what it asks for.
+private struct BotStep<Content: View>: View {
+    let number: Int
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text("\(number)")
+                .font(.caption.weight(.bold)).monospacedDigit()
+                .foregroundStyle(Theme.secondary)
+                .frame(width: 22, height: 22)
+                .background(Theme.raised, in: .circle)
+            VStack(alignment: .leading, spacing: 10) {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                    .frame(minHeight: 22)
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// A token's field: its name and where the chat shows it, then the hidden input.
+private struct TokenField: View {
+    let label: String
+    let hint: String
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) { title; where_ }
+                VStack(alignment: .leading, spacing: 2) { title; where_ }
+            }
+            TokenBox(placeholder: placeholder, text: $text)
+        }
+    }
+
+    private var title: some View {
+        Text(label).font(.footnote.weight(.semibold)).foregroundStyle(Theme.secondary)
+    }
+
+    private var where_: some View {
+        Text(hint).font(.footnote).foregroundStyle(Theme.tertiary).lineLimit(1)
     }
 }
 
@@ -201,39 +478,29 @@ private struct TokenBox: View {
             #if os(iOS)
             .textInputAutocapitalization(.never)
             #endif
-            .padding(12)
-            .frame(minHeight: Theme.rowHeight)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 36)
             .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }
 
-/// The app manifest, selectable, with a button that copies it.
+/// The app manifest, selectable.
 private struct ManifestBox: View {
     let text: String
-    @State private var copied = false
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 0) {
-            PillButton(title: copied ? "Copied" : "Copy", symbol: copied ? "checkmark" : "doc.on.doc") {
-                Clipboard.string = text
-                copied = true
-            }
-            .padding(8)
-            ScrollView {
-                Text(text)
-                    .font(Theme.monoSmall)
-                    .foregroundStyle(Theme.secondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
-            }
-            .frame(maxHeight: 180)
+        ScrollView {
+            Text(text)
+                .font(Theme.monoSmall)
+                .foregroundStyle(Theme.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
         }
+        .frame(maxHeight: 200)
         .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
-        .onChange(of: text) { copied = false }
     }
 }
 
@@ -259,8 +526,8 @@ struct MachineBotsSection: View {
                     pages.open(.bot(hostId: machine.hostId, botId: bot.botId))
                 }
             }
-            if case .failed(let why) = bots.bots {
-                Text(why).font(.footnote).foregroundStyle(Theme.failure).padding(Theme.cellPadding)
+            if let note = BotsNote(machine: machine.name, bots: bots) {
+                note.padding(.horizontal, 6).padding(.vertical, 4)
             } else if bots.list.isEmpty {
                 Text("No bots. Add one under Integrations.").font(.subheadline).foregroundStyle(Theme.tertiary)
                     .padding(.horizontal, Theme.cellPadding).frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
