@@ -168,10 +168,13 @@ fn daemon(config: Option<PathBuf>, vault: bool) -> anyhow::Result<()> {
     let own = if vault {
         vault::installed_service()
     } else {
-        Some(service::Service::daemon())
+        Some(herder_daemon::service::Service::daemon())
     };
     // Only the service herder installed restarts onto a new binary, as `update_daemon` needs.
-    if own.as_ref().is_some_and(service::runs_this_process) {
+    if own
+        .as_ref()
+        .is_some_and(herder_daemon::service::runs_this_process)
+    {
         config.self_update = Some(herder_daemon::update::SelfUpdate {
             exe: std::env::current_exe()?,
             base: herder_daemon::update::release::download_base(),
@@ -183,7 +186,7 @@ fn daemon(config: Option<PathBuf>, vault: bool) -> anyhow::Result<()> {
         herder_daemon::Exit::Restart => restart(),
         herder_daemon::Exit::Updated => {
             if let Some(sibling) = sibling(vault)
-                && let Err(err) = service::restart(&sibling)
+                && let Err(err) = herder_daemon::service::restart(&sibling)
             {
                 eprintln!("herder: restarting the {}: {err:#}", sibling.name);
             }
@@ -195,9 +198,9 @@ fn daemon(config: Option<PathBuf>, vault: bool) -> anyhow::Result<()> {
 /// The service next to this daemon that an update restarts with it, as `herder update` does,
 /// so a daemon and its vault run the same version: an installed vault's next to a daemon, the
 /// running daemon's next to a vault.
-fn sibling(vault: bool) -> Option<service::Service> {
+fn sibling(vault: bool) -> Option<herder_daemon::service::Service> {
     if vault {
-        service::is_active().then(service::Service::daemon)
+        herder_daemon::service::is_active().then(herder_daemon::service::Service::daemon)
     } else {
         vault::installed_service()
     }
