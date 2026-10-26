@@ -45,7 +45,7 @@ The Mac app is a zip on the latest GitHub release (https://github.com/herder-sh/
 - Shared skills: one skill library in a git repository, checked out on every machine for every provider, with a switch per machine.
 - Providers and CLI updates: every account and provider CLI on every machine on one page, with each machine's version against the latest, and Update All. Installs, updates and logins run as jobs in Activity.
 - MCP servers and secrets: add MCP servers to every machine at once, or import a README's JSON. Secrets live in the vault in sets granted to hosts; `herder secret run NAME -- command` runs a program with them in its environment, and the agent never sees a value.
-- Owners and members: only owners of a daemon can open a terminal, log in accounts or change settings; members can drive sessions but never get a shell.
+- Owners and members: invite someone with a one-time code from a machine's People section, and change their role or revoke a device later. Only owners of a daemon can open a terminal, log in accounts or change settings; members can drive sessions but never get a shell.
 - Scriptable: `herder session new`, `send`, `wait`, `status`, `list`, `archive`. Each takes `--json` and never prompts.
 
 ## Scripting sessions
@@ -97,7 +97,7 @@ Yes. A machine can run Slack and Telegram bots. Mention the Slack bot in a threa
 
 ### Can I share a machine with my team?
 
-Yes. Pair someone's device as a member: members see and drive the machine's sessions, while terminals, provider logins and settings stay with the machine's owners. Only owners can open, attach to or see a terminal.
+Yes. Invite someone from the machine's People section with a one-time code, as a member or an owner. Members see and drive the machine's sessions, while terminals, provider logins and settings stay with the machine's owners. Only owners can open, attach to or see a terminal.
 
 ### Is there a herder app for Mac and iPhone?
 
