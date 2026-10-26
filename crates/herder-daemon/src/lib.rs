@@ -350,7 +350,7 @@ fn herder_binary() -> Result<std::path::PathBuf> {
 }
 
 /// This machine's host name, for display.
-pub(crate) fn host_name() -> String {
+pub fn host_name() -> String {
     nix::unistd::gethostname()
         .ok()
         .and_then(|name| name.into_string().ok())

@@ -258,7 +258,7 @@ struct BoardView: View {
             if selection == nil { ConnectionLine(machines: lists.machines).taskListRow() }
             #endif
             if lists.machines.isEmpty {
-                EmptyFleet { sheet = .pair }.taskListRow()
+                EmptyFleet { sheet = .pair(.machine) }.taskListRow()
             } else if sections.isEmpty {
                 Text(query.isEmpty ? "Nothing open." : "No tasks match.")
                     .foregroundStyle(Theme.tertiary)

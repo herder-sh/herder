@@ -144,7 +144,7 @@ struct UnpairedVaultTests {
         let vaults = UnpairedVault.from(
             [(host: "laptop", vault: home), (host: "Builder", vault: home), (host: "devbox", vault: work)],
             paired: [])
-        #expect(vaults.map(\.address) == ["backup.example.com:7447", "vault.lan:7447"])
+        #expect(vaults.map(\.name) == ["backup.example.com", "vault.lan"])
         #expect(vaults.map(\.hosts) == [["devbox"], ["Builder", "laptop"]])
         #expect(vaults[0].backsUp == "devbox backs up here")
         #expect(vaults[1].backsUp == "Builder and laptop back up here")
@@ -152,5 +152,13 @@ struct UnpairedVaultTests {
         // Once this device pairs with a vault, its statistics show instead.
         let rest = UnpairedVault.from([(host: "laptop", vault: home), (host: "devbox", vault: work)], paired: ["aa"])
         #expect(rest.map(\.fingerprint) == ["bb"])
+    }
+
+    @Test func namesAVaultAfterTheMachineThatReachesItOnLoopback() {
+        let local = LinkedVault(address: "127.0.0.1:7448", fingerprint: "aa", backup: true, secrets: true)
+        let remote = LinkedVault(address: "draugelis.lan:7448", fingerprint: "aa", backup: true, secrets: true)
+        let vaults = UnpairedVault.from([(host: "laptop", vault: remote), (host: "draugelis", vault: local)], paired: [])
+        #expect(vaults.map(\.name) == ["draugelis’s vault"])
+        #expect(vaults.map(\.machine) == ["draugelis"])
     }
 }

@@ -123,6 +123,19 @@ final class ScreenshotTests: XCTestCase {
             #else
             shoot("ios-machines")
             #endif
+            // Add Machine's third choice: a link that pairs another device of yours.
+            let add = app.buttons["Add Machine"].firstMatch
+            if wait(add, "Add Machine") {
+                press(add)
+                let device = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'A device to this fleet'")).firstMatch
+                if wait(device, "Add Machine's device choice") {
+                    press(device)
+                    settle()
+                    shoot(platform("add-device"))
+                }
+                let done = app.buttons["Done"].firstMatch
+                if wait(done, "Add Machine's Done") { press(done) }
+            }
         }
         #if os(macOS)
         // Chats, a list pane on the layout grid as the Board is.
@@ -639,6 +652,8 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5), app.debugDescription)
         press(field)
         field.typeText(link)
+        settle()
+        shoot(platform("add-machine"))
         let pairButton = app.buttons["Pair"].firstMatch
         XCTAssertTrue(pairButton.waitForExistence(timeout: 5), app.debugDescription)
         press(pairButton)
