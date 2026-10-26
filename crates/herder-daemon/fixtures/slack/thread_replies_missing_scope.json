@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "error": "missing_scope",
+  "needed": "channels:history,groups:history,mpim:history,im:history",
+  "provided": "app_mentions:read,chat:write,files:read,files:write,im:history,im:write"
+}

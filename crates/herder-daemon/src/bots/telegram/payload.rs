@@ -122,6 +122,7 @@ pub fn message(message: &TelegramMessage, me: &Me, threads: &Threads) -> Option<
             channel_id: message.chat.id.to_string(),
             thread_id,
         },
+        message_id: message.message_id.to_string(),
         user_id: from.id.to_string(),
         direct,
         mentioned,

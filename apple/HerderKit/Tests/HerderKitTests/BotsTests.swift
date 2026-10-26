@@ -238,7 +238,7 @@ struct BotsTests {
         let manifest = BotSetup.slackManifest(name: "trash-can")
         #expect(manifest.contains("display_name: trash-can"))
         #expect(manifest.contains("socket_mode_enabled: true"))
-        for needed in ["app_mentions:read", "chat:write", "files:read", "files:write", "im:history", "- app_mention", "- message.im"] {
+        for needed in ["app_mentions:read", "chat:write", "files:read", "files:write", "im:history", "channels:history", "groups:history", "mpim:history", "- app_mention", "- message.im"] {
             #expect(manifest.contains(needed), "\(needed)")
         }
     }
