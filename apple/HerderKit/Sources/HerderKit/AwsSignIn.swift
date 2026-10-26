@@ -10,10 +10,9 @@ enum AwsListProblem: Error, Equatable {
     case noProfiles
     case failed(String)
 
-    /// Why listing a machine's profiles threw `error`. A daemon refuses a command it cannot
-    /// read as a bad request, and listing profiles carries nothing else it could find bad.
+    /// Why listing a machine's profiles threw `error`.
     init(error: any Error) {
-        if case .Rejected(let info) = error as? HerderError, info.code == .badRequest {
+        if (error as? HerderError)?.needsNewerHerder == true {
             self = .outdated
         } else {
             self = .failed(describe(error))

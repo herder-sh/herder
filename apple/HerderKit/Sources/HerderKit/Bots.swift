@@ -12,6 +12,8 @@ final class MachineBots {
     private let send: Send
     private(set) var bots: Load<[Bot]> = .asking
     private(set) var statuses: [BotId: BotStatus] = [:]
+    /// Whether the machine's herder is too old to know bots.
+    private(set) var outdated = false
 
     init(hostId: HostId, send: @escaping Send) {
         self.hostId = hostId
@@ -39,8 +41,10 @@ final class MachineBots {
                 throw HerderError.Local(detail: "the machine did not list its bots")
             }
             self.bots = .loaded(bots)
+            outdated = false
         } catch {
             bots = .failed(describe(error))
+            outdated = (error as? HerderError)?.needsNewerHerder == true
             return
         }
         await reloadStatus()
@@ -68,6 +72,63 @@ final class MachineBots {
     func remove(_ botId: BotId) async throws {
         _ = try await send(.removeBot(botId: botId))
         await reload()
+    }
+}
+
+/// Every owned machine's bots, kept while the app runs so Integrations and its header share
+/// them.
+@MainActor @Observable
+final class FleetBots {
+    private(set) var lists: [HostId: MachineBots] = [:]
+
+    /// Keeps a list for each of `hostIds` and none other, making those it lacks with `make`.
+    func keep(_ hostIds: [HostId], make: (HostId) -> MachineBots) {
+        lists = Dictionary(uniqueKeysWithValues: hostIds.map { ($0, lists[$0] ?? make($0)) })
+    }
+
+    func reload() async {
+        for list in lists.values { await list.reload() }
+    }
+
+    func reloadStatus() async {
+        for list in lists.values { await list.reloadStatus() }
+    }
+
+    /// "2 bots · 2 waiting for the vault": how many, then how many stand each way but connected,
+    /// then the machines too old for bots; zeros left out.
+    /// Empty until every machine has answered.
+    var status: String {
+        if lists.isEmpty || lists.values.contains(where: { if case .asking = $0.bots { true } else { false } }) { return "" }
+        let bots = lists.values.flatMap { list in list.list.map { list.statuses[$0.botId]?.state } }
+        let outdated = lists.values.filter(\.outdated).count
+        var parts = [bots.isEmpty ? "No bots yet" : bots.count == 1 ? "1 bot" : "\(bots.count) bots"]
+        for state in [BotState.connecting, .waitingForVault, .tokenRejected, .unsupported] {
+            let count = bots.filter { $0 == state }.count
+            if count > 0 { parts.append("\(count) \(state.label.lowercased())") }
+        }
+        if outdated > 0 { parts.append(outdated == 1 ? "1 machine needs a newer herder" : "\(outdated) machines need a newer herder") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// The herder release that runs bots.
+let botsRelease = "0.12.0"
+
+/// A machine as the place to add a bot to, with why it can't be, when it can't.
+struct BotTarget: Identifiable, Equatable {
+    var id: HostId { hostId }
+    let hostId: HostId
+    let name: String
+    var problem: String?
+
+    /// Every daemon this device is paired with, those it can't add a bot to now with why.
+    static func all(_ machines: [Machine]) -> [BotTarget] {
+        machines.filter { $0.hosts.isEmpty && $0.vault == nil }.map { machine in
+            BotTarget(hostId: machine.hostId, name: machine.name, problem:
+                machine.role != .owner ? "Only its owners add bots."
+                : machine.connection != .connected ? "Not connected."
+                : nil)
+        }
     }
 }
 
@@ -118,11 +179,12 @@ extension BotState {
         }
     }
 
+    /// The machine retries while it waits for the vault, so that is not the user's to act on.
     var urgency: Urgency {
         switch self {
         case .connected: .done
         case .connecting: .running
-        case .waitingForVault, .unknown: .needsYou
+        case .waitingForVault, .unknown: .quiet
         case .tokenRejected, .unsupported: .failing
         }
     }
@@ -150,6 +212,8 @@ final class BotSetup {
     /// The vault that keeps a machine's secrets.
     private let vaultOf: @MainActor (HostId) async throws -> HostId
     var hostId: HostId?
+    /// The machines it may go on, each with why it can't, once asked.
+    private(set) var targets: [BotTarget] = []
     var kind = BotKind.slack
     var name = ""
     /// Slack's bot token (`xoxb-`), or Telegram's.
@@ -170,9 +234,35 @@ final class BotSetup {
 
     convenience init(fleet: Fleet) {
         let client = fleet.client
-        self.init(hostId: fleet.botMachines.first?.hostId,
+        self.init(hostId: nil,
                   send: { try await client.send(hostId: $0, command: $1) },
                   vaultOf: { try await fleet.secretsVault(of: $0) })
+    }
+
+    /// Asks each of `targets` that may run a bot whether its herder knows bots and its vault
+    /// can keep the tokens, then picks the first that can when none is picked.
+    func check(_ targets: [BotTarget]) async {
+        var checked = targets
+        for index in checked.indices where checked[index].problem == nil {
+            let hostId = checked[index].hostId
+            do {
+                _ = try await send(hostId, .listBots)
+                _ = try await vaultOf(hostId)
+            } catch {
+                checked[index].problem = (error as? HerderError)?.needsNewerHerder == true
+                    ? "Runs an older herder; bots need \(botsRelease)." : describe(error)
+            }
+        }
+        self.targets = checked
+        if !checked.contains(where: { $0.hostId == hostId && $0.problem == nil }) {
+            hostId = checked.first { $0.problem == nil }?.hostId
+        }
+    }
+
+    /// What the primary button does: "Add trash-can bot".
+    var actionTitle: String {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? "Add Bot" : "Add \(name) bot"
     }
 
     /// The bot's id, from its name: lowercase letters, digits and single hyphens.
@@ -182,7 +272,8 @@ final class BotSetup {
     var secretSet: String { "bot-\(botId)" }
 
     var problem: String? {
-        if hostId == nil { return "Pick the machine that runs the bot." }
+        guard let hostId else { return "Pick the machine that runs the bot." }
+        if let problem = targets.first(where: { $0.hostId == hostId })?.problem { return problem }
         if botId.isEmpty { return "Name the bot, as the chat shows it, such as trash-can." }
         if kind == .slack {
             if !botToken.text.hasPrefix("xoxb-") { return "The bot token starts with xoxb-." }
@@ -235,6 +326,11 @@ final class BotSetup {
             return false
         }
     }
+
+    /// Where Slack creates an app from a manifest.
+    nonisolated static let slackAppsURL = URL(string: "https://api.slack.com/apps?new_app=1")
+    /// Telegram's bot that makes bots.
+    nonisolated static let botFatherURL = URL(string: "https://t.me/BotFather")
 
     /// Lowercase letters and digits of `name`, with single hyphens for whatever is between them.
     nonisolated static func slug(_ name: String) -> String {

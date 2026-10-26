@@ -78,6 +78,84 @@ struct BotsTests {
         #expect(why.contains("a vault runs no bots"))
     }
 
+    /// What a daemon older than a command answers it with.
+    static let unknownCommand = HerderError.Rejected(info: ErrorInfo(
+        code: .badRequest, message: "invalid message: unknown variant `list_bots`, expected one of `hello`, `list_sessions`"))
+
+    @Test func aCommandTheMachineDoesNotKnowAsksForANewerHerder() {
+        #expect(describe(Self.unknownCommand) == "This needs a newer herder on that machine.")
+        let other = HerderError.Rejected(info: ErrorInfo(code: .badRequest, message: "invalid message: missing field `name`"))
+        #expect(!other.needsNewerHerder)
+        #expect(describe(other) == "invalid message: missing field `name`")
+    }
+
+    @Test func aMachineTooOldForBotsSaysSoInOneLine() async throws {
+        let bots = MachineBots(hostId: "draugelis") { _ in throw Self.unknownCommand }
+        await bots.reload()
+        #expect(bots.outdated)
+        let note = try #require(BotsNote(machine: "draugelis", bots: bots))
+        #expect(note.outdated)
+        #expect(note.text == "draugelis runs an older herder; bots need 0.12.0.")
+    }
+
+    @Test func theTableHasARowPerBotAndNoneForAMachineWithout() async {
+        let list = Machine().model()
+        await list.reload()
+        let empty = MachineBots(hostId: "trash") { _ in .bots(bots: []) }
+        await empty.reload()
+        let rows = BotTableRow.rows(
+            [machine("devbox", name: "devbox", sessions: []), machine("trash", name: "trash", sessions: [])],
+            ["devbox": list, "trash": empty], projectName: { $0 })
+        #expect(rows.map(\.id) == ["devbox/trash-can"])
+        #expect(rows[0].status?.state == .waitingForVault)
+        // The machine retries on its own: neutral, not amber.
+        #expect(rows[0].status?.state.urgency == .quiet)
+    }
+
+    @Test func theHeaderCountsTheBotsAndHowEachStandsLeavingOutZeros() async {
+        let fleet = FleetBots()
+        fleet.keep(["devbox", "old"]) { hostId in
+            hostId == "old" ? MachineBots(hostId: hostId) { _ in throw Self.unknownCommand } : Machine().model()
+        }
+        #expect(fleet.status == "")
+        await fleet.reload()
+        #expect(fleet.status == "1 bot · 1 waiting for the vault · 1 machine needs a newer herder")
+        fleet.keep([]) { _ in Machine().model() }
+        #expect(fleet.status == "")
+    }
+
+    @Test func addBotOffersOnlyMachinesThatCanRunABotAndSaysWhyNot() async {
+        let targets = BotTarget.all([
+            machine("member", name: "member", sessions: [], role: .member),
+            machine("off", name: "off", sessions: [], connection: .disconnected(error: "offline")),
+            machine("old", name: "draugelis", sessions: []),
+            machine("novault", name: "laptop", sessions: []),
+            machine("devbox", name: "devbox", sessions: []),
+        ])
+        let setup = BotSetup(hostId: nil, send: { host, _ in
+            if host == "old" { throw Self.unknownCommand }
+            return .bots(bots: [])
+        }, vaultOf: { host in
+            if host == "novault" { throw HerderError.Local(detail: "The machine is linked to no vault.") }
+            return "vault"
+        })
+        await setup.check(targets)
+        #expect(setup.targets.map(\.problem) == [
+            "Only its owners add bots.", "Not connected.", "Runs an older herder; bots need 0.12.0.",
+            "The machine is linked to no vault.", nil,
+        ])
+        #expect(setup.hostId == "devbox")
+        setup.hostId = "old"
+        #expect(setup.problem == "Runs an older herder; bots need 0.12.0.")
+    }
+
+    @Test func thePrimaryButtonNamesTheBot() {
+        let setup = Sent().setup()
+        #expect(setup.actionTitle == "Add Bot")
+        setup.name = " trash-can "
+        #expect(setup.actionTitle == "Add trash-can bot")
+    }
+
     /// Records what Add Bot sends to the vault and the machine.
     @MainActor final class Sent {
         var commands: [(HostId, CommandBody)] = []

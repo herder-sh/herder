@@ -158,7 +158,7 @@ struct DesktopShell: View {
                 PaneButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair }
             }
         case .integrations:
-            Pane(fleet: fleet, title: "Integrations", switcher: switcher) {
+            Pane(fleet: fleet, title: "Integrations", status: fleet.bots.status, switcher: switcher) {
                 IntegrationsView(fleet: fleet, sheet: $sheet)
             } actions: {
                 PaneButton(title: "Add Bot", symbol: "plus", prominent: true) { sheet = .addBot }
