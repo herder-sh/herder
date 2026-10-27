@@ -1160,6 +1160,7 @@ mod tests {
                 queue: Vec::new(),
                 threads: Vec::new(),
                 chat: false,
+                origin: None,
             }],
             logs: vec![vec![Event {
                 session_id,

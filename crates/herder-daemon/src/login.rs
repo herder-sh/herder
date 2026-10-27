@@ -1274,6 +1274,7 @@ mod tests {
                     task: None,
                     failover_pin: None,
                     chat: false,
+                    origin: None,
                 },
             })
             .unwrap();

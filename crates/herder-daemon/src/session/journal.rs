@@ -211,6 +211,7 @@ impl Journal {
                 title: session.title,
                 head_seq: session.last_seq,
                 updated_at: session.updated_at,
+                origin: session.origin,
             })
             .collect())
     }
@@ -442,6 +443,7 @@ fn heads(store: &Store, projects: &Projects) -> herder_store::Result<Vec<Session
             task: session.task,
             title: session.title,
             account_id: session.account_id,
+            origin: session.origin,
         })
         .collect())
 }

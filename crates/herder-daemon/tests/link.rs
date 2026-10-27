@@ -143,6 +143,7 @@ fn seed(data_dir: &Path, session: &str) {
                 task: None,
                 failover_pin: None,
                 chat: false,
+                origin: None,
             },
         })
         .unwrap();

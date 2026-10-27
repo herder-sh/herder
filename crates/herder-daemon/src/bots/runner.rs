@@ -35,10 +35,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use herder_protocol::{
-    Answer, Bot, BotUser, Bytes, CommandBody, CommandResult, ErrorClass, ErrorCode, ErrorInfo,
-    Event, EventBody, HostId, IMAGE_MEDIA_TYPES, Image, ItemBody, ItemId, MAX_IMAGE_BYTES,
-    MAX_PROMPT_ATTACHMENT_BYTES, ProjectId, PromptFile, QuestionId, Route, SessionHead, SessionId,
-    SessionStatus, ThreadLink, TurnError, UserId,
+    Answer, Bot, BotPlace, BotUser, Bytes, CommandBody, CommandResult, ErrorClass, ErrorCode,
+    ErrorInfo, Event, EventBody, HostId, IMAGE_MEDIA_TYPES, Image, ItemBody, ItemId,
+    MAX_IMAGE_BYTES, MAX_PROMPT_ATTACHMENT_BYTES, ProjectId, PromptFile, QuestionId, Route,
+    SessionHead, SessionId, SessionOrigin, SessionStatus, ThreadLink, TurnError, UserId,
 };
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -253,15 +253,7 @@ impl Runner {
             }
         };
         let context = self.context(&message).await;
-        self.start(
-            project_id,
-            &message.place,
-            by,
-            &text,
-            &message.files,
-            context,
-        )
-        .await;
+        self.start(project_id, &message, by, &text, context).await;
     }
 
     async fn press(&mut self, press: Press) {
@@ -353,9 +345,7 @@ impl Runner {
             Action::Pick { project_id } => {
                 if let Some(message) = self.picking.remove(&press.place) {
                     let context = self.context(&message).await;
-                    let place = &message.place;
-                    let (text, files) = (&message.text, &message.files);
-                    self.start(Some(project_id), place, by, text, files, context)
+                    self.start(Some(project_id), &message, by, &message.text, context)
                         .await;
                 }
                 return;
@@ -650,16 +640,18 @@ impl Runner {
             .map_or_else(|| project_id.to_string(), |project| project.name)
     }
 
-    /// Starts a session on `project_id`, or a chat, links `place` to it and sends it `text`.
+    /// Starts a session on `project_id`, or a chat, for `message`, links its place to it and
+    /// sends it `text`.
     async fn start(
         &mut self,
         project_id: Option<ProjectId>,
-        place: &Place,
+        message: &Message,
         by: UserId,
         text: &str,
-        files: &[ChatFile],
         context: Context,
     ) {
+        let place = &message.place;
+        let origin = self.origin(message).await;
         let defaults = &self.bot.defaults;
         let command = CommandBody::CreateSession {
             repo: None,
@@ -672,7 +664,11 @@ impl Runner {
             permission_mode: defaults.permission_mode,
             failover_pin: None,
         };
-        let session_id = match self.host.sessions.handle(by.clone(), command).await {
+        let started = self
+            .host
+            .sessions
+            .handle_from(by.clone(), command, Some(origin));
+        let session_id = match started.await {
             Ok(CommandResult::SessionCreated { session_id }) => session_id,
             Ok(other) => {
                 warn!(bot_id = %self.bot.bot_id, "creating a session answered {other:?}");
@@ -689,8 +685,28 @@ impl Runner {
             }
         };
         self.link(&session_id, place).await;
-        self.prompt(&session_id, place, by, text, files, context)
+        self.prompt(&session_id, place, by, text, &message.files, context)
             .await;
+    }
+
+    /// The origin of a session `message` starts: who wrote it, and where.
+    async fn origin(&self, message: &Message) -> SessionOrigin {
+        let place = if message.direct {
+            BotPlace::Direct
+        } else {
+            let name = self.bridge.channel_name(&message.place).await;
+            BotPlace::Channel {
+                name: name.unwrap_or_else(|| message.place.channel_id.clone()),
+            }
+        };
+        SessionOrigin {
+            bot_id: self.bot.bot_id.clone(),
+            kind: self.bot.kind,
+            by: self
+                .user(&message.user_id)
+                .map_or_else(|| message.user_id.clone(), |user| user.display_name.clone()),
+            place,
+        }
     }
 
     /// Links `place` to `session_id`.

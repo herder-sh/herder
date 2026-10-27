@@ -87,6 +87,7 @@ impl Backend for TestBackend {
                 queue: Vec::new(),
                 threads: Vec::new(),
                 chat: false,
+                origin: None,
             })
             .collect())
     }
@@ -294,6 +295,7 @@ impl Daemon {
                 task: None,
                 failover_pin: None,
                 chat: false,
+                origin: None,
             },
         );
         session

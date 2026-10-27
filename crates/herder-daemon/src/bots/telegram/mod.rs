@@ -22,12 +22,12 @@ use std::time::Duration;
 use frankenstein::ParseMode;
 use frankenstein::methods::{
     AnswerCallbackQueryParams, DeleteMessageParams, DeleteWebhookParams,
-    EditMessageReplyMarkupParams, EditMessageTextParams, GetFileParams, GetUpdatesParams,
-    SendMessageParams,
+    EditMessageReplyMarkupParams, EditMessageTextParams, GetChatParams, GetFileParams,
+    GetUpdatesParams, SendMessageParams,
 };
 use frankenstein::types::{
-    AllowedUpdate, EphemeralMessageParameters, File, LinkPreviewOptions, Message as Sent,
-    ReplyMarkup, ReplyParameters, User,
+    AllowedUpdate, ChatFullInfo, EphemeralMessageParameters, File, LinkPreviewOptions,
+    Message as Sent, ReplyMarkup, ReplyParameters, User,
 };
 use frankenstein::updates::{Update, UpdateContent};
 use futures_util::future::BoxFuture;
@@ -564,6 +564,15 @@ impl Bridge for Telegram {
 
     fn link<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>> {
         Box::pin(async move { link(place) })
+    }
+
+    fn channel_name<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let chat_id = place.channel_id.parse::<i64>().ok()?;
+            let params = GetChatParams::builder().chat_id(chat_id).build();
+            let chat: ChatFullInfo = self.api.call("getChat", &params).await.ok()?;
+            chat.title
+        })
     }
 }
 

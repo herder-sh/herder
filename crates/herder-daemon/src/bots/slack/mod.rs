@@ -447,6 +447,15 @@ impl Bridge for Slack {
             Some(link.permalink.to_string())
         })
     }
+
+    /// Needs the `channels:read` scope, and `groups:read` for a private channel.
+    fn channel_name<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let ask = SlackApiConversationsInfoRequest::new(place.channel_id.clone().into());
+            let info = self.session().conversations_info(&ask).await.ok()?;
+            info.channel.name
+        })
+    }
 }
 
 /// A Web API request, from its JSON as Slack documents it.

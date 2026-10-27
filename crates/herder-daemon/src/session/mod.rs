@@ -265,8 +265,9 @@ use herder_protocol::{
     Account, AccountId, Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult,
     ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, FollowUp, HostId, Image, Item, ItemId,
     JournalRecord, MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS, PROJECT_ICON_MEDIA_TYPES,
-    PermissionMode, Project, ProjectId, Provider, Seq, SessionHead, SessionId, SessionStatus,
-    SessionSummary, ThreadLink, Timestamp, TitleSource, TurnId, UsageWindow, UserId, clean_title,
+    PermissionMode, Project, ProjectId, Provider, Seq, SessionHead, SessionId, SessionOrigin,
+    SessionStatus, SessionSummary, ThreadLink, Timestamp, TitleSource, TurnId, UsageWindow, UserId,
+    clean_title,
 };
 use herder_store::{Session, Store};
 use jiff::SignedDuration;
@@ -646,6 +647,17 @@ impl SessionManager {
         by: UserId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
+        self.handle_from(by, command, None).await
+    }
+
+    /// Applies a command as [`Self::handle`] does; a session it creates records that `origin`,
+    /// the bot that started it, did.
+    pub async fn handle_from(
+        &self,
+        by: UserId,
+        command: CommandBody,
+        origin: Option<SessionOrigin>,
+    ) -> Result<CommandResult, ErrorInfo> {
         // Restoring an archived session must not race a login-directory edit.
         let _settings = if matches!(&command, CommandBody::UnarchiveSession { .. }) {
             Some(self.inner.account_settings.lock().await)
@@ -690,6 +702,7 @@ impl SessionManager {
                     task: None,
                     failover_pin,
                     chat,
+                    origin,
                 };
                 let (session_id, _) = self.create_session(Some(by), request).await?;
                 return Ok(CommandResult::SessionCreated { session_id });
@@ -2154,6 +2167,7 @@ impl SessionManager {
             task: request.task,
             failover_pin: request.failover_pin,
             chat: request.chat,
+            origin: request.origin,
         };
         inner
             .journal
@@ -2294,6 +2308,8 @@ struct CreateRequest {
     failover_pin: Option<bool>,
     /// Whether the session is a chat.
     chat: bool,
+    /// The bot that started the session.
+    origin: Option<SessionOrigin>,
 }
 
 /// Whether `command` only reads: it changes nothing, so its answer, which may be large, is
