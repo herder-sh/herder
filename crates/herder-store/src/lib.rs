@@ -11,7 +11,8 @@
 //! Beside the journal, the store keeps daemon state that must survive a restart and is not a
 //! projection: the results of accepted commands ([`Store::command_result`]), each session's
 //! queued prompts ([`Store::queued_prompts`]) and the vendor CLI session behind each session
-//! ([`Store::native_session`]) and the usage of each completed turn ([`Store::record_turn_usage`]).
+//! ([`Store::native_session`]), the usage of each completed turn ([`Store::record_turn_usage`])
+//! and the facts each bot remembers ([`Store::bot_facts`]).
 //!
 //! Reads are forward compatible: a stored body this build cannot decode (an event type from a
 //! newer build, or a known type whose shape changed) is returned as [`EventBody::Unknown`] with
@@ -25,10 +26,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use herder_protocol::{
-    AccountId, Attachment, BotId, CommandId, CommandResult, Event, EventBody, FailoverTotal,
-    HostId, JournalRecord, PermissionMode, PromptId, Provider, PullRequest, RawEventBody, Seq,
-    SessionId, SessionOrigin, SessionStatus, ThreadLink, Timestamp, TitleSource, TurnId, TurnUsage,
-    UsageTotal, UserId,
+    AccountId, Attachment, BotFact, BotId, CommandId, CommandResult, Event, EventBody, FactId,
+    FailoverTotal, HostId, JournalRecord, PermissionMode, PromptId, Provider, PullRequest,
+    RawEventBody, Seq, SessionId, SessionOrigin, SessionStatus, ThreadLink, Timestamp, TitleSource,
+    TurnId, TurnUsage, UsageTotal, UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -710,6 +711,57 @@ impl Store {
         let rows = stmt.query_map([], |row| Ok(SessionId::new(row.get::<_, String>(0)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
+
+    /// The facts `bot` remembers, in order.
+    pub fn bot_facts(&self, bot: &BotId) -> Result<Vec<BotFact>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT fact_id, text, learned_at, thread, place, by FROM bot_facts
+             WHERE bot_id = ?1 ORDER BY position",
+        )?;
+        let rows = stmt.query_map([bot.as_str()], |row| {
+            Ok(BotFact {
+                id: FactId::new(row.get::<_, String>(0)?),
+                text: row.get(1)?,
+                learned_at: row.get(2)?,
+                thread: get_json(row, 3)?,
+                place: get_json(row, 4)?,
+                by: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Replaces the facts `bot` remembers with `facts`, in their order, in one transaction.
+    pub fn set_bot_facts(&mut self, bot: &BotId, facts: &[BotFact]) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.prepare_cached("DELETE FROM bot_facts WHERE bot_id = ?1")?
+            .execute([bot.as_str()])?;
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT INTO bot_facts
+                     (bot_id, fact_id, position, text, learned_at, thread, place, by)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for (position, fact) in facts.iter().enumerate() {
+                let thread = fact.thread.as_ref().map(serde_json::to_string);
+                let place = fact.place.as_ref().map(serde_json::to_string);
+                insert.execute(params![
+                    bot.as_str(),
+                    fact.id.as_str(),
+                    clamp(position),
+                    fact.text,
+                    fact.learned_at,
+                    thread.transpose()?,
+                    place.transpose()?,
+                    fact.by,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 const QUEUED_SELECT: &str = "SELECT by, text, attachments, retry, retry_at, agent_message,
@@ -805,6 +857,14 @@ fn get_tag<T: DeserializeOwned>(row: &Row<'_>, idx: usize) -> rusqlite::Result<T
         None => serde_json::Value::Null,
     };
     serde_json::from_value(tag)
+        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(idx, Type::Text, Box::new(err)))
+}
+
+/// Reads a nullable JSON column back into its value.
+fn get_json<T: DeserializeOwned>(row: &Row<'_>, idx: usize) -> rusqlite::Result<Option<T>> {
+    row.get::<_, Option<String>>(idx)?
+        .map(|json| serde_json::from_str(&json))
+        .transpose()
         .map_err(|err| rusqlite::Error::FromSqlConversionFailure(idx, Type::Text, Box::new(err)))
 }
 

@@ -1343,6 +1343,10 @@
                   "put_bot",
                   "remove_bot",
                   "get_bot_status",
+                  "get_bot_memory",
+                  "set_bot_fact",
+                  "delete_bot_fact",
+                  "clear_bot_memory",
                   "attach_terminal",
                   "detach_terminal",
                   "close_terminal",
@@ -1425,6 +1429,109 @@
         "required": [
           "secrets",
           "run"
+        ]
+      }
+    },
+    {
+      "name": "remember",
+      "description": "Save a fact to the chat bot's memory, which every future conversation with the bot is told. Save only durable facts a future conversation needs: people's roles, project conventions, recurring requests, preferences. Never save secrets, tokens, credentials or passwords, nor one-off task details. Prefer updating an existing fact, with `replaces`, to adding one. Keep each fact to one line under about 150 characters. When someone says \"remember …\", save it here. The memory holds at most 40 facts of 4 KB together: when it is full, the call fails with `invalid_arguments`; merge facts with `replaces`, or forget the least useful, then try again. Text that looks like a secret is refused. Returns the fact's id and the whole memory.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "replaces": {
+            "description": "The id of a fact this one updates, which it replaces in its place. Prefer this to adding\na fact when one already covers the subject.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The fact, as one short line a future conversation can act on, e.g. \"Staging deploys go\nthrough `make deploy-staging`\". Under about 150 characters.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "text"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The fact's id, for `replaces` and `forget`.",
+            "type": "string"
+          },
+          "memory": {
+            "description": "Everything the bot remembers now, oldest first.",
+            "type": "array",
+            "items": {
+              "description": "A fact the bot remembers.",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "description": "The fact's id.",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "The fact.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "text"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "memory"
+        ]
+      }
+    },
+    {
+      "name": "forget",
+      "description": "Drop a fact from the chat bot's memory, by its id: one that is wrong, outdated or no longer useful, or that someone asked you to forget (\"forget …\"). Returns the whole memory. Fails with `not_found` for an unknown id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The id of the fact to forget.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "memory": {
+            "description": "Everything the bot remembers now, oldest first.",
+            "type": "array",
+            "items": {
+              "description": "A fact the bot remembers.",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "description": "The fact's id.",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "The fact.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "text"
+              ]
+            }
+          }
+        },
+        "required": [
+          "memory"
         ]
       }
     }

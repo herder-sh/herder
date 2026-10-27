@@ -51,7 +51,7 @@ use tokio::time::Instant;
 
 use super::actor::{self, PrimaryAct};
 use super::{CreateRequest, Inner, SessionManager};
-use crate::mcp::{Control, SecretsFuture, ToolFuture, ToolHandler};
+use crate::mcp::{BriefFuture, Control, SecretsFuture, ToolFuture, ToolHandler};
 use crate::resources::admission::RETRY_AFTER_SECS;
 
 /// What every primary session waits for: its children's reports, and which children are
@@ -261,8 +261,18 @@ impl ToolHandler for TaskTools {
                 ToolCall::Overview(OverviewInput {}) => success(manager.overview(caller).await),
                 ToolCall::Command(input) => success(manager.command(caller, input).await),
                 ToolCall::Secrets(SecretsInput {}) => success(manager.list_secrets().await),
+                ToolCall::Remember(input) => success(manager.remember(caller, input).await),
+                ToolCall::Forget(input) => success(manager.forget(caller, input).await),
             };
             result.unwrap_or_else(CallToolResult::from)
+        })
+    }
+
+    fn bot_brief(&self, caller: SessionId) -> BriefFuture {
+        let inner = self.inner.upgrade();
+        Box::pin(async move {
+            let manager = SessionManager { inner: inner? };
+            manager.bot_brief(&caller).await
         })
     }
 

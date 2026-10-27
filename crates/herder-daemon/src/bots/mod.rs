@@ -8,10 +8,13 @@
 //! ones; one whose chat cannot be reached connects again, backing off. Changing a bot's entry
 //! connects it again. Slack bots ([`slack`]) and Telegram ones ([`telegram`]) run; a kind newer
 //! than this build is `unsupported`.
+//!
+//! What each bot knows, its owners' instructions and its memory, is in [`memory`].
 
 pub mod bridge;
 #[cfg(test)]
 mod fake;
+pub mod memory;
 pub mod runner;
 pub mod slack;
 pub mod telegram;
@@ -25,9 +28,9 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use herder_protocol::{
-    Account, Bot, BotError, BotId, BotKind, BotState, BotStatus, ChannelBinding, CommandBody,
-    CommandResult, ErrorCode, ErrorInfo, Event, Item, ItemId, ProjectId, SessionHead, SessionId,
-    Timestamp,
+    Account, Bot, BotError, BotFact, BotId, BotKind, BotMemory, BotState, BotStatus,
+    ChannelBinding, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event, Item, ItemId,
+    ProjectId, SessionHead, SessionId, Timestamp,
 };
 use tokio::sync::{Mutex, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -35,7 +38,7 @@ use tracing::{info, warn};
 
 use self::bridge::ConnectError;
 use crate::config::{self, Config};
-use crate::session::EventSink;
+use crate::session::{BotOf, EventSink, SessionManager};
 use crate::vault::{Held, HostSecrets};
 
 /// Session events the bots have not read yet, at most; a bot that falls further behind misses
@@ -146,7 +149,17 @@ impl Bots {
         }
     }
 
-    /// Answers `list_bots`, `put_bot`, `remove_bot` and `get_bot_status`.
+    /// Each bot as it runs now, by its id.
+    pub fn lookup(&self) -> BotOf {
+        let running = Arc::clone(&self.running);
+        Arc::new(move |bot_id| {
+            let running = running.lock().unwrap_or_else(PoisonError::into_inner);
+            running.get(bot_id).map(|(bot, _)| bot.clone())
+        })
+    }
+
+    /// Answers `list_bots`, `put_bot`, `remove_bot`, `get_bot_status` and the bot memory
+    /// commands.
     pub async fn command(&self, command: CommandBody) -> Result<CommandResult, ErrorInfo> {
         match command {
             CommandBody::ListBots => Ok(CommandResult::Bots {
@@ -201,10 +214,76 @@ impl Bots {
                         .collect(),
                 })
             }
+            CommandBody::GetBotMemory { bot_id } => {
+                let facts = self.sessions(&bot_id).await?.bot_facts(&bot_id).await?;
+                Ok(remembers(bot_id, facts))
+            }
+            CommandBody::SetBotFact {
+                bot_id,
+                fact_id,
+                text,
+            } => {
+                let change = memory::Change::Set {
+                    replaces: fact_id,
+                    text,
+                    thread: None,
+                    place: None,
+                    by: None,
+                };
+                self.change_memory(bot_id, change).await
+            }
+            CommandBody::DeleteBotFact { bot_id, fact_id } => {
+                self.change_memory(bot_id, memory::Change::Delete(fact_id))
+                    .await
+            }
+            CommandBody::ClearBotMemory { bot_id } => {
+                self.change_memory(bot_id, memory::Change::Clear).await
+            }
             _ => Err(error(
                 ErrorCode::Internal,
                 "the bots do not handle this command",
             )),
+        }
+    }
+
+    /// Applies an owner's `change` to the memory of `bot_id`.
+    async fn change_memory(
+        &self,
+        bot_id: BotId,
+        change: memory::Change,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let sessions = self.sessions(&bot_id).await?;
+        match sessions.change_bot_facts(&bot_id, change).await? {
+            Ok((_, facts)) => {
+                info!(%bot_id, "an owner changed a bot's memory");
+                Ok(remembers(bot_id, facts))
+            }
+            Err(refused @ memory::Refused::Invalid(_)) => {
+                Err(error(ErrorCode::BadRequest, refused.to_string()))
+            }
+            Err(refused @ memory::Refused::NotFound(_)) => {
+                Err(error(ErrorCode::NotFound, refused.to_string()))
+            }
+        }
+    }
+
+    /// The sessions whose store keeps the memory of `bot_id`, a bot of the config file.
+    async fn sessions(&self, bot_id: &BotId) -> Result<SessionManager, ErrorInfo> {
+        if !self
+            .load()
+            .await?
+            .bots
+            .iter()
+            .any(|bot| bot.bot_id == *bot_id)
+        {
+            return Err(error(
+                ErrorCode::NotFound,
+                format!("bot {bot_id} does not exist"),
+            ));
+        }
+        match self.runtime.get() {
+            Some(runtime) => Ok(runtime.host.sessions.clone()),
+            None => Err(error(ErrorCode::Internal, "the bots do not run yet")),
         }
     }
 
@@ -449,6 +528,14 @@ impl EventSink for Watch {
 
     fn accounts_changed(&self, accounts: &[Account]) {
         self.next.accounts_changed(accounts);
+    }
+}
+
+/// The answer with what `bot_id` remembers.
+fn remembers(bot_id: BotId, facts: Vec<BotFact>) -> CommandResult {
+    CommandResult::BotMemory {
+        bot_id,
+        memory: BotMemory { facts },
     }
 }
 

@@ -86,6 +86,7 @@ fn slack_bot() -> Bot {
             channel_id: "C012AB3CD".into(),
             project_id: ProjectId::new("github.com/herder-sh/herder"),
         }],
+        instructions: Some("Answer in British English.".into()),
     }
 }
 
@@ -100,6 +101,7 @@ fn telegram_bot() -> Bot {
         allow: Vec::new(),
         defaults: BotDefaults::default(),
         channel_bindings: Vec::new(),
+        instructions: None,
     }
 }
 
@@ -377,6 +379,26 @@ fn client_fixtures() -> Vec<ClientMessage> {
             bot_id: BotId::new("trash-can"),
         }),
         command(CommandBody::GetBotStatus),
+        command(CommandBody::GetBotMemory {
+            bot_id: BotId::new("trash-can"),
+        }),
+        command(CommandBody::SetBotFact {
+            bot_id: BotId::new("trash-can"),
+            fact_id: None,
+            text: "Staging deploys go through make deploy-staging".into(),
+        }),
+        command(CommandBody::SetBotFact {
+            bot_id: BotId::new("trash-can"),
+            fact_id: Some(FactId::new("01J9FACT")),
+            text: "Ada leads the payments team".into(),
+        }),
+        command(CommandBody::DeleteBotFact {
+            bot_id: BotId::new("trash-can"),
+            fact_id: FactId::new("01J9FACT"),
+        }),
+        command(CommandBody::ClearBotMemory {
+            bot_id: BotId::new("trash-can"),
+        }),
         command(CommandBody::ListSecretAudit { before: None }),
         command(CommandBody::ListSecretAudit { before: Some(41) }),
         command(CommandBody::SetVaultHostAccess {
@@ -1004,6 +1026,34 @@ fn server_fixtures() -> Vec<ServerMessage> {
             command_id: CommandId::new("01J9COMMAND"),
             result: CommandResult::Bots {
                 bots: vec![slack_bot(), telegram_bot()],
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::BotMemory {
+                bot_id: BotId::new("trash-can"),
+                memory: BotMemory {
+                    facts: vec![
+                        BotFact {
+                            id: FactId::new("01J9FACT"),
+                            text: "Staging deploys go through make deploy-staging".into(),
+                            learned_at: "2026-10-27T09:00:00Z".parse().unwrap(),
+                            thread: Some(thread()),
+                            place: Some(BotPlace::Channel {
+                                name: "general".into(),
+                            }),
+                            by: Some("Ada".into()),
+                        },
+                        BotFact {
+                            id: FactId::new("01J9FACT2"),
+                            text: "Ada leads the payments team".into(),
+                            learned_at: "2026-10-27T10:00:00Z".parse().unwrap(),
+                            thread: None,
+                            place: None,
+                            by: None,
+                        },
+                    ],
+                },
             },
         },
         ServerMessage::CommandAccepted {

@@ -176,6 +176,7 @@ pub async fn serve(
     let secrets = Arc::new(vault::HostSecrets::default());
     sessions.use_secrets(Arc::clone(&secrets))?;
     let bots = Arc::new(bots::Bots::new(config));
+    sessions.serve_bots(bots.lookup())?;
     bots.start(
         bots::Runtime {
             host: bots::runner::Host {

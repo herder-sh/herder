@@ -8,6 +8,9 @@ use tokio::task::JoinHandle;
 use super::*;
 use herder_tasktools::{ErrorCode, StatusOutput, ToolError};
 
+/// The session [`Unimplemented`] takes for a chat bot's.
+const BOT: &str = "01J0BOT";
+
 /// Tools that know no children: `status` reports none and every other tool fails.
 struct Unimplemented;
 
@@ -25,6 +28,12 @@ impl ToolHandler for Unimplemented {
             .into(),
         };
         Box::pin(std::future::ready(result))
+    }
+
+    /// `BOT` is a chat bot's session; no other is.
+    fn bot_brief(&self, caller: SessionId) -> BriefFuture {
+        let brief = (caller.as_str() == BOT).then(|| "You are the bot trash-can.".to_owned());
+        Box::pin(std::future::ready(brief))
     }
 
     fn fetch_secrets(&self, _caller: SessionId, secrets: Vec<SecretRef>) -> SecretsFuture {
@@ -175,7 +184,7 @@ async fn a_session_lists_and_calls_the_tools_through_the_shim() {
     let list = client.request("tools/list", json!({})).await;
     assert_eq!(
         list["result"],
-        serde_json::to_value(tools_list()).unwrap(),
+        serde_json::to_value(tools_list(false)).unwrap(),
         "tools/list serves herder-tasktools as is"
     );
     let status = client.call("status", json!({})).await;
@@ -198,6 +207,44 @@ async fn a_session_lists_and_calls_the_tools_through_the_shim() {
     let ping = client.request("ping", Value::Null).await;
     assert_eq!(ping["result"], json!({}));
     client.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn only_a_bots_session_is_told_of_its_bot_and_gets_its_tools() {
+    let daemon = daemon(Arc::new(Unimplemented));
+    for session in [BOT, "01J0SESSION"] {
+        daemon.mcp.grant(&SessionId::new(session)).unwrap();
+        let mut client = connect(&daemon, session);
+        let bot = session == BOT;
+        let init = client
+            .request("initialize", json!({ "protocolVersion": "2025-06-18" }))
+            .await;
+        let instructions = init["result"]["instructions"].as_str().unwrap();
+        // The bot's brief comes after herder's own instructions.
+        assert!(instructions.starts_with("herder runs this session."));
+        assert_eq!(
+            instructions.ends_with("\n\nYou are the bot trash-can."),
+            bot,
+            "{instructions}"
+        );
+        let list = client.request("tools/list", json!({})).await;
+        assert_eq!(
+            list["result"],
+            serde_json::to_value(tools_list(bot)).unwrap()
+        );
+        let remember = client
+            .request(
+                "tools/call",
+                json!({ "name": "remember", "arguments": { "text": "Ada leads payments" } }),
+            )
+            .await;
+        if bot {
+            assert!(remember["error"].is_null(), "{remember}");
+        } else {
+            assert_eq!(remember["error"]["code"], -32602, "{remember}");
+        }
+        client.close().await.unwrap();
+    }
 }
 
 #[tokio::test]

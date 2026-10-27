@@ -359,6 +359,13 @@
           "$ref": "#/$defs/BotDefaults",
           "default": {}
         },
+        "instructions": {
+          "description": "What its owners tell every session it starts, as Markdown, at most\n[`MAX_BOT_INSTRUCTIONS_BYTES`]; the bot never changes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "kind": {
           "description": "The chat it is a bot of.",
           "$ref": "#/$defs/BotKind"
@@ -2441,6 +2448,99 @@
           ]
         },
         {
+          "description": "Read what a bot remembers; owners only. Answered with `bot_memory`. It changes nothing,\nso a resend is answered afresh. Refused with `not_found` for an unknown bot, and\n`unsupported` on a vault.",
+          "type": "object",
+          "properties": {
+            "bot_id": {
+              "description": "The bot.",
+              "$ref": "#/$defs/BotId"
+            },
+            "type": {
+              "type": "string",
+              "const": "get_bot_memory"
+            }
+          },
+          "required": [
+            "type",
+            "bot_id"
+          ]
+        },
+        {
+          "description": "Add a fact to a bot's memory, or change the one `fact_id` names in its place; owners\nonly. The text is made one line. Answered with `bot_memory`, as it is now. Refused with\n`bad_request`, changing nothing, when the text is empty, longer than\n`MAX_BOT_FACT_CHARS`, looks like a secret, or the memory would hold more than\n`MAX_BOT_FACTS` facts or `MAX_BOT_MEMORY_BYTES`; with `not_found` for an unknown bot\nor fact; and with `unsupported` on a vault.",
+          "type": "object",
+          "properties": {
+            "bot_id": {
+              "description": "The bot.",
+              "$ref": "#/$defs/BotId"
+            },
+            "fact_id": {
+              "description": "The fact to change; a new fact when absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FactId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "description": "The fact.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_bot_fact"
+            }
+          },
+          "required": [
+            "type",
+            "bot_id",
+            "text"
+          ]
+        },
+        {
+          "description": "Remove a fact from a bot's memory; owners only. Answered with `bot_memory`, as it is\nnow. Refused with `not_found` for an unknown bot or fact, and `unsupported` on a vault.",
+          "type": "object",
+          "properties": {
+            "bot_id": {
+              "description": "The bot.",
+              "$ref": "#/$defs/BotId"
+            },
+            "fact_id": {
+              "description": "The fact.",
+              "$ref": "#/$defs/FactId"
+            },
+            "type": {
+              "type": "string",
+              "const": "delete_bot_fact"
+            }
+          },
+          "required": [
+            "type",
+            "bot_id",
+            "fact_id"
+          ]
+        },
+        {
+          "description": "Remove every fact from a bot's memory; owners only. Answered with `bot_memory`, then\nempty. Refused with `not_found` for an unknown bot, and `unsupported` on a vault.",
+          "type": "object",
+          "properties": {
+            "bot_id": {
+              "description": "The bot.",
+              "$ref": "#/$defs/BotId"
+            },
+            "type": {
+              "type": "string",
+              "const": "clear_bot_memory"
+            }
+          },
+          "required": [
+            "type",
+            "bot_id"
+          ]
+        },
+        {
           "description": "Start streaming a terminal's output; owners only.",
           "type": "object",
           "properties": {
@@ -3519,6 +3619,10 @@
           ]
         }
       ]
+    },
+    "FactId": {
+      "description": "Identifies a fact a bot remembers, within its bot; a ULID string, opaque to receivers.",
+      "type": "string"
     },
     "FailoverSettings": {
       "description": "How a daemon's sessions fail over when their account hits a limit: they rotate to the\navailable account of their provider with the most room left, unless pinned.",

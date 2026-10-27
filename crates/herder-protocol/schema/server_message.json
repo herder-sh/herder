@@ -831,6 +831,13 @@
           "$ref": "#/$defs/BotDefaults",
           "default": {}
         },
+        "instructions": {
+          "description": "What its owners tell every session it starts, as Markdown, at most\n[`MAX_BOT_INSTRUCTIONS_BYTES`]; the bot never changes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "kind": {
           "description": "The chat it is a bot of.",
           "$ref": "#/$defs/BotKind"
@@ -923,6 +930,59 @@
         "message"
       ]
     },
+    "BotFact": {
+      "description": "One fact a bot remembers.",
+      "type": "object",
+      "properties": {
+        "by": {
+          "description": "Who it was learned from: for a fact the bot learned in a chat, the person who started\nthe conversation, by their allowlist display name; absent for one an owner set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The fact, within its bot.",
+          "$ref": "#/$defs/FactId"
+        },
+        "learned_at": {
+          "description": "When it was learned, or last changed.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "place": {
+          "description": "Where in the chat it was learned, with the channel's name; absent for one an owner set.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BotPlace"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "description": "The fact: one line, at most [`MAX_BOT_FACT_CHARS`].",
+          "type": "string"
+        },
+        "thread": {
+          "description": "The thread it was learned in; absent for one an owner set.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadLink"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "learned_at"
+      ]
+    },
     "BotId": {
       "description": "Identifies a chat bot on a host; the name its owner gave it, opaque to receivers.",
       "type": "string"
@@ -940,6 +1000,22 @@
           "type": "string",
           "const": "telegram"
         }
+      ]
+    },
+    "BotMemory": {
+      "description": "The facts a bot keeps, answering `get_bot_memory` and the commands that change them: at\nmost [`MAX_BOT_FACTS`], of [`MAX_BOT_MEMORY_BYTES`] together.",
+      "type": "object",
+      "properties": {
+        "facts": {
+          "description": "The facts, oldest first; an edited fact keeps its place.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BotFact"
+          }
+        }
+      },
+      "required": [
+        "facts"
       ]
     },
     "BotPlace": {
@@ -1596,6 +1672,29 @@
           "required": [
             "type",
             "bots"
+          ]
+        },
+        {
+          "description": "What a bot remembers, answering `get_bot_memory`, `set_bot_fact`, `delete_bot_fact` and\n`clear_bot_memory`.",
+          "type": "object",
+          "properties": {
+            "bot_id": {
+              "description": "The bot.",
+              "$ref": "#/$defs/BotId"
+            },
+            "memory": {
+              "description": "Its memory.",
+              "$ref": "#/$defs/BotMemory"
+            },
+            "type": {
+              "type": "string",
+              "const": "bot_memory"
+            }
+          },
+          "required": [
+            "type",
+            "bot_id",
+            "memory"
           ]
         },
         {
@@ -2744,6 +2843,10 @@
           ]
         }
       ]
+    },
+    "FactId": {
+      "description": "Identifies a fact a bot remembers, within its bot; a ULID string, opaque to receivers.",
+      "type": "string"
     },
     "FailoverSettings": {
       "description": "How a daemon's sessions fail over when their account hits a limit: they rotate to the\navailable account of their provider with the most room left, unless pinned.",

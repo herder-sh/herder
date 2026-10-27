@@ -11,20 +11,21 @@ use herder_client_core::{
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
     ApprovalId, ApprovalOutcome, Attachment, AttachmentId, AwsDeviceCode, AwsProfile,
-    BackupSettings, Bot, BotDefaults, BotError, BotId, BotKind, BotPlace, BotState, BotStatus,
-    BotUser, Bytes, ChannelBinding, CiStatus, CommandBody, CommandResult, Constraint, Container,
-    ContainerState, DaemonSettings, DeviceId, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
-    EscalationReason, Event, EventBody, FailoverSettings, FailoverTotal, FleetHost, FollowUp,
-    FollowUpReason, FollowUpSettings, HistoryPart, HostId, HostReplication, HostResources,
-    HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill, LinkedVault, LogFormat, LogSettings,
-    McpServerSettings, McpTransport, Mergeable, PermissionMode, PrState, Pressure, Project,
-    ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary, ProviderReload,
-    ProviderStatus, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus,
-    Role, Route, SecretAccess, SecretInfo, SecretRef, SecretSet, SecretValue, SessionHead,
-    SessionId, SessionOrigin, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload,
-    SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp,
-    TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod,
-    UsageTotal, UsageWindow, UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
+    BackupSettings, Bot, BotDefaults, BotError, BotFact, BotId, BotKind, BotMemory, BotPlace,
+    BotState, BotStatus, BotUser, Bytes, ChannelBinding, CiStatus, CommandBody, CommandResult,
+    Constraint, Container, ContainerState, DaemonSettings, DeviceId, DirectoryEntry, ErrorClass,
+    ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FactId, FailoverSettings,
+    FailoverTotal, FleetHost, FollowUp, FollowUpReason, FollowUpSettings, HistoryPart, HostId,
+    HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill,
+    LinkedVault, LogFormat, LogSettings, McpServerSettings, McpTransport, Mergeable,
+    PermissionMode, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId,
+    Provider, ProviderBinary, ProviderReload, ProviderStatus, PullRequest, QuestionId,
+    QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo,
+    SecretRef, SecretSet, SecretValue, SessionHead, SessionId, SessionOrigin, SessionSkill,
+    SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource, SkillsStatus, Terminal,
+    TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource, TurnError,
+    TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow, UserDevice,
+    UserId, UserInfo, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -53,6 +54,7 @@ string_ids!(
     AttachmentId,
     PromptId,
     BotId,
+    FactId,
 );
 
 // A provider is its wire name; unknown names stay verbatim, as on the wire.
@@ -834,6 +836,21 @@ pub enum CommandBody {
         bot_id: BotId,
     },
     GetBotStatus,
+    GetBotMemory {
+        bot_id: BotId,
+    },
+    SetBotFact {
+        bot_id: BotId,
+        fact_id: Option<FactId>,
+        text: String,
+    },
+    DeleteBotFact {
+        bot_id: BotId,
+        fact_id: FactId,
+    },
+    ClearBotMemory {
+        bot_id: BotId,
+    },
     AttachTerminal {
         terminal_id: TerminalId,
     },
@@ -959,6 +976,10 @@ pub enum CommandResult {
     BotStatus {
         bots: Vec<BotStatus>,
     },
+    BotMemory {
+        bot_id: BotId,
+        memory: BotMemory,
+    },
     SessionForked {
         session_id: SessionId,
         account_id: AccountId,
@@ -977,6 +998,22 @@ pub struct Bot {
     pub allow: Vec<BotUser>,
     pub defaults: BotDefaults,
     pub channel_bindings: Vec<ChannelBinding>,
+    pub instructions: Option<String>,
+}
+
+#[uniffi::remote(Record)]
+pub struct BotMemory {
+    pub facts: Vec<BotFact>,
+}
+
+#[uniffi::remote(Record)]
+pub struct BotFact {
+    pub id: FactId,
+    pub text: String,
+    pub learned_at: Timestamp,
+    pub thread: Option<ThreadLink>,
+    pub place: Option<BotPlace>,
+    pub by: Option<String>,
 }
 
 #[uniffi::remote(Enum)]

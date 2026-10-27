@@ -358,7 +358,11 @@ impl<B: Backend> Shared<B> {
             command @ (CommandBody::ListBots
             | CommandBody::PutBot { .. }
             | CommandBody::RemoveBot { .. }
-            | CommandBody::GetBotStatus) => match self.bots.get() {
+            | CommandBody::GetBotStatus
+            | CommandBody::GetBotMemory { .. }
+            | CommandBody::SetBotFact { .. }
+            | CommandBody::DeleteBotFact { .. }
+            | CommandBody::ClearBotMemory { .. }) => match self.bots.get() {
                 Some(bots) => bots.command(command).await,
                 None => Err(ErrorInfo {
                     code: ErrorCode::Unsupported,
@@ -518,7 +522,9 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::ListAwsProfiles
                     | CommandBody::AwsSsoLogin { .. }
             );
-            // A bot's allowlist grants people access, as a pairing code does. An update
+            // A bot's allowlist grants people access, as a pairing code does, and a bot's
+            // memory is its owners', which its own sessions keep with `remember` and `forget`
+            // only. An update
             // restarts the daemon, ending the turn that asked for it.
             let pairing = matches!(
                 command,
@@ -531,6 +537,10 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::LinkLocalVault
                     | CommandBody::PutBot { .. }
                     | CommandBody::RemoveBot { .. }
+                    | CommandBody::GetBotMemory { .. }
+                    | CommandBody::SetBotFact { .. }
+                    | CommandBody::DeleteBotFact { .. }
+                    | CommandBody::ClearBotMemory { .. }
                     | CommandBody::UpdateDaemon { .. }
             );
             if connection || pairing {

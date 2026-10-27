@@ -9,11 +9,27 @@
 //! People in the chat are no herder users: a bot's allowlist names them by their chat user id,
 //! with what each may do. A chat thread is linked to one session ([`ThreadLink`]); a session
 //! may be linked to several threads.
+//!
+//! What a bot knows comes in two parts: its owners' [`Bot::instructions`], kept in its entry,
+//! which the bot never changes; and its [`BotMemory`], short facts it keeps itself, kept in the
+//! daemon's store. Every session the bot starts is told both.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{AccountId, BotId, PermissionMode, ProjectId, Provider, SecretRef, Timestamp};
+use crate::{AccountId, BotId, FactId, PermissionMode, ProjectId, Provider, SecretRef, Timestamp};
+
+/// The longest a bot's [`Bot::instructions`] may be, in bytes of UTF-8.
+pub const MAX_BOT_INSTRUCTIONS_BYTES: usize = 8 * 1024;
+
+/// The most facts a bot's memory holds.
+pub const MAX_BOT_FACTS: usize = 40;
+
+/// The most a bot's memory holds, in bytes of UTF-8 of its facts' text together.
+pub const MAX_BOT_MEMORY_BYTES: usize = 4 * 1024;
+
+/// The longest one fact may be, in characters.
+pub const MAX_BOT_FACT_CHARS: usize = 200;
 
 /// A bot, as its `[[bots]]` entry configures it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -41,6 +57,10 @@ pub struct Bot {
     /// The project of new threads in each channel, each channel at most once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub channel_bindings: Vec<ChannelBinding>,
+    /// What its owners tell every session it starts, as Markdown, at most
+    /// [`MAX_BOT_INSTRUCTIONS_BYTES`]; the bot never changes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 /// The chat a bot is a bot of.
@@ -201,4 +221,33 @@ pub enum BotPlace {
     #[serde(other, skip_serializing)]
     #[schemars(skip)]
     Unknown,
+}
+
+/// The facts a bot keeps, answering `get_bot_memory` and the commands that change them: at
+/// most [`MAX_BOT_FACTS`], of [`MAX_BOT_MEMORY_BYTES`] together.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BotMemory {
+    /// The facts, oldest first; an edited fact keeps its place.
+    pub facts: Vec<BotFact>,
+}
+
+/// One fact a bot remembers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BotFact {
+    /// The fact, within its bot.
+    pub id: FactId,
+    /// The fact: one line, at most [`MAX_BOT_FACT_CHARS`].
+    pub text: String,
+    /// When it was learned, or last changed.
+    pub learned_at: Timestamp,
+    /// The thread it was learned in; absent for one an owner set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadLink>,
+    /// Where in the chat it was learned, with the channel's name; absent for one an owner set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<BotPlace>,
+    /// Who it was learned from: for a fact the bot learned in a chat, the person who started
+    /// the conversation, by their allowlist display name; absent for one an owner set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
 }

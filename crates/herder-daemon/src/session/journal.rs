@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use anyhow::{Context, Result, anyhow};
 use herder_protocol::{
-    CommandId, CommandResult, Event, EventBody, FailoverTotal, HostId, JournalRecord, Project,
-    ProjectId, PromptId, PullRequest, Seq, SessionHead, SessionId, SessionStatus, SessionSummary,
-    Timestamp, UsageTotal, UserId,
+    BotFact, BotId, CommandId, CommandResult, Event, EventBody, FailoverTotal, HostId,
+    JournalRecord, Project, ProjectId, PromptId, PullRequest, Seq, SessionHead, SessionId,
+    SessionStatus, SessionSummary, ThreadLink, Timestamp, UsageTotal, UserId,
 };
 use herder_store::{NativeSession, NewEvent, QueuedPrompt, Session, Store};
 
@@ -384,6 +384,37 @@ impl Journal {
             by_path,
         };
         changed
+    }
+
+    /// The chat threads linked to `session_id`, in the order first linked.
+    pub(crate) async fn threads(&self, session_id: SessionId) -> Result<Vec<ThreadLink>> {
+        self.with_store(move |store| Ok(store.threads()?.remove(&session_id).unwrap_or_default()))
+            .await
+    }
+
+    /// The facts the bot `bot_id` remembers.
+    pub(crate) async fn bot_facts(&self, bot_id: BotId) -> Result<Vec<BotFact>> {
+        self.with_store(move |store| store.bot_facts(&bot_id)).await
+    }
+
+    /// Changes the facts the bot `bot_id` remembers with `change`, and stores them unless it
+    /// fails, with none changed meanwhile; resolves to its result and the facts as they are.
+    pub(crate) async fn change_bot_facts<T: Send + 'static, E: Send + 'static>(
+        &self,
+        bot_id: BotId,
+        change: impl FnOnce(&mut Vec<BotFact>) -> Result<T, E> + Send + 'static,
+    ) -> Result<Result<(T, Vec<BotFact>), E>> {
+        self.with_store(move |store| {
+            let mut facts = store.bot_facts(&bot_id)?;
+            match change(&mut facts) {
+                Ok(changed) => {
+                    store.set_bot_facts(&bot_id, &facts)?;
+                    Ok(Ok((changed, facts)))
+                }
+                Err(err) => Ok(Err(err)),
+            }
+        })
+        .await
     }
 
     async fn with_store<T: Send + 'static>(

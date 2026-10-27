@@ -7,9 +7,9 @@ use std::thread;
 use std::time::Duration;
 
 use herder_protocol::{
-    AccountId, Attachment, AttachmentId, BotId, BotKind, BotPlace, CiStatus, CommandId,
-    CommandResult, ErrorClass, Event, EventBody, FailoverTotal, HostId, Item, ItemBody, ItemId,
-    JournalRecord, Mergeable, PermissionMode, PrState, PromptId, Provider, PullRequest,
+    AccountId, Attachment, AttachmentId, BotFact, BotId, BotKind, BotPlace, CiStatus, CommandId,
+    CommandResult, ErrorClass, Event, EventBody, FactId, FailoverTotal, HostId, Item, ItemBody,
+    ItemId, JournalRecord, Mergeable, PermissionMode, PrState, PromptId, Provider, PullRequest,
     ReviewStatus, SessionId, SessionOrigin, SessionStatus, ThreadLink, Timestamp, TitleSource,
     TurnError, TurnId, TurnUsage, UsageTotal, UserId,
 };
@@ -742,7 +742,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 19);
+    assert_eq!(version(&path), 20);
 
     // Back to the v13 schema, where every session had a branch; reopening rebuilds the
     // sessions table and keeps them.
@@ -760,12 +760,12 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              DROP TABLE sessions;
              ALTER TABLE sessions_v13 RENAME TO sessions;
              CREATE INDEX sessions_parent ON sessions (parent);
-             ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 13;",
+             ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 13;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 19);
+    assert_eq!(version(&path), 20);
     assert_eq!(
         store.session(&s).unwrap().unwrap().branch.as_deref(),
         Some("feature")
@@ -787,11 +787,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .unwrap()
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN origin; ALTER TABLE sessions DROP COLUMN parent_host; DROP TABLE turn_usage;
-             ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 11;",
+             ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 11;",
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 19);
+    assert_eq!(version(&path), 20);
     assert_eq!(store.session(&s).unwrap().unwrap().parent_host, None);
     drop(store);
 
@@ -802,11 +802,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN origin; ALTER TABLE sessions DROP COLUMN chat; ALTER TABLE sessions DROP COLUMN parent_host;
              ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
-             ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 7;",
+             ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 7;",
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 19);
+    assert_eq!(version(&path), 20);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.title, session.title_source), (None, None));
     drop(store);
@@ -820,11 +820,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
              ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
-             ALTER TABLE queued_prompts DROP COLUMN attachments; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 4;",
+             ALTER TABLE queued_prompts DROP COLUMN attachments; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 4;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 19);
+    assert_eq!(version(&path), 20);
     let mut untracked = pr(7, PrState::Open);
     untracked.head_branch = None;
     assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
@@ -852,11 +852,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch;
              DROP TABLE session_branches; DROP TABLE command_results; DROP TABLE queued_prompts;
-             DROP TABLE native_sessions; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 2;",
+             DROP TABLE native_sessions; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 2;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 19);
+    assert_eq!(version(&path), 20);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -879,11 +879,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              ALTER TABLE sessions DROP COLUMN task;
              ALTER TABLE sessions DROP COLUMN title;
              ALTER TABLE sessions DROP COLUMN title_source;
-             DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 1;",
+             DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 1;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 19);
+    assert_eq!(version(&path), 20);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -904,13 +904,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 20)
+        .pragma_update(None, "user_version", 21)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 20,
-            supported: 19
+            found: 21,
+            supported: 20
         })
     ));
 }
@@ -988,7 +988,7 @@ fn v19_takes_a_session_a_bot_created_before_for_the_bots() {
     // Back to the v18 schema, as a build before origins left it.
     Connection::open(&path)
         .unwrap()
-        .execute_batch("ALTER TABLE sessions DROP COLUMN origin; PRAGMA user_version = 18;")
+        .execute_batch("ALTER TABLE sessions DROP COLUMN origin; DROP TABLE bot_facts; PRAGMA user_version = 18;")
         .unwrap();
     let store = Store::open(&path).unwrap();
     let origin = |session| store.session(session).unwrap().unwrap().origin;
@@ -1013,7 +1013,7 @@ fn v17_projects_chats_and_takes_every_session_before_for_none() {
     // Back to the v16 schema, as a build before chats left it.
     Connection::open(&path)
         .unwrap()
-        .execute_batch("ALTER TABLE sessions DROP COLUMN origin; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 16;")
+        .execute_batch("ALTER TABLE sessions DROP COLUMN origin; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 16;")
         .unwrap();
     let mut store = Store::open(&path).unwrap();
     assert!(!store.session(&s).unwrap().unwrap().chat);
@@ -1063,7 +1063,7 @@ fn v15_keeps_pull_requests_tracked_before_without_a_head_commit() {
         .unwrap()
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN origin; ALTER TABLE session_prs DROP COLUMN head_sha;
-             ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 14;",
+             ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 14;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
@@ -1093,7 +1093,7 @@ fn v16_indexes_events_by_type_and_time() {
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "ALTER TABLE sessions DROP COLUMN origin; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 15;",
+            "ALTER TABLE sessions DROP COLUMN origin; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 15;",
         )
         .unwrap();
     drop(Store::open(&path).unwrap());
@@ -1120,7 +1120,7 @@ fn v13_adds_an_empty_turn_usage_table() {
     // Back to the v12 schema, as a build before turn usage left it.
     Connection::open(&path)
         .unwrap()
-        .execute_batch("ALTER TABLE sessions DROP COLUMN origin; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 12;")
+        .execute_batch("ALTER TABLE sessions DROP COLUMN origin; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 12;")
         .unwrap();
     let store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
@@ -1670,7 +1670,7 @@ fn v8_queue_migration_preserves_prompts_with_no_deadline() {
          ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
          INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry)
          VALUES ('s1', 0, 'alice', 'continue', '[]', 1);
-         DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; PRAGMA user_version = 8;",
+         DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; ALTER TABLE sessions DROP COLUMN chat; DROP TABLE IF EXISTS session_threads; DROP TABLE bot_facts; PRAGMA user_version = 8;",
         )
         .unwrap();
     drop(connection);
@@ -1786,4 +1786,49 @@ fn a_prompt_leaves_the_queue_with_its_transcript_item_and_keeps_its_provenance()
         panic!("missing prompt")
     };
     assert_eq!(item.agent_message, Some(metadata));
+}
+
+#[test]
+fn bot_facts_keep_their_order_per_bot_and_survive_a_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let (trash_can, tg) = (BotId::new("trash-can"), BotId::new("tg"));
+    let fact = |id: &str, text: &str, thread: Option<ThreadLink>| BotFact {
+        id: FactId::new(id),
+        text: text.into(),
+        learned_at: at(1),
+        place: thread.is_some().then(|| BotPlace::Channel {
+            name: "general".into(),
+        }),
+        thread,
+        by: Some("Ada".into()),
+    };
+    let thread = ThreadLink {
+        kind: BotKind::Slack,
+        bot_id: trash_can.clone(),
+        channel_id: "C1".into(),
+        thread_id: "1.1".into(),
+        url: Some("https://acme.slack.com/archives/C1/p11".into()),
+    };
+    let facts = vec![
+        fact(
+            "f2",
+            "Staging deploys go through make deploy-staging",
+            Some(thread),
+        ),
+        fact("f1", "Ada leads payments", None),
+    ];
+    {
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(store.bot_facts(&trash_can).unwrap(), []);
+        store.set_bot_facts(&trash_can, &facts).unwrap();
+        store
+            .set_bot_facts(&tg, &[fact("f1", "Bob is on call", None)])
+            .unwrap();
+    }
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.bot_facts(&trash_can).unwrap(), facts);
+    store.set_bot_facts(&trash_can, &facts[1..]).unwrap();
+    assert_eq!(store.bot_facts(&trash_can).unwrap(), &facts[1..]);
+    assert_eq!(store.bot_facts(&tg).unwrap().len(), 1);
 }

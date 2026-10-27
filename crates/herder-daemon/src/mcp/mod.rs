@@ -23,7 +23,9 @@
 //!
 //! Newline-delimited JSON-RPC 2.0, as MCP's stdio transport: `initialize`, `ping`, `tools/list`
 //! and `tools/call`; notifications are ignored. Calls run concurrently, since `wait_for` blocks,
-//! and go to a [`ToolHandler`].
+//! and go to a [`ToolHandler`]. A session a chat bot started is told what the bot knows in its
+//! `initialize` instructions, and gets the bot's own tools, `remember` and `forget`
+//! ([`ToolHandler::bot_brief`]).
 //!
 //! # Secrets
 //!
@@ -103,10 +105,21 @@ pub trait ToolHandler: Send + Sync + 'static {
     /// The values of `secrets` for `caller`, the session whose token the connection presented,
     /// for `herder secret run` only: no tool returns a value.
     fn fetch_secrets(&self, caller: SessionId, secrets: Vec<SecretRef>) -> SecretsFuture;
+
+    /// What `caller` is told beyond herder's own instructions when a chat bot started it: the
+    /// bot's instructions and memory. `None` for any other session, which gets no
+    /// [`herder_tasktools::Tool::BOT`] tools either.
+    fn bot_brief(&self, caller: SessionId) -> BriefFuture {
+        let _ = caller;
+        Box::pin(std::future::ready(None))
+    }
 }
 
 /// What [`ToolHandler::call`] returns.
 pub type ToolFuture = Pin<Box<dyn Future<Output = CallToolResult> + Send>>;
+
+/// What [`ToolHandler::bot_brief`] returns.
+pub type BriefFuture = Pin<Box<dyn Future<Output = Option<String>> + Send>>;
 
 /// What [`ToolHandler::fetch_secrets`] returns.
 pub type SecretsFuture =

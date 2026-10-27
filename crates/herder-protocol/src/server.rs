@@ -671,6 +671,14 @@ pub enum CommandResult {
         /// One per bot, in the order `bots` lists them.
         bots: Vec<crate::BotStatus>,
     },
+    /// What a bot remembers, answering `get_bot_memory`, `set_bot_fact`, `delete_bot_fact` and
+    /// `clear_bot_memory`.
+    BotMemory {
+        /// The bot.
+        bot_id: crate::BotId,
+        /// Its memory.
+        memory: crate::BotMemory,
+    },
     /// The latest fetches of secrets by hosts, answering `list_secret_audit`.
     SecretAudit {
         /// The fetches, newest first; fewer than [`crate::MAX_SECRET_AUDIT_ENTRIES`] when no

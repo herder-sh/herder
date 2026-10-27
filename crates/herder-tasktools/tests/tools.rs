@@ -5,14 +5,16 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use herder_protocol::{Answer, ApprovalDecision, CommandBody, CommandResult, SessionStatus};
-use herder_protocol::{ApprovalId, PermissionMode, Provider, QuestionId, SessionId, TurnId};
+use herder_protocol::{
+    ApprovalId, FactId, PermissionMode, Provider, QuestionId, SessionId, TurnId,
+};
 use herder_tasktools::*;
 use serde_json::{Value, json};
 
 #[test]
 fn tools_list_matches_snapshot() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schema/tools.json");
-    let generated = serde_json::to_string_pretty(&tools_list()).unwrap() + "\n";
+    let generated = serde_json::to_string_pretty(&tools_list(true)).unwrap() + "\n";
     if std::env::var_os("HERDER_UPDATE_SCHEMA").is_some() {
         std::fs::write(&path, &generated).unwrap();
         return;
@@ -27,7 +29,7 @@ fn tools_list_matches_snapshot() {
 
 #[test]
 fn tools_list_is_the_mcp_shape() {
-    let list = serde_json::to_value(tools_list()).unwrap();
+    let list = serde_json::to_value(tools_list(true)).unwrap();
     let tools = list["tools"].as_array().unwrap();
     let names: Vec<_> = tools
         .iter()
@@ -46,7 +48,9 @@ fn tools_list_is_the_mcp_shape() {
             "publish",
             "overview",
             "command",
-            "secrets"
+            "secrets",
+            "remember",
+            "forget"
         ]
     );
     for tool in tools {
@@ -265,6 +269,26 @@ fn calls_parse_validate_and_round_trip() {
                 command: CommandBody::RestartDaemon,
             }),
         ),
+        (
+            json!({ "text": "Staging deploys go through make deploy-staging" }),
+            ToolCall::Remember(RememberInput {
+                text: "Staging deploys go through make deploy-staging".into(),
+                replaces: None,
+            }),
+        ),
+        (
+            json!({ "text": "Ada leads payments", "replaces": "01J9FACT" }),
+            ToolCall::Remember(RememberInput {
+                text: "Ada leads payments".into(),
+                replaces: Some(FactId::new("01J9FACT")),
+            }),
+        ),
+        (
+            json!({ "id": "01J9FACT" }),
+            ToolCall::Forget(ForgetInput {
+                id: FactId::new("01J9FACT"),
+            }),
+        ),
     ];
     for (arguments, expected) in cases {
         let tool = expected.tool();
@@ -282,6 +306,8 @@ fn calls_parse_validate_and_round_trip() {
             ToolCall::Overview(input) => serde_json::to_value(input),
             ToolCall::Command(input) => serde_json::to_value(input),
             ToolCall::Secrets(input) => serde_json::to_value(input),
+            ToolCall::Remember(input) => serde_json::to_value(input),
+            ToolCall::Forget(input) => serde_json::to_value(input),
         };
         assert_eq!(back.unwrap(), arguments);
     }
@@ -658,4 +684,21 @@ fn a_command_without_its_arguments_answers_with_its_schema() {
         "{}",
         unknown.message
     );
+}
+
+#[test]
+fn only_a_bots_sessions_get_the_memory_tools() {
+    let names = |bot| -> Vec<String> {
+        tools_list(bot)
+            .tools
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect()
+    };
+    assert!(
+        !names(false)
+            .iter()
+            .any(|name| name == "remember" || name == "forget")
+    );
+    assert_eq!(names(true).len(), names(false).len() + 2);
 }

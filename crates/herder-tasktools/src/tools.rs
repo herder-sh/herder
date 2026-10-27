@@ -4,8 +4,8 @@
 //! that calls the tool.
 
 use herder_protocol::{
-    Account, Answer, ApprovalDecision, ApprovalId, CommandBody, PermissionMode, Project, Provider,
-    QuestionId, SecretRef, SessionHead, SessionId, SessionStatus, Timestamp, TurnId,
+    Account, Answer, ApprovalDecision, ApprovalId, CommandBody, FactId, PermissionMode, Project,
+    Provider, QuestionId, SecretRef, SessionHead, SessionId, SessionStatus, Timestamp, TurnId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -513,4 +513,51 @@ pub struct CommandInput {
     /// a command's arguments, call it with its `type` alone.
     #[schemars(schema_with = "crate::command_schema")]
     pub command: CommandBody,
+}
+
+/// Arguments of `remember`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RememberInput {
+    /// The fact, as one short line a future conversation can act on, e.g. "Staging deploys go
+    /// through `make deploy-staging`". Under about 150 characters.
+    pub text: String,
+    /// The id of a fact this one updates, which it replaces in its place. Prefer this to adding
+    /// a fact when one already covers the subject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    pub replaces: Option<FactId>,
+}
+
+/// Result of `remember`: the fact is kept.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RememberOutput {
+    /// The fact's id, for `replaces` and `forget`.
+    pub id: FactId,
+    /// Everything the bot remembers now, oldest first.
+    pub memory: Vec<MemoryFact>,
+}
+
+/// Arguments of `forget`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForgetInput {
+    /// The id of the fact to forget.
+    pub id: FactId,
+}
+
+/// Result of `forget`: the fact is gone.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ForgetOutput {
+    /// Everything the bot remembers now, oldest first.
+    pub memory: Vec<MemoryFact>,
+}
+
+/// A fact the bot remembers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MemoryFact {
+    /// The fact's id.
+    pub id: FactId,
+    /// The fact.
+    pub text: String,
 }

@@ -30,7 +30,8 @@ const DEFAULT_VERSION: &str = "2025-06-18";
 /// The `initialize` result's `instructions`, which clients such as Claude Code show the model
 /// up front, so it delegates through `spawn` before trying a built-in subagent that the Claude
 /// adapter's PreToolUse hook would deny, proves its work with `publish` unasked, and knows
-/// `publish` delivers the file itself into a chat that drives the session.
+/// `publish` delivers the file itself into a chat that drives the session. A chat bot's session
+/// is told what the bot knows after them ([`super::ToolHandler::bot_brief`]).
 const INSTRUCTIONS: &str = "herder runs this session. To delegate work that edits files, \
 builds, or opens pull requests, call `spawn`: one child per independent piece of work, each \
 with a complete prompt, then collect results with `wait_for`. Use `send_session` for \
@@ -82,6 +83,7 @@ pub(super) async fn connection(
         return refuse(&mut write, message).await;
     }
     send(&mut write, &Welcome::Ok).await?;
+    let bot = mcp.tools.bot_brief(hello.session_id.clone()).await;
 
     // Ends the calls still running when the shim goes.
     let done = shutdown.child_token();
@@ -100,6 +102,7 @@ pub(super) async fn connection(
         mcp,
         out,
         done: done.clone(),
+        bot,
     };
     loop {
         let line = tokio::select! {
@@ -131,6 +134,8 @@ struct Caller {
     mcp: Arc<Mcp>,
     out: mpsc::UnboundedSender<Value>,
     done: CancellationToken,
+    /// What the session is told of the chat bot that started it, if one did.
+    bot: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -164,9 +169,9 @@ impl Caller {
         };
         let params = object.get("params").cloned().unwrap_or(Value::Null);
         match method {
-            "initialize" => self.reply(id, initialize(&params)),
+            "initialize" => self.reply(id, initialize(&params, self.bot.as_deref())),
             "ping" => self.reply(id, json!({})),
-            "tools/list" => match serde_json::to_value(tools_list()) {
+            "tools/list" => match serde_json::to_value(tools_list(self.bot.is_some())) {
                 Ok(list) => self.reply(id, list),
                 Err(err) => self.error(id, INTERNAL_ERROR, err.to_string()),
             },
@@ -181,7 +186,9 @@ impl Caller {
             Ok(params) => params,
             Err(err) => return self.error(id, INVALID_PARAMS, err.to_string()),
         };
-        let Some(tool) = Tool::from_name(&params.name) else {
+        let tool = Tool::from_name(&params.name)
+            .filter(|tool| self.bot.is_some() || !Tool::BOT.contains(tool));
+        let Some(tool) = tool else {
             return self.error(id, INVALID_PARAMS, format!("unknown tool {}", params.name));
         };
         if !self.mcp.holds(&self.session_id, &self.token) {
@@ -255,8 +262,9 @@ fn error_message(id: Value, code: i64, message: String) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// The `initialize` result: the client's protocol version when this server speaks it.
-fn initialize(params: &Value) -> Value {
+/// The `initialize` result: the client's protocol version when this server speaks it, and
+/// [`INSTRUCTIONS`] followed by what a chat bot's session is told of the bot.
+fn initialize(params: &Value, bot: Option<&str>) -> Value {
     let asked = params.get("protocolVersion").and_then(Value::as_str);
     let version = VERSIONS
         .into_iter()
@@ -266,6 +274,9 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "herder", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": INSTRUCTIONS,
+        "instructions": match bot {
+            Some(bot) => format!("{INSTRUCTIONS}\n\n{bot}"),
+            None => INSTRUCTIONS.to_owned(),
+        },
     })
 }

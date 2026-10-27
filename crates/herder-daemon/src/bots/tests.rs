@@ -37,6 +37,7 @@ fn slack_bot(id: &str) -> Bot {
             channel_id: "C012AB3CD".into(),
             project_id: ProjectId::new("github.com/herder-sh/trip1"),
         }],
+        instructions: Some("Answer in British English.".into()),
     }
 }
 
@@ -50,6 +51,7 @@ fn telegram(id: &str) -> Bot {
         allow: Vec::new(),
         defaults: BotDefaults::default(),
         channel_bindings: Vec::new(),
+        instructions: None,
     }
 }
 
@@ -167,6 +169,11 @@ async fn an_invalid_bot_is_refused_and_changes_nothing() {
     mixed.defaults.account_ids = vec![AccountId::new("claude-main"), AccountId::new("codex-main")];
     let mut blank_name = slack_bot("h");
     blank_name.name = " ".into();
+    let mut long_instructions = slack_bot("i");
+    long_instructions.instructions =
+        Some("a".repeat(herder_protocol::MAX_BOT_INSTRUCTIONS_BYTES + 1));
+    let mut secret_instructions = slack_bot("j");
+    secret_instructions.instructions = Some("Deploy with xoxb-1234567890-abcdefghij".into());
     for (bot, expected) in [
         (
             slack_bot("not an id"),
@@ -180,6 +187,8 @@ async fn an_invalid_bot_is_refused_and_changes_nothing() {
         (other_provider, "codex-main is not a claude account"),
         (mixed, "codex-main is not a claude account"),
         (blank_name, "name must be one line"),
+        (long_instructions, "instructions are 8192 bytes at most"),
+        (secret_instructions, "looks like it holds a secret"),
     ] {
         let err = bots
             .command(CommandBody::PutBot { bot: Box::new(bot) })
@@ -206,6 +215,7 @@ mod running {
         SessionStatus, TurnId, UserId,
     };
     use herder_store::Store;
+    use herder_tasktools::{ForgetInput, RememberInput};
     use serde_json::Value;
     use slack_morphism::prelude::{SlackInteractionEvent, SlackPushEventCallback};
     use tokio::sync::mpsc;
@@ -483,6 +493,7 @@ mod running {
                 ..BotDefaults::default()
             },
             channel_bindings: Vec::new(),
+            instructions: None,
         }
     }
 
@@ -720,6 +731,205 @@ mod running {
                 })
                 .collect()
         }
+    }
+
+    #[tokio::test]
+    async fn a_bots_sessions_remember_and_a_new_threads_session_knows() {
+        let chat = Chat::Slack;
+        let mut config = chat.bot();
+        config.instructions = Some("Answer in British English.".into());
+        let bot = Running::with(config.clone(), "dm.jsonl", HashMap::new()).await;
+        let known = config.clone();
+        bot.sessions
+            .serve_bots(Arc::new(move |bot_id| {
+                (*bot_id == known.bot_id).then(|| known.clone())
+            }))
+            .unwrap();
+        // The owners' side: the bots of the config file, on the same store.
+        let bots = Bots::new(&Config::load_file(&bot.config).unwrap());
+        bots.start(
+            Runtime {
+                host: runner::Host {
+                    host_id: HostId::new("host-1"),
+                    sessions: bot.sessions.clone(),
+                    names: Arc::new(|_: &UserId| None),
+                },
+                secrets: Arc::new(HostSecrets::default()),
+                events: bot.events.clone(),
+                shutdown: bot.stop.clone(),
+            },
+            &[],
+        )
+        .unwrap();
+        let memory = || async {
+            let bot_id = config.bot_id.clone();
+            match bots
+                .command(CommandBody::GetBotMemory { bot_id })
+                .await
+                .unwrap()
+            {
+                CommandResult::BotMemory { memory, .. } => memory.facts,
+                other => panic!("answered {other:?}"),
+            }
+        };
+        assert_eq!(memory().await, []);
+
+        // Ada says "remember …" in a direct message; the session's agent keeps it.
+        bot.send(chat.message("dm_message.json")).await;
+        bot.posted(&chat.dm(), answer("Fixed **it**.")).await;
+        let first = bot.session().await;
+        let brief = bot.sessions.bot_brief(&first.session_id).await.unwrap();
+        assert!(brief.contains("Answer in British English."), "{brief}");
+        assert!(brief.contains("(none yet)"), "{brief}");
+        let remembered = bot
+            .sessions
+            .remember(
+                first.session_id.clone(),
+                RememberInput {
+                    text: "Staging deploys go through make deploy-stg".into(),
+                    replaces: None,
+                },
+            )
+            .await
+            .unwrap();
+        let replaced = bot
+            .sessions
+            .remember(
+                first.session_id.clone(),
+                RememberInput {
+                    text: "Staging deploys go through make deploy-staging".into(),
+                    replaces: Some(remembered.id.clone()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(replaced.id, remembered.id);
+        assert_eq!(replaced.memory.len(), 1);
+
+        // The owners see it, learned from Ada in her thread.
+        let facts = memory().await;
+        assert_eq!(facts.len(), 1);
+        assert_eq!(
+            facts[0].text,
+            "Staging deploys go through make deploy-staging"
+        );
+        assert_eq!(facts[0].by.as_deref(), Some("Ada"));
+        assert_eq!(facts[0].place, Some(BotPlace::Direct));
+        let thread = facts[0].thread.as_ref().unwrap();
+        assert_eq!(
+            (thread.channel_id.as_str(), thread.thread_id.as_str()),
+            (chat.dm().channel_id.as_str(), chat.dm().thread_id.as_str())
+        );
+
+        // A secret is refused, changing nothing.
+        let secret = bot
+            .sessions
+            .remember(
+                first.session_id.clone(),
+                RememberInput {
+                    text: "The deploy token is xoxb-1234567890-abcdefghij".into(),
+                    replaces: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(secret.code, herder_tasktools::ErrorCode::InvalidArguments);
+        assert_eq!(memory().await, facts);
+
+        // A new thread's session is told the instructions, then the fact.
+        bot.send(said(
+            "dm_message.json",
+            "what do you know?",
+            "1761400000.000900",
+        ))
+        .await;
+        let second = loop {
+            let heads = bot.sessions.sessions().await.unwrap();
+            if let Some(head) = heads
+                .into_iter()
+                .find(|head| head.session_id != first.session_id)
+            {
+                break head;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let brief = bot.sessions.bot_brief(&second.session_id).await.unwrap();
+        let instructions = brief.find("Answer in British English.").unwrap();
+        let fact = brief
+            .find(&format!(
+                "{}: Staging deploys go through make deploy-staging",
+                facts[0].id
+            ))
+            .unwrap();
+        assert!(instructions < fact, "{brief}");
+
+        // A session the app started is no bot's: it is told nothing, and keeps no memory.
+        let project = bot.project("acme", "app");
+        bot.sessions
+            .set_projects(std::slice::from_ref(&project))
+            .await;
+        let app = bot.started(&project.project_id, "Mine").await;
+        assert_eq!(bot.sessions.bot_brief(&app).await, None);
+        let refused = bot
+            .sessions
+            .forget(
+                app,
+                ForgetInput {
+                    id: facts[0].id.clone(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, herder_tasktools::ErrorCode::NotAllowed);
+
+        // An owner edits and clears it; the facts survive a restart of the store.
+        let edited = bots
+            .command(CommandBody::SetBotFact {
+                bot_id: config.bot_id.clone(),
+                fact_id: Some(facts[0].id.clone()),
+                text: "Staging deploys: make deploy-staging".into(),
+            })
+            .await
+            .unwrap();
+        let CommandResult::BotMemory { memory: edited, .. } = edited else {
+            panic!("answered {edited:?}");
+        };
+        assert_eq!(edited.facts[0].by, None);
+        let stored = Store::open(bot.dir.join("herder.db"))
+            .unwrap()
+            .bot_facts(&config.bot_id)
+            .unwrap();
+        assert_eq!(stored, edited.facts);
+        let gone = bots
+            .command(CommandBody::DeleteBotFact {
+                bot_id: config.bot_id.clone(),
+                fact_id: herder_protocol::FactId::new("nope"),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(gone.code, ErrorCode::NotFound);
+        let unknown = bots
+            .command(CommandBody::GetBotMemory {
+                bot_id: BotId::new("nobody"),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(unknown.code, ErrorCode::NotFound);
+        bots.command(CommandBody::ClearBotMemory {
+            bot_id: config.bot_id.clone(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(memory().await, []);
+        bot.sessions
+            .forget(
+                second.session_id,
+                ForgetInput {
+                    id: facts[0].id.clone(),
+                },
+            )
+            .await
+            .unwrap_err();
     }
 
     /// The recorded message `name`, saying `text` in the thread `thread_id`.

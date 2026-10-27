@@ -2,13 +2,15 @@ import Herder
 import SwiftUI
 
 /// A bot's page, for its machine's owners: the people it answers with what each may do, what
-/// the sessions it starts run on, the project of each channel, then removing it. Each change
-/// applies as it is made.
+/// it knows (its instructions and memory, in a sheet), what the sessions it starts run on, the
+/// project of each channel, then removing it. Each change applies as it is made.
 struct BotPage: View {
     let fleet: Fleet
     let hostId: HostId
     let botId: BotId
     @State private var bots: MachineBots
+    @State private var knowledge: BotKnowledge
+    @State private var showsKnowledge = false
     @State private var saves = Autosave()
     @State private var person = BotPersonDraft()
     @State private var channel = ""
@@ -21,7 +23,10 @@ struct BotPage: View {
         self.fleet = fleet
         self.hostId = hostId
         self.botId = botId
-        _bots = State(initialValue: MachineBots(fleet: fleet, hostId: hostId))
+        let bots = MachineBots(fleet: fleet, hostId: hostId)
+        let owner = fleet.machines.first { $0.hostId == hostId }?.role == .owner
+        _bots = State(initialValue: bots)
+        _knowledge = State(initialValue: BotKnowledge(bots: bots, botId: botId, editable: owner))
     }
 
     var body: some View {
@@ -47,6 +52,8 @@ struct BotPage: View {
                         }
                     }
                     people(bot).detailSection("People")
+                    BotKnowledgeRow(knowledge: knowledge) { showsKnowledge = true }
+                        .detailSection("Instructions & memory")
                     defaults(bot, machine: machine).detailSection("Defaults")
                     channels(bot, machine: machine).detailSection("Channels")
                     if let error {
@@ -73,10 +80,14 @@ struct BotPage: View {
         }
         .task {
             await bots.reload()
+            await knowledge.reload()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 await bots.reloadStatus()
             }
+        }
+        .sheet(isPresented: $showsKnowledge) {
+            BotKnowledgeSheet(knowledge: knowledge, name: bot?.name ?? botId)
         }
         .confirmationDialog("Remove \(bot?.name ?? botId)?", isPresented: $confirmingRemove, titleVisibility: .visible) {
             Button("Remove", role: .destructive) {

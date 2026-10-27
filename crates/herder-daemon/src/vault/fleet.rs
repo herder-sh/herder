@@ -524,6 +524,10 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::PutBot { .. }
         | CommandBody::RemoveBot { .. }
         | CommandBody::GetBotStatus
+        | CommandBody::GetBotMemory { .. }
+        | CommandBody::SetBotFact { .. }
+        | CommandBody::DeleteBotFact { .. }
+        | CommandBody::ClearBotMemory { .. }
         | CommandBody::AddAccount { .. }
         | CommandBody::InstallProvider { .. }
         | CommandBody::LogInAccount { .. }

@@ -146,6 +146,24 @@ pub fn max_project_icon_bytes() -> u64 {
     herder_protocol::MAX_PROJECT_ICON_BYTES as u64
 }
 
+/// The most bytes a bot's instructions may have, `herder_protocol::MAX_BOT_INSTRUCTIONS_BYTES`.
+#[uniffi::export]
+pub fn max_bot_instructions_bytes() -> u64 {
+    herder_protocol::MAX_BOT_INSTRUCTIONS_BYTES as u64
+}
+
+/// The most facts a bot's memory holds, `herder_protocol::MAX_BOT_FACTS`.
+#[uniffi::export]
+pub fn max_bot_facts() -> u64 {
+    herder_protocol::MAX_BOT_FACTS as u64
+}
+
+/// The most characters one fact of a bot's memory may have, `herder_protocol::MAX_BOT_FACT_CHARS`.
+#[uniffi::export]
+pub fn max_bot_fact_chars() -> u64 {
+    herder_protocol::MAX_BOT_FACT_CHARS as u64
+}
+
 /// Parses a `herder://pair` link, to confirm it before pairing.
 #[uniffi::export]
 pub fn parse_pairing_uri(link: String) -> Result<PairingUri, HerderError> {
