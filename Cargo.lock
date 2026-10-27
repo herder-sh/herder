@@ -1547,6 +1547,7 @@ dependencies = [
  "portable-pty",
  "pulldown-cmark",
  "rcgen",
+ "regex",
  "ring",
  "rusqlite",
  "rustls",

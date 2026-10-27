@@ -794,6 +794,10 @@ fn validate_bot(bot: &Bot, accounts: &Accounts) -> Result<()> {
         BotKind::Telegram => ensure!(bot.app_token.is_none(), "a Telegram bot has no app_token"),
         BotKind::Unknown => bail!("kind must be slack or telegram"),
     }
+    if let Some(instructions) = &bot.instructions {
+        crate::bots::memory::check_instructions(instructions)
+            .map_err(|err| anyhow::anyhow!("instructions: {err}"))?;
+    }
     let mut people = HashSet::new();
     for user in &bot.allow {
         let id = &user.external_user_id;

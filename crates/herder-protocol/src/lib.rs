@@ -31,8 +31,9 @@ pub use attachment::{
     MAX_FILE_NAME_BYTES, MAX_IMAGE_BYTES, MAX_PROMPT_ATTACHMENT_BYTES, PromptFile,
 };
 pub use bots::{
-    Bot, BotDefaults, BotError, BotKind, BotPlace, BotState, BotStatus, BotUser, ChannelBinding,
-    SessionOrigin, ThreadLink,
+    Bot, BotDefaults, BotError, BotFact, BotKind, BotMemory, BotPlace, BotState, BotStatus,
+    BotUser, ChannelBinding, MAX_BOT_FACT_CHARS, MAX_BOT_FACTS, MAX_BOT_INSTRUCTIONS_BYTES,
+    MAX_BOT_MEMORY_BYTES, SessionOrigin, ThreadLink,
 };
 pub use bytes::Bytes;
 pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor, HistoryPart, Relay};
@@ -42,8 +43,8 @@ pub use event::{
     PrState, PullRequest, ReviewStatus, Route, SessionStatus, TitleSource, TurnError,
 };
 pub use ids::{
-    AccountId, ApprovalId, AttachmentId, BotId, CommandId, DeviceId, HostId, ItemId, PromptId,
-    QuestionId, SessionId, TerminalId, TurnId, UserId,
+    AccountId, ApprovalId, AttachmentId, BotId, CommandId, DeviceId, FactId, HostId, ItemId,
+    PromptId, QuestionId, SessionId, TerminalId, TurnId, UserId,
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use replication::{

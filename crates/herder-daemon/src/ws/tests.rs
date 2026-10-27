@@ -1809,6 +1809,7 @@ async fn owners_put_and_list_bots_and_members_are_refused() {
         allow: Vec::new(),
         defaults: herder_protocol::BotDefaults::default(),
         channel_bindings: Vec::new(),
+        instructions: None,
     };
     let put = CommandBody::PutBot {
         bot: Box::new(bot.clone()),
@@ -1842,6 +1843,17 @@ async fn owners_put_and_list_bots_and_members_are_refused() {
         put,
         remove,
         CommandBody::GetBotStatus,
+        CommandBody::GetBotMemory {
+            bot_id: bot.bot_id.clone(),
+        },
+        CommandBody::SetBotFact {
+            bot_id: bot.bot_id.clone(),
+            fact_id: None,
+            text: "Ada leads payments".into(),
+        },
+        CommandBody::ClearBotMemory {
+            bot_id: bot.bot_id.clone(),
+        },
     ]
     .into_iter()
     .enumerate()
@@ -1925,6 +1937,22 @@ async fn agents_run_commands_as_their_user_within_its_role() {
             host_name: "devbox".into(),
         },
         CommandBody::RemoveBot {
+            bot_id: herder_protocol::BotId::new("trash-can"),
+        },
+        // A bot's memory is its owners', and its own sessions' through `remember` only.
+        CommandBody::GetBotMemory {
+            bot_id: herder_protocol::BotId::new("trash-can"),
+        },
+        CommandBody::SetBotFact {
+            bot_id: herder_protocol::BotId::new("trash-can"),
+            fact_id: None,
+            text: "Ada leads payments".into(),
+        },
+        CommandBody::DeleteBotFact {
+            bot_id: herder_protocol::BotId::new("trash-can"),
+            fact_id: herder_protocol::FactId::new("01J9FACT"),
+        },
+        CommandBody::ClearBotMemory {
             bot_id: herder_protocol::BotId::new("trash-can"),
         },
         CommandBody::UpdateDaemon {

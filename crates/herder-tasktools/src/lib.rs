@@ -4,7 +4,8 @@
 //! the shape of arguments.
 //!
 //! - [`tools_list`] is the MCP `tools/list` result: name, description, `inputSchema` and
-//!   `outputSchema` of every tool, generated from the types in this crate.
+//!   `outputSchema` of every tool, generated from the types in this crate. A chat bot's
+//!   sessions also get the [`Tool::BOT`] tools, which keep the bot's memory.
 //! - [`ToolCall::parse`] turns a `tools/call` request into typed arguments.
 //! - [`CallToolResult`] is a `tools/call` result: [`CallToolResult::success`] for a tool's
 //!   output, [`ToolError`] for a failure the agent can act on.
@@ -19,10 +20,10 @@ use serde_json::{Map, Value};
 
 pub use tools::{
     AnswerArgs, AnswerInput, AnswerOutput, ChildStatus, CommandInput, EscalateArgs, EscalateInput,
-    EscalateOutput, OverviewInput, OverviewOutput, PublishInput, PublishOutput, Request,
-    RequestRef, SecretEntry, SecretsInput, SecretsOutput, SendInput, SendOutput, SendSessionInput,
-    SendSessionOutput, SpawnInput, SpawnOutput, StatusInput, StatusOutput, WaitForInput,
-    WaitForOutput,
+    EscalateOutput, ForgetInput, ForgetOutput, MemoryFact, OverviewInput, OverviewOutput,
+    PublishInput, PublishOutput, RememberInput, RememberOutput, Request, RequestRef, SecretEntry,
+    SecretsInput, SecretsOutput, SendInput, SendOutput, SendSessionInput, SendSessionOutput,
+    SpawnInput, SpawnOutput, StatusInput, StatusOutput, WaitForInput, WaitForOutput,
 };
 
 /// One of the task tools.
@@ -50,11 +51,15 @@ pub enum Tool {
     Command,
     /// The secrets the session may use, without values.
     Secrets,
+    /// Keep a fact in the bot's memory; a bot's sessions only.
+    Remember,
+    /// Drop a fact from the bot's memory; a bot's sessions only.
+    Forget,
 }
 
 impl Tool {
     /// Every tool, in `tools/list` order.
-    pub const ALL: [Tool; 11] = [
+    pub const ALL: [Tool; 13] = [
         Tool::Spawn,
         Tool::Send,
         Tool::SendSession,
@@ -66,7 +71,12 @@ impl Tool {
         Tool::Overview,
         Tool::Command,
         Tool::Secrets,
+        Tool::Remember,
+        Tool::Forget,
     ];
+
+    /// The tools only a chat bot's sessions get.
+    pub const BOT: [Tool; 2] = [Tool::Remember, Tool::Forget];
 
     /// Name the agent calls the tool by.
     pub fn name(self) -> &'static str {
@@ -82,6 +92,8 @@ impl Tool {
             Tool::Overview => "overview",
             Tool::Command => "command",
             Tool::Secrets => "secrets",
+            Tool::Remember => "remember",
+            Tool::Forget => "forget",
         }
     }
 
@@ -211,6 +223,23 @@ impl Tool {
                  publish a value. Fails with `unavailable` when this host has no vault or \
                  cannot reach it now."
             }
+            Tool::Remember => {
+                "Save a fact to the chat bot's memory, which every future conversation with the \
+                 bot is told. Save only durable facts a future conversation needs: people's \
+                 roles, project conventions, recurring requests, preferences. Never save \
+                 secrets, tokens, credentials or passwords, nor one-off task details. Prefer \
+                 updating an existing fact, with `replaces`, to adding one. Keep each fact to \
+                 one line under about 150 characters. When someone says \"remember …\", save \
+                 it here. The memory holds at most 40 facts of 4 KB together: when it is full, \
+                 the call fails with `invalid_arguments`; merge facts with `replaces`, or \
+                 forget the least useful, then try again. Text that looks like a secret is \
+                 refused. Returns the fact's id and the whole memory."
+            }
+            Tool::Forget => {
+                "Drop a fact from the chat bot's memory, by its id: one that is wrong, outdated \
+                 or no longer useful, or that someone asked you to forget (\"forget …\"). \
+                 Returns the whole memory. Fails with `not_found` for an unknown id."
+            }
         }
     }
 
@@ -228,6 +257,8 @@ impl Tool {
             Tool::Overview => tool_schema::<OverviewInput>(),
             Tool::Command => tool_schema::<CommandInput>(),
             Tool::Secrets => tool_schema::<SecretsInput>(),
+            Tool::Remember => tool_schema::<RememberInput>(),
+            Tool::Forget => tool_schema::<ForgetInput>(),
         }
     }
 
@@ -244,6 +275,8 @@ impl Tool {
             Tool::Publish => tool_schema::<PublishOutput>(),
             Tool::Overview => tool_schema::<OverviewOutput>(),
             Tool::Secrets => tool_schema::<SecretsOutput>(),
+            Tool::Remember => tool_schema::<RememberOutput>(),
+            Tool::Forget => tool_schema::<ForgetOutput>(),
             Tool::Command => json_schema!({
                 "type": "object",
                 "properties": {
@@ -332,14 +365,19 @@ pub struct ToolDefinition {
 /// MCP `tools/list` result.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolsList {
-    /// Every task tool.
+    /// The task tools the agent gets.
     pub tools: Vec<ToolDefinition>,
 }
 
-/// The `tools/list` result the daemon serves to every agent.
-pub fn tools_list() -> ToolsList {
+/// The `tools/list` result the daemon serves an agent: every tool for a chat bot's session
+/// (`bot`), every tool but the [`Tool::BOT`] ones for any other.
+pub fn tools_list(bot: bool) -> ToolsList {
     ToolsList {
-        tools: Tool::ALL.into_iter().map(Tool::definition).collect(),
+        tools: Tool::ALL
+            .into_iter()
+            .filter(|tool| bot || !Tool::BOT.contains(tool))
+            .map(Tool::definition)
+            .collect(),
     }
 }
 
@@ -368,6 +406,10 @@ pub enum ToolCall {
     Command(CommandInput),
     /// `secrets`.
     Secrets(SecretsInput),
+    /// `remember`.
+    Remember(RememberInput),
+    /// `forget`.
+    Forget(ForgetInput),
 }
 
 impl ToolCall {
@@ -391,6 +433,8 @@ impl ToolCall {
             Tool::Overview => serde_json::from_value(arguments).map(ToolCall::Overview),
             Tool::Command => serde_json::from_value(arguments).map(ToolCall::Command),
             Tool::Secrets => serde_json::from_value(arguments).map(ToolCall::Secrets),
+            Tool::Remember => serde_json::from_value(arguments).map(ToolCall::Remember),
+            Tool::Forget => serde_json::from_value(arguments).map(ToolCall::Forget),
         };
         call.map_err(|error| {
             let mut message = error.to_string();
@@ -418,6 +462,8 @@ impl ToolCall {
             ToolCall::Overview(_) => Tool::Overview,
             ToolCall::Command(_) => Tool::Command,
             ToolCall::Secrets(_) => Tool::Secrets,
+            ToolCall::Remember(_) => Tool::Remember,
+            ToolCall::Forget(_) => Tool::Forget,
         }
     }
 }
@@ -436,7 +482,7 @@ pub enum ErrorCode {
     NotAllowed,
     /// The session, question or approval request belongs to another session's task.
     NotYourChild,
-    /// No such session, question or approval request.
+    /// No such session, question, approval request or remembered fact.
     NotFound,
     /// The question or approval request was already answered, by a user or by the caller.
     AlreadyResolved,

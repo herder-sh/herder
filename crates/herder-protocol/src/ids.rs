@@ -61,4 +61,6 @@ id! {
     PromptId,
     /// Identifies a chat bot on a host; the name its owner gave it, opaque to receivers.
     BotId,
+    /// Identifies a fact a bot remembers, within its bot; a ULID string, opaque to receivers.
+    FactId,
 }

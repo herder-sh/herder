@@ -243,6 +243,7 @@
 
 mod actor;
 mod attachments;
+mod bot_memory;
 pub mod failover;
 pub mod fork;
 pub(crate) mod journal;
@@ -262,12 +263,12 @@ use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
-    Account, AccountId, Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult,
-    ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, FollowUp, HostId, Image, Item, ItemId,
-    JournalRecord, MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS, PROJECT_ICON_MEDIA_TYPES,
-    PermissionMode, Project, ProjectId, Provider, Seq, SessionHead, SessionId, SessionOrigin,
-    SessionStatus, SessionSummary, ThreadLink, Timestamp, TitleSource, TurnId, UsageWindow, UserId,
-    clean_title,
+    Account, AccountId, Attachment, AttachmentId, Bot, BotFact, BotId, Bytes, CommandBody,
+    CommandId, CommandResult, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, FactId, FollowUp,
+    HostId, Image, Item, ItemId, JournalRecord, MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS,
+    PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project, ProjectId, Provider, Seq, SessionHead,
+    SessionId, SessionOrigin, SessionStatus, SessionSummary, ThreadLink, Timestamp, TitleSource,
+    TurnId, UsageWindow, UserId, clean_title,
 };
 use herder_store::{Session, Store};
 use jiff::SignedDuration;
@@ -283,6 +284,7 @@ use tasks::{TaskTools, Tasks};
 use titles::Titler;
 pub use titles::{TitleCli, TitleClis, TitlesConfig};
 
+use crate::bots::memory;
 use crate::config::ProjectSettings;
 use crate::mcp::servers::UserServers;
 use crate::mcp::{self, Control, Mcp};
@@ -294,6 +296,9 @@ use crate::stalls::{self, Stalls};
 use crate::usage::{self, Usage};
 use crate::vault::HostSecrets;
 use crate::worktree::{self, Worktree, Worktrees, checkpoint};
+
+/// The bot of an id, as it runs now; `None` for one the host does not hold.
+pub type BotOf = Arc<dyn Fn(&BotId) -> Option<Bot> + Send + Sync>;
 
 /// How long an archived session's worktree is kept before it is removed.
 pub const KEEP_ARCHIVED_WORKTREE: SignedDuration = SignedDuration::from_hours(3 * 24);
@@ -426,6 +431,8 @@ struct Inner {
     control: OnceLock<Arc<dyn Control>>,
     /// The vault's secrets, for `secrets` and `herder secret run`, once set.
     secrets: OnceLock<Arc<HostSecrets>>,
+    /// The host's bots, for what their sessions know and `remember` and `forget`, once set.
+    bots: OnceLock<BotOf>,
     /// Children's reports and requests waiting for their primaries.
     tasks: Tasks,
     /// Where children's requests that go to the user are announced, once set.
@@ -616,6 +623,7 @@ impl SessionManager {
                 mcp: OnceLock::new(),
                 mcp_servers: OnceLock::new(),
                 control: OnceLock::new(),
+                bots: OnceLock::new(),
                 secrets: OnceLock::new(),
                 tasks,
                 notifier: OnceLock::new(),
@@ -910,7 +918,11 @@ impl SessionManager {
             CommandBody::ListBots
             | CommandBody::PutBot { .. }
             | CommandBody::RemoveBot { .. }
-            | CommandBody::GetBotStatus => {
+            | CommandBody::GetBotStatus
+            | CommandBody::GetBotMemory { .. }
+            | CommandBody::SetBotFact { .. }
+            | CommandBody::DeleteBotFact { .. }
+            | CommandBody::ClearBotMemory { .. } => {
                 return Err(error(ErrorCode::Unsupported, "this daemon holds no bots"));
             }
             // The daemon's vault link answers these ([`crate::vault::Link`]).
@@ -1142,6 +1154,38 @@ impl SessionManager {
             .secrets
             .set(secrets)
             .map_err(|_| anyhow::anyhow!("sessions use secrets already"))
+    }
+
+    /// Tells the sessions each bot of `bots` starts what the bot knows, and gives them
+    /// `remember` and `forget`; once per manager. Without it, no session is a bot's.
+    pub fn serve_bots(&self, bots: BotOf) -> anyhow::Result<()> {
+        self.inner
+            .bots
+            .set(bots)
+            .map_err(|_| anyhow::anyhow!("sessions know their bots already"))
+    }
+
+    /// The facts the bot `bot_id` remembers.
+    pub async fn bot_facts(&self, bot_id: &BotId) -> Result<Vec<BotFact>, ErrorInfo> {
+        self.inner
+            .journal
+            .bot_facts(bot_id.clone())
+            .await
+            .map_err(internal)
+    }
+
+    /// Applies `change` to the facts the bot `bot_id` remembers; resolves to the fact it set,
+    /// if any, and the facts as they are now, or to why it was refused, changing nothing.
+    pub async fn change_bot_facts(
+        &self,
+        bot_id: &BotId,
+        change: memory::Change,
+    ) -> Result<Result<(Option<FactId>, Vec<BotFact>), memory::Refused>, ErrorInfo> {
+        self.inner
+            .journal
+            .change_bot_facts(bot_id.clone(), move |facts| change.apply(facts))
+            .await
+            .map_err(internal)
     }
 
     /// Gives every session's CLI the user's MCP servers `servers` from its next start, as they
@@ -2325,6 +2369,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
             | CommandBody::ListAwsProfiles
             | CommandBody::ListBots
             | CommandBody::GetBotStatus
+            | CommandBody::GetBotMemory { .. }
             | CommandBody::ListUsers
     )
 }

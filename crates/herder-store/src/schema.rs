@@ -6,7 +6,7 @@ use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
 const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20,
 ];
 
 /// Schema version this build writes.
@@ -249,6 +249,23 @@ UPDATE sessions SET origin = (
     ORDER BY t.first_seen_seq
     LIMIT 1
 );
+";
+
+/// The facts each bot remembers, in order: `position` keeps a fact's place when it changes.
+/// `thread` and `place` are the [`herder_protocol::ThreadLink`] and
+/// [`herder_protocol::BotPlace`] it was learned in, as JSON.
+const V20: &str = "
+CREATE TABLE bot_facts (
+    bot_id     TEXT    NOT NULL,
+    fact_id    TEXT    NOT NULL,
+    position   INTEGER NOT NULL,
+    text       TEXT    NOT NULL,
+    learned_at TEXT    NOT NULL,
+    thread     TEXT,
+    place      TEXT,
+    by         TEXT,
+    PRIMARY KEY (bot_id, fact_id)
+) STRICT;
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.

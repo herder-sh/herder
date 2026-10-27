@@ -9,7 +9,7 @@ final class MachineBots {
     typealias Send = @MainActor (CommandBody) async throws -> CommandResult
 
     let hostId: HostId
-    private let send: Send
+    let send: Send
     private(set) var bots: Load<[Bot]> = .asking
     private(set) var statuses: [BotId: BotStatus] = [:]
     /// Whether the machine's herder is too old to know bots.
@@ -72,6 +72,119 @@ final class MachineBots {
     func remove(_ botId: BotId) async throws {
         _ = try await send(.removeBot(botId: botId))
         await reload()
+    }
+}
+
+/// What a bot knows, for its Instructions & memory sheet: its owners' instructions, kept on the
+/// bot itself, and the facts it keeps in its memory, which the bot updates as it learns and
+/// owners edit here. Only owners change either.
+@MainActor @Observable
+final class BotKnowledge {
+    let botId: BotId
+    let bots: MachineBots
+    /// Whether this device may change them.
+    let editable: Bool
+    private(set) var facts: Load<[BotFact]> = .asking
+    /// The instructions as they are being edited.
+    var instructions = ""
+    private(set) var error: String?
+
+    init(bots: MachineBots, botId: BotId, editable: Bool) {
+        self.bots = bots
+        self.botId = botId
+        self.editable = editable
+        instructions = saved
+    }
+
+    /// The instructions the machine has.
+    var saved: String { bots.bot(botId)?.instructions ?? "" }
+
+    var changed: Bool { instructions != saved }
+
+    /// What is wrong with the edited instructions, if anything.
+    var instructionsProblem: String? {
+        let limit = Int(maxBotInstructionsBytes())
+        let bytes = instructions.utf8.count
+        return bytes > limit ? "\(bytes - limit) bytes over the \(limit / 1024) KB limit." : nil
+    }
+
+    var list: [BotFact] {
+        if case .loaded(let facts) = facts { facts } else { [] }
+    }
+
+    /// "Instructions · 3 facts", for the row that opens the sheet.
+    var summary: String {
+        let facts = switch facts {
+        case .asking: ""
+        case .failed: "Memory unavailable"
+        case .loaded(let facts): facts.isEmpty ? "No facts yet" : facts.count == 1 ? "1 fact" : "\(facts.count) facts"
+        }
+        return [saved.isEmpty ? "No instructions" : "Instructions", facts].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// Asks the machine what the bot remembers, and starts the instructions afresh from its.
+    func reload() async {
+        instructions = saved
+        do {
+            facts = .loaded(try await memory(.getBotMemory(botId: botId)))
+        } catch {
+            facts = .failed(describe(error))
+        }
+    }
+
+    /// Saves the edited instructions on the bot; empty ones are none.
+    func saveInstructions() async {
+        guard editable, instructionsProblem == nil else { return }
+        let text = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        await run { try await bots.update(botId) { $0.instructions = text.isEmpty ? nil : text } }
+        instructions = saved
+    }
+
+    /// Adds a fact, or changes `factId` in its place; whether the machine kept it.
+    @discardableResult
+    func setFact(_ factId: FactId?, _ text: String) async -> Bool {
+        await run { facts = .loaded(try await memory(.setBotFact(botId: botId, factId: factId, text: text))) }
+    }
+
+    func delete(_ factId: FactId) async {
+        await run { facts = .loaded(try await memory(.deleteBotFact(botId: botId, factId: factId))) }
+    }
+
+    func clear() async {
+        await run { facts = .loaded(try await memory(.clearBotMemory(botId: botId))) }
+    }
+
+    private func memory(_ command: CommandBody) async throws -> [BotFact] {
+        guard case .botMemory(_, let memory) = try await bots.send(command) else {
+            throw HerderError.Local(detail: "the machine did not say what the bot remembers")
+        }
+        return memory.facts
+    }
+
+    private func run(_ change: () async throws -> Void) async -> Bool {
+        guard editable else { return false }
+        error = nil
+        do {
+            try await change()
+            return true
+        } catch {
+            self.error = describe(error)
+            return false
+        }
+    }
+
+    /// Where and when a fact was learned: "Learned from Ada in #general, 3 days ago".
+    static func learned(_ fact: BotFact, now: Date = .now) -> String {
+        let when = Timestamp.date(fact.learnedAt).map { RelativeTime.text($0, now: now) } ?? ""
+        let place = switch fact.place {
+        case .channel(let name): "in #\(name)"
+        case .direct: "in a direct message"
+        case nil, .unknown: ""
+        }
+        let what = fact.thread == nil && fact.by == nil
+            ? "Added by an owner"
+            : ["Learned", fact.by.map { "from \($0)" }, place.isEmpty ? nil : place].compactMap(\.self).joined(separator: " ")
+        return when.isEmpty ? what : "\(what), \(when)"
     }
 }
 
@@ -325,7 +438,7 @@ final class BotSetup {
                 token: "\(set)/\(Self.botTokenName)",
                 appToken: kind == .slack ? "\(set)/\(Self.appTokenName)" : nil,
                 allow: [], defaults: BotDefaults(projectId: nil, provider: nil, accountIds: [], model: nil, permissionMode: nil),
-                channelBindings: [])))
+                channelBindings: [], instructions: nil)))
             return true
         } catch {
             self.error = describe(error)

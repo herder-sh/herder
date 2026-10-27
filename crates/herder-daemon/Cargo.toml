@@ -26,6 +26,7 @@ nix = { workspace = true, features = ["user"] }
 portable-pty.workspace = true
 pulldown-cmark.workspace = true
 rcgen.workspace = true
+regex.workspace = true
 ring.workspace = true
 rusqlite.workspace = true
 rustls.workspace = true

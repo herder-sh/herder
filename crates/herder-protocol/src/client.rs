@@ -839,6 +839,42 @@ pub enum CommandBody {
     /// `bot_status`. It changes nothing, so a resend is answered afresh. Refused with
     /// `unsupported` on a vault.
     GetBotStatus,
+    /// Read what a bot remembers; owners only. Answered with `bot_memory`. It changes nothing,
+    /// so a resend is answered afresh. Refused with `not_found` for an unknown bot, and
+    /// `unsupported` on a vault.
+    GetBotMemory {
+        /// The bot.
+        bot_id: BotId,
+    },
+    /// Add a fact to a bot's memory, or change the one `fact_id` names in its place; owners
+    /// only. The text is made one line. Answered with `bot_memory`, as it is now. Refused with
+    /// `bad_request`, changing nothing, when the text is empty, longer than
+    /// `MAX_BOT_FACT_CHARS`, looks like a secret, or the memory would hold more than
+    /// `MAX_BOT_FACTS` facts or `MAX_BOT_MEMORY_BYTES`; with `not_found` for an unknown bot
+    /// or fact; and with `unsupported` on a vault.
+    SetBotFact {
+        /// The bot.
+        bot_id: BotId,
+        /// The fact to change; a new fact when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fact_id: Option<crate::FactId>,
+        /// The fact.
+        text: String,
+    },
+    /// Remove a fact from a bot's memory; owners only. Answered with `bot_memory`, as it is
+    /// now. Refused with `not_found` for an unknown bot or fact, and `unsupported` on a vault.
+    DeleteBotFact {
+        /// The bot.
+        bot_id: BotId,
+        /// The fact.
+        fact_id: crate::FactId,
+    },
+    /// Remove every fact from a bot's memory; owners only. Answered with `bot_memory`, then
+    /// empty. Refused with `not_found` for an unknown bot, and `unsupported` on a vault.
+    ClearBotMemory {
+        /// The bot.
+        bot_id: BotId,
+    },
     /// Start streaming a terminal's output; owners only.
     AttachTerminal {
         /// Target terminal.

@@ -9,7 +9,7 @@ struct BotsTests {
 
     static func bot(_ id: String, allow: [BotUser] = []) -> Bot {
         Bot(botId: id, kind: .slack, name: id, token: "bot-\(id)/BOT_TOKEN", appToken: "bot-\(id)/APP_TOKEN",
-            allow: allow, defaults: defaults, channelBindings: [])
+            allow: allow, defaults: defaults, channelBindings: [], instructions: nil)
     }
 
     /// A machine that keeps the bots it is put, and says how each stands.
@@ -213,7 +213,7 @@ struct BotsTests {
         #expect(commands[4].1 == .grantSecretSet(set: "bot-trash-can", hostId: "devbox", hostUse: true))
         #expect(commands[5].1 == .putBot(bot: Bot(
             botId: "trash-can", kind: .slack, name: "Trash Can", token: "bot-trash-can/BOT_TOKEN",
-            appToken: "bot-trash-can/APP_TOKEN", allow: [], defaults: Self.defaults, channelBindings: [])))
+            appToken: "bot-trash-can/APP_TOKEN", allow: [], defaults: Self.defaults, channelBindings: [], instructions: nil)))
     }
 
     @Test func addingABotAgainReusesItsSet() async {

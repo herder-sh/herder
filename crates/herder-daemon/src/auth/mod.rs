@@ -754,6 +754,10 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             | CommandBody::PutBot { .. }
             | CommandBody::RemoveBot { .. }
             | CommandBody::GetBotStatus
+            | CommandBody::GetBotMemory { .. }
+            | CommandBody::SetBotFact { .. }
+            | CommandBody::DeleteBotFact { .. }
+            | CommandBody::ClearBotMemory { .. }
     );
     if bots && role != Role::Owner {
         return Err(forbidden("the daemon's bots are for its owners only"));
@@ -1274,7 +1278,7 @@ mod tests {
     }
 
     #[test]
-    fn only_owners_may_list_put_remove_or_watch_bots() {
+    fn only_owners_may_list_put_remove_or_watch_bots_or_change_their_memory() {
         let (_tmp, auth) = open();
         let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
         let mut alice = pair(&auth, "fp-a", &code).unwrap();
@@ -1291,9 +1295,21 @@ mod tests {
                     allow: Vec::new(),
                     defaults: herder_protocol::BotDefaults::default(),
                     channel_bindings: Vec::new(),
+                    instructions: None,
                 }),
             },
             CommandBody::RemoveBot { bot_id: bot_id() },
+            CommandBody::GetBotMemory { bot_id: bot_id() },
+            CommandBody::SetBotFact {
+                bot_id: bot_id(),
+                fact_id: None,
+                text: "Ada leads payments".into(),
+            },
+            CommandBody::DeleteBotFact {
+                bot_id: bot_id(),
+                fact_id: herder_protocol::FactId::new("01J9FACT"),
+            },
+            CommandBody::ClearBotMemory { bot_id: bot_id() },
             CommandBody::GetBotStatus,
         ];
         for command in &commands {
