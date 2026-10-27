@@ -33,7 +33,7 @@ struct DetailPage<Leading: View, Actions: View, Content: View>: View {
                         current = section
                         withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(section, anchor: .top) }
                     }
-                    .frame(width: 168)
+                    .frame(width: 188)
                     .padding(.top, 26)
                 }
                 ScrollView {
