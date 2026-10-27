@@ -148,6 +148,15 @@ extension TranscriptText {
         return result
     }
 
+    /// `range`, a drag's selection, grown by `pressed`, the character the drag started on, if
+    /// it stops just short of it: pressed past a letter's middle, the drag anchors after it.
+    static func dragSelection(_ range: NSRange, keeping pressed: Int) -> NSRange {
+        guard range.length > 0 else { return range }
+        if pressed == range.location - 1 { return NSRange(location: pressed, length: range.length + 1) }
+        if pressed == NSMaxRange(range) { return NSRange(location: range.location, length: range.length + 1) }
+        return range
+    }
+
     /// Each inline code span of `string` that is not a link, as one range however many runs
     /// find's marks split it into, with the link that copies its text.
     static func codeSpans(_ string: AttributedString) -> [(range: Range<AttributedString.Index>, url: URL)] {
@@ -377,9 +386,13 @@ private struct SelectableTextView: NSViewRepresentable {
     }
 }
 
-/// A text view that lights up the code span under the pointer, as a hint that a click copies it.
+/// A text view that lights up the code span under the pointer, as a hint that a click copies it,
+/// and whose drag selects the letter it starts on. NSTextView anchors a drag at the gap nearest
+/// the press, so one pressed on the right half of a letter left that letter out.
 private final class CodeCopyTextView: NSTextView {
     private var hovered: NSRange?
+    /// The character a plain press landed on, while its drag selects.
+    private var pressed: Int?
     private lazy var tracking = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited,
                                                                        .activeInKeyWindow, .inVisibleRect], owner: self)
 
@@ -398,13 +411,33 @@ private final class CodeCopyTextView: NSTextView {
         highlight(nil)
     }
 
-    private func span(at point: NSPoint) -> (range: NSRange, code: String)? {
-        guard let layoutManager, let textContainer, let textStorage else { return nil }
+    override func mouseDown(with event: NSEvent) {
+        let plain = event.clickCount == 1 && event.modifierFlags.isDisjoint(with: [.shift, .command, .option])
+        pressed = plain ? character(at: convert(event.locationInWindow, from: nil)) : nil
+        defer { pressed = nil }
+        super.mouseDown(with: event)
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        guard let pressed, ranges.count == 1 else {
+            return super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        }
+        super.setSelectedRanges([NSValue(range: TranscriptText.dragSelection(ranges[0].rangeValue, keeping: pressed))],
+                                affinity: affinity, stillSelecting: stillSelecting)
+    }
+
+    /// The character drawn at `point`; none between lines or past their ends.
+    private func character(at point: NSPoint) -> Int? {
+        guard let layoutManager, let textContainer else { return nil }
         let location = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
         let glyph = layoutManager.glyphIndex(for: location, in: textContainer)
         guard layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
             .contains(location) else { return nil }
-        return textStorage.codeSpan(at: layoutManager.characterIndexForGlyph(at: glyph))
+        return layoutManager.characterIndexForGlyph(at: glyph)
+    }
+
+    private func span(at point: NSPoint) -> (range: NSRange, code: String)? {
+        character(at: point).flatMap { textStorage?.codeSpan(at: $0) }
     }
 
     private func highlight(_ range: NSRange?) {

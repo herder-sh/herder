@@ -53,4 +53,18 @@ struct CodeCopyTests {
         #expect(AppLink(url: url) == nil)
         #expect(CodeCopy.code(try #require(URL(string: "https://example.com"))) == nil)
     }
+
+    /// A drag keeps the letter it started on: "The quick brown", pressed on the right half of
+    /// the "q" (4), anchors after it, at 5; pressed on the "n" (14), dragging back, anchors at 14.
+    @Test func aDragKeepsTheLetterItStartsOn() {
+        // Rightwards, from past the middle of "q": "uick brown" becomes "quick brown".
+        #expect(TranscriptText.dragSelection(NSRange(location: 5, length: 10), keeping: 4) == NSRange(location: 4, length: 11))
+        // Leftwards, from the left half of "n": "quick brow" becomes "quick brown".
+        #expect(TranscriptText.dragSelection(NSRange(location: 4, length: 10), keeping: 14) == NSRange(location: 4, length: 11))
+        // A selection that has the letter already, or a click, stays as it is.
+        #expect(TranscriptText.dragSelection(NSRange(location: 4, length: 11), keeping: 4) == NSRange(location: 4, length: 11))
+        #expect(TranscriptText.dragSelection(NSRange(location: 5, length: 0), keeping: 4) == NSRange(location: 5, length: 0))
+        // Dragged back past where it started, the selection is the other side's.
+        #expect(TranscriptText.dragSelection(NSRange(location: 0, length: 3), keeping: 4) == NSRange(location: 0, length: 3))
+    }
 }
