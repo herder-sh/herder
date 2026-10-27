@@ -50,6 +50,9 @@ struct SessionSummary: Hashable, Identifiable {
     var agents: [NativeAgent] = []
     /// The chat threads linked to it, in the order they were linked.
     var threads: [ThreadLink] = []
+    /// The bot that started it; `nil` for one started from the apps or by an agent, and for a
+    /// child, whose task's top says.
+    var origin: SessionOrigin?
 }
 
 /// An approval or a question waiting on the user: the one its session pins, with how many

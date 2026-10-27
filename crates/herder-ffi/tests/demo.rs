@@ -103,6 +103,20 @@ async fn the_demo_sets_up_every_scene() -> anyhow::Result<()> {
         && scene.title == "Fix the flaky checkout e2e test"
         && scene.status == SessionStatus::Archived));
 
+    // Conversations people started from Slack through devbox's bots, one waiting on an
+    // approval.
+    let rollback = scene("devbox", "Roll back the staging deploy");
+    assert_eq!(rollback.status, SessionStatus::NeedsYou);
+    assert_eq!(
+        rollback
+            .origin
+            .as_ref()
+            .map(|origin| origin.bot_id.as_str()),
+        Some("acme-ops")
+    );
+    let bots = scenes.iter().filter(|scene| scene.origin.is_some()).count();
+    assert_eq!(bots, 4);
+
     // Every machine has work on it.
     for host in ["devbox", "studio", "laptop"] {
         assert!(

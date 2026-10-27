@@ -214,10 +214,24 @@ extension Lists {
         }
     }
 
+    /// The bots' tasks with a session waiting for the user: a bot's conversation lives under
+    /// Bots, but what needs the user still reaches the Board.
+    private var waitingBotTasks: [TaskTree] {
+        bots.flatMap { group in
+            TaskTree.trees(group.live)
+                .filter { tree in ([tree.lead] + tree.children).contains { waiting.contains($0.key) } }
+                .map { tree in
+                    var tree = tree
+                    tree.project = tree.lead.origin?.line ?? ""
+                    return tree
+                }
+        }
+    }
+
     /// The Board's open tasks a search finds: those whose top session is neither archived nor
-    /// moved.
+    /// moved, and the bots' that wait for the user.
     func board(matching query: String = "") -> [TaskTree] {
-        tasks.filter { ![.archived, .moved].contains($0.lead.state) && $0.matches(query) }
+        (tasks + waitingBotTasks).filter { ![.archived, .moved].contains($0.lead.state) && $0.matches(query) }
     }
 
     /// The tasks archived today a search finds, as Show Archived lists them: archiving is a

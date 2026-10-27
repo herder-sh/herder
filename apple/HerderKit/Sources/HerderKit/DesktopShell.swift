@@ -74,6 +74,7 @@ struct DesktopShell: View {
         case .machines: "Machines"
         case .integrations: "Integrations"
         case .project(let id): lists.projects.first { $0.id == id }?.name ?? "Project"
+        case .bots(let id): lists.bots.first { $0.id == id }.map(fleet.botName) ?? "Bots"
         }
         return [root] + pages.pages.map { page in
             // A project's settings opened from elsewhere say whose they are.
@@ -121,6 +122,16 @@ struct DesktopShell: View {
                     let started = Draft.chat(fleet: fleet)
                     PaneButton(title: "New Chat", symbol: "plus", prominent: true) { draft = started }
                         .disabled(started == nil)
+                }
+            }
+        case .bots(let id):
+            let groups = lists.bots(id)
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
+                Pane(fleet: fleet, title: id == nil ? "Bots" : groups.first.map(fleet.botName) ?? "Bots",
+                     status: BotSessions.status(groups), switcher: switcher, query: $query) {
+                    BotSessions(fleet: fleet, groups: groups, query: query, selection: $session)
+                } actions: {
+                    EmptyView()
                 }
             }
         case .board:
@@ -351,6 +362,8 @@ struct Pane<Content: View, Actions: View>: View {
 struct Switcher {
     /// The symbol of Chats, wherever it is listed.
     static let chatSymbol = "bubble.left.and.bubble.right"
+    /// The symbol of Bots.
+    static let botsSymbol = "ellipsis.bubble"
     /// The symbol of Integrations.
     static let integrationsSymbol = "puzzlepiece.extension"
     let fleet: Fleet
@@ -362,6 +375,7 @@ struct Switcher {
     @MainActor @ViewBuilder var items: some View {
         Button("Board", systemImage: "checklist") { go(.board) }
         Button("Chats", systemImage: Self.chatSymbol) { go(.chats) }
+        Button("Bots", systemImage: Self.botsSymbol) { go(.bots(nil)) }
         Divider()
         Button("Providers", systemImage: "person.2") { go(.providers) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
@@ -464,6 +478,13 @@ struct Sidebar: View {
                        needsYou: lists.chats.filter { $0.state == .needsYou }.count,
                        working: lists.chats.filter { $0.state == .running }.count,
                        selected: item == .chats) { select(.chats) }
+            SidebarRow(title: "Bots", symbol: Switcher.botsSymbol, needsYou: lists.botsWaiting,
+                       selected: item == .bots(nil)) { select(.bots(nil)) }
+            // Each bot filters Bots to its own conversations.
+            ForEach(lists.bots) { group in
+                SidebarRow(title: fleet.botName(group), symbol: "", needsYou: group.waiting,
+                           selected: item == .bots(group.id), indented: true) { select(.bots(group.id)) }
+            }
 
             heading("Workspace")
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
@@ -693,6 +714,7 @@ private struct SidebarRail: View {
             rail("checklist", "Board", .board, needsYou: lists.requests.count)
             rail(Switcher.chatSymbol, "Chats", .chats, needsYou: lists.chats.filter { $0.state == .needsYou }.count,
                  working: lists.chats.filter { $0.state == .running }.count)
+            rail(Switcher.botsSymbol, "Bots", .bots(nil), needsYou: lists.botsWaiting)
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("person.2", "Providers", .providers)
             rail("book.closed", "Skills", .skills)
@@ -768,6 +790,8 @@ private struct SidebarRow: View {
     var needsYou = 0
     var working = 0
     let selected: Bool
+    /// A sub-item of the row above: no icon, its label under that row's.
+    var indented = false
     /// Opens the row's settings, from a gear shown on hover and when selected.
     var settings: (() -> Void)?
     let action: () -> Void
@@ -777,11 +801,12 @@ private struct SidebarRow: View {
         Button(action: action) {
             HStack(spacing: Sidebar.gap) {
                 Group {
-                    if let icon { icon } else { Image(systemName: symbol) }
+                    if let icon { icon } else if indented { Color.clear } else { Image(systemName: symbol) }
                 }
                     .frame(width: Sidebar.icon)
                     .foregroundStyle(selected ? Theme.text : Theme.secondary)
                 Text(title).foregroundStyle(Theme.text).lineLimit(1)
+                    .font(indented ? .subheadline.weight(selected ? .semibold : .regular) : nil)
                 Spacer()
                 if let settings, hovering || selected {
                     Button(action: settings) {
@@ -812,7 +837,7 @@ private struct SidebarRow: View {
             }
             .font(.body.weight(selected ? .semibold : .regular))
             .padding(.horizontal, Sidebar.inset)
-            .frame(height: 34)
+            .frame(height: indented ? 28 : 34)
             .background(selected ? Theme.raised : hovering ? Theme.raised.opacity(0.5) : .clear,
                         in: .rect(cornerRadius: 8))
             .contentShape(.rect)
