@@ -574,6 +574,7 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
             queue: Vec::new(),
             threads: Vec::new(),
             chat: false,
+            origin: None,
         }]
     );
     // Nothing starts until the next prompt.
@@ -3266,6 +3267,7 @@ async fn a_child_switches_to_any_account_like_its_primary() {
         parent_host: None,
         failover_pin: None,
         chat: false,
+        origin: None,
     };
     let (primary, child) = (SessionId::new("primary"), SessionId::new("child"));
     let daemon = Switching::open(

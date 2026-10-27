@@ -1058,6 +1058,7 @@ mod tests {
                 queue: Vec::new(),
                 threads: Vec::new(),
                 chat: false,
+                origin: None,
             }]
         };
         let first = Arc::new(Outbox::default());

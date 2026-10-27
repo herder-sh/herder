@@ -168,6 +168,9 @@ pub struct SessionSummary {
     pub head_seq: Seq,
     /// `at` of the session's latest event.
     pub updated_at: Timestamp,
+    /// The bot that started the session; absent when the apps or an agent did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::SessionOrigin>,
 }
 
 /// Events of one session with consecutive seqs, oldest first.

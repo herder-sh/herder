@@ -310,4 +310,6 @@ pub trait Bridge: Send + Sync + 'static {
     ) -> BoxFuture<'a, std::result::Result<Vec<Earlier>, HistoryError>>;
     /// A web link to `place`, if the chat has one.
     fn link<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>>;
+    /// The name of the channel or group of `place`, such as `general`, if the chat tells it.
+    fn channel_name<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>>;
 }

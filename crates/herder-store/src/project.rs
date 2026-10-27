@@ -22,13 +22,15 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             parent_host,
             task,
             chat,
+            origin,
             ..
         } => {
+            let origin = origin.as_ref().map(serde_json::to_string).transpose()?;
             tx.prepare_cached(
                 "INSERT INTO sessions (session_id, repo, worktree, branch, provider, account_id,
                      model, permission_mode, parent, parent_host, task, status, last_seq, updated_at,
-                     chat)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                     chat, origin)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             )?
             .execute(params![
                 id,
@@ -46,6 +48,7 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
                 event.seq,
                 event.at,
                 chat,
+                origin,
             ])?;
             if let Some(branch) = branch {
                 add_branch(tx, id, branch, event.seq)?;

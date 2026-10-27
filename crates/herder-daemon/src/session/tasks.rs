@@ -509,6 +509,8 @@ impl SessionManager {
             failover_pin: settings.failover_pin,
             // A chat's child chats too, in a folder of its own.
             chat: primary.chat,
+            // Its primary's origin tells which bot started the task.
+            origin: None,
         };
         let (child, branch) = self
             .create_session(None, request)

@@ -27,8 +27,8 @@ use std::path::Path;
 use herder_protocol::{
     AccountId, Attachment, BotId, CommandId, CommandResult, Event, EventBody, FailoverTotal,
     HostId, JournalRecord, PermissionMode, PromptId, Provider, PullRequest, RawEventBody, Seq,
-    SessionId, SessionStatus, ThreadLink, Timestamp, TitleSource, TurnId, TurnUsage, UsageTotal,
-    UserId,
+    SessionId, SessionOrigin, SessionStatus, ThreadLink, Timestamp, TitleSource, TurnId, TurnUsage,
+    UsageTotal, UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -115,6 +115,8 @@ pub struct Session {
     pub title_source: Option<TitleSource>,
     /// Whether the session is a chat, about no project.
     pub chat: bool,
+    /// The bot that started the session; `None` when the apps or an agent did.
+    pub origin: Option<SessionOrigin>,
     /// Current status; `Idle` until the first status change.
     pub status: SessionStatus,
     /// Seq of the latest event, equal to [`Store::latest_seq`].
@@ -737,7 +739,7 @@ fn queued_prompt(row: &Row<'_>) -> rusqlite::Result<QueuedPrompt> {
 
 const SESSION_SELECT: &str = "SELECT session_id, repo, worktree, branch, provider, account_id,
     model, permission_mode, parent, task, status, last_seq, updated_at, title, title_source,
-    parent_host, chat FROM sessions";
+    parent_host, chat, origin FROM sessions";
 
 fn latest_seq(conn: &Connection, session: &SessionId) -> Result<Seq> {
     let max: Option<Seq> = conn
@@ -776,6 +778,13 @@ fn read_session(row: &Row<'_>) -> rusqlite::Result<Session> {
         title_source: get_tag(row, 14)?,
         parent_host: row.get::<_, Option<String>>(15)?.map(HostId::new),
         chat: row.get(16)?,
+        origin: row
+            .get::<_, Option<String>>(17)?
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(17, Type::Text, Box::new(err))
+            })?,
     })
 }
 

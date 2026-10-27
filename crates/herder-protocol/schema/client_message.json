@@ -451,6 +451,42 @@
         }
       ]
     },
+    "BotPlace": {
+      "description": "Where in a chat a message to a bot was written.",
+      "oneOf": [
+        {
+          "description": "A direct message with the bot.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "direct"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A channel or group, or a thread in one.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The channel's name, as the chat showed it when the session started, such as\n`general`; its id when the chat gave no name.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "channel"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ]
+        }
+      ]
+    },
     "BotUser": {
       "description": "A person a bot answers, and what they may do.",
       "type": "object",
@@ -2736,6 +2772,17 @@
               "description": "Starting model, in the provider's own naming.",
               "type": "string"
             },
+            "origin": {
+              "description": "The bot that started the session; absent when the apps or an agent did.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "parent": {
               "description": "Primary session of the task this session is a child of; absent for a top-level session.",
               "anyOf": [
@@ -4399,6 +4446,34 @@
     "SessionId": {
       "description": "Identifies a session; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "SessionOrigin": {
+      "description": "The bot that started a session, and who it started it for where. Set when the session is\ncreated and never changed; a thread linked to a session later does not make it one.",
+      "type": "object",
+      "properties": {
+        "bot_id": {
+          "description": "The bot, on the session's host.",
+          "$ref": "#/$defs/BotId"
+        },
+        "by": {
+          "description": "Who wrote the message that started it, by their allowlist display name.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The chat.",
+          "$ref": "#/$defs/BotKind"
+        },
+        "place": {
+          "description": "Where they wrote it.",
+          "$ref": "#/$defs/BotPlace"
+        }
+      },
+      "required": [
+        "bot_id",
+        "kind",
+        "by",
+        "place"
+      ]
     },
     "SessionStatus": {
       "description": "Where a session stands, as shown in lists.",

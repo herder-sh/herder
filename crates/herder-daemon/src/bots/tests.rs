@@ -1,6 +1,6 @@
 use herder_protocol::{
-    AccountId, Bot, BotDefaults, BotId, BotKind, BotUser, ChannelBinding, PermissionMode,
-    ProjectId, Provider,
+    AccountId, Bot, BotDefaults, BotId, BotKind, BotPlace, BotUser, ChannelBinding, PermissionMode,
+    ProjectId, Provider, SessionOrigin,
 };
 
 use super::*;
@@ -882,6 +882,14 @@ mod running {
         assert_eq!(head.threads[0].channel_id, chat.dm().channel_id);
         assert_eq!(head.threads[0].thread_id, chat.dm().thread_id);
         assert!(head.threads[0].url.is_some());
+        // It says the bot started it, for Ada, in a direct message.
+        let origin = SessionOrigin {
+            bot_id: chat.bot().bot_id,
+            kind: chat.bot().kind,
+            by: "Ada".into(),
+            place: BotPlace::Direct,
+        };
+        assert_eq!(head.origin, Some(origin));
 
         bot.send(chat.message("dm_reply.json")).await;
         bot.posted(&chat.dm(), answer("Added one.")).await;
@@ -925,6 +933,11 @@ mod running {
             .map(|(_, text)| text)
             .collect();
         assert_eq!(prompts, ["What does the bot do?", "and how is it tested?"]);
+        let name = format!("{}-name", chat.channel().channel_id);
+        assert_eq!(
+            head.origin.map(|origin| (origin.by, origin.place)),
+            Some(("Ada".to_owned(), BotPlace::Channel { name }))
+        );
     }
 
     async fn people_off_the_allowlist_get_one_note_and_reach_nothing(chat: Chat) {
@@ -1310,6 +1323,8 @@ mod running {
         bot.posted(&place, answer("Will do.")).await;
         let head = bot.session().await;
         assert_eq!(head.session_id, session_id);
+        // A thread linked later does not make it a bot's session.
+        assert_eq!(head.origin, None);
         assert_eq!(
             head.threads
                 .iter()

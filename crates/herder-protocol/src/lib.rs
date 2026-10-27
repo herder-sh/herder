@@ -31,7 +31,8 @@ pub use attachment::{
     MAX_FILE_NAME_BYTES, MAX_IMAGE_BYTES, MAX_PROMPT_ATTACHMENT_BYTES, PromptFile,
 };
 pub use bots::{
-    Bot, BotDefaults, BotError, BotKind, BotState, BotStatus, BotUser, ChannelBinding, ThreadLink,
+    Bot, BotDefaults, BotError, BotKind, BotPlace, BotState, BotStatus, BotUser, ChannelBinding,
+    SessionOrigin, ThreadLink,
 };
 pub use bytes::Bytes;
 pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor, HistoryPart, Relay};

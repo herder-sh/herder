@@ -11,8 +11,8 @@ use herder_client_core::{
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
     ApprovalId, ApprovalOutcome, Attachment, AttachmentId, AwsDeviceCode, AwsProfile,
-    BackupSettings, Bot, BotDefaults, BotError, BotId, BotKind, BotState, BotStatus, BotUser,
-    Bytes, ChannelBinding, CiStatus, CommandBody, CommandResult, Constraint, Container,
+    BackupSettings, Bot, BotDefaults, BotError, BotId, BotKind, BotPlace, BotState, BotStatus,
+    BotUser, Bytes, ChannelBinding, CiStatus, CommandBody, CommandResult, Constraint, Container,
     ContainerState, DaemonSettings, DeviceId, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
     EscalationReason, Event, EventBody, FailoverSettings, FailoverTotal, FleetHost, FollowUp,
     FollowUpReason, FollowUpSettings, HistoryPart, HostId, HostReplication, HostResources,
@@ -21,10 +21,10 @@ use herder_protocol::{
     ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary, ProviderReload,
     ProviderStatus, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus,
     Role, Route, SecretAccess, SecretInfo, SecretRef, SecretSet, SecretValue, SessionHead,
-    SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource,
-    SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings,
-    TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal,
-    UsageWindow, UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
+    SessionId, SessionOrigin, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload,
+    SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp,
+    TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod,
+    UsageTotal, UsageWindow, UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -236,6 +236,7 @@ pub enum EventBody {
         task: Option<String>,
         failover_pin: Option<bool>,
         chat: bool,
+        origin: Option<SessionOrigin>,
     },
     BranchCheckedOut {
         branch: String,
@@ -1043,6 +1044,21 @@ pub struct ThreadLink {
 }
 
 #[uniffi::remote(Record)]
+pub struct SessionOrigin {
+    pub bot_id: BotId,
+    pub kind: BotKind,
+    pub by: String,
+    pub place: BotPlace,
+}
+
+#[uniffi::remote(Enum)]
+pub enum BotPlace {
+    Direct,
+    Channel { name: String },
+    Unknown,
+}
+
+#[uniffi::remote(Record)]
 pub struct UserInfo {
     pub user_id: UserId,
     pub name: String,
@@ -1247,6 +1263,10 @@ pub struct SessionHead {
     pub children_need_you: u32,
     pub queue: Vec<QueuedPrompt>,
     pub threads: Vec<ThreadLink>,
+    // Defaulted, so Swift and Kotlin code that builds a session head, as tests do, need not
+    // name it.
+    #[uniffi(default = None)]
+    pub origin: Option<SessionOrigin>,
 }
 
 #[uniffi::remote(Record)]

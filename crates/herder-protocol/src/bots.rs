@@ -170,3 +170,35 @@ pub struct ThreadLink {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
+
+/// The bot that started a session, and who it started it for where. Set when the session is
+/// created and never changed; a thread linked to a session later does not make it one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionOrigin {
+    /// The bot, on the session's host.
+    pub bot_id: BotId,
+    /// The chat.
+    pub kind: BotKind,
+    /// Who wrote the message that started it, by their allowlist display name.
+    pub by: String,
+    /// Where they wrote it.
+    pub place: BotPlace,
+}
+
+/// Where in a chat a message to a bot was written.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BotPlace {
+    /// A direct message with the bot.
+    Direct,
+    /// A channel or group, or a thread in one.
+    Channel {
+        /// The channel's name, as the chat showed it when the session started, such as
+        /// `general`; its id when the chat gave no name.
+        name: String,
+    },
+    /// A place newer than this build.
+    #[serde(other, skip_serializing)]
+    #[schemars(skip)]
+    Unknown,
+}

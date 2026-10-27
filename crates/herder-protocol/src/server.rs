@@ -357,6 +357,9 @@ pub struct SessionHead {
     /// Chat threads linked to the session, in the order they were linked. A vault lists none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<crate::ThreadLink>,
+    /// The bot that started the session; absent when the apps or an agent did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::SessionOrigin>,
 }
 
 /// A prompt waiting in a session's queue.

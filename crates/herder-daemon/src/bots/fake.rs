@@ -264,4 +264,9 @@ impl Bridge for FakeBridge {
         );
         Box::pin(async move { Some(url) })
     }
+
+    fn channel_name<'a>(&'a self, place: &'a Place) -> BoxFuture<'a, Option<String>> {
+        let name = format!("{}-name", place.channel_id);
+        Box::pin(async move { Some(name) })
+    }
 }

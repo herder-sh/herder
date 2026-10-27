@@ -349,6 +349,7 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
                 parent_host: None,
                 task: None,
                 chat: true,
+                origin: None,
             },
         })
         .unwrap();
@@ -370,6 +371,7 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
                 parent_host: None,
                 task: None,
                 chat: false,
+                origin: None,
             },
         })
         .unwrap();
@@ -483,6 +485,7 @@ async fn sessions_in_folders_that_are_not_git_repositories_make_no_project() {
                     parent_host: None,
                     task: None,
                     chat: false,
+                    origin: None,
                 },
             })
             .unwrap();
@@ -826,6 +829,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
                     parent_host: None,
                     task: None,
                     chat: false,
+                    origin: None,
                 },
             })
             .unwrap();

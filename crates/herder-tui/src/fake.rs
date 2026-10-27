@@ -27,6 +27,7 @@ pub fn head(id: &str, project: Option<&str>) -> SessionHead {
         queue: Vec::new(),
         threads: Vec::new(),
         chat: false,
+        origin: None,
     }
 }
 
@@ -82,6 +83,7 @@ pub fn created_in(repo: &str, branch: &str, parent: Option<&str>, task: Option<&
         task: task.map(str::to_owned),
         failover_pin: None,
         chat: false,
+        origin: None,
     }
 }
 

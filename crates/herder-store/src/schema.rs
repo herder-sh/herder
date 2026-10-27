@@ -6,7 +6,7 @@ use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
 const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19,
 ];
 
 /// Schema version this build writes.
@@ -225,6 +225,30 @@ CREATE TABLE session_threads (
     first_seen_seq INTEGER NOT NULL,
     PRIMARY KEY (session_id, bot_id, channel_id, thread_id)
 ) STRICT;
+";
+
+/// The bot that started each session, as JSON; none for one the apps or an agent started.
+/// A bot-started session before is recognised by its creator, "via ‹bot›, ‹name›", and the
+/// thread linked to it first; its channel had no name recorded, so it gets the channel's id.
+const V19: &str = "
+ALTER TABLE sessions ADD COLUMN origin TEXT;
+UPDATE sessions SET origin = (
+    SELECT json_object(
+        'bot_id', t.bot_id,
+        'kind', t.kind,
+        'by', substr(e.by, instr(e.by, ', ') + 2),
+        'place', CASE
+            WHEN (t.kind = 'slack' AND t.channel_id LIKE 'D%')
+                OR (t.kind = 'telegram' AND t.channel_id NOT LIKE '-%')
+            THEN json_object('type', 'direct')
+            ELSE json_object('type', 'channel', 'name', t.channel_id)
+        END)
+    FROM events e JOIN session_threads t ON t.session_id = e.session_id
+    WHERE e.session_id = sessions.session_id AND e.seq = 1
+        AND e.by LIKE 'via %, %'
+    ORDER BY t.first_seen_seq
+    LIMIT 1
+);
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.

@@ -676,6 +676,14 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     ],
                     threads: vec![thread()],
                     chat: false,
+                    origin: Some(SessionOrigin {
+                        bot_id: BotId::new("trash-can"),
+                        kind: BotKind::Slack,
+                        by: "Ada".into(),
+                        place: BotPlace::Channel {
+                            name: "general".into(),
+                        },
+                    }),
                 },
                 SessionHead {
                     session_id: SessionId::new("01J9CHILD"),
@@ -692,6 +700,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     queue: Vec::new(),
                     threads: Vec::new(),
                     chat: false,
+                    origin: None,
                 },
                 SessionHead {
                     session_id: SessionId::new("01J9CHAT"),
@@ -708,6 +717,12 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     queue: Vec::new(),
                     threads: Vec::new(),
                     chat: true,
+                    origin: Some(SessionOrigin {
+                        bot_id: BotId::new("trash-can"),
+                        kind: BotKind::Telegram,
+                        by: "Ada".into(),
+                        place: BotPlace::Direct,
+                    }),
                 },
             ],
         },
@@ -1095,6 +1110,14 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 task: None,
                 failover_pin: Some(false),
                 chat: false,
+                origin: Some(SessionOrigin {
+                    bot_id: BotId::new("trash-can"),
+                    kind: BotKind::Slack,
+                    by: "Ada".into(),
+                    place: BotPlace::Channel {
+                        name: "general".into(),
+                    },
+                }),
             },
         ),
         event(2, owner, EventBody::TurnStarted { turn_id: turn_id() }),
@@ -1870,6 +1893,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 task: Some("Store migration".into()),
                 failover_pin: None,
                 chat: false,
+                origin: None,
             },
         ),
         in_primary(
@@ -1906,6 +1930,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 task: Some("Build the Mac app".into()),
                 failover_pin: None,
                 chat: false,
+                origin: None,
             },
         }),
         ServerMessage::Event(Event {
@@ -1926,6 +1951,12 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 task: None,
                 failover_pin: None,
                 chat: true,
+                origin: Some(SessionOrigin {
+                    bot_id: BotId::new("trash-can"),
+                    kind: BotKind::Telegram,
+                    by: "Ada".into(),
+                    place: BotPlace::Direct,
+                }),
             },
         }),
         in_primary(
@@ -2267,6 +2298,7 @@ fn remote_parent_and_child_host_are_on_the_wire_only_when_set() {
         task: None,
         failover_pin: None,
         chat: false,
+        origin: None,
     };
     let spawned = |host_id: Option<HostId>| EventBody::ChildSpawned {
         child_session_id: SessionId::new("c"),
@@ -3208,6 +3240,7 @@ fn summary(status: SessionStatus, prs: Vec<PullRequest>) -> SessionSummary {
         head_seq: 17,
         updated_at: at(),
         chat: false,
+        origin: None,
     }
 }
 
@@ -3257,6 +3290,26 @@ fn host_fixtures() -> Vec<HostMessage> {
             parent: Some(SessionId::new("01J9PRIMARY")),
             task: Some("write the tests".into()),
             title: Some("Write the tests".into()),
+            ..summary(SessionStatus::Running, Vec::new())
+        }),
+        HostMessage::Session(SessionSummary {
+            origin: Some(SessionOrigin {
+                bot_id: BotId::new("trash-can"),
+                kind: BotKind::Slack,
+                by: "Ada".into(),
+                place: BotPlace::Direct,
+            }),
+            ..summary(SessionStatus::Running, Vec::new())
+        }),
+        HostMessage::Session(SessionSummary {
+            origin: Some(SessionOrigin {
+                bot_id: BotId::new("trash-can"),
+                kind: BotKind::Telegram,
+                by: "Ada".into(),
+                place: BotPlace::Channel {
+                    name: "Team".into(),
+                },
+            }),
             ..summary(SessionStatus::Running, Vec::new())
         }),
     ];

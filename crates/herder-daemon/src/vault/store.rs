@@ -481,6 +481,7 @@ impl VaultStore {
                     children_need_you: need_you(&summary.session_id),
                     queue: Vec::new(),
                     threads: Vec::new(),
+                    origin: summary.origin.clone(),
                 })
             })
             .collect())
@@ -1146,6 +1147,7 @@ mod tests {
             head_seq: 1,
             updated_at: "2027-01-15T08:00:00Z".parse().unwrap(),
             chat: false,
+            origin: None,
         }
     }
 
@@ -1196,8 +1198,16 @@ mod tests {
         store
             .put_summary(&host, &summary("s3", None, SessionStatus::Idle))
             .unwrap();
+        // A chat a bot started, which the fleet says it did.
+        let origin = herder_protocol::SessionOrigin {
+            bot_id: herder_protocol::BotId::new("trash-can"),
+            kind: herder_protocol::BotKind::Slack,
+            by: "Ada".into(),
+            place: herder_protocol::BotPlace::Direct,
+        };
         let chat = SessionSummary {
             chat: true,
+            origin: Some(origin.clone()),
             ..summary("s4", None, SessionStatus::Idle)
         };
         store.put_summary(&host, &chat).unwrap();
@@ -1210,6 +1220,13 @@ mod tests {
                 .map(|head| (head.chat, head.project_id.is_some()))
                 .collect::<Vec<_>>(),
             [(false, true), (false, true), (true, false)]
+        );
+        assert_eq!(
+            heads
+                .iter()
+                .map(|head| head.origin.clone())
+                .collect::<Vec<_>>(),
+            [None, None, Some(origin)]
         );
         assert_eq!(heads[0].session_id.as_str(), "s1");
         assert_eq!(heads[0].host_id, Some(host.clone()));

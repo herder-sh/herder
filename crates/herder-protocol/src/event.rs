@@ -70,6 +70,9 @@ pub enum EventBody {
         /// under the daemon's data dir.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         chat: bool,
+        /// The bot that started the session; absent when the apps or an agent did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<crate::SessionOrigin>,
     },
     /// The session's worktree had a branch checked out that the session had not had before.
     /// The session owns it from then on, including after its worktree is removed. The branch
