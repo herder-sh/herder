@@ -19,6 +19,14 @@ struct ToastView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.text)
                     }
+                    #if os(macOS)
+                    if let file = toast.reveal {
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+                            .buttonStyle(.plain)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.text)
+                    }
+                    #endif
                     if toast.failed {
                         Button("Details") { details = toast }
                             .buttonStyle(.plain)
