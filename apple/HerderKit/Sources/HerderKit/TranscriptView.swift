@@ -59,7 +59,7 @@ struct TranscriptBlockView: View {
                             .textSelection(.enabled)
                             #endif
                     } else {
-                        TranscriptText(string: MarkdownText.decorated(AttributedString(text), prs: prLinks, find: find),
+                        TranscriptText(string: MarkdownText.inline(text, ground: Theme.onBubbleCode, prs: prLinks, find: find),
                                        color: Theme.onBubble)
                     }
                 }
@@ -381,8 +381,15 @@ struct MarkdownText: View {
         return blocks
     }
 
-    static func inline(_ text: String, prs: PRLinks = PRLinks(), find: FindHighlight? = nil) -> AttributedString {
-        decorated(markdown(text), prs: prs, find: find)
+    /// `text`'s inline Markdown, its code spans set on `ground` if given.
+    static func inline(_ text: String, ground: Color? = nil, prs: PRLinks = PRLinks(), find: FindHighlight? = nil) -> AttributedString {
+        var string = markdown(text)
+        if let ground {
+            for run in string.runs where run.inlinePresentationIntent?.contains(.code) == true {
+                string[run.range].backgroundColor = ground
+            }
+        }
+        return decorated(string, prs: prs, find: find)
     }
 
     static func markdown(_ text: String) -> AttributedString {
@@ -669,13 +676,14 @@ private struct DeliveryLine: View {
 /// with "held" under it.
 struct HeldMessage: View {
     let text: String
+    @Environment(\.prLinks) private var prLinks
+    @Environment(\.findHighlight) private var find
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            Text(text)
-                .font(.body)
-                .foregroundStyle(Theme.onBubble)
-                .textSelection(.enabled)
+            TranscriptText(string: MarkdownText.inline(text, ground: Theme.onBubbleCode, prs: prLinks, find: find),
+                           color: Theme.onBubble)
+                .tint(Theme.link)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Theme.bubble, in: .rect(cornerRadius: 18))
@@ -686,7 +694,7 @@ struct HeldMessage: View {
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 48)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("held-message")
     }
 }

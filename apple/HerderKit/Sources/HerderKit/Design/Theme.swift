@@ -30,6 +30,8 @@ enum Theme {
     static let primaryStroke = Color(light: 0xA8A8A6, dark: 0x3D3D44)
     static let bubble = Color(light: 0x333333, dark: 0x1A1A1A)
     static let onBubble = Color(light: 0xECECEA, dark: 0xF7F7F7)
+    /// The ground of inline code in a bubble.
+    static let onBubbleCode = onBubble.opacity(0.14)
 
     /// Needs you: approvals, questions, anything waiting on the user, and nothing else.
     static let accent = Color(light: 0x2E7D7A, dark: 0xE69F00)
