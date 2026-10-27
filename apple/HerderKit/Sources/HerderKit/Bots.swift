@@ -517,3 +517,77 @@ struct BotPersonDraft: Equatable {
         return BotUser(externalUserId: id, displayName: name, dm: true, channels: true, approve: true, notify: false)
     }
 }
+
+/// What a person may do with a bot, as a preset of `BotUser`'s four switches; a mix no preset
+/// matches is `custom`, set one switch at a time.
+enum BotRole: CaseIterable, Identifiable {
+    /// Starts sessions in DMs and channels.
+    case driver
+    /// A driver who may also press Allow.
+    case approver
+    /// Only told when a session waits or fails.
+    case watcher
+    case custom
+
+    var id: Self { self }
+
+    /// The role `user`'s switches add up to.
+    init(_ user: BotUser) {
+        self = Self.presets.first { $0.matches(user) } ?? .custom
+    }
+
+    static let presets: [BotRole] = [.driver, .approver, .watcher]
+
+    var label: String {
+        switch self {
+        case .driver: "Driver"
+        case .approver: "Approver"
+        case .watcher: "Watcher"
+        case .custom: "Custom"
+        }
+    }
+
+    /// The preset's switches: DM, channels, approve, notify; `nil` for custom.
+    private var switches: (dm: Bool, channels: Bool, approve: Bool, notify: Bool)? {
+        switch self {
+        case .driver: (true, true, false, false)
+        case .approver: (true, true, true, false)
+        case .watcher: (false, false, false, true)
+        case .custom: nil
+        }
+    }
+
+    private func matches(_ user: BotUser) -> Bool {
+        guard let switches else { return false }
+        return switches == (user.dm, user.channels, user.approve, user.notify)
+    }
+
+    /// `user` with the preset's switches; custom leaves them as they are.
+    func applied(to user: BotUser) -> BotUser {
+        guard let switches else { return user }
+        var user = user
+        user.dm = switches.dm
+        user.channels = switches.channels
+        user.approve = switches.approve
+        user.notify = switches.notify
+        return user
+    }
+
+    /// The line under the People group that says what each role means.
+    static let legend = "**Driver**: DMs and channels. **Approver**: a driver who may also press Allow. **Watcher**: only gets notified. **Custom**: any mix of the four switches."
+}
+
+extension BotUser {
+    /// What they may do, in a few words: "DMs, channels, approves", "DMs only".
+    var abilities: String {
+        let parts = [dm ? "DMs" : nil, channels ? "channels" : nil, approve ? "approves" : nil,
+                     notify ? "notified" : nil].compactMap(\.self)
+        switch parts.count {
+        case 0: return "Nothing yet"
+        case 1 where dm: return "DMs only"
+        default:
+            let line = parts.joined(separator: ", ")
+            return line.prefix(1).uppercased() + line.dropFirst()
+        }
+    }
+}

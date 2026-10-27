@@ -156,7 +156,7 @@ struct ProjectSettingsPage: View {
                 } label: {
                     Text("Remove…")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.failure)
+                        .foregroundStyle(Theme.danger)
                         .padding(.horizontal, 12)
                         .frame(height: 32)
                         .background(Theme.raised, in: .rect(cornerRadius: 7))
@@ -290,7 +290,7 @@ struct ProjectSettingsForm: View {
                                saved: saves["Keep private"]) {
                         Toggle("Keep artifacts private", isOn: $privateArtifacts)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(.settings)
                             .accessibilityIdentifier("private-artifacts")
                     }
                 }

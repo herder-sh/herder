@@ -160,22 +160,8 @@ struct BotKnowledgeRow: View {
 
     var body: some View {
         SettingsList(title: "Instructions & memory") {
-            Button(action: open) {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Instructions & memory").font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
-                        Text(knowledge.summary).font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
-                    }
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                }
-                .padding(.horizontal, Theme.cellPadding)
-                .padding(.vertical, 8)
-                .frame(minHeight: Theme.tallRowHeight)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("bot-knowledge")
+            SummaryRow(title: "Instructions & memory", summary: knowledge.summary, open: open)
+                .accessibilityIdentifier("bot-knowledge")
         }
     }
 }

@@ -75,10 +75,8 @@ struct PeopleList: View {
                 }
                 if owner {
                     RowDivider()
-                    SettingRow(label: "Invite someone", hint: "A one-time code, as member or owner") {
-                        PillButton(title: "Invite…", symbol: "person.badge.plus", prominent: true, action: invite)
-                            .accessibilityIdentifier("people-invite")
-                    }
+                    AddRow(title: "Invite someone…", action: invite)
+                        .accessibilityIdentifier("people-invite")
                 }
             }
             if let error {

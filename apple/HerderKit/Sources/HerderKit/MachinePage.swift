@@ -251,22 +251,25 @@ struct MachinePage: View {
                 RowDivider()
                 HStack(spacing: 10) {
                     if owner {
-                        PillButton(title: "Add Account", symbol: "plus") { addingAccount = true }.disabled(!connected)
-                        if running > 0 {
-                            Text(running == 1 ? "1 login running" : "\(running) logins running")
-                                .font(.caption).foregroundStyle(Theme.secondary)
-                        }
+                        AddRow(title: "Add account…") { addingAccount = true }
+                            .disabled(!connected)
+                            .accessibilityLabel("Add Account")
                     } else {
                         Text("Only the machine’s owner can add accounts.").font(.footnote).foregroundStyle(Theme.tertiary)
+                            .padding(.leading, Theme.cellPadding)
+                            .frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
                     }
-                    Spacer()
+                    if owner && running > 0 {
+                        Text(running == 1 ? "1 login running" : "\(running) logins running")
+                            .font(.caption).foregroundStyle(Theme.secondary).fixedSize()
+                    }
                     if machine.failover.pin {
                         Label("Failover pinned", systemImage: "pin").font(.caption).foregroundStyle(Theme.tertiary)
                             .help("Sessions stay on their account when it hits a limit.")
+                            .fixedSize()
                     }
                 }
-                .padding(.horizontal, 14)
-                .frame(minHeight: 44)
+                .padding(.trailing, Theme.cellPadding)
             }
             Text("A session at its limit rotates to another of its provider’s accounts here.")
                 .font(.footnote).foregroundStyle(Theme.tertiary)

@@ -1,30 +1,31 @@
 import Herder
 import SwiftUI
 
-/// A bot's page, for its machine's owners: the people it answers with what each may do, what
-/// it knows (its instructions and memory, in a sheet), what the sessions it starts run on, the
-/// project of each channel, then removing it. Each change applies as it is made.
+/// A bot's page, for its machine's owners, in the settings pattern: a row per person with their
+/// role, what it knows (its instructions and memory), one row summing up what new threads run
+/// on, the channels with a project of their own, then removing it. Each row opens its details in
+/// a sheet; each change applies as it is made.
 struct BotPage: View {
     let fleet: Fleet
     let hostId: HostId
     let botId: BotId
     @State private var bots: MachineBots
     @State private var knowledge: BotKnowledge
-    @State private var showsKnowledge = false
     @State private var saves = Autosave()
-    @State private var person = BotPersonDraft()
-    @State private var channel = ""
-    @State private var channelProject: ProjectId?
+    @State private var sheet: BotSheet?
     @State private var confirmingRemove = false
     @State private var error: String?
     @Environment(\.pages) private var pages
 
     init(fleet: Fleet, hostId: HostId, botId: BotId) {
+        self.init(fleet: fleet, bots: MachineBots(fleet: fleet, hostId: hostId), botId: botId)
+    }
+
+    init(fleet: Fleet, bots: MachineBots, botId: BotId) {
         self.fleet = fleet
-        self.hostId = hostId
+        self.hostId = bots.hostId
         self.botId = botId
-        let bots = MachineBots(fleet: fleet, hostId: hostId)
-        let owner = fleet.machines.first { $0.hostId == hostId }?.role == .owner
+        let owner = fleet.machines.first { $0.hostId == bots.hostId }?.role == .owner
         _bots = State(initialValue: bots)
         _knowledge = State(initialValue: BotKnowledge(bots: bots, botId: botId, editable: owner))
     }
@@ -52,10 +53,10 @@ struct BotPage: View {
                         }
                     }
                     people(bot).detailSection("People")
-                    BotKnowledgeRow(knowledge: knowledge) { showsKnowledge = true }
+                    BotKnowledgeRow(knowledge: knowledge) { sheet = .knowledge }
                         .detailSection("Instructions & memory")
-                    defaults(bot, machine: machine).detailSection("Defaults")
-                    channels(bot, machine: machine).detailSection("Channels")
+                    newThreads(bot).detailSection("New threads")
+                    channels(bot).detailSection("Channels")
                     if let error {
                         Text(error).font(.footnote).foregroundStyle(Theme.failure).accessibilityIdentifier("bot-error")
                     }
@@ -86,8 +87,19 @@ struct BotPage: View {
                 await bots.reloadStatus()
             }
         }
-        .sheet(isPresented: $showsKnowledge) {
-            BotKnowledgeSheet(knowledge: knowledge, name: bot?.name ?? botId)
+        .sheet(item: $sheet) { sheet in
+            if let bot {
+                switch sheet {
+                case .person(let id): personSheet(bot, id: id)
+                case .addPerson: AddPersonSheet(bot: bot) { user in change(user.externalUserId) { $0.allow.append(user) } }
+                case .knowledge: BotKnowledgeSheet(knowledge: knowledge, name: bot.name)
+                case .newThreads: newThreadsSheet(bot, machine: machine)
+                case .channel(let id): channelSheet(bot, id: id, machine: machine)
+                case .addChannel: AddChannelSheet(bot: bot, projects: machine?.projects ?? [], projectName: fleet.projectName) { binding in
+                    change(binding.channelId) { $0.channelBindings.append(binding) }
+                }
+                }
+            }
         }
         .confirmationDialog("Remove \(bot?.name ?? botId)?", isPresented: $confirmingRemove, titleVisibility: .visible) {
             Button("Remove", role: .destructive) {
@@ -117,175 +129,183 @@ struct BotPage: View {
     // MARK: People
 
     private func people(_ bot: Bot) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SettingsList(title: "People") {
-                if bot.allow.isEmpty {
-                    Text("No one yet: the bot answers no one until you add them.")
-                        .font(.subheadline).foregroundStyle(Theme.tertiary)
-                        .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                }
-                ForEach(Array(bot.allow.enumerated()), id: \.element.externalUserId) { index, user in
-                    if index > 0 { RowDivider() }
-                    personRow(user)
-                }
+        SettingsList(title: "People", caption: BotRole.legend) {
+            if bot.allow.isEmpty {
+                EmptyRow(text: "No one yet: the bot answers no one until you add them.")
                 RowDivider()
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { personFields(bot) }
-                    VStack(alignment: .trailing, spacing: 8) { personFields(bot) }
-                }
-                .padding(10)
             }
-            Text("Slack shows a member ID in their profile, under ⋯ › Copy member ID. Only people here drive sessions or press Allow; others get a note.")
-                .font(.footnote).foregroundStyle(Theme.tertiary)
+            ForEach(bot.allow, id: \.externalUserId) { user in
+                personRow(user)
+                RowDivider()
+            }
+            AddRow(title: "Add person…") { sheet = .addPerson }
+                .accessibilityIdentifier("bot-add-person")
         }
-    }
-
-    @ViewBuilder private func personFields(_ bot: Bot) -> some View {
-        InputBox(placeholder: "Member ID, U012AB3CD", text: $person.memberId, mono: true)
-            .frame(minWidth: 200)
-            .accessibilityIdentifier("bot-person-id")
-        InputBox(placeholder: "Name", text: $person.name)
-            .frame(minWidth: 140)
-            .accessibilityIdentifier("bot-person-name")
-        PillButton(title: "Add", symbol: "plus", prominent: true) { addPerson(bot) }
-            .disabled(person.memberId.trimmingCharacters(in: .whitespaces).isEmpty
-                      || person.name.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func personRow(_ user: BotUser) -> some View {
         let id = user.externalUserId
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(user.displayName).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text).lineLimit(1)
-                    Text(id).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
+        let role = BotRole(user)
+        return SummaryRow(title: user.displayName, summary: role == .custom ? user.abilities : "", saved: saves[id],
+                          open: { sheet = .person(id) }) {
+            Avatar(name: user.displayName, id: id)
+        } accessory: {
+            Menu {
+                ForEach(BotRole.presets) { preset in
+                    Button {
+                        change(id) { bot in
+                            if let index = bot.allow.firstIndex(where: { $0.externalUserId == id }) {
+                                bot.allow[index] = preset.applied(to: bot.allow[index])
+                            }
+                        }
+                    } label: {
+                        if preset == role { Label(preset.label, systemImage: "checkmark") } else { Text(preset.label) }
+                    }
                 }
-                Spacer(minLength: 8)
-                SaveMark(state: saves[id])
-                IconButton(symbol: "minus.circle", help: "Remove \(user.displayName)") {
-                    change(id) { $0.allow.removeAll { $0.externalUserId == id } }
+                Divider()
+                Button("Custom…") { sheet = .person(id) }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(role.label)
+                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
                 }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Theme.text)
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .background(Theme.raised, in: .rect(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.stroke))
+                .hitTarget()
             }
-            FlowLayout(spacing: 14) {
-                permission("DM", user.dm, id) { $0.dm = $1 }
-                permission("Channels", user.channels, id) { $0.channels = $1 }
-                permission("Approve", user.approve, id) { $0.approve = $1 }
-                permission("Notify", user.notify, id) { $0.notify = $1 }
-            }
-            if case .failed(let why) = saves[id] {
-                Text(why).font(.caption).foregroundStyle(Theme.failure)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel("Role of \(user.displayName)")
+            .accessibilityValue(role.label)
+        }
+        .accessibilityIdentifier("bot-person-\(id)")
+    }
+
+    @ViewBuilder private func personSheet(_ bot: Bot, id: String) -> some View {
+        if let user = bot.allow.first(where: { $0.externalUserId == id }) {
+            BotPersonSheet(bot: bot.name, user: user, saved: saves[id]) { next in
+                change(id) { bot in
+                    if let index = bot.allow.firstIndex(where: { $0.externalUserId == id }) { bot.allow[index] = next }
+                }
+            } remove: {
+                sheet = nil
+                change(id) { $0.allow.removeAll { $0.externalUserId == id } }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
     }
 
-    private func permission(_ label: String, _ on: Bool, _ id: String,
-                            _ set: @escaping (inout BotUser, Bool) -> Void) -> some View {
-        Toggle(label, isOn: Binding(get: { on }, set: { value in
-            change(id) { bot in
-                if let index = bot.allow.firstIndex(where: { $0.externalUserId == id }) { set(&bot.allow[index], value) }
-            }
-        }))
-        .toggleStyle(.switch)
-        .controlSize(.mini)
-        .font(.caption)
-        .foregroundStyle(Theme.secondary)
-        .fixedSize()
-    }
+    // MARK: New threads
 
-    private func addPerson(_ bot: Bot) {
-        do {
-            guard let user = try person.person(among: bot.allow) else { return }
-            person = BotPersonDraft()
-            error = nil
-            change(user.externalUserId) { $0.allow.append(user) }
-        } catch {
-            self.error = describe(error)
+    private func newThreads(_ bot: Bot) -> some View {
+        SettingsList(title: "New threads") {
+            SummaryRow(title: Self.newThreads(bot.defaults, projectName: fleet.projectName),
+                       summary: "Project, provider, accounts, model and permissions",
+                       saved: Self.defaultsRows.lazy.compactMap { saves[$0] }.first, open: { sheet = .newThreads })
+                .accessibilityIdentifier("bot-new-threads")
         }
     }
 
-    // MARK: Defaults
+    static let defaultsRows = ["Project", "Provider", "Accounts", "Model", "Permissions"]
 
-    private func defaults(_ bot: Bot, machine: Machine?) -> some View {
+    /// "api · Claude Opus 5.5 · Full access": what a new thread runs on, each part left out when
+    /// new sessions pick it.
+    static func newThreads(_ defaults: BotDefaults, projectName: (ProjectId) -> String) -> String {
+        let model = defaults.model.map { id in
+            defaults.provider.flatMap { ModelCatalog.models($0).first { $0.id == id }?.name } ?? id
+        } ?? defaults.provider.map(ModelCatalog.providerName)
+        let parts = [defaults.projectId.map(projectName) ?? "A chat", model, defaults.permissionMode?.label].compactMap(\.self)
+        return parts.joined(separator: " · ")
+    }
+
+    private func newThreadsSheet(_ bot: Bot, machine: Machine?) -> some View {
         let accounts = machine?.accounts ?? []
         let providers = Array(Set(accounts.map(\.provider))).sorted()
         let provider = bot.defaults.provider
         let ofProvider = accounts.filter { $0.provider == provider }
-        return SettingsList(title: "Defaults") {
-            SettingRow(label: "Project", hint: "Of a new thread whose channel and message name none", saved: saves["Project"]) {
-                FooterItem(symbol: "shippingbox", text: bot.defaults.projectId.map { fleet.projectName($0) } ?? "None: a chat") {
-                    Picker("Project", selection: Binding(get: { bot.defaults.projectId }, set: { project in
-                        change("Project") { $0.defaults.projectId = project }
-                    })) {
-                        Text("None: a chat").tag(ProjectId?.none)
-                        ForEach(machine?.projects ?? [], id: \.projectId) { Text($0.name).tag(Optional($0.projectId)) }
-                    }
-                    .pickerStyle(.inline)
-                }
-            }
-            RowDivider()
-            SettingRow(label: "Provider", saved: saves["Provider"]) {
-                FooterItem(symbol: "cpu", text: provider.map(ModelCatalog.providerName) ?? "As new sessions pick") {
-                    Picker("Provider", selection: Binding(get: { provider }, set: { next in
-                        change("Provider") {
-                            $0.defaults.provider = next
-                            $0.defaults.accountIds = []
-                            $0.defaults.model = nil
+        return DetailSheet(title: "New threads") {
+            SettingsGroup {
+                SettingRow(label: "Project", hint: "Used when the channel has no project", saved: saves["Project"]) {
+                    FooterItem(symbol: "shippingbox", text: bot.defaults.projectId.map { fleet.projectName($0) } ?? "None: a chat") {
+                        Picker("Project", selection: Binding(get: { bot.defaults.projectId }, set: { project in
+                            change("Project") { $0.defaults.projectId = project }
+                        })) {
+                            Text("None: a chat").tag(ProjectId?.none)
+                            ForEach(machine?.projects ?? [], id: \.projectId) { Text($0.name).tag(Optional($0.projectId)) }
                         }
-                    })) {
-                        Text("As new sessions pick").tag(Provider?.none)
-                        ForEach(providers, id: \.self) { Text(ModelCatalog.providerName($0)).tag(Optional($0)) }
-                    }
-                    .pickerStyle(.inline)
-                }
-            }
-            RowDivider()
-            SettingRow(label: "Accounts", hint: "Sessions start on and rotate across these", saved: saves["Accounts"]) {
-                FooterItem(symbol: "person.crop.circle", text: Self.accounts(bot.defaults.accountIds, of: ofProvider)) {
-                    ForEach(ofProvider, id: \.accountId) { account in
-                        Toggle(account.email ?? account.label, isOn: Binding(
-                            get: { bot.defaults.accountIds.contains(account.accountId) },
-                            set: { on in
-                                change("Accounts") { bot in
-                                    bot.defaults.accountIds.removeAll { $0 == account.accountId }
-                                    if on { bot.defaults.accountIds.append(account.accountId) }
-                                }
-                            }))
+                        .pickerStyle(.inline)
                     }
                 }
-                .disabled(provider == nil)
-            }
-            RowDivider()
-            SettingRow(label: "Model", saved: saves["Model"]) {
-                FooterItem(symbol: "sparkles", text: bot.defaults.model ?? "Provider’s default") {
-                    Picker("Model", selection: Binding(get: { bot.defaults.model }, set: { model in
-                        change("Model") { $0.defaults.model = model }
-                    })) {
-                        Text("Provider’s default").tag(String?.none)
-                        ForEach(provider.map(ModelCatalog.models) ?? [], id: \.id) { Text($0.name).tag(Optional($0.id)) }
+                RowDivider()
+                SettingRow(label: "Provider", saved: saves["Provider"]) {
+                    FooterItem(symbol: "cpu", text: provider.map(ModelCatalog.providerName) ?? "As new sessions pick") {
+                        Picker("Provider", selection: Binding(get: { provider }, set: { next in
+                            change("Provider") {
+                                $0.defaults.provider = next
+                                $0.defaults.accountIds = []
+                                $0.defaults.model = nil
+                            }
+                        })) {
+                            Text("As new sessions pick").tag(Provider?.none)
+                            ForEach(providers, id: \.self) { Text(ModelCatalog.providerName($0)).tag(Optional($0)) }
+                        }
+                        .pickerStyle(.inline)
                     }
-                    .pickerStyle(.inline)
                 }
-                .disabled(provider == nil)
-            }
-            RowDivider()
-            SettingRow(label: "Permissions", hint: "What agents may do without asking", saved: saves["Permissions"]) {
-                FooterItem(symbol: "lock.shield", text: bot.defaults.permissionMode?.label ?? "As new sessions pick") {
-                    Picker("Permissions", selection: Binding(get: { bot.defaults.permissionMode }, set: { mode in
-                        change("Permissions") { $0.defaults.permissionMode = mode }
-                    })) {
-                        Text("As new sessions pick").tag(PermissionMode?.none)
-                        ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) {
-                            Text($0.label).tag(Optional($0))
+                RowDivider()
+                SettingRow(label: "Accounts", hint: "Sessions start on and rotate across these", saved: saves["Accounts"]) {
+                    FooterItem(symbol: "person.crop.circle", text: Self.accounts(bot.defaults.accountIds, of: ofProvider)) {
+                        ForEach(ofProvider, id: \.accountId) { account in
+                            Toggle(account.email ?? account.label, isOn: Binding(
+                                get: { bot.defaults.accountIds.contains(account.accountId) },
+                                set: { on in
+                                    change("Accounts") { bot in
+                                        bot.defaults.accountIds.removeAll { $0 == account.accountId }
+                                        if on { bot.defaults.accountIds.append(account.accountId) }
+                                    }
+                                }))
                         }
                     }
-                    .pickerStyle(.inline)
+                    .disabled(provider == nil)
+                }
+                RowDivider()
+                SettingRow(label: "Model", saved: saves["Model"]) {
+                    FooterItem(symbol: "sparkles", text: bot.defaults.model.flatMap { id in
+                        provider.flatMap { ModelCatalog.models($0).first { $0.id == id }?.name } ?? id
+                    } ?? "Provider’s default") {
+                        Picker("Model", selection: Binding(get: { bot.defaults.model }, set: { model in
+                            change("Model") { $0.defaults.model = model }
+                        })) {
+                            Text("Provider’s default").tag(String?.none)
+                            ForEach(provider.map(ModelCatalog.models) ?? [], id: \.id) { Text($0.name).tag(Optional($0.id)) }
+                        }
+                        .pickerStyle(.inline)
+                    }
+                    .disabled(provider == nil)
+                }
+                RowDivider()
+                SettingRow(label: "Permissions", hint: "What agents may do without asking", saved: saves["Permissions"]) {
+                    FooterItem(symbol: "lock.shield", text: bot.defaults.permissionMode?.label ?? "As new sessions pick") {
+                        Picker("Permissions", selection: Binding(get: { bot.defaults.permissionMode }, set: { mode in
+                            change("Permissions") { $0.defaults.permissionMode = mode }
+                        })) {
+                            Text("As new sessions pick").tag(PermissionMode?.none)
+                            ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) {
+                                Text($0.label).tag(Optional($0))
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    }
                 }
             }
+            .font(.subheadline)
+            .foregroundStyle(Theme.action)
         }
-        .font(.subheadline)
-        .foregroundStyle(Theme.secondary)
     }
 
     /// "Any" with none picked, else the picked ones' labels.
@@ -296,19 +316,30 @@ struct BotPage: View {
 
     // MARK: Channels
 
-    private func channels(_ bot: Bot, machine: Machine?) -> some View {
-        let projects = machine?.projects ?? []
-        return VStack(alignment: .leading, spacing: 8) {
-            SettingsList(title: "Channels") {
-                if bot.channelBindings.isEmpty {
-                    Text("No channel has a project of its own.")
-                        .font(.subheadline).foregroundStyle(Theme.tertiary)
-                        .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                }
-                ForEach(Array(bot.channelBindings.enumerated()), id: \.element.channelId) { index, binding in
-                    if index > 0 { RowDivider() }
-                    let id = binding.channelId
-                    SettingRow(label: id, saved: saves[id]) {
+    private func channels(_ bot: Bot) -> some View {
+        SettingsList(title: "Channels", caption: "`@\(bot.name) use ‹project›` in a channel gives it its own project too.") {
+            if bot.channelBindings.isEmpty {
+                EmptyRow(text: "Every channel uses the default")
+            }
+            ForEach(Array(bot.channelBindings.enumerated()), id: \.element.channelId) { index, binding in
+                if index > 0 { RowDivider() }
+                SummaryRow(title: binding.channelId, value: fleet.projectName(binding.projectId), saved: saves[binding.channelId],
+                           open: { sheet = .channel(binding.channelId) })
+            }
+            RowDivider()
+            AddRow(title: "Give a channel its own project…") { sheet = .addChannel }
+                .accessibilityIdentifier("bot-add-channel")
+        }
+    }
+
+    @ViewBuilder private func channelSheet(_ bot: Bot, id: String, machine: Machine?) -> some View {
+        if let binding = bot.channelBindings.first(where: { $0.channelId == id }) {
+            DetailSheet(title: "Channel", id: id, destructive: "Use the default", onDestructive: {
+                sheet = nil
+                change(id) { $0.channelBindings.removeAll { $0.channelId == id } }
+            }) {
+                SettingsGroup {
+                    SettingRow(label: "Project", hint: "New threads here work on it", saved: saves[id]) {
                         FooterItem(symbol: "shippingbox", text: fleet.projectName(binding.projectId)) {
                             Picker("Project", selection: Binding(get: { binding.projectId }, set: { project in
                                 change(id) { bot in
@@ -317,55 +348,156 @@ struct BotPage: View {
                                     }
                                 }
                             })) {
-                                ForEach(projects, id: \.projectId) { Text($0.name).tag($0.projectId) }
+                                ForEach(machine?.projects ?? [], id: \.projectId) { Text($0.name).tag($0.projectId) }
                             }
                             .pickerStyle(.inline)
                         }
                         .font(.subheadline)
-                        .foregroundStyle(Theme.secondary)
-                        IconButton(symbol: "minus.circle", help: "Unbind \(id)") {
-                            change(id) { $0.channelBindings.removeAll { $0.channelId == id } }
-                        }
+                        .foregroundStyle(Theme.action)
                     }
                 }
+            }
+        }
+    }
+}
+
+/// The sheet a bot's page has open: a person's, adding one, its instructions and memory, new
+/// threads', a channel's, or giving a channel a project.
+enum BotSheet: Identifiable, Hashable {
+    case person(String)
+    case addPerson
+    case knowledge
+    case newThreads
+    case channel(String)
+    case addChannel
+
+    var id: Self { self }
+}
+
+/// A person's details: their member ID, and the four switches their role stands for, each
+/// with what it lets them do; removing them bottom left.
+struct BotPersonSheet: View {
+    /// The bot's name.
+    let bot: String
+    let user: BotUser
+    var saved: SaveState?
+    let set: (BotUser) -> Void
+    let remove: () -> Void
+
+    var body: some View {
+        let name = user.displayName
+        DetailSheet(title: name, id: user.externalUserId, destructive: "Remove \(name)", onDestructive: remove) {
+            SettingsGroup {
+                SwitchRow(title: "Message the bot directly", detail: "\(name)’s DMs to \(bot) start sessions",
+                          isOn: binding(\.dm))
                 RowDivider()
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { channelFields(bot, projects: projects) }
-                    VStack(alignment: .trailing, spacing: 8) { channelFields(bot, projects: projects) }
+                SwitchRow(title: "Mention it in channels", detail: "@\(bot) in a channel starts a thread",
+                          isOn: binding(\.channels))
+                RowDivider()
+                SwitchRow(title: "Approve requests", detail: "May press Allow when an agent asks",
+                          isOn: binding(\.approve))
+                RowDivider()
+                SwitchRow(title: "Get notified", detail: "A DM when a session waits for them or fails",
+                          isOn: binding(\.notify))
+            }
+            HStack(spacing: 6) {
+                Text("Role: \(BotRole(user).label)").foregroundStyle(Theme.secondary)
+                SaveMark(state: saved)
+                if case .failed(let why) = saved { Text(why).foregroundStyle(Theme.failure) }
+            }
+            .font(.footnote)
+        }
+    }
+
+    private func binding(_ key: WritableKeyPath<BotUser, Bool>) -> Binding<Bool> {
+        Binding(get: { user[keyPath: key] }, set: { on in
+            var next = user
+            next[keyPath: key] = on
+            set(next)
+        })
+    }
+}
+
+/// Adds a person to a bot: their member ID, which the chat does not list for the bot, and name.
+/// They start as an approver.
+private struct AddPersonSheet: View {
+    let bot: Bot
+    let add: (BotUser) -> Void
+    @State private var person = BotPersonDraft()
+    @State private var error: String?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        DetailSheet(title: "Add person", primary: "Add", onPrimary: save,
+                    primaryDisabled: person.memberId.trimmingCharacters(in: .whitespaces).isEmpty
+                        || person.name.trimmingCharacters(in: .whitespaces).isEmpty) {
+            Field(label: "Member ID", hint: "In Slack, open their profile, then ⋯ › Copy member ID.") {
+                InputBox(placeholder: "U012AB3CD", text: $person.memberId, mono: true)
+                    .accessibilityIdentifier("bot-person-id")
+            }
+            Field(label: "Name", hint: "How herder names their actions: “via \(bot.name), Sam”.") {
+                InputBox(placeholder: "Sam", text: $person.name)
+                    .accessibilityIdentifier("bot-person-name")
+            }
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(Theme.failure)
+            }
+        }
+    }
+
+    private func save() {
+        do {
+            guard let user = try person.person(among: bot.allow) else { return }
+            add(user)
+            dismiss()
+        } catch {
+            self.error = describe(error)
+        }
+    }
+}
+
+/// Gives a channel a project of its own: its ID and the project.
+private struct AddChannelSheet: View {
+    let bot: Bot
+    let projects: [Project]
+    let projectName: (ProjectId) -> String
+    let bind: (ChannelBinding) -> Void
+    @State private var channel = ""
+    @State private var project: ProjectId?
+    @State private var error: String?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        DetailSheet(title: "Give a channel its own project", primary: "Save", onPrimary: save,
+                    primaryDisabled: channel.trimmingCharacters(in: .whitespaces).isEmpty || project == nil) {
+            Field(label: "Channel ID", hint: "Slack shows it at the bottom of the channel’s details.") {
+                InputBox(placeholder: "C012AB3CD", text: $channel, mono: true)
+                    .accessibilityIdentifier("bot-channel-id")
+            }
+            Field(label: "Project") {
+                FooterItem(symbol: "shippingbox", text: project.map(projectName) ?? "Pick a project") {
+                    Picker("Project", selection: $project) {
+                        ForEach(projects, id: \.projectId) { Text($0.name).tag(Optional($0.projectId)) }
+                    }
+                    .pickerStyle(.inline)
                 }
-                .padding(10)
+                .font(.subheadline)
+                .foregroundStyle(Theme.action)
             }
-            Text("New threads in a bound channel work on its project. Slack shows a channel’s ID at the bottom of its details; `@bot use ‹project›` in the channel binds it too.")
-                .font(.footnote).foregroundStyle(Theme.tertiary)
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(Theme.failure)
+            }
         }
     }
 
-    @ViewBuilder private func channelFields(_ bot: Bot, projects: [Project]) -> some View {
-        InputBox(placeholder: "Channel ID, C012AB3CD", text: $channel, mono: true)
-            .frame(minWidth: 200)
-            .accessibilityIdentifier("bot-channel-id")
-        FooterItem(symbol: "shippingbox", text: channelProject.map { fleet.projectName($0) } ?? "Project") {
-            Picker("Project", selection: $channelProject) {
-                ForEach(projects, id: \.projectId) { Text($0.name).tag(Optional($0.projectId)) }
-            }
-            .pickerStyle(.inline)
-        }
-        .font(.subheadline)
-        .foregroundStyle(Theme.secondary)
-        PillButton(title: "Bind", symbol: "plus", prominent: true) { bind(bot) }
-            .disabled(channel.trimmingCharacters(in: .whitespaces).isEmpty || channelProject == nil)
-    }
-
-    private func bind(_ bot: Bot) {
+    private func save() {
         let id = channel.trimmingCharacters(in: .whitespaces).uppercased()
-        guard let project = channelProject else { return }
+        guard let project else { return }
         if bot.channelBindings.contains(where: { $0.channelId == id }) {
-            error = "\(id) has a project already; pick another in its row."
+            error = "\(id) has a project already; change it in its row."
             return
         }
-        channel = ""
-        channelProject = nil
-        error = nil
-        change(id) { $0.channelBindings.append(ChannelBinding(channelId: id, projectId: project)) }
+        bind(ChannelBinding(channelId: id, projectId: project))
+        dismiss()
     }
 }

@@ -48,6 +48,18 @@ enum Theme {
     /// Marks a child session: its banner, header edge and composer.
     static let child = Color(light: 0x3C3C3A, dark: 0x9D8CF0)
 
+    /// Settings pages (P16.28). A switch that is on, and the dot of a page's "Connected" chip.
+    static let switchOn = Color(light: 0x2BB673, dark: 0x3ECF8E)
+    /// A switch that is off: a clearly dark track under its white knob.
+    static let switchOff = Color(light: 0xC2C2C8, dark: 0x303036)
+    /// The primary button of a settings sheet, "+ Add …" rows and editable values.
+    static let action = Color(light: 0x3D6FE0, dark: 0x5B8CFF)
+    /// What removes or forgets something; on its own page only, never in the section index.
+    static let danger = Color(light: 0xD4483A, dark: 0xEF6B5B)
+    /// The fills of a person's initials (`Avatar`), white on each in both appearances.
+    static let avatars: [Color] = [0x6A5ACD, 0x2F8F83, 0xB5653A, 0x3D7FC1, 0xA8508F, 0x7A8A35]
+        .map { Color(light: $0, dark: $0) }
+
     /// The type scale: a page's title, a section or row title, body text, and meta (times,
     /// counts, hints). The Mac uses the scale's point sizes; iOS the Dynamic Type styles
     /// nearest them.
@@ -79,6 +91,8 @@ enum Theme {
     #endif
     static let paneMargin: CGFloat = 16
     static let pageWidth: CGFloat = 920
+    /// A settings page's column (`DetailPage`), centred in the room beside its index.
+    static let settingsWidth: CGFloat = 880
     /// A page header's height, the sidebar's top bar's on the Mac, so their lines meet.
     static let headerHeight: CGFloat = 52
     /// A section heading's line (TODAY, ACCOUNTS), over its rows.
