@@ -66,6 +66,32 @@ struct Artifact: Hashable, Identifiable {
         return url
     }
 
+    /// What its card offers.
+    enum Action: Hashable { case open, download, copyLink, browser }
+
+    /// The card's actions at `now`, in order: Open and Download always, from the file kept with
+    /// the session; Copy link while the public link works; Open in browser with the link, or
+    /// where the browser opens files (`opensFiles`), with the file.
+    func actions(at now: Date, opensFiles: Bool) -> [Action] {
+        let live = link(at: now) != nil
+        return [.open, .download] + (live ? [.copyLink] : []) + (live || opensFiles ? [.browser] : [])
+    }
+
+    /// Where Download saves it in `folder`: its own name, numbered as the Finder numbers copies
+    /// ("shot 2.png") when that is taken.
+    func download(in folder: URL) -> URL {
+        let base = (name as NSString).deletingPathExtension
+        var file = folder.appendingPathComponent(name)
+        var copy = 2
+        while FileManager.default.fileExists(atPath: file.path) {
+            let numbered = "\(base) \(copy)"
+            file = folder.appendingPathComponent(pathExtension.isEmpty ? numbered
+                                                     : "\(numbered).\((name as NSString).pathExtension)")
+            copy += 1
+        }
+        return file
+    }
+
     var symbol: String {
         switch kind {
         case .image: "photo"
@@ -169,7 +195,8 @@ enum PageLayout {
 }
 
 /// An artifact as a card in the thread: a sharp thumbnail of it at fit width, then its title,
-/// type and size with Open and Open in browser. The thumbnail opens the viewer too.
+/// type and size with Open, Download, Copy link and Open in browser. The thumbnail opens the
+/// viewer too.
 struct ArtifactBlock: View {
     let artifact: Artifact
     let fleet: Fleet
@@ -181,6 +208,11 @@ struct ArtifactBlock: View {
     @State private var viewing = false
     #endif
     @Environment(\.openURL) private var openURL
+    @State private var copied = false
+    #if os(iOS)
+    /// The file Download shares.
+    @State private var file: URL?
+    #endif
 
     private static let cap: CGFloat = 360
 
@@ -255,24 +287,37 @@ struct ArtifactBlock: View {
         }
     }
 
-    /// The title gets the card's width: beside the buttons where it fits whole, else above them.
+    /// The title gets the card's width: beside the buttons where it fits whole, else above them;
+    /// where even the buttons don't fit, all but Open fold into a ⋯ menu.
     private var footer: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let link = artifact.link(at: context.date)
+            let actions = artifact.actions(at: context.date, opensFiles: ArtifactBrowser.opensFiles)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) {
                     heading(link: link).fixedSize(horizontal: true, vertical: false)
                     Spacer(minLength: 0)
-                    actions(link: link)
+                    buttons(actions, link: link)
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     heading(link: link)
-                    HStack(spacing: 8) { actions(link: link) }
-                        .padding(.leading, 26)
+                    buttons(actions, link: link).padding(.leading, 16)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    heading(link: link)
+                    HStack(spacing: HeaderControl.spacing) {
+                        button(.open, link: link)
+                        Menu {
+                            ForEach(actions.dropFirst(), id: \.self) { item($0, link: link) }
+                        } label: {
+                            HeaderLabel(symbol: "ellipsis")
+                        }
+                        .modifier(HeaderMenuStyle())
+                        .accessibilityLabel("More")
+                    }
+                    .padding(.leading, 16)
                 }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
             .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 8)
             .contextMenu {
                 if let link {
@@ -281,6 +326,9 @@ struct ArtifactBlock: View {
                 }
             }
         }
+        #if os(iOS)
+        .task(id: data != nil) { file = data.flatMap { try? artifact.file($0) } }
+        #endif
     }
 
     private func heading(link: URL?) -> some View {
@@ -293,19 +341,105 @@ struct ArtifactBlock: View {
         }
     }
 
-    @ViewBuilder private func actions(link: URL?) -> some View {
-        if data != nil {
-            Button("Open", action: open)
-                .accessibilityIdentifier("artifact-open")
+    private func buttons(_ actions: [Artifact.Action], link: URL?) -> some View {
+        HStack(spacing: HeaderControl.spacing) {
+            ForEach(actions, id: \.self) { button($0, link: link) }
         }
-        if let link {
-            Button { openURL(link) } label: { Label("Open in browser", systemImage: "arrow.up.right.square") }
-                .help(link.absoluteString)
-        } else if let data, ArtifactBrowser.opensFiles {
-            Button { ArtifactBrowser.open(artifact, data) } label: {
-                Label("Open in browser", systemImage: "arrow.up.right.square")
+    }
+
+    @ViewBuilder private func button(_ action: Artifact.Action, link: URL?) -> some View {
+        switch action {
+        case .download:
+            #if os(iOS)
+            // iOS saves through the share sheet: Save to Files, Save Image.
+            if let file {
+                ShareLink(item: file) { HeaderLabel(symbol: "square.and.arrow.down", title: "Download") }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("artifact-download")
+            } else {
+                HeaderButton(symbol: "square.and.arrow.down", title: "Download") {}.disabled(true)
             }
+            #else
+            HeaderButton(symbol: "square.and.arrow.down", title: "Download", action: download)
+                .disabled(data == nil)
+                .help(help(.download, link: nil))
+                .accessibilityIdentifier("artifact-download")
+            #endif
+        default:
+            HeaderButton(symbol: symbol(action), title: title(action)) { perform(action, link: link) }
+                .disabled(action == .open && data == nil)
+                .help(help(action, link: link))
+                .accessibilityIdentifier("artifact-\(action)")
         }
+    }
+
+    /// `action` as an item of the ⋯ menu.
+    @ViewBuilder private func item(_ action: Artifact.Action, link: URL?) -> some View {
+        #if os(iOS)
+        if action == .download, let file {
+            ShareLink(item: file) { Label("Download", systemImage: "square.and.arrow.down") }
+        } else if action != .download {
+            Button(title(action), systemImage: symbol(action)) { perform(action, link: link) }
+        }
+        #else
+        Button(title(action), systemImage: symbol(action)) { perform(action, link: link) }
+            .disabled(action == .download && data == nil)
+        #endif
+    }
+
+    private func title(_ action: Artifact.Action) -> String {
+        switch action {
+        case .open: "Open"
+        case .download: "Download"
+        case .copyLink: copied ? "Copied" : "Copy link"
+        case .browser: "Open in browser"
+        }
+    }
+
+    private func symbol(_ action: Artifact.Action) -> String {
+        switch action {
+        case .open: "arrow.up.left.and.arrow.down.right"
+        case .download: "square.and.arrow.down"
+        case .copyLink: copied ? "checkmark" : "link"
+        case .browser: "arrow.up.right.square"
+        }
+    }
+
+    private func help(_ action: Artifact.Action, link: URL?) -> String {
+        switch action {
+        case .open: "Open in the viewer"
+        case .download: "Save to Downloads"
+        case .copyLink: "Copy the public link"
+        case .browser: link?.absoluteString ?? "Open a copy of the file"
+        }
+    }
+
+    private func perform(_ action: Artifact.Action, link: URL?) {
+        switch action {
+        case .open: open()
+        case .download: download()
+        case .copyLink:
+            Clipboard.string = link?.absoluteString
+            copied = true
+        case .browser:
+            if let link { openURL(link) } else if let data { ArtifactBrowser.open(artifact, data) }
+        }
+    }
+
+    /// Saves the file to the Mac's Downloads, saying so with Show in Finder.
+    private func download() {
+        #if os(macOS)
+        guard let data else { return }
+        do {
+            let folder = try FileManager.default.url(for: .downloadsDirectory, in: .userDomainMask,
+                                                     appropriateFor: nil, create: false)
+            let file = artifact.download(in: folder)
+            try data.write(to: file, options: .withoutOverwriting)
+            fleet.toast = Toast(text: "Saved to Downloads", reveal: file)
+        } catch {
+            fleet.toast = .failure("Could not save \(artifact.name)", error)
+        }
+        #endif
     }
 
     private func meta(link: URL?) -> String {

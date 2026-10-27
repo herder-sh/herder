@@ -928,6 +928,80 @@
                     "null"
                   ]
                 },
+                "origin": {
+                  "description": "The bot that started the session; absent when the apps or an agent did.",
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "bot_id": {
+                      "description": "The bot, on the session's host.",
+                      "type": "string"
+                    },
+                    "by": {
+                      "description": "Who wrote the message that started it, by their allowlist display name.",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "description": "The chat.",
+                      "oneOf": [
+                        {
+                          "description": "A Slack app, connected over Socket Mode.",
+                          "type": "string",
+                          "const": "slack"
+                        },
+                        {
+                          "description": "A Telegram bot.",
+                          "type": "string",
+                          "const": "telegram"
+                        }
+                      ]
+                    },
+                    "place": {
+                      "description": "Where they wrote it.",
+                      "oneOf": [
+                        {
+                          "description": "A direct message with the bot.",
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "direct"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ]
+                        },
+                        {
+                          "description": "A channel or group, or a thread in one.",
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "description": "The channel's name, as the chat showed it when the session started, such as\n`general`; its id when the chat gave no name.",
+                              "type": "string"
+                            },
+                            "type": {
+                              "type": "string",
+                              "const": "channel"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "name"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "bot_id",
+                    "kind",
+                    "by",
+                    "place"
+                  ]
+                },
                 "parent": {
                   "description": "Primary session of the task this session is a child of; absent for a top-level session.",
                   "type": [
