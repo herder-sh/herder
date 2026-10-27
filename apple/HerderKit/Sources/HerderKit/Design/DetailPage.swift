@@ -16,6 +16,8 @@ struct DetailPage<Leading: View, Actions: View, Content: View>: View {
     @ViewBuilder var actions: Actions
     @ViewBuilder var content: Content
     @State private var sections: [String] = []
+    /// The section at the top of the scrolled page, raised in the index.
+    @State private var current: String?
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -27,10 +29,11 @@ struct DetailPage<Leading: View, Actions: View, Content: View>: View {
         ScrollViewReader { proxy in
             HStack(alignment: .top, spacing: 0) {
                 if showsIndex {
-                    SectionIndex(sections: sections) { section in
+                    SectionIndex(sections: sections, current: current ?? sections.first) { section in
+                        current = section
                         withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(section, anchor: .top) }
                     }
-                    .frame(width: 168)
+                    .frame(width: 188)
                     .padding(.top, 26)
                 }
                 ScrollView {
@@ -38,14 +41,19 @@ struct DetailPage<Leading: View, Actions: View, Content: View>: View {
                         header
                         content
                     }
-                    .frame(maxWidth: 760, alignment: .leading)
-                    .padding(.horizontal, 20)
+                    .frame(maxWidth: Theme.settingsWidth, alignment: .leading)
+                    .padding(.horizontal, Theme.margin)
                     .padding(.bottom, 32)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity)
                 }
+                .coordinateSpace(.named(DetailSectionTops.space))
             }
         }
         .onPreferenceChange(DetailSections.self) { sections = $0 }
+        .onPreferenceChange(DetailSectionTops.self) { tops in
+            let next = DetailSectionTops.current(tops, in: sections)
+            if next != current { current = next }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.background)
         #if os(iOS)
@@ -66,9 +74,16 @@ struct DetailPage<Leading: View, Actions: View, Content: View>: View {
         HStack(alignment: .center, spacing: 12) {
             leading
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 10) {
-                    Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1)
-                    if let chip { chip }
+                // The title keeps its width: the chip goes under it where both do not fit.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1)
+                        if let chip { chip }
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1)
+                        if let chip { chip }
+                    }
                 }
                 if !status.isEmpty {
                     Text(status).font(Theme.body).foregroundStyle(Theme.secondary).lineLimit(2)
@@ -106,35 +121,63 @@ struct DetailSections: PreferenceKey {
     }
 }
 
-extension View {
-    /// Lists this part of a `DetailPage` in its index, as `title`, and lets the index scroll to it.
-    func detailSection(_ title: String) -> some View {
-        id(title).preference(key: DetailSections.self, value: [title])
+/// Where each section of a `DetailPage` starts, from the top of its scrolled area.
+struct DetailSectionTops: PreferenceKey {
+    static let defaultValue: [String: CGFloat] = [:]
+    static let space = "detail-page"
+    /// How far under the scrolled area's top a section still counts as the one being read.
+    static let reading: CGFloat = 80
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue()) { $1 }
+    }
+
+    /// The last of `sections` whose top has scrolled up to the reading line, else the first.
+    static func current(_ tops: [String: CGFloat], in sections: [String]) -> String? {
+        sections.last { (tops[$0] ?? .infinity) <= reading } ?? sections.first
     }
 }
 
-/// A long page's sections, each a link that scrolls to it.
+extension View {
+    /// Lists this part of a `DetailPage` in its index, as `title`, and lets the index scroll to it.
+    func detailSection(_ title: String) -> some View {
+        id(title)
+            .preference(key: DetailSections.self, value: [title])
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: DetailSectionTops.self,
+                                       value: [title: geometry.frame(in: .named(DetailSectionTops.space)).minY])
+            })
+    }
+}
+
+/// A long page's sections, each a link that scrolls to it, quiet but for the one being read on
+/// the raised surface. A destructive section is no louder than the rest here.
 private struct SectionIndex: View {
     let sections: [String]
+    let current: String?
     let go: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(sections, id: \.self) { section in
+                let selected = section == current
                 Button { go(section) } label: {
                     Text(section)
-                        .font(Theme.body)
-                        .foregroundStyle(section == "Danger zone" ? Theme.failure : Theme.secondary)
+                        .font(Theme.body.weight(selected ? .medium : .regular))
+                        .foregroundStyle(selected ? Theme.text : Theme.secondary)
                         .lineLimit(1)
                         .padding(.horizontal, 10)
                         .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                        .background(selected ? Theme.raised : .clear, in: .rect(cornerRadius: 6))
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("section-index-\(section)")
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(.leading, 12)
+        .padding(.trailing, 4)
     }
 }
 
@@ -145,7 +188,7 @@ struct StatusChip: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle().fill(urgency.color).frame(width: 7, height: 7)
+            Circle().fill(urgency == .done ? Theme.switchOn : urgency.color).frame(width: 7, height: 7)
             Text(text).lineLimit(1)
         }
         .font(Theme.meta.weight(.medium))
@@ -237,10 +280,10 @@ struct DangerZone<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionHeading(title: "Danger zone", tint: Theme.failure)
+            SectionHeading(title: "Danger zone", tint: Theme.danger)
             VStack(spacing: 0) { content }
                 .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
-                .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.failure.opacity(0.4)))
+                .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.danger.opacity(0.4)))
         }
         .detailSection("Danger zone")
     }
@@ -256,7 +299,7 @@ struct DangerButton: View {
         Button(title, role: .destructive, action: action)
             .buttonStyle(.plain)
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Theme.failure)
+            .foregroundStyle(Theme.danger)
             .padding(.horizontal, 12)
             .frame(height: 32)
             .background(Theme.raised, in: .rect(cornerRadius: 7))

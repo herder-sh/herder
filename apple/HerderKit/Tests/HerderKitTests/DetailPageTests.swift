@@ -226,3 +226,28 @@ private struct SamplePage: View {
     }
 }
 #endif
+
+struct SettingsPatternTests {
+    @Test func aPersonsAvatarColourComesFromTheirIdAlone() {
+        #expect(Avatar.colorIndex("U04SAM0001") == Avatar.colorIndex("U04SAM0001"))
+        // Pinned, so a change to the hash that would recolour everyone fails here.
+        #expect(Avatar.colorIndex("") == 4)
+        #expect(Avatar.colorIndex("a") == 5)
+        // The demo's people, whose ids differ in a few letters, get fills of their own.
+        #expect(["U04SAM0001", "U04KIM0003", "U04ALEX002"].map(Avatar.colorIndex) == [0, 3, 4])
+        let ids = (0..<60).map { "U\($0)" }
+        #expect(Set(ids.map(Avatar.colorIndex)).count == Theme.avatars.count)
+        #expect(Avatar.initials("Sam") == "S")
+        #expect(Avatar.initials("Alex Kim") == "AK")
+        #expect(Avatar.initials(" ") == "?")
+    }
+
+    @Test func theIndexRaisesTheSectionBeingRead() {
+        let sections = ["People", "New threads", "Channels", "About"]
+        #expect(DetailSectionTops.current([:], in: sections) == "People")
+        #expect(DetailSectionTops.current(["People": 200, "New threads": 500], in: sections) == "People")
+        #expect(DetailSectionTops.current(["People": -300, "New threads": 40, "Channels": 300], in: sections) == "New threads")
+        #expect(DetailSectionTops.current(["People": -900, "New threads": -500, "Channels": -100, "About": 20],
+                                          in: sections) == "About")
+    }
+}

@@ -238,8 +238,9 @@ private struct SetCard: View {
                     let granted = set.hosts.contains(host.id)
                     Toggle(isOn: Binding(get: { asked[host.id] ?? granted }, set: { grant($0, host.id) })) {
                         Text(host.name ?? host.id).font(.subheadline).foregroundStyle(Theme.text)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .toggleStyle(.switch)
+                    .toggleStyle(.settings)
                     .disabled(asked[host.id] != nil)
                     .accessibilityIdentifier("secret-grant-\(set.name)-\(host.id)")
                 }
@@ -477,7 +478,7 @@ private struct HandoffToggle: View {
     var body: some View {
         HStack(spacing: 6) {
             Toggle("Takes handoffs", isOn: Binding(get: { asked ?? takesHandoffs }, set: { change($0) }))
-                .toggleStyle(.switch)
+                .toggleStyle(.settings)
                 .labelsHidden()
                 .controlSize(.small)
                 .disabled(asked != nil)

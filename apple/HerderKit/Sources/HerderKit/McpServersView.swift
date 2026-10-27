@@ -156,7 +156,7 @@ struct McpServersSection: View {
                 }
             }))
             .labelsHidden()
-            .toggleStyle(.switch)
+            .toggleStyle(.settings)
             .controlSize(.small)
             .disabled(!row.places.contains { editable.contains($0.hostId) })
             .accessibilityLabel("\(row.name) enabled")
@@ -396,7 +396,7 @@ struct McpMachineServers: View {
                     name: $0.name, enabled: on, project: $0.project, transport: $0.transport) : $0 } }
             }))
             .labelsHidden()
-            .toggleStyle(.switch)
+            .toggleStyle(.settings)
             .controlSize(.small)
             .disabled(!connected)
             .accessibilityLabel("\(server.name) enabled")
@@ -646,7 +646,7 @@ struct McpServerForm: View {
             .fixedSize()
         }
         Toggle("Enabled", isOn: $draft.enabled)
-            .toggleStyle(.switch)
+            .toggleStyle(.settings)
             .font(.subheadline)
             .foregroundStyle(Theme.text)
     }

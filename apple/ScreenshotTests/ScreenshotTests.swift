@@ -410,9 +410,17 @@ final class ScreenshotTests: XCTestCase {
         resize(to: CGSize(width: 1440, height: 900))
         #endif
         press(bot)
-        guard wait(app.staticTexts["U04SAM0001"].firstMatch, "trash-can's people") else { return }
+        let sam = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Sam'")).firstMatch
+        guard wait(sam, "trash-can's people") else { return }
         settle()
         shoot(platform("bot"))
+        // A person's sheet: their member ID and the four switches behind their role.
+        press(sam)
+        if wait(app.staticTexts["U04SAM0001"].firstMatch, "Sam's sheet") {
+            settle()
+            shoot(platform("bot-person"))
+            dismiss()
+        }
         back()
         let add = app.buttons["Add Bot"].firstMatch
         guard wait(add, "Add Bot") else { return }

@@ -617,9 +617,21 @@ Xcode preview in its file.
   `SectionHeading` over rows split by hairlines, with no box; the raised surface
   (`Theme.raised`) for a row's hover and selection and a settings group. A card
   (`Card`, `RequestCard`) only for an object you act on: a request, a machine in its detail page.
-- **Settings are rows** (`SettingsList`, `SettingRow`). Grouped under a heading; the label on
-  the left with at most one line of hint, the control on the right. Longer help goes behind
-  the ⓘ (`SettingRow(help:)`).
+- **Settings are rows** (`SettingsList`, `SettingRow`). Grouped under a heading in an inset
+  box, with a caption under it when the group needs one; the label on the left with at most
+  one line of hint, the control on the right. Longer help goes behind the ⓘ
+  (`SettingRow(help:)`).
+- **One settings pattern** (P16.28, `Design/SettingsList.swift`). What takes more than a
+  control is a `SummaryRow`: an optional mark (an `Avatar`), the title, one line of summary in
+  secondary text, the value and a chevron, or an accessory such as a role menu in the
+  chevron's place. Clicking it opens a `DetailSheet`: the title with a monospaced id, a
+  `SwitchRow` per switch with a sentence that says what it does, the destructive action bottom
+  left and Done, in the action colour, bottom right. Its changes apply at once, as on the page.
+  A group that grows ends in an `AddRow` ("+ Add person…"). Switches are the settings switch
+  (`.toggleStyle(.settings)`): `Theme.switchOn` green on, a clearly dark `Theme.switchOff`
+  track off. `Theme.action` blue is for primary sheet buttons, add rows and editable values;
+  `Theme.danger` red for what removes or forgets, on its own page only; an `Avatar`'s fill
+  comes from `Theme.avatars`, picked by FNV-1a of the person's id so it never changes.
 - **Collections are tables** (`SortableTable`). Anything over about four items of one kind.
   A click on a column header sorts by it, again reverses it, and the sorted column shows an
   arrow. Each device keeps each table's sort (`table.<id>.sort` in its defaults). Text sorts as
@@ -661,7 +673,9 @@ Every page is a `DetailPage`, top to bottom:
 
 Each part marked `detailSection(_:)` (the four above do it themselves) is listed in a section
 index on the left of a page with four or more of them, on the Mac and iPad, which scrolls to it.
-iPhone has no index.
+The index is quiet: the section being read sits on the raised surface, and Danger zone is no
+louder than the rest. The page's column is at most `Theme.settingsWidth` (880 pt), centred in
+the room beside the index. iPhone has no index.
 
 Changes save as they are made: `Autosave` runs a row's save and its `SettingRow(saved:)` shows a
 quiet "Saved" by the control for two seconds, or the error in the hint's place until the next

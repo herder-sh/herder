@@ -165,7 +165,7 @@ struct BackupSection: View {
                     }
                 }))
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(.settings)
                 .accessibilityIdentifier("takes-handoffs")
             }
             // The vault's status follows the change; until then the switch shows it.
@@ -210,7 +210,7 @@ struct VaultLinkSwitch: View {
 
     var body: some View {
         SettingRow(label: label, hint: hint, saved: saves["switch"]) {
-            Toggle(label, isOn: Binding(get: { vault[keyPath: key] }, set: { flip($0) })).labelsHidden().toggleStyle(.switch)
+            Toggle(label, isOn: Binding(get: { vault[keyPath: key] }, set: { flip($0) })).labelsHidden().toggleStyle(.settings)
         }
     }
 

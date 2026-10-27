@@ -156,7 +156,7 @@ struct ProjectSettingsPage: View {
                 } label: {
                     Text("Remove…")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.failure)
+                        .foregroundStyle(Theme.danger)
                         .padding(.horizontal, 12)
                         .frame(height: 32)
                         .background(Theme.raised, in: .rect(cornerRadius: 7))
@@ -249,15 +249,24 @@ struct ProjectSettingsForm: View {
                 }
                 Group {
                     SettingRow(label: "Permissions", hint: "What agents may do without asking", saved: saves["Permissions"]) {
-                        // No mode set starts sessions asking, as Ask does.
-                        Picker("Permissions", selection: Binding(get: { mode ?? .ask }, set: { mode = $0 })) {
-                            ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) {
-                                Text($0.label).tag($0)
+                        // No mode set starts sessions asking, as Ask does. A menu where the four
+                        // segments do not fit, as on a phone.
+                        let selection = Binding(get: { mode ?? .ask }, set: { mode = $0 })
+                        let modes = [PermissionMode.readOnly, .ask, .autoEdit, .fullAccess]
+                        ViewThatFits(in: .horizontal) {
+                            Picker("Permissions", selection: selection) {
+                                ForEach(modes, id: \.self) { Text($0.label).tag($0) }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .fixedSize()
+                            FooterItem(symbol: "lock.shield", text: (mode ?? .ask).label) {
+                                Picker("Permissions", selection: selection) {
+                                    ForEach(modes, id: \.self) { Text($0.label).tag($0) }
+                                }
+                                .pickerStyle(.inline)
                             }
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .fixedSize()
                     }
                     RowDivider()
                     SettingRow(label: "Account", hint: "Rotates to another when it runs out", saved: saves["Account"]) {
@@ -290,7 +299,7 @@ struct ProjectSettingsForm: View {
                                saved: saves["Keep private"]) {
                         Toggle("Keep artifacts private", isOn: $privateArtifacts)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(.settings)
                             .accessibilityIdentifier("private-artifacts")
                     }
                 }

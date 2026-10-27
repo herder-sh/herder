@@ -280,6 +280,42 @@ struct BotsTests {
         #expect(try draft.person(among: []) == nil)
     }
 
+    @Test func eachRolePresetSetsTheFourSwitchesAndReadsBack() {
+        let blank = BotUser(externalUserId: "U1", displayName: "Kim", dm: false, channels: false, approve: false, notify: false)
+        let driver = BotRole.driver.applied(to: blank)
+        #expect(driver.dm && driver.channels && !driver.approve && !driver.notify)
+        let approver = BotRole.approver.applied(to: blank)
+        #expect(approver.dm && approver.channels && approver.approve && !approver.notify)
+        let watcher = BotRole.watcher.applied(to: blank)
+        #expect(!watcher.dm && !watcher.channels && !watcher.approve && watcher.notify)
+        for role in BotRole.presets {
+            #expect(BotRole(role.applied(to: blank)) == role)
+            #expect(BotRole(role.applied(to: watcher)) == role)
+        }
+        #expect(driver.externalUserId == "U1" && driver.displayName == "Kim")
+    }
+
+    @Test func anyOtherMixIsCustomAndKeepsItsSwitches() {
+        let alex = BotUser(externalUserId: "U2", displayName: "Alex", dm: true, channels: false, approve: false, notify: false)
+        #expect(BotRole(alex) == .custom)
+        #expect(BotRole.custom.applied(to: alex) == alex)
+        #expect(alex.abilities == "DMs only")
+        let everything = BotUser(externalUserId: "U3", displayName: "Sam", dm: true, channels: true, approve: true, notify: true)
+        #expect(BotRole(everything) == .custom)
+        #expect(everything.abilities == "DMs, channels, approves, notified")
+        // A new person starts as an approver.
+        let sam = try? BotPersonDraft(memberId: "U012AB3CD", name: "Sam").person(among: [])
+        #expect(sam.map(BotRole.init) == .approver)
+    }
+
+    @Test func newThreadsSumUpWhatTheyRunOn() {
+        var defaults = BotDefaults(projectId: "github.com/acme/api", provider: "claude", accountIds: [],
+                                   model: "claude-opus-5-5", permissionMode: .fullAccess)
+        #expect(BotPage.newThreads(defaults) { _ in "api" } == "api · Claude Opus 5.5 · Full access")
+        defaults = BotDefaults(projectId: nil, provider: nil, accountIds: [], model: nil, permissionMode: nil)
+        #expect(BotPage.newThreads(defaults) { _ in "api" } == "A chat")
+    }
+
     @Test func aLinkedSessionCarriesItsThreadsToItsRow() {
         var script = Script("01A")
         var host = machine("host-a", name: "a", sessions: ["01A"])
