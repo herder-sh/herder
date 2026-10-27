@@ -762,6 +762,8 @@ struct Toast: Identifiable, Equatable {
     /// The whole error, shown when the toast is tapped.
     var detail: String?
     var undo: SessionKey?
+    /// A file it saved, which Show in Finder reveals.
+    var reveal: URL?
     /// Says what went wrong, rather than what finished. It stays until dismissed.
     var failed = false
 

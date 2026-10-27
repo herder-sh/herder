@@ -35,6 +35,60 @@ import WebKit
         try await shoot(card, size: CGSize(width: 720, height: 470), named: "artifact-card.png", titled: false)
     }
 
+    @Test func showsTheCardsActionsAtMacWidth() async throws {
+        try await snap(width: 720, named: "artifact-card-actions-mac.png")
+    }
+
+    @Test func foldsTheCardsActionsAtIPhoneWidth() async throws {
+        try await snap(width: 390, named: "artifact-card-actions-iphone.png")
+    }
+
+    /// A published PNG's card, with its public link and then without, drawn without a screen
+    /// capture: an image thumbnail has no page to paint out of process.
+    private func snap(width: CGFloat, named name: String) async throws {
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else { return }
+        let icon = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("App/Assets.xcassets/AppIcon.appiconset/icon-mac-512.png")
+        let png = try Data(contentsOf: icon)
+        var script = Script("01CARD", host: "studio")
+        let shared = Attachment(attachmentId: "01ICON", mediaType: "image/png", size: UInt64(png.count),
+                                name: "app-icon-1024.png")
+        let kept = Attachment(attachmentId: "01KEPT", mediaType: "image/png", size: UInt64(png.count), name: "icon.png")
+        let events = [
+            script.event(created()),
+            script.event(.artifactPublished(title: "trip1 app icon 1024x1024 for Meta", attachment: shared,
+                                            url: "https://krowk.com/a/demo-icon", expiresAt: nil)),
+            script.event(.artifactPublished(title: "trip1 app icon, private copy", attachment: kept, url: nil,
+                                            expiresAt: nil)),
+        ]
+        fleet.applyForTesting(SessionUpdate(events: events, streaming: []), to: script.key)
+        fleet.setAttachmentForTesting("01ICON", png)
+        fleet.setAttachmentForTesting("01KEPT", png)
+        let cards = VStack(spacing: 16) {
+            ForEach(fleet.artifacts(of: script.key)) { ArtifactBlock(artifact: $0, fleet: fleet, key: script.key) }
+        }
+        .padding(16).frame(width: width).background(Theme.background).environment(\.colorScheme, .dark)
+        let host = NSHostingView(rootView: cards)
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.frame = NSRect(x: 0, y: 0, width: width, height: 900)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        for _ in 0..<5 {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        host.frame.size.height = host.fittingSize.height
+        host.layoutSubtreeIfNeeded()
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let image = try #require(rep.representation(using: .png, properties: [:]))
+        Attachment.record(image, named: name)
+        if let dir = ProcessInfo.processInfo.environment["HERDER_SCREENSHOT_DIR"] {
+            try image.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
+        }
+    }
+
     private func shoot(_ view: some View, size: CGSize, named name: String, titled: Bool = true) async throws {
         let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
         host.sceneBridgingOptions = [.toolbars, .title]

@@ -68,6 +68,34 @@ struct ArtifactTests {
         #expect(privately.link(at: before) == nil)
     }
 
+    @Test func theCardCopiesOnlyALiveLink() {
+        let attachment = Attachment(attachmentId: "a", mediaType: "application/octet-stream", size: 1, name: "a.png")
+        let now = Timestamp.date("2026-10-11T11:59:00Z")!
+        let shared = Artifact(id: 1, title: "t", attachment: attachment, url: "https://krowk.com/a/1",
+                               expiresAt: "2026-10-11T12:00:00Z")
+        let privately = Artifact(id: 2, title: "t", attachment: attachment, url: nil, expiresAt: nil)
+        let expired = Artifact(id: 3, title: "t", attachment: attachment, url: "https://krowk.com/a/3",
+                               expiresAt: "2026-10-11T11:00:00Z")
+        #expect(shared.actions(at: now, opensFiles: false) == [.open, .download, .copyLink, .browser])
+        #expect(privately.actions(at: now, opensFiles: false) == [.open, .download])
+        #expect(expired.actions(at: now, opensFiles: false) == [.open, .download])
+        // The Mac opens the file itself in the browser.
+        #expect(privately.actions(at: now, opensFiles: true) == [.open, .download, .browser])
+        #expect(expired.actions(at: now, opensFiles: true) == [.open, .download, .browser])
+    }
+
+    @Test func downloadNumbersACopyRatherThanOverwrite() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let attachment = Attachment(attachmentId: "a", mediaType: "application/octet-stream", size: 1, name: "icon.png")
+        let artifact = Artifact(id: 1, title: "t", attachment: attachment, url: nil, expiresAt: nil)
+        #expect(artifact.download(in: folder).lastPathComponent == "icon.png")
+        try Data().write(to: folder.appendingPathComponent("icon.png"))
+        try Data().write(to: folder.appendingPathComponent("icon 2.png"))
+        #expect(artifact.download(in: folder).lastPathComponent == "icon 3.png")
+    }
+
     @Test func thePolicyComesFirstAfterTheDoctype() {
         let page = SandboxedPage.wrapped("\n<!DOCTYPE html><html><body>hi</body></html>")
         #expect(page.hasPrefix("<!DOCTYPE html>\n<meta http-equiv=\"Content-Security-Policy\""))
