@@ -63,6 +63,22 @@ struct ProjectGroup: Hashable, Identifiable {
     }
 }
 
+/// A chat bot's conversations: the task trees its people started, on the machine that holds it.
+struct BotGroup: Hashable, Identifiable {
+    var id: String { "\(hostId)/\(botId)" }
+    /// The machine the bot runs on: for a vault, the host its sessions run on.
+    let hostId: HostId
+    let botId: BotId
+    let kind: BotKind
+    /// Its task trees with a live session, then those archived whole, as a project's.
+    var live: [SessionSummary]
+    var archived: [SessionSummary]
+    /// How many of its sessions have an approval or a question waiting for the user.
+    var waiting = 0
+
+    var sessions: [SessionSummary] { live + archived }
+}
+
 /// What the lists show, built from the machines and their sessions' folded state the way the
 /// TUI builds its own (crates/herder-tui/src/app.rs, projects.rs, inbox.rs).
 struct Lists: Equatable {
@@ -72,6 +88,11 @@ struct Lists: Equatable {
     /// session, then the archived ones.
     var chats: [SessionSummary] = []
     var archivedChats: [SessionSummary] = []
+    /// The bots' conversations, a group a bot, kept out of the projects, the chats and so the
+    /// Board; a tree waiting for the user is on the Board too (`board`).
+    var bots: [BotGroup] = []
+    /// The sessions with an approval or a question waiting for the user.
+    var waiting: Set<SessionKey> = []
     var machines: [MachineSummary] = []
     /// Each session's children: a view can walk one session's tree without reading every
     /// session, and so redrawing on every token any of them streams.
@@ -115,8 +136,10 @@ struct Lists: Equatable {
             if !used.contains(model) { used.append(model) }
             usedModels[entry.key.hostId, default: [:]][provider] = used
         }
-        projects = Self.projects(entries.filter { !$0.head.chat }, machines: machines, now: now)
-        (chats, archivedChats) = Self.split(entries.filter(\.head.chat), now: now)
+        let origins = Self.origins(entries)
+        let own = entries.filter { origins[$0.key] == nil }
+        projects = Self.projects(own.filter { !$0.head.chat }, machines: machines, now: now)
+        (chats, archivedChats) = Self.split(own.filter(\.head.chat), now: now)
         let flat = entries.map { $0.summary(now: now, children: children) }
 
         // One per session, as its view pins it: the questions asked together page in one card.
@@ -133,6 +156,8 @@ struct Lists: Equatable {
             if a.isQuestion != b.isQuestion { return !a.isQuestion }
             return a.requestId < b.requestId
         }
+        waiting = Set(requests.map(\.session.key))
+        bots = Self.bots(entries.filter { origins[$0.key] != nil }, origins: origins, waiting: waiting, now: now)
 
         self.machines = machines.map { Self.summary($0, entries: entries, now: now) }
     }
@@ -207,6 +232,39 @@ struct Lists: Equatable {
             }
         }
         return (live, archived)
+    }
+
+    /// The bot that started each session of a bot's task tree, with the host that holds the bot:
+    /// a child has the origin of its tree's top.
+    static func origins(_ entries: [Entry]) -> [SessionKey: (hostId: HostId, origin: SessionOrigin)] {
+        let byKey = Dictionary(entries.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        var origins: [SessionKey: (hostId: HostId, origin: SessionOrigin)] = [:]
+        for entry in entries {
+            var top = entry
+            var seen: Set<SessionKey> = [entry.key]
+            while let parent = top.parentKey.flatMap({ byKey[$0] }), seen.insert(parent.key).inserted { top = parent }
+            if let origin = top.head.origin {
+                origins[entry.key] = (top.head.hostId ?? top.machine.hostId, origin)
+            }
+        }
+        return origins
+    }
+
+    /// The bots' groups of `members`, ordered by bot then machine, each split as a project is.
+    private static func bots(_ members: [Entry], origins: [SessionKey: (hostId: HostId, origin: SessionOrigin)],
+                             waiting: Set<SessionKey>, now: Date) -> [BotGroup] {
+        let grouped = Dictionary(grouping: members) { entry -> String in
+            let found = origins[entry.key]
+            return "\(found?.origin.botId ?? "")\u{0}\(found?.hostId ?? "")"
+        }
+        return grouped.values.compactMap { members -> BotGroup? in
+            guard let found = members.first.flatMap({ origins[$0.key] }) else { return nil }
+            let (live, archived) = split(members, now: now)
+            return BotGroup(hostId: found.hostId, botId: found.origin.botId, kind: found.origin.kind,
+                            live: live, archived: archived,
+                            waiting: members.filter { waiting.contains($0.key) }.count)
+        }
+        .sorted { ($0.botId, $0.hostId) < ($1.botId, $1.hostId) }
     }
 
     /// A project's name, the same on every device whatever order it paired its machines in: one
@@ -373,7 +431,7 @@ struct Lists: Equatable {
                 state: state, activity: model.activity,
                 age: Timestamp.age(model.updatedAt, now: now), updatedAt: model.updatedAt, prs: model.prs,
                 children: kids.count, childrenNeedYou: kids.filter(\.model.needsUser).count,
-                agents: NativeAgent.listed(in: model), threads: head.threads)
+                agents: NativeAgent.listed(in: model), threads: head.threads, origin: head.origin)
         }
     }
 }

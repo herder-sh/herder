@@ -5,6 +5,8 @@ import SwiftUI
 enum SidebarItem: Hashable {
     case board, chats, skills, providers, machines, integrations
     case project(String)
+    /// The bots' conversations: one bot's, by its `BotGroup.id`, or every bot's for `nil`.
+    case bots(String?)
 }
 
 /// The tab bar's tabs on compact width: the sidebar's sections, with the projects as one tab,
@@ -16,7 +18,7 @@ enum CompactTab: Hashable, CaseIterable {
     init(_ item: SidebarItem) {
         switch item {
         case .project: self = .projects
-        case .chats: self = .chats
+        case .chats, .bots: self = .chats
         case .board: self = .board
         case .skills, .providers, .machines, .integrations: self = .machines
         }
@@ -178,6 +180,10 @@ struct FleetView: View {
         .onChange(of: fleet.lists.projects.map(\.id)) { _, ids in
             if case .project(let id) = item, !ids.contains(id) { item = .board }
         }
+        // Nor a bot whose conversations are all gone.
+        .onChange(of: fleet.lists.bots.map(\.id)) { _, ids in
+            if case .bots(let id?) = item, !ids.contains(id) { item = .bots(nil) }
+        }
         // A draft belongs to the Board or its own project, a chat to Chats;
         // leaving for elsewhere closes it, and its card stays in those lists.
         .onChange(of: item) {
@@ -244,14 +250,15 @@ struct FleetView: View {
         }
     }
 
-    /// Brings a session forward: selected beside the Board, or Chats for a chat, on the Mac and
-    /// iPad; pushed on the Board tab on iPhone.
+    /// Brings a session forward: selected beside the Board, Chats for a chat, or Bots for a bot's,
+    /// on the Mac and iPad; pushed on the Board tab on iPhone.
     private func show(_ key: SessionKey) {
         sheet = nil
         draft = nil
         pages.back(to: 0)
         let chat = fleet.machines.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }?.chat
-        item = chat == true ? .chats : .board
+        let bot = fleet.lists.bots.contains { $0.sessions.contains { $0.key == key } }
+        item = bot ? .bots(nil) : chat == true ? .chats : .board
         session = key
         tab = .board
         boardPath = [.session(key)]
@@ -502,25 +509,42 @@ struct ProjectView: View {
     }
 }
 
-/// The chats on iPhone: their sessions, pushed when tapped.
+/// The chats on iPhone: their sessions, pushed when tapped; "Bots" switches to the bots'
+/// conversations.
 struct ChatsView: View {
+    enum Shown: Hashable { case mine, bots }
+
     let fleet: Fleet
     @State private var query = ""
+    @State private var shown = Shown.mine
 
     var body: some View {
         let lists = fleet.lists
         let empty = lists.chats.isEmpty && lists.archivedChats.isEmpty
-        Group {
-            // With no chats it says so, rather than the list's "No sessions match."
-            if empty {
-                ContentUnavailableView("No chats", systemImage: Switcher.chatSymbol,
-                                       description: Text("Ask anything, about no project."))
-            } else {
-                ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, query: query)
+        VStack(spacing: 0) {
+            Picker("Chats", selection: $shown) {
+                Text("Mine").tag(Shown.mine)
+                Text(lists.botsWaiting > 0 ? "Bots · \(lists.botsWaiting)" : "Bots").tag(Shown.bots)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            Group {
+                switch shown {
+                case .bots:
+                    BotSessions(fleet: fleet, groups: lists.bots, query: query)
+                // With no chats it says so, rather than the list's "No sessions match."
+                case .mine where empty:
+                    ContentUnavailableView("No chats", systemImage: Switcher.chatSymbol,
+                                           description: Text("Ask anything, about no project."))
+                case .mine:
+                    ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, query: query)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .alwaysSearchable(text: $query, prompt: "Chats")
+        .alwaysSearchable(text: $query, prompt: shown == .mine ? "Chats" : "Bot conversations")
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle("Chats")

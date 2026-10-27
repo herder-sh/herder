@@ -13,6 +13,9 @@
 //!   where it finished the work;
 //! - on `laptop`, a finished session and a Claude session waiting on a multi-select question.
 //!
+//! On `devbox`, its bots' people have started conversations from Slack ([`BOT_SESSIONS`]): a
+//! DM, a mention in a channel, a chat, and one waiting on an approval.
+//!
 //! The ledger session publishes a wide HTML mockup during its turn ([`MOCKUP`]) with a public
 //! link from a krowk of the demo's own ([`DemoKrowk`]).
 //!
@@ -71,8 +74,9 @@ use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Config, Hub};
 use herder_protocol::{
-    AccountId, Bytes, CommandBody, CommandResult, EventBody, HostId, Item, ItemBody, ItemId,
-    PermissionMode, Provider, Role, SessionId, SessionStatus, Timestamp, TurnId, UserId,
+    AccountId, BotId, BotKind, BotPlace, Bytes, CommandBody, CommandResult, EventBody, HostId,
+    Item, ItemBody, ItemId, PermissionMode, Provider, Role, SessionId, SessionOrigin,
+    SessionStatus, Timestamp, TurnId, UserId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -103,6 +107,7 @@ const HELM: &str = "Lower Loki's retention_period to 30 days in every values fil
 const RUNBOOK: &str = "Write docs/runbooks/logs.md: how to restore logs older than 30 days from \
                        the cold storage archive.";
 const FLAKY: &str = "The checkout e2e test fails about one CI run in five. Find out why.";
+const ROLLBACK: &str = "Staging is throwing 500s since the last deploy, roll it back.";
 const SAFARI: &str = "Carry on here: fix it and run the checkout suite in WebKit until it passes \
                       20 times in a row.";
 
@@ -161,6 +166,7 @@ const SCRIPTS: &[(&str, &str, &str)] = &[
     ("claude-personal", RUNBOOK, "child-runbook.jsonl"),
     ("claude-personal", FLAKY, "handoff-devbox.jsonl"),
     ("claude-team", SAFARI, "handoff-studio.jsonl"),
+    ("codex", ROLLBACK, "bot-approval.jsonl"),
     ("codex", FINISHED[0].4, "done.jsonl"),
     ("claude-personal", FINISHED[1].4, "done.jsonl"),
     ("codex", FINISHED[2].4, "done.jsonl"),
@@ -188,6 +194,57 @@ const FINISHED: &[(&str, &str, &str, &str, &str)] = &[
         "infra",
         "Pin the Terraform providers",
         "Pin every Terraform provider to a minor version.",
+    ),
+];
+
+/// The conversations people started from Slack through `devbox`'s bots: bot, who wrote, the
+/// channel they wrote in (`None` for a DM), the repository (`None` for a chat), account, title
+/// and prompt.
+type BotSession = (
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+    Option<&'static str>,
+    &'static str,
+    &'static str,
+    &'static str,
+);
+const BOT_SESSIONS: &[BotSession] = &[
+    (
+        "trash-can",
+        "Sam",
+        None,
+        Some("api"),
+        "claude-personal",
+        "Why invoice exports time out",
+        "Why do invoice exports time out for our biggest accounts?",
+    ),
+    (
+        "trash-can",
+        "Kim",
+        Some("web"),
+        Some("web"),
+        "claude-personal",
+        "Pricing page shows USD in the EU",
+        "The pricing page shows USD to visitors in the EU, can you check why?",
+    ),
+    (
+        "trash-can",
+        "Alex",
+        None,
+        None,
+        "claude-personal",
+        "Partial refunds in the refund policy",
+        "What does our refund policy say about partial refunds?",
+    ),
+    (
+        "acme-ops",
+        "Sam",
+        None,
+        Some("infra"),
+        "codex",
+        "Roll back the staging deploy",
+        ROLLBACK,
     ),
 ];
 
@@ -477,6 +534,7 @@ impl Demo {
 pub struct Scene {
     pub host: String,
     pub title: String,
+    pub origin: Option<SessionOrigin>,
     pub status: SessionStatus,
     pub events: Vec<EventBody>,
 }
@@ -507,6 +565,7 @@ impl Demo {
                 scenes.push(Scene {
                     host: daemon.id.to_string(),
                     title,
+                    origin: head.origin,
                     status,
                     events,
                 });
@@ -620,6 +679,10 @@ impl Scenario<'_> {
             let branch = title.to_lowercase().replace(' ', "-");
             let session = self.session(name, account, repo, &branch, title).await?;
             self.prompt(name, &session, prompt).await?;
+        }
+        let mut bot_sessions = Vec::new();
+        for bot_session in BOT_SESSIONS {
+            bot_sessions.push(self.bot_session(bot_session).await?);
         }
 
         let agents = self
@@ -744,6 +807,17 @@ impl Scenario<'_> {
                     .any(|body| matches!(body, EventBody::ChildReported { .. }))
             })
             .await?;
+        let rollback = bot_sessions.pop().context("no bot sessions")?;
+        for session in &bot_sessions {
+            devbox.until(session, finished(1)).await?;
+        }
+        devbox
+            .until(&rollback, |events| {
+                events
+                    .iter()
+                    .any(|body| matches!(body, EventBody::ApprovalRequested { .. }))
+            })
+            .await?;
         self.daemon("laptop")?
             .until(&browsers, |events| {
                 events
@@ -821,6 +895,63 @@ impl Scenario<'_> {
                 },
             )
             .await?;
+        Ok(session_id)
+    }
+
+    /// Starts a conversation on `devbox` as its bot does for a message in Slack, titles it and
+    /// sends it its prompt.
+    async fn bot_session(
+        &self,
+        &(bot, by, channel, repo, account, title, prompt): &BotSession,
+    ) -> Result<SessionId> {
+        let daemon = self.daemon("devbox")?;
+        let origin = SessionOrigin {
+            bot_id: BotId::new(bot),
+            kind: BotKind::Slack,
+            by: by.into(),
+            place: channel.map_or(BotPlace::Direct, |name| BotPlace::Channel {
+                name: name.into(),
+            }),
+        };
+        let user = UserId::new(format!("via {bot}, {by}"));
+        let command = CommandBody::CreateSession {
+            repo: repo.map(|repo| daemon.repos[repo].clone()),
+            project_id: None,
+            branch: None,
+            account_id: Some(AccountId::new(account)),
+            provider: None,
+            model: None,
+            permission_mode: Some(PermissionMode::AutoEdit),
+            failover_pin: None,
+            chat: repo.is_none(),
+        };
+        let fail = |err: herder_protocol::ErrorInfo| anyhow::anyhow!("devbox: {}", err.message);
+        let created = daemon
+            .sessions
+            .handle_from(user.clone(), command, Some(origin))
+            .await
+            .map_err(fail)?;
+        let CommandResult::SessionCreated { session_id } = created else {
+            bail!("devbox did not create a session: {created:?}");
+        };
+        for command in [
+            CommandBody::RenameSession {
+                session_id: session_id.clone(),
+                title: title.into(),
+            },
+            CommandBody::SendPrompt {
+                session_id: session_id.clone(),
+                text: prompt.into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+        ] {
+            daemon
+                .sessions
+                .handle(user.clone(), command)
+                .await
+                .map_err(fail)?;
+        }
         Ok(session_id)
     }
 
