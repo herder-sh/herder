@@ -38,14 +38,14 @@ jobs:
           mkdir -p _site
           cp -r site/. _site/
           cp install.sh _site/install
-          # Point the Mac download and the version pill at the latest release. With no
+          # Point every Mac download link and the version pill at the latest release. With no
           # release, or no Mac asset in it, the links committed in index.html stay.
           tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName || true)
           url=$(gh release view --repo "$GITHUB_REPOSITORY" --json assets \
             -q '.assets[] | select(.name | test("^herder-app-.*-macos-arm64\\.zip$")) | .url' || true)
           if [ -n "$tag" ] && [ -n "$url" ]; then
             sed -i \
-              -e "s#id=\"mac-download\" href=\"[^\"]*\"#id=\"mac-download\" href=\"$url\"#" \
+              -e "s#data-mac-download href=\"[^\"]*\"#data-mac-download href=\"$url\"#g" \
               -e "s#<span data-version>[^<]*</span>#<span data-version>$tag</span>#" \
               _site/index.html
             grep -q "$url" _site/index.html
