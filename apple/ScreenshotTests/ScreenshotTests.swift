@@ -98,6 +98,7 @@ final class ScreenshotTests: XCTestCase {
             settle()
         }
         #endif
+        artifact()
         agents()
 
         // The header's PR chip opens the task's PRs: a popover on the Mac, a sheet on the iPhone.
@@ -166,6 +167,41 @@ final class ScreenshotTests: XCTestCase {
         archiving()
         project()
         finish()
+    }
+
+    /// The wide mockup the ledger session published during its turn: its card in the thread,
+    /// then the viewer at Fit width with its toolbar, then at actual size.
+    private func artifact() {
+        guard open("Move invoices onto the ledger") else { return }
+        let card = app.buttons["artifact-open"].firstMatch
+        guard wait(card, "artifact card") else { return }
+        // Published during the turn, the card sits above the reply the transcript opens on.
+        for _ in 0..<8 where !card.isHittable {
+            #if os(iOS)
+            app.swipeDown(velocity: .slow)
+            #else
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5))
+                .scroll(byDeltaX: 0, deltaY: 250)
+            #endif
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        settle()
+        shoot(platform("artifact-card"))
+        press(card)
+        for label in ["Fit Width", "Zoom Out", "Actual Size", "Zoom In", "Open in Browser"] {
+            _ = wait(app.buttons[label].firstMatch, "artifact viewer's \(label)")
+        }
+        settle()
+        shoot(platform("artifact"))
+        press(app.buttons["Actual Size"].firstMatch)
+        settle()
+        shoot(platform("artifact-actual"))
+        #if os(macOS)
+        app.typeKey(.escape, modifierFlags: [])
+        #else
+        press(app.buttons["Close"].firstMatch)
+        #endif
+        settle()
     }
 
     /// A task's agents unfolded under its row on the Board, then one of them opened: beside the
@@ -777,6 +813,11 @@ final class ScreenshotTests: XCTestCase {
         let tab = app.tabBars.buttons[name].firstMatch
         guard wait(tab, "\(name) tab") else { return false }
         tab.tap()
+        // A tap while a toast still animates away can be lost: the tab says when it took.
+        for _ in 0..<2 where !tab.isSelected {
+            settle()
+            tab.tap()
+        }
         #else
         let row = app.buttons.matching(NSPredicate(
             format: "label == %@ OR label BEGINSWITH %@", name, "\(name), ")).firstMatch

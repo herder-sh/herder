@@ -84,6 +84,9 @@ public final class Fleet {
         change(key) { $0.apply(update) }
     }
 
+    /// Holds an attachment's bytes as though fetched, for tests.
+    func setAttachmentForTesting(_ id: AttachmentId, _ data: Data) { attachments[id] = data }
+
     /// Rebuilds the lists at most ten times a second. Opening the app replays every session's
     /// events, thousands at once; rebuilding on each kept the main thread busy until the
     /// system killed the app.

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Invoices on the ledger — list (mockup)</title>
+<style>
+  body { margin: 0; font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; background: #111418; color: #e6e8eb; }
+  .page { width: 1440px; padding: 32px 40px; box-sizing: border-box; }
+  header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 8px; }
+  h1 { font-size: 26px; margin: 0; }
+  .sub { color: #8c96a1; margin: 0 0 24px; }
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px; }
+  .stat { background: #1a1f25; border: 1px solid #2a3139; border-radius: 10px; padding: 14px 16px; }
+  .stat b { display: block; font-size: 22px; }
+  .stat span { color: #8c96a1; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; background: #1a1f25; border: 1px solid #2a3139; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid #252b32; white-space: nowrap; }
+  th { color: #8c96a1; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; background: #161a1f; }
+  .mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #2a3139; }
+  .paid { background: #193a26; color: #8fdca9; } .open { background: #1b2f4a; color: #8cbcf2; }
+  .overdue { background: #4a2a12; color: #f0b06e; } .refunded { background: #33264a; color: #c7a3e8; }
+  .actions button { background: #252b32; color: #e6e8eb; border: 1px solid #333b44; border-radius: 6px; padding: 4px 10px; margin-right: 6px; font: inherit; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header><h1>Invoices on the ledger</h1><span class="sub">mockup · acme/api · migration 0042</span></header>
+  <p class="sub">Every invoice since October, as the new ledger tables hold it. Rerunning the migration changes nothing: each row is matched on its invoice number.</p>
+  <div class="stats">
+    <div class="stat"><b>12</b><span>invoices</span></div>
+    <div class="stat"><b>11</b><span>migrated</span></div>
+    <div class="stat"><b>1</b><span>skipped (draft)</span></div>
+    <div class="stat"><b>13</b><span>ledger entries</span></div>
+    <div class="stat"><b>0</b><span>mismatched totals</span></div>
+  </div>
+  <table>
+    <thead><tr><th>Invoice</th><th>Customer</th><th>Issued</th><th class="num">Total</th><th>Currency</th><th>Status</th><th>Ledger</th><th>Migration</th><th>Actions</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">INV-2041</td><td>Northwind Traders</td><td>2026-10-01</td><td class="num">€4,820.00</td><td>EUR</td><td><span class="pill paid">Paid</span></td><td class="mono">ledger_entries #88121</td><td>Migrated</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2042</td><td>Blue Harbor Studio</td><td>2026-10-02</td><td class="num">$1,250.00</td><td>USD</td><td><span class="pill open">Open</span></td><td class="mono">ledger_entries #88122</td><td>Migrated</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2043</td><td>Kettle & Co.</td><td>2026-10-03</td><td class="num">£760.40</td><td>GBP</td><td><span class="pill overdue">Overdue</span></td><td class="mono">ledger_entries #88123</td><td>Migrated</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2044</td><td>Atlas Freight</td><td>2026-10-05</td><td class="num">€12,400.00</td><td>EUR</td><td><span class="pill paid">Paid</span></td><td class="mono">ledger_entries #88124</td><td>Migrated</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2045</td><td>Pine Labs</td><td>2026-10-06</td><td class="num">$980.00</td><td>USD</td><td><span class="pill draft">Draft</span></td><td class="mono">—</td><td>Skipped: draft</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2046</td><td>Orbit Coffee</td><td>2026-10-07</td><td class="num">€310.75</td><td>EUR</td><td><span class="pill paid">Paid</span></td><td class="mono">ledger_entries #88126</td><td>Migrated</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2047</td><td>Harbor Analytics</td><td>2026-10-09</td><td class="num">$7,100.00</td><td>USD</td><td><span class="pill open">Open</span></td><td class="mono">ledger_entries #88127</td><td>Migrated</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2048</td><td>Lumen Print</td><td>2026-10-10</td><td class="num">€2,045.10</td><td>EUR</td><td><span class="pill refunded">Refunded</span></td><td class="mono">ledger_entries #88128, #88129</td><td>Migrated (2)</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2049</td><td>Fjord Outdoor</td><td>2026-10-12</td><td class="num">NOK 18,500</td><td>NOK</td><td><span class="pill paid">Paid</span></td><td class="mono">ledger_entries #88130</td><td>Migrated</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2050</td><td>Quarry Games</td><td>2026-10-14</td><td class="num">$640.00</td><td>USD</td><td><span class="pill overdue">Overdue</span></td><td class="mono">ledger_entries #88131</td><td>Migrated</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2051</td><td>Sable Systems</td><td>2026-10-15</td><td class="num">€9,990.00</td><td>EUR</td><td><span class="pill open">Open</span></td><td class="mono">ledger_entries #88132</td><td>Migrated</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+      <tr><td class="mono">INV-2052</td><td>Tidewater Supply</td><td>2026-10-17</td><td class="num">$3,315.60</td><td>USD</td><td><span class="pill paid">Paid</span></td><td class="mono">ledger_entries #88133</td><td>Migrated</td><td class="actions"><button>Open</button><button>Diff</button></td></tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

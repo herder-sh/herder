@@ -40,5 +40,18 @@ public struct HerderScene: Scene {
             default: break
             }
         }
+        #if os(macOS)
+        // An artifact opens in a large window of its own, which remembers its frame.
+        WindowGroup("Artifact", for: ArtifactViewer.Ref.self) { $ref in
+            if case .opened(let fleet) = profile, let ref {
+                ArtifactViewer(fleet: fleet, key: ref.key, start: ref.id)
+            }
+        }
+        .defaultWindowPlacement { _, context in
+            let screen = context.defaultDisplay.visibleRect
+            return WindowPlacement(size: CGSize(width: screen.width * 0.9, height: screen.height * 0.9))
+        }
+        .windowToolbarStyle(.unified)
+        #endif
     }
 }

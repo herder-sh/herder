@@ -1,8 +1,8 @@
 import AVKit
 import Foundation
 import Herder
+import PDFKit
 import SwiftUI
-import WebKit
 
 #if os(iOS)
 import UIKit
@@ -14,7 +14,7 @@ import AppKit
 /// recording, a page, a log. The thread renders the file, fetched from its machine, and offers
 /// the public link, which opens on any device and can be sent to anyone.
 struct Artifact: Hashable, Identifiable {
-    enum Kind: Hashable { case image, video, page, text, file }
+    enum Kind: Hashable { case image, video, page, pdf, text, file }
 
     /// The event's seq.
     let id: UInt64
@@ -35,15 +35,29 @@ struct Artifact: Hashable, Identifiable {
 
     var name: String { attachment.name ?? "artifact" }
 
+    private var pathExtension: String { (name as NSString).pathExtension.lowercased() }
+
     /// How it renders, by its name's extension, as the daemon picks its media type.
     var kind: Kind {
-        switch (name as NSString).pathExtension.lowercased() {
+        switch pathExtension {
         case "png", "jpg", "jpeg", "gif", "webp", "heic": .image
         case "mp4", "m4v", "mov": .video
         case "html", "htm", "svg": .page
-        case "txt", "log", "md", "markdown", "json", "csv", "diff", "patch", "xml", "yaml", "yml": .text
+        case "pdf": .pdf
+        case "txt", "log", "md", "markdown", "json", "csv", "diff", "patch", "xml", "yaml", "yml", "toml", "swift",
+             "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "rb", "sh": .text
         default: .file
         }
+    }
+
+    /// The language `CodeHighlight` colours a text artifact as: its extension, which it names
+    /// languages by; one it doesn't know stays plain.
+    var language: String { pathExtension }
+
+    /// What it is and how big, as its header says: "HTML · 24 KB".
+    var summary: String {
+        let type = pathExtension.isEmpty ? "File" : pathExtension.uppercased()
+        return "\(type) · \(ByteCountFormatter.string(fromByteCount: Int64(attachment.size), countStyle: .file))"
     }
 
     /// The link to offer at `now`: `nil` once it has expired, or when there is none.
@@ -57,124 +71,183 @@ struct Artifact: Hashable, Identifiable {
         case .image: "photo"
         case .video: "play.rectangle"
         case .page: "macwindow"
+        case .pdf: "doc.richtext"
         case .text: "doc.text"
         case .file: "doc"
         }
     }
-}
 
-/// No network at all: scripts and styles inline, images, fonts and media from data only.
-enum SandboxedPage {
-    static let policy =
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:"
-
-    /// The page with the policy and the dark colour scheme ahead of anything it holds, after its
-    /// doctype so it keeps standards mode.
-    static func wrapped(_ html: String) -> String {
-        let head = """
-            <meta http-equiv="Content-Security-Policy" content="\(policy)">
-            <meta name="color-scheme" content="dark">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <style>:root { color-scheme: dark; }</style>
-
-            """
-        let page = html.drop(while: \.isWhitespace)
-        if page.prefix(9).lowercased() == "<!doctype", let end = page.firstIndex(of: ">") {
-            return String(page[...end]) + "\n" + head + String(page[page.index(after: end)...])
-        }
-        return head + String(page)
+    /// `data` as a file of its own name, for what opens files rather than bytes: the browser, a
+    /// player, the share sheet. The same artifact always lands on the same file.
+    func file(_ data: Data) throws -> URL {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("herder-artifacts", isDirectory: true)
+            .appendingPathComponent(attachment.attachmentId, isDirectory: true)
+            .appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: file)
+        return file
     }
 }
 
-/// An artifact as a card: its title, the file rendered as what it is, and its link to copy,
-/// share or open. A page or picture sizes the card up to `cap`; on iOS a taller one is cut there
-/// so a swipe on it always scrolls the thread, and the larger view shows it all.
+extension Fleet {
+    /// The artifacts `key`'s session published, oldest first.
+    func artifacts(of key: SessionKey) -> [Artifact] {
+        session(key)?.log.compactMap { if case .artifact(let artifact) = $0 { artifact } else { nil } } ?? []
+    }
+}
+
+/// How far a viewer is zoomed: to fit the width, or by a scale of its own (1 is actual size).
+enum Zoom: Hashable {
+    case fit
+    case scale(CGFloat)
+
+    static let levels: [CGFloat] = [0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
+
+    /// The scale it shows at, where fitting takes `fit`: never below fit, never above 4×.
+    func scale(fit: CGFloat) -> CGFloat {
+        switch self {
+        case .fit: fit
+        case .scale(let scale): min(max(scale, fit), Self.levels[Self.levels.count - 1])
+        }
+    }
+
+    /// The next level in from `scale`.
+    static func larger(than scale: CGFloat) -> Zoom {
+        .scale(levels.first { $0 > scale + 0.005 } ?? levels[levels.count - 1])
+    }
+
+    /// The next level out from `scale`.
+    static func smaller(than scale: CGFloat) -> Zoom {
+        .scale(levels.last { $0 < scale - 0.005 } ?? levels[0])
+    }
+}
+
+/// A zoom the toolbar asks for; each press counts, even of the zoom already asked for, so Fit
+/// width fits again after a pinch.
+struct ZoomRequest: Equatable {
+    var zoom: Zoom = .fit
+    var id = 0
+}
+
+/// How wide a page lays out, in CSS pixels, and the scale that fits it.
+enum PageLayout {
+    /// What a page declares its layout width to be.
+    enum Declared: Equatable {
+        /// `width=device-width`, or a viewport without a width: the view's own width.
+        case device
+        case fixed(CGFloat)
+    }
+
+    /// A page without a viewport is a desktop page: it lays out this wide.
+    static let defaultWidth: CGFloat = 1280
+
+    /// `nil` when the page has no viewport meta tag.
+    static func declared(_ html: String) -> Declared? {
+        guard let meta = html.firstMatch(of: #/(?i)<meta\b[^>]*\bname\s*=\s*["']?viewport\b[^>]*>/#) else { return nil }
+        guard let content = meta.output.firstMatch(of: #/(?i)\bcontent\s*=\s*["']([^"']*)["']/#),
+              let width = content.output.1.firstMatch(of: #/(?i)\bwidth\s*=\s*([^,;\s]+)/#) else { return .device }
+        if let pixels = Double(width.output.1), pixels > 0 { return .fixed(pixels) }
+        return .device
+    }
+
+    /// The width it lays out at in a view `view` wide: what it declares, else the default, and
+    /// wider when its content overflows that (`content`, its measured scroll width).
+    static func width(_ declared: Declared?, view: CGFloat, content: CGFloat) -> CGFloat {
+        let natural = switch declared ?? .fixed(defaultWidth) {
+        case .device: view
+        case .fixed(let width): width
+        }
+        return max(natural, content)
+    }
+
+    /// The scale that shows `width` whole across `view`: never above actual size.
+    static func fit(view: CGFloat, width: CGFloat) -> CGFloat {
+        guard view > 0, width > 0 else { return 1 }
+        return min(1, view / width)
+    }
+}
+
+/// An artifact as a card in the thread: a sharp thumbnail of it at fit width, then its title,
+/// type and size with Open and Open in browser. The thumbnail opens the viewer too.
 struct ArtifactBlock: View {
     let artifact: Artifact
     let fleet: Fleet
     let key: SessionKey
     @State private var height: CGFloat = 0
-    @State private var expanded = false
-    @State private var copied = false
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #else
+    @State private var viewing = false
+    #endif
+    @Environment(\.openURL) private var openURL
 
-    private static let cap: CGFloat = 600
+    private static let cap: CGFloat = 360
 
     private var data: Data? { fleet.attachments[artifact.attachment.attachmentId] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 2) {
-                Image(systemName: artifact.symbol).font(.caption).foregroundStyle(Theme.tertiary)
-                Text(artifact.title).font(.caption.weight(.medium)).foregroundStyle(Theme.secondary).lineLimit(1)
-                    .padding(.leading, 4)
-                Spacer()
-                if data != nil, [.image, .page, .text].contains(artifact.kind) {
-                    action("arrow.up.left.and.arrow.down.right", "Expand") { expanded = true }
-                }
+            if artifact.kind != .file {
+                thumbnail
+                Rectangle().fill(Theme.stroke).frame(height: 1)
             }
-            .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 6)
-            content
-            Rectangle().fill(Theme.stroke).frame(height: 1)
-            linkLine
+            footer
         }
         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .clipShape(.rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
         .task { await fleet.fetchAttachment(artifact.attachment.attachmentId, of: key) }
-        .task(id: copied) {
-            guard copied else { return }
-            try? await Task.sleep(for: .seconds(1.5))
-            copied = false
-        }
-        .sheet(isPresented: $expanded) {
-            if let data { ArtifactExpanded(artifact: artifact, data: data) }
-        }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $viewing) { ArtifactViewer(fleet: fleet, key: key, start: artifact.id) }
+        #endif
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("artifact")
     }
 
-    @ViewBuilder private var content: some View {
+    private func open() {
+        #if os(macOS)
+        openWindow(value: ArtifactViewer.Ref(key: key, id: artifact.id))
+        #else
+        viewing = true
+        #endif
+    }
+
+    @ViewBuilder private var thumbnail: some View {
         if let data {
             switch artifact.kind {
             case .image:
                 Picture(data: data, height: 280)
                     .frame(maxWidth: .infinity)
                     .padding(8)
-                    .onTapGesture { expanded = true }
+                    .opening(open)
             case .video:
-                ArtifactVideo(name: artifact.name, data: data)
+                ArtifactVideo(artifact: artifact, data: data)
                     .frame(height: 280)
                     .clipShape(.rect(cornerRadius: Theme.corner))
                     .padding(8)
             case .page:
-                SandboxedWebView(html: String(decoding: data, as: UTF8.self), inline: true) { height = $0 }
+                // A picture of the page, not a page to use: swipes scroll the thread, a click opens it.
+                SandboxedWebView(html: String(decoding: data, as: UTF8.self), thumbnail: true, measured: { height = $0 })
                     .frame(height: height > 0 ? min(height, Self.cap) : 160)
-                    .clipShape(.rect(cornerRadius: Theme.corner))
-                    #if os(iOS)
-                    .overlay(alignment: .bottom) {
-                        if height > Self.cap {
-                            Button("Show All") { expanded = true }
-                                .font(.caption.weight(.medium))
-                                .buttonStyle(.bordered)
-                                .padding(8)
-                        }
-                    }
-                    #endif
+                    .allowsHitTesting(false)
+                    .opening(open)
+            case .pdf:
+                PDFThumbnail(data: data)
+                    .frame(maxWidth: .infinity)
+                    .padding(8)
+                    .opening(open)
             case .text:
-                ScrollView {
-                    Text(String(decoding: data.prefix(64 * 1024), as: UTF8.self))
-                        .font(.caption.monospaced())
-                        .foregroundStyle(Theme.text)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                }
-                .frame(maxHeight: 280)
-                .fixedSize(horizontal: false, vertical: true)
-            case .file:
-                Label("\(artifact.name) · \(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))",
-                      systemImage: "doc")
-                    .font(.footnote).foregroundStyle(Theme.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(CodeHighlight.attributed(String(decoding: data.prefix(4 * 1024), as: UTF8.self),
+                                              language: artifact.language))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(14)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(12)
+                    .opening(open)
+            case .file:
+                EmptyView()
             }
         } else {
             ProgressView().controlSize(.small).tint(Theme.tertiary)
@@ -182,57 +255,109 @@ struct ArtifactBlock: View {
         }
     }
 
-    /// The public link with copy, share and open; or why there is none.
-    @ViewBuilder private var linkLine: some View {
+    /// The title gets the card's width: beside the buttons where it fits whole, else above them.
+    private var footer: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            HStack(spacing: 2) {
-                if let url = artifact.link(at: context.date) {
-                    Link(destination: url) {
-                        Text(url.absoluteString).font(.caption).foregroundStyle(Theme.link).lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 8)
-                    action(copied ? "checkmark" : "link", copied ? "Copied" : "Copy link") {
-                        Clipboard.string = url.absoluteString
-                        copied = true
-                    }
-                    ShareLink(item: url, subject: Text(artifact.title)) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(Theme.tertiary)
-                            .frame(width: 24, height: 22)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Share link")
-                    .accessibilityLabel("Share link")
-                } else {
-                    Text(artifact.url == nil ? "Private: this project's artifacts get no public link" : "Link expired")
-                        .font(.caption).foregroundStyle(Theme.tertiary)
-                    Spacer()
+            let link = artifact.link(at: context.date)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    heading(link: link).fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 0)
+                    actions(link: link)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    heading(link: link)
+                    HStack(spacing: 8) { actions(link: link) }
+                        .padding(.leading, 26)
                 }
             }
-            .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 6)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 8)
+            .contextMenu {
+                if let link {
+                    Button("Copy Link", systemImage: "link") { Clipboard.string = link.absoluteString }
+                    ShareLink(item: link, subject: Text(artifact.title))
+                }
+            }
         }
     }
 
-    private func action(_ symbol: String, _ help: String, _ perform: @escaping () -> Void) -> some View {
-        Button(action: perform) {
-            Image(systemName: symbol)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(Theme.tertiary)
-                .frame(width: 24, height: 22)
-                .contentShape(.rect)
+    private func heading(link: URL?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: artifact.symbol).font(.callout).foregroundStyle(Theme.tertiary).frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(artifact.title).font(.callout.weight(.medium)).foregroundStyle(Theme.text)
+                Text(meta(link: link)).font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+            }
         }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(help)
+    }
+
+    @ViewBuilder private func actions(link: URL?) -> some View {
+        if data != nil {
+            Button("Open", action: open)
+                .accessibilityIdentifier("artifact-open")
+        }
+        if let link {
+            Button { openURL(link) } label: { Label("Open in browser", systemImage: "arrow.up.right.square") }
+                .help(link.absoluteString)
+        } else if let data, ArtifactBrowser.opensFiles {
+            Button { ArtifactBrowser.open(artifact, data) } label: {
+                Label("Open in browser", systemImage: "arrow.up.right.square")
+            }
+        }
+    }
+
+    private func meta(link: URL?) -> String {
+        let reach = link != nil ? "Public link" : artifact.url == nil ? "Private" : "Link expired"
+        return "\(artifact.summary) · \(reach)"
+    }
+}
+
+private extension View {
+    /// Opens the viewer on a click anywhere on it.
+    func opening(_ open: @escaping () -> Void) -> some View {
+        contentShape(.rect).onTapGesture(perform: open).accessibilityAddTraits(.isButton)
+    }
+}
+
+/// Opens a private artifact, which has no link, in the browser: the Mac opens its file with the
+/// default app; iOS opens no local files, so it offers the share sheet instead.
+enum ArtifactBrowser {
+    #if os(macOS)
+    static let opensFiles = true
+    #else
+    static let opensFiles = false
+    #endif
+
+    @MainActor static func open(_ artifact: Artifact, _ data: Data) {
+        #if os(macOS)
+        guard let file = try? artifact.file(data) else { return }
+        NSWorkspace.shared.open(file)
+        #endif
+    }
+}
+
+/// A PDF's first page, as the card's thumbnail.
+private struct PDFThumbnail: View {
+    let data: Data
+
+    var body: some View {
+        if let page = PDFDocument(data: data)?.page(at: 0) {
+            #if os(macOS)
+            SwiftUI.Image(nsImage: page.thumbnail(of: CGSize(width: 900, height: 900), for: .mediaBox))
+                .resizable().scaledToFit().frame(maxHeight: 280)
+            #else
+            SwiftUI.Image(uiImage: page.thumbnail(of: CGSize(width: 900, height: 900), for: .mediaBox))
+                .resizable().scaledToFit().frame(maxHeight: 280)
+            #endif
+        }
     }
 }
 
 /// A recording, played from a file of its own: AVPlayer plays files, not bytes.
-private struct ArtifactVideo: View {
-    let name: String
+struct ArtifactVideo: View {
+    let artifact: Artifact
     let data: Data
     @State private var player: AVPlayer?
 
@@ -240,172 +365,6 @@ private struct ArtifactVideo: View {
         Group {
             if let player { VideoPlayer(player: player) } else { Theme.raised }
         }
-        .task(id: data) {
-            let file = FileManager.default.temporaryDirectory
-                .appendingPathComponent("herder-artifacts", isDirectory: true)
-                .appendingPathComponent(UUID().uuidString, isDirectory: true)
-                .appendingPathComponent(name)
-            do {
-                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
-                                                        withIntermediateDirectories: true)
-                try data.write(to: file)
-                player = AVPlayer(url: file)
-            } catch {
-                player = nil
-            }
-        }
+        .task(id: data) { player = (try? artifact.file(data)).map(AVPlayer.init(url:)) }
     }
 }
-
-/// The artifact filling a sheet, scrolling as a whole.
-private struct ArtifactExpanded: View {
-    let artifact: Artifact
-    let data: Data
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text(artifact.title).font(.headline).foregroundStyle(Theme.text).lineLimit(1)
-                Spacer()
-                IconButton(symbol: "xmark", help: "Close") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-            }
-            .padding(16)
-            Rectangle().fill(Theme.stroke).frame(height: 1)
-            switch artifact.kind {
-            case .page:
-                SandboxedWebView(html: String(decoding: data, as: UTF8.self), inline: false) { _ in }
-            case .image:
-                ScrollView([.horizontal, .vertical]) { Picture(data: data, height: 900) }
-            default:
-                ScrollView {
-                    Text(String(decoding: data, as: UTF8.self))
-                        .font(.caption.monospaced()).foregroundStyle(Theme.text).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(16)
-                }
-            }
-        }
-        .background(Theme.surface)
-        #if os(macOS)
-        .frame(minWidth: 640, idealWidth: 960, minHeight: 440, idealHeight: 680)
-        #endif
-        .preferredColorScheme(.dark)
-    }
-}
-
-/// Runs an agent's page sandboxed: no storage that outlives it, a policy that blocks every
-/// network load, and only the page itself may load in it. A link the user follows opens in the
-/// browser; popups, dialogs and any other navigation do nothing.
-@MainActor
-struct SandboxedWebView {
-    let html: String
-    let inline: Bool
-    /// The page's height, as it lays out and on every resize.
-    let measured: (CGFloat) -> Void
-
-    @MainActor
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
-        var html = ""
-        var measured: (CGFloat) -> Void = { _ in }
-        var open: (URL) -> Void = { _ in }
-        /// The load of `html` has been let through; nothing else will be.
-        private var started = false
-
-        func load(_ html: String, in web: WKWebView) {
-            self.html = html
-            started = false
-            web.loadHTMLString(SandboxedPage.wrapped(html), baseURL: nil)
-        }
-
-        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
-            if !started, action.navigationType == .other, action.targetFrame?.isMainFrame == true {
-                started = true
-                return .allow
-            }
-            if action.navigationType == .linkActivated, let url = action.request.url,
-               ["http", "https"].contains(url.scheme?.lowercased()) {
-                open(url)
-            }
-            return .cancel
-        }
-
-        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
-                     for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
-
-        func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
-                     initiatedByFrame frame: WKFrameInfo) async {}
-
-        func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
-                     initiatedByFrame frame: WKFrameInfo) async -> Bool { false }
-
-        func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?,
-                     initiatedByFrame frame: WKFrameInfo) async -> String? { nil }
-
-        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-            if let height = message.body as? Double, height.isFinite, height > 0 { measured(CGFloat(height)) }
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    /// Posts the page's height from the client world, where the page can't reach the handler.
-    private static let measure = """
-        (() => {
-          const post = () => {
-            const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
-            window.webkit.messageHandlers.height.postMessage(height);
-          };
-          const observer = new ResizeObserver(post);
-          observer.observe(document.documentElement);
-          if (document.body) observer.observe(document.body);
-          addEventListener("load", post);
-          post();
-        })();
-        """
-
-    private func makeWebView(_ coordinator: Coordinator) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
-        config.preferences.javaScriptCanOpenWindowsAutomatically = false
-        let scripts = config.userContentController
-        scripts.add(coordinator, contentWorld: .defaultClient, name: "height")
-        scripts.addUserScript(WKUserScript(source: Self.measure, injectionTime: .atDocumentEnd, forMainFrameOnly: true,
-                                           in: .defaultClient))
-        let web = WKWebView(frame: .zero, configuration: config)
-        web.navigationDelegate = coordinator
-        web.uiDelegate = coordinator
-        #if os(iOS)
-        web.overrideUserInterfaceStyle = .dark
-        web.isOpaque = false
-        web.backgroundColor = .clear
-        web.scrollView.backgroundColor = .clear
-        // Inline, the thread scrolls under a swipe; the page is cut at the card's height.
-        web.scrollView.isScrollEnabled = !inline
-        #else
-        web.appearance = NSAppearance(named: .darkAqua)
-        // No public API for a transparent WKWebView on the Mac; this key is the standard one.
-        web.setValue(false, forKey: "drawsBackground")
-        #endif
-        return web
-    }
-
-    private func update(_ web: WKWebView, _ coordinator: Coordinator, _ openURL: OpenURLAction) {
-        coordinator.measured = measured
-        coordinator.open = { openURL($0) }
-        guard coordinator.html != html else { return }
-        coordinator.load(html, in: web)
-    }
-}
-
-#if os(iOS)
-extension SandboxedWebView: UIViewRepresentable {
-    func makeUIView(context: Context) -> WKWebView { makeWebView(context.coordinator) }
-    func updateUIView(_ web: WKWebView, context: Context) { update(web, context.coordinator, context.environment.openURL) }
-}
-#else
-extension SandboxedWebView: NSViewRepresentable {
-    func makeNSView(context: Context) -> WKWebView { makeWebView(context.coordinator) }
-    func updateNSView(_ web: WKWebView, context: Context) { update(web, context.coordinator, context.environment.openURL) }
-}
-#endif

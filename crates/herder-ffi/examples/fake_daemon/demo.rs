@@ -13,6 +13,9 @@
 //!   where it finished the work;
 //! - on `laptop`, a finished session and a Claude session waiting on a multi-select question.
 //!
+//! The ledger session publishes a wide HTML mockup during its turn ([`MOCKUP`]) with a public
+//! link from a krowk of the demo's own ([`DemoKrowk`]).
+//!
 //! The subagents' session and the primary have pull requests ([`PRS`]), which a GitHub of the
 //! demo's own serves ([`DemoGitHub`]).
 //!
@@ -56,6 +59,7 @@ use herder_daemon::projects::{
 use herder_daemon::providers::{InstallRecipe, Providers};
 use herder_daemon::prs::{self, Fetched, GetFuture, GitHub, GraphqlFuture};
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
+use herder_daemon::session::publish::{self, Publisher, UploadFuture};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::settings::Settings;
 use herder_daemon::skills::{Skills, SkillsSink};
@@ -67,7 +71,7 @@ use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Config, Hub};
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, EventBody, HostId, Item, ItemBody, ItemId,
+    AccountId, Bytes, CommandBody, CommandResult, EventBody, HostId, Item, ItemBody, ItemId,
     PermissionMode, Provider, Role, SessionId, SessionStatus, Timestamp, TurnId, UserId,
 };
 use serde::Deserialize;
@@ -86,6 +90,8 @@ const AGENTS: &str =
     "Audit how the webhook handlers retry failed deliveries and fix anything unsafe.";
 const LEDGER: &str =
     "Move invoices onto the new ledger tables, with a migration that is safe to rerun.";
+/// The page the ledger session publishes: a mockup laid out 1440 px wide.
+const MOCKUP: &str = include_str!("../../fixtures/demo/invoices-mockup.html");
 const DATES: &str = "Upgrade date-fns to v4 and fix whatever breaks.";
 const BROWSERS: &str = "Run the checkout e2e suite in more browsers.";
 const RETENTION: &str =
@@ -582,6 +588,24 @@ impl Scenario<'_> {
             )
             .await?;
         self.prompt("devbox", &ledger, LEDGER).await?;
+        // Published during its turn, before any other session exists: its last activity stays
+        // the turn's end, so the Board orders every task as it would without it. Its MCP server
+        // answers once the turn has started.
+        let devbox = self.daemon("devbox")?;
+        devbox
+            .until(&ledger, |events| {
+                events
+                    .iter()
+                    .any(|body| matches!(body, EventBody::TurnStarted { .. }))
+            })
+            .await?;
+        devbox
+            .tool(
+                &ledger,
+                "publish",
+                json!({ "title": "Invoices on the ledger — list (mockup)", "html": MOCKUP }),
+            )
+            .await?;
         let flaky = self
             .session(
                 "devbox",
@@ -986,6 +1010,7 @@ impl Daemon {
             data_dir: dir.to_owned(),
             herder: PathBuf::from("herder"),
         })?;
+        sessions.publish_with(Arc::new(DemoKrowk))?;
         sessions
             .track_prs(prs::Config {
                 data_dir: dir.to_owned(),
@@ -1191,27 +1216,33 @@ impl Daemon {
 
     /// Spawns a child of `primary` through herder's MCP server, as the primary's CLI would.
     async fn spawn(&self, primary: &SessionId, task: &str, prompt: &str) -> Result<()> {
+        self.tool(primary, "spawn", json!({ "task": task, "prompt": prompt }))
+            .await
+    }
+
+    /// Calls herder's MCP tool `name` as `session` would.
+    async fn tool(&self, session: &SessionId, name: &str, arguments: Value) -> Result<()> {
         let (mut input, shim_input) = tokio::io::duplex(1 << 16);
         let (shim_output, output) = tokio::io::duplex(1 << 16);
-        let (dir, session) = (self.data_dir.clone(), primary.clone());
+        let (dir, session) = (self.data_dir.clone(), session.clone());
         let shim =
             tokio::spawn(async move { mcp::shim(&dir, &session, shim_input, shim_output).await });
         let request = json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": { "name": "spawn", "arguments": { "task": task, "prompt": prompt } },
+            "params": { "name": name, "arguments": arguments },
         });
         input.write_all(format!("{request}\n").as_bytes()).await?;
         let mut line = String::new();
         tokio::time::timeout(TIMEOUT, BufReader::new(output).read_line(&mut line))
             .await
-            .context("spawn did not answer")??;
+            .with_context(|| format!("{name} did not answer"))??;
         drop(input);
         let response: Value = serde_json::from_str(&line)?;
         ensure!(
             response["result"]["isError"] != json!(true) && response.get("error").is_none(),
-            "spawn failed: {response}"
+            "{name} failed: {response}"
         );
         shim.await??;
         Ok(())
@@ -1699,6 +1730,20 @@ impl DemoGitHub {
             })),
             _ => None,
         }
+    }
+}
+
+/// Gives every artifact a krowk-shaped public link, uploading nothing.
+struct DemoKrowk;
+
+impl Publisher for DemoKrowk {
+    fn upload(&self, name: String, _media_type: &'static str, _data: Bytes) -> UploadFuture {
+        Box::pin(async move {
+            Ok(publish::Link {
+                url: format!("https://krowk.com/a/demo-{name}"),
+                expires_at: None,
+            })
+        })
     }
 }
 
