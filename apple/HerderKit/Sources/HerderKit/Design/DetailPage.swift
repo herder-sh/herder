@@ -74,9 +74,16 @@ struct DetailPage<Leading: View, Actions: View, Content: View>: View {
         HStack(alignment: .center, spacing: 12) {
             leading
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 10) {
-                    Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1)
-                    if let chip { chip }
+                // The title keeps its width: the chip goes under it where both do not fit.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1)
+                        if let chip { chip }
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(Theme.page).foregroundStyle(Theme.text).lineLimit(1)
+                        if let chip { chip }
+                    }
                 }
                 if !status.isEmpty {
                     Text(status).font(Theme.body).foregroundStyle(Theme.secondary).lineLimit(2)
