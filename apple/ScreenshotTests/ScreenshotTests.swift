@@ -161,12 +161,35 @@ final class ScreenshotTests: XCTestCase {
         // Chats, a list pane on the layout grid as the Board is.
         if section("Chats") { shoot("mac-chats") }
         #endif
+        bots()
         skills()
         providers()
         integrations()
         archiving()
         project()
         finish()
+    }
+
+    /// The conversations people started from Slack through the bots, a section a bot, beside one
+    /// of them on the Mac: on the iPhone, Chats' Bots switch.
+    private func bots() {
+        #if os(macOS)
+        guard section("Bots") else { return }
+        shoot("mac-bots")
+        let row = row("Why invoice exports time out")
+        guard wait(row, "a bot conversation") else { return }
+        press(row)
+        settle()
+        shoot("mac-bots-session")
+        #else
+        guard section("Chats") else { return }
+        let bots = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Bots'")).firstMatch
+        guard wait(bots, "Chats' Bots switch") else { return }
+        press(bots)
+        guard wait(row("Why invoice exports time out"), "a bot conversation") else { return }
+        settle()
+        shoot("ios-bots")
+        #endif
     }
 
     /// The wide mockup the ledger session published during its turn: its card in the thread,
