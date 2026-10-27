@@ -127,6 +127,13 @@ async fn the_busy_demo_adds_a_long_transcript_that_keeps_streaming() -> anyhow::
         .iter()
         .filter(|body| matches!(body, EventBody::TurnCompleted { .. }))
         .count();
-    assert_eq!(finished, 30);
+    assert_eq!(finished, 100);
+    // About 2,000 items, as the apps are profiled scrolling.
+    let items = busy
+        .events
+        .iter()
+        .filter(|body| matches!(body, EventBody::ItemAdded { .. }))
+        .count();
+    assert!(items >= 2000, "{items} items");
     demo.stop().await
 }
