@@ -74,27 +74,29 @@ struct MarkdownTableView: View {
         SidewaysScroll {
             TableLayout(columns: table.header.count, width: width) {
                 ForEach(Array(table.header.enumerated()), id: \.offset) { column, text in
-                    cell(text, column).font(.callout.weight(.semibold)).background(Theme.raised)
+                    cell(text, column, header: true).background(Theme.raised)
                 }
                 ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
                     ForEach(Array(row.enumerated()), id: \.offset) { column, text in
-                        cell(text, column).font(.callout)
+                        cell(text, column)
                             .overlay(alignment: .top) { Rectangle().fill(Theme.stroke).frame(height: 1) }
                     }
                 }
             }
-            .foregroundStyle(Theme.text)
             .clipShape(.rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
-            .textSelection(.enabled)
-            .tint(Theme.link)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 
-    private func cell(_ text: String, _ column: Int) -> some View {
-        LinkText(MarkdownText.inline(text, prs: prLinks, find: find))
-            .multilineTextAlignment(textAlignment(table.alignments[column]))
+    private func cell(_ text: String, _ column: Int, header: Bool = false) -> some View {
+        var string = MarkdownText.inline(text, prs: prLinks, find: find)
+        if header {
+            for run in string.runs {
+                string[run.range].inlinePresentationIntent = (run.inlinePresentationIntent ?? []).union(.stronglyEmphasized)
+            }
+        }
+        return TranscriptText(string: string, style: .callout, alignment: textAlignment(table.alignments[column]))
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, maxHeight: .infinity,
@@ -109,11 +111,11 @@ struct MarkdownTableView: View {
         }
     }
 
-    private func textAlignment(_ alignment: MarkdownTable.Alignment) -> TextAlignment {
+    private func textAlignment(_ alignment: MarkdownTable.Alignment) -> NSTextAlignment {
         switch alignment {
-        case .leading: .leading
+        case .leading: .natural
         case .center: .center
-        case .trailing: .trailing
+        case .trailing: .right
         }
     }
 }

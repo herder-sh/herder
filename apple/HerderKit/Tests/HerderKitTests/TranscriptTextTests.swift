@@ -43,6 +43,23 @@ struct TranscriptTextTests {
         #expect(board.string(forType: .string) == "The change")
     }
 
+    /// A click on inline code copies exactly its text, and shows "Copied" over it.
+    @Test func clickingInlineCodeCopiesIt() throws {
+        let host = NSHostingView(rootView: MarkdownText(text: "Set `https://example.com/callback` as the redirect URL."))
+        host.frame = CGRect(x: 0, y: 0, width: 500, height: 100)
+        host.layoutSubtreeIfNeeded()
+        let view = try #require(Self.first(NSTextView.self, in: host))
+        let index = (view.string as NSString).range(of: "example").location
+        let saved = NSPasteboard.general.string(forType: .string)
+        defer {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
+        view.clicked(onLink: try #require(view.textStorage?.attribute(.link, at: index, effectiveRange: nil)), at: index)
+        #expect(NSPasteboard.general.string(forType: .string) == "https://example.com/callback")
+        #expect(view.subviews.contains { $0.identifier?.rawValue == "copied-badge" })
+    }
+
     /// A list item's wrapped lines hang under its text, past the marker.
     @Test func aListItemHangsItsWrappedLines() throws {
         let prose = MarkdownText(text: "")

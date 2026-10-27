@@ -177,10 +177,6 @@ extension MarkdownText {
 
     /// `text`'s inline Markdown, its code spans set on a raised ground.
     private func inline(_ text: String) -> AttributedString {
-        var string = Self.markdown(text)
-        for run in string.runs where run.inlinePresentationIntent?.contains(.code) == true {
-            string[run.range].backgroundColor = Theme.raised
-        }
-        return Self.decorated(string, prs: prLinks, find: find)
+        Self.inline(text, ground: Theme.raised, prs: prLinks, find: find)
     }
 }
