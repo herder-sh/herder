@@ -203,9 +203,9 @@ impl Tool {
                  prompt, rename, archive or interrupt sessions (your own included), switch a \
                  session's model, permission mode, account or provider, link pull requests, \
                  manage projects and skills, and read or change the daemon's settings. It runs \
-                 as the user who started your session (for a child, your primary's), with that \
-                 user's role: commands for the daemon's owners only fail with `not_allowed` for \
-                 a member. Commands that open a terminal (terminals, adding or logging in \
+                 as the person who sent the prompt of your current turn (for a child, your \
+                 primary's), with their role: commands for the daemon's owners only fail with \
+                 `not_allowed` for a member, or a chat person not linked to a herder user. Commands that open a terminal (terminals, adding or logging in \
                  accounts, installing providers) or pair a device or host are never run for an \
                  agent; ask the user to do those in a herder app. Act only on what the user \
                  asked for: these commands change the user's real sessions and settings. Call \

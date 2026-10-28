@@ -1144,6 +1144,17 @@
           "description": "Whether the bot messages them directly when a session on the host waits for them or\nfails.",
           "type": "boolean",
           "default": false
+        },
+        "user_id": {
+          "description": "The paired herder user they are, which only owners set: an agent runs herder commands\nfor a turn they prompted with this user's role. An unlinked person has no role.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

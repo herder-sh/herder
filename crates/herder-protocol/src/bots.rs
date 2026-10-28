@@ -7,7 +7,8 @@
 //! entry names and the daemon reads into memory only.
 //!
 //! People in the chat are no herder users: a bot's allowlist names them by their chat user id,
-//! with what each may do. A chat thread is linked to one session ([`ThreadLink`]); a session
+//! with what each may do, and may link each to a paired herder user whose role their prompts
+//! carry. A chat thread is linked to one session ([`ThreadLink`]); a session
 //! may be linked to several threads.
 //!
 //! What a bot knows comes in two parts: its owners' [`Bot::instructions`], kept in its entry,
@@ -17,7 +18,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{AccountId, BotId, FactId, PermissionMode, ProjectId, Provider, SecretRef, Timestamp};
+use crate::{
+    AccountId, BotId, FactId, PermissionMode, ProjectId, Provider, SecretRef, Timestamp, UserId,
+};
 
 /// The longest a bot's [`Bot::instructions`] may be, in bytes of UTF-8.
 pub const MAX_BOT_INSTRUCTIONS_BYTES: usize = 8 * 1024;
@@ -97,6 +100,10 @@ pub struct BotUser {
     /// fails.
     #[serde(default)]
     pub notify: bool,
+    /// The paired herder user they are, which only owners set: an agent runs herder commands
+    /// for a turn they prompted with this user's role. An unlinked person has no role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<UserId>,
 }
 
 /// What a session a bot starts runs on; an absent value is chosen as `create_session` chooses

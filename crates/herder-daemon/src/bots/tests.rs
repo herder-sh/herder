@@ -1,6 +1,6 @@
 use herder_protocol::{
     AccountId, Bot, BotDefaults, BotId, BotKind, BotPlace, BotUser, ChannelBinding, PermissionMode,
-    ProjectId, Provider, SessionOrigin,
+    ProjectId, Provider, SessionOrigin, UserId,
 };
 
 use super::*;
@@ -25,6 +25,7 @@ fn slack_bot(id: &str) -> Bot {
             channels: false,
             approve: true,
             notify: false,
+            user_id: Some(UserId::new("01J9OWNER")),
         }],
         defaults: BotDefaults {
             project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
@@ -476,6 +477,7 @@ mod running {
             channels: true,
             approve,
             notify: false,
+            user_id: None,
         }
     }
 

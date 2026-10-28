@@ -28,9 +28,9 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use herder_protocol::{
-    Account, Bot, BotError, BotFact, BotId, BotKind, BotMemory, BotState, BotStatus,
+    Account, Bot, BotError, BotFact, BotId, BotKind, BotMemory, BotState, BotStatus, BotUser,
     ChannelBinding, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event, Item, ItemId,
-    ProjectId, SessionHead, SessionId, Timestamp,
+    ProjectId, SessionHead, SessionId, Timestamp, UserId,
 };
 use tokio::sync::{Mutex, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -293,6 +293,26 @@ impl Bots {
         blocking(move || Config::load_file(&path))
             .await?
             .map_err(|err| error(ErrorCode::Internal, format!("{err:#}")))
+    }
+
+    /// The bot and the person of its allowlist the journal records as `by`, if any; for two
+    /// such people, which a shared name allows, the first, linked to a user only when all are
+    /// linked to the same one, so a name never borrows another person's link.
+    pub async fn person(&self, by: &UserId) -> Result<Option<(Bot, BotUser)>, ErrorInfo> {
+        let mut found: Option<(Bot, BotUser)> = None;
+        for bot in self.load().await?.bots {
+            for user in &bot.allow {
+                if runner::by(&bot, user) != *by {
+                    continue;
+                }
+                match &mut found {
+                    None => found = Some((bot.clone(), user.clone())),
+                    Some((_, first)) if first.user_id != user.user_id => first.user_id = None,
+                    Some(_) => {}
+                }
+            }
+        }
+        Ok(found)
     }
 
     /// Where the bot `bot_id` changes its own channel bindings.
