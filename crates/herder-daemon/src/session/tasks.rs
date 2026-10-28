@@ -421,7 +421,7 @@ impl SessionManager {
     /// The user who sent the latest prompt of `session`, or for a child its primary's, that
     /// a person sent: the prompt behind the current turn, as agents' messages and the daemon's
     /// follow-ups prompt for no one. An agent acts for them.
-    async fn acts_for(&self, mut session: SessionId) -> Result<UserId, ToolError> {
+    pub(super) async fn acts_for(&self, mut session: SessionId) -> Result<UserId, ToolError> {
         loop {
             let events = self
                 .inner

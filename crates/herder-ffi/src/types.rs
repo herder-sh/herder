@@ -1031,6 +1031,8 @@ pub struct BotUser {
     pub channels: bool,
     pub approve: bool,
     pub notify: bool,
+    #[uniffi(default = false)]
+    pub owner: bool,
     #[uniffi(default = None)]
     pub user_id: Option<UserId>,
 }

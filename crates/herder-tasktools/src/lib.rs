@@ -233,12 +233,15 @@ impl Tool {
                  it here. The memory holds at most 40 facts of 4 KB together: when it is full, \
                  the call fails with `invalid_arguments`; merge facts with `replaces`, or \
                  forget the least useful, then try again. Text that looks like a secret is \
-                 refused. Returns the fact's id and the whole memory."
+                 refused. Once the bot has owners, only a turn one of them prompted changes the \
+                 memory; any other fails with `not_allowed`, which says whom to ask: tell the \
+                 person so. Returns the fact's id and the whole memory."
             }
             Tool::Forget => {
                 "Drop a fact from the chat bot's memory, by its id: one that is wrong, outdated \
                  or no longer useful, or that someone asked you to forget (\"forget …\"). \
-                 Returns the whole memory. Fails with `not_found` for an unknown id."
+                 Returns the whole memory. Fails with `not_found` for an unknown id, and with \
+                 `not_allowed` as `remember` does."
             }
         }
     }
