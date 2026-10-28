@@ -74,11 +74,10 @@ struct ChildrenCard: View {
                 }
             }
             .padding(4)
-            .background(Theme.background.opacity(0.5), in: .rect(cornerRadius: Theme.corner - 2))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner - 2).strokeBorder(Theme.stroke.opacity(0.7)))
             .padding([.horizontal, .bottom], 6)
         }
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }
@@ -147,7 +146,7 @@ struct ChildAvatar: View {
                     StateDot(progress: progress, size: max(7, size * 0.32)).offset(x: 1, y: 1)
                 }
             }
-            .background(Theme.surface, in: Circle().inset(by: -2))
+            .background(.card, in: Circle().inset(by: -2))
             .accessibilityHidden(true)
     }
 }
@@ -163,7 +162,7 @@ private struct StateDot: View {
             Circle().fill(progress == .idle ? Theme.idle : progress.color).frame(width: size, height: size)
         }
         .frame(width: size, height: size)
-        .overlay(Circle().strokeBorder(Theme.surface, lineWidth: 2).padding(-2))
+        .overlay(Circle().strokeBorder(.card, lineWidth: 2).padding(-2))
     }
 }
 
@@ -384,7 +383,7 @@ private struct ReportCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
         .messageCopy(report.summary)
     }

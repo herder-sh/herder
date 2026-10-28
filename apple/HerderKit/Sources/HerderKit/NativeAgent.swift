@@ -178,7 +178,7 @@ struct NativeAgentGroup: View {
                     HStack(spacing: -8) {
                         ForEach(agents.prefix(3)) { _ in
                             ProviderMark(provider: fleet.session(key)?.provider ?? "claude", size: 18)
-                                .padding(7).background(Theme.surface, in: Circle())
+                                .padding(7).background(.card, in: Circle())
                                 .overlay(Circle().strokeBorder(Theme.stroke))
                         }
                     }
@@ -217,10 +217,10 @@ struct NativeAgentCard: View {
         Button { pages.open(.agent(key, agent.id)) } label: {
             HStack(spacing: 12) {
                 ProviderMark(provider: fleet.session(key)?.provider ?? "claude", size: 20)
-                    .padding(8).background(Theme.surface, in: Circle())
+                    .padding(8).background(.card, in: Circle())
                     .overlay(alignment: .bottomTrailing) {
                         Circle().fill(agent.outcome == .running ? Theme.running : agent.outcome == .failed ? Theme.failure : Theme.idle)
-                            .frame(width: 9, height: 9).overlay(Circle().strokeBorder(Theme.background, lineWidth: 2))
+                            .frame(width: 9, height: 9).overlay(Circle().strokeBorder(.ground, lineWidth: 2))
                     }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(agent.title).font(.callout.weight(.semibold)).foregroundStyle(Theme.text).lineLimit(2)
@@ -253,7 +253,7 @@ struct NativeAgentPage: View {
             } else {
                 Text("This sub-agent is no longer available.").foregroundStyle(Theme.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Theme.background)
+                    .background(.ground)
             }
         }
         #if os(iOS)
@@ -302,7 +302,7 @@ struct NativeAgentDetail: View {
                 .padding(20)
             }
         }
-        .background(Theme.background)
+        .background(.ground)
     }
 
     private var parentTitle: String { model.title ?? "Conversation" }
@@ -313,11 +313,11 @@ struct NativeAgentDetail: View {
             HStack(alignment: .center, spacing: 14) {
                 ProviderMark(provider: model.provider ?? "claude", size: 22)
                     .padding(10)
-                    .background(Theme.surface, in: Circle())
+                    .background(.card, in: Circle())
                     .overlay(Circle().strokeBorder(Theme.stroke))
                     .overlay(alignment: .bottomTrailing) {
                         Circle().fill(agent.badge.color).frame(width: 11, height: 11)
-                            .overlay(Circle().strokeBorder(Theme.background, lineWidth: 2.5))
+                            .overlay(Circle().strokeBorder(.ground, lineWidth: 2.5))
                     }
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
@@ -353,7 +353,7 @@ struct NativeAgentDetail: View {
             MarkdownText(text: result)
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+                .background(.card, in: .rect(cornerRadius: Theme.corner))
                 .overlay(RoundedRectangle(cornerRadius: Theme.corner)
                     .strokeBorder(agent.outcome == .failed ? Theme.failure.opacity(0.5) : Theme.stroke))
                 .messageCopy(result)
@@ -374,7 +374,7 @@ struct NativeAgentDetail: View {
             .foregroundStyle(Theme.secondary)
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
         }
     }
@@ -413,7 +413,7 @@ private struct AgentTask: View {
             }
         }
         .padding(14)
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }

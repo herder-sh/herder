@@ -75,5 +75,5 @@ struct SignalStrip: View {
         Signal(id: "idle", count: 49, label: "idle", urgency: .quiet),
     ], filter: $filter)
     .padding()
-    .background(Theme.background)
+    .background(Theme.canvas)
 }

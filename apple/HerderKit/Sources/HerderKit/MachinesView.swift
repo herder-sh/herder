@@ -147,7 +147,7 @@ struct MachinesView: View {
             }
             .pageColumn(width: .infinity)
         }
-        .background(Theme.background)
+        .background(.ground)
         .refreshable { fleet.wake() }
         // Asked again as machines connect, and as a vault gets paired.
         .task(id: fleet.machines.filter { $0.connection == .connected }.map(\.hostId)) {
@@ -507,7 +507,7 @@ struct ConnectionMark: View {
             case .disconnected:
                 Circle().fill(Theme.failure).frame(width: 10, height: 10)
                     .overlay(Image(systemName: "xmark").font(.system(size: 5, weight: .heavy))
-                        .foregroundStyle(Theme.background))
+                        .foregroundStyle(.ground))
             }
         }
         .accessibilityLabel(state.label)

@@ -229,7 +229,7 @@ struct AwsSignInSheet: View {
                     .frame(minHeight: 44)
                 }
             }
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
         }
     }

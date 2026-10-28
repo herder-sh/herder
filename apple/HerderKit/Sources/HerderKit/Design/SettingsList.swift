@@ -25,7 +25,7 @@ struct SettingsGroup<Content: View>: View {
 
     var body: some View {
         VStack(spacing: 0) { content }
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
     }
 }
@@ -298,7 +298,7 @@ struct DetailSheet<Content: View>: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
         }
-        .background(Theme.surface)
+        .layer(.sheet)
         // Escape closes it, as a sheet's close button does.
         .background { Button("Close") { dismiss() }.keyboardShortcut(.cancelAction).hidden() }
         #if os(macOS)
@@ -306,7 +306,7 @@ struct DetailSheet<Content: View>: View {
         .frame(minHeight: 200, idealHeight: 420)
         #else
         .presentationDetents([.medium, .large])
-        .presentationBackground(Theme.surface)
+        .presentationBackground(Theme.sheet)
         #endif
         .preferredColorScheme(.dark)
     }
@@ -394,5 +394,5 @@ struct InfoButton: View {
     }
     .frame(width: 520)
     .padding()
-    .background(Theme.surface)
+    .background(Theme.canvas)
 }

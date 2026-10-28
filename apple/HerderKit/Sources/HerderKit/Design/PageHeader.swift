@@ -98,5 +98,5 @@ extension EnvironmentValues {
         }
     }
     .frame(width: 760)
-    .background(Theme.background)
+    .background(.ground)
 }

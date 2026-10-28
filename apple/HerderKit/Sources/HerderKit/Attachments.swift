@@ -369,7 +369,7 @@ struct AttachmentStrip: View {
                         .overlay(alignment: .topTrailing) {
                             Button { remove(index) } label: {
                                 SwiftUI.Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(Theme.text, Theme.background)
+                                    .foregroundStyle(Theme.text, .ground)
                             }
                             .buttonStyle(.plain)
                             .padding(3)

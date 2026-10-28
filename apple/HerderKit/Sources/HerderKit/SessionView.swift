@@ -110,7 +110,7 @@ struct SessionView: View {
         }
         .environment(\.prLinks, PRLinks(linkablePRs))
         .environment(\.transcriptExpanded, $expanded)
-        .background(Theme.background)
+        .background(.ground)
         .overlay(alignment: .trailing) { EmptyView() }
         .safeAreaInset(edge: .trailing, spacing: 0) {
             if inspector == .pane && inspectorShown {
@@ -138,7 +138,8 @@ struct SessionView: View {
         .sheet(isPresented: $inspectorSheet) {
             SessionInspector(fleet: fleet, key: key)
                 .presentationDetents([.medium, .large])
-                .presentationBackground(Theme.surface)
+                .layer(.sheet)
+                .presentationBackground(Theme.sheet)
         }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -383,7 +384,7 @@ struct SessionView: View {
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(summary?.machineOffline == true ? Theme.failure : Theme.secondary)
                     .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+                    .background(.card, in: .rect(cornerRadius: Theme.corner))
             } else {
                 Composer(fleet: fleet, key: key, model: model) { host, account in
                     Task {
@@ -401,7 +402,7 @@ struct SessionView: View {
         .padding(.horizontal, SessionColumn.composerMargin)
         .padding(.top, 8)
         .padding(.bottom, 10)
-        .background(Theme.background)
+        .background(.ground)
     }
 
     /// The oldest approval, else the oldest question, on any route, as the TUI pins them.
@@ -462,7 +463,7 @@ private struct FollowsEnd: ViewModifier {
                             .foregroundStyle(Theme.text)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(Theme.surface, in: .capsule)
+                            .background(.card, in: .capsule)
                             .overlay(Capsule().strokeBorder(Theme.stroke))
                             .contentShape(.capsule)
                     }
@@ -748,7 +749,7 @@ struct DraftSessionView: View {
         .padding(.horizontal, compact ? 12 : 24)
         .padding(.bottom, starting == nil ? 0 : 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.background)
+        .background(.ground)
         .onAppear {
             hostId = draft.hostId
             choice = fleet.draftChoice(on: hostId, projectId: draft.projectId)

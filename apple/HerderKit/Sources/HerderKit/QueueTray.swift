@@ -73,7 +73,7 @@ struct QueueTray: View {
             .frame(height: Self.rowHeight * CGFloat(min(shown.count, 4)))
             .scrollDisabled(shown.count <= 4)
         }
-        .background(Theme.surface, in: .rect(cornerRadius: 14))
+        .background(.card, in: .rect(cornerRadius: 14))
         .clipShape(.rect(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.stroke.opacity(0.6)))
         .padding(.horizontal, 12)

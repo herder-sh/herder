@@ -83,7 +83,7 @@ struct PairingLinkCode: View {
                 CopyButton(text: link)
             }
             .padding(12)
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
         }
     }
 }

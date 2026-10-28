@@ -46,7 +46,7 @@ import Testing
         let view = content
             .padding(Theme.margin)
             .frame(width: width, alignment: .topLeading)
-            .background(Theme.surface)
+            .layer(.sheet)
             .environment(\.colorScheme, .dark)
         let host = NSHostingView(rootView: view)
         host.appearance = NSAppearance(named: .darkAqua)

@@ -212,5 +212,5 @@ private extension View {
     ])
     .frame(width: 620)
     .padding()
-    .background(Theme.background)
+    .background(Theme.canvas)
 }

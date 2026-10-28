@@ -12,7 +12,7 @@ struct Splash: View {
     var body: some View {
         if shown {
             ZStack {
-                Theme.background.ignoresSafeArea()
+                Theme.canvas.ignoresSafeArea()
                 VStack(spacing: 22) {
                     Wordmark(rows: rows)
                         .frame(maxWidth: 260)

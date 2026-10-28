@@ -42,7 +42,7 @@ struct QuestionRecord: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner)
             .strokeBorder(waitsForYou ? Theme.accent.opacity(0.6) : Theme.stroke))
         .accessibilityElement(children: .contain)

@@ -70,7 +70,7 @@ struct IntegrationsView: View {
             .pageColumn(width: .infinity)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-        .background(Theme.background)
+        .background(.ground)
         .refreshable { await fleet.bots.reload() }
         .navigationTitle("Integrations")
         #if os(iOS)
@@ -398,7 +398,7 @@ struct AddBotForm: View {
             .font(.subheadline)
             .padding(.horizontal, 12)
             .frame(minWidth: 200, minHeight: 36)
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
             .contentShape(.rect)
         }
@@ -418,7 +418,7 @@ struct AddBotForm: View {
                         .font(.subheadline.weight(selected ? .semibold : .regular))
                         .foregroundStyle(selected ? Theme.text : Theme.secondary)
                         .frame(maxWidth: .infinity, minHeight: 30)
-                        .primaryFill(in: .rect(cornerRadius: Theme.corner - 2), on: selected, off: .clear)
+                        .primaryFill(in: .rect(cornerRadius: Theme.corner - 2), on: selected, off: AnyShapeStyle(.clear))
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -427,7 +427,7 @@ struct AddBotForm: View {
         }
         .padding(2)
         .frame(width: 190)
-        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }
@@ -474,7 +474,7 @@ private struct TokenBox: View {
             #endif
             .padding(.horizontal, 12)
             .frame(minHeight: 36)
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }
@@ -493,7 +493,7 @@ private struct ManifestBox: View {
                 .padding(12)
         }
         .frame(maxHeight: 200)
-        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }

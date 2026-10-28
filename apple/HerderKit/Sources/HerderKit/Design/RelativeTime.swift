@@ -40,5 +40,5 @@ struct RelativeTime: View {
     }
     .font(Theme.meta).foregroundStyle(Theme.tertiary)
     .padding()
-    .background(Theme.background)
+    .background(Theme.canvas)
 }

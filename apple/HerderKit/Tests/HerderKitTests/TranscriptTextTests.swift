@@ -15,7 +15,7 @@ struct TranscriptTextTests {
         }
         .defaultScrollAnchor(.bottom)
         .frame(width: 400, height: 300)
-        .background(.black)
+        .background(Theme.canvas)
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 300), styleMask: .borderless,
                               backing: .buffered, defer: false)
         let host = NSHostingView(rootView: view)

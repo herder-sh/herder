@@ -112,7 +112,7 @@ private struct ToastDetails: View {
                 .padding(16)
             }
         }
-        .background(Theme.surface)
+        .layer(.sheet)
         #if os(macOS)
         .frame(minWidth: 420, idealWidth: 560, minHeight: 240, idealHeight: 360)
         #else

@@ -241,7 +241,7 @@ struct SandboxedWebView {
         web.navigationDelegate = coordinator
         web.uiDelegate = coordinator
         // Past the page's end, zoomed out below it: the app's background, not WebKit's white.
-        web.underPageBackgroundColor = .init(Theme.background)
+        web.underPageBackgroundColor = .init(Theme.canvas)
         #if os(iOS)
         web.overrideUserInterfaceStyle = .dark
         web.isOpaque = false

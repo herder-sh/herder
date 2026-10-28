@@ -24,7 +24,7 @@ struct SessionInspector: View {
                 if tab == 0 { events(model) } else { InspectorStats(fleet: fleet, key: key, model: model) }
             }
         }
-        .background(Theme.surface)
+        .layer(.pane)
     }
 
     private func events(_ model: SessionModel) -> some View {
@@ -121,7 +121,7 @@ private struct MomentGroupView: View {
             }
         }
         .padding(10)
-        .background(Theme.background.opacity(group.turn == nil ? 0 : 0.5), in: .rect(cornerRadius: Theme.corner))
+        .background(Theme.card.opacity(group.turn == nil ? 0 : 1), in: .rect(cornerRadius: Theme.corner))
         .overlay {
             if group.turn != nil { RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke) }
         }
@@ -240,7 +240,7 @@ private struct MomentLine<Content: View>: View {
                 .font(.system(size: 8, weight: .bold))
                 .foregroundStyle(tint)
                 .frame(width: 18, height: 18)
-                .background(Circle().fill(Theme.surface))
+                .background(Circle().fill(.ground))
                 .background(Circle().fill(tint.opacity(0.18)).padding(-0.5))
             content
                 .font(.caption)

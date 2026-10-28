@@ -31,7 +31,7 @@ import WebKit
         let (fleet, key) = try sampleFleet()
         let artifact = try #require(fleet.artifacts(of: key).last)
         let card = ArtifactBlock(artifact: artifact, fleet: fleet, key: key)
-            .padding(24).frame(width: 720).background(Theme.background)
+            .padding(24).frame(width: 720).background(Theme.canvas)
         try await shoot(card, size: CGSize(width: 720, height: 470), named: "artifact-card.png", titled: false)
     }
 
@@ -68,7 +68,7 @@ import WebKit
         let cards = VStack(spacing: 16) {
             ForEach(fleet.artifacts(of: script.key)) { ArtifactBlock(artifact: $0, fleet: fleet, key: script.key) }
         }
-        .padding(16).frame(width: width).background(Theme.background).environment(\.colorScheme, .dark)
+        .padding(16).frame(width: width).background(Theme.canvas).environment(\.colorScheme, .dark)
         let host = NSHostingView(rootView: cards)
         host.appearance = NSAppearance(named: .darkAqua)
         host.frame = NSRect(x: 0, y: 0, width: width, height: 900)

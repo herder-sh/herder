@@ -303,7 +303,7 @@ struct ProvidersView: View {
             }
             .pageColumn()
         }
-        .background(Theme.background)
+        .background(.ground)
         .navigationTitle("Providers")
         .toolbar {
             #if os(iOS)
@@ -359,7 +359,7 @@ struct ProvidersView: View {
                         .padding(.vertical, 10)
                     }
                 }
-                .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+                .background(.card, in: .rect(cornerRadius: Theme.corner))
                 .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
             }
         }
@@ -503,7 +503,7 @@ struct ProvidersPage: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Theme.cellPadding)
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(urgency.color.opacity(0.45)))
     }
 
@@ -1051,6 +1051,6 @@ struct FailureOutput: View {
         }
         .defaultScrollAnchor(.bottom)
         .frame(maxHeight: 220)
-        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
     }
 }

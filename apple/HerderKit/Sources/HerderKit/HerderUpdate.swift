@@ -131,7 +131,7 @@ struct HerderVersionsSection: View {
                         .frame(minHeight: 48)
                     }
                 }
-                .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+                .background(.card, in: .rect(cornerRadius: Theme.corner))
                 .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
             }
         }

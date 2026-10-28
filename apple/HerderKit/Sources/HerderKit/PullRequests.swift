@@ -192,7 +192,7 @@ struct PRList: View {
                         .padding(.vertical, 8)
                 }
                 .frame(width: 520)
-                .background(Theme.surface)
+                .layer(.sheet)
             case .sheet:
                 SheetScaffold(title: "Pull Requests", subtitle: rollup.groups.count > 1
                               ? "This session's and its agents'." : "Linked to this session.") {
@@ -264,7 +264,7 @@ struct PRList: View {
                 .font(Theme.body)
                 .padding(.horizontal, 10)
                 .frame(height: 30)
-                .background(Theme.background, in: .rect(cornerRadius: Theme.corner - 2))
+                .background(.card, in: .rect(cornerRadius: Theme.corner - 2))
             } else {
                 Spacer()
             }

@@ -68,7 +68,7 @@ private struct SelectTextSheet: View {
             Rectangle().fill(Theme.stroke).frame(height: 1)
             SelectableText(text: text)
         }
-        .background(Theme.surface)
+        .layer(.sheet)
         .frame(minWidth: 520, idealWidth: 720, minHeight: 360, idealHeight: 560)
     }
 }

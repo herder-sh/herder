@@ -37,7 +37,7 @@ import Testing
         }
         .frame(width: width)
         .padding(16)
-        .background(Theme.background)
+        .background(Theme.canvas)
         .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2

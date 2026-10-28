@@ -418,7 +418,7 @@ struct ChipDetail: View {
         }
         .padding(14)
         .frame(minWidth: 320)
-        .background(Theme.surface)
+        .layer(.sheet)
     }
 }
 

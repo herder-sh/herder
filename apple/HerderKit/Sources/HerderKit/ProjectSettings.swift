@@ -215,7 +215,7 @@ struct ProjectSettingsForm: View {
                         .onSubmit { saveAppearance("Name") }
                         .padding(.horizontal, 10)
                         .frame(maxWidth: 240, minHeight: 32)
-                        .background(Theme.surface, in: .rect(cornerRadius: 7))
+                        .background(.card, in: .rect(cornerRadius: 7))
                 }
                 RowDivider()
                 SettingRow(label: "Background", hint: "Fills the tile behind the icon", saved: saves["Background"]) {
@@ -292,7 +292,7 @@ struct ProjectSettingsForm: View {
                             .onSubmit { save("Setup command") }
                             .padding(.horizontal, 10)
                             .frame(maxWidth: 240, minHeight: 32)
-                            .background(Theme.surface, in: .rect(cornerRadius: 7))
+                            .background(.card, in: .rect(cornerRadius: 7))
                     }
                     RowDivider()
                     SettingRow(label: "Keep artifacts private", hint: "Shown in the thread, never uploaded for a public link",

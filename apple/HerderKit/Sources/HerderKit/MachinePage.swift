@@ -379,7 +379,7 @@ struct MachinePage: View {
                     .onSubmit { rename() }
                     .padding(.horizontal, 10)
                     .frame(maxWidth: 240, minHeight: 32)
-                    .background(Theme.surface, in: .rect(cornerRadius: 7))
+                    .background(.card, in: .rect(cornerRadius: 7))
                     .accessibilityIdentifier("machine-name")
             }
             RowDivider()
@@ -444,7 +444,7 @@ struct MachinePage: View {
             }
         }
         .padding(12)
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
     }
 
     /// The machine's addresses in order, each movable, removable and one to connect through now, and

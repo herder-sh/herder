@@ -99,7 +99,7 @@ import AppKit
             PageTrail(crumbs: ["Providers", Page.account(loginId: loginId).title(in: fleet)]) { _ in }
             AccountPage(fleet: fleet, loginId: loginId)
         }
-        .background(Theme.background)
+        .background(Theme.canvas)
         let host = NSHostingView(rootView: page.environment(\.colorScheme, .dark))
         host.appearance = NSAppearance(named: .darkAqua)
         host.frame = NSRect(x: 0, y: 0, width: 1040, height: 900)

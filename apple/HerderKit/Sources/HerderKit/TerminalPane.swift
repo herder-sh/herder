@@ -258,7 +258,7 @@ struct TerminalPane: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Theme.surface)
+        .background(Theme.pane)
     }
 
     /// The machine's open shells of this session, then a new one if there are none.

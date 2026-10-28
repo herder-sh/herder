@@ -140,7 +140,7 @@ struct AddMachineSheet: View {
         // The camera takes the sheet's place rather than opening over it.
         if scanning {
             PairScanner(scanned: { text = $0 }, close: { scanning = false })
-                .presentationBackground(.black)
+                .presentationBackground(Theme.sheet)
         } else {
             form
         }
@@ -346,7 +346,7 @@ struct AddMachineForm<Device: View>: View {
             .font(.subheadline)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 36)
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
             .contentShape(.rect)
         }
@@ -390,7 +390,7 @@ private struct KindPicker: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, maxHeight: wide ? nil : .infinity, alignment: wide ? .leading : .topLeading)
-            .primaryFill(in: .rect(cornerRadius: Theme.corner), on: selected, off: Theme.background)
+            .primaryFill(in: .rect(cornerRadius: Theme.corner), on: selected, off: AnyShapeStyle(.card))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(selected ? .clear : Theme.stroke))
             .contentShape(.rect)
         }
@@ -412,7 +412,7 @@ private struct CommandBox: View {
         .padding(.leading, 12)
         .padding(.trailing, 4)
         .frame(minHeight: 40)
-        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }
@@ -459,7 +459,7 @@ private struct GrantCard: View {
         }
         .padding(12)
         .fixedSize(horizontal: false, vertical: true)
-        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }
