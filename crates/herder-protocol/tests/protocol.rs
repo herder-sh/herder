@@ -74,6 +74,7 @@ fn slack_bot() -> Bot {
             channels: true,
             approve: true,
             notify: false,
+            user_id: Some(UserId::new("01J9OWNER")),
         }],
         defaults: BotDefaults {
             project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
@@ -2823,6 +2824,23 @@ fn bots_and_thread_links_have_their_wire_form() {
     }))
     .unwrap();
     assert!(!(user.dm || user.channels || user.approve || user.notify));
+    assert_eq!(user.user_id, None);
+    let linked = BotUser {
+        user_id: Some(UserId::new("ada")),
+        ..user
+    };
+    assert_eq!(
+        serde_json::to_value(&linked).unwrap(),
+        json!({
+            "external_user_id": "U1",
+            "display_name": "Ada",
+            "dm": false,
+            "channels": false,
+            "approve": false,
+            "notify": false,
+            "user_id": "ada"
+        })
+    );
 
     let linked = EventBody::ThreadLinked { thread: thread() };
     assert_eq!(

@@ -418,35 +418,43 @@ impl SessionManager {
         })
     }
 
-    /// The user who created `session`, or for a child its primary; an agent acts for them.
+    /// The user who sent the latest prompt of `session`, or for a child its primary's, that
+    /// a person sent: the prompt behind the current turn, as agents' messages and the daemon's
+    /// follow-ups prompt for no one. An agent acts for them.
     async fn acts_for(&self, mut session: SessionId) -> Result<UserId, ToolError> {
         loop {
-            let created = self
+            let events = self
                 .inner
                 .journal
-                .read_since(session.clone(), 0, 1)
+                .all(session.clone())
                 .await
                 .map_err(|err| tool_internal(format!("{err:#}")))?;
-            let Some(created) = created.into_iter().next() else {
+            let Some(created) = events.first() else {
                 return Err(tool_internal(format!("session {session} does not exist")));
             };
-            if let Some(by) = created.by {
-                return Ok(by);
+            if let EventBody::SessionCreated {
+                parent: Some(parent),
+                parent_host: None,
+                ..
+            } = &created.body
+            {
+                session = parent.clone();
+                continue;
             }
-            match created.body {
-                EventBody::SessionCreated {
-                    parent: Some(parent),
-                    parent_host: None,
-                    ..
-                } => session = parent,
-                _ => {
-                    return Err(ToolError::new(
-                        ErrorCode::NotAllowed,
-                        "no user of this daemon started your session, so it runs no herder \
-                         commands",
-                    ));
+            let sender = events.iter().rev().find_map(|event| match &event.body {
+                EventBody::ItemAdded { item }
+                    if matches!(item.body, herder_protocol::ItemBody::UserMessage { .. }) =>
+                {
+                    event.by.clone()
                 }
-            }
+                _ => None,
+            });
+            return sender.ok_or_else(|| {
+                ToolError::new(
+                    ErrorCode::NotAllowed,
+                    "no user of this daemon prompted your session, so it runs no herder commands",
+                )
+            });
         }
     }
 

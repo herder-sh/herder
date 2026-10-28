@@ -1870,6 +1870,113 @@ async fn owners_put_and_list_bots_and_members_are_refused() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
+    let daemon = Daemon::start().await;
+    let mut owner_client = daemon.client().await;
+    let owner = owner_client.hello(Vec::new()).await.user_id;
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut member_client = daemon.client_on(&device, Some(&code)).await;
+    let member = member_client.hello(Vec::new()).await.user_id;
+    let person = |id: &str, name: &str, user_id: Option<&UserId>| herder_protocol::BotUser {
+        external_user_id: id.into(),
+        display_name: name.into(),
+        dm: true,
+        channels: true,
+        approve: false,
+        notify: false,
+        user_id: user_id.cloned(),
+    };
+    let mut bot = herder_protocol::Bot {
+        bot_id: herder_protocol::BotId::new("tg"),
+        kind: herder_protocol::BotKind::Telegram,
+        name: "trash-can".into(),
+        token: "TELEGRAM_TOKEN".parse().unwrap(),
+        app_token: None,
+        allow: vec![
+            person("1", "Ada", Some(&owner)),
+            person("2", "Bob", Some(&member)),
+            person("3", "Kim", None),
+        ],
+        defaults: herder_protocol::BotDefaults::default(),
+        channel_bindings: Vec::new(),
+        instructions: None,
+    };
+    let put = |bot: &herder_protocol::Bot| CommandBody::PutBot {
+        bot: Box::new(bot.clone()),
+    };
+
+    // Only owners link people, and only to users paired with the daemon.
+    assert!(matches!(
+        member_client.command("m1", put(&bot)).await,
+        ServerMessage::CommandRejected { error, .. } if error.code == ErrorCode::Forbidden
+    ));
+    let mut ghost = bot.clone();
+    ghost
+        .allow
+        .push(person("4", "Cy", Some(&UserId::new("ghost"))));
+    assert!(matches!(
+        owner_client.command("c1", put(&ghost)).await,
+        ServerMessage::CommandRejected { error, .. }
+            if error.code == ErrorCode::BadRequest && error.message.contains("Cy is linked to ghost")
+    ));
+    assert_eq!(crate::Config::load_file(&daemon.config).unwrap().bots, []);
+    assert!(matches!(
+        owner_client.command("c2", put(&bot)).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+
+    // A turn Ada prompted acts as the owner she is linked to; Bob's as a member; Kim's as no one.
+    let control = &daemon.control;
+    let put_secret = || CommandBody::PutSecret {
+        set: "prod".into(),
+        name: "API_KEY".into(),
+        description: "The API key".into(),
+        value: herder_protocol::SecretValue::new("s3cret").unwrap(),
+    };
+    let via = |name: &str| UserId::new(format!("via trash-can, {name}"));
+    // Past the owners-only check, a host with no vault keeps no secrets.
+    let ada = control.command(via("Ada"), put_secret()).await.unwrap_err();
+    assert_ne!(ada.code, ErrorCode::Forbidden, "{ada:?}");
+    assert!(matches!(
+        control.command(via("Ada"), CommandBody::GetSettings).await,
+        Ok(CommandResult::Settings { .. })
+    ));
+    let bob = control.command(via("Bob"), put_secret()).await.unwrap_err();
+    assert_eq!(bob.code, ErrorCode::Forbidden);
+    let kim = control.command(via("Kim"), put_secret()).await.unwrap_err();
+    assert_eq!(kim.code, ErrorCode::Forbidden);
+    assert_eq!(
+        kim.message,
+        "this turn was sent by Kim via trash-can, who isn't linked to a herder user; an owner \
+         can link them in the bot's People"
+    );
+    let gone = control
+        .command(UserId::new("gone"), CommandBody::GetSettings)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        gone.message,
+        "this turn was sent by gone, who is no longer paired with this daemon"
+    );
+
+    // Two people of one name share a link only when both have it.
+    bot.allow.push(person("5", "Ada", None));
+    assert!(matches!(
+        owner_client.command("c3", put(&bot)).await,
+        ServerMessage::CommandAccepted { .. }
+    ));
+    let twin = control
+        .command(via("Ada"), CommandBody::GetSettings)
+        .await
+        .unwrap_err();
+    assert_eq!(twin.code, ErrorCode::Forbidden);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agents_run_commands_as_their_user_within_its_role() {
     let daemon = Daemon::start().await;
     let owner = daemon.client().await.hello(Vec::new()).await.user_id;

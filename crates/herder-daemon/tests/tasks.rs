@@ -332,6 +332,11 @@ impl Daemon {
 
     /// Runs a turn of `session_id`, which starts its CLI and grants it an MCP token.
     async fn start(&self, session_id: &SessionId) {
+        self.start_as(alice(), session_id).await;
+    }
+
+    /// Runs a turn of `session_id` that `user_id` prompts.
+    async fn start_as(&self, user_id: UserId, session_id: &SessionId) {
         let turns = |events: &[Event]| {
             events
                 .iter()
@@ -345,7 +350,7 @@ impl Daemon {
             images: Vec::new(),
             files: Vec::new(),
         };
-        self.manager.handle(alice(), prompt).await.unwrap();
+        self.manager.handle(user_id, prompt).await.unwrap();
         for _ in 0..250 {
             if turns(&self.journal(session_id).await) > before {
                 return;
@@ -2203,7 +2208,7 @@ impl mcp::Control for Commands {
 }
 
 #[tokio::test]
-async fn agents_drive_the_daemon_as_the_user_who_started_their_task() {
+async fn agents_drive_the_daemon_as_the_user_who_prompted_their_task() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path()).await;
     let primary = daemon.primary(PermissionMode::Ask).await;
@@ -2240,7 +2245,7 @@ async fn agents_drive_the_daemon_as_the_user_who_started_their_task() {
         "invalid_arguments"
     );
 
-    // A child acts for the user who started its primary.
+    // A child acts for whoever prompted its primary.
     let child = id(&tools
         .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
         .await["child"]);
@@ -2260,6 +2265,54 @@ async fn agents_drive_the_daemon_as_the_user_who_started_their_task() {
         matches!(&ran[0].1, CommandBody::RenameSession { session_id, .. } if session_id == &primary)
     );
     assert!(matches!(&ran[2].1, CommandBody::Interrupt { session_id } if session_id == &child));
+}
+
+#[tokio::test]
+async fn agents_act_for_whoever_prompted_their_current_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let commands = Arc::new(Commands::default());
+    daemon.manager.serve_control(commands.clone()).unwrap();
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let list = json!({ "command": { "type": "get_settings" } });
+    let last = || commands.ran.lock().unwrap().last().unwrap().0.clone();
+    tools.ok("command", list.clone()).await;
+    assert_eq!(last(), alice());
+
+    // Bob prompts the session alice started: its agent, and its child, act for bob.
+    let bob = UserId::new("bob");
+    daemon.start_as(bob.clone(), &primary).await;
+    tools.ok("command", list.clone()).await;
+    assert_eq!(last(), bob);
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
+        .await["child"]);
+    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(request["kind"], "request");
+    let mut child_tools = daemon.connect(&child);
+    child_tools.ok("command", list.clone()).await;
+    assert_eq!(last(), bob);
+
+    // Another agent's message starts a turn for no one: the turn still acts for bob.
+    let other = daemon.primary(PermissionMode::Ask).await;
+    let mut other_tools = daemon.connect(&other);
+    let message = json!({ "session_id": primary, "text": "Plan.", "message_id": "m-1" });
+    other_tools.ok("send_session", message).await;
+    daemon
+        .until_n(&primary, 3, |event| {
+            matches!(event, EventBody::TurnCompleted { .. })
+        })
+        .await;
+    tools.ok("command", list.clone()).await;
+    assert_eq!(last(), bob);
+
+    // Alice prompts again: the agents act for her again.
+    daemon.start_as(alice(), &primary).await;
+    tools.ok("command", list.clone()).await;
+    assert_eq!(last(), alice());
+    child_tools.ok("command", list).await;
+    assert_eq!(last(), alice());
 }
 
 #[tokio::test]

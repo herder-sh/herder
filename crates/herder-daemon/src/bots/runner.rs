@@ -1454,9 +1454,9 @@ impl Runner {
             .cloned()
     }
 
-    /// The user the journal records a person's actions as: "via ‹bot›, ‹name›".
+    /// The user the journal records a person's actions as.
     fn by(&self, user: &BotUser) -> UserId {
-        UserId::new(format!("via {}, {}", self.bot.name, user.display_name))
+        by(&self.bot, user)
     }
 
     /// Whether `by` is one of the bot's people, acting through it.
@@ -1570,6 +1570,12 @@ struct Context {
 
 /// `data`, downloaded of `file`, as one of a prompt's `images` when it is one the agent sees,
 /// else as one of its `files`.
+/// The user the journal records the actions of `user`, one of `bot`'s people, as: "via ‹bot›,
+/// ‹name›".
+pub fn by(bot: &Bot, user: &BotUser) -> UserId {
+    UserId::new(format!("via {}, {}", bot.name, user.display_name))
+}
+
 fn attach(file: &ChatFile, data: Vec<u8>, images: &mut Vec<Image>, files: &mut Vec<PromptFile>) {
     if IMAGE_MEDIA_TYPES.contains(&file.media_type.as_str()) && data.len() <= MAX_IMAGE_BYTES {
         images.push(Image {

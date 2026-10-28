@@ -190,6 +190,7 @@
 //! channels = true
 //! approve = true
 //! notify = false
+//! user_id = "01J9OWNER"         # the paired user they are, for agents' herder commands; none by default
 //!
 //! [bots.defaults]               # each key chosen as for any new session when absent
 //! project_id = "github.com/herder-sh/herder" # a chat when absent

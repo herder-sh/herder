@@ -11,6 +11,8 @@ struct BotPage: View {
     let botId: BotId
     @State private var bots: MachineBots
     @State private var knowledge: BotKnowledge
+    /// The machine's users, whom a person can be linked to.
+    @State private var users: People
     @State private var saves = Autosave()
     @State private var sheet: BotSheet?
     @State private var confirmingRemove = false
@@ -28,6 +30,7 @@ struct BotPage: View {
         let owner = fleet.machines.first { $0.hostId == bots.hostId }?.role == .owner
         _bots = State(initialValue: bots)
         _knowledge = State(initialValue: BotKnowledge(bots: bots, botId: botId, editable: owner))
+        _users = State(initialValue: People(fleet: fleet, hostId: bots.hostId))
     }
 
     var body: some View {
@@ -82,6 +85,7 @@ struct BotPage: View {
         .task {
             await bots.reload()
             await knowledge.reload()
+            await users.reload()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 await bots.reloadStatus()
@@ -189,7 +193,8 @@ struct BotPage: View {
 
     @ViewBuilder private func personSheet(_ bot: Bot, id: String) -> some View {
         if let user = bot.allow.first(where: { $0.externalUserId == id }) {
-            BotPersonSheet(bot: bot.name, user: user, saved: saves[id]) { next in
+            let paired: [UserInfo] = if case .loaded(let loaded) = users.users { loaded } else { [] }
+            BotPersonSheet(bot: bot.name, user: user, users: paired, saved: saves[id]) { next in
                 change(id) { bot in
                     if let index = bot.allow.firstIndex(where: { $0.externalUserId == id }) { bot.allow[index] = next }
                 }
@@ -374,12 +379,14 @@ enum BotSheet: Identifiable, Hashable {
     var id: Self { self }
 }
 
-/// A person's details: their member ID, and the four switches their role stands for, each
-/// with what it lets them do; removing them bottom left.
+/// A person's details: their member ID, the four switches their role stands for, each with
+/// what it lets them do, and the herder user they are; removing them bottom left.
 struct BotPersonSheet: View {
     /// The bot's name.
     let bot: String
     let user: BotUser
+    /// The machine's users, whom they can be linked to.
+    var users: [UserInfo] = []
     var saved: SaveState?
     let set: (BotUser) -> Void
     let remove: () -> Void
@@ -400,6 +407,22 @@ struct BotPersonSheet: View {
                 SwitchRow(title: "Get notified", detail: "A DM when a session waits for them or fails",
                           isOn: binding(\.notify))
             }
+            SettingsGroup {
+                SettingRow(label: "herder user", hint: "Agents run herder commands for \(name)’s prompts with this user’s role") {
+                    FooterItem(symbol: "person.crop.circle", text: linked) {
+                        Picker("herder user", selection: Binding(get: { user.userId }, set: { userId in
+                            var next = user
+                            next.userId = userId
+                            set(next)
+                        })) {
+                            Text("None").tag(UserId?.none)
+                            ForEach(users, id: \.userId) { Text($0.name).tag(Optional($0.userId)) }
+                        }
+                        .pickerStyle(.inline)
+                    }
+                }
+                .accessibilityIdentifier("bot-person-user")
+            }
             HStack(spacing: 6) {
                 Text("Role: \(BotRole(user).label)").foregroundStyle(Theme.secondary)
                 SaveMark(state: saved)
@@ -407,6 +430,12 @@ struct BotPersonSheet: View {
             }
             .font(.footnote)
         }
+    }
+
+    /// The user they are linked to, by name; their id when the machine no longer has them.
+    private var linked: String {
+        guard let userId = user.userId else { return "None" }
+        return users.first { $0.userId == userId }?.name ?? userId
     }
 
     private func binding(_ key: WritableKeyPath<BotUser, Bool>) -> Binding<Bool> {

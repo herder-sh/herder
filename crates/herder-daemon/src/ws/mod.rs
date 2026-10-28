@@ -363,7 +363,12 @@ impl<B: Backend> Shared<B> {
             | CommandBody::SetBotFact { .. }
             | CommandBody::DeleteBotFact { .. }
             | CommandBody::ClearBotMemory { .. }) => match self.bots.get() {
-                Some(bots) => bots.command(command).await,
+                Some(bots) => {
+                    if let CommandBody::PutBot { bot } = &command {
+                        self.check_links(bot)?;
+                    }
+                    bots.command(command).await
+                }
                 None => Err(ErrorInfo {
                     code: ErrorCode::Unsupported,
                     message: "this daemon holds no bots; a vault runs none".to_owned(),
@@ -371,6 +376,61 @@ impl<B: Backend> Shared<B> {
             },
             command => self.backend.command(user_id, command_id, command).await,
         }
+    }
+
+    /// The paired user an agent acts as, and their role, for a turn whose prompt `by` sent:
+    /// `by` itself, or the user a bot's person is linked to.
+    async fn sender(&self, by: UserId) -> Result<(UserId, Role), ErrorInfo> {
+        if let Some(role) = self.auth.role(&by) {
+            return Ok((by, role));
+        }
+        let forbidden = |message: String| ErrorInfo {
+            code: ErrorCode::Forbidden,
+            message,
+        };
+        let person = match self.bots.get() {
+            Some(bots) => bots.person(&by).await?,
+            None => None,
+        };
+        let Some((bot, person)) = person else {
+            return Err(forbidden(format!(
+                "this turn was sent by {by}, who is no longer paired with this daemon"
+            )));
+        };
+        let name = &person.display_name;
+        let bot = &bot.name;
+        let Some(user_id) = person.user_id else {
+            return Err(forbidden(format!(
+                "this turn was sent by {name} via {bot}, who isn't linked to a herder user; an \
+                 owner can link them in the bot's People"
+            )));
+        };
+        match self.auth.role(&user_id) {
+            Some(role) => Ok((user_id, role)),
+            None => Err(forbidden(format!(
+                "this turn was sent by {name} via {bot}, who is linked to {user_id}, no longer \
+                 paired with this daemon; an owner can link them again in the bot's People"
+            ))),
+        }
+    }
+
+    /// Refuses `bot` when it links a person to a user who is not paired with this daemon.
+    fn check_links(&self, bot: &herder_protocol::Bot) -> Result<(), ErrorInfo> {
+        for person in &bot.allow {
+            if let Some(user_id) = &person.user_id
+                && self.auth.role(user_id).is_none()
+            {
+                return Err(ErrorInfo {
+                    code: ErrorCode::BadRequest,
+                    message: format!(
+                        "{} is linked to {user_id}, who is not paired with this daemon; link \
+                         them to a paired user or to none",
+                        person.display_name
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The host's AWS CLI, unless this daemon signs nothing in to AWS.
@@ -552,14 +612,7 @@ impl<B: Backend> Control for AgentControl<B> {
                         .to_owned(),
                 });
             }
-            let Some(role) = shared.auth.role(&user_id) else {
-                return Err(ErrorInfo {
-                    code: ErrorCode::Forbidden,
-                    message: "the user who started this session is no longer paired with this \
-                              daemon"
-                        .to_owned(),
-                });
-            };
+            let (user_id, role) = shared.sender(user_id).await?;
             auth::authorize(role, &command)?;
             let command_id = CommandId::new(ulid::Ulid::generate().to_string());
             shared.run(&user_id, &command_id, command).await
