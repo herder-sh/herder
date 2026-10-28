@@ -65,7 +65,7 @@ final class SecretsUITests: XCTestCase {
         let grant = app.switches["secret-grant-\(set)-devbox"]
         XCTAssertTrue(grant.waitForExistence(timeout: 5))
         XCTAssertEqual(grant.value as? String, "0")
-        grant.switches.firstMatch.tap()
+        grant.tap()
         let granted = expectation(for: NSPredicate(format: "value == '1' AND isEnabled == true"), evaluatedWith: grant)
         wait(for: [granted], timeout: 10)
         XCTAssertFalse(app.staticTexts.matching(identifier: "secrets-error").firstMatch.exists)

@@ -148,37 +148,39 @@ struct SettingsSwitchStyle: ToggleStyle {
     }
 }
 
-/// The label, unless hidden (`labelsHidden()`), then the switch.
+/// The label, unless hidden (`labelsHidden()`), then the switch. A tap anywhere on it toggles
+/// it, as the accessibility element it stands for spans both.
 private struct SettingsSwitchBody: View {
     let configuration: ToggleStyleConfiguration
     @Environment(\.labelsVisibility) private var labels
 
     var body: some View {
-        HStack(spacing: 12) {
-            if labels != .hidden { configuration.label }
-            SettingsSwitch(isOn: configuration.$isOn)
+        Button { configuration.isOn.toggle() } label: {
+            HStack(spacing: 12) {
+                if labels != .hidden { configuration.label }
+                SettingsSwitch(isOn: configuration.isOn)
+            }
+            .contentShape(.rect)
         }
+        .buttonStyle(.plain)
     }
 }
 
 private struct SettingsSwitch: View {
-    @Binding var isOn: Bool
+    let isOn: Bool
     @Environment(\.isEnabled) private var enabled
 
     var body: some View {
-        Button { isOn.toggle() } label: {
-            Capsule()
-                .fill(isOn ? Theme.switchOn : Theme.switchOff)
-                .frame(width: 34, height: 20)
-                .overlay(alignment: isOn ? .trailing : .leading) {
-                    Circle().fill(.white).frame(width: 16, height: 16).padding(2)
-                        .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
-                }
-                .animation(.easeInOut(duration: 0.15), value: isOn)
-                .opacity(enabled ? 1 : 0.45)
-                .hitTarget()
-        }
-        .buttonStyle(.plain)
+        Capsule()
+            .fill(isOn ? Theme.switchOn : Theme.switchOff)
+            .frame(width: 34, height: 20)
+            .overlay(alignment: isOn ? .trailing : .leading) {
+                Circle().fill(.white).frame(width: 16, height: 16).padding(2)
+                    .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
+            }
+            .animation(.easeInOut(duration: 0.15), value: isOn)
+            .opacity(enabled ? 1 : 0.45)
+            .hitTarget()
     }
 }
 
