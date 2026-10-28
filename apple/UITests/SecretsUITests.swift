@@ -65,7 +65,8 @@ final class SecretsUITests: XCTestCase {
         let grant = app.switches["secret-grant-\(set)-devbox"]
         XCTAssertTrue(grant.waitForExistence(timeout: 5))
         XCTAssertEqual(grant.value as? String, "0")
-        grant.switches.firstMatch.tap()
+        // herder's switch is one element spanning its row, drawn 34 pt wide at the trailing edge.
+        grant.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)).withOffset(CGVector(dx: -17, dy: 0)).tap()
         let granted = expectation(for: NSPredicate(format: "value == '1' AND isEnabled == true"), evaluatedWith: grant)
         wait(for: [granted], timeout: 10)
         XCTAssertFalse(app.staticTexts.matching(identifier: "secrets-error").firstMatch.exists)
