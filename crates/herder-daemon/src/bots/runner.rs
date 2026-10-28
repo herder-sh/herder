@@ -358,7 +358,8 @@ impl Runner {
             Action::Use { project_id } => {
                 if !press.direct {
                     let name = self.project_name(Some(&project_id));
-                    self.bind(&press.place, Some((project_id, name))).await;
+                    self.bind(&press.place, &press.user_id, Some((project_id, name)))
+                        .await;
                 }
                 return;
             }
@@ -433,7 +434,7 @@ impl Runner {
                 Some(Post::Text(text.into()))
             }
             Command::Use(name) if name.eq_ignore_ascii_case("none") => {
-                self.bind(place, None).await;
+                self.bind(place, &message.user_id, None).await;
                 None
             }
             Command::Use(name) => {
@@ -449,8 +450,8 @@ impl Runner {
                     .collect();
                 match <[_; 1]>::try_from(named) {
                     Ok([project]) => {
-                        self.bind(place, Some((project.project_id, project.name)))
-                            .await;
+                        let project = Some((project.project_id, project.name));
+                        self.bind(place, &message.user_id, project).await;
                         None
                     }
                     Err(named) if named.is_empty() => {
@@ -598,9 +599,16 @@ impl Runner {
         self.post(place, &Post::Text(text)).await;
     }
 
-    /// Binds the channel of `place` to `project`, by id and name, or to none, and says so
-    /// there.
-    async fn bind(&mut self, place: &Place, project: Option<(ProjectId, String)>) {
+    /// Binds the channel of `place` to `project`, by id and name, or to none, for the person
+    /// `user_id`, and says so there; refuses anyone who does not manage the bot.
+    async fn bind(&mut self, place: &Place, user_id: &str, project: Option<(ProjectId, String)>) {
+        let manager = self
+            .user(user_id)
+            .is_some_and(|user| manages(&self.bot, &self.by(user)));
+        if !manager {
+            self.post(place, &Post::Text(owners_only(&self.bot))).await;
+            return;
+        }
         let project_id = project.as_ref().map(|(project_id, _)| project_id.clone());
         let text = match self.bindings.bind(&place.channel_id, project_id).await {
             Ok(bindings) => {
@@ -1574,6 +1582,30 @@ struct Context {
 /// ‹name›".
 pub fn by(bot: &Bot, user: &BotUser) -> UserId {
     UserId::new(format!("via {}, {}", bot.name, user.display_name))
+}
+
+/// Whether `by`, who sent a message or a prompt, manages `bot` from its chat: one of its owners,
+/// as the journal records them or as the herder user they are linked to. While it has no owner,
+/// anyone does.
+pub fn manages(bot: &Bot, by: &UserId) -> bool {
+    let mut owners = bot.allow.iter().filter(|user| user.owner).peekable();
+    owners.peek().is_none()
+        || owners.any(|user| self::by(bot, user) == *by || user.user_id.as_ref() == Some(by))
+}
+
+/// What the bot answers someone who does not manage it.
+pub fn owners_only(bot: &Bot) -> String {
+    let owners: Vec<_> = bot
+        .allow
+        .iter()
+        .filter(|user| user.owner)
+        .map(|user| user.display_name.as_str())
+        .collect();
+    format!(
+        "Only {}'s owners can do that: ask {}.",
+        bot.name,
+        owners.join(" or ")
+    )
 }
 
 fn attach(file: &ChatFile, data: Vec<u8>, images: &mut Vec<Image>, files: &mut Vec<PromptFile>) {

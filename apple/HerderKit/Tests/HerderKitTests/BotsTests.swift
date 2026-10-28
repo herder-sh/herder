@@ -280,7 +280,7 @@ struct BotsTests {
         #expect(try draft.person(among: []) == nil)
     }
 
-    @Test func eachRolePresetSetsTheFourSwitchesAndReadsBack() {
+    @Test func eachRolePresetSetsTheFiveSwitchesAndReadsBack() {
         let blank = BotUser(externalUserId: "U1", displayName: "Kim", dm: false, channels: false, approve: false, notify: false)
         let driver = BotRole.driver.applied(to: blank)
         #expect(driver.dm && driver.channels && !driver.approve && !driver.notify)
@@ -288,14 +288,19 @@ struct BotsTests {
         #expect(approver.dm && approver.channels && approver.approve && !approver.notify)
         let watcher = BotRole.watcher.applied(to: blank)
         #expect(!watcher.dm && !watcher.channels && !watcher.approve && watcher.notify)
+        let owner = BotRole.owner.applied(to: blank)
+        #expect(owner.dm && owner.channels && owner.approve && !owner.notify && owner.owner)
+        #expect(!driver.owner && !approver.owner && !watcher.owner)
+        #expect(BotRole.approver.applied(to: owner) == approver)
         for role in BotRole.presets {
             #expect(BotRole(role.applied(to: blank)) == role)
             #expect(BotRole(role.applied(to: watcher)) == role)
+            #expect(BotRole(role.applied(to: owner)) == role)
         }
         #expect(driver.externalUserId == "U1" && driver.displayName == "Kim")
     }
 
-    @Test func anyOtherMixIsCustomAndKeepsItsSwitches() {
+    @Test func anyOtherMixIsCustomAndKeepsItsSwitches() throws {
         let alex = BotUser(externalUserId: "U2", displayName: "Alex", dm: true, channels: false, approve: false, notify: false)
         #expect(BotRole(alex) == .custom)
         #expect(BotRole.custom.applied(to: alex) == alex)
@@ -303,9 +308,21 @@ struct BotsTests {
         let everything = BotUser(externalUserId: "U3", displayName: "Sam", dm: true, channels: true, approve: true, notify: true)
         #expect(BotRole(everything) == .custom)
         #expect(everything.abilities == "DMs, channels, approves, notified")
-        // A new person starts as an approver.
-        let sam = try? BotPersonDraft(memberId: "U012AB3CD", name: "Sam").person(among: [])
-        #expect(sam.map(BotRole.init) == .approver)
+        let managing = BotUser(externalUserId: "U4", displayName: "Kim", dm: false, channels: false, approve: false, notify: true, owner: true)
+        #expect(BotRole(managing) == .custom)
+        #expect(managing.abilities == "Notified, manages")
+        // A bot's first person starts as its owner, everyone after as an approver.
+        let sam = try #require(try BotPersonDraft(memberId: "U012AB3CD", name: "Sam").person(among: []))
+        #expect(BotRole(sam) == .owner)
+        let kim = try? BotPersonDraft(memberId: "U012AB3CE", name: "Kim").person(among: [sam])
+        #expect(kim.map(BotRole.init) == .approver)
+    }
+
+    @Test func peopleWithNoOwnerAreWarned() {
+        let approver = BotUser(externalUserId: "U1", displayName: "Kim", dm: true, channels: true, approve: true, notify: false)
+        #expect(BotRole.hint([]) == nil)
+        #expect(BotRole.hint([approver])?.hasPrefix("No owner") == true)
+        #expect(BotRole.hint([approver, BotRole.owner.applied(to: approver)]) == nil)
     }
 
     @Test func newThreadsSumUpWhatTheyRunOn() {

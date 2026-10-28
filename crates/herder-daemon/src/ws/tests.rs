@@ -1885,6 +1885,7 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
         channels: true,
         approve: false,
         notify: false,
+        owner: false,
         user_id: user_id.cloned(),
     };
     let mut bot = herder_protocol::Bot {

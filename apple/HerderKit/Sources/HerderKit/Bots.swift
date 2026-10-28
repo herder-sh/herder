@@ -503,7 +503,8 @@ struct BotPersonDraft: Equatable {
     var memberId = ""
     var name = ""
 
-    /// The person, with every switch but Notify on; `nil` until both are filled.
+    /// The person, with every switch but Notify on, and Owner too when they are the bot's first;
+    /// `nil` until both are filled.
     func person(among people: [BotUser]) throws -> BotUser? {
         let id = memberId.trimmingCharacters(in: .whitespaces).uppercased()
         let name = name.trimmingCharacters(in: .whitespaces)
@@ -514,15 +515,18 @@ struct BotPersonDraft: Equatable {
         if people.contains(where: { $0.externalUserId == id }) {
             throw HerderError.Local(detail: "\(id) is on the list already.")
         }
-        return BotUser(externalUserId: id, displayName: name, dm: true, channels: true, approve: true, notify: false)
+        return BotUser(externalUserId: id, displayName: name, dm: true, channels: true, approve: true, notify: false,
+                       owner: people.isEmpty)
     }
 }
 
-/// What a person may do with a bot, as a preset of `BotUser`'s four switches; a mix no preset
+/// What a person may do with a bot, as a preset of `BotUser`'s five switches; a mix no preset
 /// matches is `custom`, set one switch at a time.
 enum BotRole: CaseIterable, Identifiable {
     /// Starts sessions in DMs and channels.
     case driver
+    /// An approver who also manages the bot from chat: binds channels, changes its memory.
+    case owner
     /// A driver who may also press Allow.
     case approver
     /// Only told when a session waits or fails.
@@ -536,30 +540,32 @@ enum BotRole: CaseIterable, Identifiable {
         self = Self.presets.first { $0.matches(user) } ?? .custom
     }
 
-    static let presets: [BotRole] = [.driver, .approver, .watcher]
+    static let presets: [BotRole] = [.driver, .owner, .approver, .watcher]
 
     var label: String {
         switch self {
         case .driver: "Driver"
+        case .owner: "Owner"
         case .approver: "Approver"
         case .watcher: "Watcher"
         case .custom: "Custom"
         }
     }
 
-    /// The preset's switches: DM, channels, approve, notify; `nil` for custom.
-    private var switches: (dm: Bool, channels: Bool, approve: Bool, notify: Bool)? {
+    /// The preset's switches: DM, channels, approve, notify, owner; `nil` for custom.
+    private var switches: (dm: Bool, channels: Bool, approve: Bool, notify: Bool, owner: Bool)? {
         switch self {
-        case .driver: (true, true, false, false)
-        case .approver: (true, true, true, false)
-        case .watcher: (false, false, false, true)
+        case .driver: (true, true, false, false, false)
+        case .owner: (true, true, true, false, true)
+        case .approver: (true, true, true, false, false)
+        case .watcher: (false, false, false, true, false)
         case .custom: nil
         }
     }
 
     private func matches(_ user: BotUser) -> Bool {
         guard let switches else { return false }
-        return switches == (user.dm, user.channels, user.approve, user.notify)
+        return switches == (user.dm, user.channels, user.approve, user.notify, user.owner)
     }
 
     /// `user` with the preset's switches; custom leaves them as they are.
@@ -570,18 +576,25 @@ enum BotRole: CaseIterable, Identifiable {
         user.channels = switches.channels
         user.approve = switches.approve
         user.notify = switches.notify
+        user.owner = switches.owner
         return user
     }
 
     /// The line under the People group that says what each role means.
-    static let legend = "**Driver**: DMs and channels. **Approver**: a driver who may also press Allow. **Watcher**: only gets notified. **Custom**: any mix of the four switches."
+    static let legend = "**Driver**: DMs and channels. **Owner**: an approver who also manages the bot from chat: binds channels, changes its memory. **Approver**: a driver who may also press Allow. **Watcher**: only gets notified. **Custom**: any mix of the five switches."
+
+    /// What the People group warns of while `people` has someone but no owner; `nil` otherwise.
+    static func hint(_ people: [BotUser]) -> String? {
+        guard !people.isEmpty, !people.contains(where: \.owner) else { return nil }
+        return "No owner: anyone driving can rebind channels and change memory. Make someone Owner."
+    }
 }
 
 extension BotUser {
     /// What they may do, in a few words: "DMs, channels, approves", "DMs only".
     var abilities: String {
         let parts = [dm ? "DMs" : nil, channels ? "channels" : nil, approve ? "approves" : nil,
-                     notify ? "notified" : nil].compactMap(\.self)
+                     notify ? "notified" : nil, owner ? "manages" : nil].compactMap(\.self)
         switch parts.count {
         case 0: return "Nothing yet"
         case 1 where dm: return "DMs only"

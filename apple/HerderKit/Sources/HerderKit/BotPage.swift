@@ -138,6 +138,10 @@ struct BotPage: View {
                 EmptyRow(text: "No one yet: the bot answers no one until you add them.")
                 RowDivider()
             }
+            if let hint = BotRole.hint(bot.allow) {
+                EmptyRow(text: hint).accessibilityIdentifier("bot-no-owner")
+                RowDivider()
+            }
             ForEach(bot.allow, id: \.externalUserId) { user in
                 personRow(user)
                 RowDivider()
@@ -379,7 +383,7 @@ enum BotSheet: Identifiable, Hashable {
     var id: Self { self }
 }
 
-/// A person's details: their member ID, the four switches their role stands for, each with
+/// A person's details: their member ID, the five switches their role stands for, each with
 /// what it lets them do, and the herder user they are; removing them bottom left.
 struct BotPersonSheet: View {
     /// The bot's name.
@@ -406,6 +410,9 @@ struct BotPersonSheet: View {
                 RowDivider()
                 SwitchRow(title: "Get notified", detail: "A DM when a session waits for them or fails",
                           isOn: binding(\.notify))
+                RowDivider()
+                SwitchRow(title: "Manage the bot", detail: "May bind channels to projects and change \(bot)’s memory from chat",
+                          isOn: binding(\.owner))
             }
             SettingsGroup {
                 SettingRow(label: "herder user", hint: "Agents run herder commands for \(name)’s prompts with this user’s role") {

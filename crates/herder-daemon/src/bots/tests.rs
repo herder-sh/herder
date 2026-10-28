@@ -25,6 +25,7 @@ fn slack_bot(id: &str) -> Bot {
             channels: false,
             approve: true,
             notify: false,
+            owner: true,
             user_id: Some(UserId::new("01J9OWNER")),
         }],
         defaults: BotDefaults {
@@ -477,6 +478,7 @@ mod running {
             channels: true,
             approve,
             notify: false,
+            owner: false,
             user_id: None,
         }
     }
@@ -2018,6 +2020,101 @@ mod running {
         )
         .await;
         assert_eq!(bot.listed().await[0].channel_bindings, []);
+    }
+
+    #[tokio::test]
+    async fn only_owners_bind_channels_and_change_memory() {
+        let chat = Chat::Slack;
+        let mut config = chat.bot();
+        config.allow[1].owner = true;
+        let bot = Running::with(config.clone(), "dm.jsonl", HashMap::new()).await;
+        let known = config.clone();
+        bot.sessions
+            .serve_bots(Arc::new(move |bot_id| {
+                (*bot_id == known.bot_id).then(|| known.clone())
+            }))
+            .unwrap();
+        let project = bot.project("ada", "trip1");
+        bot.sessions
+            .set_projects(std::slice::from_ref(&project))
+            .await;
+        let from = |inbound: Option<Inbound>, user: &str| {
+            let Some(Inbound::Message(mut message)) = inbound else {
+                panic!("a message");
+            };
+            message.user_id = user.into();
+            Some(Inbound::Message(message))
+        };
+        let at = |thread_id: &str| Place {
+            thread_id: thread_id.into(),
+            ..channel()
+        };
+        let refusal = "Only trash-can's owners can do that: ask Bob.";
+
+        // Ada drives, but only Bob owns the bot: her `use` is refused, and binds nothing.
+        bot.send(said("channel_mention.json", "use trip1", "1761401110.1"))
+            .await;
+        bot.posted(&at("1761401110.1"), text(refusal)).await;
+        assert_eq!(bot.listed().await[0].channel_bindings, []);
+        let said_by_bob = from(
+            said("channel_mention.json", "use trip1", "1761401120.1"),
+            BOB,
+        );
+        bot.send(said_by_bob).await;
+        bot.posted(
+            &at("1761401120.1"),
+            text("New threads in this channel work on **trip1**."),
+        )
+        .await;
+        assert_eq!(bot.listed().await[0].channel_bindings.len(), 1);
+
+        // A turn Ada prompted changes no memory; one Bob prompted does.
+        bot.send(chat.message("dm_message.json")).await;
+        bot.posted(&chat.dm(), answer("Fixed **it**.")).await;
+        let session_id = bot.session().await.session_id;
+        let fact = || RememberInput {
+            text: "Staging deploys go through make deploy-staging".into(),
+            replaces: None,
+        };
+        let refused = bot
+            .sessions
+            .remember(session_id.clone(), fact())
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, herder_tasktools::ErrorCode::NotAllowed);
+        assert!(refused.message.starts_with(refusal), "{}", refused.message);
+        let said_by_bob = from(
+            said("dm_message.json", "remember that", &chat.dm().thread_id),
+            BOB,
+        );
+        bot.send(said_by_bob).await;
+        for _ in 0..500 {
+            if bot.prompts(&session_id).await.len() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let kept = bot.sessions.remember(session_id, fact()).await.unwrap();
+        assert_eq!(kept.memory.len(), 1);
+    }
+
+    #[test]
+    fn a_bot_with_no_owner_is_managed_by_anyone_and_an_owner_by_their_link_too() {
+        let mut bot = Chat::Slack.bot();
+        let (ada, bob) = (
+            runner::by(&bot, &bot.allow[0]),
+            runner::by(&bot, &bot.allow[1]),
+        );
+        assert!(runner::manages(&bot, &ada) && runner::manages(&bot, &bob));
+        bot.allow[1].owner = true;
+        bot.allow[1].user_id = Some(UserId::new("01J9BOB"));
+        assert!(!runner::manages(&bot, &ada));
+        assert!(runner::manages(&bot, &bob));
+        assert!(runner::manages(&bot, &UserId::new("01J9BOB")));
+        assert_eq!(
+            runner::owners_only(&bot),
+            "Only trash-can's owners can do that: ask Bob."
+        );
     }
 
     /// The thread a mention in a reply is in, and where the bridge downloads its root's image.
