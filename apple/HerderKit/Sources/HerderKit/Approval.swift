@@ -14,8 +14,8 @@ struct ApprovalRequest: Equatable, Hashable {
     }
 
     let kind: Kind
-    /// The new machine's name, or the machine the terminal runs on; its address until the
-    /// machine says its name.
+    /// The new machine's name, as its link says it, or else its address; for a login, the
+    /// machine's address.
     let name: String
     /// The code the terminal shows: "K7Q4PD".
     let code: String
@@ -23,45 +23,35 @@ struct ApprovalRequest: Equatable, Hashable {
     let fingerprint: String
     /// Where the machine listens: "10.0.4.17:7447".
     let hosts: [String]
-    /// The machine's OS and herder version, once it says them.
-    var os: String?
-    var version: String?
 
-    /// `herder://own?host=<host:port>&fp=<sha256 hex>&code=<code>`, or the same with `login`,
-    /// `host` once per address; nil for another link, or one missing what it needs.
+    /// A `herder://own` link of `herder service install`, or a `herder://login` link of
+    /// `herder login`; nil for another link, or one missing what it needs.
     init?(url: URL) {
-        guard url.scheme?.lowercased() == "herder",
-              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
-        else { return nil }
-        let kind: Kind
+        let link = url.absoluteString
         switch url.host()?.lowercased() {
-        case "own": kind = .machine
-        case "login": kind = .login
-        default: return nil
+        case "own":
+            guard let uri = try? parseOwnUri(link: link) else { return nil }
+            self.init(kind: .machine, name: uri.name ?? Self.address(uri.hosts.first ?? ""), code: uri.code,
+                      fingerprint: uri.fingerprint, hosts: uri.hosts)
+        case "login":
+            guard let uri = try? parseLoginUri(link: link) else { return nil }
+            self.init(kind: .login, name: Self.address(uri.hosts.first ?? ""), code: uri.code,
+                      fingerprint: uri.fingerprint, hosts: uri.hosts)
+        default:
+            return nil
         }
-        func value(_ name: String) -> String? {
-            items.first { $0.name == name }?.value.flatMap { $0.isEmpty ? nil : $0 }
-        }
-        let hosts = items.filter { $0.name == "host" }.compactMap(\.value).filter { !$0.isEmpty }
-        guard let fingerprint = value("fp"), let code = value("code"), !hosts.isEmpty else { return nil }
-        self.init(kind: kind, name: Self.address(hosts[0]), code: code, fingerprint: fingerprint, hosts: hosts)
     }
 
-    init(kind: Kind, name: String, code: String, fingerprint: String, hosts: [String], os: String? = nil,
-         version: String? = nil) {
+    init(kind: Kind, name: String, code: String, fingerprint: String, hosts: [String]) {
         self.kind = kind
         self.name = name
         self.code = code
         self.fingerprint = fingerprint
         self.hosts = hosts
-        self.os = os
-        self.version = version
     }
 
-    /// "Linux · 10.0.4.17 · herder 0.17.0": what the machine's link says of it.
-    var about: String {
-        [os, hosts.first.map(Self.address), version.map { "herder \($0)" }].compactMap { $0 }.joined(separator: " · ")
-    }
+    /// "10.0.4.17": where the machine is, under its name.
+    var about: String { hosts.first.map(Self.address) ?? "" }
 
     /// "K7Q · 4PD": the code in two halves, as the terminal prints it.
     var spokenCode: String { Self.halves(code) }
@@ -90,8 +80,9 @@ struct ApprovalRequest: Equatable, Hashable {
     }
 }
 
-/// Approving a request: the machine gives a challenge, Face ID signs it, then the signature goes
-/// back. "Not mine" declines it, and closing the Face ID prompt leaves it to be asked again.
+/// Approving a request: Face ID signs what the machine asks, and the machine takes you as its
+/// owner or signs the terminal in. "Not mine" declines it, and closing the Face ID prompt leaves
+/// it to be asked again.
 @MainActor @Observable
 final class Approval {
     enum State: Equatable {
@@ -102,28 +93,26 @@ final class Approval {
         case failed(String)
     }
 
-    typealias Challenge = @MainActor () async throws -> PasskeyChallenge
-    typealias Send = @MainActor (PasskeyAssertion) async throws -> Void
+    /// Approves with the passkey: the machine to open after, for a new one.
+    typealias Run = @MainActor (Authenticator) async throws -> HostId?
 
     let request: ApprovalRequest
     private(set) var state = State.asking
+    /// The new machine, once it is yours.
+    private(set) var machine: HostId?
     private let authenticator: Authenticator
-    private let challenge: Challenge
-    private let send: Send
+    private let run: Run
 
-    init(_ request: ApprovalRequest, authenticator: Authenticator, challenge: @escaping Challenge,
-         send: @escaping Send) {
+    init(_ request: ApprovalRequest, authenticator: Authenticator, run: @escaping Run) {
         self.request = request
         self.authenticator = authenticator
-        self.challenge = challenge
-        self.send = send
+        self.run = run
     }
 
     func approve() async {
         state = .signing
         do {
-            let assertion = try await authenticator.sign(try await challenge())
-            try await send(assertion)
+            machine = try await run(authenticator)
             state = .approved
         } catch {
             state = isCancelled(error) ? .asking : .failed(describe(error))
@@ -160,28 +149,48 @@ extension Fleet {
         machines.first { $0.fingerprint.lowercased() == fingerprint.lowercased() }
     }
 
-    /// What the passkey signs to approve `request`: a challenge of the machine it names.
-    func passkeyChallenge(for request: ApprovalRequest) async throws -> PasskeyChallenge {
-        guard request.kind == .login else {
-            throw HerderError.Local(detail: "this herder cannot take a new machine yet")
+    /// Approves `request` with your passkey: a new machine takes you as its owner and is saved,
+    /// its host id returned; a terminal is signed in as you.
+    func approve(_ request: ApprovalRequest, with authenticator: Authenticator) async throws -> HostId? {
+        switch request.kind {
+        case .machine:
+            let pending = try await client.signIn(hosts: request.hosts, fingerprint: request.fingerprint)
+            let person = try await owner(pending, authenticator: authenticator)
+            return try await pending.finish(signIn: .claimOwnership(code: request.code, person: person)).hostId
+        case .login:
+            guard let hostId = machine(fingerprint: request.fingerprint)?.hostId else {
+                throw HerderError.Local(detail: "this device is not paired with \(request.name)")
+            }
+            guard case .passkeyChallenge(let challenge, _) = try await client.send(hostId: hostId, command: .passkeyChallenge)
+            else { throw HerderError.Local(detail: "\(request.name) did not send a challenge") }
+            let assertion = try await authenticator.sign(challenge)
+            _ = try await client.send(hostId: hostId, command: .approveLogin(code: request.code, assertion: assertion))
+            return nil
         }
-        guard case .passkeyChallenge(let challenge, _) = try await client.send(hostId: try hostId(of: request),
-                                                                           command: .passkeyChallenge)
-        else { throw HerderError.Local(detail: "\(request.name) did not send a challenge") }
-        return challenge
     }
 
-    /// Sends the signed approval: the terminal is signed in as you.
-    func approve(_ request: ApprovalRequest, assertion: PasskeyAssertion) async throws {
-        _ = try await client.send(hostId: try hostId(of: request),
-                                  command: .approveLogin(code: request.code, assertion: assertion))
+    /// You, as a new machine's owner: with the passkey your machines know, else with one made now.
+    private func owner(_ pending: PendingSignIn, authenticator: Authenticator) async throws -> NewPerson {
+        let people = FleetPeople(fleet: self)
+        await people.reload(machines)
+        let me = FleetPeople.me(people.people, machines: machines)
+        if let known = Self.keyed(me, in: people.people) {
+            let assertion = try await authenticator.sign(pending.challenge())
+            guard let key = known.passkeys.first(where: { $0.credentialId == assertion.id }) else {
+                throw HerderError.Local(detail: "that passkey is not the one your machines know")
+            }
+            return NewPerson(name: known.name, passkey: .existing(personId: known.personId, key: key, assertion: assertion))
+        }
+        guard let creation = pending.registration(),
+              let userId = Data(base64URL: creation.userHandle), let challenge = Data(base64URL: creation.challenge)
+        else { throw HerderError.Local(detail: "the machine did not offer to make a passkey") }
+        let name = people.people.values.joined().first { $0.personId == me }?.name ?? NSFullUserName()
+        let registration = try await authenticator.register(name: name, userId: userId, challenge: challenge)
+        return NewPerson(name: name, passkey: .register(registration: registration))
     }
 
-    /// The paired machine a terminal's link names, by its fingerprint.
-    private func hostId(of request: ApprovalRequest) throws -> HostId {
-        guard let machine = machine(fingerprint: request.fingerprint) else {
-            throw HerderError.Local(detail: "this device is not paired with \(request.name)")
-        }
-        return machine.hostId
+    /// You as a machine lists you with your passkeys, when one does.
+    nonisolated static func keyed(_ me: PersonId?, in people: [HostId: [PersonInfo]]) -> PersonInfo? {
+        people.values.joined().first { $0.personId == me && !$0.passkeys.isEmpty }
     }
 }

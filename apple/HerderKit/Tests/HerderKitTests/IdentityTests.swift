@@ -34,14 +34,20 @@ struct ApprovalTests {
     static let challenge = PasskeyChallenge(rpId: "herder.sh", challenge: "CQk", expiresAt: "2026-10-29T12:01:00Z")
     static let fingerprint = "ab129f3c" + String(repeating: "0", count: 52) + "e07d"
     static let machine = ApprovalRequest(kind: .machine, name: "new-server", code: "K7Q4PD", fingerprint: fingerprint,
-                                         hosts: ["10.0.4.17:7447"], os: "Linux", version: "0.17.0")
+                                         hosts: ["10.0.4.17:7447"])
 
-    @Test func aMachinesLinkSaysWhereItListens() throws {
-        let url = try #require(URL(string: "herder://own?host=10.0.4.17%3A7447&host=new-server.local%3A7447&fp=\(Self.fingerprint)&code=K7Q4PD"))
+    @Test func aMachinesLinkNamesIt() throws {
+        let url = try #require(URL(string: "herder://own?host=10.0.4.17%3A7447&host=new-server.local%3A7447&fp=\(Self.fingerprint)&code=K7Q4PD&name=new-server"))
         #expect(AppLink(url: url) == .approve(ApprovalRequest(
-            kind: .machine, name: "10.0.4.17", code: "K7Q4PD", fingerprint: Self.fingerprint,
+            kind: .machine, name: "new-server", code: "K7Q4PD", fingerprint: Self.fingerprint,
             hosts: ["10.0.4.17:7447", "new-server.local:7447"])))
-        #expect(Self.machine.about == "Linux · 10.0.4.17 · herder 0.17.0")
+        #expect(Self.machine.about == "10.0.4.17")
+    }
+
+    @Test func anUnnamedMachineGoesByItsAddress() throws {
+        let url = try #require(URL(string: "herder://own?host=10.0.4.17%3A7447&fp=\(Self.fingerprint)&code=K7Q4PD"))
+        guard case .approve(let request) = AppLink(url: url) else { Issue.record("not an approval"); return }
+        #expect(request.name == "10.0.4.17")
     }
 
     @Test func aTerminalsLinkAsksToSignIn() throws {
@@ -71,24 +77,38 @@ struct ApprovalTests {
         #expect(Self.machine.shortFingerprint == "ab12 9f3c … e07d")
     }
 
-    @Test func approvingSignsTheChallengeThenSendsIt() async {
+    @Test func approvingRunsWithThePasskeyAndKeepsTheNewMachine() async {
         let authenticator = FakeAuthenticator()
-        var sent: [PasskeyAssertion] = []
-        let approval = Approval(Self.machine, authenticator: authenticator, challenge: { Self.challenge }) { sent.append($0) }
+        let approval = Approval(Self.machine, authenticator: authenticator) { passkey in
+            _ = try await passkey.sign(Self.challenge)
+            return "new-server-host"
+        }
         await approval.approve()
         #expect(authenticator.signed == [Data([9, 9])])
-        #expect(sent.count == 1)
         #expect(approval.state == .approved)
+        #expect(approval.machine == "new-server-host")
+    }
+
+    @Test func aNewMachinesOwnerIsYouWithYourPasskeyWhenAMachineKnowsIt() {
+        let key = PasskeyKey(credentialId: "AQ", publicKey: "pk")
+        let people: [HostId: [PersonInfo]] = [
+            "devbox": [PersonInfo(personId: "me", name: "Tomas", role: .owner, passkeys: [], devices: [])],
+            "studio": [PersonInfo(personId: "me", name: "Tomas", role: .owner, passkeys: [key], devices: []),
+                       PersonInfo(personId: "sam", name: "Sam", role: .member, passkeys: [key], devices: [])],
+        ]
+        #expect(Fleet.keyed("me", in: people)?.passkeys == [key])
+        #expect(Fleet.keyed("kim", in: people) == nil)
+        #expect(Fleet.keyed(nil, in: people) == nil)
     }
 
     @Test func closingFaceIDAsksAgainButARefusalSaysWhy() async {
         let authenticator = FakeAuthenticator()
         authenticator.failure = ASAuthorizationError(.canceled)
-        let approval = Approval(Self.machine, authenticator: authenticator, challenge: { Self.challenge }) { _ in }
+        let approval = Approval(Self.machine, authenticator: authenticator) { try await $0.sign(Self.challenge); return nil }
         await approval.approve()
         #expect(approval.state == .asking)
         authenticator.failure = nil
-        let refused = Approval(Self.machine, authenticator: authenticator, challenge: { Self.challenge }) { _ in
+        let refused = Approval(Self.machine, authenticator: authenticator) { _ in
             throw HerderError.Local(detail: "the code expired")
         }
         await refused.approve()
