@@ -41,6 +41,8 @@ targets:
         # The `herder` URL scheme, and the launch screen: the splash's background, so the splash
         # follows it seamlessly.
         INFOPLIST_FILE: App/Info.plist
+        # webcredentials:herder.sh, for the herder passkey.
+        CODE_SIGN_ENTITLEMENTS: App/herder-iOS.entitlements
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: >-
           UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft
