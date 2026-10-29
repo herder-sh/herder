@@ -14,7 +14,8 @@ struct ApprovalRequest: Equatable, Hashable {
     }
 
     let kind: Kind
-    /// The new machine's name, or the machine the terminal runs on.
+    /// The new machine's name, or the machine the terminal runs on; its address until the
+    /// machine says its name.
     let name: String
     /// The code the terminal shows: "K7Q4PD".
     let code: String
@@ -22,12 +23,12 @@ struct ApprovalRequest: Equatable, Hashable {
     let fingerprint: String
     /// Where the machine listens: "10.0.4.17:7447".
     let hosts: [String]
-    /// The machine's OS and herder version, when its link says them.
+    /// The machine's OS and herder version, once it says them.
     var os: String?
     var version: String?
 
-    /// `herder://own?host=…&fp=…&code=…&name=…&os=…&v=…`, or the same with `login`; nil for
-    /// another link, or one missing what it needs.
+    /// `herder://own?host=<host:port>&fp=<sha256 hex>&code=<code>`, or the same with `login`,
+    /// `host` once per address; nil for another link, or one missing what it needs.
     init?(url: URL) {
         guard url.scheme?.lowercased() == "herder",
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
@@ -43,8 +44,7 @@ struct ApprovalRequest: Equatable, Hashable {
         }
         let hosts = items.filter { $0.name == "host" }.compactMap(\.value).filter { !$0.isEmpty }
         guard let fingerprint = value("fp"), let code = value("code"), !hosts.isEmpty else { return nil }
-        self.init(kind: kind, name: value("name") ?? Self.address(hosts[0]), code: code, fingerprint: fingerprint,
-                  hosts: hosts, os: value("os"), version: value("v"))
+        self.init(kind: kind, name: Self.address(hosts[0]), code: code, fingerprint: fingerprint, hosts: hosts)
     }
 
     init(kind: Kind, name: String, code: String, fingerprint: String, hosts: [String], os: String? = nil,
