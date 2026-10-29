@@ -117,7 +117,7 @@ unrestrictedWebAccess = true
 notes = """
 herder is a client for herder daemons that people run on their own Linux machines and Macs, where they drive coding agents (Claude Code, Codex, Cursor, OpenCode). Without a daemon of your own, use the demo mode:
 
-1. Open the app. On the first screen, tap Try the Demo.
+1. Open the app. On the empty screen, tap Explore a demo.
 2. The app connects to a built-in demo fleet of three machines with sample tasks. Nothing leaves the device and no account or sign-in is needed.
 3. The Board lists the tasks; open "Upgrade date-fns to v4" to see an agent waiting for approval, and answer it with Allow or Deny.
 4. Fleet shows the machines; its Providers, People, Integrations and Skills pages are below the machine list.
