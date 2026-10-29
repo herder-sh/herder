@@ -48,9 +48,9 @@ pub use ids::{
     PersonId, PromptId, QuestionId, SessionId, TerminalId, TurnId, UserId,
 };
 pub use people::{
-    AssertionResponse, NewPerson, PASSKEY_CHALLENGE_SECS, PASSKEY_RP_ID, PasskeyAssertion,
-    PasskeyChallenge, PasskeyCreation, PasskeyKey, PasskeyRegistration, PersonCard, PersonInfo,
-    PersonPasskey, RegistrationResponse, SignIn,
+    AssertionResponse, LeftoverDecision, NewPerson, PASSKEY_CHALLENGE_SECS, PASSKEY_RP_ID,
+    PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey, PasskeyRegistration,
+    PersonCard, PersonInfo, PersonPasskey, RegistrationResponse, SignIn,
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use replication::{

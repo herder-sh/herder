@@ -1709,6 +1709,40 @@
           ]
         },
         {
+          "description": "The caller's users became a person, answering `claim_users`.",
+          "type": "object",
+          "properties": {
+            "hosts": {
+              "description": "Users that were machines, made hosts, by name.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "leftovers": {
+              "description": "Users that need a decision, with `decide_leftover`.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/UserInfo"
+              }
+            },
+            "person_id": {
+              "description": "The person they became.",
+              "$ref": "#/$defs/PersonId"
+            },
+            "type": {
+              "type": "string",
+              "const": "claimed"
+            }
+          },
+          "required": [
+            "type",
+            "person_id",
+            "hosts",
+            "leftovers"
+          ]
+        },
+        {
           "description": "The device signed in as the caller, answering `approve_login`.",
           "type": "object",
           "properties": {

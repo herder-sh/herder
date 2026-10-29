@@ -516,6 +516,8 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::SetPersonRole { .. }
         | CommandBody::RevokePerson { .. }
         | CommandBody::ApproveLogin { .. }
+        | CommandBody::ClaimUsers { .. }
+        | CommandBody::DecideLeftover { .. }
         | CommandBody::SetAccountSettings { .. }
         | CommandBody::SetResourceLimits { .. }
         | CommandBody::GetSettings

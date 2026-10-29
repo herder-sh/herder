@@ -432,6 +432,27 @@ fn client_fixtures() -> Vec<ClientMessage> {
             person_id: person_id(),
             assertion: Box::new(assertion()),
         }),
+        command(CommandBody::ClaimUsers {
+            person: Box::new(NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Existing {
+                    person_id: person_id(),
+                    key: passkey_key(),
+                    assertion: assertion(),
+                },
+            }),
+            also: vec![UserId::new("01J9USER")],
+        }),
+        command(CommandBody::DecideLeftover {
+            user_id: UserId::new("01J9USER"),
+            decision: LeftoverDecision::ItsMe,
+            assertion: Box::new(assertion()),
+        }),
+        command(CommandBody::DecideLeftover {
+            user_id: UserId::new("01J9USES"),
+            decision: LeftoverDecision::Remove,
+            assertion: Box::new(assertion()),
+        }),
         command(CommandBody::ApproveLogin {
             code: "K7Q-4PD".into(),
             assertion: Box::new(assertion()),
@@ -1144,6 +1165,19 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 fingerprint: "3f9a".repeat(16),
                 addresses: vec!["192.168.1.20:7447".into()],
                 expires_at: "2026-10-04T12:00:00Z".parse().unwrap(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::Claimed {
+                person_id: person_id(),
+                hosts: vec!["trash-can-01".into()],
+                leftovers: vec![UserInfo {
+                    user_id: UserId::new("01J9USER"),
+                    name: "owner".into(),
+                    role: Role::Owner,
+                    devices: Vec::new(),
+                }],
             },
         },
         ServerMessage::CommandAccepted {

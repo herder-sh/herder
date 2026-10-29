@@ -200,3 +200,13 @@ pub struct PersonInfo {
     /// Their devices on this daemon, oldest first.
     pub devices: Vec<UserDevice>,
 }
+
+/// What becomes of a user `claimed` left over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LeftoverDecision {
+    /// They are the caller: their history reads as the caller's person.
+    ItsMe,
+    /// They are removed, with their devices.
+    Remove,
+}

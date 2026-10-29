@@ -16,17 +16,18 @@ use herder_protocol::{
     CommandResult, Constraint, Container, ContainerState, DaemonSettings, DeviceId, DirectoryEntry,
     ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FactId, FailoverSettings,
     FailoverTotal, FleetHost, FollowUp, FollowUpReason, FollowUpSettings, HistoryPart, HostId,
-    HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill,
-    LinkedVault, LogFormat, LogSettings, McpServerSettings, McpTransport, Mergeable,
-    PasskeyAssertion, PasskeyChallenge, PasskeyKey, PermissionMode, PersonCard, PersonId,
-    PersonInfo, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId,
-    Provider, ProviderBinary, ProviderReload, ProviderStatus, PullRequest, QuestionId,
-    QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo,
-    SecretRef, SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId, SessionOrigin,
-    SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource, SkillsStatus,
-    Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource,
-    TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow,
-    UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
+    HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LeftoverDecision,
+    LibrarySkill, LinkedVault, LogFormat, LogSettings, McpServerSettings, McpTransport, Mergeable,
+    NewPerson, PasskeyAssertion, PasskeyChallenge, PasskeyKey, PasskeyRegistration, PermissionMode,
+    PersonCard, PersonId, PersonInfo, PersonPasskey, PrState, Pressure, Project, ProjectDiscovery,
+    ProjectId, PromptFile, PromptId, Provider, ProviderBinary, ProviderReload, ProviderStatus,
+    PullRequest, QuestionId, QueuedPrompt, RegistrationResponse, Relay, ResourceSettings,
+    ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef, SecretSet, SecretStoreRequest,
+    SecretValue, SessionHead, SessionId, SessionOrigin, SessionSkill, SessionStatus, SessionUsage,
+    SkillFile, SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose,
+    ThreadLink, Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UpdateStage,
+    UpdateWhen, UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId, UserInfo, VaultStatus,
+    VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -748,6 +749,15 @@ pub enum CommandBody {
         person_id: PersonId,
         assertion: Box<PasskeyAssertion>,
     },
+    ClaimUsers {
+        person: Box<NewPerson>,
+        also: Vec<UserId>,
+    },
+    DecideLeftover {
+        user_id: UserId,
+        decision: LeftoverDecision,
+        assertion: Box<PasskeyAssertion>,
+    },
     ApproveLogin {
         code: String,
         assertion: Box<PasskeyAssertion>,
@@ -1002,6 +1012,11 @@ pub enum CommandResult {
         addresses: Vec<String>,
         expires_at: Timestamp,
     },
+    Claimed {
+        person_id: PersonId,
+        hosts: Vec<String>,
+        leftovers: Vec<UserInfo>,
+    },
     LoginApproved {
         device_id: DeviceId,
         client: String,
@@ -1202,6 +1217,44 @@ pub struct AssertionResponse {
     pub authenticator_data: String,
     pub signature: String,
     pub user_handle: Option<String>,
+}
+
+#[uniffi::remote(Record)]
+pub struct NewPerson {
+    pub name: String,
+    pub passkey: PersonPasskey,
+}
+
+#[uniffi::remote(Enum)]
+pub enum PersonPasskey {
+    Register {
+        registration: PasskeyRegistration,
+    },
+    Existing {
+        person_id: PersonId,
+        key: PasskeyKey,
+        assertion: PasskeyAssertion,
+    },
+}
+
+#[uniffi::remote(Record)]
+pub struct PasskeyRegistration {
+    pub id: String,
+    pub raw_id: String,
+    pub response: RegistrationResponse,
+    pub kind: String,
+}
+
+#[uniffi::remote(Record)]
+pub struct RegistrationResponse {
+    pub client_data_json: String,
+    pub attestation_object: String,
+}
+
+#[uniffi::remote(Enum)]
+pub enum LeftoverDecision {
+    ItsMe,
+    Remove,
 }
 
 #[uniffi::remote(Record)]

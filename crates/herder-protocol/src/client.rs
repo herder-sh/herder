@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, Answer, ApprovalDecision, ApprovalId, Attachment, AttachmentId, BotId, Bytes,
-    CommandId, DaemonSettings, DeviceId, Event, HostId, Image, PasskeyAssertion, PermissionMode,
-    PersonCard, PersonId, ProjectId, PromptFile, PromptId, Provider, QuestionId, Role, SecretValue,
-    Seq, SessionId, SignIn, TerminalId, UpdateWhen, UsagePeriod, UserId,
+    CommandId, DaemonSettings, DeviceId, Event, HostId, Image, LeftoverDecision, NewPerson,
+    PasskeyAssertion, PermissionMode, PersonCard, PersonId, ProjectId, PromptFile, PromptId,
+    Provider, QuestionId, Role, SecretValue, Seq, SessionId, SignIn, TerminalId, UpdateWhen,
+    UsagePeriod, UserId,
 };
 
 /// A client-to-daemon message.
@@ -714,6 +715,28 @@ pub enum CommandBody {
     RevokePerson {
         /// The person.
         person_id: PersonId,
+        /// An assertion over a fresh `passkey_challenge`.
+        assertion: Box<PasskeyAssertion>,
+    },
+    /// Make the caller's per-daemon user, an owner, the person `person`, with the users in
+    /// `also`, which are the caller's on other machines claimed in the same pass: history
+    /// under their ids then reads as the person's. Owners only. Answered with `claimed`.
+    ClaimUsers {
+        /// Who the caller becomes: a passkey registered now, or an existing one with an
+        /// assertion over a fresh `passkey_challenge`.
+        person: Box<NewPerson>,
+        /// The caller's user ids on the other machines claimed with this one.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        also: Vec<UserId>,
+    },
+    /// Settle a user `claimed` left over: make them the caller's person, or remove them;
+    /// owners only, with an assertion. Answered with `applied`. Refused with `not_found` for
+    /// a user that is not left over.
+    DecideLeftover {
+        /// The leftover user.
+        user_id: UserId,
+        /// What becomes of them.
+        decision: LeftoverDecision,
         /// An assertion over a fresh `passkey_challenge`.
         assertion: Box<PasskeyAssertion>,
     },

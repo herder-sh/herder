@@ -916,6 +916,8 @@ impl SessionManager {
             | CommandBody::Invite { .. }
             | CommandBody::SetPersonRole { .. }
             | CommandBody::RevokePerson { .. }
+            | CommandBody::ClaimUsers { .. }
+            | CommandBody::DecideLeftover { .. }
             | CommandBody::ApproveLogin { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,

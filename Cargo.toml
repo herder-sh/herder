@@ -77,6 +77,8 @@ ureq = "3"
 uniffi = "0.32"
 url = "2"
 uuid = { version = "1", features = ["v7"] }
+# 0.6 verifies with RustCrypto; 0.5 needs OpenSSL, which no herder build links.
+webauthn-rs = { version = "0.6.1-dev", features = ["conditional-ui"] }
 
 # Line tables keep backtraces readable; full debug info would double each worktree's
 # `target/`. Dependencies are rarely stepped into, so they get none.

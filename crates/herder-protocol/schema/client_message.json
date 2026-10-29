@@ -2209,6 +2209,59 @@
           ]
         },
         {
+          "description": "Make the caller's per-daemon user, an owner, the person `person`, with the users in\n`also`, which are the caller's on other machines claimed in the same pass: history\nunder their ids then reads as the person's. Owners only. Answered with `claimed`.",
+          "type": "object",
+          "properties": {
+            "also": {
+              "description": "The caller's user ids on the other machines claimed with this one.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/UserId"
+              }
+            },
+            "person": {
+              "description": "Who the caller becomes: a passkey registered now, or an existing one with an\nassertion over a fresh `passkey_challenge`.",
+              "$ref": "#/$defs/NewPerson"
+            },
+            "type": {
+              "type": "string",
+              "const": "claim_users"
+            }
+          },
+          "required": [
+            "type",
+            "person"
+          ]
+        },
+        {
+          "description": "Settle a user `claimed` left over: make them the caller's person, or remove them;\nowners only, with an assertion. Answered with `applied`. Refused with `not_found` for\na user that is not left over.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "decision": {
+              "description": "What becomes of them.",
+              "$ref": "#/$defs/LeftoverDecision"
+            },
+            "type": {
+              "type": "string",
+              "const": "decide_leftover"
+            },
+            "user_id": {
+              "description": "The leftover user.",
+              "$ref": "#/$defs/UserId"
+            }
+          },
+          "required": [
+            "type",
+            "user_id",
+            "decision",
+            "assertion"
+          ]
+        },
+        {
           "description": "Approve the waiting `start_login` whose code the caller's app shows, signing that\ndevice in as the caller; any person, with an assertion. Answered with `login_approved`.\nRefused with `not_found` for a code no login is waiting with.",
           "type": "object",
           "properties": {
@@ -4263,6 +4316,21 @@
     "ItemId": {
       "description": "Identifies an item within a session; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "LeftoverDecision": {
+      "description": "What becomes of a user `claimed` left over.",
+      "oneOf": [
+        {
+          "description": "They are the caller: their history reads as the caller's person.",
+          "type": "string",
+          "const": "its_me"
+        },
+        {
+          "description": "They are removed, with their devices.",
+          "type": "string",
+          "const": "remove"
+        }
+      ]
     },
     "LogFormat": {
       "description": "How the daemon writes its log.",

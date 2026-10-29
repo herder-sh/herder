@@ -688,6 +688,15 @@ pub enum CommandResult {
         /// When the invite stops working.
         expires_at: Timestamp,
     },
+    /// The caller's users became a person, answering `claim_users`.
+    Claimed {
+        /// The person they became.
+        person_id: PersonId,
+        /// Users that were machines, made hosts, by name.
+        hosts: Vec<String>,
+        /// Users that need a decision, with `decide_leftover`.
+        leftovers: Vec<UserInfo>,
+    },
     /// The device signed in as the caller, answering `approve_login`.
     LoginApproved {
         /// The device, now listed under the caller.
