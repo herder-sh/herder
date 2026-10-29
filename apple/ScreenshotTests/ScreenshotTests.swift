@@ -165,7 +165,6 @@ final class ScreenshotTests: XCTestCase {
         skills()
         providers()
         integrations()
-        people()
         archiving()
         project()
         finish()
@@ -436,23 +435,6 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot(platform("add-bot"))
         dismiss()
-    }
-
-    /// The People page: you, Sam and Kim, then who can do what on each machine; a grid on the
-    /// Mac, a list of machines under each person on the iPhone.
-    private func people() {
-        #if os(macOS)
-        guard section("People") else { return }
-        #else
-        // On the iPhone, People is a link in Fleet, not a tab.
-        guard section("Fleet") else { return }
-        let link = app.descendants(matching: .any)["people-link"].firstMatch
-        guard wait(link, "People link") else { return }
-        press(link)
-        #endif
-        guard wait(app.descendants(matching: .any)["person-kim"].firstMatch, "Kim on People") else { return }
-        settle()
-        shoot(platform("people"))
     }
 
     /// The Skills page: the library, a switch per machine, one skill off on `studio`.
