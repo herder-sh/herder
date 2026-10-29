@@ -100,6 +100,11 @@ pub struct BotUser {
     /// fails.
     #[serde(default)]
     pub notify: bool,
+    /// Whether they manage the bot from the chat: bind channels to projects, and have its
+    /// sessions change its memory. While none of its people is an owner, everyone who drives
+    /// may.
+    #[serde(default)]
+    pub owner: bool,
     /// The paired herder user they are, which only owners set: an agent runs herder commands
     /// for a turn they prompted with this user's role. An unlinked person has no role.
     #[serde(default, skip_serializing_if = "Option::is_none")]

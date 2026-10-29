@@ -190,6 +190,7 @@
 //! channels = true
 //! approve = true
 //! notify = false
+//! owner = true                  # binds channels and changes the bot's memory from the chat
 //! user_id = "01J9OWNER"         # the paired user they are, for agents' herder commands; none by default
 //!
 //! [bots.defaults]               # each key chosen as for any new session when absent

@@ -74,6 +74,7 @@ fn slack_bot() -> Bot {
             channels: true,
             approve: true,
             notify: false,
+            owner: true,
             user_id: Some(UserId::new("01J9OWNER")),
         }],
         defaults: BotDefaults {
@@ -2823,7 +2824,7 @@ fn bots_and_thread_links_have_their_wire_form() {
         "display_name": "Ada"
     }))
     .unwrap();
-    assert!(!(user.dm || user.channels || user.approve || user.notify));
+    assert!(!(user.dm || user.channels || user.approve || user.notify || user.owner));
     assert_eq!(user.user_id, None);
     let linked = BotUser {
         user_id: Some(UserId::new("ada")),
@@ -2838,6 +2839,7 @@ fn bots_and_thread_links_have_their_wire_form() {
             "channels": false,
             "approve": false,
             "notify": false,
+            "owner": false,
             "user_id": "ada"
         })
     );

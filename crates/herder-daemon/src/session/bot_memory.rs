@@ -1,5 +1,6 @@
 //! The sessions a chat bot starts: what they are told of the bot ([`crate::bots::memory`]), and
-//! the `remember` and `forget` tools, which change the memory of that bot only.
+//! the `remember` and `forget` tools, which change the memory of that bot only, and only for a
+//! turn one of its owners prompted ([`runner::manages`]).
 
 use herder_protocol::{Bot, BotFact, SessionId, SessionOrigin};
 use herder_tasktools::{
@@ -9,6 +10,7 @@ use tracing::{info, warn};
 
 use super::SessionManager;
 use crate::bots::memory::{self, Change, Refused};
+use crate::bots::runner;
 
 impl SessionManager {
     /// What `caller` is told of the bot that started it, with the facts it remembers now;
@@ -32,6 +34,7 @@ impl SessionManager {
         input: RememberInput,
     ) -> Result<RememberOutput, ToolError> {
         let (bot, origin) = self.bot_of(&caller).await?;
+        self.managed(&caller, &bot).await?;
         let thread = self
             .inner
             .journal
@@ -62,11 +65,32 @@ impl SessionManager {
         input: ForgetInput,
     ) -> Result<ForgetOutput, ToolError> {
         let (bot, _) = self.bot_of(&caller).await?;
+        self.managed(&caller, &bot).await?;
         let (_, facts) = self.change(&bot, Change::Delete(input.id)).await?;
         info!(session_id = %caller, bot_id = %bot.bot_id, "a bot forgot a fact");
         Ok(ForgetOutput {
             memory: listed(facts),
         })
+    }
+
+    /// Refuses a change to `bot`'s memory from `caller` unless whoever prompted its current turn
+    /// manages the bot.
+    async fn managed(&self, caller: &SessionId, bot: &Bot) -> Result<(), ToolError> {
+        let manages = match self.acts_for(caller.clone()).await {
+            Ok(by) => runner::manages(bot, &by),
+            Err(_) => !bot.allow.iter().any(|user| user.owner),
+        };
+        if manages {
+            return Ok(());
+        }
+        Err(ToolError::new(
+            ErrorCode::NotAllowed,
+            format!(
+                "{} Whoever prompted this turn is not one of them, so nothing changed: tell \
+                 them so.",
+                runner::owners_only(bot)
+            ),
+        ))
     }
 
     async fn change(

@@ -1145,6 +1145,11 @@
           "type": "boolean",
           "default": false
         },
+        "owner": {
+          "description": "Whether they manage the bot from the chat: bind channels to projects, and have its\nsessions change its memory. While none of its people is an owner, everyone who drives\nmay.",
+          "type": "boolean",
+          "default": false
+        },
         "user_id": {
           "description": "The paired herder user they are, which only owners set: an agent runs herder commands\nfor a turn they prompted with this user's role. An unlinked person has no role.",
           "anyOf": [
