@@ -14,11 +14,10 @@ import Testing
 
     @Test(arguments: [("mac", 560.0), ("iphone", 390.0)])
     func drawsAnInvite(width: (name: String, points: Double)) async throws {
-        let invite = People.Invite(
-            name: "dana", role: .member,
-            link: pairingUriToString(uri: PairingUri(hosts: ["devbox.tailnet.ts.net:7447", "192.168.1.20:7447"],
-                                                     fingerprint: String(repeating: "9f86", count: 16),
-                                                     code: "ABCDE-FGHJK")),
+        let invite = FleetPeople.Invite(
+            role: .member,
+            link: FleetPeople.inviteLink(addresses: ["devbox.tailnet.ts.net:7447", "192.168.1.20:7447"],
+                                         fingerprint: String(repeating: "9f86", count: 16), invite: "Kq3vX9mPz2Lr"),
             expiresAt: now.addingTimeInterval(9 * 60 + 41))
         let view = VStack(alignment: .leading, spacing: 18) { InviteLinkView(invite: invite, now: now) }
         try await shoot(view, width: width.points, named: "people-invite-\(width.name).png")
