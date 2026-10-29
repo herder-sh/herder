@@ -1,14 +1,22 @@
 import SwiftUI
 
-/// Claim your machines: what becomes yours, what needs a decision, then Create passkey and
-/// claim, with Face ID once for all of them.
+/// Claim your machines: what becomes yours, then Create passkey and claim, then the users that
+/// need a decision. Later puts it off until the next launch.
 struct ClaimSheet: View {
-    let claim: Claim
-    /// Your name, as the passkey is saved under it.
-    let name: String
-    let userId: Data
-    let challenge: Data
+    @State private var claim: Claim
     @Environment(\.dismiss) private var dismiss
+
+    init(claim: Claim) {
+        _claim = State(initialValue: claim)
+    }
+
+    /// Claims `plan` on `fleet`'s machines with your passkey.
+    init(fleet: Fleet, plan: ClaimPlan) {
+        let client = fleet.client
+        self.init(claim: Claim(plan, authenticator: passkeyAuthenticator()) {
+            try await client.send(hostId: $0, command: $1)
+        })
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -20,15 +28,15 @@ struct ClaimSheet: View {
                     banner
                     heading("Becomes yours")
                     SettingsGroup {
-                        ForEach(Array(claim.plan.machines.enumerated()), id: \.element.id) { index, machine in
+                        ForEach(Array(claim.machines.enumerated()), id: \.element.id) { index, machine in
                             if index > 0 { RowDivider() }
                             machineRow(machine)
                         }
                     }
-                    if !claim.plan.questions.isEmpty {
+                    if !claim.questions.isEmpty {
                         heading("Needs a decision")
                         SettingsGroup {
-                            ForEach(Array(claim.plan.questions.enumerated()), id: \.element.id) { index, question in
+                            ForEach(Array(claim.questions.enumerated()), id: \.element.id) { index, question in
                                 if index > 0 { RowDivider() }
                                 questionRow(question)
                             }
@@ -45,13 +53,21 @@ struct ClaimSheet: View {
             HStack(spacing: 8) {
                 Spacer()
                 SettingsButton(title: claim.done ? "Done" : "Later", style: .quiet) { dismiss() }
-                if !claim.done {
-                    SettingsButton(title: "Create passkey and claim", style: .primary) {
-                        Task { await claim.claim(name: name, userId: userId, challenge: challenge) }
+                if !claim.claimed {
+                    SettingsButton(title: claim.plan.known == nil ? "Create passkey and claim" : "Claim with passkey",
+                                   style: .primary) {
+                        Task { await claim.claim() }
                     }
                     .disabled(claim.working)
                     .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("claim")
+                } else if !claim.done {
+                    SettingsButton(title: "Apply decisions", style: .primary) {
+                        Task { await claim.decide() }
+                    }
+                    .disabled(claim.working)
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("decide")
                 }
             }
             .padding(.horizontal, 22)
@@ -99,7 +115,7 @@ struct ClaimSheet: View {
             case .ready: Pill(text: "✓ ready", tint: Theme.switchOn)
             case .claiming: ProgressView().controlSize(.small)
             case .claimed: Pill(text: "✓ yours", tint: Theme.switchOn)
-            case .failed(let why): Pill(text: why, tint: Theme.danger)
+            case .failed: Pill(text: "✕ failed", tint: Theme.danger)
             }
         }
         .padding(.horizontal, Theme.cellPadding)

@@ -30,6 +30,8 @@ enum AppSheet: Identifiable, Hashable {
     case invite(HostId)
     /// Approving a new machine's `herder://own` link or a terminal's `herder://login` one.
     case approve(ApprovalRequest)
+    /// Claim your machines: offered once on launch while a machine you own is not claimed.
+    case claim(ClaimPlan)
 
     var id: Self { self }
 }
@@ -53,6 +55,8 @@ extension AppSheet {
             InviteSheet(fleet: fleet, hostId: hostId)
         case .approve(let request):
             ApproveSheet(fleet: fleet, request: request, open: openMachine) { present(.pair(.vault)) }
+        case .claim(let plan):
+            ClaimSheet(fleet: fleet, plan: plan)
         }
     }
 }

@@ -155,7 +155,7 @@ use herder_protocol::{
     CommandResult, ErrorCode, ErrorInfo, Event, FailoverSettings, FleetHost, HostId, HostResources,
     Item, PasskeyAssertion, PasskeyChallenge, PersonId, Project, Provider, Role, SessionHead,
     SessionId, SessionSkill, SessionUsage, SkillsStatus, Terminal, TerminalId, Timestamp,
-    UpdateStage, VaultStatus,
+    UpdateStage, UserId, VaultStatus,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -249,6 +249,10 @@ pub struct Machine {
     pub quality: ConnectionQuality,
     /// This device's user's role, from the latest hello; `None` until the first connection.
     pub role: Option<Role>,
+    /// The user this device is authenticated as there, from the latest hello: a person's id
+    /// once claimed, else the per-daemon user's, which `claim_users` takes in `also`; `None`
+    /// until the first connection.
+    pub user_id: Option<UserId>,
     /// The person this device acts for there, from the latest hello; `None` until the first
     /// connection.
     pub person_id: Option<PersonId>,

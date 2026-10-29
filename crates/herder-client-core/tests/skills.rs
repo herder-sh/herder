@@ -226,6 +226,7 @@ impl Fake {
             user_id: UserId::new("alice"),
             device_id: DeviceId::new("device"),
             role: self.role,
+            user_id: None,
             person_id: None,
             herder_version: None,
         });

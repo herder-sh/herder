@@ -116,6 +116,8 @@ pub struct Machine {
     pub quality: ConnectionQuality,
     pub role: Option<Role>,
     #[uniffi(default = None)]
+    pub user_id: Option<UserId>,
+    #[uniffi(default = None)]
     pub person_id: Option<PersonId>,
     #[uniffi(default = None)]
     pub herder_version: Option<String>,
