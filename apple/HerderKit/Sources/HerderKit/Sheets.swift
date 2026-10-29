@@ -27,6 +27,8 @@ enum AppSheet: Identifiable, Hashable {
     case importSkill
     /// A new chat bot: pick its machine first.
     case addBot
+    /// A one-time code that pairs someone new with a machine.
+    case invite(HostId)
 
     var id: Self { self }
 }
@@ -44,6 +46,8 @@ extension AppSheet {
         case .skill(let editing): SkillEditorSheet(fleet: fleet, editing: editing)
         case .importSkill: SkillImportSheet(fleet: fleet)
         case .addBot: AddBotSheet(fleet: fleet)
+        case .invite(let hostId):
+            InviteSheet(fleet: fleet, hostId: hostId)
         }
     }
 }

@@ -18,6 +18,9 @@ enum Page: Hashable {
     case agent(SessionKey, NativeAgent.ID)
     /// Every bot on every machine, opened from Machines on iPhone, where it is no tab.
     case integrations
+    /// Everyone across the fleet, or one machine's people, opened from its page; on iPhone from
+    /// Fleet, where it is no tab.
+    case people(HostId?)
     /// A chat bot on a machine, for its owners.
     case bot(hostId: HostId, botId: BotId)
 }
@@ -39,6 +42,8 @@ extension Page {
             return fleet.session(key).flatMap { NativeAgent.find(id, in: $0) }?.title ?? "Sub-agent"
         case .integrations:
             return "Integrations"
+        case .people:
+            return "People"
         case .bot(_, let botId):
             return botId
         }
@@ -53,6 +58,7 @@ extension Page {
         case .vault(let hostId, let tab): VaultPage(fleet: fleet, vault: hostId, tab: tab)
         case .agent(let key, let id): NativeAgentPage(reference: id, fleet: fleet, key: key)
         case .integrations: IntegrationsView(fleet: fleet, sheet: sheet)
+        case .people(let hostId): PeoplePage(fleet: fleet, hostId: hostId, sheet: sheet)
         case .bot(let hostId, let botId): BotPage(fleet: fleet, hostId: hostId, botId: botId)
         }
     }
