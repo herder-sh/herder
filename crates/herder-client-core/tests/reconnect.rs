@@ -17,6 +17,7 @@ use herder_client_core::{
     SessionSubscription, SessionUpdate, TerminalEvent, TerminalStream,
 };
 use herder_client_core::{LoginUri, PairingUri};
+use herder_daemon::auth::authenticator::Authenticator;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::aws::Aws;
 use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
@@ -28,8 +29,8 @@ use herder_daemon::{Hub, session};
 use herder_protocol::{
     AccountId, AwsDeviceCode, AwsProfile, CommandBody, CommandResult, Constraint, Container,
     ContainerState, ErrorCode, Event, EventBody, FailoverSettings, HostId, HostResources, ItemBody,
-    PermissionMode, Provider, Role, SessionId, SessionStatus, SessionUsage, TerminalPurpose,
-    TurnId,
+    NewPerson, PermissionMode, PersonPasskey, Provider, Role, SessionId, SessionStatus,
+    SessionUsage, SignIn, TerminalPurpose, TurnId,
 };
 use herder_store::Store;
 use tokio::net::{TcpListener, TcpStream};
@@ -2017,4 +2018,95 @@ async fn a_new_device_is_asked_to_sign_in_and_a_terminal_gets_a_code_to_show() {
     assert!(!login.is_finished(), "a login waits for an app's approval");
     login.abort();
     assert!(client.machines().is_empty(), "nothing is saved before it");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_app_claims_a_machine_and_approves_a_terminal_that_logs_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let hosts = vec![daemon.addr.to_string()];
+
+    // The app claims the fresh machine with a new passkey, with the code its terminal shows.
+    let app = Client::open(
+        tmp.path().join("app").display().to_string(),
+        "herder-app/0".into(),
+    )
+    .unwrap();
+    let (claim, _) = daemon.auth.open_claim().unwrap();
+    let pending = tokio::time::timeout(
+        TIMEOUT,
+        app.sign_in(hosts.clone(), daemon.fingerprint.clone()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let (passkey, registration) = Authenticator::register(
+        "tomas",
+        &pending.registration().expect("a fresh machine offers one"),
+    );
+    let claimed = pending
+        .finish(SignIn::ClaimOwnership {
+            code: claim,
+            person: NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Register { registration },
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(claimed.host_id, HostId::new("host-1"));
+    wait_connection(&app, connected).await;
+    assert_eq!(app.machines()[0].role, Some(Role::Owner));
+
+    // A terminal logs in; the app approves the code it shows with the passkey.
+    let terminal = Client::open(
+        tmp.path().join("terminal").display().to_string(),
+        "herder-cli/0".into(),
+    )
+    .unwrap();
+    let (shown, code) = tokio::sync::oneshot::channel();
+    let login = {
+        let (terminal, hosts) = (terminal.clone(), hosts.clone());
+        let fingerprint = daemon.fingerprint.clone();
+        tokio::spawn(async move {
+            terminal
+                .log_in(hosts, fingerprint, move |code, _| {
+                    let _ = shown.send(code.to_owned());
+                })
+                .await
+        })
+    };
+    let code = tokio::time::timeout(TIMEOUT, code).await.unwrap().unwrap();
+    let CommandResult::PasskeyChallenge { challenge, .. } = app
+        .send(claimed.host_id.clone(), CommandBody::PasskeyChallenge)
+        .await
+        .unwrap()
+    else {
+        panic!("expected a passkey challenge");
+    };
+    let approve = CommandBody::ApproveLogin {
+        code,
+        assertion: Box::new(passkey.assert(&challenge)),
+    };
+    let CommandResult::LoginApproved { client, .. } =
+        app.send(claimed.host_id.clone(), approve).await.unwrap()
+    else {
+        panic!("expected the login approved");
+    };
+    assert_eq!(client, "herder-cli/0");
+
+    let machine = tokio::time::timeout(TIMEOUT, login)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(machine.host_id, claimed.host_id);
+    wait_connection(&terminal, connected).await;
+    assert_eq!(terminal.machines()[0].role, Some(Role::Owner));
 }
