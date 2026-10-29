@@ -41,8 +41,8 @@ import Testing
 
     @Test(arguments: [("mac", 640.0), ("iphone", 390.0)])
     func drawsClaim(width: (name: String, points: Double)) async throws {
-        let claim = Claim(.demo, authenticator: FakeAuthenticator()) { _, _, _ in }
-        let sheet = ClaimSheet(claim: claim, name: "Tomas", userId: Data(), challenge: Data())
+        let claim = Claim(.demo, name: "Tomas", authenticator: FakeAuthenticator()) { _, _ in .applied }
+        let sheet = ClaimSheet(claim: claim)
             // The iPhone's sheet fills the screen; the Mac's is its own height.
             .frame(width: width.points, height: width.name == "iphone" ? Self.phone.height : nil)
         try await shoot(sheet, width: width.points, named: "identity-claim-\(width.name).png")

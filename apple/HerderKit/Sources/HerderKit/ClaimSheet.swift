@@ -1,13 +1,9 @@
 import SwiftUI
 
 /// Claim your machines: what becomes yours, what needs a decision, then Create passkey and
-/// claim, with Face ID once for all of them.
+/// claim, with Face ID once for each machine.
 struct ClaimSheet: View {
     let claim: Claim
-    /// Your name, as the passkey is saved under it.
-    let name: String
-    let userId: Data
-    let challenge: Data
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -34,9 +30,6 @@ struct ClaimSheet: View {
                             }
                         }
                     }
-                    if let error = claim.error {
-                        Text(error).font(.footnote).foregroundStyle(Theme.danger).padding(.top, 10)
-                    }
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 14)
@@ -47,7 +40,7 @@ struct ClaimSheet: View {
                 SettingsButton(title: claim.done ? "Done" : "Later", style: .quiet) { dismiss() }
                 if !claim.done {
                     SettingsButton(title: "Create passkey and claim", style: .primary) {
-                        Task { await claim.claim(name: name, userId: userId, challenge: challenge) }
+                        Task { await claim.claim() }
                     }
                     .disabled(claim.working)
                     .keyboardShortcut(.defaultAction)
@@ -93,13 +86,16 @@ struct ClaimSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(machine.name).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
                 Text(machine.change).font(.caption).foregroundStyle(Theme.secondary)
+                if case .failed(let why) = claim.rows[machine.id] {
+                    Text(why).font(.caption).foregroundStyle(Theme.danger).fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 8)
             switch claim.rows[machine.id] ?? .ready {
             case .ready: Pill(text: "✓ ready", tint: Theme.switchOn)
             case .claiming: ProgressView().controlSize(.small)
             case .claimed: Pill(text: "✓ yours", tint: Theme.switchOn)
-            case .failed(let why): Pill(text: why, tint: Theme.danger)
+            case .failed: Pill(text: "✕ failed", tint: Theme.danger)
             }
         }
         .padding(.horizontal, Theme.cellPadding)
@@ -114,18 +110,34 @@ struct ClaimSheet: View {
             }
             Spacer(minLength: 8)
             Menu {
-                Picker("Who is this?", selection: Binding(get: { claim.answers[question.id] ?? .me },
+                Picker("Who is this?", selection: Binding(get: { claim.answers[question.id] ?? question.suggested },
                                                          set: { claim.answers[question.id] = $0 })) {
                     ForEach(ClaimPlan.Answer.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.inline)
             } label: {
-                RoleBox(title: (claim.answers[question.id] ?? .me).title, menu: true)
+                RoleBox(title: (claim.answers[question.id] ?? question.suggested).title, menu: true)
             }
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
             .accessibilityLabel("Who is \(question.user) on \(question.machine)")
         }
         .padding(.horizontal, Theme.cellPadding)
         .padding(.vertical, 11)
+    }
+}
+
+/// Claim your machines on the fleet, as `person` when a machine already knows your passkey.
+struct ClaimFleetSheet: View {
+    @State private var claim: Claim
+
+    init(fleet: Fleet, plan: ClaimPlan, person: Claim.Person?, authenticator: Authenticator) {
+        let name = person?.name ?? plan.machines.first?.users.first ?? NSFullUserName()
+        _claim = State(initialValue: Claim(plan, name: name, person: person, authenticator: authenticator) {
+            try await fleet.client.send(hostId: $0, command: $1)
+        })
+    }
+
+    var body: some View {
+        ClaimSheet(claim: claim)
     }
 }

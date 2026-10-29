@@ -62,15 +62,18 @@ struct FleetView: View {
     @State private var linked: SessionKey?
     /// Why a link's session did not open, for the alert that says so.
     @State private var linkProblem: SessionLinkTarget?
-    /// Your herder passkey, which signs every change to people and every approval.
-    @State private var authenticator = PlatformAuthenticator()
+    /// Whether Claim your machines was offered this launch.
+    @State private var claimOffered = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
     var body: some View {
         screens
-            .environment(\.signPasskey) { try await authenticator.sign($0) }
+            .environment(\.signPasskey) { try await Passkey.device.sign($0) }
+            // Once a launch, Claim your machines, while a machine you own knows you by a user of
+            // its own; offered when the machines you own have connected and no other sheet shows.
+            .task(id: ownedConnected) { await offerClaim() }
             .onOpenURL(perform: open)
             #if os(macOS)
             // A link opens in the one window rather than a new one.
@@ -244,6 +247,23 @@ struct FleetView: View {
         case nil:
             fleet.toast = Toast(text: "herder cannot open that link", failed: true)
         }
+    }
+
+    /// The machines you own that are connected.
+    private var ownedConnected: Set<HostId> {
+        Set(fleet.machines.filter { $0.connection == .connected && $0.role == .owner }.map(\.hostId))
+    }
+
+    private func offerClaim() async {
+        guard !claimOffered, !ownedConnected.isEmpty,
+              ProcessInfo.processInfo.environment["HERDER_NO_CLAIM_OFFER"] == nil else { return }
+        // The rest of the fleet connects within moments of the first machine.
+        try? await Task.sleep(for: .seconds(2))
+        guard !Task.isCancelled else { return }
+        let plan = await fleet.claimPlan()
+        guard !plan.machines.isEmpty, !claimOffered, sheet == nil, !Task.isCancelled else { return }
+        claimOffered = true
+        sheet = .claim(plan, await fleet.claimant())
     }
 
     /// Shows a machine's page: over the section on the Mac and iPad, on the Fleet tab on iPhone.
