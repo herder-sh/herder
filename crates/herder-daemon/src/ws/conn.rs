@@ -21,8 +21,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::{Backend, Identity, Shared, Tls, Ws, fingerprint};
+use crate::auth::{self, Auth};
 use crate::hub::{Outbox, OutboxState};
-use crate::{auth, session};
+use crate::session;
 
 /// Time a client gets for the TLS and WebSocket handshakes, and again for its hello.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -73,7 +74,12 @@ pub(super) async fn serve<B: Backend>(
 ) {
     let (sink, stream) = ws.split();
     let outbox = Arc::new(Outbox::default());
-    let writer = tokio::spawn(write(sink, Arc::clone(&outbox), cancel.clone()));
+    let writer = tokio::spawn(write(
+        sink,
+        Arc::clone(&outbox),
+        Arc::clone(&shared.auth),
+        cancel.clone(),
+    ));
     let result = tokio::select! {
         () = cancel.cancelled() => Ok(()),
         result = read(stream, first, &shared, &outbox, &device, &cancel) => result,
@@ -441,10 +447,17 @@ fn reject(outbox: &Outbox, message: &str) -> Result<()> {
     bail!("hello refused: {message}")
 }
 
-/// Writes queued messages until the outbox stops, the socket fails, or `cancel`.
-async fn write(mut sink: SplitSink<Ws, Message>, outbox: Arc<Outbox>, cancel: CancellationToken) {
+/// Writes queued messages, attributed as `auth` resolves ids, until the outbox stops, the
+/// socket fails, or `cancel`.
+async fn write(
+    mut sink: SplitSink<Ws, Message>,
+    outbox: Arc<Outbox>,
+    auth: Arc<Auth>,
+    cancel: CancellationToken,
+) {
     let close = loop {
-        while let Some(message) = outbox.pop() {
+        while let Some(mut message) = outbox.pop() {
+            auth.attribute(&mut message);
             let text = match serde_json::to_string(&message) {
                 Ok(text) => text,
                 Err(err) => {

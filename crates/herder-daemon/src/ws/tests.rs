@@ -2321,3 +2321,113 @@ async fn an_owner_signs_the_host_in_to_aws() {
         .await;
     assert!(matches!(member.recv().await, ServerMessage::Synced { .. }));
 }
+
+/// Moves `owner` to the person `0192f3a4-…`, holding no passkey here, with `also`.
+fn claim(daemon: &Daemon, owner: &UserId, also: &[UserId]) {
+    daemon
+        .auth
+        .claim_as(
+            owner,
+            &herder_protocol::PersonId::new("0192f3a4-5b6c-7d8e-9f00-112233445566"),
+            "Tomas".into(),
+            Vec::new(),
+            also,
+            &[],
+        )
+        .unwrap();
+}
+
+#[tokio::test]
+async fn after_a_claim_the_owners_history_reads_as_the_person() {
+    let daemon = Daemon::start().await;
+    let owner = daemon.client().await.hello(Vec::new()).await.user_id;
+    let bob = DeviceKey::generate().unwrap();
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let bob = daemon
+        .client_on(&bob, Some(&code))
+        .await
+        .hello(Vec::new())
+        .await
+        .user_id;
+    // Sessions by both, journaled under their per-daemon ids.
+    let session = daemon.create_session("s1");
+    let by = |user: &UserId| {
+        daemon
+            .store
+            .lock()
+            .unwrap()
+            .append(NewEvent {
+                session_id: session.clone(),
+                at: jiff::Timestamp::now(),
+                by: Some(user.clone()),
+                body: added("i1", "hi"),
+            })
+            .unwrap()
+    };
+    by(&owner);
+    by(&bob);
+
+    let person = UserId::new("0192f3a4-5b6c-7d8e-9f00-112233445566");
+    claim(&daemon, &owner, &[]);
+    let mut client = daemon.client().await;
+    assert_eq!(client.hello(Vec::new()).await.user_id, person);
+    client.subscribe(&session, 0).await;
+    client.read_until(|view| view.last_seq() == 3).await;
+    let authors: Vec<_> = client.view.events.iter().map(|e| e.by.clone()).collect();
+    assert_eq!(authors, [None, Some(person.clone()), Some(bob)]);
+
+    // Live events under the old id too.
+    let event = by(&owner);
+    daemon.hub.event(&event);
+    client.read_until(|view| view.last_seq() == 4).await;
+    assert_eq!(client.view.events[3].by, Some(person));
+}
+
+#[tokio::test]
+async fn after_a_claim_agents_act_for_the_person_by_any_of_their_old_ids() {
+    let daemon = Daemon::start().await;
+    let mut client = daemon.client().await;
+    let owner = client.hello(Vec::new()).await.user_id;
+    // The person's id on the machine a forked session came from.
+    let elsewhere = UserId::new("01JA0HOSTUSER");
+    claim(&daemon, &owner, std::slice::from_ref(&elsewhere));
+
+    // A bot person linked to the old id is still linked, as the person.
+    let bot = herder_protocol::Bot {
+        bot_id: herder_protocol::BotId::new("tg"),
+        kind: herder_protocol::BotKind::Telegram,
+        name: "trash-can".into(),
+        token: "TELEGRAM_TOKEN".parse().unwrap(),
+        app_token: None,
+        allow: vec![herder_protocol::BotUser {
+            external_user_id: "1".into(),
+            display_name: "Ada".into(),
+            dm: true,
+            channels: true,
+            approve: false,
+            notify: false,
+            owner: false,
+            user_id: Some(owner.clone()),
+        }],
+        defaults: herder_protocol::BotDefaults::default(),
+        channel_bindings: Vec::new(),
+        instructions: None,
+    };
+    assert!(matches!(
+        client
+            .command("c1", CommandBody::PutBot { bot: Box::new(bot) })
+            .await,
+        ServerMessage::CommandAccepted { .. }
+    ));
+    let via_ada = UserId::new("via trash-can, Ada");
+    for by in [owner, elsewhere, via_ada] {
+        let settings = daemon
+            .control
+            .command(SessionId::new("s1"), by.clone(), CommandBody::GetSettings)
+            .await;
+        assert!(
+            matches!(settings, Ok(CommandResult::Settings { .. })),
+            "{by}: {settings:?}"
+        );
+    }
+}
