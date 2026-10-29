@@ -34,7 +34,7 @@ pub(crate) type Ws =
     tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>;
 
 use crate::auth::control::addresses;
-use crate::auth::{self, Auth, PAIRING_TTL};
+use crate::auth::{self, Auth};
 use crate::aws::Aws;
 use crate::bots::Bots;
 use crate::hub::Hub;
@@ -174,7 +174,7 @@ struct Shared<B> {
     host: Host,
     /// The host's link to its vault, which answers the vault link commands; a vault has none.
     link: OnceLock<Arc<Link>>,
-    /// The addresses the server listens on, set once it does; `pair_device` advertises them.
+    /// The addresses the server listens on, set once it does; `invite` advertises them.
     listen: OnceLock<Vec<SocketAddr>>,
     /// The daemon's settings, which answer the settings commands, once set.
     settings: OnceLock<Arc<Settings>>,
@@ -312,15 +312,6 @@ impl<B: Backend> Shared<B> {
             CommandBody::TerminalInput { terminal_id, data } => {
                 terminals.input(&terminal_id, outbox, data.0).await?;
             }
-            CommandBody::PairDevice { user, role } => {
-                return self.pair_device(identity, user.as_deref(), role);
-            }
-            CommandBody::ListUsers => {
-                return Ok(CommandResult::Users {
-                    users: self.auth.users(),
-                });
-            }
-            CommandBody::SetUserRole { user_id, role } => self.auth.set_role(&user_id, role)?,
             CommandBody::PasskeyChallenge => return self.passkey_challenge(identity),
             CommandBody::ListPeople => {
                 return Ok(CommandResult::People {
@@ -527,16 +518,8 @@ impl<B: Backend> Shared<B> {
             {
                 link.command(command).await
             }
-            command @ (CommandBody::InstallVault | CommandBody::LinkLocalVault)
-                if let Some(link) = self.link.get() =>
-            {
-                let Some(user) = self.auth.name(user_id) else {
-                    return Err(ErrorInfo {
-                        code: ErrorCode::Forbidden,
-                        message: "you are no longer paired with this daemon".to_owned(),
-                    });
-                };
-                link.local_vault(command, user).await
+            CommandBody::InstallVault if let Some(link) = self.link.get() => {
+                link.install_vault().await
             }
             command @ (CommandBody::GetSettings
             | CommandBody::SetSettings { .. }
@@ -678,53 +661,6 @@ impl<B: Backend> Shared<B> {
         }
         opened
     }
-
-    /// A one-time code that pairs another device as `identity`'s user, with this daemon's
-    /// own addresses rather than the one the caller reached it on.
-    /// Mints a code that pairs a device as the caller, or, given either, as `user` with
-    /// `role`, as `herder pair --user --role` does; [`auth::authorize`] lets only owners give
-    /// either.
-    fn pair_device(
-        &self,
-        identity: &Identity,
-        user: Option<&str>,
-        role: Option<Role>,
-    ) -> Result<CommandResult, ErrorInfo> {
-        let Some(listen) = self.listen.get() else {
-            return Err(ErrorInfo {
-                code: ErrorCode::Internal,
-                message: "the daemon is not listening yet".to_owned(),
-            });
-        };
-        let pairing = if user.is_none() && role.is_none() {
-            self.auth
-                .mint_for(&identity.user_id, PAIRING_TTL)
-                .map_err(|err| ErrorInfo {
-                    code: ErrorCode::Internal,
-                    message: format!("{err:#}"),
-                })?
-        } else {
-            let own = self.auth.name(&identity.user_id);
-            let Some(user) = user.or(own.as_deref()) else {
-                return Err(ErrorInfo {
-                    code: ErrorCode::Forbidden,
-                    message: "you are no longer paired with this daemon".to_owned(),
-                });
-            };
-            self.auth
-                .mint(user, role, PAIRING_TTL)
-                .map_err(|err| ErrorInfo {
-                    code: ErrorCode::BadRequest,
-                    message: format!("{err:#}"),
-                })?
-        };
-        Ok(CommandResult::DevicePairing {
-            code: pairing.code,
-            fingerprint: self.tls.fingerprint().to_owned(),
-            addresses: addresses(listen),
-            expires_at: pairing.expires_at,
-        })
-    }
 }
 
 /// What `command` does, as a person's devices are asked to approve it.
@@ -854,10 +790,7 @@ impl<B: Backend> Control for AgentControl<B> {
             // restarts the daemon, ending the turn that asked for it.
             let pairing = matches!(
                 command,
-                CommandBody::PairDevice { .. }
-                    | CommandBody::ListUsers
-                    | CommandBody::SetUserRole { .. }
-                    | CommandBody::RevokeDevice { .. }
+                CommandBody::RevokeDevice { .. }
                     | CommandBody::PasskeyChallenge
                     | CommandBody::ListPeople
                     | CommandBody::Invite { .. }
@@ -870,7 +803,6 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::RefuseAction { .. }
                     | CommandBody::PairVaultHost { .. }
                     | CommandBody::InstallVault
-                    | CommandBody::LinkLocalVault
                     | CommandBody::PutBot { .. }
                     | CommandBody::RemoveBot { .. }
                     | CommandBody::GetBotMemory { .. }

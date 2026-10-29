@@ -61,8 +61,10 @@ pub enum Msg {
     },
     /// Something to tell the user on the status line, such as a refused command.
     Notice(String),
-    /// Pairing a machine ended: the machine, or why it failed.
-    Paired(Result<Box<Machine>, String>),
+    /// The machine this terminal signs in to gave the login's code, for an app to approve.
+    LoginCode(String),
+    /// Signing in to a machine ended: the machine, or why it failed.
+    SignedIn(Result<Box<Machine>, String>),
     /// An attached terminal gave the screen back.
     TerminalEnded(terminal::Ended),
     /// Time passed: an armed leader may lapse.
@@ -102,8 +104,9 @@ pub enum Effect {
     },
     /// Open a web page in the browser.
     OpenUrl(String),
-    /// Pair with the daemon of a `herder://pair` link, answering with [`Msg::Paired`].
-    Pair(String),
+    /// Sign this terminal in to the machine as a person, as `herder login` does: answered
+    /// with [`Msg::LoginCode`] once there is a code to approve, then [`Msg::SignedIn`].
+    LogIn(herder_client_core::FleetMachine),
     /// Show a machine by another name on this device; a failure comes back as a notice.
     RenameMachine {
         /// The machine.
@@ -453,7 +456,7 @@ impl App {
             }
             Msg::Paste(text) => {
                 if !self.paste_accounts(&text)
-                    && !self.paste_pairing(&text)
+                    && !self.paste_link(&text)
                     && !self.paste_inbox(&text)
                 {
                     return self.paste(&text);
@@ -479,8 +482,12 @@ impl App {
                 self.notice = Some(text);
                 Vec::new()
             }
-            Msg::Paired(result) => {
-                self.paired(result);
+            Msg::LoginCode(code) => {
+                self.login_code(code);
+                Vec::new()
+            }
+            Msg::SignedIn(result) => {
+                self.signed_in(result);
                 Vec::new()
             }
         }

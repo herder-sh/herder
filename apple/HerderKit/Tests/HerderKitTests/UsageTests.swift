@@ -185,7 +185,7 @@ struct UsageFleetTests {
         }
         let following = Task { await fleet.follow() }
         for daemon in daemons {
-            let machine = try await fleet.pair(daemon, member: member)
+            let machine = try await fleet.signIn(to: daemon, member: member)
             try await fleet.client.synced(hostId: machine.hostId)
         }
         return (fleet, following)

@@ -6,7 +6,7 @@ The single `herder` binary: `herder daemon` runs the daemon, bare `herder` opens
 ## Scripting sessions
 
 `herder session` drives sessions from scripts and other agents, through the same client
-profile as the TUI (pair a machine first with `herder connect`). It never prompts; every
+profile as the TUI (sign in to a machine first with `herder login`). It never prompts; every
 command takes `--json` for one JSON value on stdout, and `--machine <name or host id>`,
 which defaults to the only paired machine.
 

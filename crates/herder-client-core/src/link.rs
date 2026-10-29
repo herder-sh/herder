@@ -1,16 +1,16 @@
-//! The `herder://pair` link a daemon prints as text and as a QR code, and the multi-machine
-//! link a paired device shares.
+//! The links a person's devices pass each other, as text and as a QR code.
 //!
 //! A link names one or more machines, each as a group of query parameters: one or more
-//! `host`, then `fp` and `code`. A group is complete once it has all three; the next parameter
-//! after a complete group starts the next group. So a link of one machine, as `herder pair`
-//! prints it, is a link of one group:
+//! `host`, then `fp`, then `code` for a link that carries one. A group is complete once it has
+//! them all; the next parameter after a complete group starts the next group.
 //!
-//! `herder://pair?host=<addr>&fp=<sha256 hex>&code=<code>&host=<addr>&host=<addr>&fp=…&code=…`
-//!
-//! Signing in as a person takes links of one machine in the same form: `herder://login`, which
-//! `herder login` shows for an app to approve, and `herder://own`, which a fresh daemon shows
-//! for its first owner to claim it.
+//! - `herder://own?host=<addr>&fp=<sha256 hex>&code=<code>&name=<name>`: a fresh daemon, or
+//!   one `herder claim` ran on, waiting for an owner to claim it (`claim_ownership`).
+//! - `herder://login?host=<addr>&fp=<sha256 hex>&code=<code>`: a terminal's `herder login`,
+//!   waiting for an app of the person to approve it (`approve_login`).
+//! - `herder://fleet?host=<addr>&fp=<sha256 hex>&host=<addr>&fp=…`: the machines a device
+//!   shares with another device of the same person, which signs in to each with its passkey.
+//!   It carries no code, so it grants nothing by itself.
 
 use std::fmt;
 use std::str::FromStr;
@@ -19,23 +19,22 @@ use url::Url;
 
 use crate::Error;
 
-/// What a device needs to pair with one machine, as the QR code carries it:
-/// `herder://pair?host=<addr>&host=<addr>&fp=<sha256 hex>&code=<code>`.
+/// The `herder://fleet` link [`crate::Client::share`] makes: machines by address and
+/// fingerprint, for another device of the person to sign in to with its passkey
+/// ([`crate::Client::sign_in`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PairingUri {
+pub struct FleetLink {
+    /// The machines, in the link's order; never empty.
+    pub machines: Vec<FleetMachine>,
+}
+
+/// One machine of a [`FleetLink`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FleetMachine {
     /// Addresses the daemon may be reached at, as `host:port`; try them in order.
     pub hosts: Vec<String>,
     /// SHA-256 of the daemon's certificate, lowercase hex: the client pins it.
     pub fingerprint: String,
-    /// One-time pairing code, sent as the `pairing_code` of the client's hello.
-    pub code: String,
-}
-
-/// A `herder://pair` link naming one or more machines, each with its own code.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PairingLink {
-    /// The machines, in the link's order; never empty.
-    pub machines: Vec<PairingUri>,
 }
 
 /// The `herder://login` link `herder login` shows: the machine a terminal waits on, and the
@@ -50,8 +49,8 @@ pub struct LoginUri {
     pub code: String,
 }
 
-/// The `herder://own` link `herder service install` shows on a fresh daemon: the machine
-/// waiting for its first owner, and the code that claims it (`claim_ownership`).
+/// The `herder://own` link a daemon waiting for an owner shows, after `herder service
+/// install` or `herder claim`: the machine, and the code that claims it (`claim_ownership`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnUri {
     /// Addresses the daemon may be reached at, as `host:port`; try them in order.
@@ -65,32 +64,56 @@ pub struct OwnUri {
     pub name: Option<String>,
 }
 
-/// Formats the link, `herder://pair?…`.
-impl fmt::Display for PairingUri {
+/// One machine's parameters, as a link carries them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Group {
+    hosts: Vec<String>,
+    fingerprint: Option<String>,
+    code: Option<String>,
+}
+
+/// Formats the link, `herder://fleet?…`.
+impl fmt::Display for FleetLink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        format(PAIR, std::slice::from_ref(self), f)
+        let groups: Vec<Group> = self
+            .machines
+            .iter()
+            .map(|machine| Group {
+                hosts: machine.hosts.clone(),
+                fingerprint: Some(machine.fingerprint.clone()),
+                code: None,
+            })
+            .collect();
+        format(FLEET, &groups, f)
     }
 }
 
-impl FromStr for PairingUri {
+impl FromStr for FleetLink {
     type Err = Error;
 
-    /// Parses a link of one machine; fails with [`Error::InvalidLink`], also for a link of
-    /// several.
+    /// Parses a link of one or more machines; fails with [`Error::InvalidLink`], also for a
+    /// link with a code, which a fleet link never has.
     fn from_str(text: &str) -> Result<Self, Error> {
-        one(PAIR, text)
+        let machines = parse(FLEET, text, false)?
+            .into_iter()
+            .map(|group| FleetMachine {
+                hosts: group.hosts,
+                fingerprint: group.fingerprint.unwrap_or_default(),
+            })
+            .collect();
+        Ok(Self { machines })
     }
 }
 
 /// Formats the link, `herder://login?…`.
 impl fmt::Display for LoginUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let uri = PairingUri {
+        let group = Group {
             hosts: self.hosts.clone(),
-            fingerprint: self.fingerprint.clone(),
-            code: self.code.clone(),
+            fingerprint: Some(self.fingerprint.clone()),
+            code: Some(self.code.clone()),
         };
-        format(LOGIN, std::slice::from_ref(&uri), f)
+        format(LOGIN, &[group], f)
     }
 }
 
@@ -99,11 +122,7 @@ impl FromStr for LoginUri {
 
     /// Parses a `herder://login` link; fails with [`Error::InvalidLink`].
     fn from_str(text: &str) -> Result<Self, Error> {
-        let PairingUri {
-            hosts,
-            fingerprint,
-            code,
-        } = one(LOGIN, text)?;
+        let (hosts, fingerprint, code) = one(LOGIN, text)?;
         Ok(Self {
             hosts,
             fingerprint,
@@ -115,12 +134,12 @@ impl FromStr for LoginUri {
 /// Formats the link, `herder://own?…`, with the name last.
 impl fmt::Display for OwnUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let uri = PairingUri {
+        let group = Group {
             hosts: self.hosts.clone(),
-            fingerprint: self.fingerprint.clone(),
-            code: self.code.clone(),
+            fingerprint: Some(self.fingerprint.clone()),
+            code: Some(self.code.clone()),
         };
-        format(OWN, std::slice::from_ref(&uri), f)?;
+        format(OWN, &[group], f)?;
         if let Some(name) = &self.name {
             let name = url::form_urlencoded::Serializer::new(String::new())
                 .append_pair("name", name)
@@ -137,11 +156,7 @@ impl FromStr for OwnUri {
     /// Parses a `herder://own` link, skipping parameters it does not know; fails with
     /// [`Error::InvalidLink`].
     fn from_str(text: &str) -> Result<Self, Error> {
-        let PairingUri {
-            hosts,
-            fingerprint,
-            code,
-        } = one(OWN, text)?;
+        let (hosts, fingerprint, code) = one(OWN, text)?;
         // `one` checked it parses.
         let name = Url::parse(text).ok().and_then(|url| {
             url.query_pairs()
@@ -158,83 +173,69 @@ impl FromStr for OwnUri {
 }
 
 /// The kinds of link, as their host part.
-const PAIR: &str = "pair";
+const FLEET: &str = "fleet";
 const LOGIN: &str = "login";
 const OWN: &str = "own";
 
-/// The one machine of a `herder://<kind>` link.
-fn one(kind: &str, text: &str) -> Result<PairingUri, Error> {
-    let mut machines = parse(kind, text)?;
-    match machines.len() {
-        1 => Ok(machines.remove(0)),
-        count => Err(invalid(&format!(
-            "the {kind} link names {count} machines, not one"
-        ))),
+/// The one machine of a `herder://<kind>` link with a code: its hosts, fingerprint and code.
+fn one(kind: &str, text: &str) -> Result<(Vec<String>, String, String), Error> {
+    let mut groups = parse(kind, text, true)?;
+    if groups.len() != 1 {
+        return Err(invalid(&format!(
+            "the {kind} link names {} machines, not one",
+            groups.len()
+        )));
     }
+    let group = groups.remove(0);
+    Ok((
+        group.hosts,
+        group.fingerprint.unwrap_or_default(),
+        group.code.unwrap_or_default(),
+    ))
 }
 
-/// Formats the link, `herder://pair?…`.
-impl fmt::Display for PairingLink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        format(PAIR, &self.machines, f)
-    }
-}
-
-impl FromStr for PairingLink {
-    type Err = Error;
-
-    /// Parses a link of one or more machines; fails with [`Error::InvalidLink`].
-    fn from_str(text: &str) -> Result<Self, Error> {
-        Ok(Self {
-            machines: parse(PAIR, text)?,
-        })
-    }
-}
-
-fn format(kind: &str, machines: &[PairingUri], f: &mut fmt::Formatter<'_>) -> fmt::Result {
+fn format(kind: &str, groups: &[Group], f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let mut url = format!("herder://{kind}?");
     let start = url.len();
     let mut query = url::form_urlencoded::Serializer::for_suffix(&mut url, start);
-    for machine in machines {
-        for host in &machine.hosts {
+    for group in groups {
+        for host in &group.hosts {
             query.append_pair("host", host);
         }
-        query.append_pair("fp", &machine.fingerprint);
-        query.append_pair("code", &machine.code);
+        if let Some(fingerprint) = &group.fingerprint {
+            query.append_pair("fp", fingerprint);
+        }
+        if let Some(code) = &group.code {
+            query.append_pair("code", code);
+        }
     }
     query.finish();
     f.write_str(&url)
 }
 
-/// One machine's parameters, as far as read.
-#[derive(Default)]
-struct Group {
-    hosts: Vec<String>,
-    fingerprint: Option<String>,
-    code: Option<String>,
-}
-
 impl Group {
-    fn complete(&self) -> bool {
-        !self.hosts.is_empty() && self.fingerprint.is_some() && self.code.is_some()
+    fn complete(&self, coded: bool) -> bool {
+        !self.hosts.is_empty() && self.fingerprint.is_some() && (!coded || self.code.is_some())
     }
 
-    fn finish(self) -> Result<PairingUri, Error> {
-        let (Some(fingerprint), Some(code)) = (self.fingerprint, self.code) else {
-            return Err(invalid("the link lacks the fingerprint or the code"));
-        };
+    /// The group, once it has everything a link of its kind needs.
+    fn finish(self, coded: bool) -> Result<Self, Error> {
+        if self.fingerprint.is_none() || (coded && self.code.is_none()) {
+            return Err(invalid(if coded {
+                "the link lacks the fingerprint or the code"
+            } else {
+                "the link lacks a fingerprint"
+            }));
+        }
         if self.hosts.is_empty() {
             return Err(invalid("the link names no daemon address"));
         }
-        Ok(PairingUri {
-            hosts: self.hosts,
-            fingerprint,
-            code,
-        })
+        Ok(self)
     }
 }
 
-fn parse(kind: &str, text: &str) -> Result<Vec<PairingUri>, Error> {
+/// The machines of a `herder://<kind>` link, each with a code when `coded`.
+fn parse(kind: &str, text: &str, coded: bool) -> Result<Vec<Group>, Error> {
     let url = Url::parse(text).map_err(|err| invalid(&format!("not a {kind} link: {err}")))?;
     if url.scheme() != "herder" || url.host_str() != Some(kind) {
         return Err(invalid(&format!("not a herder://{kind} link")));
@@ -245,8 +246,11 @@ fn parse(kind: &str, text: &str) -> Result<Vec<PairingUri>, Error> {
         if !matches!(&*key, "host" | "fp" | "code") {
             continue;
         }
-        if group.complete() {
-            machines.push(std::mem::take(&mut group).finish()?);
+        if !coded && key == "code" {
+            return Err(invalid(&format!("a {kind} link carries no code")));
+        }
+        if group.complete(coded) {
+            machines.push(std::mem::take(&mut group).finish(coded)?);
         }
         let value = value.into_owned();
         let repeated = match &*key {
@@ -261,7 +265,7 @@ fn parse(kind: &str, text: &str) -> Result<Vec<PairingUri>, Error> {
             return Err(invalid(&format!("the link names a machine's {key} twice")));
         }
     }
-    machines.push(group.finish()?);
+    machines.push(group.finish(coded)?);
     Ok(machines)
 }
 
@@ -275,89 +279,59 @@ fn invalid(message: &str) -> Error {
 mod tests {
     use super::*;
 
-    fn machine(host: &str, fingerprint: &str, code: &str) -> PairingUri {
-        PairingUri {
+    fn machine(host: &str, fingerprint: &str) -> FleetMachine {
+        FleetMachine {
             hosts: vec![host.into()],
             fingerprint: fingerprint.repeat(32),
-            code: code.into(),
         }
     }
 
     #[test]
-    fn a_pairing_uri_round_trips() {
-        let uri = PairingUri {
-            hosts: vec!["192.168.1.5:7447".into(), "[fd00::1]:7447".into()],
-            fingerprint: "ab".repeat(32),
-            code: "ABCDE-FGHJK".into(),
-        };
-        let text = uri.to_string();
-        assert!(
-            text.starts_with("herder://pair?host=192.168.1.5%3A7447&host="),
-            "{text}"
-        );
-        assert_eq!(text.parse::<PairingUri>().unwrap(), uri);
-        assert!(
-            "https://pair?fp=a&code=b&host=c"
-                .parse::<PairingUri>()
-                .is_err()
-        );
-        assert!("herder://pair?host=c&fp=a".parse::<PairingUri>().is_err());
-        // A group's parameters may come in any order.
-        let reordered: PairingUri = "herder://pair?fp=a&code=b&host=c".parse().unwrap();
-        assert_eq!(
-            (reordered.hosts, reordered.code),
-            (vec!["c".into()], "b".into())
-        );
-    }
-
-    #[test]
-    fn a_link_of_several_machines_round_trips() {
-        let mut first = machine("192.168.1.5:7447", "ab", "ABCDE-FGHJK");
+    fn a_fleet_link_round_trips_and_carries_no_code() {
+        let mut first = machine("192.168.1.5:7447", "ab");
         first.hosts.push("[fd00::1]:7447".into());
-        let link = PairingLink {
-            machines: vec![first.clone(), machine("10.0.0.9:7447", "cd", "MNPQR-STVWX")],
+        let link = FleetLink {
+            machines: vec![first, machine("10.0.0.9:7447", "cd")],
         };
         let text = link.to_string();
         assert_eq!(
             text,
             format!(
-                "herder://pair?host=192.168.1.5%3A7447&host=%5Bfd00%3A%3A1%5D%3A7447&fp={}\
-                 &code=ABCDE-FGHJK&host=10.0.0.9%3A7447&fp={}&code=MNPQR-STVWX",
+                "herder://fleet?host=192.168.1.5%3A7447&host=%5Bfd00%3A%3A1%5D%3A7447&fp={}\
+                 &host=10.0.0.9%3A7447&fp={}",
                 "ab".repeat(32),
                 "cd".repeat(32)
             )
         );
-        assert_eq!(text.parse::<PairingLink>().unwrap(), link);
-        // A single-machine parser refuses it rather than pair with the first alone.
-        let err = text.parse::<PairingUri>().unwrap_err();
-        assert!(err.to_string().contains("2 machines"), "{err}");
-
-        // A single-machine link is a link of one machine.
-        let single = PairingLink {
-            machines: vec![first.clone()],
-        };
-        assert_eq!(single.to_string(), first.to_string());
-        assert_eq!(first.to_string().parse::<PairingLink>().unwrap(), single);
-    }
-
-    #[test]
-    fn every_machine_of_a_link_needs_its_address_fingerprint_and_code() {
+        assert_eq!(text.parse::<FleetLink>().unwrap(), link);
+        // A group's parameters may come in any order.
+        let reordered: FleetLink = "herder://fleet?fp=a&host=c".parse().unwrap();
+        assert_eq!(
+            reordered.machines,
+            [FleetMachine {
+                hosts: vec!["c".into()],
+                fingerprint: "a".into(),
+            }]
+        );
         let fp = "ab".repeat(32);
         for text in [
-            format!("herder://pair?host=a&fp={fp}&code=X&host=b&fp={fp}"),
-            format!("herder://pair?host=a&fp={fp}&code=X&fp={fp}&code=Y"),
-            format!("herder://pair?host=a&fp={fp}&fp={fp}&code=X"),
-            "herder://pair".to_owned(),
+            format!("herder://fleet?host=a&fp={fp}&code=X"),
+            format!("herder://fleet?host=a&fp={fp}&fp={fp}"),
+            format!("herder://fleet?host=a&fp={fp}&host=b"),
+            "herder://fleet?host=a".to_owned(),
+            "herder://fleet".to_owned(),
+            format!("herder://pair?host=a&fp={fp}&code=X"),
+            format!("https://fleet?host=a&fp={fp}"),
         ] {
             assert!(
-                matches!(text.parse::<PairingLink>(), Err(Error::InvalidLink { .. })),
+                matches!(text.parse::<FleetLink>(), Err(Error::InvalidLink { .. })),
                 "{text}"
             );
         }
     }
 
     #[test]
-    fn login_and_own_links_round_trip_and_are_not_pairing_links() {
+    fn login_and_own_links_round_trip_and_are_not_fleet_links() {
         let login = LoginUri {
             hosts: vec!["10.0.4.17:7447".into(), "[fd00::1]:7447".into()],
             fingerprint: "ab".repeat(32),
@@ -369,7 +343,7 @@ mod tests {
             "{text}"
         );
         assert_eq!(text.parse::<LoginUri>().unwrap(), login);
-        assert!(text.parse::<PairingUri>().is_err());
+        assert!(text.parse::<FleetLink>().is_err());
         assert!(text.parse::<OwnUri>().is_err());
 
         let own = OwnUri {
@@ -383,6 +357,9 @@ mod tests {
         assert_eq!(text.parse::<OwnUri>().unwrap(), own);
         assert!(text.parse::<LoginUri>().is_err());
         assert!("herder://login?host=a&fp=b".parse::<LoginUri>().is_err());
+        let two = "herder://login?host=a&fp=b&code=c&host=d&fp=e&code=f";
+        let err = two.parse::<LoginUri>().unwrap_err();
+        assert!(err.to_string().contains("2 machines"), "{err}");
 
         // As `herder service install` prints it, with parameters it does not know and a
         // code typed loosely, which the daemon normalizes.

@@ -33,7 +33,7 @@ struct VaultSetup {
         report(.setting)
         let name = UnpairedVault.name(machine: machine)
         do {
-            guard case .devicePairing(let code, let fingerprint, let addresses, _) = try await send(.installVault) else {
+            guard case .ownershipClaim(let code, let fingerprint, let addresses, _) = try await send(.installVault) else {
                 throw HerderError.Local(detail: "The machine did not answer with its vault’s claim.")
             }
             report(.claiming)

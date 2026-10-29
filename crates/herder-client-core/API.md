@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 14`
+`CLIENT_API_VERSION = 17`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -65,8 +65,8 @@ adapting anything:
 | Rust                                                          | UniFFI                          |
 | ------------------------------------------------------------- | ------------------------------- |
 | `Client`, `SessionSubscription`, `TerminalStream`, `Changes`, `PendingSignIn` | objects (`Arc`, `Send + Sync`)  |
-| `Machine`, `ConnectionQuality`, `SessionUpdate`, `NewAccount`, `PairingUri`, `PairingLink`, `LoginUri`, `OwnUri`, `SharedLink`, `SkippedMachine` | records |
-| `ConnectionState`, `TerminalEvent`, `PairResult`              | enums with named fields         |
+| `Machine`, `ConnectionQuality`, `SessionUpdate`, `NewAccount`, `FleetLink`, `FleetMachine`, `LoginUri`, `OwnUri` | records |
+| `ConnectionState`, `TerminalEvent`                            | enums with named fields         |
 | `Error`                                                       | error enum with named fields    |
 | `async fn` methods                                            | async methods on a tokio runtime (`async_runtime = "tokio"`) |
 | protocol newtype ids (`HostId`, `SessionId`, ...)             | custom types over `String`      |
@@ -83,7 +83,7 @@ Rules the surface keeps, and `public_api` checks the object rules:
   `AsyncSequence`, Kotlin in a `Flow`. Dropping (in Swift/Kotlin: releasing) the object
   unsubscribes or detaches.
 - `Client::open` must be called within a tokio runtime; the FFI layer owns that runtime.
-- `PairingUri`, `PairingLink`, `LoginUri` and `OwnUri` parse with `FromStr` and format with
+- `FleetLink`, `LoginUri` and `OwnUri` parse with `FromStr` and format with
   `Display`. UniFFI cannot export trait impls on records, so the FFI layer exports them as
   plain functions.
 - `Client::log_in` takes a closure and is Rust-only, for `herder login`; the FFI layer does
@@ -106,7 +106,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `person_id` | `Client::pair`, `share`, `rename`, `set_addresses`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`, `PairingLink` |
+| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `person_id` | `Client::sign_in`, `share`, `rename`, `set_addresses`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `FleetLink` |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images` and `files`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow`, `MergeQueued` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
 | Projects  | `Machine::projects`; a `Project`'s `remote`, the URL `CloneProject` clones it onto another machine from (none without a remote), `icon`, the hash of its icon, to cache it by, `icon_uploaded`, whether an owner uploaded it, and `icon_background`, the colour behind it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `CloneProject` (a git URL or GitHub `owner/repo`, into a new folder, or without one into a folder named after the repository in the machine's projects dir; `conflict` when it exists) → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
@@ -151,13 +151,12 @@ everything stops once the last clone is dropped.
 | `open_with_passkey(config_dir: String, client: String, authenticator: Arc<dyn Authenticator>) -> Result<Client, Error>` | `open` for a client that signs passkey assertions, as the apps do with Face ID. See [Passkeys](#passkeys). |
 | `machines() -> Vec<Machine>` | Every paired machine, in pairing order. |
 | `changes() -> Changes` | Notifications that `machines()` changed. |
-| `async pair(link: String) -> Result<Vec<PairResult>, Error>` | Pairs with every machine a `herder://pair` link names, at once, and saves each that paired; one `PairResult` per machine, in the link's order. Fails only with `InvalidLink`. |
-| `async share() -> Result<SharedLink, Error>` | Asks every connected machine for a one-time code (`pair_device`) and builds one link that pairs another device with all of them, as this device's user with its role on each. A machine not connected, or that refuses or does not answer within 10 s, is skipped. Fails with `Pairing` when no machine gave a code. |
+| `share() -> Option<FleetLink>` | The `herder://fleet` link of every saved machine, connected or not, for another device of the person to sign in to each with its passkey. It carries no code. `None` while no machine is saved. See [Fleet links](#fleet-links). |
 | `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
 | `set_addresses(host_id: HostId, addresses: Vec<String>) -> Result<(), Error>` | Connects to a machine at `addresses`, in this order of preference, from now on; each a host or IP with an optional port (7447 by default). Fails with `Error::Local` on an invalid address or an empty list. |
 | `async reconnect(host_id: HostId) -> Result<String, Error>` | Drops a machine's connection, if up, and connects again at once, racing its addresses in order: the address the new connection uses, or `Unreachable` when none answered. |
 | `forget(host_id: HostId) -> Result<(), Error>` | Unpairs a machine on this device. |
-| `async sign_in(hosts: Vec<String>, fingerprint: String) -> Result<PendingSignIn, Error>` | Connects to a machine under a new device key to sign in as a person, rather than pair with a code: the `PendingSignIn` holds what the person's passkey signs. Fails with `Unreachable` when no address answered. See [Signing in](#signing-in). |
+| `async sign_in(hosts: Vec<String>, fingerprint: String) -> Result<PendingSignIn, Error>` | Connects to a machine under a new device key to sign in as a person: the `PendingSignIn` holds what the person's passkey signs. Fails with `Unreachable` when no address answered. See [Signing in](#signing-in). |
 | `async log_in(hosts: Vec<String>, fingerprint: String, shown: impl FnOnce(&str, Timestamp) + Send) -> Result<Machine, Error>` | Rust-only, for `herder login`: signs this device in without a passkey. `shown` gets the code to show and when it expires; once an app of a person approves it, the machine is saved as theirs. Fails with `Rejected` when the request expires or is refused. |
 | `async synced(host_id: HostId) -> Result<(), Error>` | Waits until a machine is connected and has sent everything owed for what was sent before. |
 | `suspend()` | The app went to the background: saves the offline cache (blocking) and stops retrying lost connections. |
@@ -213,30 +212,23 @@ everything stops once the last clone is dropped.
 - `SessionUpdate` — `events: Vec<Event>` (new durable events, in seq order) and
   `streaming: Vec<Item>` (every item streaming now; replaces the previous list).
 - `NewAccount` — `account_id`, `provider`, `label: Option<String>`, `config_dir: Option<String>`.
-- `PairingUri` — one machine of a link: `hosts: Vec<String>`, `fingerprint: String`,
-  `code: String`; `FromStr` (fails with `Error::InvalidLink`, also for a link of several
-  machines) and `Display` (`herder://pair?…`).
-- `PairingLink` — `machines: Vec<PairingUri>`, never empty; `FromStr` (fails with
-  `Error::InvalidLink`) and `Display`. See [Pairing links](#pairing-links).
+- `FleetMachine` — one machine of a fleet link: `hosts: Vec<String>`, `fingerprint: String`.
+- `FleetLink` — `machines: Vec<FleetMachine>`, never empty; `FromStr` (fails with
+  `Error::InvalidLink`, also for a link with a code) and `Display` (`herder://fleet?…`). See
+  [Fleet links](#fleet-links).
 - `LoginUri` — `hosts: Vec<String>`, `fingerprint: String`, `code: String` (`XXX-XXX`):
   the machine a terminal waits on in `herder login` and the code an app approves it with;
   `FromStr` and `Display` (`herder://login?…`).
 - `OwnUri` — the same fields and `name: Option<String>`: a fresh machine waiting for its
   first owner, its claim code (case and separators do not matter) and its name to show;
   `FromStr` (skipping parameters it does not know) and `Display` (`herder://own?…`, as
-  `herder service install` prints it).
-- `SharedLink` — what `share()` made: `link: PairingLink`, `shared: Vec<HostId>` (the
-  machines it pairs with, in its order), `skipped: Vec<SkippedMachine>`, `expires_at:
-  Timestamp` (when its first code stops working).
-- `SkippedMachine` — `host_id`, `error: String` (not connected, refused, or no answer).
+  `herder service install` and `herder claim` print it).
 
 ### Enums
 
 - `ConnectionState` — `Connecting`, `Connected`, `Disconnected { error: String }`.
 - `TerminalEvent` — `Output { data: Vec<u8> }`, `Reattached`, `Closed { exit_code: Option<i32> }`.
-- `PairResult` — `Paired { machine: Machine }`, `Failed { addresses: Vec<String>, error:
-  String }` (nothing was saved for that machine).
-- `Error` — `InvalidLink { message }`, `Pairing { message }`, `UnknownMachine { host_id }`,
+- `Error` — `InvalidLink { message }`, `UnknownMachine { host_id }`,
   `Rejected { info: ErrorInfo }` (the daemon refused; `info.code` says why, e.g. `forbidden`,
   `read_only`), `Unreachable { message }` (no address answered a `reconnect`), `Local {
   message }`, `Closed`.
@@ -274,7 +266,7 @@ after the one before, or as soon as every attempt so far failed, and the first t
 hello wins. So the first address wins whenever it answers, and a dead one delays the next by
 300 ms, not by the 10 s connect timeout.
 
-`pair` completes each address of the link (the default port, brackets around IPv6) and saves
+`sign_in` completes each address it is given (the default port, brackets around IPv6) and saves
 them direct routes first: private network addresses (home, or a VPN into it such as UniFi
 Teleport), then other addresses, then Tailscale ones (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`,
 `*.ts.net`). After that `set_addresses` sets the order, and nothing re-sorts it.
@@ -298,30 +290,27 @@ ends. A ping still unanswered when the next is due counts in `missed_pongs`; the
 the connection is. Each pong updates the machine, so `Changes` fires about every 15 s per
 connected machine.
 
-## Pairing links
+## Fleet links
 
-A `herder://pair` link names one or more machines. Each is a group of query parameters: one
-or more `host` (`host:port`, tried in order), `fp` (SHA-256 of the daemon's certificate,
-lowercase hex) and `code` (its one-time pairing code). A group is complete once it has all
-three, and the next parameter after a complete group starts the next machine. `herder pair`
-prints a link of one group, which parses unchanged:
+A `herder://fleet` link names one or more machines. Each is a group of query parameters: one
+or more `host` (`host:port`, tried in order), then `fp` (SHA-256 of the daemon's certificate,
+lowercase hex). A group is complete once it has both, and the next parameter after a
+complete group starts the next machine:
 
 ```
-herder://pair?host=192.168.1.5%3A7447&fp=<hex>&code=ABCDE-FGHJK
-herder://pair?host=192.168.1.5%3A7447&fp=<hex>&code=ABCDE-FGHJK&host=10.0.0.9%3A7447&host=%5Bfd00%3A%3A9%5D%3A7447&fp=<hex>&code=MNPQR-STVWX
+herder://fleet?host=192.168.1.5%3A7447&fp=<hex>&host=10.0.0.9%3A7447&host=%5Bfd00%3A%3A9%5D%3A7447&fp=<hex>
 ```
 
-`Client::share` builds the second kind: each daemon answers `pair_device` with a code that
-pairs a new device as the sharer's own user with the sharer's role (so never more than the
-sharer may do; members still get no terminals) and the addresses that daemon advertises,
-not the ones the sharer reached it on. The new device gets its own key on every machine,
-revocable on its own; the sharer's keys never leave it. The share is one-time: machines
-paired later are not passed on.
+`Client::share` makes one of every machine the device has saved. It holds no code and grants
+nothing: another device of the same person signs in to each machine with its own passkey
+(`sign_in`, then `finish(SignIn::Passkey)`), synced to it with the person's other passkeys,
+and gets a key of its own on each, revocable on its own. A machine that does not know the
+person refuses the sign-in.
 
 ## Signing in
 
-A device signs in to a machine as a person, rather than pairing with a code, when the machine
-knows that person's passkey. `Client::sign_in(hosts, fingerprint)` connects under a new device
+A device signs in to a machine as a person: with that person's passkey when the machine knows
+it, or to claim a machine that has no owner or to accept an invite. `Client::sign_in(hosts, fingerprint)` connects under a new device
 key with `sign_in` set, and returns a `PendingSignIn` once the machine answers:
 
 | Method | Does |
@@ -334,8 +323,8 @@ A terminal, which holds no passkey, signs in with `Client::log_in` instead, as `
 does: it shows the code the machine gives as a `herder://login` link and QR, and an app of
 the person approves it with `send(host, ApproveLogin { code, assertion })`.
 
-Links of one machine for signing in take the form of a pairing link's group, with their own
-host part:
+Links of one machine with a code take the form of a fleet link's group with a `code` after its
+`fp`, with their own host part:
 
 ```
 herder://login?host=10.0.4.17%3A7447&fp=<hex>&code=K7Q-4PD
@@ -366,6 +355,14 @@ change to secrets need a fresh passkey assertion.
 | Rust | Does |
 | ---- | ---- |
 | `trait Authenticator: Send + Sync { fn assert(&self, host_id: HostId, challenge: PasskeyChallenge) -> Assertion }` | Signs `challenge`, asking the user; `Assertion` is a boxed `Send` future of `Result<PasskeyAssertion, Error>`. |
+
+## Changes in version 17
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| `Client::pair`, `PairingUri`, `PairingLink`, `PairResult` | — | Daemons mint no codes for devices any more: people sign in with their passkey, terminals with `herder login`. |
+| `async share() -> Result<SharedLink, Error>`, `SharedLink`, `SkippedMachine` | `share() -> Option<FleetLink>`, `FleetLink`, `FleetMachine` | Another device of yours signs in to each machine with your passkey, so the link carries addresses and fingerprints only, and needs no machine to answer. |
+| `Error::Pairing { message }` | — | Nothing pairs by code. |
 
 ## Changes in version 16
 

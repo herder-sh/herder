@@ -1,8 +1,10 @@
 // The Swift bindings against the fake daemon (`examples/fake_daemon.rs`), run as a sidecar:
-// connect, pair, create a session, prompt it and stream the turn. Exits non-zero on failure.
+// sign in with the owner's test passkey, create a session, prompt it and stream the turn. Exits
+// non-zero on failure.
 //
 //     swift run herder-sample <path to fake_daemon>
 
+import CryptoKit
 import Foundation
 import Herder
 
@@ -28,24 +30,25 @@ struct Sample {
             try? stdin.fileHandleForWriting.close()
             daemon.waitUntilExit()
         }
-        let lines = try readLines(3, from: stdout.fileHandleForReading)
-        try await pairAndStream(link: lines[0], repo: lines[1], account: lines[2])
+        let lines = try readLines(4, from: stdout.fileHandleForReading)
+        let passkey = try TestPasskey(lines[1])
+        try await signInAndStream(link: lines[0], passkey: passkey, repo: lines[2], account: lines[3])
         print("ok")
     }
 
-    static func pairAndStream(link: String, repo: String, account: String) async throws {
-        try check(pairingUriToString(uri: parsePairingUri(link: link)) == link, "the link round-trips")
+    static func signInAndStream(link: String, passkey: TestPasskey, repo: String, account: String) async throws {
+        let fleet = try parseFleetLink(link: link)
+        try check(fleetLinkToString(link: fleet) == link, "the link round-trips")
         let config = FileManager.default.temporaryDirectory
             .appendingPathComponent("herder-swift-\(UUID().uuidString)")
         let client = try Client.open(configDir: config.path, client: "herder-swift-sample/0")
-        let results = try await client.pair(link: link)
-        guard results.count == 1, case .paired(let machine) = results[0] else {
-            throw Failure(description: "expected one paired machine, got \(results)")
-        }
-        try check(machine.name == "fake-host", "paired with \(machine.name)")
+        let at = fleet.machines[0]
+        let pending = try await client.signIn(hosts: at.hosts, fingerprint: at.fingerprint)
+        let machine = try await pending.finish(signIn: .passkey(assertion: try passkey.assert(pending.challenge())))
+        try check(machine.name == "fake-host", "signed in to \(machine.name)")
         let host = machine.hostId
         try await client.synced(hostId: host)
-        print("paired with \(machine.name)")
+        print("signed in to \(machine.name)")
 
         let created = try await client.send(
             hostId: host,
@@ -95,5 +98,55 @@ struct Sample {
         }
         return String(decoding: data, as: UTF8.self)
             .split(separator: "\n").prefix(count).map(String.init)
+    }
+}
+
+/// The recorded test passkey the fake daemon prints, `<credential id>.<PKCS#8 key>.<user handle>`
+/// in base64url:
+/// it signs a challenge as a platform authenticator would, with no Face ID to ask.
+struct TestPasskey {
+    let credentialId: String
+    let key: P256.Signing.PrivateKey
+    let userHandle: String
+
+    init(_ exported: String) throws {
+        let parts = exported.split(separator: ".").map(String.init)
+        guard parts.count == 3, let der = Data(base64URL: parts[1]) else {
+            throw Failure(description: "not a test passkey: \(exported)")
+        }
+        credentialId = parts[0]
+        userHandle = parts[2]
+        key = try P256.Signing.PrivateKey(derRepresentation: der)
+    }
+
+    func assert(_ challenge: PasskeyChallenge) throws -> PasskeyAssertion {
+        let clientData = try JSONSerialization.data(withJSONObject: [
+            "type": "webauthn.get", "challenge": challenge.challenge, "origin": "https://herder.sh",
+            "crossOrigin": false,
+        ] as [String: Any])
+        // The RP id hash, then user present and verified, backup eligible and backed up, and a
+        // zero signature counter, as a synced passkey has them.
+        var authData = Data(SHA256.hash(data: Data(challenge.rpId.utf8)))
+        authData.append(contentsOf: [0x1D, 0, 0, 0, 0])
+        let signature = try key.signature(for: authData + Data(SHA256.hash(data: clientData)))
+        return PasskeyAssertion(
+            id: credentialId, rawId: credentialId,
+            response: AssertionResponse(
+                clientDataJson: clientData.base64URL, authenticatorData: authData.base64URL,
+                signature: signature.derRepresentation.base64URL, userHandle: userHandle),
+            kind: "public-key")
+    }
+}
+
+extension Data {
+    init?(base64URL text: String) {
+        var base64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        self.init(base64Encoded: base64)
+    }
+
+    var base64URL: String {
+        base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 }

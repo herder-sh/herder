@@ -311,11 +311,6 @@ pub struct HostReplication {
     /// the vault started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lag_ms: Option<u64>,
-    /// Whether a device the host replicates from may read the vault as a client too, so the
-    /// host can take handoffs of other hosts' sessions; false for a host paired host-only.
-    /// `set_vault_host_access` changes it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub read: bool,
 }
 
 /// A user's role on a daemon.
@@ -328,7 +323,8 @@ pub enum Role {
     Member,
 }
 
-/// A user of a daemon, with their devices, answering `list_users`.
+/// A per-daemon user of an install no person claimed yet, with their devices, as `claimed`
+/// lists the leftovers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UserInfo {
     /// The user.
@@ -658,8 +654,7 @@ pub enum CommandResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         volume: Option<VaultVolume>,
         /// Whether a vault is installed on this machine, next to the daemon, as
-        /// `install_vault` or `herder vault install` installs one; `link_local_vault` links to
-        /// it.
+        /// `install_vault` or `herder vault install` installs one.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         local_vault: bool,
     },
@@ -674,18 +669,16 @@ pub enum CommandResult {
         /// Whether the daemon is a vault; set where it starts, not here.
         is_vault: bool,
     },
-    /// A one-time code that pairs another device as the caller's user, answering
-    /// `pair_device`: everything a `herder://pair` link names for this daemon. Also the answer
-    /// to `install_vault` and `link_local_vault`, naming the vault on this machine.
-    DevicePairing {
-        /// The code, for the new device's hello.
+    /// The window in which the caller claims the vault `install_vault` ran as its first owner,
+    /// with `claim_ownership` and this code; the vault's, not this daemon's.
+    OwnershipClaim {
+        /// The claim code.
         code: String,
-        /// SHA-256 of the daemon's TLS certificate, lowercase hex.
+        /// SHA-256 of the vault's TLS certificate, lowercase hex.
         fingerprint: String,
-        /// Addresses the daemon advertises as `host:port`, most likely reachable first; not
-        /// necessarily the one the caller reached it on.
+        /// Addresses the vault advertises as `host:port`, most likely reachable first.
         addresses: Vec<String>,
-        /// When the code stops working.
+        /// When the window closes.
         expires_at: Timestamp,
     },
     /// A challenge for the caller's passkey, answering `passkey_challenge`.
@@ -731,11 +724,6 @@ pub enum CommandResult {
         device_id: DeviceId,
         /// Its client, from its hello, e.g. `herder-tui/0.7.0`.
         client: String,
-    },
-    /// This daemon's users, answering `list_users`.
-    Users {
-        /// Oldest first.
-        users: Vec<UserInfo>,
     },
     /// A one-time code that pairs a host with this vault to replicate and only that,
     /// answering `pair_vault_host`.

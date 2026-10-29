@@ -678,45 +678,13 @@ pub enum CommandBody {
     /// Run a vault on this machine, next to this daemon, and link this host to it; owners
     /// only. The daemon does what `herder vault install` does: writes the vault's config and
     /// secrets key and installs and starts its service. It then links itself to the vault with
-    /// `secrets` on and `backup` off, and mints a one-time code that pairs the caller's device
-    /// with the vault as an owner. Answered with `device_pairing`, the vault's, which the
-    /// client redeems on its own. Refused with `conflict` when a vault is installed on this
+    /// `secrets` on and `backup` off, and opens the vault's window for its first owner.
+    /// Answered with `ownership_claim`, the vault's, which the client claims it with on its
+    /// own (`claim_ownership`). Refused with `conflict` when a vault is installed on this
     /// machine already or this host is linked to a vault, with `unsupported` on a vault or a
     /// daemon that installs no vault, and with `internal` when the service cannot be written or
     /// the vault does not start.
     InstallVault,
-    /// Pair with and link to the vault installed on this machine by hand (`herder vault
-    /// install`), as `install_vault` does once it installed one; owners only. Answered with
-    /// `device_pairing`, the vault's. Refused with `not_found` when no vault is installed on
-    /// this machine, with `conflict` when this host is linked to a vault, and with
-    /// `unsupported` on a vault.
-    LinkLocalVault,
-    /// Mint a one-time code, as `herder pair` does, that pairs another device. Without `user`
-    /// and `role` it pairs as the caller's own user with the caller's role, so a shared code
-    /// never grants more than the sharer has; owners and members alike. With either, owners
-    /// only: it pairs as `user`, created as `role` when new, or the caller's user when absent.
-    /// Answered with `device_pairing`. Refused with `bad_request` for a name that is not 1 to
-    /// 64 printable characters, or a `role` that is not the existing user's.
-    PairDevice {
-        /// The user the device pairs as, by name.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        user: Option<String>,
-        /// The role of that user when new; the daemon picks when absent.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        role: Option<Role>,
-    },
-    /// List this daemon's users, each with their role and paired devices; owners and members
-    /// alike. Answered with `users`. It changes nothing, so a resend is answered afresh.
-    ListUsers,
-    /// Make `user_id` an owner or a member; owners only. Their devices' connections close, so
-    /// they reconnect with the new role. Answered with `applied`. Refused with `not_found` for
-    /// an unknown user, and `conflict` when it would leave the daemon with no owner.
-    SetUserRole {
-        /// The user.
-        user_id: UserId,
-        /// Their new role.
-        role: Role,
-    },
     /// Unpair a device and close its connections; owners only. Its user or person stays.
     /// Answered with `applied`. Refused with `not_found` when no such device is paired.
     RevokeDevice {
@@ -953,18 +921,6 @@ pub enum CommandBody {
         /// Only fetches older than this one, by its `id`, to page back; the latest when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before: Option<u64>,
-    },
-    /// On a vault, let every device that replicates as `host_id` read the vault as a client
-    /// too, or make them host-only again; owners only. A host that reads the vault can take
-    /// handoffs: fork another host's session from it. The devices stay paired, so nothing
-    /// pairs again; taking read away closes their client connections, not their
-    /// replication. Answered with `applied`; `vault_status` follows with the host's `read`.
-    /// Refused with `not_found` when no paired device replicates as it.
-    SetVaultHostAccess {
-        /// The host.
-        host_id: HostId,
-        /// Whether its devices may read the vault.
-        read: bool,
     },
     /// Use the git repository at `url` as the skill library: the daemon replaces its checkout
     /// with a clone of it; owners only. The skills of a library that was the machine's own and

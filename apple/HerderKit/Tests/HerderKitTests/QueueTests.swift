@@ -41,7 +41,7 @@ struct QueueTests {
         }
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
-        let machine = try await fleet.pair(daemon)
+        let machine = try await fleet.signIn(to: daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         let key = try await fleet.createSession(
             on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.holdAccount, model: "",
@@ -61,10 +61,15 @@ struct QueueTests {
         #expect(await eventually { texts() == ["C.", "A."] })
         #expect(fleet.refusals[key] == nil)
 
-        // Another device of the same user moves it back; this tray follows.
-        let shared = try await fleet.client.share()
+        // Another device of the same person, signed in from the link this one shares, moves it
+        // back; this tray follows.
+        let shared = try #require(fleet.client.share())
         let other = try Client.open(configDir: temporaryProfile().path, client: "other")
-        _ = try await other.pair(link: pairingLinkToString(link: shared.link))
+        let passkey = try #require(RecordedPasskey(daemon.passkey))
+        for at in shared.machines {
+            let pending = try await other.signIn(hosts: at.hosts, fingerprint: at.fingerprint)
+            _ = try await pending.finish(signIn: .passkey(assertion: try await passkey.sign(pending.challenge())))
+        }
         try await other.synced(hostId: machine.hostId)
         _ = try await other.send(
             hostId: machine.hostId,

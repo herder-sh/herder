@@ -9,7 +9,9 @@ use herder_protocol::{AccountId, EventBody, ItemBody, Role, SessionStatus};
 #[tokio::test(flavor = "multi_thread")]
 async fn the_demo_sets_up_every_scene() -> anyhow::Result<()> {
     let demo = demo::Demo::start(false).await?;
-    assert!(demo.link.starts_with("herder://pair?"), "{}", demo.link);
+    assert!(demo.link.starts_with("herder://fleet?"), "{}", demo.link);
+    assert!(!demo.link.contains("code="), "{}", demo.link);
+    assert!(demo.passkey.contains('.'), "{}", demo.passkey);
     let scenes = demo.scenes().await?;
     let scene = |host: &str, title: &str| {
         scenes
@@ -120,12 +122,7 @@ async fn the_demo_sets_up_every_scene() -> anyhow::Result<()> {
     // The People page's team: the user owns devbox with Sam and Kim as members, and is a
     // member on laptop, which Pat and Kim own.
     let team = |host: &str| {
-        let mut users: Vec<(String, Role)> = demo
-            .users(host)
-            .expect("the machine's users")
-            .into_iter()
-            .map(|user| (user.name, user.role))
-            .collect();
+        let mut users = demo.team(host).expect("the machine's team");
         users.sort_by(|a, b| a.0.cmp(&b.0));
         users
     };

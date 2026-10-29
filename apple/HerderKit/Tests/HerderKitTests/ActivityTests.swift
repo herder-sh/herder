@@ -230,8 +230,8 @@ struct ActivityTests {
             Issue.record("cannot open profile")
             return
         }
-        let first = try await fleet.pair(one)
-        let second = try await fleet.pair(two)
+        let first = try await fleet.signIn(to: one)
+        let second = try await fleet.signIn(to: two)
         try await fleet.client.synced(hostId: first.hostId)
         try await fleet.client.synced(hostId: second.hostId)
         let keys = [(first.hostId, "claude"), (first.hostId, "codex"), (second.hostId, "claude"), (second.hostId, "codex")]

@@ -66,8 +66,8 @@ struct AccountSettingsTests {
         }
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
-        let first = try await fleet.pair(one)
-        let second = try await fleet.pair(two)
+        let first = try await fleet.signIn(to: one)
+        let second = try await fleet.signIn(to: two)
         try await fleet.client.synced(hostId: first.hostId)
         try await fleet.client.synced(hostId: second.hostId)
         // The fake daemons log OpenCode in at once, in the config dir given.
@@ -123,7 +123,7 @@ struct AccountSettingsTests {
             Issue.record("cannot open profile")
             return
         }
-        let machine = try await fleet.pair(daemon)
+        let machine = try await fleet.signIn(to: daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         // No emulator is ever made: a job runs whether its terminal is shown or not. The fake
         // daemon installs no provider, and says so, which only an opened request learns.
@@ -145,7 +145,7 @@ struct AccountSettingsTests {
             Issue.record("cannot open profile")
             return
         }
-        let machine = try await fleet.pair(daemon)
+        let machine = try await fleet.signIn(to: daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         let account = NewAccount(accountId: "work", provider: "claude", label: nil, configDir: nil)
         let key = fleet.addAccount(account, on: machine.hostId)
@@ -172,7 +172,7 @@ struct AccountSettingsTests {
             Issue.record("cannot open profile")
             return
         }
-        let machine = try await fleet.pair(daemon)
+        let machine = try await fleet.signIn(to: daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         // The fake daemon cannot log its fake provider in, and says so.
         let listed = { fleet.machines.first { $0.hostId == machine.hostId }?.accounts.first?.accountId }
@@ -194,7 +194,7 @@ struct AccountSettingsTests {
             Issue.record("cannot open profile")
             return
         }
-        let machine = try await fleet.pair(daemon)
+        let machine = try await fleet.signIn(to: daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         let original = machine.accounts.first
         do {

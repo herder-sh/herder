@@ -109,8 +109,7 @@ import Testing
         vault.fingerprint = "ab12"
         vault.vault = VaultStatus(sessions: 40, events: 9000, storageBytes: 1 << 26, hosts: [
             HostReplication(hostId: "trash-can-01", sessions: 40, events: 9000,
-                            lastEventAt: Date.now.addingTimeInterval(-180).formatted(.iso8601), lagMs: 300,
-                            read: true),
+                            lastEventAt: Date.now.addingTimeInterval(-180).formatted(.iso8601), lagMs: 300),
         ])
         fleet.setMachinesForTesting([owned, laptop, member, vault])
         return fleet

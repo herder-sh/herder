@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 use herder_client_core::Machine;
 use herder_daemon::auth::authenticator::Join;
 use herder_ffi::{
-    Client, HerderError, image_media_types, max_file_bytes, max_file_name_bytes, max_image_bytes,
-    max_project_icon_bytes, max_prompt_attachment_bytes, pairing_uri_to_string, parse_pairing_uri,
+    Client, HerderError, fleet_link_to_string, image_media_types, max_file_bytes,
+    max_file_name_bytes, max_image_bytes, max_project_icon_bytes, max_prompt_attachment_bytes,
+    parse_fleet_link,
 };
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, DirectoryEntry, EventBody, ItemBody, McpServerSettings,
@@ -47,11 +48,14 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-/// Signs `client` in to `daemon`, where its owner's link points, as the new person `name` with
-/// `role`, through the bindings.
+/// Signs `client` in to `daemon`, where its link points, as the new person `name` with `role`,
+/// through the bindings.
 async fn sign_in(daemon: &FakeDaemon, client: &Client, name: &str, role: Role) -> Machine {
     let join = Join::open(&daemon.auth, role);
-    let at = parse_pairing_uri(daemon.link.clone()).unwrap();
+    let at = parse_fleet_link(daemon.link.clone())
+        .unwrap()
+        .machines
+        .remove(0);
     let pending = client.sign_in(at.hosts, at.fingerprint).await.unwrap();
     let (_, sign_in) = join.sign_in(name, &pending.registration().unwrap());
     pending.finish(sign_in).await.unwrap()
@@ -63,10 +67,8 @@ fn a_client_signs_in_and_streams_a_session_without_a_runtime_of_its_callers() {
     let daemon = runtime.block_on(FakeDaemon::start("fake-host")).unwrap();
     let config = tempfile::tempdir().unwrap();
 
-    for link in [&daemon.link, &daemon.member_link] {
-        let uri = parse_pairing_uri(link.clone()).unwrap();
-        assert_eq!(&pairing_uri_to_string(uri), link);
-    }
+    let link = parse_fleet_link(daemon.link.clone()).unwrap();
+    assert_eq!(fleet_link_to_string(link), daemon.link);
     let client = Client::open(
         config.path().display().to_string(),
         "herder-ffi-test/0".into(),
@@ -331,7 +333,7 @@ fn the_attachment_limits_are_the_protocols() {
 
 #[test]
 fn an_invalid_link_fails_with_invalid_link() {
-    let error = parse_pairing_uri("https://example.com".into()).unwrap_err();
+    let error = parse_fleet_link("https://example.com".into()).unwrap_err();
     assert!(
         matches!(error, HerderError::InvalidLink { .. }),
         "{error:?}"

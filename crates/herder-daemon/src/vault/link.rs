@@ -11,16 +11,15 @@
 //! Unlinking removes the table and disconnects; what the vault holds stays there. Unpairing the
 //! host's device on the vault (`revoke_vault_host`) is the client's, as an owner of both.
 //!
-//! An owner may also have the daemon run a vault on its own machine (`install_vault`), or pair
-//! with one installed there by hand (`link_local_vault`). The daemon asks that vault, over its
-//! control socket, for a host code to link with, secrets on and backup off, and then for a code
-//! that pairs the owner's device with it as an owner, which the client redeems.
+//! An owner may also have the daemon run a vault on its own machine (`install_vault`). The
+//! daemon asks that vault, over its control socket, for a host code to link with, secrets on
+//! and backup off, and then opens its window for a first owner, which the client claims.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use anyhow::Result;
-use herder_protocol::{CommandBody, CommandResult, ErrorCode, ErrorInfo, LinkedVault, Role};
+use herder_protocol::{CommandBody, CommandResult, ErrorCode, ErrorInfo, LinkedVault};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -129,13 +128,9 @@ impl Link {
         }
     }
 
-    /// Applies `install_vault` or `link_local_vault` for the owner named `user`, answering
-    /// with a code that pairs their device with the vault.
-    pub async fn local_vault(
-        &self,
-        command: CommandBody,
-        user: String,
-    ) -> Result<CommandResult, ErrorInfo> {
+    /// Applies `install_vault`: installs a vault on this machine, links to it, and answers with
+    /// the window in which the caller claims it as its first owner.
+    pub async fn install_vault(&self) -> Result<CommandResult, ErrorInfo> {
         let _changing = self.changing.lock().await;
         self.unlinked()?;
         let Some(local) = self.setup.local.clone() else {
@@ -144,34 +139,17 @@ impl Link {
                 "this daemon does not run a vault on its machine".to_owned(),
             ));
         };
-        let installed = local.is_installed();
-        match command {
-            CommandBody::InstallVault if installed => {
-                return Err(error(
-                    ErrorCode::Conflict,
-                    "a vault is installed on this machine already; pair and link it instead"
-                        .to_owned(),
-                ));
-            }
-            CommandBody::InstallVault => {
-                let local = local.clone();
-                blocking(move || local.install(&mut |step| info!("installing the vault: {step}")))
-                    .await?;
-            }
-            CommandBody::LinkLocalVault if !installed => {
-                return Err(error(
-                    ErrorCode::NotFound,
-                    "no vault is installed on this machine".to_owned(),
-                ));
-            }
-            CommandBody::LinkLocalVault => {}
-            _ => {
-                return Err(error(
-                    ErrorCode::BadRequest,
-                    "not a local vault command".to_owned(),
-                ));
-            }
+        if local.is_installed() {
+            return Err(error(
+                ErrorCode::Conflict,
+                "a vault is installed on this machine already; link to it with a code from \
+                 `herder pair --host` there"
+                    .to_owned(),
+            ));
         }
+        let installing = local.clone();
+        blocking(move || installing.install(&mut |step| info!("installing the vault: {step}")))
+            .await?;
         let host = Request::PairHost {
             host: self.setup.host.name.clone(),
         };
@@ -181,17 +159,13 @@ impl Link {
         // devices are told where it is from there.
         self.link_unlocked(host.addresses, &host.fingerprint, host.code, false, true)
             .await?;
-        let owner = Request::Pair {
-            user,
-            role: Some(Role::Owner),
-        };
-        let device = blocking(move || local.pair(&owner)).await?;
-        info!(vault = %device.fingerprint, "paired a device with the vault on this machine");
-        Ok(CommandResult::DevicePairing {
-            code: device.code,
-            fingerprint: device.fingerprint,
-            addresses: device.addresses,
-            expires_at: device.expires_at,
+        let own = blocking(move || local.own()).await?;
+        info!(vault = %own.fingerprint, "installed the vault on this machine, waiting for its owner");
+        Ok(CommandResult::OwnershipClaim {
+            code: own.code,
+            fingerprint: own.fingerprint,
+            addresses: own.addresses,
+            expires_at: own.expires_at,
         })
     }
 

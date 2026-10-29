@@ -51,7 +51,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use herder_client_core::{Client, PairResult};
+use herder_client_core::{Client, FleetMachine};
 use ratatui::crossterm::event::{self, Event, MouseEventKind};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -179,7 +179,7 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                         origin,
                     } => send(&client, host_id, command, origin, tx.clone()),
                     Effect::OpenUrl(url) => open_url(url, tx.clone()),
-                    Effect::Pair(link) => pair(&client, link, tx.clone()),
+                    Effect::LogIn(machine) => log_in(&client, machine, tx.clone()),
                     Effect::RenameMachine { host_id, name } => {
                         if let Err(err) = client.rename(host_id.clone(), name) {
                             let _ = tx.send(Msg::Notice(format!("renaming: {err}")));
@@ -447,19 +447,20 @@ fn open_url(url: String, tx: mpsc::UnboundedSender<Msg>) {
     }
 }
 
-/// Pairs with the daemon of `link`, a link of one machine, and sends the outcome to the loop.
-fn pair(client: &Client, link: String, tx: mpsc::UnboundedSender<Msg>) {
+/// Signs this terminal in to `machine`, as `herder login` does, and sends the login's code
+/// and then the outcome to the loop.
+fn log_in(client: &Client, machine: FleetMachine, tx: mpsc::UnboundedSender<Msg>) {
     let client = client.clone();
     tokio::spawn(async move {
-        let result = match client.pair(link).await.map(Vec::into_iter) {
-            Err(err) => Err(err.to_string()),
-            Ok(mut results) => match results.next() {
-                Some(PairResult::Paired { machine }) => Ok(Box::new(machine)),
-                Some(PairResult::Failed { error, .. }) => Err(format!("pairing failed: {error}")),
-                None => Err("the link names no machine".to_owned()),
-            },
-        };
-        let _ = tx.send(Msg::Paired(result));
+        let shown = tx.clone();
+        let result = client
+            .log_in(machine.hosts, machine.fingerprint, move |code, _| {
+                let _ = shown.send(Msg::LoginCode(code.to_owned()));
+            })
+            .await
+            .map(Box::new)
+            .map_err(|err| err.to_string());
+        let _ = tx.send(Msg::SignedIn(result));
     });
 }
 

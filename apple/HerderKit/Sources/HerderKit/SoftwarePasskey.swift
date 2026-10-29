@@ -2,10 +2,14 @@ import CryptoKit
 import Foundation
 import Herder
 
-/// The authenticator the app signs with: the platform's passkey, or, in a debug build launched
-/// with `-softwarePasskey` (what the UI tests pass), a software passkey, as no simulator can
-/// answer Face ID for a test.
+/// The authenticator the app signs with: the platform's passkey; on the fake fleet of a test
+/// run, the passkey of the person on it (`HERDER_FAKE_PASSKEY`, see `Fleet.joinFakeFleet`); or,
+/// in a debug build launched with `-softwarePasskey` (what the UI tests pass), a software
+/// passkey, as no simulator can answer Face ID for a test.
 @MainActor func passkeyAuthenticator() -> Authenticator {
+    if let passkey = ProcessInfo.processInfo.environment["HERDER_FAKE_PASSKEY"].flatMap(RecordedPasskey.init) {
+        return passkey
+    }
     #if DEBUG
     if ProcessInfo.processInfo.arguments.contains(SoftwarePasskey.argument) {
         return SoftwarePasskey()
@@ -22,8 +26,6 @@ import Herder
 @MainActor final class SoftwarePasskey: Authenticator {
     static let argument = "-softwarePasskey"
 
-    /// User present, user verified, backup eligible and backed up: a synced passkey.
-    private static let flags: UInt8 = 0x01 | 0x04 | 0x08 | 0x10
     /// Attested credential data follows.
     private static let attested: UInt8 = 0x40
 
@@ -52,7 +54,7 @@ import Herder
 
     func register(name: String, userId: Data, challenge: Data) async throws -> PasskeyRegistration {
         self.userId = userId
-        var authData = Self.authData(Self.flags | Self.attested)
+        var authData = SoftwareSigning.authData(SoftwareSigning.flags | Self.attested)
         authData.append(Data(count: 16)) // No AAGUID.
         authData.append(contentsOf: [UInt8(credentialId.count >> 8), UInt8(credentialId.count & 0xff)])
         authData.append(credentialId)
@@ -68,24 +70,13 @@ import Herder
         return PasskeyRegistration(
             id: id, rawId: id,
             response: RegistrationResponse(
-                clientDataJson: try Self.clientData("webauthn.create", challenge).base64URLEncodedString(),
+                clientDataJson: try SoftwareSigning.clientData("webauthn.create", challenge).base64URLEncodedString(),
                 attestationObject: attestation.base64URLEncodedString()),
             kind: "public-key")
     }
 
     func assert(challenge: Data) async throws -> PasskeyAssertion {
-        let clientData = try Self.clientData("webauthn.get", challenge)
-        let authData = Self.authData(Self.flags)
-        let signature = try key.signature(for: authData + SHA256.hash(data: clientData))
-        let id = credentialId.base64URLEncodedString()
-        return PasskeyAssertion(
-            id: id, rawId: id,
-            response: AssertionResponse(
-                clientDataJson: clientData.base64URLEncodedString(),
-                authenticatorData: authData.base64URLEncodedString(),
-                signature: signature.derRepresentation.base64URLEncodedString(),
-                userHandle: userId?.base64URLEncodedString()),
-            kind: "public-key")
+        try SoftwareSigning.assertion(key: key, credentialId: credentialId, userHandle: userId, challenge: challenge)
     }
 
     /// The public key as a COSE_Key: EC2, ES256, P-256, x, y.
@@ -97,23 +88,6 @@ import Herder
         cose.append(0x22)
         cose.append(Self.bytes(point.suffix(32)))
         return cose
-    }
-
-    /// The RP id hash, `flags` and a zero signature counter, as synced passkeys keep it.
-    private static func authData(_ flags: UInt8) -> Data {
-        var data = Data(SHA256.hash(data: Data(PlatformAuthenticator.relyingParty.utf8)))
-        data.append(flags)
-        data.append(Data(count: 4))
-        return data
-    }
-
-    private static func clientData(_ kind: String, _ challenge: Data) throws -> Data {
-        try JSONSerialization.data(withJSONObject: [
-            "type": kind,
-            "challenge": challenge.base64URLEncodedString(),
-            "origin": "https://\(PlatformAuthenticator.relyingParty)",
-            "crossOrigin": false,
-        ] as [String: Any])
     }
 
     /// A CBOR head of `major` type with argument `count`.
@@ -130,3 +104,45 @@ import Herder
     private static func text(_ value: String) -> Data { head(3, value.utf8.count) + Data(value.utf8) }
 }
 #endif
+
+/// How a passkey held in software signs: assertions encoded exactly as a platform
+/// authenticator encodes them, for the passkeys tests sign with in place of Face ID.
+@MainActor enum SoftwareSigning {
+    /// User present, user verified, backup eligible and backed up: a synced passkey.
+    static let flags: UInt8 = 0x01 | 0x04 | 0x08 | 0x10
+
+    /// An assertion over `challenge` by `key`, the credential `credentialId` of the person
+    /// `userHandle` names.
+    static func assertion(key: P256.Signing.PrivateKey, credentialId: Data, userHandle: Data?,
+                          challenge: Data) throws -> PasskeyAssertion {
+        let clientData = try clientData("webauthn.get", challenge)
+        let authData = authData(flags)
+        let signature = try key.signature(for: authData + SHA256.hash(data: clientData))
+        let id = credentialId.base64URLEncodedString()
+        return PasskeyAssertion(
+            id: id, rawId: id,
+            response: AssertionResponse(
+                clientDataJson: clientData.base64URLEncodedString(),
+                authenticatorData: authData.base64URLEncodedString(),
+                signature: signature.derRepresentation.base64URLEncodedString(),
+                userHandle: userHandle?.base64URLEncodedString()),
+            kind: "public-key")
+    }
+
+    /// The RP id hash, `flags` and a zero signature counter, as synced passkeys keep it.
+    static func authData(_ flags: UInt8) -> Data {
+        var data = Data(SHA256.hash(data: Data(PlatformAuthenticator.relyingParty.utf8)))
+        data.append(flags)
+        data.append(Data(count: 4))
+        return data
+    }
+
+    static func clientData(_ kind: String, _ challenge: Data) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "type": kind,
+            "challenge": challenge.base64URLEncodedString(),
+            "origin": "https://\(PlatformAuthenticator.relyingParty)",
+            "crossOrigin": false,
+        ] as [String: Any])
+    }
+}

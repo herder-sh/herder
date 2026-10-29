@@ -4,7 +4,7 @@ expression: "render(&mut app, 90, 16).backend()"
 ---
 " herder        inbox 0 « │ ┌ add machine ──────────────────────────────────────── esc ┐   "
 "                         │ │                                                          │   "
-" machines     by machine │ │  Paired with laptop.                                     │   "
+" machines     by machine │ │  Signed in to laptop.                                    │   "
 "  ◉ box                1 │ │                                                          │   "
 "▶   ├ ◉ app · api        │ │  host id      h2                                         │   "
 "    │ ├ ● write the tes… │ │  fingerprint  9f86 d081 884c 7d65 9a2f eaa0 c55a d015    │   "

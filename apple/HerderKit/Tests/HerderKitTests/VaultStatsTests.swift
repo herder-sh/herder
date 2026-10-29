@@ -38,8 +38,8 @@ struct VaultStatsTests {
         machine.vault = VaultStatus(sessions: 0, events: 12, storageBytes: 4096, hosts: [
             // builder's last batch arrived 23 ms after its newest event, three minutes ago.
             HostReplication(hostId: "h1", sessions: 0, events: 12,
-                            lastEventAt: now.addingTimeInterval(-180).ISO8601Format(), lagMs: 23, read: true),
-            HostReplication(hostId: "h2", sessions: 0, events: 0, lastEventAt: nil, lagMs: nil, read: false),
+                            lastEventAt: now.addingTimeInterval(-180).ISO8601Format(), lagMs: 23),
+            HostReplication(hostId: "h2", sessions: 0, events: 0, lastEventAt: nil, lagMs: nil),
         ])
         let stats = try #require(VaultStats(machine: machine, sessions: [:], now: now))
         let builder = try #require(stats.hosts.first { $0.id == "h1" })
@@ -69,18 +69,9 @@ struct VaultStatsTests {
         #expect(Freshness.span(3 * 86400) == "3 d")
     }
 
-    @Test func eachHostSaysWhetherItTakesHandoffsOnceTheStatusArrives() throws {
+    @Test func onlyAnOwnersVaultIsOwned() throws {
         var machine = vault([])
-        let unknown = try #require(VaultStats(machine: machine, sessions: [:]))
-        #expect(unknown.owned)
-        #expect(unknown.hosts.allSatisfy { $0.takesHandoffs == nil })
-        machine.vault = VaultStatus(sessions: 0, events: 0, storageBytes: 0, hosts: [
-            HostReplication(hostId: "h1", sessions: 0, events: 0, lastEventAt: nil, lagMs: nil, read: true),
-            HostReplication(hostId: "h2", sessions: 0, events: 0, lastEventAt: nil, lagMs: nil, read: false),
-        ])
-        let stats = try #require(VaultStats(machine: machine, sessions: [:]))
-        #expect(stats.hosts.first { $0.id == "h1" }?.takesHandoffs == true)
-        #expect(stats.hosts.first { $0.id == "h2" }?.takesHandoffs == false)
+        #expect(try #require(VaultStats(machine: machine, sessions: [:])).owned)
         machine.role = .member
         #expect(try #require(VaultStats(machine: machine, sessions: [:])).owned == false)
     }

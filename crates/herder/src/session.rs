@@ -221,7 +221,7 @@ fn pick(machines: &[Machine], wanted: Option<&str>) -> Result<Machine> {
             .join(", ")
     };
     match (wanted, machines) {
-        (None, []) => bail!("no paired machines; pair one with `herder connect`"),
+        (None, []) => bail!("no machines; sign this terminal in to one with `herder login`"),
         (None, [machine]) => Ok(machine.clone()),
         (None, _) => bail!(
             "several machines are paired; pick one with --machine: {}",

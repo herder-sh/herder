@@ -29,7 +29,7 @@ The Mac app is a zip on the latest GitHub release (https://github.com/herder-sh/
 ## Get started
 
 1. Install herder and run `herder service install`. `herder doctor` checks the machine and says how to fix what is not ready.
-2. Run `herder pair` to print a pairing link and QR code. Scan it with the iPhone app, paste the link into the Mac app's Add to Fleet, or run `herder connect <link>` on another computer.
+2. Make the machine yours: `herder service install` prints a link and QR code, and `herder claim` prints them again. Scan it with the iPhone app or paste the link into the Mac app's Add to Fleet, and approve with Face ID. A terminal on another computer signs in with `herder login`.
 3. Add an account: Add Account in the app, or `n` in the terminal UI. The vendor's own login runs in a terminal on the machine; herder only shows you that terminal.
 
 ## Features

@@ -249,7 +249,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
             hints
         }
         Some(Mode::Navigate) if app.machines.is_empty() => vec![
-            tap("a", "pair a machine", char('a')),
+            tap("a", "add a machine", char('a')),
             tap("q", "quit", char('q')),
             help,
         ],

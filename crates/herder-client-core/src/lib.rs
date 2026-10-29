@@ -12,10 +12,10 @@
 //!
 //! # Machines
 //!
-//! A machine is a daemon this device paired with, keyed by the daemon's [`HostId`]. The
+//! A machine is a daemon this device signed in to, keyed by the daemon's [`HostId`]. The
 //! profile, `<config_dir>/machines.json`, holds each machine's addresses, the pinned SHA-256
 //! of its certificate, and the device key this device presents to it (one key per machine).
-//! [`Client::pair`] adds every machine a `herder://pair` link names, [`Client::rename`]
+//! [`Client::sign_in`] and [`Client::log_in`] add a machine, [`Client::rename`]
 //! changes the name it is shown by on this device, [`Client::set_addresses`] the addresses it
 //! is reached at, [`Client::reconnect`] connects again now, and [`Client::forget`] removes it.
 //!
@@ -24,10 +24,9 @@
 //! the file within a second of a change and starts, updates or stops machines to match.
 //! The offline cache is shared too; whichever client saves last wins, as it is only a cache.
 //!
-//! [`Client::share`] makes one link that pairs another device with every connected machine:
-//! each daemon mints a one-time code for this device's user and role there, so the new device
-//! gets its own key and is revocable on its own, and never more than this device may do.
-//! It is a one-time share: machines paired later are not passed on.
+//! [`Client::share`] makes the `herder://fleet` link of every machine, which another device of
+//! the person signs in to each with its own passkey: it carries no code and grants nothing by
+//! itself. The new device gets its own key on each, revocable on its own.
 //!
 //! # Connections
 //!
@@ -136,8 +135,8 @@ pub mod auth;
 mod cache;
 mod catalog;
 mod fork;
+mod link;
 mod offline;
-mod pairing;
 mod profile;
 mod sign_in;
 mod skills;
@@ -151,13 +150,12 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use futures_util::future::join_all;
 use herder_protocol::{
-    Account, AccountId, ApprovalRequest, AwsProfile, ClientHello, Command, CommandBody, CommandId,
+    Account, AccountId, ApprovalRequest, AwsProfile, Command, CommandBody, CommandId,
     CommandResult, ErrorCode, ErrorInfo, Event, FailoverSettings, FleetHost, HostId, HostResources,
-    Item, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, PersonId, Project, Provider, Role,
-    SessionHead, SessionId, SessionSkill, SessionUsage, SkillsStatus, Terminal, TerminalId,
-    Timestamp, UpdateStage, VaultStatus,
+    Item, PasskeyAssertion, PasskeyChallenge, PersonId, Project, Provider, Role, SessionHead,
+    SessionId, SessionSkill, SessionUsage, SkillsStatus, Terminal, TerminalId, Timestamp,
+    UpdateStage, VaultStatus,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -168,7 +166,7 @@ pub use catalog::{
     CatalogEntry, CatalogModel, ProviderHint, ProviderHintKind, catalog_entry, next_account_id,
     provider_catalog, provider_hints,
 };
-pub use pairing::{LoginUri, OwnUri, PairingLink, PairingUri};
+pub use link::{FleetLink, FleetMachine, LoginUri, OwnUri};
 use profile::SavedMachine;
 pub use sign_in::PendingSignIn;
 use supervisor::{Subscription, Supervisor};
@@ -177,7 +175,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 16;
+pub const CLIENT_API_VERSION: u32 = 17;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,17 +194,10 @@ pub struct NewAccount {
 /// Why a client call failed.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    /// The pairing link is not a valid `herder://pair` link.
+    /// The link is not a valid `herder://` link of its kind.
     #[error("{message}")]
     InvalidLink {
         /// What is wrong with it.
-        message: String,
-    },
-    /// Pairing failed: no address answered, the certificate did not match, or the daemon
-    /// refused the code.
-    #[error("pairing failed: {message}")]
-    Pairing {
-        /// Why.
         message: String,
     },
     /// No paired machine has this host id.
@@ -313,49 +304,6 @@ pub trait Authenticator: Send + Sync {
     /// Signs `challenge`, which the machine `host_id` minted, asking the user. Fails, and the
     /// command with it, when the user cancels.
     fn assert(&self, host_id: HostId, challenge: PasskeyChallenge) -> Assertion;
-}
-
-/// What pairing with one machine of a link came to; see [`Client::pair`].
-// UniFFI passes records by value and cannot carry a `Box`; a link names a handful of machines,
-// so the size of a result does not matter.
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug, PartialEq)]
-pub enum PairResult {
-    /// Paired, saved and connecting.
-    Paired {
-        /// The machine.
-        machine: Machine,
-    },
-    /// Not paired; nothing was saved for it.
-    Failed {
-        /// The addresses the link names for it.
-        addresses: Vec<String>,
-        /// Why: no address answered, the certificate did not match, or the daemon refused
-        /// the code.
-        error: String,
-    },
-}
-
-/// A link that pairs another device with this device's machines; see [`Client::share`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SharedLink {
-    /// The link, one machine per code; format it with `to_string` for the QR code.
-    pub link: PairingLink,
-    /// The machines it pairs with, in the link's order.
-    pub shared: Vec<HostId>,
-    /// The machines left out, with why.
-    pub skipped: Vec<SkippedMachine>,
-    /// When the first of its codes stops working.
-    pub expires_at: Timestamp,
-}
-
-/// A machine [`Client::share`] left out of the link.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SkippedMachine {
-    /// The machine.
-    pub host_id: HostId,
-    /// Why: not connected, or its daemon refused or did not answer in time.
-    pub error: String,
 }
 
 /// Where a machine's connection stands.
@@ -510,48 +458,6 @@ impl Client {
         self.lock().iter().map(|machine| machine.view()).collect()
     }
 
-    /// Pairs with every machine a `herder://pair` link names, saves each that paired, and
-    /// starts its supervisor; one result per machine, in the link's order. Fails only for a
-    /// link that is not one.
-    ///
-    /// Pairing a machine already paired replaces it, with a new device key.
-    pub async fn pair(&self, link: String) -> Result<Vec<PairResult>, Error> {
-        let link: PairingLink = link.parse()?;
-        let proved = join_all(link.machines.into_iter().map(|uri| self.prove(uri))).await;
-        Ok(proved
-            .into_iter()
-            .map(|proved| match proved.and_then(|saved| self.add(saved)) {
-                Ok(machine) => PairResult::Paired { machine },
-                Err((addresses, error)) => PairResult::Failed { addresses, error },
-            })
-            .collect())
-    }
-
-    /// Pairs a new device key with the machine `uri` names: the machine as it will be saved,
-    /// or its addresses and why it did not pair.
-    async fn prove(&self, uri: PairingUri) -> Result<SavedMachine, (Vec<String>, String)> {
-        let addresses = uri.hosts.clone();
-        let (mut saved, device) = unsaved(&uri.hosts, &uri.fingerprint)
-            .map_err(|message| (addresses.clone(), message))?;
-        let hello = ClientHello {
-            protocol_version: PROTOCOL_VERSION,
-            client: self.inner.client.clone(),
-            resume: Vec::new(),
-            pairing_code: Some(uri.code),
-            sign_in: false,
-            passkey: false,
-        };
-        let (ws, hello, _) =
-            supervisor::connect(&saved.addresses, &saved.fingerprint, &device, hello)
-                .await
-                .map_err(|message| (addresses, message))?;
-        // The supervisor opens its own connection; this one only proved the code.
-        drop(ws);
-        saved.host_id = hello.host_id;
-        saved.name = hello.host_name;
-        Ok(saved)
-    }
-
     /// Connects to the machine at `hosts` with certificate `fingerprint` under a new device
     /// key, to sign in as a person: the machine answers with what the person's passkey signs.
     /// Finish with [`PendingSignIn::finish`]. Fails with `Unreachable` when no address
@@ -599,76 +505,20 @@ impl Client {
         .map_err(|err| (addresses, err.to_string()))
     }
 
-    /// Makes a link that pairs another device with every connected machine, as this
-    /// device's user with its role on each. Each machine is asked for a one-time code
-    /// (`pair_device`); one not connected, or that refuses or does not answer within 10 s, is
-    /// skipped. Fails with [`Error::Pairing`] when no machine gave a code.
-    pub async fn share(&self) -> Result<SharedLink, Error> {
-        let machines = self.lock().clone();
-        let asked = machines.iter().map(|machine| async move {
-            let host_id = machine.saved.host_id.clone();
-            if machine.view().connection != ConnectionState::Connected {
-                return (host_id, Err("not connected".to_owned()));
-            }
-            let command = Command {
-                id: new_command_id(),
-                body: CommandBody::PairDevice {
-                    user: None,
-                    role: None,
-                },
-            };
-            let answer = match tokio::time::timeout(SHARE_TIMEOUT, machine.send(command)).await {
-                Err(_) => Err("did not answer in time".to_owned()),
-                Ok(Err(err)) => Err(err.to_string()),
-                Ok(Ok(Err(info))) => Err(info.message),
-                Ok(Ok(Ok(CommandResult::DevicePairing {
-                    code,
-                    fingerprint,
-                    addresses,
-                    expires_at,
-                }))) => Ok((
-                    PairingUri {
-                        hosts: addresses,
-                        fingerprint,
-                        code,
-                    },
-                    expires_at,
-                )),
-                Ok(Ok(Ok(_))) => Err("the daemon sent an unexpected answer".to_owned()),
-            };
-            (host_id, answer)
-        });
-        let (mut uris, mut shared, mut skipped) = (Vec::new(), Vec::new(), Vec::new());
-        let mut expires_at: Option<Timestamp> = None;
-        for (host_id, answer) in join_all(asked).await {
-            match answer {
-                Ok((uri, expires)) => {
-                    uris.push(uri);
-                    shared.push(host_id);
-                    expires_at = Some(expires_at.map_or(expires, |at| at.min(expires)));
-                }
-                Err(error) => skipped.push(SkippedMachine { host_id, error }),
-            }
-        }
-        let Some(expires_at) = expires_at else {
-            let reasons: Vec<String> = skipped
-                .iter()
-                .map(|s| format!("{}: {}", s.host_id, s.error))
-                .collect();
-            return Err(Error::Pairing {
-                message: if reasons.is_empty() {
-                    "no machine is paired to share".to_owned()
-                } else {
-                    format!("no machine gave a code ({})", reasons.join("; "))
-                },
-            });
-        };
-        Ok(SharedLink {
-            link: PairingLink { machines: uris },
-            shared,
-            skipped,
-            expires_at,
-        })
+    /// The link that shares this device's machines with another device of the person's: each
+    /// machine's addresses and fingerprint, which that device signs in to with its passkey
+    /// ([`Client::sign_in`]). It carries no code, so it grants nothing by itself. `None` while
+    /// no machine is saved.
+    pub fn share(&self) -> Option<FleetLink> {
+        let machines: Vec<FleetMachine> = self
+            .lock()
+            .iter()
+            .map(|machine| FleetMachine {
+                hosts: machine.saved.addresses.clone(),
+                fingerprint: machine.saved.fingerprint.clone(),
+            })
+            .collect();
+        (!machines.is_empty()).then_some(FleetLink { machines })
     }
 
     /// Shows a machine as `name` on this device from now on, and saves that.
@@ -1233,9 +1083,6 @@ impl Changes {
         }
     }
 }
-
-/// How long [`Client::share`] waits for each machine's code.
-const SHARE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A fresh command id.
 /// A machine at `hosts` with certificate `fingerprint` to pair or sign in with, under a new

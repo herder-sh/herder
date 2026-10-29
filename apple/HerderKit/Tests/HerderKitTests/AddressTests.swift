@@ -29,7 +29,7 @@ struct AddressTests {
         }
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
-        let host = try await fleet.pair(daemon).hostId
+        let host = try await fleet.signIn(to: daemon).hostId
         try await fleet.client.synced(hostId: host)
         let live = try #require(fleet.machines.first?.addresses.first)
         // Nothing listens on port 1.

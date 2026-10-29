@@ -13,6 +13,7 @@ final class TranscriptScrollUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["HERDER_PROFILE"] = "transcript-scroll-\(UUID().uuidString)"
         app.launchEnvironment["HERDER_FAKE_FLEET"] = link
+        app.launchEnvironment["HERDER_FAKE_PASSKEY"] = try XCUIApplication.fakePasskey()
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["Board"].waitForExistence(timeout: 30))
 

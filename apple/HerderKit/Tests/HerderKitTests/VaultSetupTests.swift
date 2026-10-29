@@ -29,7 +29,7 @@ struct VaultSetupTests {
 
     private let fingerprint = String(repeating: "ab", count: 32)
     private var answer: CommandResult {
-        .devicePairing(code: "K7Q-4PD", fingerprint: fingerprint, addresses: ["10.0.0.5:7448"],
+        .ownershipClaim(code: "K7Q-4PD", fingerprint: fingerprint, addresses: ["10.0.0.5:7448"],
                        expiresAt: "2026-10-26T12:00:00Z")
     }
 

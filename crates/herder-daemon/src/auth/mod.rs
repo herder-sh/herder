@@ -1,5 +1,5 @@
-//! Who may connect, and as whom: named users with owner or member roles, their paired devices,
-//! and the one-time codes that pair a new device.
+//! Who may connect, and as whom: people with owner or member roles, their devices, and the
+//! one-time codes that pair a host with a vault.
 //!
 //! A device is a key pair the client generates once (`herder_client_core::DeviceKey`). It
 //! presents a self-signed certificate for that key as its TLS client certificate, and TLS 1.3
@@ -7,22 +7,22 @@
 //! connection proves the client holds the key. The daemon knows a device by the SHA-256 fingerprint of that
 //! certificate.
 //!
-//! An unknown device pairs by sending a code minted by `herder pair` as the `pairing_code` of
-//! its hello. A code names a user and a role, works once and expires after [`PAIRING_TTL`];
-//! codes live in memory only, so a restart voids them.
+//! A host pairs with a vault by sending the code `herder pair --host` minted there as the
+//! `pairing_code` of its hello. A code names the host, works once and expires after
+//! [`PAIRING_TTL`]; codes live in memory only, so a restart voids them.
 //!
-//! A device is a client or a host ([`DeviceRole`]), as its code says. A client connects as a
-//! client and reads everything, and may replicate to a vault too. A host, paired by
-//! `herder pair --host` on a vault, may only replicate: every client connection it opens is
-//! refused, so its key, if stolen, reads nothing. An owner may let a host read the vault too, so
-//! it can take handoffs ([`Auth::set_device_role`]), and take that back.
+//! A device is a client or a host ([`DeviceRole`]). A client connects as a client and reads
+//! everything, and may replicate to a vault too. A host may only replicate: every client
+//! connection it opens is refused, so its key, if stolen, reads nothing, and no host reads
+//! another's sessions.
 //!
 //! A person ([`Person`]) is one identity across every daemon that knows them, named by their
 //! passkeys ([`passkeys`]). A device the daemon does not know signs in as a person with a fresh
 //! assertion, claims a daemon with no owner with the code `herder install` printed, accepts an
 //! invite, or waits for an app of the person to approve its login. A person's devices are
 //! listed under them, and every connection from one acts as the person: its user id is the
-//! person's id. Per-daemon users stay until every install has moved to people.
+//! person's id. The per-daemon users of an install from before people stay, readable, until
+//! its owner claims them; nothing creates new ones.
 //!
 //! A claim ([`Auth::claim`]) moves an owner's user to a person, keeping a record of the ids they
 //! had, so history attributed to those ids reads as the person's.
@@ -368,41 +368,6 @@ impl Auth {
         })
     }
 
-    /// Mints a one-time code that pairs a client device as `user`, valid for `ttl`.
-    ///
-    /// An existing user keeps their role, so `role` must be absent or equal to it. A new user
-    /// defaults to member, except that the first user of a daemon is always its owner: users
-    /// of hosts alone do not count.
-    pub fn mint(&self, user: &str, role: Option<Role>, ttl: Duration) -> Result<Pairing> {
-        let user = user_name(user)?;
-        let mut state = self.lock();
-        let ownerless = !state.users.users.iter().any(|u| u.role == Role::Owner);
-        let role = match (state.users.user(user), role) {
-            (Some(existing), None) => existing.role,
-            (Some(existing), Some(role)) if role == existing.role => role,
-            (Some(existing), Some(_)) => {
-                bail!("{user} is already {}", describe(existing.role))
-            }
-            (None, Some(Role::Member)) if ownerless => {
-                bail!("the first user of a daemon is its owner; pair the owner first")
-            }
-            (None, role) if ownerless => role.unwrap_or(Role::Owner),
-            (None, role) => role.unwrap_or(Role::Member),
-        };
-        Self::insert_code(&mut state, user, role, DeviceRole::Client, ttl)
-    }
-
-    /// Mints a one-time code that pairs a client device as the paired user `user_id`, with
-    /// their role, valid for `ttl`: what `pair_device` shares from a device already paired.
-    pub fn mint_for(&self, user_id: &UserId, ttl: Duration) -> Result<Pairing> {
-        let mut state = self.lock();
-        let Some(user) = state.users.users.iter().find(|u| &u.user_id == user_id) else {
-            bail!("no user {user_id} on this daemon");
-        };
-        let (name, role) = (user.name.clone(), user.role);
-        Self::insert_code(&mut state, &name, role, DeviceRole::Client, ttl)
-    }
-
     /// Mints a one-time code that pairs the vault host named `host` as a host-only device,
     /// valid for `ttl`. The device acts as the user `host`, a member when new.
     pub fn mint_host(&self, host: &str, ttl: Duration) -> Result<Pairing> {
@@ -413,6 +378,24 @@ impl Auth {
             .user(host)
             .map_or(Role::Member, |user| user.role);
         Self::insert_code(&mut state, host, role, DeviceRole::Host, ttl)
+    }
+
+    /// Seeds the per-daemon user `name` with the client device of `fingerprint`, as the users
+    /// file of an install from before people has them: what tests of unclaimed installs and
+    /// their claim start from. Nothing else creates a client user.
+    #[cfg(any(test, feature = "test-authenticator"))]
+    pub fn legacy_user(&self, name: &str, role: Role, fingerprint: &str) -> Identity {
+        let mut state = self.lock();
+        let pairing = Self::insert_code(&mut state, name, role, DeviceRole::Client, PAIRING_TTL)
+            .expect("a test user's code");
+        self.pair(
+            &mut state,
+            fingerprint,
+            &pairing.code,
+            "test",
+            DeviceRole::Client,
+        )
+        .expect("a test user's device pairs")
     }
 
     fn insert_code(
@@ -478,8 +461,8 @@ impl Auth {
             None => {
                 let Some(code) = code else {
                     return Err(forbidden(
-                        "this device is not paired with this daemon; run `herder pair` on the \
-                         daemon's machine and pair with the code it prints",
+                        "this device is not signed in to this daemon; sign in from the herder \
+                         app, or with `herder login` in a terminal",
                     ));
                 };
                 self.pair(&mut state, fingerprint, code, client, peer)?
@@ -508,7 +491,7 @@ impl Auth {
         if !pending.device_role.allows(peer) {
             return Err(forbidden(
                 "this code pairs a host, which may only back its sessions up to the vault; \
-                 pair a client with `herder pair` on the vault",
+                 sign in to the vault from the herder app instead",
             ));
         }
         let now = Timestamp::now();
@@ -645,7 +628,7 @@ impl Auth {
     }
 
     /// Every user but hosts, oldest first, each with their devices, oldest first: what
-    /// `list_users` and `herder pair --list` show.
+    /// `herder pair --list` shows.
     pub fn users(&self) -> Vec<UserInfo> {
         let mut state = self.lock();
         state
@@ -662,43 +645,6 @@ impl Auth {
                 devices: devices_of(&state, &user.user_id),
             })
             .collect()
-    }
-
-    /// Makes `user_id` a `role`, and closes their devices' connections, which carry the old
-    /// role, so they connect again with the new one. Refuses to leave the daemon with no
-    /// owner.
-    pub fn set_role(&self, user_id: &UserId, role: Role) -> Result<(), ErrorInfo> {
-        let mut state = self.lock();
-        let mut users = state.users.clone();
-        let Some(user) = users.users.iter_mut().find(|user| &user.user_id == user_id) else {
-            return Err(ErrorInfo {
-                code: ErrorCode::NotFound,
-                message: format!("no user {user_id} on this daemon"),
-            });
-        };
-        if user.role == role {
-            return Ok(());
-        }
-        user.role = role;
-        if !users.has_owner() {
-            return Err(ErrorInfo {
-                code: ErrorCode::Conflict,
-                message: "the last owner cannot be made a member; make someone else an owner \
-                          first"
-                    .to_owned(),
-            });
-        }
-        self.save(&users).map_err(|err| {
-            tracing::error!("cannot save a user's role: {err:#}");
-            ErrorInfo {
-                code: ErrorCode::Internal,
-                message: "cannot save the user's role".to_owned(),
-            }
-        })?;
-        state.users = users;
-        disconnect(&mut state, user_id);
-        info!(%user_id, ?role, "user role changed");
-        Ok(())
     }
 
     /// Makes the devices in `hosts`, which replicated to this vault as hosts, host-only, once:
@@ -737,37 +683,6 @@ impl Auth {
             .iter()
             .find(|device| &device.device_id == device_id)
             .map(|device| device.role)
-    }
-
-    /// Lets the paired device `device_id` connect as `role` from now on, keeping it paired;
-    /// `false` if it is not paired. Made a host, its client connections close and its host
-    /// connections stay.
-    pub fn set_device_role(&self, device_id: &DeviceId, role: DeviceRole) -> Result<bool> {
-        let mut state = self.lock();
-        let mut users = state.users.clone();
-        let Some(device) = users
-            .devices
-            .iter_mut()
-            .find(|device| &device.device_id == device_id)
-        else {
-            return Ok(false);
-        };
-        if device.role == role {
-            return Ok(true);
-        }
-        device.role = role;
-        self.save(&users)?;
-        state.users = users;
-        if let Some(open) = state.connections.get_mut(device_id) {
-            open.retain(|(peer, token)| {
-                if !role.allows(*peer) {
-                    token.cancel();
-                }
-                !token.is_cancelled()
-            });
-        }
-        info!(%device_id, ?role, "device role changed");
-        Ok(true)
     }
 
     /// Unpairs a device and closes its open connections; `false` if it was not paired.
@@ -1266,10 +1181,8 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             | CommandBody::SetVaultLink { .. }
             | CommandBody::UnlinkVault
             | CommandBody::InstallVault
-            | CommandBody::LinkLocalVault
             | CommandBody::PairVaultHost { .. }
             | CommandBody::RevokeVaultHost { .. }
-            | CommandBody::SetVaultHostAccess { .. }
     );
     if backup && role != Role::Owner {
         return Err(forbidden(
@@ -1301,15 +1214,12 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     }
     let people = matches!(
         command,
-        CommandBody::SetUserRole { .. }
-            | CommandBody::RevokeDevice { .. }
+        CommandBody::RevokeDevice { .. }
             | CommandBody::Invite { .. }
             | CommandBody::SetPersonRole { .. }
             | CommandBody::RevokePerson { .. }
             | CommandBody::ClaimUsers { .. }
             | CommandBody::DecideLeftover { .. }
-            | CommandBody::PairDevice { user: Some(_), .. }
-            | CommandBody::PairDevice { role: Some(_), .. }
     );
     if people && role != Role::Owner {
         return Err(forbidden(
@@ -1601,49 +1511,10 @@ mod tests {
     }
 
     #[test]
-    fn the_first_user_is_the_owner() {
-        let (_tmp, auth) = open();
-        let err = auth
-            .mint("bob", Some(Role::Member), PAIRING_TTL)
-            .unwrap_err();
-        assert!(err.to_string().contains("first user"), "{err}");
-        assert_eq!(auth.owner(), None);
-        let pairing = auth.mint("alice", None, PAIRING_TTL).unwrap();
-        assert_eq!(pairing.role, Role::Owner);
-        let alice = pair(&auth, "fp-a", &pairing.code).unwrap();
-        assert_eq!(alice.role, Role::Owner);
-        assert_eq!(auth.owner().as_ref(), Some(&alice.user_id));
-
-        // Later users default to member; an existing user keeps their role.
-        let bob = auth.mint("bob", None, PAIRING_TTL).unwrap();
-        assert_eq!(bob.role, Role::Member);
-        pair(&auth, "fp-b", &bob.code).unwrap();
-        assert_eq!(auth.owner().as_ref(), Some(&alice.user_id));
-        assert_eq!(
-            auth.mint("alice", None, PAIRING_TTL).unwrap().role,
-            Role::Owner
-        );
-        let err = auth
-            .mint("alice", Some(Role::Member), PAIRING_TTL)
-            .unwrap_err();
-        assert!(err.to_string().contains("already an owner"), "{err}");
-        assert!(auth.mint(" ", None, PAIRING_TTL).is_err());
-    }
-
-    #[test]
     fn a_second_device_joins_its_existing_user() {
         let (_tmp, auth) = open();
-        let first = pair(
-            &auth,
-            "fp-a",
-            &auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-        );
-        let second = pair(
-            &auth,
-            "fp-b",
-            &auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-        );
-        let (first, second) = (first.unwrap(), second.unwrap());
+        let first = auth.legacy_user("alice", Role::Owner, "fp-a");
+        let second = auth.legacy_user("alice", Role::Owner, "fp-b");
         assert_eq!(first.user_id, second.user_id);
         assert_ne!(first.device_id, second.device_id);
     }
@@ -1651,9 +1522,8 @@ mod tests {
     #[test]
     fn users_and_devices_survive_a_restart_but_codes_do_not() {
         let (tmp, auth) = open();
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-        let alice = pair(&auth, "fp-a", &code).unwrap();
-        let pending = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        let alice = auth.legacy_user("alice", Role::Owner, "fp-a");
+        let pending = auth.mint_host("devbox", PAIRING_TTL).unwrap().code;
         drop(auth);
 
         let auth = Auth::open(tmp.path()).unwrap();
@@ -1662,17 +1532,24 @@ mod tests {
             auth.authenticate("fp-a", None, "test", DeviceRole::Client, &token),
             Ok(alice)
         );
-        assert!(pair(&auth, "fp-b", &pending).is_err());
+        let host = auth.authenticate(
+            "fp-h",
+            Some(&pending),
+            "test",
+            DeviceRole::Host,
+            &CancellationToken::new(),
+        );
+        assert!(host.is_err());
         assert_eq!(auth.devices().len(), 1);
     }
 
     #[test]
     fn revoking_a_device_refuses_it_and_closes_its_connections() {
         let (_tmp, auth) = open();
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        auth.legacy_user("alice", Role::Owner, "fp-a");
         let connection = CancellationToken::new();
         let alice = auth
-            .authenticate("fp-a", Some(&code), "test", DeviceRole::Client, &connection)
+            .authenticate("fp-a", None, "test", DeviceRole::Client, &connection)
             .unwrap();
         assert!(auth.revoke(&alice.device_id).unwrap());
         assert!(connection.is_cancelled());
@@ -1694,12 +1571,7 @@ mod tests {
     #[test]
     fn a_host_device_replicates_but_never_connects_as_a_client() {
         let (_tmp, auth) = open();
-        pair(
-            &auth,
-            "fp-a",
-            &auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-        )
-        .unwrap();
+        auth.legacy_user("alice", Role::Owner, "fp-a");
         let pairing = auth.mint_host("devbox", PAIRING_TTL).unwrap();
         assert_eq!(
             (pairing.user.as_str(), pairing.role, pairing.device_role),
@@ -1735,125 +1607,10 @@ mod tests {
     }
 
     #[test]
-    fn a_host_device_reads_once_let_and_stops_when_no_longer_let() {
-        let (tmp, auth) = open();
-        let code = auth.mint_host("devbox", PAIRING_TTL).unwrap().code;
-        let replication = CancellationToken::new();
-        let host = auth
-            .authenticate("fp-h", Some(&code), "test", DeviceRole::Host, &replication)
-            .unwrap();
-        assert_eq!(auth.device_role(&host.device_id), Some(DeviceRole::Host));
-
-        assert!(
-            auth.set_device_role(&host.device_id, DeviceRole::Client)
-                .unwrap()
-        );
-        let reading = CancellationToken::new();
-        let client = auth
-            .authenticate("fp-h", None, "test", DeviceRole::Client, &reading)
-            .unwrap();
-        assert_eq!(client, host);
-        // Kept across a restart.
-        let auth = Auth::open(tmp.path()).unwrap();
-        assert_eq!(auth.device_role(&host.device_id), Some(DeviceRole::Client));
-        let reading = CancellationToken::new();
-        let replication = CancellationToken::new();
-        auth.authenticate("fp-h", None, "test", DeviceRole::Client, &reading)
-            .unwrap();
-        auth.authenticate("fp-h", None, "test", DeviceRole::Host, &replication)
-            .unwrap();
-
-        // Taking it back closes the client connection, not the replication.
-        assert!(
-            auth.set_device_role(&host.device_id, DeviceRole::Host)
-                .unwrap()
-        );
-        assert!(reading.is_cancelled());
-        assert!(!replication.is_cancelled());
-        assert!(connect(&auth, "fp-h", DeviceRole::Client).is_err());
-        assert!(connect(&auth, "fp-h", DeviceRole::Host).is_ok());
-
-        let unknown = DeviceId::new("nobody");
-        assert!(!auth.set_device_role(&unknown, DeviceRole::Client).unwrap());
-        assert_eq!(auth.device_role(&unknown), None);
-    }
-
-    #[test]
-    fn a_shared_code_pairs_as_the_sharer_with_their_role() {
-        let (_tmp, auth) = open();
-        let alice = pair(
-            &auth,
-            "fp-a",
-            &auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-        )
-        .unwrap();
-        let bob = pair(
-            &auth,
-            "fp-b",
-            &auth.mint("bob", None, PAIRING_TTL).unwrap().code,
-        )
-        .unwrap();
-        for (sharer, role, phone) in [
-            (&alice, Role::Owner, "fp-a2"),
-            (&bob, Role::Member, "fp-b2"),
-        ] {
-            let pairing = auth.mint_for(&sharer.user_id, PAIRING_TTL).unwrap();
-            assert_eq!(
-                (pairing.role, pairing.device_role),
-                (role, DeviceRole::Client)
-            );
-            let paired = pair(&auth, phone, &pairing.code).unwrap();
-            assert_eq!((&paired.user_id, paired.role), (&sharer.user_id, role));
-            assert_ne!(paired.device_id, sharer.device_id);
-            // Once only.
-            assert!(pair(&auth, "fp-x", &pairing.code).is_err());
-        }
-        // Each device keeps its own credential: revoking the new one leaves the sharer's.
-        let phone = connect(&auth, "fp-b2", DeviceRole::Client).unwrap();
-        assert!(auth.revoke(&phone.device_id).unwrap());
-        assert!(connect(&auth, "fp-b", DeviceRole::Client).is_ok());
-
-        let expired = auth.mint_for(&alice.user_id, Duration::ZERO).unwrap();
-        assert_eq!(
-            pair(&auth, "fp-y", &expired.code).unwrap_err().code,
-            ErrorCode::Forbidden
-        );
-        assert!(auth.mint_for(&UserId::new("nobody"), PAIRING_TTL).is_err());
-    }
-
-    #[test]
-    fn users_of_hosts_alone_do_not_make_the_first_owner() {
-        let (_tmp, auth) = open();
-        let host = auth.mint_host("devbox", PAIRING_TTL).unwrap().code;
-        auth.authenticate(
-            "fp-h",
-            Some(&host),
-            "test",
-            DeviceRole::Host,
-            &CancellationToken::new(),
-        )
-        .unwrap();
-        assert!(auth.mint("bob", Some(Role::Member), PAIRING_TTL).is_err());
-        assert_eq!(
-            auth.mint("alice", None, PAIRING_TTL).unwrap().role,
-            Role::Owner
-        );
-    }
-
-    #[test]
     fn migration_makes_devices_that_replicated_host_only_once() {
         let (tmp, auth) = open();
-        let laptop = pair(
-            &auth,
-            "fp-a",
-            &auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-        );
-        let devbox = pair(
-            &auth,
-            "fp-h",
-            &auth.mint("devbox", None, PAIRING_TTL).unwrap().code,
-        );
-        let (laptop, devbox) = (laptop.unwrap(), devbox.unwrap());
+        let laptop = auth.legacy_user("alice", Role::Owner, "fp-a");
+        let devbox = auth.legacy_user("devbox", Role::Member, "fp-h");
         drop(auth);
         // A file from before roles: no version, no device roles.
         let path = tmp.path().join(FILE);
@@ -1885,8 +1642,7 @@ mod tests {
     #[test]
     fn a_new_daemon_has_nothing_to_migrate() {
         let (_tmp, auth) = open();
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-        let alice = pair(&auth, "fp-a", &code).unwrap();
+        let alice = auth.legacy_user("alice", Role::Owner, "fp-a");
         assert!(
             auth.migrate_device_roles(&[alice.device_id])
                 .unwrap()
@@ -1897,8 +1653,7 @@ mod tests {
     #[test]
     fn only_owners_may_configure_accounts() {
         let (_tmp, auth) = open();
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let mut alice = auth.legacy_user("alice", Role::Owner, "fp-a");
         let command = CommandBody::SetAccountSettings {
             account_id: herder_protocol::AccountId::new("work"),
             label: "Work".into(),
@@ -1916,8 +1671,7 @@ mod tests {
     #[test]
     fn only_owners_may_install_a_provider() {
         let (_tmp, auth) = open();
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let mut alice = auth.legacy_user("alice", Role::Owner, "fp-a");
         let command = CommandBody::InstallProvider {
             provider: herder_protocol::Provider::Cursor,
             cols: 80,
@@ -1934,8 +1688,7 @@ mod tests {
     #[test]
     fn only_owners_may_close_a_terminal() {
         let (_tmp, auth) = open();
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let mut alice = auth.legacy_user("alice", Role::Owner, "fp-a");
         let command = CommandBody::CloseTerminal {
             terminal_id: herder_protocol::TerminalId::new("t1"),
         };
@@ -1950,8 +1703,7 @@ mod tests {
     #[test]
     fn only_owners_may_log_an_account_in_again() {
         let (_tmp, auth) = open();
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let mut alice = auth.legacy_user("alice", Role::Owner, "fp-a");
         let command = CommandBody::LogInAccount {
             account_id: herder_protocol::AccountId::new("work"),
             cols: 80,
@@ -1968,8 +1720,7 @@ mod tests {
     #[test]
     fn only_owners_may_read_or_change_the_settings_or_restart() {
         let (tmp, auth) = open();
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let mut alice = auth.legacy_user("alice", Role::Owner, "fp-a");
         let settings = crate::Config::load_file(&tmp.path().join("none.toml"))
             .unwrap()
             .settings();
@@ -1999,8 +1750,7 @@ mod tests {
     #[test]
     fn only_owners_may_list_put_remove_or_watch_bots_or_change_their_memory() {
         let (_tmp, auth) = open();
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let mut alice = auth.legacy_user("alice", Role::Owner, "fp-a");
         let bot_id = || herder_protocol::BotId::new("trash-can");
         let commands = [
             CommandBody::ListBots,
@@ -2046,8 +1796,7 @@ mod tests {
     #[test]
     fn only_owners_may_manage_secrets() {
         let (_tmp, auth) = open();
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let mut alice = auth.legacy_user("alice", Role::Owner, "fp-a");
         let (set, host_id) = (|| "prod".to_owned(), || herder_protocol::HostId::new("h1"));
         let commands = [
             CommandBody::CreateSecretSet {
@@ -2288,16 +2037,7 @@ mod people_tests {
         assert!(auth.approve_login(&tomas, &request.code).is_err());
 
         // A per-daemon user, who has no passkey, approves nothing.
-        let pairing = auth.mint("bob", None, super::PAIRING_TTL).unwrap();
-        let bob = auth
-            .authenticate(
-                "fp-bob",
-                Some(&pairing.code),
-                "test",
-                DeviceRole::Client,
-                &CancellationToken::new(),
-            )
-            .unwrap();
+        let bob = auth.legacy_user("bob", Role::Member, "fp-bob");
         let request = auth.start_login("fp-term-2", "test").unwrap();
         assert!(auth.approve_login(&bob, &request.code).is_err());
 

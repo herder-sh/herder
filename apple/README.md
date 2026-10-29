@@ -65,29 +65,28 @@ The HerderKit tests pair with the fake daemon `build-ffi.sh` builds:
 HERDER_FAKE_DAEMON=$PWD/target/debug/examples/fake_daemon swift test --package-path apple/HerderKit
 ```
 
-The iOS UI tests pair the app on a simulator with two running fake daemons, from the link a
-device paired with both shares (as **Add to Fleet › A device to this fleet** does), then
-open the session waiting on an approval on the first from its card on Home:
+The iOS UI tests sign the app in on a simulator to two running fake daemons, from the link a
+device signed in to both shares and with the passkey of their owner, which the fake daemons
+print, then open the session waiting on an approval on the first from its card on Home:
 
 ```sh
-cargo run -p herder-ffi --example fake_daemon -- --share   # the shared link first, the waiting session last
+cargo run -p herder-ffi --example fake_daemon -- --share   # the link and passkey first, the waiting session last
 cargo run -p herder-ffi --example fake_daemon -- --vault   # a vault that keeps secrets
 cargo run -p herder-ffi --example fake_daemon -- --own     # a machine to approve as its owner
-TEST_RUNNER_HERDER_PAIR_LINK='<link>' TEST_RUNNER_HERDER_WAITING_SESSION='<session id>' \
+TEST_RUNNER_HERDER_PAIR_LINK='<link>' TEST_RUNNER_HERDER_PASSKEY='<passkey>' \
+TEST_RUNNER_HERDER_WAITING_SESSION='<session id>' \
 TEST_RUNNER_HERDER_VAULT_LINK='<vault link>' TEST_RUNNER_HERDER_OWN_LINK='<own link>' xcodebuild test -skipPackagePluginValidation -project apple/herder.xcodeproj \
   -scheme herder-iOS -destination 'platform=iOS Simulator,name=iPhone 18 Pro'
 ```
 
-A pairing code works once, so start new fake daemons for each run, and erase the app from the
-simulator (`xcrun simctl uninstall booted sh.herder.Herder`) so it starts with no machines.
-The approval test signs with a software passkey the app has only in debug builds launched with
-`-softwarePasskey`, as no simulator answers Face ID for a test.
+Erase the app from the simulator (`xcrun simctl uninstall booted sh.herder.Herder`) so it
+starts with no machines.
 
-To try the app against it, run `cargo run -p herder-ffi --example fake_daemon` and paste the
-link it prints into **Add to Fleet**. For a real machine, run `herder pair` on it: on iOS, scan
-the QR code it prints with **Scan QR Code**; on the Mac, paste the link (or all of its output).
-To add a device to every machine another one already has, open **Fleet › Add to Fleet ›
-A device to this fleet** on that one and scan or paste the link it shows.
+To try the app against it, launch the app with `HERDER_FAKE_FLEET` set to the link
+`fake_daemon` prints and `HERDER_FAKE_PASSKEY` to the passkey after it: it signs in to those
+machines at launch. For a real machine, run `herder claim` on it: on iOS, scan the QR code it
+prints with **Scan QR Code**; on the Mac, paste the link (or all of its output), and approve
+with your passkey.
 
 The `apple` workflow runs the tests and builds both apps on every change to `apple/` or to what
 it builds on.
@@ -103,7 +102,7 @@ apple/scripts/profile-mac.sh switch     # back and forth between it and a finish
 ```
 
 It builds a release copy of the app with its own bundle id and profile, so the installed app
-keeps running with its pairings, and pairs it with `fake_daemon --busy`: the demo fleet plus a
+keeps running with its machines, and signs it in to `fake_daemon --busy`: the demo fleet plus a
 session with a long transcript whose turn keeps streaming. The `herder-macOS-Profile` UI test
 opens the scene and holds it while Instruments records it with the SwiftUI template. Then the
 script prints the hitches, how long the main thread was busy, the SwiftUI updates that took

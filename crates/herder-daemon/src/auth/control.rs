@@ -38,14 +38,6 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
-    /// Mint a pairing code for `user`: only `link_local_vault` asks this, of the vault on its
-    /// machine, and it goes with it. People join through the app and `herder login`.
-    Pair {
-        /// User name; created when the device pairs, if new.
-        user: String,
-        /// Role of a new user; the daemon picks when absent.
-        role: Option<Role>,
-    },
     /// Mint a pairing code for a host to replicate to this vault, and only that.
     PairHost {
         /// The host's name; the user its device acts as.
@@ -86,7 +78,7 @@ pub enum Response {
         /// Addresses it listens on, as `host:port`, most likely reachable first.
         addresses: Vec<String>,
     },
-    /// The users and their paired devices, as `list_users` answers.
+    /// The users and their paired devices.
     Users {
         /// Oldest first.
         users: Vec<UserInfo>,
@@ -231,10 +223,6 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
         message: format!("{err:#}"),
     };
     match request {
-        Request::Pair { user, role } => match auth.mint(&user, role, PAIRING_TTL) {
-            Ok(pairing) => paired(pairing, daemon),
-            Err(err) => failed(err),
-        },
         Request::PairHost { .. } if daemon.vault.is_none() => Response::Error {
             message: "hosts pair with a vault; `--host` works on the vault only".to_owned(),
         },
@@ -360,7 +348,7 @@ fn interface_addresses(wildcard: SocketAddr) -> Vec<SocketAddr> {
             IpAddr::V4(v4.ip())
         } else if let Some(v6) = address.as_sockaddr_in6() {
             // A wildcard IPv4 bind does not accept IPv6, and link-local addresses need a
-            // scope a pairing link cannot carry.
+            // scope a link cannot carry.
             if wildcard.is_ipv4() || v6.ip().is_unicast_link_local() {
                 continue;
             }
@@ -480,20 +468,6 @@ mod tests {
                 addresses: vec!["127.0.0.1:7447".into()],
             }
         );
-        let pair = Request::Pair {
-            user: "alice".into(),
-            role: None,
-        };
-        let Response::Paired(info) = ask(pair).await.unwrap() else {
-            panic!("expected a pairing code");
-        };
-        assert_eq!((info.user.as_str(), info.role), ("alice", Role::Owner));
-        assert_eq!(info.addresses, ["127.0.0.1:7447"]);
-        let member = Request::Pair {
-            user: "bob".into(),
-            role: Some(Role::Member),
-        };
-        assert!(matches!(ask(member).await.unwrap(), Response::Error { .. }));
         assert_eq!(
             ask(Request::Users).await.unwrap(),
             Response::Users { users: Vec::new() }
@@ -522,15 +496,7 @@ mod tests {
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
             vault: None,
         };
-        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-        auth.authenticate(
-            "fp-a",
-            Some(&code),
-            "test",
-            DeviceRole::Client,
-            &CancellationToken::new(),
-        )
-        .unwrap();
+        auth.legacy_user("alice", Role::Owner, "fp-a");
         let Response::Error { message } = handle(Request::Own, &auth, &daemon).await else {
             panic!("a daemon with an owner opens no first-owner window");
         };

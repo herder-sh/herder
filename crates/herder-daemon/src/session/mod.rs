@@ -908,9 +908,6 @@ impl SessionManager {
             | CommandBody::CloseTerminal { .. }
             | CommandBody::ResizeTerminal { .. }
             | CommandBody::TerminalInput { .. }
-            | CommandBody::PairDevice { .. }
-            | CommandBody::ListUsers
-            | CommandBody::SetUserRole { .. }
             | CommandBody::RevokeDevice { .. }
             | CommandBody::PasskeyChallenge
             | CommandBody::ListPeople
@@ -954,8 +951,7 @@ impl SessionManager {
             | CommandBody::LinkVault { .. }
             | CommandBody::SetVaultLink { .. }
             | CommandBody::UnlinkVault
-            | CommandBody::InstallVault
-            | CommandBody::LinkLocalVault => {
+            | CommandBody::InstallVault => {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "this daemon cannot back up to a vault",
@@ -972,9 +968,7 @@ impl SessionManager {
                 })?;
                 return skills.command(command).await;
             }
-            CommandBody::PairVaultHost { .. }
-            | CommandBody::RevokeVaultHost { .. }
-            | CommandBody::SetVaultHostAccess { .. } => {
+            CommandBody::PairVaultHost { .. } | CommandBody::RevokeVaultHost { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "this daemon is not a vault; pair hosts on the vault",
@@ -2396,7 +2390,6 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
             | CommandBody::ListBots
             | CommandBody::GetBotStatus
             | CommandBody::GetBotMemory { .. }
-            | CommandBody::ListUsers
             | CommandBody::ListPeople
             | CommandBody::GetSecretToStore { .. }
     )

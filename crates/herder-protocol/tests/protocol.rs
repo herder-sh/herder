@@ -388,20 +388,6 @@ fn client_fixtures() -> Vec<ClientMessage> {
         }),
         command(CommandBody::UnlinkVault),
         command(CommandBody::InstallVault),
-        command(CommandBody::LinkLocalVault),
-        command(CommandBody::PairDevice {
-            user: None,
-            role: None,
-        }),
-        command(CommandBody::PairDevice {
-            user: Some("bob".into()),
-            role: Some(Role::Member),
-        }),
-        command(CommandBody::ListUsers),
-        command(CommandBody::SetUserRole {
-            user_id: UserId::new("01J9USER"),
-            role: Role::Owner,
-        }),
         command(CommandBody::RevokeDevice {
             device_id: DeviceId::new("01J9DEVICE"),
             assertion: None,
@@ -555,10 +541,6 @@ fn client_fixtures() -> Vec<ClientMessage> {
         }),
         command(CommandBody::ListSecretAudit { before: None }),
         command(CommandBody::ListSecretAudit { before: Some(41) }),
-        command(CommandBody::SetVaultHostAccess {
-            host_id: HostId::new("01J9HOST"),
-            read: true,
-        }),
         command(CommandBody::ArchiveSession {
             session_id: session_id(),
         }),
@@ -1160,8 +1142,8 @@ fn server_fixtures() -> Vec<ServerMessage> {
         },
         ServerMessage::CommandAccepted {
             command_id: CommandId::new("01J9COMMAND"),
-            result: CommandResult::DevicePairing {
-                code: "ABCDE-FGHJK".into(),
+            result: CommandResult::OwnershipClaim {
+                code: "K7Q-4PD".into(),
                 fingerprint: "3f9a".repeat(16),
                 addresses: vec!["192.168.1.20:7447".into(), "[fd00::20]:7447".into()],
                 expires_at: "2026-10-03T12:10:00Z".parse().unwrap(),
@@ -1242,34 +1224,6 @@ fn server_fixtures() -> Vec<ServerMessage> {
             result: CommandResult::LoginApproved {
                 device_id: DeviceId::new("01J9DEVICE"),
                 client: "herder-tui/0.7.0".into(),
-            },
-        },
-        ServerMessage::CommandAccepted {
-            command_id: CommandId::new("01J9COMMAND"),
-            result: CommandResult::Users {
-                users: vec![UserInfo {
-                    user_id: UserId::new("01J9USER"),
-                    name: "alice".into(),
-                    role: Role::Owner,
-                    devices: vec![
-                        UserDevice {
-                            device_id: DeviceId::new("01J9DEVICE"),
-                            client: "herder-ios/0.6.0".into(),
-                            paired_at: "2026-10-03T12:00:00Z".parse().unwrap(),
-                            last_seen: Some("2026-10-04T08:00:00Z".parse().unwrap()),
-                            online: true,
-                            host_only: false,
-                        },
-                        UserDevice {
-                            device_id: DeviceId::new("01J9DEVICF"),
-                            client: "herder-daemon/0.6.0".into(),
-                            paired_at: "2026-10-03T12:00:00Z".parse().unwrap(),
-                            last_seen: None,
-                            online: false,
-                            host_only: true,
-                        },
-                    ],
-                }],
             },
         },
         ServerMessage::CommandAccepted {
@@ -2007,7 +1961,6 @@ fn fleet_fixtures() -> Vec<ServerMessage> {
                     events: 100,
                     last_event_at: Some(at()),
                     lag_ms: Some(42),
-                    read: true,
                 },
                 HostReplication {
                     host_id: HostId::new("01J9HOST2"),
@@ -2015,7 +1968,6 @@ fn fleet_fixtures() -> Vec<ServerMessage> {
                     events: 20,
                     last_event_at: Some(at()),
                     lag_ms: None,
-                    read: false,
                 },
             ],
         }),
@@ -2847,7 +2799,6 @@ fn fork_and_vault_status_wire_shape() {
             events: 2,
             last_event_at: None,
             lag_ms: None,
-            read: false,
         }]
     );
 }
@@ -3404,44 +3355,26 @@ fn usage_periods_start_where_they_say() {
 }
 
 #[test]
-fn device_pairing_has_its_wire_form() {
-    let own = CommandBody::PairDevice {
-        user: None,
-        role: None,
-    };
-    assert_eq!(
-        serde_json::to_value(&own).unwrap(),
-        json!({ "type": "pair_device" })
-    );
-    assert_eq!(
-        serde_json::from_value::<CommandBody>(json!({ "type": "pair_device" })).unwrap(),
-        own
-    );
-    assert_eq!(
-        serde_json::to_value(CommandBody::PairDevice {
-            user: Some("bob".into()),
-            role: Some(Role::Owner),
-        })
-        .unwrap(),
-        json!({ "type": "pair_device", "user": "bob", "role": "owner" })
-    );
-    let pairing = CommandResult::DevicePairing {
-        code: "ABCDE-FGHJK".into(),
+fn an_ownership_claim_has_its_wire_form() {
+    // Pairing a device by code is gone from the protocol.
+    assert!(serde_json::from_value::<CommandBody>(json!({ "type": "pair_device" })).is_err());
+    let claim = CommandResult::OwnershipClaim {
+        code: "K7Q-4PD".into(),
         fingerprint: "ab".into(),
         addresses: vec!["192.168.1.20:7447".into()],
         expires_at: "2026-10-03T12:10:00Z".parse().unwrap(),
     };
     let wire = json!({
-        "type": "device_pairing",
-        "code": "ABCDE-FGHJK",
+        "type": "ownership_claim",
+        "code": "K7Q-4PD",
         "fingerprint": "ab",
         "addresses": ["192.168.1.20:7447"],
         "expires_at": "2026-10-03T12:10:00Z",
     });
-    assert_eq!(serde_json::to_value(&pairing).unwrap(), wire);
+    assert_eq!(serde_json::to_value(&claim).unwrap(), wire);
     assert_eq!(
         serde_json::from_value::<CommandResult>(wire).unwrap(),
-        pairing
+        claim
     );
 }
 
