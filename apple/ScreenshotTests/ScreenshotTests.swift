@@ -167,6 +167,10 @@ final class ScreenshotTests: XCTestCase {
         integrations()
         archiving()
         project()
+        #if os(iOS)
+        // Last: the terminal hides the composer section() goes back by.
+        terminal()
+        #endif
         finish()
     }
 
@@ -452,6 +456,28 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot(platform("skills"))
     }
+
+    #if os(iOS)
+    /// A shell in a session's worktree, from the session's menu, with a command run in it.
+    private func terminal() {
+        guard open("Roll out 30-day log retention") else { return }
+        let menu = app.buttons["Session Actions"].firstMatch
+        guard wait(menu, "Session Actions") else { return }
+        press(menu)
+        let item = app.buttons["Terminal"].firstMatch
+        guard wait(item, "Terminal in Session Actions") else { return }
+        press(item)
+        let terminal = app.descendants(matching: .any)["session-terminal"].firstMatch
+        guard wait(terminal, "session terminal") else { return }
+        press(terminal)
+        settle()
+        // The prompt would name the machine running the demo and its user.
+        app.typeText("PS1='devbox:log-retention $ '; clear\n")
+        app.typeText("git status && git log --oneline --decorate -3\n")
+        settle()
+        shoot("ios-terminal")
+    }
+    #endif
 
     /// The Providers page, adding accounts on `devbox` (a login that runs in Activity, a second
     /// one cancelled there) and the machine's settings, then Update All.
