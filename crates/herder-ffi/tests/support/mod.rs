@@ -6,7 +6,7 @@
 //! It admits [`MAX_TURNS`] turns at once on a host that always has room otherwise, and an
 //! owner may change that limit. Adding an OpenCode account runs [`fake_login`], which logs in
 //! at once. Its owner, [`OWNER`], is set up before anyone pairs, so a member
-//! can pair too.
+//! can pair too; [`FakeDaemon::unowned`] starts one with no owner yet, waiting for its first.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, ensure};
 use herder_adapters::fake::FakeAdapter;
-use herder_client_core::PairingUri;
+use herder_client_core::{OwnUri, PairingUri};
 use herder_daemon::auth::{Auth, PAIRING_TTL, User};
 use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
@@ -86,10 +86,14 @@ impl ReadHost for Roomy {
 
 /// A running daemon; [`FakeDaemon::stop`] stops it and removes everything it created.
 pub struct FakeDaemon {
-    /// A pairing link with a fresh code, for the owner, [`OWNER`].
+    /// A pairing link with a fresh code, for the owner, [`OWNER`]; empty for an unowned daemon,
+    /// which pairs nobody by code.
     pub link: String,
-    /// A pairing link with a fresh code, for a member, `guest`.
+    /// A pairing link with a fresh code, for a member, `guest`; empty for an unowned daemon.
     pub member_link: String,
+    /// For a daemon with no owner yet, the `herder://own` link its first owner approves, as
+    /// `herder service install` prints it.
+    pub own_link: Option<String>,
     /// Absolute path of a git repository with one commit, holding [`PROJECT_SKILL`].
     pub repo: String,
     /// Absolute path of a git repository with [`IMPORTED_SKILL`] in a folder of its name.
@@ -102,13 +106,25 @@ pub struct FakeDaemon {
 impl FakeDaemon {
     /// Starts the daemon of host `name` on the current tokio runtime.
     pub async fn start(name: &str) -> Result<Self> {
+        Self::open(name, true).await
+    }
+
+    /// Starts the daemon of host `name` with no owner yet, its first-owner window open, as a
+    /// machine is right after `herder service install`.
+    pub async fn unowned(name: &str) -> Result<Self> {
+        Self::open(name, false).await
+    }
+
+    async fn open(name: &str, owned: bool) -> Result<Self> {
         let tmp = tempfile::tempdir()?;
         let dir = tmp.path().join("daemon");
         let app = repo(&tmp.path().join("app"), &[PROJECT_SKILL], ".claude/skills/")?;
         let library = library(tmp.path())?;
         let skill_source = repo(&tmp.path().join("imports"), &[IMPORTED_SKILL], "")?;
         std::fs::create_dir_all(dir.join("tls"))?;
-        owner(&dir)?;
+        if owned {
+            owner(&dir)?;
+        }
 
         let tls = Tls::load_or_create(&dir.join("tls"), name)?;
         let auth = Arc::new(Auth::open(&dir)?);
@@ -194,7 +210,22 @@ impl FakeDaemon {
             };
             Ok(uri.to_string())
         };
-        let (link, member_link) = (link(OWNER, None)?, link("guest", Some(Role::Member))?);
+        let (link, member_link) = if owned {
+            (link(OWNER, None)?, link("guest", Some(Role::Member))?)
+        } else {
+            (String::new(), String::new())
+        };
+        let own_link = if owned {
+            None
+        } else {
+            let uri = OwnUri {
+                hosts: vec![listener.local_addr()?.to_string()],
+                fingerprint: tls.fingerprint().to_owned(),
+                code: auth.open_claim()?.0,
+                name: Some(name.to_owned()),
+            };
+            Some(uri.to_string())
+        };
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
         let logins = Logins::new(
             HashMap::from([(Provider::Opencode, fake_login())]),
@@ -215,6 +246,7 @@ impl FakeDaemon {
         Ok(Self {
             link,
             member_link,
+            own_link,
             repo: app,
             skill_source,
             shutdown,

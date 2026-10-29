@@ -13,6 +13,8 @@
 //! apps are profiled under.
 //! `fake_daemon --vault` runs a vault that keeps secrets ([`vault`]) and prints only its
 //! owner's pairing link.
+//! `fake_daemon --own` runs `new-server`, a machine with no owner yet, and prints only the
+//! `herder://own` link its first owner approves.
 
 #[path = "fake_daemon/demo.rs"]
 mod demo;
@@ -42,6 +44,12 @@ async fn main() -> Result<()> {
             println!("{}", vault.link);
             tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
             return vault.stop().await;
+        }
+        Some("--own") => {
+            let daemon = support::FakeDaemon::unowned("new-server").await?;
+            println!("{}", daemon.own_link.clone().context("an unowned daemon has an own link")?);
+            tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
+            return daemon.stop().await;
         }
         Some("--share") => {
             let daemons = vec![

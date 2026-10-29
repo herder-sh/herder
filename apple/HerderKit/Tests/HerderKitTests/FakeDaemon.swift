@@ -43,7 +43,7 @@ final class FakeDaemon {
     }
 
     /// Reads the first `count` lines a process writes.
-    private static func readLines(_ count: Int, from handle: FileHandle) throws -> [String] {
+    static func readLines(_ count: Int, from handle: FileHandle) throws -> [String] {
         var data = Data()
         while data.filter({ $0 == UInt8(ascii: "\n") }).count < count {
             // Blocks until some output, unlike `read(upToCount:)`, which waits for all of it.
@@ -53,6 +53,30 @@ final class FakeDaemon {
         }
         return String(decoding: data, as: UTF8.self)
             .split(separator: "\n").prefix(count).map(String.init)
+    }
+}
+
+/// `fake_daemon --own`: `new-server`, a machine with no owner yet, and the `herder://own` link
+/// its first owner approves.
+final class OwnDaemon {
+    let link: String
+    private let process = Process()
+    private let stdin = Pipe()
+
+    init() throws {
+        guard let path = FakeDaemon.path else { throw CocoaError(.fileNoSuchFile) }
+        let stdout = Pipe()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["--own"]
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        try process.run()
+        link = try FakeDaemon.readLines(1, from: stdout.fileHandleForReading)[0]
+    }
+
+    deinit {
+        try? stdin.fileHandleForWriting.close()
+        process.waitUntilExit()
     }
 }
 

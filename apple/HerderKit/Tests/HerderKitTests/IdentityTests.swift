@@ -239,6 +239,55 @@ struct ClaimTests {
 
 @MainActor
 struct SoftwarePasskeyTests {
+    /// The whole of approving a new machine against a daemon: its link, the passkey made from
+    /// its offer, the claim, and the machine saved with you as its owner.
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func approvingANewMachinesLinkMakesYouItsOwner() async throws {
+        let daemon = try OwnDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        guard case .approve(let request) = AppLink(url: try #require(URL(string: daemon.link))) else {
+            Issue.record("not an approval link: \(daemon.link)")
+            return
+        }
+        #expect(request.name == "new-server")
+        let hostId = try #require(try await fleet.approve(request, with: SoftwareAuthenticator()))
+        #expect(await eventually { fleet.machines.first { $0.hostId == hostId }?.connection == .connected })
+        #expect(fleet.machines.first { $0.hostId == hostId }?.role == .owner)
+        // The window closed with its first owner: the same code takes no second.
+        await #expect(throws: (any Error).self) { try await fleet.approve(request, with: SoftwareAuthenticator()) }
+    }
+
+    /// Claim your machines against a daemon this app owns by a user of its own: offered, then
+    /// claimed with a passkey made there, after which nothing is left to claim.
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func claimingMovesAnOwnerUserToYourPasskey() async throws {
+        let daemon = try FakeDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: FleetPeople.thisClient + "/test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        let machine = try await fleet.pair(daemon)
+        try await fleet.client.synced(hostId: machine.hostId)
+        let plan = await fleet.claimPlan()
+        #expect(plan.machines.map(\.id) == [machine.hostId])
+        let claim = Claim(plan, name: "Tomas", authenticator: SoftwareAuthenticator()) {
+            try await fleet.client.send(hostId: $0, command: $1)
+        }
+        await claim.claim()
+        #expect(claim.rows[machine.hostId] == .claimed)
+        #expect(await eventually { fleet.machines.first?.connection == .connected })
+        try await fleet.client.synced(hostId: machine.hostId)
+        #expect(await fleet.claimPlan().machines.isEmpty)
+        #expect(await fleet.claimant()?.name == "Tomas")
+    }
+
     @Test func itsAssertionVerifiesWithTheKeyItRegistered() async throws {
         let passkey = SoftwareAuthenticator()
         let registration = try await passkey.register(name: "Tomas", userId: Data([1]), challenge: Data([2]))
