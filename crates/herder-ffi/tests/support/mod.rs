@@ -90,6 +90,10 @@ pub struct FakeDaemon {
     pub link: String,
     /// A pairing link with a fresh code, for a member, `guest`.
     pub member_link: String,
+    /// Who is on the daemon, for a test to sign people in to it.
+    // The fake_daemon example, which shares this module, signs no one in: it prints the links.
+    #[allow(dead_code)]
+    pub auth: Arc<Auth>,
     /// Absolute path of a git repository with one commit, holding [`PROJECT_SKILL`].
     pub repo: String,
     /// Absolute path of a git repository with [`IMPORTED_SKILL`] in a folder of its name.
@@ -209,12 +213,21 @@ impl FakeDaemon {
             host: host.id.clone(),
             vault: None,
         })?;
-        let server = Server::new(tls, auth, hub, sessions, terminals, logins, host);
+        let server = Server::new(
+            tls,
+            Arc::clone(&auth),
+            hub,
+            sessions,
+            terminals,
+            logins,
+            host,
+        );
         server.manage_settings(settings)?;
         let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
         Ok(Self {
             link,
             member_link,
+            auth,
             repo: app,
             skill_source,
             shutdown,
