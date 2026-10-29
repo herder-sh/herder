@@ -17,7 +17,7 @@ use herder_client_core::{
     SessionSubscription, SessionUpdate, TerminalEvent, TerminalStream,
 };
 use herder_client_core::{LoginUri, PairingUri};
-use herder_daemon::auth::authenticator::Authenticator;
+use herder_daemon::auth::authenticator::{self, Authenticator};
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::aws::Aws;
 use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
@@ -207,6 +207,19 @@ impl Daemon {
         .to_string()
     }
 
+    /// Signs `client` in as the person `name` by `addr`, joining as a new person the first time.
+    async fn sign_in(
+        &self,
+        client: &Client,
+        name: &str,
+        addr: SocketAddr,
+    ) -> Result<Machine, String> {
+        let hosts = vec![addr.to_string()];
+        authenticator::sign_in(&self.auth, client, hosts, &self.fingerprint, name)
+            .await
+            .map_err(|err| err.to_string())
+    }
+
     /// Kills the daemon: drops every task where it stands and waits until they are gone.
     async fn kill(mut self) {
         let runtime = self.runtime.take().unwrap();
@@ -337,7 +350,7 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
     let daemon = Daemon::start(&data, 0, "mid_turn.jsonl", Arc::clone(&turns)).await;
 
     let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
-    let machine = pair_one(&client, daemon.pairing_link()).await.unwrap();
+    let machine = daemon.sign_in(&client, "alice", daemon.addr).await.unwrap();
     let host = machine.host_id;
     assert_eq!(host, HostId::new("host-1"));
     assert_eq!(machine.name, "test-host-1");
@@ -451,7 +464,8 @@ async fn synced_waits_for_the_lists_and_the_replay() {
     )
     .await;
     let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
-    let host = pair_one(&client, daemon.pairing_link())
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
         .await
         .unwrap()
         .host_id;
@@ -519,14 +533,15 @@ async fn a_renamed_machine_keeps_its_name_and_a_forgotten_one_is_gone() {
     )
     .await;
     let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
-    let host = pair_one(&client, daemon.pairing_link())
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
         .await
         .unwrap()
         .host_id;
     client.rename(host.clone(), "build box".into()).unwrap();
     assert_eq!(client.machines()[0].name, "build box");
     // Pairing again keeps the name.
-    pair_one(&client, daemon.pairing_link()).await.unwrap();
+    daemon.sign_in(&client, "alice", daemon.addr).await.unwrap();
     assert_eq!(client.machines()[0].name, "build box");
     drop(client);
 
@@ -583,7 +598,11 @@ async fn clients_sharing_a_profile_see_each_others_changes() {
     let app = Client::open(config.clone(), "herder-app/0".into()).unwrap();
     let tui = Client::open(config.clone(), "herder-tui/0".into()).unwrap();
 
-    let host = pair_one(&app, daemon.pairing_link()).await.unwrap().host_id;
+    let host = daemon
+        .sign_in(&app, "alice", daemon.addr)
+        .await
+        .unwrap()
+        .host_id;
     wait_machines(&tui, |m| m.len() == 1 && m[0].host_id == host).await;
     wait_connection(&tui, connected).await;
 
@@ -596,7 +615,7 @@ async fn clients_sharing_a_profile_see_each_others_changes() {
     assert_eq!(tui.machines()[0].name, "build box");
 
     // Pairing again with a new key replaces the other client's connection too.
-    pair_one(&tui, daemon.pairing_link()).await.unwrap();
+    daemon.sign_in(&tui, "alice", daemon.addr).await.unwrap();
     wait_connection(&app, connected).await;
 
     app.forget(host.clone()).unwrap();
@@ -632,8 +651,8 @@ async fn clients_sharing_a_profile_lose_no_pairing() {
     let tui = Client::open(config.clone(), "herder-tui/0".into()).unwrap();
 
     let (paired_one, paired_two) = tokio::join!(
-        pair_one(&app, one.pairing_link()),
-        pair_one(&tui, two.pairing_link())
+        one.sign_in(&app, "alice", one.addr),
+        two.sign_in(&tui, "alice", two.addr)
     );
     paired_one.unwrap();
     paired_two.unwrap();
@@ -746,7 +765,8 @@ async fn reconnect_dials_the_first_address_and_falls_back_when_it_is_dead() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = pair_one(&client, daemon.pairing_link())
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
         .await
         .unwrap()
         .host_id;
@@ -965,7 +985,8 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = pair_one(&client, daemon.pairing_link_via("alice", relay.addr))
+    let host = daemon
+        .sign_in(&client, "alice", relay.addr)
         .await
         .unwrap()
         .host_id;
@@ -1006,7 +1027,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         "herder-test/0".into(),
     )
     .unwrap();
-    pair_one(&other, daemon.pairing_link()).await.unwrap();
+    daemon.sign_in(&other, "alice", daemon.addr).await.unwrap();
     let watcher = other
         .attach_terminal(host.clone(), terminal_id.clone())
         .await
@@ -1023,9 +1044,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         "herder-test/0".into(),
     )
     .unwrap();
-    pair_one(&member, daemon.pairing_link_via("bob", daemon.addr))
-        .await
-        .unwrap();
+    daemon.sign_in(&member, "bob", daemon.addr).await.unwrap();
     wait_connection(&member, connected).await;
     assert_eq!(member.machines()[0].role, Some(Role::Member));
     for refused in [
@@ -1098,7 +1117,8 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = pair_one(&client, daemon.pairing_link())
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
         .await
         .unwrap()
         .host_id;
@@ -1116,9 +1136,7 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
         "herder-test/0".into(),
     )
     .unwrap();
-    pair_one(&member, daemon.pairing_link_via("bob", daemon.addr))
-        .await
-        .unwrap();
+    daemon.sign_in(&member, "bob", daemon.addr).await.unwrap();
     let refused = member
         .add_account(host.clone(), new_account("codex-2"), 80, 24)
         .await
@@ -1251,7 +1269,8 @@ async fn logging_an_account_in_again_relays_its_login_in_its_own_dir() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = pair_one(&client, daemon.pairing_link())
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
         .await
         .unwrap()
         .host_id;
@@ -1262,9 +1281,7 @@ async fn logging_an_account_in_again_relays_its_login_in_its_own_dir() {
         "herder-test/0".into(),
     )
     .unwrap();
-    pair_one(&member, daemon.pairing_link_via("bob", daemon.addr))
-        .await
-        .unwrap();
+    daemon.sign_in(&member, "bob", daemon.addr).await.unwrap();
     let refused = member
         .log_in_account(host.clone(), account(), 80, 24)
         .await
@@ -1349,7 +1366,7 @@ async fn host_and_session_resources_stay_current_while_connected() {
         "herder-test/0".into(),
     )
     .unwrap();
-    pair_one(&client, daemon.pairing_link()).await.unwrap();
+    daemon.sign_in(&client, "alice", daemon.addr).await.unwrap();
     wait_machine(&client, |m| m.resources == Some(host_resources(3))).await;
 
     // Later figures replace them.
@@ -1416,7 +1433,7 @@ async fn skills_stay_current_while_connected() {
         "herder-test/0".into(),
     )
     .unwrap();
-    pair_one(&client, daemon.pairing_link()).await.unwrap();
+    daemon.sign_in(&client, "alice", daemon.addr).await.unwrap();
     wait_machine(&client, |m| m.skills == Some(status("a1"))).await;
     daemon.hub.skills_status(status("b2"));
     wait_machine(&client, |m| m.skills == Some(status("b2"))).await;
@@ -1457,7 +1474,7 @@ async fn connection_quality_reports_round_trips_and_reconnects() {
         "herder-test/0".into(),
     )
     .unwrap();
-    pair_one(&client, daemon.pairing_link()).await.unwrap();
+    daemon.sign_in(&client, "alice", daemon.addr).await.unwrap();
     wait_machine(&client, |m| m.quality.last_rtt_ms.is_some()).await;
     let quality = client.machines()[0].quality.clone();
     assert!(connected(&client.machines()[0].connection));
@@ -1545,7 +1562,8 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = pair_one(&phone, daemon.pairing_link_via("alice", relay.addr))
+    let host = daemon
+        .sign_in(&phone, "alice", relay.addr)
         .await
         .unwrap()
         .host_id;
@@ -1574,7 +1592,10 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
         "herder-test/0".into(),
     )
     .unwrap();
-    pair_one(&desktop, daemon.pairing_link()).await.unwrap();
+    daemon
+        .sign_in(&desktop, "alice", daemon.addr)
+        .await
+        .unwrap();
     let watched = desktop
         .subscribe_session(host.clone(), session_id.clone())
         .unwrap();
@@ -1630,7 +1651,8 @@ async fn wake_keeps_a_healthy_connection_and_replaces_a_dead_one() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = pair_one(&client, daemon.pairing_link_via("alice", relay.addr))
+    let host = daemon
+        .sign_in(&client, "alice", relay.addr)
         .await
         .unwrap()
         .host_id;
@@ -1671,7 +1693,8 @@ async fn the_offline_cache_shows_the_last_state_and_live_data_wins() {
     let turns = Arc::new(AtomicU64::new(0));
     let daemon = Daemon::start(&data, 0, "mid_turn.jsonl", Arc::clone(&turns)).await;
     let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
-    let host = pair_one(&client, daemon.pairing_link())
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
         .await
         .unwrap()
         .host_id;
@@ -1915,7 +1938,8 @@ async fn an_aws_sign_in_relays_its_device_code_and_exit() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = pair_one(&client, daemon.pairing_link())
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
         .await
         .unwrap()
         .host_id;

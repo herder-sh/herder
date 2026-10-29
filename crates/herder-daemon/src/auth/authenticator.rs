@@ -16,8 +16,9 @@ use ring::digest::{SHA256, digest};
 use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair, KeyPair};
 
-use herder_client_core::{Client, Machine};
+use herder_client_core::{Client, Error, Machine};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use super::Auth;
 use crate::ws::Identity;
@@ -91,6 +92,16 @@ impl Authenticator {
             kind: "public-key".to_owned(),
         };
         (authenticator, registration)
+    }
+
+    /// The recorded passkey `name` of `auth`'s person `name`, once they are there.
+    pub fn of(auth: &Auth, name: &str) -> Option<Self> {
+        let person = auth
+            .people()
+            .into_iter()
+            .find(|person| person.name == name)?;
+        let handle = Uuid::parse_str(person.person_id.as_str()).unwrap();
+        Some(Self::new(name, handle.as_bytes()))
     }
 
     /// Signs the device with certificate `fingerprint` in to `auth` as this passkey's person,
@@ -221,6 +232,31 @@ impl Join {
         };
         (passkey, sign_in)
     }
+}
+
+/// Signs `client` in to the daemon of `auth` at `hosts`, with certificate `fingerprint`, as the
+/// person `name`: with their recorded passkey when they are there, else as a new person, the
+/// owner of a daemon with none and a member after, as pairing with a code made them.
+pub async fn sign_in(
+    auth: &Auth,
+    client: &Client,
+    hosts: Vec<String>,
+    fingerprint: &str,
+    name: &str,
+) -> Result<Machine, Error> {
+    if let Some(passkey) = Authenticator::of(auth, name) {
+        let pending = client.sign_in(hosts, fingerprint.to_owned()).await?;
+        let assertion = passkey.assert(&pending.challenge());
+        return pending.finish(SignIn::Passkey { assertion }).await;
+    }
+    let role = match auth.owner() {
+        None => Role::Owner,
+        Some(_) => Role::Member,
+    };
+    let join = Join::open(auth, role);
+    let pending = client.sign_in(hosts, fingerprint.to_owned()).await?;
+    let (_, sign_in) = join.sign_in(name, &pending.registration().unwrap());
+    pending.finish(sign_in).await
 }
 
 /// Signs the device with certificate `fingerprint` in to `auth` as the new person `name`, with
