@@ -259,7 +259,7 @@ pub struct Machine {
     /// This device's user's role, from the latest hello; `None` until the first connection.
     pub role: Option<Role>,
     /// The person this device acts for there, from the latest hello; `None` until the first
-    /// connection and for a per-daemon user.
+    /// connection.
     pub person_id: Option<PersonId>,
     /// The daemon's herder version, from the latest hello; `None` until the first connection,
     /// and from daemons too old to update from a client (before `UpdateDaemon`).
