@@ -2550,3 +2550,136 @@ async fn a_fresh_daemon_gets_its_first_owner_by_an_assertion_and_their_devices_n
     };
     assert_eq!(error.code, ErrorCode::Forbidden);
 }
+
+/// An assertion by `passkey` over a challenge `client` just asked for.
+async fn fresh(client: &mut Client, passkey: &Authenticator) -> Box<PasskeyAssertion> {
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::PasskeyChallenge { challenge, .. },
+        ..
+    } = client
+        .command(
+            &ulid::Ulid::generate().to_string(),
+            CommandBody::PasskeyChallenge,
+        )
+        .await
+    else {
+        panic!("expected a passkey challenge");
+    };
+    Box::new(passkey.assert(&challenge))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_invited_member_connects_a_role_change_applies_and_a_revoke_disconnects() {
+    let daemon = Daemon::start_fresh().await;
+    let (code, _) = daemon.auth.open_claim().unwrap();
+    let mut tomas_passkey = None;
+    let mut owner = daemon
+        .client_on(&DeviceKey::generate().unwrap(), None)
+        .await;
+    owner
+        .sign_in(|_, registration| {
+            let (passkey, registration) =
+                Authenticator::register("tomas", &registration.expect("a claim registers"));
+            tomas_passkey = Some(passkey);
+            SignIn::ClaimOwnership {
+                code: code.clone(),
+                person: NewPerson {
+                    name: "Tomas".into(),
+                    passkey: PersonPasskey::Register { registration },
+                },
+            }
+        })
+        .await;
+    let tomas = tomas_passkey.unwrap();
+
+    // Tomas invites Sam as a member; Sam registers his own passkey through the invite.
+    let invite = CommandBody::Invite {
+        role: Role::Member,
+        assertion: fresh(&mut owner, &tomas).await,
+    };
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::Invite { invite, role, .. },
+        ..
+    } = owner.command("invite", invite).await
+    else {
+        panic!("expected an invite");
+    };
+    assert_eq!(role, Role::Member);
+    let laptop = DeviceKey::generate().unwrap();
+    let mut sam = daemon.client_on(&laptop, None).await;
+    let joined = sam
+        .sign_in(|_, registration| {
+            let (_, registration) =
+                Authenticator::register("sam", &registration.expect("an invite registers"));
+            SignIn::AcceptInvite {
+                invite: invite.clone(),
+                person: NewPerson {
+                    name: "Sam".into(),
+                    passkey: PersonPasskey::Register { registration },
+                },
+            }
+        })
+        .await;
+    assert_eq!(joined.role, Role::Member);
+    let sam_id = joined.person_id.clone().expect("Sam is a person");
+    // Its invite used, the daemon takes no more new passkeys.
+    let mut late = daemon
+        .client_on(&DeviceKey::generate().unwrap(), None)
+        .await;
+    late.send(&ClientMessage::Hello(ClientHello {
+        protocol_version: PROTOCOL_VERSION,
+        client: "test".into(),
+        resume: Vec::new(),
+        pairing_code: None,
+        sign_in: true,
+    }))
+    .await;
+    assert!(
+        matches!(
+            late.recv().await,
+            ServerMessage::SignInChallenge {
+                registration: None,
+                ..
+            }
+        ),
+        "an invite works once"
+    );
+
+    // Making Sam an owner closes his connection; he comes back as an owner.
+    let promote = CommandBody::SetPersonRole {
+        person_id: sam_id.clone(),
+        role: Role::Owner,
+        person: None,
+        assertion: fresh(&mut owner, &tomas).await,
+    };
+    assert!(matches!(
+        owner.command("promote", promote).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+    assert!(sam.try_recv().await.is_none(), "the role change closed it");
+    let mut sam = daemon.client_on(&laptop, None).await;
+    let back = sam.hello(Vec::new()).await;
+    assert_eq!(
+        (back.role, back.device_id),
+        (Role::Owner, joined.device_id.clone())
+    );
+
+    // Removing Sam disconnects him at once, and his device is refused from then on.
+    let remove = CommandBody::RevokePerson {
+        person_id: sam_id,
+        assertion: fresh(&mut owner, &tomas).await,
+    };
+    assert!(matches!(
+        owner.command("remove", remove).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+    assert!(sam.try_recv().await.is_none(), "the revoke closed it");
+    let again = daemon.client_on(&laptop, None).await;
+    assert_eq!(refused(again).await.code, ErrorCode::Forbidden);
+}
