@@ -125,6 +125,63 @@ struct ApprovalTests {
 
 @MainActor
 struct ClaimTests {
+    /// Three machines you own: a host, and a vault that has a machine row and a leftover owner.
+    static let plan = ClaimPlan(machines: [
+        ClaimPlan.Machine(hostId: "box", name: "box", userId: "u-box"),
+        ClaimPlan.Machine(hostId: "lab", name: "lab", userId: "u-lab"),
+        ClaimPlan.Machine(hostId: "vault", name: "herder-vault-0", userId: "u-vault"),
+    ], name: "Tomas")
+
+    static let key = PasskeyKey(credentialId: "AQ", publicKey: "pk")
+
+    /// The machines, as `claim_users`, `list_people`, `passkey_challenge` and `decide_leftover`
+    /// answer, with what each was sent.
+    @MainActor final class Machines {
+        var sent: [(HostId, CommandBody)] = []
+        var refusing: Set<HostId> = []
+
+        func send(_ hostId: HostId, _ command: CommandBody) async throws -> CommandResult {
+            sent.append((hostId, command))
+            if refusing.contains(hostId) { throw HerderError.Local(detail: "not an owner") }
+            switch command {
+            case .passkeyChallenge:
+                return .passkeyChallenge(
+                    challenge: PasskeyChallenge(rpId: "herder.sh", challenge: "CQk", expiresAt: "2026-10-29T12:01:00Z"),
+                    registration: PasskeyCreation(rpId: "herder.sh", challenge: "CQk", personId: "p-\(hostId)",
+                                                  userHandle: "AQ", expiresAt: "2026-10-29T12:01:00Z"))
+            case .claimUsers(let person, _):
+                let personId = switch person.passkey {
+                case .register: "p-\(hostId)"
+                case .existing(let personId, _, _): personId
+                }
+                guard hostId == "vault" else { return .claimed(personId: personId, hosts: [], leftovers: []) }
+                let device = UserDevice(deviceId: "d", client: "herder-cli/0.6.0", pairedAt: "2026-10-09T09:00:00Z",
+                                        lastSeen: nil, online: true, hostOnly: false)
+                return .claimed(personId: personId, hosts: ["trash-can-01"],
+                                leftovers: [UserInfo(userId: "u-owner", name: "owner", role: .owner, devices: [device])])
+            case .listPeople:
+                return .people(people: [PersonInfo(personId: "p-\(hostId)", name: "Tomas", role: .owner,
+                                                   passkeys: [ClaimTests.key], devices: [])])
+            case .decideLeftover:
+                return .applied
+            default:
+                throw HerderError.Local(detail: "unexpected \(command)")
+            }
+        }
+
+        /// What `claim_users` carried, by machine: the passkey made or reused, and `also`.
+        var claims: [String] {
+            sent.compactMap { hostId, command in
+                guard case .claimUsers(let person, let also) = command else { return nil }
+                let passkey = switch person.passkey {
+                case .register: "new"
+                case .existing(let personId, _, _): personId
+                }
+                return "\(hostId) \(passkey) also \(also.joined(separator: ","))"
+            }
+        }
+    }
+
     @Test func rowsSayWhatChanges() {
         let plan = ClaimPlan.demo
         #expect(plan.headline == "Create your herder passkey, then claim 5 machines")
@@ -134,26 +191,90 @@ struct ClaimTests {
             "tomas, owner (owner) → you · 3 machine rows move to Machines",
             "tomas (owner) → you · draugelis moves to Machines",
         ])
+        #expect(Self.plan.machines[0].change == "your user (owner) → you")
     }
 
-    @Test func claimingCreatesThePasskeyThenClaimsEveryMachine() async {
-        let authenticator = FakeAuthenticator()
-        var answered: [String: ClaimPlan.Answer] = [:]
-        let claim = Claim(.demo, authenticator: authenticator) { _, answers, _ in answered = answers }
-        claim.answers["owner@herder-vault-0"] = .remove
-        await claim.claim(name: "Tomas", userId: Data([1]), challenge: Data([2]))
-        #expect(authenticator.registered == ["Tomas"])
-        #expect(answered == ["owner@herder-vault-0": .remove])
-        #expect(claim.done)
-    }
-
-    @Test func aFailedClaimLeavesEveryMachineReady() async {
-        let claim = Claim(.demo, authenticator: FakeAuthenticator()) { _, _, _ in
-            throw HerderError.Local(detail: "draugelis did not answer")
+    @Test func onlyConnectedMachinesYouOwnWithoutAPersonAreUnclaimed() {
+        func owned(_ id: HostId, role: Role = .owner, personId: PersonId? = nil,
+                   connection: ConnectionState = .connected) -> Machine {
+            var machine = machine(id, name: id, sessions: [], role: role, personId: personId, connection: connection)
+            machine.userId = "u-\(id)"
+            return machine
         }
-        await claim.claim(name: "Tomas", userId: Data([1]), challenge: Data([2]))
-        #expect(!claim.done)
+        let fleet = [owned("box"), owned("claimed", personId: "p"), owned("shared", role: .member),
+                     owned("away", connection: .connecting), machine("new", name: "new", sessions: [])]
+        #expect(ClaimPlan.unclaimed(fleet) == [ClaimPlan.Machine(hostId: "box", name: "box", userId: "u-box")])
+    }
+
+    @Test func claimingMakesThePasskeyOnceAndEachMachineTakesTheOthersUsers() async {
+        let authenticator = FakeAuthenticator()
+        let machines = Machines()
+        let claim = Claim(Self.plan, authenticator: authenticator, send: machines.send)
+        await claim.claim()
+        #expect(authenticator.registered == ["Tomas"])
+        #expect(authenticator.signed.count == 2, "one assertion for each machine after the first")
+        #expect(machines.claims == ["box new also u-lab,u-vault", "lab p-box also u-box,u-vault",
+                                    "vault p-box also u-box,u-lab"])
+        #expect(claim.claimed)
+        #expect(claim.machines[2].change == "your user (owner) → you · trash-can-01 moves to Machines")
+        #expect(claim.questions.map(\.id) == ["u-owner@vault"])
+        #expect(claim.questions[0].reason.hasPrefix("An owner from"))
+        #expect(claim.questions[0].reason.hasSuffix("whose device is online. Is this you?"))
+        #expect(!claim.done, "the leftover owner waits for a decision")
+    }
+
+    @Test func aPasskeyYourMachinesKnowIsReusedNotMadeAnew() async {
+        var plan = Self.plan
+        plan.known = PersonInfo(personId: "p-me", name: "Tomas", role: .owner, passkeys: [Self.key], devices: [])
+        #expect(plan.headline == "Claim 3 machines with your herder passkey")
+        let authenticator = FakeAuthenticator()
+        let machines = Machines()
+        let claim = Claim(plan, authenticator: authenticator, send: machines.send)
+        await claim.claim()
+        #expect(authenticator.registered.isEmpty)
+        #expect(machines.claims.map { $0.split(separator: " ")[1] } == ["p-me", "p-me", "p-me"])
+        #expect(claim.claimed)
+    }
+
+    @Test func decisionsGoToTheLeftoversMachineAndSomeoneElseStays() async {
+        let machines = Machines()
+        let claim = Claim(Self.plan, authenticator: FakeAuthenticator(), send: machines.send)
+        await claim.claim()
+        claim.answers["u-owner@vault"] = .remove
+        await claim.decide()
+        let decided = machines.sent.compactMap { hostId, command -> String? in
+            guard case .decideLeftover(let userId, let decision, _) = command else { return nil }
+            return "\(hostId) \(userId) \(decision)"
+        }
+        #expect(decided == ["vault u-owner remove"])
+        #expect(claim.done)
+
+        let other = Machines()
+        let kept = Claim(Self.plan, authenticator: FakeAuthenticator(), send: other.send)
+        await kept.claim()
+        kept.answers["u-owner@vault"] = .someoneElse
+        await kept.decide()
+        #expect(!other.sent.contains { if case .decideLeftover = $0.1 { true } else { false } })
+        #expect(kept.done)
+    }
+
+    @Test func aMachineThatRefusesIsMarkedAndTheOthersAreClaimed() async {
+        let machines = Machines()
+        machines.refusing = ["lab"]
+        let claim = Claim(Self.plan, authenticator: FakeAuthenticator(), send: machines.send)
+        await claim.claim()
+        #expect(claim.rows == ["box": .claimed, "lab": .failed, "vault": .claimed])
+        #expect(claim.error == "lab: not an owner")
+        #expect(!claim.claimed)
+    }
+
+    @Test func closingFaceIDLeavesEveryMachineReady() async {
+        let authenticator = FakeAuthenticator()
+        authenticator.failure = ASAuthorizationError(.canceled)
+        let claim = Claim(Self.plan, authenticator: authenticator, send: Machines().send)
+        await claim.claim()
         #expect(claim.rows.values.allSatisfy { $0 == .ready })
-        #expect(claim.error == "draugelis did not answer")
+        #expect(claim.error == nil)
+        #expect(!claim.working)
     }
 }

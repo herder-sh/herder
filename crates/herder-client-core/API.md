@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 17`
+`CLIENT_API_VERSION = 18`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -106,7 +106,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `person_id` | `Client::sign_in`, `share`, `rename`, `set_addresses`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `FleetLink` |
+| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `user_id`, `person_id` | `Client::sign_in`, `share`, `rename`, `set_addresses`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `FleetLink` |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images` and `files`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow`, `MergeQueued` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
 | Projects  | `Machine::projects`; a `Project`'s `remote`, the URL `CloneProject` clones it onto another machine from (none without a remote), `icon`, the hash of its icon, to cache it by, `icon_uploaded`, whether an owner uploaded it, and `icon_background`, the colour behind it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `CloneProject` (a git URL or GitHub `owner/repo`, into a new folder, or without one into a folder named after the repository in the machine's projects dir; `conflict` when it exists) → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |

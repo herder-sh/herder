@@ -67,6 +67,8 @@ struct FleetView: View {
     /// The request of a device without a passkey on show, and those put off by closing the sheet.
     @State private var actionRequest: ActionRequest?
     @State private var putOff: Set<ActionRequest.ID> = []
+    /// Whether Claim your machines came up this launch; Later puts it off until the next.
+    @State private var claimOffered = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -98,6 +100,15 @@ struct FleetView: View {
                 guard let request = fleet.claiming else { return }
                 fleet.claiming = nil
                 sheet = .approve(request)
+            }
+            // Claim your machines comes up once a launch, when the machines you own that connect
+            // within a moment of each other still know you by a per-daemon user.
+            .task(id: ClaimPlan.unclaimed(fleet.machines).map(\.hostId)) {
+                guard !claimOffered, !ClaimPlan.unclaimed(fleet.machines).isEmpty else { return }
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, !claimOffered, sheet == nil, let plan = await fleet.claimPlan() else { return }
+                claimOffered = true
+                sheet = .claim(plan)
             }
             // As a link does: the new session shows once its machine lists it.
             .onChange(of: fleet.revealed) {
