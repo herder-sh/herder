@@ -27,6 +27,8 @@
 //! Users, people and devices persist in `<data_dir>/auth.json`, written atomically on every
 //! change.
 
+#[cfg(test)]
+pub(crate) mod authenticator;
 pub mod control;
 pub mod passkeys;
 
@@ -1086,8 +1088,9 @@ impl Auth {
         let user_id = UserId::new(person_id.as_str());
         users.devices.retain(|device| device.user_id != user_id);
         self.save(&users).map_err(saving)?;
-        state.users = users;
+        // Their devices are found in what is about to be replaced.
         disconnect(&mut state, &user_id);
+        state.users = users;
         info!(%person_id, "person revoked");
         Ok(())
     }
@@ -2025,5 +2028,369 @@ mod tests {
                 ErrorCode::Forbidden
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod people_tests {
+    use std::time::Duration;
+
+    use herder_protocol::{ErrorCode, NewPerson, PersonCard, PersonPasskey, Role, SignIn, UserId};
+    use tokio_util::sync::CancellationToken;
+
+    use super::authenticator::Authenticator;
+    use super::passkeys::Passkeys;
+    use super::{Auth, DeviceRole, Identity};
+
+    fn open() -> (tempfile::TempDir, Auth) {
+        let tmp = tempfile::tempdir().unwrap();
+        let auth = Auth::open(tmp.path()).unwrap();
+        (tmp, auth)
+    }
+
+    fn sign_in(auth: &Auth, fingerprint: &str, method: SignIn) -> Result<Identity, ErrorInfo> {
+        auth.sign_in(fingerprint, "test", method, &CancellationToken::new())
+    }
+
+    use herder_protocol::ErrorInfo;
+
+    /// Claims a fresh `auth` as Tomas with a passkey created now, from the Mac.
+    fn claim(auth: &Auth) -> (Identity, Authenticator) {
+        let (code, _) = auth.open_claim().unwrap();
+        let (_, creation) = auth.sign_in_challenge().unwrap();
+        let (passkey, registration) = Authenticator::register("tomas", &creation.unwrap());
+        let method = SignIn::ClaimOwnership {
+            code,
+            person: NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Register { registration },
+            },
+        };
+        (sign_in(auth, "fp-mac", method).unwrap(), passkey)
+    }
+
+    /// Asks `passkey` to sign a fresh challenge of `auth`.
+    fn fresh(auth: &Auth, passkey: &Authenticator) -> herder_protocol::PasskeyAssertion {
+        passkey.assert(&auth.challenge().unwrap())
+    }
+
+    #[test]
+    fn registrations_and_assertions_verify_against_recorded_passkeys() {
+        let passkeys = Passkeys::new().unwrap();
+        let (passkey, registration) =
+            Authenticator::register("tomas", &passkeys.creation().unwrap());
+        let (person_id, key) = passkeys.register(&registration).unwrap();
+        assert_eq!(
+            uuid::Uuid::parse_str(person_id.as_str())
+                .unwrap()
+                .as_bytes(),
+            passkey.user_handle.as_slice()
+        );
+        // A registration works once.
+        assert_eq!(
+            passkeys.register(&registration).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+
+        let keys = |_: &herder_protocol::PersonId| vec![key.clone()];
+        let assertion = passkey.assert(&passkeys.challenge().unwrap());
+        assert_eq!(
+            passkeys.verify(&assertion, keys).unwrap().person_id,
+            person_id
+        );
+        // So does an assertion's challenge.
+        assert!(passkeys.verify(&assertion, keys).is_err());
+
+        // Another origin, another key, or a forged signature does not verify.
+        let challenge = passkeys.challenge().unwrap().challenge;
+        let phished = passkey.assert_raw(&challenge, "https://herder.example");
+        assert!(passkeys.verify(&phished, keys).is_err());
+        let sam = Authenticator::new("sam", &passkey.user_handle);
+        assert!(
+            passkeys
+                .verify(&sam.assert(&passkeys.challenge().unwrap()), keys)
+                .is_err()
+        );
+        let mut forged = passkey.assert(&passkeys.challenge().unwrap());
+        forged.response.signature = sam
+            .assert(&passkeys.challenge().unwrap())
+            .response
+            .signature;
+        assert!(passkeys.verify(&forged, keys).is_err());
+    }
+
+    #[test]
+    fn a_fresh_daemon_gets_its_first_owner_and_their_other_devices_need_no_code() {
+        // Tomas created his passkey on another machine; this one learns it from his app.
+        let (_mac_tmp, mac) = open();
+        let (tomas, passkey) = claim(&mac);
+        let key = mac.people()[0].passkeys[0].clone();
+        let person_id = tomas.person_id.clone().unwrap();
+
+        let (_tmp, auth) = open();
+        assert!(auth.sign_in_challenge().unwrap().1.is_none());
+        let (code, _) = auth.open_claim().unwrap();
+        assert!(auth.sign_in_challenge().unwrap().1.is_some());
+        let claim = |code: &str| SignIn::ClaimOwnership {
+            code: code.to_owned(),
+            person: NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Existing {
+                    person_id: person_id.clone(),
+                    key: key.clone(),
+                    assertion: fresh(&auth, &passkey),
+                },
+            },
+        };
+        // The code on the phone must match the terminal's.
+        let wrong = sign_in(&auth, "fp-mac", claim("AAA-AAA")).unwrap_err();
+        assert_eq!(wrong.code, ErrorCode::Forbidden);
+        assert_eq!(auth.owner(), None);
+
+        let owner = sign_in(&auth, "fp-mac", claim(&code.to_lowercase())).unwrap();
+        assert_eq!(owner.role, Role::Owner);
+        assert_eq!(owner.person_id.as_ref(), Some(&person_id));
+        assert_eq!(owner.user_id, UserId::new(person_id.as_str()));
+        assert_eq!(auth.owner(), Some(owner.user_id.clone()));
+        // The window closed with its first owner.
+        assert!(auth.sign_in_challenge().unwrap().1.is_none());
+        assert!(sign_in(&auth, "fp-other", claim(&code)).is_err());
+        assert!(auth.open_claim().is_err());
+
+        // His iPhone holds the same passkey: an assertion is all it needs.
+        let phone = SignIn::Passkey {
+            assertion: fresh(&auth, &passkey),
+        };
+        let phone = sign_in(&auth, "fp-phone", phone).unwrap();
+        assert_eq!(phone.user_id, owner.user_id);
+        assert_ne!(phone.device_id, owner.device_id);
+        let people = auth.people();
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].devices.len(), 2);
+
+        // Both devices are known from then on.
+        let again = auth.authenticate(
+            "fp-phone",
+            None,
+            "test",
+            DeviceRole::Client,
+            &CancellationToken::new(),
+        );
+        assert_eq!(again.unwrap(), phone);
+
+        // A passkey of nobody here signs nothing in.
+        let stranger = Authenticator::new("sam", &uuid::Uuid::now_v7().into_bytes());
+        let refused = SignIn::Passkey {
+            assertion: fresh(&auth, &stranger),
+        };
+        assert_eq!(
+            sign_in(&auth, "fp-stranger", refused).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+    }
+
+    #[tokio::test]
+    async fn an_app_approves_a_terminal_login() {
+        let (tmp, auth) = open();
+        let (tomas, passkey) = claim(&auth);
+        let request = auth.start_login("fp-term", "herder-tui/0.7.0").unwrap();
+        assert_eq!(request.code.len(), 7);
+        assert!(!auth.is_paired("fp-term"));
+
+        let wrong = auth.approve_login(&tomas, "ZZZ-ZZZ").unwrap_err();
+        assert_eq!(wrong.code, ErrorCode::NotFound);
+        auth.verify_assertion(tomas.person_id.as_ref().unwrap(), &fresh(&auth, &passkey))
+            .unwrap();
+        let (device_id, client) = auth.approve_login(&tomas, &request.code).unwrap();
+        assert_eq!(client, "herder-tui/0.7.0");
+        request.approved.await.unwrap();
+        let terminal = auth
+            .authenticate(
+                "fp-term",
+                None,
+                "test",
+                DeviceRole::Client,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            (terminal.device_id, terminal.user_id),
+            (device_id, tomas.user_id.clone())
+        );
+        // A code works once.
+        assert!(auth.approve_login(&tomas, &request.code).is_err());
+
+        // A per-daemon user, who has no passkey, approves nothing.
+        let pairing = auth.mint("bob", None, super::PAIRING_TTL).unwrap();
+        let bob = auth
+            .authenticate(
+                "fp-bob",
+                Some(&pairing.code),
+                "test",
+                DeviceRole::Client,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        let request = auth.start_login("fp-term-2", "test").unwrap();
+        assert!(auth.approve_login(&bob, &request.code).is_err());
+
+        // People and their devices survive a restart.
+        drop(auth);
+        let auth = Auth::open(tmp.path()).unwrap();
+        assert!(auth.is_paired("fp-term"));
+        assert_eq!(auth.people()[0].devices.len(), 2);
+    }
+
+    #[test]
+    fn invites_and_roles() {
+        let (_tmp, auth) = open();
+        let (tomas, _) = claim(&auth);
+        let tomas_id = tomas.person_id.clone().unwrap();
+        let (invite, _) = auth.invite(Role::Member).unwrap();
+        let (_, creation) = auth.sign_in_challenge().unwrap();
+        let (_, registration) = Authenticator::register("sam", &creation.unwrap());
+        let accept = |registration| SignIn::AcceptInvite {
+            invite: invite.clone(),
+            person: NewPerson {
+                name: "Sam".into(),
+                passkey: PersonPasskey::Register { registration },
+            },
+        };
+        let sam = sign_in(&auth, "fp-sam", accept(registration)).unwrap();
+        assert_eq!(sam.role, Role::Member);
+        let sam_id = sam.person_id.clone().unwrap();
+        // An invite works once.
+        let (_, creation) = auth.sign_in_challenge().unwrap();
+        assert!(creation.is_none());
+        let (_tmp2, other) = open();
+        let (_, registration) = Authenticator::register("sam", &other.creation().unwrap());
+        assert!(sign_in(&auth, "fp-sam-2", accept(registration)).is_err());
+
+        // Roles change, but never leave the daemon without an owner.
+        let last = auth
+            .set_person_role(&tomas_id, Role::Member, None)
+            .unwrap_err();
+        assert_eq!(last.code, ErrorCode::Conflict);
+        assert_eq!(
+            auth.revoke_person(&tomas_id).unwrap_err().code,
+            ErrorCode::Conflict
+        );
+        auth.set_person_role(&sam_id, Role::Owner, None).unwrap();
+        auth.set_person_role(&tomas_id, Role::Member, None).unwrap();
+        assert_eq!(auth.role(&tomas.user_id), Some(Role::Member));
+
+        // Another daemon learns Sam from the card this one lists.
+        let (_tmp3, third) = open();
+        claim(&third);
+        let listed = auth
+            .people()
+            .into_iter()
+            .find(|person| person.person_id == sam_id)
+            .unwrap();
+        let card = PersonCard {
+            name: listed.name,
+            passkeys: listed.passkeys,
+        };
+        assert_eq!(
+            third
+                .set_person_role(&sam_id, Role::Member, None)
+                .unwrap_err()
+                .code,
+            ErrorCode::NotFound
+        );
+        third
+            .set_person_role(&sam_id, Role::Member, Some(card))
+            .unwrap();
+        assert_eq!(third.role(&sam.user_id), Some(Role::Member));
+        let empty = PersonCard {
+            name: "Kim".into(),
+            passkeys: Vec::new(),
+        };
+        let kim = herder_protocol::PersonId::new(uuid::Uuid::now_v7().to_string());
+        assert_eq!(
+            third
+                .set_person_role(&kim, Role::Member, Some(empty))
+                .unwrap_err()
+                .code,
+            ErrorCode::BadRequest
+        );
+    }
+
+    #[test]
+    fn revoking_a_person_or_device_disconnects_it() {
+        let (_tmp, auth) = open();
+        let (tomas, passkey) = claim(&auth);
+        let (invite, _) = auth.invite(Role::Owner).unwrap();
+        let (_, creation) = auth.sign_in_challenge().unwrap();
+        let (sam_passkey, registration) = Authenticator::register("sam", &creation.unwrap());
+        let connection = CancellationToken::new();
+        let sam = auth
+            .sign_in(
+                "fp-sam",
+                "test",
+                SignIn::AcceptInvite {
+                    invite,
+                    person: NewPerson {
+                        name: "Sam".into(),
+                        passkey: PersonPasskey::Register { registration },
+                    },
+                },
+                &connection,
+            )
+            .unwrap();
+        let phone = CancellationToken::new();
+        let tomas_phone = auth
+            .sign_in(
+                "fp-phone",
+                "test",
+                SignIn::Passkey {
+                    assertion: fresh(&auth, &passkey),
+                },
+                &phone,
+            )
+            .unwrap();
+        assert!(auth.revoke(&tomas_phone.device_id).unwrap());
+        assert!(phone.is_cancelled());
+        assert!(auth.is_paired("fp-mac"));
+
+        auth.revoke_person(sam.person_id.as_ref().unwrap()).unwrap();
+        assert!(connection.is_cancelled());
+        assert!(!auth.is_paired("fp-sam"));
+        let gone = SignIn::Passkey {
+            assertion: fresh(&auth, &sam_passkey),
+        };
+        assert!(sign_in(&auth, "fp-sam", gone).is_err());
+        assert_eq!(auth.people().len(), 1);
+        assert_eq!(auth.people()[0].person_id, tomas.person_id.unwrap());
+    }
+
+    #[test]
+    fn an_assertion_must_be_fresh_and_the_callers_own() {
+        let (_tmp, mut auth) = open();
+        let (tomas, passkey) = claim(&auth);
+        let tomas_id = tomas.person_id.unwrap();
+        let assertion = fresh(&auth, &passkey);
+        auth.verify_assertion(&tomas_id, &assertion).unwrap();
+        // Used once.
+        assert!(auth.verify_assertion(&tomas_id, &assertion).is_err());
+        // Never minted here.
+        assert!(
+            auth.verify_assertion(
+                &tomas_id,
+                &passkey.assert_raw("bm90LW1pbnRlZA", "https://herder.sh")
+            )
+            .is_err()
+        );
+        // By someone else's passkey.
+        let other = herder_protocol::PersonId::new(uuid::Uuid::now_v7().to_string());
+        assert!(
+            auth.verify_assertion(&other, &fresh(&auth, &passkey))
+                .is_err()
+        );
+        // Expired: challenges here last no time at all.
+        auth.passkeys = Passkeys::with_ttl(Duration::ZERO).unwrap();
+        let stale = fresh(&auth, &passkey);
+        let refused = auth.verify_assertion(&tomas_id, &stale).unwrap_err();
+        assert!(refused.message.contains("expired"), "{}", refused.message);
     }
 }

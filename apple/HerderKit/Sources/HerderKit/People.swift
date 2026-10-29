@@ -51,7 +51,7 @@ final class People {
     }
 
     func revoke(_ device: UserDevice) async throws {
-        _ = try await send(.revokeDevice(deviceId: device.deviceId))
+        _ = try await send(.revokeDevice(deviceId: device.deviceId, assertion: nil))
         await reload()
     }
 

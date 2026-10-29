@@ -12,9 +12,10 @@ use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Account, AccountId, AwsDeviceCode, AwsProfile, ClientHello, ClientMessage, Command,
     CommandBody, CommandId, CommandResult, Cursor, DaemonSettings, DeviceId, ErrorCode, ErrorInfo,
-    Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION, PermissionMode, Provider,
-    Role, Seq, ServerHello, ServerMessage, SessionHead, SessionId, Terminal, TerminalPurpose,
-    TurnId, UserId, UserInfo,
+    Event, EventBody, HostId, Item, ItemBody, ItemId, LeftoverDecision, NewPerson,
+    PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey,
+    PermissionMode, PersonId, PersonPasskey, Provider, Role, Seq, ServerHello, ServerMessage,
+    SessionHead, SessionId, SignIn, Terminal, TerminalPurpose, TurnId, UserId, UserInfo,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -28,6 +29,8 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 
 use super::{Backend, Host, Server, Tls};
+use crate::auth::authenticator::Authenticator;
+use crate::auth::passkeys::{self, Passkeys};
 use crate::auth::{Auth, PAIRING_TTL};
 use crate::aws::Aws;
 use crate::hub::{self, DELTA_BACKLOG, Hub};
@@ -177,6 +180,15 @@ struct Daemon {
 
 impl Daemon {
     async fn start() -> Arc<Self> {
+        Self::start_with(true).await
+    }
+
+    /// A daemon with no owner, nobody paired: as `herder service install` leaves it.
+    async fn start_fresh() -> Arc<Self> {
+        Self::start_with(false).await
+    }
+
+    async fn start_with(paired_owner: bool) -> Arc<Self> {
         let tmp = tempfile::tempdir().unwrap();
         let tls = Tls::load_or_create(tmp.path(), "localhost").unwrap();
         let store = Arc::new(Mutex::new(
@@ -201,15 +213,17 @@ impl Daemon {
         let fingerprint = tls.fingerprint().to_owned();
         let auth = Arc::new(Auth::open(tmp.path()).unwrap());
         let owner = DeviceKey::generate().unwrap();
-        let code = auth.mint("owner", None, PAIRING_TTL).unwrap().code;
-        auth.authenticate(
-            &owner.fingerprint(),
-            Some(&code),
-            "test",
-            crate::auth::DeviceRole::Client,
-            &CancellationToken::new(),
-        )
-        .unwrap();
+        if paired_owner {
+            let code = auth.mint("owner", None, PAIRING_TTL).unwrap().code;
+            auth.authenticate(
+                &owner.fingerprint(),
+                Some(&code),
+                "test",
+                crate::auth::DeviceRole::Client,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        }
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
         let server = Server::new(
             tls,
@@ -469,13 +483,48 @@ impl Client {
         let ServerMessage::Hello(hello) = self.recv().await else {
             panic!("expected a hello");
         };
+        self.lists(&hello).await;
+        hello
+    }
+
+    /// Signs in as a person: says hello with `sign_in`, answers the challenge with what
+    /// `answer` makes of it, and reads the server hello and the lists that follow it.
+    async fn sign_in(
+        &mut self,
+        answer: impl FnOnce(PasskeyChallenge, Option<PasskeyCreation>) -> SignIn,
+    ) -> ServerHello {
+        self.send(&ClientMessage::Hello(ClientHello {
+            protocol_version: PROTOCOL_VERSION,
+            client: "test".into(),
+            resume: Vec::new(),
+            pairing_code: None,
+            sign_in: true,
+        }))
+        .await;
+        let ServerMessage::SignInChallenge {
+            challenge,
+            registration,
+        } = self.recv().await
+        else {
+            panic!("expected a sign-in challenge");
+        };
+        self.send(&ClientMessage::SignIn(answer(challenge, registration)))
+            .await;
+        let ServerMessage::Hello(hello) = self.recv().await else {
+            panic!("expected a hello");
+        };
+        self.lists(&hello).await;
+        hello
+    }
+
+    /// Reads the lists that follow the server hello.
+    async fn lists(&mut self, hello: &ServerHello) {
         assert!(matches!(self.recv().await, ServerMessage::Sessions { .. }));
         assert!(matches!(self.recv().await, ServerMessage::Accounts { .. }));
         assert!(matches!(self.recv().await, ServerMessage::Providers { .. }));
         if hello.role == Role::Owner {
             assert!(matches!(self.recv().await, ServerMessage::Terminals { .. }));
         }
-        hello
     }
 
     async fn command(&mut self, id: &str, body: CommandBody) -> ServerMessage {
@@ -502,6 +551,12 @@ impl Client {
             self.view.apply(message);
         }
     }
+}
+
+/// An assertion over a challenge no daemon minted.
+fn stale_assertion() -> PasskeyAssertion {
+    let passkey = Authenticator::new("tomas", &[0; 16]);
+    passkey.assert_raw("bm90LW1pbnRlZA", "https://herder.sh")
 }
 
 fn cursor(session: &SessionId, after_seq: Seq) -> Cursor {
@@ -2092,6 +2147,46 @@ async fn agents_run_commands_as_their_user_within_its_role() {
             device_id: DeviceId::new("d1"),
             assertion: None,
         },
+        // Nor does one see, invite, change or sign in people, even with an assertion.
+        CommandBody::PasskeyChallenge,
+        CommandBody::ListPeople,
+        CommandBody::Invite {
+            role: Role::Owner,
+            assertion: Box::new(stale_assertion()),
+        },
+        CommandBody::SetPersonRole {
+            person_id: PersonId::new("p1"),
+            role: Role::Owner,
+            person: None,
+            assertion: Box::new(stale_assertion()),
+        },
+        CommandBody::RevokePerson {
+            person_id: PersonId::new("p1"),
+            assertion: Box::new(stale_assertion()),
+        },
+        CommandBody::ApproveLogin {
+            code: "K7Q-4PD".into(),
+            assertion: Box::new(stale_assertion()),
+        },
+        CommandBody::ClaimUsers {
+            person: Box::new(NewPerson {
+                name: "agent".into(),
+                passkey: PersonPasskey::Existing {
+                    person_id: PersonId::new("p1"),
+                    key: PasskeyKey {
+                        credential_id: "Y3JlZA".into(),
+                        public_key: serde_json::Value::Null,
+                    },
+                    assertion: stale_assertion(),
+                },
+            }),
+            also: Vec::new(),
+        },
+        CommandBody::DecideLeftover {
+            user_id: owner.clone(),
+            decision: LeftoverDecision::ItsMe,
+            assertion: Box::new(stale_assertion()),
+        },
         CommandBody::PairVaultHost {
             host_name: "devbox".into(),
         },
@@ -2320,4 +2415,138 @@ async fn an_owner_signs_the_host_in_to_aws() {
         .send(&ClientMessage::Sync { token: "t".into() })
         .await;
     assert!(matches!(member.recv().await, ServerMessage::Synced { .. }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fresh_daemon_gets_its_first_owner_by_an_assertion_and_their_devices_need_no_code() {
+    let daemon = Daemon::start_fresh().await;
+    // Tomas created his passkey for another machine; his app carries its public key here.
+    let elsewhere = Passkeys::new().unwrap();
+    let (passkey, registration) = Authenticator::register("tomas", &elsewhere.creation().unwrap());
+    let (person_id, key) = elsewhere.register(&registration).unwrap();
+    let key = passkeys::key(&key);
+
+    // `herder service install` printed the code; the app shows the same one.
+    let (code, _) = daemon.auth.open_claim().unwrap();
+    let mac = DeviceKey::generate().unwrap();
+    let owner = daemon
+        .client_on(&mac, None)
+        .await
+        .sign_in(|challenge, registration| {
+            assert!(
+                registration.is_some(),
+                "a claimable daemon offers a registration"
+            );
+            SignIn::ClaimOwnership {
+                code: code.clone(),
+                person: NewPerson {
+                    name: "Tomas".into(),
+                    passkey: PersonPasskey::Existing {
+                        person_id: person_id.clone(),
+                        key: key.clone(),
+                        assertion: passkey.assert(&challenge),
+                    },
+                },
+            }
+        })
+        .await;
+    assert_eq!(owner.role, Role::Owner);
+    assert_eq!(owner.person_id.as_ref(), Some(&person_id));
+    assert_eq!(owner.user_id.as_str(), person_id.as_str());
+
+    // His iPhone has the same passkey, and no code.
+    let iphone = DeviceKey::generate().unwrap();
+    let mut phone = daemon.client_on(&iphone, None).await;
+    let signed_in = phone
+        .sign_in(|challenge, registration| {
+            assert!(registration.is_none(), "the claim window closed");
+            SignIn::Passkey {
+                assertion: passkey.assert(&challenge),
+            }
+        })
+        .await;
+    assert_eq!(signed_in.user_id, owner.user_id);
+    assert_ne!(signed_in.device_id, owner.device_id);
+
+    // A terminal with no passkey waits for the phone to approve it.
+    let terminal_key = DeviceKey::generate().unwrap();
+    let mut terminal = daemon.client_on(&terminal_key, None).await;
+    terminal
+        .send(&ClientMessage::Hello(ClientHello {
+            protocol_version: PROTOCOL_VERSION,
+            client: "herder-tui/0.7.0".into(),
+            resume: Vec::new(),
+            pairing_code: None,
+            sign_in: true,
+        }))
+        .await;
+    assert!(matches!(
+        terminal.recv().await,
+        ServerMessage::SignInChallenge { .. }
+    ));
+    terminal
+        .send(&ClientMessage::SignIn(SignIn::StartLogin))
+        .await;
+    let ServerMessage::LoginRequest { code, .. } = terminal.recv().await else {
+        panic!("expected a login request");
+    };
+    let ServerMessage::CommandAccepted {
+        result:
+            CommandResult::PasskeyChallenge {
+                challenge,
+                registration: None,
+            },
+        ..
+    } = phone
+        .command("challenge", CommandBody::PasskeyChallenge)
+        .await
+    else {
+        panic!("expected a passkey challenge");
+    };
+    let approve = CommandBody::ApproveLogin {
+        code,
+        assertion: Box::new(passkey.assert(&challenge)),
+    };
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::LoginApproved { device_id, client },
+        ..
+    } = phone.command("approve", approve).await
+    else {
+        panic!("expected the login approved");
+    };
+    assert_eq!(client, "herder-tui/0.7.0");
+    let ServerMessage::Hello(hello) = terminal.recv().await else {
+        panic!("expected a hello");
+    };
+    assert_eq!(
+        (hello.user_id, hello.device_id),
+        (owner.user_id.clone(), device_id)
+    );
+
+    // Each is known from then on, and listed under him.
+    let again = daemon
+        .client_on(&iphone, None)
+        .await
+        .hello(Vec::new())
+        .await;
+    assert_eq!(again.device_id, signed_in.device_id);
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::People { people },
+        ..
+    } = phone.command("people", CommandBody::ListPeople).await
+    else {
+        panic!("expected the people");
+    };
+    assert_eq!(people.len(), 1);
+    assert_eq!(people[0].devices.len(), 3);
+
+    // Owner-only people commands need a fresh assertion of the caller's.
+    let invite = CommandBody::Invite {
+        role: Role::Member,
+        assertion: Box::new(stale_assertion()),
+    };
+    let ServerMessage::CommandRejected { error, .. } = phone.command("invite", invite).await else {
+        panic!("expected the invite refused");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
 }

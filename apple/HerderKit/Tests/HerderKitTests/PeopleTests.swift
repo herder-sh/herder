@@ -67,7 +67,7 @@ struct PeopleTests {
         let invite = try await people.invite(" dana ", as: .owner)
         #expect(machine.changes == [
             .setUserRole(userId: "u-bob", role: .owner),
-            .revokeDevice(deviceId: "d-phone"),
+            .revokeDevice(deviceId: "d-phone", assertion: nil),
             .pairDevice(user: "dana", role: .owner),
         ])
         #expect(machine.sent.count == 1 + 3 * 2)

@@ -72,6 +72,8 @@ type Open<S> = Mutex<HashMap<String, (S, Instant)>>;
 /// The daemon's passkey ceremonies in progress.
 pub struct Passkeys {
     webauthn: Webauthn,
+    /// How long a challenge stays valid.
+    ttl: Duration,
     /// Assertion challenges.
     assertions: Open<DiscoverableAuthentication>,
     /// Registration challenges, with the person each is for.
@@ -81,15 +83,25 @@ pub struct Passkeys {
 impl Passkeys {
     /// Ceremonies for [`PASSKEY_RP_ID`].
     pub fn new() -> Result<Self> {
+        Self::with_ttl(TTL)
+    }
+
+    /// Ceremonies whose challenges stay valid for `ttl`.
+    pub fn with_ttl(ttl: Duration) -> Result<Self> {
         let origin = Url::parse(ORIGIN).context("parsing the passkey origin")?;
         let webauthn = webauthn_rs::WebauthnBuilder::new(PASSKEY_RP_ID, &origin)
             .and_then(|builder| builder.rp_name("herder").build())
             .context("setting up passkeys")?;
         Ok(Self {
             webauthn,
+            ttl,
             assertions: Mutex::default(),
             registrations: Mutex::default(),
         })
+    }
+
+    fn expires_at(&self) -> Result<Timestamp, ErrorInfo> {
+        Timestamp::now().checked_add(self.ttl).map_err(internal)
     }
 
     /// A fresh challenge for any known passkey to sign.
@@ -102,11 +114,11 @@ impl Passkeys {
         let now = Instant::now();
         let mut open = lock(&self.assertions);
         open.retain(|_, (_, expires)| *expires > now);
-        open.insert(challenge.clone(), (state, now + TTL));
+        open.insert(challenge.clone(), (state, now + self.ttl));
         Ok(PasskeyChallenge {
             rp_id: PASSKEY_RP_ID.to_owned(),
             challenge,
-            expires_at: expires_at()?,
+            expires_at: self.expires_at()?,
         })
     }
 
@@ -121,13 +133,13 @@ impl Passkeys {
         let now = Instant::now();
         let mut open = lock(&self.registrations);
         open.retain(|_, (_, expires)| *expires > now);
-        open.insert(challenge.clone(), ((state, uuid), now + TTL));
+        open.insert(challenge.clone(), ((state, uuid), now + self.ttl));
         Ok(PasskeyCreation {
             rp_id: PASSKEY_RP_ID.to_owned(),
             challenge,
             person_id: person_of(uuid),
             user_handle: URL_SAFE_NO_PAD.encode(uuid.as_bytes()),
-            expires_at: expires_at()?,
+            expires_at: self.expires_at()?,
         })
     }
 
@@ -208,10 +220,6 @@ fn convert<T: serde::de::DeserializeOwned>(
     serde_json::to_value(message)
         .and_then(serde_json::from_value)
         .map_err(|err| bad_request(&format!("not a WebAuthn credential: {err}")))
-}
-
-fn expires_at() -> Result<Timestamp, ErrorInfo> {
-    Timestamp::now().checked_add(TTL).map_err(internal)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
