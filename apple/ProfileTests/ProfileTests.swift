@@ -22,7 +22,7 @@ final class ProfileTests: XCTestCase {
         app.launchEnvironment["HERDER_PROFILE"] = "profile-\(UUID().uuidString)"
         app.launch()
 
-        let add = app.buttons["Add Machine"].firstMatch
+        let add = app.buttons["add-to-fleet"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 15), app.debugDescription)
         add.click()
         let field = app.descendants(matching: .any)["pairing-link"].firstMatch

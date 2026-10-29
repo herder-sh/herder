@@ -125,7 +125,8 @@ struct MachinesView: View {
                     } description: {
                         Text("Run herder on a machine, then pair this device with it.")
                     } actions: {
-                        PillButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair(.machine) }
+                        PillButton(title: "Add to Fleet", symbol: "plus", prominent: true) { sheet = .pair(.machine) }
+                            .accessibilityIdentifier("add-to-fleet")
                     }
                     .padding(.top, 60)
                 } else {
@@ -153,7 +154,7 @@ struct MachinesView: View {
         .task(id: fleet.machines.filter { $0.connection == .connected }.map(\.hostId)) {
             unpaired = await fleet.unpairedVaults()
         }
-        .navigationTitle("Machines")
+        .navigationTitle("Fleet")
         .toolbar {
             #if os(iOS)
             ActivityToolbarButton(fleet: fleet) { sheet = .activity }
@@ -161,7 +162,8 @@ struct MachinesView: View {
             if !AwsSignIn.machines(fleet.machines).isEmpty {
                 Button("AWS Sign-in", systemImage: "key") { sheet = .awsSignIn }
             }
-            Button("Add Machine", systemImage: "plus") { sheet = .pair(.machine) }
+            Button("Add to Fleet", systemImage: "plus") { sheet = .pair(.machine) }
+                .accessibilityIdentifier("add-to-fleet")
             #endif
         }
     }

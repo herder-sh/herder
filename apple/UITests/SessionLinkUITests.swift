@@ -29,7 +29,7 @@ final class SessionLinkUITests: XCTestCase {
 
         let alert = app.alerts["Machine not paired"]
         XCTAssertTrue(alert.waitForExistence(timeout: 10))
-        alert.buttons["Add Machine"].tap()
+        alert.buttons["Add to Fleet"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["pairing-link"].waitForExistence(timeout: 5))
     }
 }

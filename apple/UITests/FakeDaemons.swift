@@ -24,7 +24,7 @@ extension XCUIApplication {
             add.tap()
             _ = field.waitForExistence(timeout: 5)
         }
-        XCTAssertTrue(field.exists, "Add Machine did not open the pairing sheet")
+        XCTAssertTrue(field.exists, "Add to Fleet did not open the pairing sheet")
         return field
     }
 
@@ -38,11 +38,11 @@ extension XCUIApplication {
     /// `PairingUITests`, which runs first, leaves the app paired, and a test run on its own pairs.
     ///
     /// The app reads its machines before its first frame, so once the tab bar shows, the Board shows
-    /// "Add Machine" exactly when nothing is paired; no guess at how long a cold launch takes.
+    /// "Add to Fleet" exactly when nothing is paired; no guess at how long a cold launch takes.
     @MainActor
     func pairUnlessPaired() throws {
         XCTAssertTrue(tabBars.buttons["Board"].waitForExistence(timeout: 30), "the app did not show the Board")
-        let add = buttons["Add Machine"].firstMatch
+        let add = buttons["add-to-fleet"].firstMatch
         guard add.exists else { return }
         let link = try Self.pairLink()
         let field = openPairing(add)

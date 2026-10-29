@@ -2,8 +2,8 @@ import XCTest
 
 /// Manages a vault's secrets: against the fake vault (`fake_daemon --vault` prints its link; pass
 /// it to `xcodebuild test` as `TEST_RUNNER_HERDER_VAULT_LINK`), whose hosts are `devbox` and
-/// `laptop`, opens its page from Machines and its Secrets tab, adds a set, adds a secret to it and grants the set
-/// to a host, then goes back to Machines.
+/// `laptop`, opens its page from Fleet and its Secrets tab, adds a set, adds a secret to it and grants the set
+/// to a host, then goes back to Fleet.
 final class SecretsUITests: XCTestCase {
     @MainActor
     func testAddingASetAndASecretAndGrantingIt() throws {
@@ -12,11 +12,11 @@ final class SecretsUITests: XCTestCase {
         app.launch()
         try app.pairUnlessPaired()
 
-        app.tabBars.buttons["Machines"].tap()
+        app.tabBars.buttons["Fleet"].tap()
         let open = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'vaults.paired.'")).firstMatch
         if !open.waitForExistence(timeout: 5) {
             // Pairs with the vault, once: its code works once.
-            app.navigationBars.buttons["Add Machine"].tap()
+            app.navigationBars.buttons["add-to-fleet"].tap()
             let field = app.descendants(matching: .any)["pairing-link"].firstMatch
             XCTAssertTrue(field.waitForExistence(timeout: 10))
             field.tap()
@@ -25,7 +25,7 @@ final class SecretsUITests: XCTestCase {
             // One machine paired closes the sheet; a list of results waits for Done.
             if app.buttons["Done"].waitForExistence(timeout: 10) { app.buttons["Done"].tap() }
         }
-        XCTAssertTrue(open.waitForExistence(timeout: 30), "Machines shows no vault")
+        XCTAssertTrue(open.waitForExistence(timeout: 30), "Fleet shows no vault")
         for _ in 0..<5 where !open.isHittable { app.swipeUp() }
         open.tap()
         let secrets = app.buttons["Secrets"].firstMatch
@@ -70,8 +70,8 @@ final class SecretsUITests: XCTestCase {
         wait(for: [granted], timeout: 10)
         XCTAssertFalse(app.staticTexts.matching(identifier: "secrets-error").firstMatch.exists)
 
-        // The page was pushed on Machines: Back returns there.
+        // The page was pushed on Fleet: Back returns there.
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(open.waitForExistence(timeout: 5), "Back did not return to Machines")
+        XCTAssertTrue(open.waitForExistence(timeout: 5), "Back did not return to Fleet")
     }
 }

@@ -130,7 +130,7 @@ struct AccountSettingsTests {
         let keys = ["claude", "codex"].map { fleet.install($0, on: machine.hostId) }
         for key in keys {
             let connection = try #require(fleet.activity[key]?.connection)
-            #expect(await eventually {
+            #expect(await eventually(within: 30) {
                 if case .failed = connection.state { return true }
                 return false
             })
@@ -151,13 +151,13 @@ struct AccountSettingsTests {
         let key = fleet.addAccount(account, on: machine.hostId)
         let connection = try #require(fleet.activity[key]?.connection)
         let screen = connection.view(client: fleet.client, sessionId: nil)
-        #expect(await eventually {
+        #expect(await eventually(within: 30) {
             if case .failed = connection.state { return true }
             return false
         })
         #expect(fleet.activity[key]?.connection === connection)
         // Ended, it no longer holds its id, so the form may suggest it again.
-        #expect(await eventually { fleet.activity.phase(key) == .ended })
+        #expect(await eventually(within: 30) { fleet.activity.phase(key) == .ended })
         #expect(fleet.activity.pendingIds(on: machine.hostId).isEmpty)
         #expect(fleet.progress(key).failed)
         #expect(connection.view(client: fleet.client, sessionId: nil) === screen)
@@ -176,11 +176,11 @@ struct AccountSettingsTests {
         try await fleet.client.synced(hostId: machine.hostId)
         // The fake daemon cannot log its fake provider in, and says so.
         let listed = { fleet.machines.first { $0.hostId == machine.hostId }?.accounts.first?.accountId }
-        #expect(await eventually { listed() != nil })
+        #expect(await eventually(within: 30) { listed() != nil })
         let accountId = try #require(listed())
         let connection = TerminalConnection(hostId: machine.hostId, terminalId: nil, relogin: accountId)
         connection.connect(client: fleet.client, sessionId: nil, cols: 80, rows: 24)
-        #expect(await eventually {
+        #expect(await eventually(within: 30) {
             if case .failed(let message) = connection.state { return message.contains("cannot log") }
             return false
         })

@@ -154,7 +154,7 @@ struct InviteSheet: View {
 
     var body: some View {
         SheetScaffold(title: "Invite to \(machine)",
-                      subtitle: "Scan the code with herder on their device, or send them the link to paste into Add Machine.",
+                      subtitle: "Scan the code with herder on their device, or send them the link to paste into Add to Fleet.",
                       height: 720) {
             if let invite {
                 InviteLinkView(invite: invite)

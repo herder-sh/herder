@@ -71,7 +71,7 @@ struct DesktopShell: View {
         case .chats: "Chats"
         case .skills: "Skills"
         case .providers: "Providers"
-        case .machines: "Machines"
+        case .machines: "Fleet"
         case .integrations: "Integrations"
         case .project(let id): lists.projects.first { $0.id == id }?.name ?? "Project"
         case .bots(let id): lists.bots.first { $0.id == id }.map(fleet.botName) ?? "Bots"
@@ -161,14 +161,15 @@ struct DesktopShell: View {
                 PaneButton(title: "Add Account", symbol: "plus", prominent: true) { sheet = .addAccount }
             }
         case .machines:
-            Pane(fleet: fleet, title: "Machines", status: MachinesView.status(lists.machines, vaults: fleet.vaults),
+            Pane(fleet: fleet, title: "Fleet", status: MachinesView.status(lists.machines, vaults: fleet.vaults),
                  switcher: switcher) {
                 MachinesView(fleet: fleet, sheet: $sheet)
             } actions: {
                 if !AwsSignIn.machines(fleet.machines).isEmpty {
                     PaneButton(title: "AWS Sign-in", symbol: "key") { sheet = .awsSignIn }
                 }
-                PaneButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair(.machine) }
+                PaneButton(title: "Add to Fleet", symbol: "plus", prominent: true) { sheet = .pair(.machine) }
+                    .accessibilityIdentifier("add-to-fleet")
             }
         case .integrations:
             Pane(fleet: fleet, title: "Integrations", status: fleet.bots.status, switcher: switcher) {
@@ -379,7 +380,7 @@ struct Switcher {
         Divider()
         Button("Providers", systemImage: "person.2") { go(.providers) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
-        Button("Machines", systemImage: "server.rack") { go(.machines) }
+        Button("Fleet", systemImage: "server.rack") { go(.machines) }
         Button("Integrations", systemImage: Switcher.integrationsSymbol) { go(.integrations) }
         Divider()
         ForEach(order.sorted(fleet.lists.projects)) { project in
@@ -489,7 +490,7 @@ struct Sidebar: View {
             heading("Workspace")
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
-            SidebarRow(title: "Machines", symbol: "server.rack", selected: item == .machines) { select(.machines) }
+            SidebarRow(title: "Fleet", symbol: "server.rack", selected: item == .machines) { select(.machines) }
             SidebarRow(title: "Integrations", symbol: Switcher.integrationsSymbol, selected: item == .integrations) {
                 select(.integrations)
             }
@@ -667,7 +668,7 @@ struct MachinesFooter: View {
                     open = false
                     showAll()
                 } label: {
-                    Text("All Machines").foregroundStyle(Theme.link).padding(.horizontal, 10).frame(height: 28)
+                    Text("Open Fleet").foregroundStyle(Theme.link).padding(.horizontal, 10).frame(height: 28)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -718,7 +719,7 @@ private struct SidebarRail: View {
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("person.2", "Providers", .providers)
             rail("book.closed", "Skills", .skills)
-            rail("server.rack", "Machines", .machines)
+            rail("server.rack", "Fleet", .machines)
             rail(Switcher.integrationsSymbol, "Integrations", .integrations)
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             ScrollView {

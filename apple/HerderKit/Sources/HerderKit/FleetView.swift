@@ -29,7 +29,7 @@ enum CompactTab: Hashable, CaseIterable {
         case .board: "Board"
         case .chats: "Chats"
         case .projects: "Projects"
-        case .machines: "Machines"
+        case .machines: "Fleet"
         }
     }
 
@@ -95,7 +95,7 @@ struct FleetView: View {
                    presenting: linkProblem) { problem in
                 switch problem {
                 case .unpaired:
-                    Button("Add Machine") { sheet = .pair(.machine) }
+                    Button("Add to Fleet") { sheet = .pair(.machine) }
                     Button("Cancel", role: .cancel) {}
                 default:
                     Button("OK", role: .cancel) {}
@@ -387,7 +387,8 @@ struct EmptyFleet: View {
                 Text("Run `herder pair` on a machine, then add it here with the link it prints.")
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondary)
-                ActionButton(title: "Add Machine", style: .primary) { add() }
+                ActionButton(title: "Add to Fleet", style: .primary) { add() }
+                    .accessibilityIdentifier("add-to-fleet")
                     #if os(macOS)
                     .frame(maxWidth: 220)
                     #endif

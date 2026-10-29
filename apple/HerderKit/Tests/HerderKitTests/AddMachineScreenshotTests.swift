@@ -6,8 +6,8 @@ import Herder
 import SwiftUI
 import Testing
 
-/// Draws Add Machine at the Mac sheet's width and the iPhone's: a machine's link that says it
-/// makes you its owner, and a vault chosen from the Machines page with its bare code typed. With
+/// Draws Add to Fleet at the Mac sheet's width and the iPhone's: a machine's link that says it
+/// makes you its owner, and a vault chosen from the Fleet page with its bare code typed. With
 /// `HERDER_SCREENSHOT_DIR` set, also writes them there. Drawn in a window, as its text fields are
 /// AppKit's, which `ImageRenderer` leaves out.
 @MainActor struct AddMachineScreenshotTests {
@@ -54,14 +54,14 @@ private struct AddMachinePreview: View {
     var body: some View {
         // The Mac's scaffold is 560 wide; at the iPhone's width, the form as its sheet lays it out.
         ViewThatFits(in: .horizontal) {
-            SheetScaffold(title: "Add Machine", height: height, hint: "Check the fingerprint `herder pair` printed.") {
+            SheetScaffold(title: "Add to Fleet", height: height, hint: "Check the fingerprint `herder pair` printed.") {
                 form
             } footer: {
                 Spacer()
                 ActionButton(title: "Pair", style: .primary) {}.frame(width: 160)
             }
             VStack(alignment: .leading, spacing: 18) {
-                Text("Add Machine").font(.title3.weight(.bold)).foregroundStyle(Theme.text)
+                Text("Add to Fleet").font(.title3.weight(.bold)).foregroundStyle(Theme.text)
                 form
                 Spacer(minLength: 0)
             }

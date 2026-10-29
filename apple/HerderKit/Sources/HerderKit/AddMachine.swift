@@ -1,7 +1,7 @@
 import Herder
 import SwiftUI
 
-/// What Add Machine adds: the first choice its sheet asks for.
+/// What Add to Fleet adds: the first choice its sheet asks for.
 enum PairKind: CaseIterable, Hashable {
     /// A machine running herder, from the link `herder pair` prints on it.
     case machine
@@ -39,7 +39,7 @@ enum PairKind: CaseIterable, Hashable {
     static let command = "herder pair --role owner"
 }
 
-/// What was pasted or scanned into Add Machine, as the link to pair with and what it grants.
+/// What was pasted or scanned into Add to Fleet, as the link to pair with and what it grants.
 struct PairInput: Equatable {
     let link: String
     let machines: [PairingUri]
@@ -152,7 +152,7 @@ struct AddMachineSheet: View {
     private var input: PairInput? { PairInput(text, vault: kind == .vault ? vault : nil) }
 
     private var form: some View {
-        SheetScaffold(title: "Add Machine", height: 640, hint: hint) {
+        SheetScaffold(title: "Add to Fleet", height: 640, hint: hint) {
             if let results {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(results.enumerated()), id: \.offset) { PairResultRow(result: $0.element) }
@@ -244,7 +244,7 @@ struct AddMachineSheet: View {
     }
 }
 
-/// Add Machine's choice and its steps, on bindings alone so they can be drawn without a fleet;
+/// Add to Fleet's choice and its steps, on bindings alone so they can be drawn without a fleet;
 /// `device` is what the device choice shows.
 struct AddMachineForm<Device: View>: View {
     @Binding var kind: PairKind
@@ -357,7 +357,7 @@ struct AddMachineForm<Device: View>: View {
     }
 }
 
-/// The three things Add Machine adds, as tiles side by side, or as rows where they do not fit.
+/// The three things Add to Fleet adds, as tiles side by side, or as rows where they do not fit.
 private struct KindPicker: View {
     @Binding var kind: PairKind
 
