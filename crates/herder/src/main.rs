@@ -5,6 +5,7 @@ mod dev;
 mod doctor;
 mod fork;
 mod hook;
+mod login;
 mod pair;
 mod secret;
 mod service;
@@ -48,6 +49,8 @@ enum Command {
         #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
         config: Option<PathBuf>,
     },
+    /// Sign this terminal in as a person: an app of yours approves the code it shows.
+    Login(login::Args),
     /// Pair this device with a daemon, from the link `herder pair` printed on its machine.
     Connect {
         /// The `herder://pair?...` link.
@@ -133,6 +136,7 @@ fn main() -> ExitCode {
         }
         Some(Command::Pair(args)) => pair::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Claim { config }) => pair::claim(config).map(|()| ExitCode::SUCCESS),
+        Some(Command::Login(args)) => login::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Connect { link }) => connect::run(&link).map(|()| ExitCode::SUCCESS),
         Some(Command::Session(args)) => session::run(args),
         Some(Command::Fork(args)) => fork::run(args).map(|()| ExitCode::SUCCESS),
@@ -318,6 +322,17 @@ mod tests {
                 "{action}"
             );
         }
+    }
+
+    #[test]
+    fn login_takes_the_local_daemon_or_an_address_with_its_fingerprint() {
+        let local = Cli::try_parse_from(["herder", "login"]);
+        assert!(matches!(local.unwrap().command, Some(Command::Login(_))));
+        let remote =
+            Cli::try_parse_from(["herder", "login", "10.0.4.17:7447", "--fingerprint", "ab"]);
+        assert!(matches!(remote.unwrap().command, Some(Command::Login(_))));
+        assert!(Cli::try_parse_from(["herder", "login", "10.0.4.17:7447"]).is_err());
+        assert!(Cli::try_parse_from(["herder", "login", "--fingerprint", "ab"]).is_err());
     }
 
     #[test]
