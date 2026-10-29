@@ -1,4 +1,5 @@
 import Foundation
+import Herder
 import Observation
 
 /// The one-time move to one identity: on each machine you own, your old user (or users) become
