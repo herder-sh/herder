@@ -1,13 +1,16 @@
 import Foundation
 import Herder
 
-/// What a `herder://` link opens: a session, as the bots' "Open in herder" button links it, or
-/// Add to Fleet with the link `herder pair` prints.
+/// What a `herder://` link opens: a session, as the bots' "Open in herder" button links it,
+/// Add to Fleet with the link `herder pair` prints, or the approval a new machine's or a
+/// terminal's link asks for.
 enum AppLink: Equatable {
     /// `herder://session?host=…&session=…`.
     case session(SessionKey)
     /// `herder://pair?host=…&fp=…&code=…`, of one machine or several: the link itself.
     case pair(String)
+    /// `herder://own?…` of `herder install`, or `herder://login?…` of `herder login`.
+    case approve(ApprovalRequest)
 
     /// Nil for a link of another scheme or kind, or one missing what it needs.
     init?(url: URL) {
@@ -26,6 +29,9 @@ enum AppLink: Equatable {
             let link = url.absoluteString
             guard (try? parsePairingLink(link: link)) != nil else { return nil }
             self = .pair(link)
+        case "own", "login":
+            guard let request = ApprovalRequest(url: url) else { return nil }
+            self = .approve(request)
         default:
             return nil
         }

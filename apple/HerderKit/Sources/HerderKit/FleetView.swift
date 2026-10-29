@@ -62,12 +62,15 @@ struct FleetView: View {
     @State private var linked: SessionKey?
     /// Why a link's session did not open, for the alert that says so.
     @State private var linkProblem: SessionLinkTarget?
+    /// Your herder passkey, which signs every change to people and every approval.
+    @State private var authenticator = PlatformAuthenticator()
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
     var body: some View {
         screens
+            .environment(\.signPasskey) { try await authenticator.sign($0) }
             .onOpenURL(perform: open)
             #if os(macOS)
             // A link opens in the one window rather than a new one.
@@ -130,6 +133,10 @@ struct FleetView: View {
                 } else {
                     draft = selection
                 }
+            } openMachine: { hostId in
+                openMachine(hostId)
+            } present: { next in
+                self.sheet = next
             }
         }
         #if os(iOS)
@@ -232,9 +239,23 @@ struct FleetView: View {
             resolveLink()
         case .pair(let link):
             sheet = .pair(.machine, link: link)
+        case .approve(let request):
+            sheet = .approve(request)
         case nil:
             fleet.toast = Toast(text: "herder cannot open that link", failed: true)
         }
+    }
+
+    /// Shows a machine's page: over the section on the Mac and iPad, on the Fleet tab on iPhone.
+    private func openMachine(_ hostId: HostId) {
+        #if os(iOS)
+        if sizeClass == .compact {
+            tab = .machines
+            machinesPath = [.page(.machine(hostId))]
+            return
+        }
+        #endif
+        pages.open(.machine(hostId))
     }
 
     /// Opens the linked session once its machine lists it, or says why it cannot.
