@@ -218,6 +218,8 @@ struct TerminalPane: View {
                     if connections.indices.contains(store.selected) {
                         let connection = connections[store.selected]
                         TerminalSurface(connection: connection, client: fleet.client, sessionId: key.sessionId)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("session-terminal")
                     }
                 }
             }
