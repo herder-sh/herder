@@ -79,7 +79,7 @@ struct VaultPage: View {
             } else if let stats {
                 VaultOverview(fleet: fleet, vault: stats)
                 if let machine, machine.connection == .connected {
-                    PeopleSection(fleet: fleet, machine: machine).id(machine.hostId)
+                    PeopleLink(hostId: machine.hostId)
                 }
             }
         }

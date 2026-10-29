@@ -228,10 +228,10 @@ struct Avatar: View {
     }
 }
 
-/// A settings sheet's button: `primary` in the action colour, `destructive` red text, else
-/// plain on the raised surface.
+/// A settings sheet's button: `primary` in the action colour, `destructive` red text, `quiet`
+/// only a hairline, else plain on the raised surface.
 struct SettingsButton: View {
-    enum Style { case primary, plain, destructive }
+    enum Style { case primary, plain, quiet, destructive }
     let title: String
     var style = Style.plain
     let action: () -> Void
@@ -246,7 +246,8 @@ struct SettingsButton: View {
                 .frame(minWidth: style == .primary ? 72 : 0, minHeight: 32)
                 .background(style == .primary ? Theme.action : style == .plain ? Theme.raised : .clear,
                             in: .rect(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(style == .destructive ? Theme.stroke : .clear))
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(style == .destructive || style == .quiet ? Theme.stroke : .clear))
                 .opacity(enabled ? 1 : 0.45)
                 .contentShape(.rect)
                 .hitTarget()
