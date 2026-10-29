@@ -1,0 +1,10 @@
+{
+  "tomas": {
+    "credential_id": "DyfTv54huMGFffTvWggeJw",
+    "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg7M6y8nG2czOm-YMJ9DjF9YXFHYELPjWgDl6KEbGVzrChRANCAAQgZapU_BZfWBGCDxsSKZdcZL-mbOcRXQA0jyeth4EZ5867UW0cG5R-aT2zgEVkyLA3ibQRSM-qqbyvGSIeeVjx"
+  },
+  "sam": {
+    "credential_id": "pjoRJ1r4wKCCV4QUG--VTQ",
+    "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg9pxO4MHKuYcgj6laPypm5IYH1yvynY8E5Ym24_YIlfuhRANCAARmCWImb5xUE0d4Oshd9WcqUuR_pVXIJNCPvVIQtFroan2Hnrl1dvUmfKyKgo3vZoWqWxFQSzhuHSrqoDj9EnhR"
+  }
+}

@@ -442,6 +442,7 @@ impl Client {
                 client: "herder-drill".into(),
                 resume: Vec::new(),
                 pairing_code,
+                sign_in: false,
             }))
             .await;
         let hello = client.recv().await;

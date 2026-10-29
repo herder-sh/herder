@@ -49,6 +49,8 @@ id! {
     AccountId,
     /// Identifies a named user of a daemon; a ULID string, opaque to receivers.
     UserId,
+    /// Identifies a person across every daemon that knows them; a UUID string, opaque to receivers.
+    PersonId,
     /// Identifies a paired client device; a ULID string, opaque to receivers.
     DeviceId,
     /// Identifies a terminal on a host; a ULID string, opaque to receivers.

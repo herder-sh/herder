@@ -10,18 +10,20 @@ use herder_client_core::{
 };
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
-    ApprovalId, ApprovalOutcome, Attachment, AttachmentId, AwsDeviceCode, AwsProfile,
-    BackupSettings, Bot, BotDefaults, BotError, BotFact, BotId, BotKind, BotMemory, BotPlace,
-    BotState, BotStatus, BotUser, Bytes, ChannelBinding, CiStatus, CommandBody, CommandResult,
-    Constraint, Container, ContainerState, DaemonSettings, DeviceId, DirectoryEntry, ErrorClass,
-    ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FactId, FailoverSettings,
+    ApprovalId, ApprovalOutcome, AssertionResponse, Attachment, AttachmentId, AwsDeviceCode,
+    AwsProfile, BackupSettings, Bot, BotDefaults, BotError, BotFact, BotId, BotKind, BotMemory,
+    BotPlace, BotState, BotStatus, BotUser, Bytes, ChannelBinding, CiStatus, CommandBody,
+    CommandResult, Constraint, Container, ContainerState, DaemonSettings, DeviceId, DirectoryEntry,
+    ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FactId, FailoverSettings,
     FailoverTotal, FleetHost, FollowUp, FollowUpReason, FollowUpSettings, HistoryPart, HostId,
-    HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill,
-    LinkedVault, LogFormat, LogSettings, McpServerSettings, McpTransport, Mergeable,
-    PermissionMode, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId,
-    Provider, ProviderBinary, ProviderReload, ProviderStatus, PullRequest, QuestionId,
-    QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo,
-    SecretRef, SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId, SessionOrigin,
+    HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LeftoverDecision,
+    LibrarySkill, LinkedVault, LogFormat, LogSettings, McpServerSettings, McpTransport, Mergeable,
+    NewPerson, PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey,
+    PasskeyRegistration, PermissionMode, PersonCard, PersonId, PersonInfo, PersonPasskey, PrState,
+    Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary,
+    ProviderReload, ProviderStatus, PullRequest, QuestionId, QueuedPrompt, RegistrationResponse,
+    Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef,
+    SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId, SessionOrigin,
     SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource, SkillsStatus,
     Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource,
     TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow,
@@ -48,6 +50,7 @@ string_ids!(
     HostId,
     AccountId,
     UserId,
+    PersonId,
     DeviceId,
     TerminalId,
     ProjectId,
@@ -728,6 +731,36 @@ pub enum CommandBody {
     },
     RevokeDevice {
         device_id: DeviceId,
+        assertion: Option<Box<PasskeyAssertion>>,
+    },
+    PasskeyChallenge,
+    ListPeople,
+    Invite {
+        role: Role,
+        assertion: Box<PasskeyAssertion>,
+    },
+    SetPersonRole {
+        person_id: PersonId,
+        role: Role,
+        person: Option<PersonCard>,
+        assertion: Box<PasskeyAssertion>,
+    },
+    RevokePerson {
+        person_id: PersonId,
+        assertion: Box<PasskeyAssertion>,
+    },
+    ClaimUsers {
+        person: Box<NewPerson>,
+        also: Vec<UserId>,
+    },
+    DecideLeftover {
+        user_id: UserId,
+        decision: LeftoverDecision,
+        assertion: Box<PasskeyAssertion>,
+    },
+    ApproveLogin {
+        code: String,
+        assertion: Box<PasskeyAssertion>,
     },
     PairVaultHost {
         host_name: String,
@@ -966,6 +999,29 @@ pub enum CommandResult {
         addresses: Vec<String>,
         expires_at: Timestamp,
     },
+    PasskeyChallenge {
+        challenge: PasskeyChallenge,
+        registration: Option<PasskeyCreation>,
+    },
+    People {
+        people: Vec<PersonInfo>,
+    },
+    Invite {
+        invite: String,
+        role: Role,
+        fingerprint: String,
+        addresses: Vec<String>,
+        expires_at: Timestamp,
+    },
+    Claimed {
+        person_id: PersonId,
+        hosts: Vec<String>,
+        leftovers: Vec<UserInfo>,
+    },
+    LoginApproved {
+        device_id: DeviceId,
+        client: String,
+    },
     Users {
         users: Vec<UserInfo>,
     },
@@ -1118,6 +1174,97 @@ pub struct UserInfo {
     pub name: String,
     pub role: Role,
     pub devices: Vec<UserDevice>,
+}
+
+#[uniffi::remote(Record)]
+pub struct PersonInfo {
+    pub person_id: PersonId,
+    pub name: String,
+    pub role: Role,
+    pub passkeys: Vec<PasskeyKey>,
+    pub devices: Vec<UserDevice>,
+}
+
+#[uniffi::remote(Record)]
+pub struct PersonCard {
+    pub name: String,
+    pub passkeys: Vec<PasskeyKey>,
+}
+
+#[uniffi::remote(Record)]
+pub struct PasskeyKey {
+    pub credential_id: String,
+    pub public_key: Json,
+}
+
+#[uniffi::remote(Record)]
+pub struct PasskeyChallenge {
+    pub rp_id: String,
+    pub challenge: String,
+    pub expires_at: Timestamp,
+}
+
+#[uniffi::remote(Record)]
+pub struct PasskeyCreation {
+    pub rp_id: String,
+    pub challenge: String,
+    pub person_id: PersonId,
+    pub user_handle: String,
+    pub expires_at: Timestamp,
+}
+
+#[uniffi::remote(Record)]
+pub struct PasskeyAssertion {
+    pub id: String,
+    pub raw_id: String,
+    pub response: AssertionResponse,
+    pub kind: String,
+}
+
+#[uniffi::remote(Record)]
+pub struct AssertionResponse {
+    pub client_data_json: String,
+    pub authenticator_data: String,
+    pub signature: String,
+    pub user_handle: Option<String>,
+}
+
+#[uniffi::remote(Record)]
+pub struct NewPerson {
+    pub name: String,
+    pub passkey: PersonPasskey,
+}
+
+#[uniffi::remote(Enum)]
+pub enum PersonPasskey {
+    Register {
+        registration: PasskeyRegistration,
+    },
+    Existing {
+        person_id: PersonId,
+        key: PasskeyKey,
+        assertion: PasskeyAssertion,
+    },
+}
+
+#[uniffi::remote(Record)]
+pub struct PasskeyRegistration {
+    pub id: String,
+    pub raw_id: String,
+    pub response: RegistrationResponse,
+    pub kind: String,
+}
+
+#[uniffi::remote(Record)]
+pub struct RegistrationResponse {
+    pub client_data_json: String,
+    pub attestation_object: String,
+}
+
+#[uniffi::remote(Enum)]
+pub enum LeftoverDecision {
+    ItsMe,
+    Remove,
 }
 
 #[uniffi::remote(Record)]

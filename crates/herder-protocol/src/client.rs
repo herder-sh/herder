@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, Answer, ApprovalDecision, ApprovalId, Attachment, AttachmentId, BotId, Bytes,
-    CommandId, DaemonSettings, DeviceId, Event, HostId, Image, PermissionMode, ProjectId,
-    PromptFile, PromptId, Provider, QuestionId, Role, SecretValue, Seq, SessionId, TerminalId,
-    UpdateWhen, UsagePeriod, UserId,
+    CommandId, DaemonSettings, DeviceId, Event, HostId, Image, LeftoverDecision, NewPerson,
+    PasskeyAssertion, PermissionMode, PersonCard, PersonId, ProjectId, PromptFile, PromptId,
+    Provider, QuestionId, Role, SecretValue, Seq, SessionId, SignIn, TerminalId, UpdateWhen,
+    UsagePeriod, UserId,
 };
 
 /// A client-to-daemon message.
@@ -16,6 +17,9 @@ use crate::{
 pub enum ClientMessage {
     /// First message on every connection.
     Hello(ClientHello),
+    /// How a device the daemon does not know signs in, answering `sign_in_challenge`; the
+    /// daemon then answers `hello`, or an error and closes the connection.
+    SignIn(SignIn),
     /// Stream a session's events after a cursor, then live; replaces any existing subscription.
     Subscribe(Cursor),
     /// Stop streaming a session.
@@ -47,6 +51,11 @@ pub struct ClientHello {
     /// it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_code: Option<String>,
+    /// Set by a device the daemon may not know that signs in as a person: rather than refuse
+    /// it, the daemon answers `sign_in_challenge`, and the device then sends `sign_in`. A
+    /// device the daemon knows gets `hello` as usual.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sign_in: bool,
 }
 
 /// A position in a session's journal.
@@ -656,11 +665,90 @@ pub enum CommandBody {
         /// Their new role.
         role: Role,
     },
-    /// Unpair a device and close its connections; owners only. Its user stays. Answered with
-    /// `applied`. Refused with `not_found` when no such device is paired.
+    /// Unpair a device and close its connections; owners only. Its user or person stays.
+    /// Answered with `applied`. Refused with `not_found` when no such device is paired.
     RevokeDevice {
         /// The device.
         device_id: DeviceId,
+        /// An assertion over a fresh `passkey_challenge`; required when the caller is a person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assertion: Option<Box<PasskeyAssertion>>,
+    },
+    /// Mint a challenge for the caller's passkey to sign, which `invite`, `set_person_role`,
+    /// `revoke_person`, `revoke_device` and `approve_login` carry an assertion over. It works
+    /// once, for [`crate::PASSKEY_CHALLENGE_SECS`]. A per-daemon owner, moving to a person
+    /// with `claim_users`, also gets what to create a passkey from. Answered with
+    /// `passkey_challenge`. Refused with `forbidden` for a per-daemon member.
+    PasskeyChallenge,
+    /// List the people of this daemon, each with their role, passkeys and devices; owners and
+    /// members alike. Answered with `people`. It changes nothing, so a resend is answered
+    /// afresh.
+    ListPeople,
+    /// Mint an invite that lets someone join this daemon as a person with `role`, registering
+    /// their own passkey through it; owners only, with an assertion. Answered with `invite`.
+    Invite {
+        /// The role the invitee gets.
+        role: Role,
+        /// An assertion over a fresh `passkey_challenge`.
+        assertion: Box<PasskeyAssertion>,
+    },
+    /// Give `person_id` a role on this daemon; owners only, with an assertion. A person the
+    /// daemon does not know yet is added from `person`, as another daemon lists them, which is
+    /// how an app gives someone access to more machines. A role change closes their devices'
+    /// connections, so they reconnect with the new one. Answered with `applied`. Refused with
+    /// `not_found` for an unknown person without `person`, `bad_request` for a card with no
+    /// usable passkey, and `conflict` when it would leave the daemon with no owner.
+    SetPersonRole {
+        /// The person.
+        person_id: PersonId,
+        /// Their new role.
+        role: Role,
+        /// Who they are, for a person this daemon does not know yet.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        person: Option<PersonCard>,
+        /// An assertion over a fresh `passkey_challenge`.
+        assertion: Box<PasskeyAssertion>,
+    },
+    /// Remove a person from this daemon: forget their passkeys, unpair their devices and close
+    /// their connections; owners only, with an assertion. Answered with `applied`. Refused with
+    /// `not_found` for an unknown person, and `conflict` when it would leave the daemon with no
+    /// owner.
+    RevokePerson {
+        /// The person.
+        person_id: PersonId,
+        /// An assertion over a fresh `passkey_challenge`.
+        assertion: Box<PasskeyAssertion>,
+    },
+    /// Make the caller's per-daemon user, an owner, the person `person`, with the users in
+    /// `also`, which are the caller's on other machines claimed in the same pass: history
+    /// under their ids then reads as the person's. Owners only. Answered with `claimed`.
+    ClaimUsers {
+        /// Who the caller becomes: a passkey registered now, or an existing one with an
+        /// assertion over a fresh `passkey_challenge`.
+        person: Box<NewPerson>,
+        /// The caller's user ids on the other machines claimed with this one.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        also: Vec<UserId>,
+    },
+    /// Settle a user `claimed` left over: make them the caller's person, or remove them;
+    /// owners only, with an assertion. Answered with `applied`. Refused with `not_found` for
+    /// a user that is not left over.
+    DecideLeftover {
+        /// The leftover user.
+        user_id: UserId,
+        /// What becomes of them.
+        decision: LeftoverDecision,
+        /// An assertion over a fresh `passkey_challenge`.
+        assertion: Box<PasskeyAssertion>,
+    },
+    /// Approve the waiting `start_login` whose code the caller's app shows, signing that
+    /// device in as the caller; any person, with an assertion. Answered with `login_approved`.
+    /// Refused with `not_found` for a code no login is waiting with.
+    ApproveLogin {
+        /// The code, as the terminal shows it; case and separators do not matter.
+        code: String,
+        /// An assertion over a fresh `passkey_challenge`.
+        assertion: Box<PasskeyAssertion>,
     },
     /// On a vault, mint a one-time code that pairs a host to replicate here and only that,
     /// as `herder pair --host` does; owners only. Answered with `host_pairing`.

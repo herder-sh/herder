@@ -484,6 +484,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             client: "herder-multi-agent".into(),
             resume: Vec::new(),
             pairing_code: Some(link.code.clone()),
+            sign_in: false,
         }))
         .await;
     let ServerMessage::Hello(hello) = client.recv().await else {

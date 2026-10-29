@@ -18,6 +18,59 @@
       ]
     },
     {
+      "description": "Answers the hello of a device the daemon does not know that set `sign_in`, before\n`hello`: what its passkey signs for a `sign_in`.",
+      "type": "object",
+      "properties": {
+        "challenge": {
+          "description": "What an existing passkey signs, for every method but `start_login`.",
+          "$ref": "#/$defs/PasskeyChallenge"
+        },
+        "registration": {
+          "description": "What a new passkey is created from, for `claim_ownership` and `accept_invite` with\n`register`; absent while the daemon takes neither a claim nor an invite.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PasskeyCreation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "const": "sign_in_challenge"
+        }
+      },
+      "required": [
+        "type",
+        "challenge"
+      ]
+    },
+    {
+      "description": "Answers `start_login`: the code the device shows, as a `herder://login` link and as\ntext, for an app of the person to approve with `approve_login`. `hello` follows once it\ndoes, or an error once the request expires.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "The code, `XXX-XXX`.",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "When the request expires.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "type": {
+          "type": "string",
+          "const": "login_request"
+        }
+      },
+      "required": [
+        "type",
+        "code",
+        "expires_at"
+      ]
+    },
+    {
       "description": "Every session on this daemon; sent after hello and whenever a session is created or\nits status, account, project, title or queue changes.",
       "type": "object",
       "properties": {
@@ -1572,6 +1625,155 @@
             "fingerprint",
             "addresses",
             "expires_at"
+          ]
+        },
+        {
+          "description": "A challenge for the caller's passkey, answering `passkey_challenge`.",
+          "type": "object",
+          "properties": {
+            "challenge": {
+              "description": "What the passkey signs.",
+              "$ref": "#/$defs/PasskeyChallenge"
+            },
+            "registration": {
+              "description": "What a new passkey is created from, for `claim_users` with `register`; only for a\nper-daemon owner, who is no person yet.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyCreation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "passkey_challenge"
+            }
+          },
+          "required": [
+            "type",
+            "challenge"
+          ]
+        },
+        {
+          "description": "This daemon's people, answering `list_people`.",
+          "type": "object",
+          "properties": {
+            "people": {
+              "description": "Oldest first.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PersonInfo"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "people"
+            }
+          },
+          "required": [
+            "type",
+            "people"
+          ]
+        },
+        {
+          "description": "An invite that lets someone join this daemon as a person, answering `invite`:\neverything a `herder://invite` link names.",
+          "type": "object",
+          "properties": {
+            "addresses": {
+              "description": "Addresses the daemon advertises as `host:port`, most likely reachable first.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "expires_at": {
+              "description": "When the invite stops working.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "fingerprint": {
+              "description": "SHA-256 of the daemon's TLS certificate, lowercase hex.",
+              "type": "string"
+            },
+            "invite": {
+              "description": "The token, for `accept_invite`.",
+              "type": "string"
+            },
+            "role": {
+              "description": "The role the invitee gets.",
+              "$ref": "#/$defs/Role"
+            },
+            "type": {
+              "type": "string",
+              "const": "invite"
+            }
+          },
+          "required": [
+            "type",
+            "invite",
+            "role",
+            "fingerprint",
+            "addresses",
+            "expires_at"
+          ]
+        },
+        {
+          "description": "The caller's users became a person, answering `claim_users`.",
+          "type": "object",
+          "properties": {
+            "hosts": {
+              "description": "Users that were machines, made hosts, by name.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "leftovers": {
+              "description": "Users that need a decision, with `decide_leftover`.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/UserInfo"
+              }
+            },
+            "person_id": {
+              "description": "The person they became.",
+              "$ref": "#/$defs/PersonId"
+            },
+            "type": {
+              "type": "string",
+              "const": "claimed"
+            }
+          },
+          "required": [
+            "type",
+            "person_id",
+            "hosts",
+            "leftovers"
+          ]
+        },
+        {
+          "description": "The device signed in as the caller, answering `approve_login`.",
+          "type": "object",
+          "properties": {
+            "client": {
+              "description": "Its client, from its hello, e.g. `herder-tui/0.7.0`.",
+              "type": "string"
+            },
+            "device_id": {
+              "description": "The device, now listed under the caller.",
+              "$ref": "#/$defs/DeviceId"
+            },
+            "type": {
+              "type": "string",
+              "const": "login_approved"
+            }
+          },
+          "required": [
+            "type",
+            "device_id",
+            "client"
           ]
         },
         {
@@ -3654,6 +3856,81 @@
         }
       ]
     },
+    "PasskeyChallenge": {
+      "description": "What a passkey signs: the arguments of the platform's assertion request.",
+      "type": "object",
+      "properties": {
+        "challenge": {
+          "description": "The challenge, base64url.",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "When the daemon stops accepting an assertion over it.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "rp_id": {
+          "description": "Relying party; always [`PASSKEY_RP_ID`].",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rp_id",
+        "challenge",
+        "expires_at"
+      ]
+    },
+    "PasskeyCreation": {
+      "description": "What a new passkey is created from: the arguments of the platform's registration request.",
+      "type": "object",
+      "properties": {
+        "challenge": {
+          "description": "The challenge, base64url.",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "When the daemon stops accepting a registration from it.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "person_id": {
+          "description": "The person the passkey will identify, picked by the daemon.",
+          "$ref": "#/$defs/PersonId"
+        },
+        "rp_id": {
+          "description": "Relying party; always [`PASSKEY_RP_ID`].",
+          "type": "string"
+        },
+        "user_handle": {
+          "description": "The WebAuthn user handle for `person_id`, base64url: the UUID's 16 bytes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rp_id",
+        "challenge",
+        "person_id",
+        "user_handle",
+        "expires_at"
+      ]
+    },
+    "PasskeyKey": {
+      "description": "A passkey's public key, as a daemon keeps it. Clients pass it on unchanged, to introduce\nits person to another daemon.",
+      "type": "object",
+      "properties": {
+        "credential_id": {
+          "description": "The credential id, base64url.",
+          "type": "string"
+        },
+        "public_key": {
+          "description": "The public key and its signature counter, in the daemon's own encoding."
+        }
+      },
+      "required": [
+        "credential_id",
+        "public_key"
+      ]
+    },
     "PermissionMode": {
       "description": "How much the agent may do without asking.",
       "oneOf": [
@@ -3677,6 +3954,49 @@
           "type": "string",
           "const": "full_access"
         }
+      ]
+    },
+    "PersonId": {
+      "description": "Identifies a person across every daemon that knows them; a UUID string, opaque to receivers.",
+      "type": "string"
+    },
+    "PersonInfo": {
+      "description": "A person on a daemon, answering `list_people`.",
+      "type": "object",
+      "properties": {
+        "devices": {
+          "description": "Their devices on this daemon, oldest first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UserDevice"
+          }
+        },
+        "name": {
+          "description": "How others see them.",
+          "type": "string"
+        },
+        "passkeys": {
+          "description": "Their passkeys' public keys.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PasskeyKey"
+          }
+        },
+        "person_id": {
+          "description": "The person.",
+          "$ref": "#/$defs/PersonId"
+        },
+        "role": {
+          "description": "Their role on this daemon.",
+          "$ref": "#/$defs/Role"
+        }
+      },
+      "required": [
+        "person_id",
+        "name",
+        "role",
+        "passkeys",
+        "devices"
       ]
     },
     "PrState": {
@@ -4402,6 +4722,17 @@
         "host_name": {
           "description": "Display name of the host.",
           "type": "string"
+        },
+        "person_id": {
+          "description": "The person this connection acts for, whose id is also its `user_id`; absent for a\nper-daemon user.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PersonId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "protocol_version": {
           "description": "The daemon's [`crate::PROTOCOL_VERSION`]; the client disconnects on a mismatch.",

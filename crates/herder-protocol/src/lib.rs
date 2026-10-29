@@ -16,6 +16,7 @@ mod bytes;
 mod client;
 mod event;
 mod ids;
+mod people;
 mod project;
 pub mod replication;
 mod resources;
@@ -44,7 +45,12 @@ pub use event::{
 };
 pub use ids::{
     AccountId, ApprovalId, AttachmentId, BotId, CommandId, DeviceId, FactId, HostId, ItemId,
-    PromptId, QuestionId, SessionId, TerminalId, TurnId, UserId,
+    PersonId, PromptId, QuestionId, SessionId, TerminalId, TurnId, UserId,
+};
+pub use people::{
+    AssertionResponse, LeftoverDecision, NewPerson, PASSKEY_CHALLENGE_SECS, PASSKEY_RP_ID,
+    PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey, PasskeyRegistration,
+    PersonCard, PersonInfo, PersonPasskey, RegistrationResponse, SignIn,
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use replication::{

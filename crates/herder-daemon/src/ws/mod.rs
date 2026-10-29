@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use herder_protocol::{
     Account, AccountId, CommandBody, CommandId, CommandResult, DeviceId, ErrorCode, ErrorInfo,
-    Event, HostId, Role, Seq, SessionHead, SessionId, TerminalPurpose, UserId,
+    Event, HostId, PasskeyAssertion, PersonId, Role, Seq, SessionHead, SessionId, TerminalPurpose,
+    UserId,
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -50,12 +51,14 @@ use commands::Commands;
 /// Who a connection acts as.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
-    /// The user.
+    /// The user; a person's own id for a person.
     pub user_id: UserId,
     /// The device the connection comes from.
     pub device_id: DeviceId,
     /// The user's role on this daemon.
     pub role: Role,
+    /// The person, for a device signed in as one; `None` for a per-daemon user.
+    pub person_id: Option<PersonId>,
 }
 
 /// The sessions the server gives clients access to: [`SessionManager`] in the daemon.
@@ -279,24 +282,134 @@ impl<B: Backend> Shared<B> {
                 });
             }
             CommandBody::SetUserRole { user_id, role } => self.auth.set_role(&user_id, role)?,
-            CommandBody::RevokeDevice { device_id } => match self.auth.revoke(&device_id) {
-                Ok(true) => {}
-                Ok(false) => {
-                    return Err(ErrorInfo {
-                        code: ErrorCode::NotFound,
-                        message: format!("no paired device {device_id}"),
-                    });
+            CommandBody::PasskeyChallenge => return self.passkey_challenge(identity),
+            CommandBody::ListPeople => {
+                return Ok(CommandResult::People {
+                    people: self.auth.people(),
+                });
+            }
+            CommandBody::Invite { role, assertion } => {
+                self.assert(identity, &assertion)?;
+                return self.invite(role);
+            }
+            CommandBody::SetPersonRole {
+                person_id,
+                role,
+                person,
+                assertion,
+            } => {
+                self.assert(identity, &assertion)?;
+                self.auth.set_person_role(&person_id, role, person)?;
+            }
+            CommandBody::RevokePerson {
+                person_id,
+                assertion,
+            } => {
+                self.assert(identity, &assertion)?;
+                self.auth.revoke_person(&person_id)?;
+            }
+            CommandBody::ApproveLogin { code, assertion } => {
+                self.assert(identity, &assertion)?;
+                let (device_id, client) = self.auth.approve_login(identity, &code)?;
+                return Ok(CommandResult::LoginApproved { device_id, client });
+            }
+            CommandBody::ClaimUsers { .. } | CommandBody::DecideLeftover { .. } => {
+                return Err(ErrorInfo {
+                    code: ErrorCode::Unsupported,
+                    message: "this daemon cannot move its users to people yet; update herder \
+                              on it"
+                        .to_owned(),
+                });
+            }
+            CommandBody::RevokeDevice {
+                device_id,
+                assertion,
+            } => {
+                if identity.person_id.is_some() {
+                    let Some(assertion) = assertion else {
+                        return Err(ErrorInfo {
+                            code: ErrorCode::Forbidden,
+                            message: "revoking a device needs a fresh assertion by your passkey"
+                                .to_owned(),
+                        });
+                    };
+                    self.assert(identity, &assertion)?;
                 }
-                Err(err) => {
-                    return Err(ErrorInfo {
-                        code: ErrorCode::Internal,
-                        message: format!("{err:#}"),
-                    });
-                }
-            },
+                self.revoke_device(&device_id)?;
+            }
             command => return self.run(&identity.user_id, command_id, command).await,
         }
         Ok(CommandResult::Applied)
+    }
+
+    /// Unpairs `device_id`, closing its connections.
+    fn revoke_device(&self, device_id: &DeviceId) -> Result<(), ErrorInfo> {
+        match self.auth.revoke(device_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(ErrorInfo {
+                    code: ErrorCode::NotFound,
+                    message: format!("no paired device {device_id}"),
+                });
+            }
+            Err(err) => {
+                return Err(ErrorInfo {
+                    code: ErrorCode::Internal,
+                    message: format!("{err:#}"),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuses unless `assertion`, over a fresh challenge, is by `identity`'s person.
+    fn assert(&self, identity: &Identity, assertion: &PasskeyAssertion) -> Result<(), ErrorInfo> {
+        let Some(person_id) = &identity.person_id else {
+            return Err(ErrorInfo {
+                code: ErrorCode::Forbidden,
+                message: "this needs a person's passkey; sign in to this daemon with yours"
+                    .to_owned(),
+            });
+        };
+        self.auth.verify_assertion(person_id, assertion)
+    }
+
+    /// A challenge for the caller's passkey; a per-daemon owner also gets what to create one
+    /// from, to become a person.
+    fn passkey_challenge(&self, identity: &Identity) -> Result<CommandResult, ErrorInfo> {
+        let registration = match (&identity.person_id, identity.role) {
+            (Some(_), _) => None,
+            (None, Role::Owner) => Some(self.auth.creation()?),
+            (None, Role::Member) => {
+                return Err(ErrorInfo {
+                    code: ErrorCode::Forbidden,
+                    message: "you have no passkey on this daemon; ask an owner to invite you"
+                        .to_owned(),
+                });
+            }
+        };
+        Ok(CommandResult::PasskeyChallenge {
+            challenge: self.auth.challenge()?,
+            registration,
+        })
+    }
+
+    /// An invite to join as a person with `role`, with this daemon's own addresses.
+    fn invite(&self, role: Role) -> Result<CommandResult, ErrorInfo> {
+        let Some(listen) = self.listen.get() else {
+            return Err(ErrorInfo {
+                code: ErrorCode::Internal,
+                message: "the daemon is not listening yet".to_owned(),
+            });
+        };
+        let (invite, expires_at) = self.auth.invite(role)?;
+        Ok(CommandResult::Invite {
+            invite,
+            role,
+            fingerprint: self.tls.fingerprint().to_owned(),
+            addresses: addresses(listen),
+            expires_at,
+        })
     }
 
     /// Applies `user_id`'s command `command_id` that needs no connection: every command but
@@ -605,6 +718,14 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::ListUsers
                     | CommandBody::SetUserRole { .. }
                     | CommandBody::RevokeDevice { .. }
+                    | CommandBody::PasskeyChallenge
+                    | CommandBody::ListPeople
+                    | CommandBody::Invite { .. }
+                    | CommandBody::SetPersonRole { .. }
+                    | CommandBody::RevokePerson { .. }
+                    | CommandBody::ApproveLogin { .. }
+                    | CommandBody::ClaimUsers { .. }
+                    | CommandBody::DecideLeftover { .. }
                     | CommandBody::PairVaultHost { .. }
                     | CommandBody::InstallVault
                     | CommandBody::LinkLocalVault
@@ -637,8 +758,8 @@ impl<B: Backend> Control for AgentControl<B> {
             if connection || pairing {
                 return Err(ErrorInfo {
                     code: ErrorCode::Forbidden,
-                    message: "terminals, logins, installs, pairing codes, users, bots and \
-                              updates are never run for an agent; ask the user to do this in a \
+                    message: "terminals, logins, installs, pairing codes, users, people, \
+                              bots and updates are never run for an agent; ask the user to do this in a \
                               herder app"
                         .to_owned(),
                 });

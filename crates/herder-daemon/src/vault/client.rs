@@ -105,6 +105,7 @@ async fn read_view(
             .into_iter()
             .collect(),
         pairing_code: vault.pairing_code.clone(),
+        sign_in: false,
     });
     let token = "read".to_owned();
     for message in [

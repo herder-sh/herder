@@ -17,9 +17,20 @@
 //! refused, so its key, if stolen, reads nothing. An owner may let a host read the vault too, so
 //! it can take handoffs ([`Auth::set_device_role`]), and take that back.
 //!
-//! Users and devices persist in `<data_dir>/auth.json`, written atomically on every change.
+//! A person ([`Person`]) is one identity across every daemon that knows them, named by their
+//! passkeys ([`passkeys`]). A device the daemon does not know signs in as a person with a fresh
+//! assertion, claims a daemon with no owner with the code `herder install` printed, accepts an
+//! invite, or waits for an app of the person to approve its login. A person's devices are
+//! listed under them, and every connection from one acts as the person: its user id is the
+//! person's id. Per-daemon users stay until every install has moved to people.
+//!
+//! Users, people and devices persist in `<data_dir>/auth.json`, written atomically on every
+//! change.
 
+#[cfg(test)]
+pub(crate) mod authenticator;
 pub mod control;
+pub mod passkeys;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -30,12 +41,18 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use herder_protocol::{
-    CommandBody, DeviceId, ErrorCode, ErrorInfo, Role, Timestamp, UserDevice, UserId, UserInfo,
+    CommandBody, DeviceId, ErrorCode, ErrorInfo, NewPerson, PasskeyAssertion, PasskeyChallenge,
+    PasskeyCreation, PersonCard, PersonId, PersonInfo, PersonPasskey, Role, SignIn, Timestamp,
+    UserDevice, UserId, UserInfo,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+use webauthn_rs::prelude::{AuthenticationResult, Passkey};
+
+use passkeys::Passkeys;
 
 use crate::data_dir::write_private;
 use crate::ws::Identity;
@@ -49,6 +66,16 @@ const CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// Characters in a code: 50 bits, against at most ten minutes of online guessing.
 const CODE_LEN: usize = 10;
+
+/// How long an invite stays valid: long enough to reach a teammate.
+pub const INVITE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Characters in an invite: 100 bits, as it lives a day.
+const INVITE_LEN: usize = 20;
+
+/// Characters in a claim or login code. A person compares it by eye, and it only names a
+/// window a passkey must still sign into.
+const SHORT_CODE_LEN: usize = 6;
 
 const FILE: &str = "auth.json";
 
@@ -122,19 +149,136 @@ pub struct Pairing {
     pub expires_at: Timestamp,
 }
 
+/// A person on this daemon, known by their passkeys.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Person {
+    /// The person, across every daemon that knows them.
+    pub person_id: PersonId,
+    /// How others see them.
+    pub name: String,
+    /// What they may do here.
+    pub role: Role,
+    /// Their passkeys' public keys and signature counters.
+    pub passkeys: Vec<Passkey>,
+    /// When they joined this daemon.
+    pub created_at: Timestamp,
+}
+
+impl Person {
+    /// The user id their connections act as: their own id.
+    pub fn user_id(&self) -> UserId {
+        UserId::new(self.person_id.as_str())
+    }
+}
+
+/// A person a passkey proved, not yet on this daemon: [`Auth::verify_new_person`].
+pub struct ProvenPerson {
+    /// Who they are.
+    pub person_id: PersonId,
+    /// The name they gave.
+    pub name: String,
+    /// The passkey they hold.
+    pub passkey: Passkey,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct Users {
     /// [`VERSION`] once migrated; files from before versions have none.
     #[serde(default)]
     version: u32,
     users: Vec<User>,
+    /// Devices of users and people alike; a person's are under their [`Person::user_id`].
     devices: Vec<Device>,
+    #[serde(default)]
+    people: Vec<Person>,
 }
 
 impl Users {
     fn user(&self, name: &str) -> Option<&User> {
         self.users.iter().find(|user| user.name == name)
     }
+
+    fn person(&self, person_id: &PersonId) -> Option<&Person> {
+        self.people
+            .iter()
+            .find(|person| &person.person_id == person_id)
+    }
+
+    /// The role of `user_id`, a user's or a person's, and the person it is.
+    fn member(&self, user_id: &UserId) -> Option<(Role, Option<PersonId>)> {
+        if let Some(user) = self.users.iter().find(|user| &user.user_id == user_id) {
+            return Some((user.role, None));
+        }
+        self.people
+            .iter()
+            .find(|person| person.person_id.as_str() == user_id.as_str())
+            .map(|person| (person.role, Some(person.person_id.clone())))
+    }
+
+    /// The name of `user_id`, a user's or a person's.
+    fn name(&self, user_id: &UserId) -> Option<&str> {
+        self.users
+            .iter()
+            .find(|user| &user.user_id == user_id)
+            .map(|user| user.name.as_str())
+            .or_else(|| {
+                self.people
+                    .iter()
+                    .find(|person| person.person_id.as_str() == user_id.as_str())
+                    .map(|person| person.name.as_str())
+            })
+    }
+
+    fn has_owner(&self) -> bool {
+        self.users.iter().any(|user| user.role == Role::Owner)
+            || self.people.iter().any(|person| person.role == Role::Owner)
+    }
+
+    /// The passkeys of `person_id`; none for a person not on this daemon.
+    fn keys(&self, person_id: &PersonId) -> Vec<Passkey> {
+        self.person(person_id)
+            .map(|person| person.passkeys.clone())
+            .unwrap_or_default()
+    }
+
+    fn device(&self, fingerprint: &str) -> Option<&Device> {
+        self.devices
+            .iter()
+            .find(|device| device.fingerprint == fingerprint)
+    }
+
+    /// The devices acting as `user_id`.
+    fn devices_of(&self, user_id: &UserId) -> Vec<DeviceId> {
+        self.devices
+            .iter()
+            .filter(|device| &device.user_id == user_id)
+            .map(|device| device.device_id.clone())
+            .collect()
+    }
+}
+
+/// A window that ends at `expires`, opened by a code.
+struct Window {
+    code: String,
+    expires: Instant,
+}
+
+/// A device waiting for an app of a person to approve its login.
+struct PendingLogin {
+    fingerprint: String,
+    client: String,
+    expires: Instant,
+    approved: oneshot::Sender<()>,
+}
+
+/// A login request, answering `start_login`.
+pub struct LoginRequest {
+    /// The code the device shows.
+    pub code: String,
+    /// When it expires.
+    pub expires_at: Timestamp,
+    /// Resolves once an app approves it; the device is then paired.
+    pub approved: oneshot::Receiver<()>,
 }
 
 struct Pending {
@@ -151,12 +295,19 @@ struct State {
     /// Cancels the open connections of each device, with what each was opened as, so revoking
     /// one disconnects it.
     connections: HashMap<DeviceId, Vec<(DeviceRole, CancellationToken)>>,
+    /// The window in which a daemon with no owner takes its first, from `herder install`.
+    claim: Option<Window>,
+    /// Unexpired invites by their normalized token, with the role each gives.
+    invites: HashMap<String, (Role, Instant)>,
+    /// Devices waiting for a login approval, by their normalized code.
+    logins: HashMap<String, PendingLogin>,
 }
 
-/// The daemon's users, devices and pending pairing codes.
+/// The daemon's users, people, devices and pending codes.
 pub struct Auth {
     dir: PathBuf,
     state: Mutex<State>,
+    passkeys: Passkeys,
 }
 
 impl Auth {
@@ -178,7 +329,11 @@ impl Auth {
                 users,
                 codes: HashMap::new(),
                 connections: HashMap::new(),
+                claim: None,
+                invites: HashMap::new(),
+                logins: HashMap::new(),
             }),
+            passkeys: Passkeys::new()?,
         })
     }
 
@@ -299,12 +454,7 @@ impl Auth {
                 self.pair(&mut state, fingerprint, code, client, peer)?
             }
         };
-        let open = state
-            .connections
-            .entry(identity.device_id.clone())
-            .or_default();
-        open.retain(|(_, token)| !token.is_cancelled());
-        open.push((peer, connection.clone()));
+        connected(&mut state, &identity.device_id, peer, connection);
         Ok(identity)
     }
 
@@ -378,6 +528,7 @@ impl Auth {
             user_id: user.user_id,
             device_id: device.device_id,
             role: user.role,
+            person_id: None,
         })
     }
 
@@ -401,33 +552,33 @@ impl Auth {
     /// The daemon's first owner, which the local control socket acts as: only the system user
     /// running the daemon reaches it. `None` until an owner pairs.
     pub fn owner(&self) -> Option<UserId> {
-        self.lock()
+        let state = self.lock();
+        let users = state
             .users
             .users
             .iter()
             .filter(|user| user.role == Role::Owner)
-            .min_by_key(|user| user.created_at)
-            .map(|user| user.user_id.clone())
+            .map(|user| (user.created_at, user.user_id.clone()));
+        let people = state
+            .users
+            .people
+            .iter()
+            .filter(|person| person.role == Role::Owner)
+            .map(|person| (person.created_at, person.user_id()));
+        users
+            .chain(people)
+            .min_by_key(|(created_at, _)| *created_at)
+            .map(|(_, user_id)| user_id)
     }
 
-    /// The role of `user_id`; `None` once no such user is paired.
+    /// The role of `user_id`, a user or a person; `None` once no such user or person is here.
     pub fn role(&self, user_id: &UserId) -> Option<Role> {
-        self.lock()
-            .users
-            .users
-            .iter()
-            .find(|user| &user.user_id == user_id)
-            .map(|user| user.role)
+        self.lock().users.member(user_id).map(|(role, _)| role)
     }
 
-    /// The name of `user_id`; `None` once no such user is paired.
+    /// The name of `user_id`, a user or a person; `None` once no such user or person is here.
     pub fn name(&self, user_id: &UserId) -> Option<String> {
-        self.lock()
-            .users
-            .users
-            .iter()
-            .find(|user| &user.user_id == user_id)
-            .map(|user| user.name.clone())
+        self.lock().users.name(user_id).map(str::to_owned)
     }
 
     /// Every paired device with its user, oldest first.
@@ -463,25 +614,7 @@ impl Auth {
                 user_id: user.user_id.clone(),
                 name: user.name.clone(),
                 role: user.role,
-                devices: state
-                    .users
-                    .devices
-                    .iter()
-                    .filter(|device| device.user_id == user.user_id)
-                    .map(|device| UserDevice {
-                        device_id: device.device_id.clone(),
-                        client: device.client.clone(),
-                        paired_at: device.paired_at,
-                        last_seen: device.last_seen,
-                        online: state
-                            .connections
-                            .get(&device.device_id)
-                            .is_some_and(|open| {
-                                open.iter().any(|(_, token)| !token.is_cancelled())
-                            }),
-                        host_only: device.role == DeviceRole::Host,
-                    })
-                    .collect(),
+                devices: devices_of(&state, &user.user_id),
             })
             .collect()
     }
@@ -502,7 +635,7 @@ impl Auth {
             return Ok(());
         }
         user.role = role;
-        if !users.users.iter().any(|user| user.role == Role::Owner) {
+        if !users.has_owner() {
             return Err(ErrorInfo {
                 code: ErrorCode::Conflict,
                 message: "the last owner cannot be made a member; make someone else an owner \
@@ -518,18 +651,7 @@ impl Auth {
             }
         })?;
         state.users = users;
-        let devices: Vec<DeviceId> = state
-            .users
-            .devices
-            .iter()
-            .filter(|device| &device.user_id == user_id)
-            .map(|device| device.device_id.clone())
-            .collect();
-        for device_id in devices {
-            for (_, token) in state.connections.remove(&device_id).unwrap_or_default() {
-                token.cancel();
-            }
-        }
+        disconnect(&mut state, user_id);
         info!(%user_id, ?role, "user role changed");
         Ok(())
     }
@@ -623,6 +745,389 @@ impl Auth {
         Ok(true)
     }
 
+    /// Whether the device with certificate `fingerprint` is paired.
+    pub fn is_paired(&self, fingerprint: &str) -> bool {
+        self.lock().users.device(fingerprint).is_some()
+    }
+
+    /// Opens the window in which this daemon takes its first owner, for [`PAIRING_TTL`], with
+    /// a fresh code; what `herder install` shows. Refused once the daemon has an owner.
+    pub fn open_claim(&self) -> Result<(String, Timestamp)> {
+        let mut state = self.lock();
+        if state.users.has_owner() {
+            bail!("this daemon has an owner already");
+        }
+        let code = random_code(SHORT_CODE_LEN, 3)?;
+        state.claim = Some(Window {
+            code: normalize(&code),
+            expires: Instant::now() + PAIRING_TTL,
+        });
+        let expires_at = Timestamp::now()
+            .checked_add(PAIRING_TTL)
+            .context("the claim would expire too far in the future")?;
+        info!("claim window opened");
+        Ok((code, expires_at))
+    }
+
+    /// A fresh challenge for a passkey to sign: for a sign-in, or for a command that needs a
+    /// fresh assertion.
+    pub fn challenge(&self) -> Result<PasskeyChallenge, ErrorInfo> {
+        self.passkeys.challenge()
+    }
+
+    /// A fresh challenge to create a passkey for a new person from.
+    pub fn creation(&self) -> Result<PasskeyCreation, ErrorInfo> {
+        self.passkeys.creation()
+    }
+
+    /// What a device signing in signs, and what a new passkey is created from while the
+    /// daemon takes a claim or an invite.
+    pub fn sign_in_challenge(
+        &self,
+    ) -> Result<(PasskeyChallenge, Option<PasskeyCreation>), ErrorInfo> {
+        let creating = {
+            let mut state = self.lock();
+            let now = Instant::now();
+            state.invites.retain(|_, (_, expires)| *expires > now);
+            let claiming = state
+                .claim
+                .as_ref()
+                .is_some_and(|claim| claim.expires > now && !state.users.has_owner());
+            claiming || !state.invites.is_empty()
+        };
+        let creation = match creating {
+            true => Some(self.passkeys.creation()?),
+            false => None,
+        };
+        Ok((self.passkeys.challenge()?, creation))
+    }
+
+    /// Verifies the passkey `person` holds, by its registration or by an assertion over a
+    /// fresh challenge, without adding them to this daemon.
+    pub fn verify_new_person(&self, person: &NewPerson) -> Result<ProvenPerson, ErrorInfo> {
+        let name = user_name(&person.name)
+            .map_err(|err| bad_request(&err.to_string()))?
+            .to_owned();
+        let (person_id, passkey) = match &person.passkey {
+            PersonPasskey::Register { registration } => self.passkeys.register(registration)?,
+            PersonPasskey::Existing {
+                person_id,
+                key,
+                assertion,
+            } => {
+                let mut passkey = passkeys::passkey(key)?;
+                let asserted = self.passkeys.verify(assertion, |id| {
+                    if id == person_id {
+                        vec![passkey.clone()]
+                    } else {
+                        Vec::new()
+                    }
+                })?;
+                passkey.update_credential(&asserted.result);
+                (asserted.person_id, passkey)
+            }
+        };
+        Ok(ProvenPerson {
+            person_id,
+            name,
+            passkey,
+        })
+    }
+
+    /// Verifies that `assertion`, over a fresh challenge, is by a passkey of `person_id`.
+    pub fn verify_assertion(
+        &self,
+        person_id: &PersonId,
+        assertion: &PasskeyAssertion,
+    ) -> Result<(), ErrorInfo> {
+        let mut state = self.lock();
+        let asserted = self.passkeys.verify(assertion, |id| {
+            if id == person_id {
+                state.users.keys(id)
+            } else {
+                Vec::new()
+            }
+        })?;
+        self.note_use(&mut state, &asserted.person_id, &asserted.result);
+        Ok(())
+    }
+
+    /// Signs in the device with certificate `fingerprint` as a person, by `method`, and lists
+    /// it under them. `connection` is cancelled if the device or person is revoked.
+    pub fn sign_in(
+        &self,
+        fingerprint: &str,
+        client: &str,
+        method: SignIn,
+        connection: &CancellationToken,
+    ) -> Result<Identity, ErrorInfo> {
+        let mut state = self.lock();
+        if state.users.device(fingerprint).is_some() {
+            return Err(bad_request("this device is paired already"));
+        }
+        let mut users = state.users.clone();
+        let now = Instant::now();
+        let person_id = match method {
+            SignIn::Passkey { assertion } => {
+                let asserted = self.passkeys.verify(&assertion, |id| users.keys(id))?;
+                note(&mut users, &asserted.person_id, &asserted.result);
+                asserted.person_id
+            }
+            SignIn::ClaimOwnership { code, person } => {
+                let open = state
+                    .claim
+                    .as_ref()
+                    .is_some_and(|claim| claim.expires > now && claim.code == normalize(&code));
+                if !open || users.has_owner() {
+                    return Err(forbidden(
+                        "the code is wrong or expired, or this daemon has an owner already; \
+                         run `herder install` on it again for a new code",
+                    ));
+                }
+                let proven = self.verify_new_person(&person)?;
+                let person_id = proven.person_id.clone();
+                add_person(&mut users, proven, Role::Owner);
+                person_id
+            }
+            SignIn::AcceptInvite { invite, person } => {
+                let key = normalize(&invite);
+                let role = match state.invites.get(&key) {
+                    Some((role, expires)) if *expires > now => *role,
+                    _ => return Err(forbidden("the invite is invalid, expired or already used")),
+                };
+                let proven = self.verify_new_person(&person)?;
+                if users.person(&proven.person_id).is_some() {
+                    return Err(conflict(
+                        "you are on this daemon already; sign in with your passkey",
+                    ));
+                }
+                let person_id = proven.person_id.clone();
+                add_person(&mut users, proven, role);
+                state.invites.remove(&key);
+                person_id
+            }
+            SignIn::StartLogin => {
+                return Err(bad_request("a login waits for an approval instead"));
+            }
+        };
+        let Some(person) = users.person(&person_id).cloned() else {
+            return Err(forbidden("this passkey's person is not on this daemon"));
+        };
+        let device = new_device(&person.user_id(), fingerprint, client);
+        users.devices.push(device.clone());
+        self.save(&users).map_err(saving)?;
+        if person.role == Role::Owner {
+            state.claim = None;
+        }
+        state.users = users;
+        info!(
+            person_id = %person.person_id,
+            device_id = %device.device_id,
+            "device signed in"
+        );
+        connected(
+            &mut state,
+            &device.device_id,
+            DeviceRole::Client,
+            connection,
+        );
+        Ok(Identity {
+            user_id: person.user_id(),
+            device_id: device.device_id,
+            role: person.role,
+            person_id: Some(person.person_id),
+        })
+    }
+
+    /// Asks for a person's app to approve the device with certificate `fingerprint`, for up
+    /// to [`PAIRING_TTL`].
+    pub fn start_login(&self, fingerprint: &str, client: &str) -> Result<LoginRequest, ErrorInfo> {
+        let code = random_code(SHORT_CODE_LEN, 3).map_err(|err| internal(&err))?;
+        let expires_at = Timestamp::now()
+            .checked_add(PAIRING_TTL)
+            .map_err(|err| internal(&err))?;
+        let (approve, approved) = oneshot::channel();
+        let mut state = self.lock();
+        let now = Instant::now();
+        state
+            .logins
+            .retain(|_, login| login.expires > now && !login.approved.is_closed());
+        state.logins.insert(
+            normalize(&code),
+            PendingLogin {
+                fingerprint: fingerprint.to_owned(),
+                client: client.to_owned(),
+                expires: now + PAIRING_TTL,
+                approved: approve,
+            },
+        );
+        Ok(LoginRequest {
+            code,
+            expires_at,
+            approved,
+        })
+    }
+
+    /// Lists the device waiting with `code` under `identity`'s person, and lets it in.
+    pub fn approve_login(
+        &self,
+        identity: &Identity,
+        code: &str,
+    ) -> Result<(DeviceId, String), ErrorInfo> {
+        let Some(person_id) = &identity.person_id else {
+            return Err(forbidden("only a person signs a device in"));
+        };
+        let mut state = self.lock();
+        let key = normalize(code);
+        let waiting = state
+            .logins
+            .get(&key)
+            .is_some_and(|login| login.expires > Instant::now() && !login.approved.is_closed());
+        let Some(login) = state.logins.remove(&key).filter(|_| waiting) else {
+            return Err(not_found("no device is waiting to sign in with that code"));
+        };
+        if state.users.device(&login.fingerprint).is_some() {
+            return Err(conflict("that device is paired already"));
+        }
+        let mut users = state.users.clone();
+        if users.person(person_id).is_none() {
+            return Err(forbidden("you are no longer on this daemon"));
+        }
+        let device = new_device(&identity.user_id, &login.fingerprint, &login.client);
+        users.devices.push(device.clone());
+        self.save(&users).map_err(saving)?;
+        state.users = users;
+        info!(%person_id, device_id = %device.device_id, "login approved");
+        // The device stops waiting if it is gone; it is paired either way.
+        let _ = login.approved.send(());
+        Ok((device.device_id, device.client))
+    }
+
+    /// Mints an invite that lets someone join as a person with `role`, valid for
+    /// [`INVITE_TTL`].
+    pub fn invite(&self, role: Role) -> Result<(String, Timestamp), ErrorInfo> {
+        let token = random_code(INVITE_LEN, 5).map_err(|err| internal(&err))?;
+        let expires_at = Timestamp::now()
+            .checked_add(INVITE_TTL)
+            .map_err(|err| internal(&err))?;
+        let mut state = self.lock();
+        let now = Instant::now();
+        state.invites.retain(|_, (_, expires)| *expires > now);
+        state
+            .invites
+            .insert(normalize(&token), (role, now + INVITE_TTL));
+        info!(?role, "invite minted");
+        Ok((token, expires_at))
+    }
+
+    /// Gives `person_id` `role`, adding them from `card` when they are not here yet, and
+    /// closes their connections, which carry the old role. Refuses to leave the daemon with
+    /// no owner.
+    pub fn set_person_role(
+        &self,
+        person_id: &PersonId,
+        role: Role,
+        card: Option<PersonCard>,
+    ) -> Result<(), ErrorInfo> {
+        let mut state = self.lock();
+        let mut users = state.users.clone();
+        match users
+            .people
+            .iter_mut()
+            .find(|person| &person.person_id == person_id)
+        {
+            Some(person) if person.role == role => return Ok(()),
+            Some(person) => person.role = role,
+            None => {
+                let Some(card) = card else {
+                    return Err(not_found(&format!("no person {person_id} on this daemon")));
+                };
+                let name = user_name(&card.name)
+                    .map_err(|err| bad_request(&err.to_string()))?
+                    .to_owned();
+                let passkeys = card
+                    .passkeys
+                    .iter()
+                    .map(passkeys::passkey)
+                    .collect::<Result<Vec<_>, _>>()?;
+                if passkeys.is_empty() {
+                    return Err(bad_request("a person needs at least one passkey"));
+                }
+                users.people.push(Person {
+                    person_id: person_id.clone(),
+                    name,
+                    role,
+                    passkeys,
+                    created_at: Timestamp::now(),
+                });
+            }
+        }
+        if !users.has_owner() {
+            return Err(last_owner());
+        }
+        self.save(&users).map_err(saving)?;
+        state.users = users;
+        disconnect(&mut state, &UserId::new(person_id.as_str()));
+        info!(%person_id, ?role, "person role changed");
+        Ok(())
+    }
+
+    /// Removes `person_id` with their devices, closing their connections. Refuses to leave
+    /// the daemon with no owner.
+    pub fn revoke_person(&self, person_id: &PersonId) -> Result<(), ErrorInfo> {
+        let mut state = self.lock();
+        let mut users = state.users.clone();
+        let before = users.people.len();
+        users.people.retain(|person| &person.person_id != person_id);
+        if users.people.len() == before {
+            return Err(not_found(&format!("no person {person_id} on this daemon")));
+        }
+        if !users.has_owner() {
+            return Err(last_owner());
+        }
+        let user_id = UserId::new(person_id.as_str());
+        users.devices.retain(|device| device.user_id != user_id);
+        self.save(&users).map_err(saving)?;
+        // Their devices are found in what is about to be replaced.
+        disconnect(&mut state, &user_id);
+        state.users = users;
+        info!(%person_id, "person revoked");
+        Ok(())
+    }
+
+    /// Every person, oldest first, each with their passkeys and devices: what `list_people`
+    /// shows.
+    pub fn people(&self) -> Vec<PersonInfo> {
+        let mut state = self.lock();
+        state
+            .connections
+            .retain(|_, open| open.iter().any(|(_, token)| !token.is_cancelled()));
+        let mut people: Vec<&Person> = state.users.people.iter().collect();
+        people.sort_by_key(|person| person.created_at);
+        people
+            .into_iter()
+            .map(|person| PersonInfo {
+                person_id: person.person_id.clone(),
+                name: person.name.clone(),
+                role: person.role,
+                passkeys: person.passkeys.iter().map(passkeys::key).collect(),
+                devices: devices_of(&state, &person.user_id()),
+            })
+            .collect()
+    }
+
+    /// Notes an assertion on `person_id`'s passkeys. Failing to save only loses the counter.
+    fn note_use(&self, state: &mut State, person_id: &PersonId, result: &AuthenticationResult) {
+        let mut users = state.users.clone();
+        if !note(&mut users, person_id, result) {
+            return;
+        }
+        match self.save(&users) {
+            Ok(()) => state.users = users,
+            Err(err) => warn!(%person_id, "cannot note a passkey's use: {err:#}"),
+        }
+    }
+
     fn save(&self, users: &Users) -> Result<()> {
         let json = serde_json::to_vec_pretty(users).context("encoding the users file")?;
         write_private(&self.dir, FILE, &json)?;
@@ -641,7 +1146,8 @@ impl Auth {
 /// logging them in again and signing the host in to AWS, bringing down containers, browsing folders, changing projects,
 /// reading or changing the daemon's settings, restarting it, backing up to a vault, forking
 /// sessions onto the host, changing the skill library or which of its skills are enabled,
-/// changing users' roles, revoking devices and pairing one as anyone but the caller, managing
+/// changing users' and people's roles, inviting people, revoking people and devices, claiming
+/// users as a person, pairing a device as anyone but the caller, managing
 /// secrets and storing an agent's are for owners only.
 pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
@@ -740,6 +1246,11 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
         command,
         CommandBody::SetUserRole { .. }
             | CommandBody::RevokeDevice { .. }
+            | CommandBody::Invite { .. }
+            | CommandBody::SetPersonRole { .. }
+            | CommandBody::RevokePerson { .. }
+            | CommandBody::ClaimUsers { .. }
+            | CommandBody::DecideLeftover { .. }
             | CommandBody::PairDevice { user: Some(_), .. }
             | CommandBody::PairDevice { role: Some(_), .. }
     );
@@ -793,20 +1304,151 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
 
 /// A device's identity, with what it may connect as.
 fn identity(users: &Users, fingerprint: &str) -> Option<(Identity, DeviceRole)> {
-    let device = users
-        .devices
-        .iter()
-        .find(|device| device.fingerprint == fingerprint)?;
-    let user = users
-        .users
-        .iter()
-        .find(|user| user.user_id == device.user_id)?;
+    let device = users.device(fingerprint)?;
+    let (role, person_id) = users.member(&device.user_id)?;
     let identity = Identity {
-        user_id: user.user_id.clone(),
+        user_id: device.user_id.clone(),
         device_id: device.device_id.clone(),
-        role: user.role,
+        role,
+        person_id,
     };
     Some((identity, device.role))
+}
+
+/// Notes that `connection`, from `device_id` as `peer`, is open, so revoking closes it.
+fn connected(
+    state: &mut State,
+    device_id: &DeviceId,
+    peer: DeviceRole,
+    connection: &CancellationToken,
+) {
+    let open = state.connections.entry(device_id.clone()).or_default();
+    open.retain(|(_, token)| !token.is_cancelled());
+    open.push((peer, connection.clone()));
+}
+
+/// Closes every connection of the devices acting as `user_id`.
+fn disconnect(state: &mut State, user_id: &UserId) {
+    for device_id in state.users.devices_of(user_id) {
+        for (_, token) in state.connections.remove(&device_id).unwrap_or_default() {
+            token.cancel();
+        }
+    }
+}
+
+/// The devices acting as `user_id`, oldest first, as lists show them.
+fn devices_of(state: &State, user_id: &UserId) -> Vec<UserDevice> {
+    state
+        .users
+        .devices
+        .iter()
+        .filter(|device| &device.user_id == user_id)
+        .map(|device| UserDevice {
+            device_id: device.device_id.clone(),
+            client: device.client.clone(),
+            paired_at: device.paired_at,
+            last_seen: device.last_seen,
+            online: state
+                .connections
+                .get(&device.device_id)
+                .is_some_and(|open| open.iter().any(|(_, token)| !token.is_cancelled())),
+            host_only: device.role == DeviceRole::Host,
+        })
+        .collect()
+}
+
+/// A client device acting as `user_id`, paired now.
+fn new_device(user_id: &UserId, fingerprint: &str, client: &str) -> Device {
+    let now = Timestamp::now();
+    Device {
+        device_id: DeviceId::new(ulid::Ulid::generate().to_string()),
+        user_id: user_id.clone(),
+        client: client.to_owned(),
+        fingerprint: fingerprint.to_owned(),
+        paired_at: now,
+        role: DeviceRole::Client,
+        last_seen: Some(now),
+    }
+}
+
+/// Adds `proven` as `role`; a person already here takes `role` and their passkey too.
+fn add_person(users: &mut Users, proven: ProvenPerson, role: Role) {
+    if let Some(person) = users
+        .people
+        .iter_mut()
+        .find(|person| person.person_id == proven.person_id)
+    {
+        person.role = role;
+        if !person
+            .passkeys
+            .iter()
+            .any(|passkey| passkey.cred_id() == proven.passkey.cred_id())
+        {
+            person.passkeys.push(proven.passkey);
+        }
+        return;
+    }
+    users.people.push(Person {
+        person_id: proven.person_id,
+        name: proven.name,
+        role,
+        passkeys: vec![proven.passkey],
+        created_at: Timestamp::now(),
+    });
+}
+
+/// Notes an assertion on `person_id`'s passkeys; whether any changed.
+fn note(users: &mut Users, person_id: &PersonId, result: &AuthenticationResult) -> bool {
+    let Some(person) = users
+        .people
+        .iter_mut()
+        .find(|person| &person.person_id == person_id)
+    else {
+        return false;
+    };
+    let mut changed = false;
+    for passkey in &mut person.passkeys {
+        changed |= passkey.update_credential(result) == Some(true);
+    }
+    changed
+}
+
+fn saving(err: anyhow::Error) -> ErrorInfo {
+    tracing::error!("cannot save the people file: {err:#}");
+    internal(&"cannot save who is on this daemon")
+}
+
+fn internal(err: &dyn std::fmt::Display) -> ErrorInfo {
+    tracing::error!("{err}");
+    ErrorInfo {
+        code: ErrorCode::Internal,
+        message: err.to_string(),
+    }
+}
+
+fn last_owner() -> ErrorInfo {
+    conflict("the last owner cannot be removed or made a member; make someone else an owner first")
+}
+
+fn bad_request(message: &str) -> ErrorInfo {
+    ErrorInfo {
+        code: ErrorCode::BadRequest,
+        message: message.to_owned(),
+    }
+}
+
+fn not_found(message: &str) -> ErrorInfo {
+    ErrorInfo {
+        code: ErrorCode::NotFound,
+        message: message.to_owned(),
+    }
+}
+
+fn conflict(message: &str) -> ErrorInfo {
+    ErrorInfo {
+        code: ErrorCode::Conflict,
+        message: message.to_owned(),
+    }
 }
 
 /// A user name as given, trimmed.
@@ -843,16 +1485,24 @@ fn describe(role: Role) -> &'static str {
 
 /// A random code, formatted `XXXXX-XXXXX`.
 fn new_code() -> Result<String> {
-    let mut bytes = [0u8; CODE_LEN];
+    random_code(CODE_LEN, 5)
+}
+
+/// A random code of `len` characters, in groups of `group` joined by dashes.
+fn random_code(len: usize, group: usize) -> Result<String> {
+    let mut bytes = vec![0u8; len];
     SystemRandom::new()
         .fill(&mut bytes)
         .map_err(|_| anyhow::anyhow!("the system random number generator failed"))?;
-    let chars: String = bytes
+    let chars: Vec<char> = bytes
         .iter()
         .map(|byte| char::from(CODE_ALPHABET[usize::from(*byte) % CODE_ALPHABET.len()]))
         .collect();
-    let (first, second) = chars.split_at(CODE_LEN / 2);
-    Ok(format!("{first}-{second}"))
+    Ok(chars
+        .chunks(group)
+        .map(|chunk| chunk.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join("-"))
 }
 
 /// A code as typed, without separators or case.
@@ -1378,5 +2028,369 @@ mod tests {
                 ErrorCode::Forbidden
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod people_tests {
+    use std::time::Duration;
+
+    use herder_protocol::{ErrorCode, NewPerson, PersonCard, PersonPasskey, Role, SignIn, UserId};
+    use tokio_util::sync::CancellationToken;
+
+    use super::authenticator::Authenticator;
+    use super::passkeys::Passkeys;
+    use super::{Auth, DeviceRole, Identity};
+
+    fn open() -> (tempfile::TempDir, Auth) {
+        let tmp = tempfile::tempdir().unwrap();
+        let auth = Auth::open(tmp.path()).unwrap();
+        (tmp, auth)
+    }
+
+    fn sign_in(auth: &Auth, fingerprint: &str, method: SignIn) -> Result<Identity, ErrorInfo> {
+        auth.sign_in(fingerprint, "test", method, &CancellationToken::new())
+    }
+
+    use herder_protocol::ErrorInfo;
+
+    /// Claims a fresh `auth` as Tomas with a passkey created now, from the Mac.
+    fn claim(auth: &Auth) -> (Identity, Authenticator) {
+        let (code, _) = auth.open_claim().unwrap();
+        let (_, creation) = auth.sign_in_challenge().unwrap();
+        let (passkey, registration) = Authenticator::register("tomas", &creation.unwrap());
+        let method = SignIn::ClaimOwnership {
+            code,
+            person: NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Register { registration },
+            },
+        };
+        (sign_in(auth, "fp-mac", method).unwrap(), passkey)
+    }
+
+    /// Asks `passkey` to sign a fresh challenge of `auth`.
+    fn fresh(auth: &Auth, passkey: &Authenticator) -> herder_protocol::PasskeyAssertion {
+        passkey.assert(&auth.challenge().unwrap())
+    }
+
+    #[test]
+    fn registrations_and_assertions_verify_against_recorded_passkeys() {
+        let passkeys = Passkeys::new().unwrap();
+        let (passkey, registration) =
+            Authenticator::register("tomas", &passkeys.creation().unwrap());
+        let (person_id, key) = passkeys.register(&registration).unwrap();
+        assert_eq!(
+            uuid::Uuid::parse_str(person_id.as_str())
+                .unwrap()
+                .as_bytes(),
+            passkey.user_handle.as_slice()
+        );
+        // A registration works once.
+        assert_eq!(
+            passkeys.register(&registration).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+
+        let keys = |_: &herder_protocol::PersonId| vec![key.clone()];
+        let assertion = passkey.assert(&passkeys.challenge().unwrap());
+        assert_eq!(
+            passkeys.verify(&assertion, keys).unwrap().person_id,
+            person_id
+        );
+        // So does an assertion's challenge.
+        assert!(passkeys.verify(&assertion, keys).is_err());
+
+        // Another origin, another key, or a forged signature does not verify.
+        let challenge = passkeys.challenge().unwrap().challenge;
+        let phished = passkey.assert_raw(&challenge, "https://herder.example");
+        assert!(passkeys.verify(&phished, keys).is_err());
+        let sam = Authenticator::new("sam", &passkey.user_handle);
+        assert!(
+            passkeys
+                .verify(&sam.assert(&passkeys.challenge().unwrap()), keys)
+                .is_err()
+        );
+        let mut forged = passkey.assert(&passkeys.challenge().unwrap());
+        forged.response.signature = sam
+            .assert(&passkeys.challenge().unwrap())
+            .response
+            .signature;
+        assert!(passkeys.verify(&forged, keys).is_err());
+    }
+
+    #[test]
+    fn a_fresh_daemon_gets_its_first_owner_and_their_other_devices_need_no_code() {
+        // Tomas created his passkey on another machine; this one learns it from his app.
+        let (_mac_tmp, mac) = open();
+        let (tomas, passkey) = claim(&mac);
+        let key = mac.people()[0].passkeys[0].clone();
+        let person_id = tomas.person_id.clone().unwrap();
+
+        let (_tmp, auth) = open();
+        assert!(auth.sign_in_challenge().unwrap().1.is_none());
+        let (code, _) = auth.open_claim().unwrap();
+        assert!(auth.sign_in_challenge().unwrap().1.is_some());
+        let claim = |code: &str| SignIn::ClaimOwnership {
+            code: code.to_owned(),
+            person: NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Existing {
+                    person_id: person_id.clone(),
+                    key: key.clone(),
+                    assertion: fresh(&auth, &passkey),
+                },
+            },
+        };
+        // The code on the phone must match the terminal's.
+        let wrong = sign_in(&auth, "fp-mac", claim("AAA-AAA")).unwrap_err();
+        assert_eq!(wrong.code, ErrorCode::Forbidden);
+        assert_eq!(auth.owner(), None);
+
+        let owner = sign_in(&auth, "fp-mac", claim(&code.to_lowercase())).unwrap();
+        assert_eq!(owner.role, Role::Owner);
+        assert_eq!(owner.person_id.as_ref(), Some(&person_id));
+        assert_eq!(owner.user_id, UserId::new(person_id.as_str()));
+        assert_eq!(auth.owner(), Some(owner.user_id.clone()));
+        // The window closed with its first owner.
+        assert!(auth.sign_in_challenge().unwrap().1.is_none());
+        assert!(sign_in(&auth, "fp-other", claim(&code)).is_err());
+        assert!(auth.open_claim().is_err());
+
+        // His iPhone holds the same passkey: an assertion is all it needs.
+        let phone = SignIn::Passkey {
+            assertion: fresh(&auth, &passkey),
+        };
+        let phone = sign_in(&auth, "fp-phone", phone).unwrap();
+        assert_eq!(phone.user_id, owner.user_id);
+        assert_ne!(phone.device_id, owner.device_id);
+        let people = auth.people();
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].devices.len(), 2);
+
+        // Both devices are known from then on.
+        let again = auth.authenticate(
+            "fp-phone",
+            None,
+            "test",
+            DeviceRole::Client,
+            &CancellationToken::new(),
+        );
+        assert_eq!(again.unwrap(), phone);
+
+        // A passkey of nobody here signs nothing in.
+        let stranger = Authenticator::new("sam", &uuid::Uuid::now_v7().into_bytes());
+        let refused = SignIn::Passkey {
+            assertion: fresh(&auth, &stranger),
+        };
+        assert_eq!(
+            sign_in(&auth, "fp-stranger", refused).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+    }
+
+    #[tokio::test]
+    async fn an_app_approves_a_terminal_login() {
+        let (tmp, auth) = open();
+        let (tomas, passkey) = claim(&auth);
+        let request = auth.start_login("fp-term", "herder-tui/0.7.0").unwrap();
+        assert_eq!(request.code.len(), 7);
+        assert!(!auth.is_paired("fp-term"));
+
+        let wrong = auth.approve_login(&tomas, "ZZZ-ZZZ").unwrap_err();
+        assert_eq!(wrong.code, ErrorCode::NotFound);
+        auth.verify_assertion(tomas.person_id.as_ref().unwrap(), &fresh(&auth, &passkey))
+            .unwrap();
+        let (device_id, client) = auth.approve_login(&tomas, &request.code).unwrap();
+        assert_eq!(client, "herder-tui/0.7.0");
+        request.approved.await.unwrap();
+        let terminal = auth
+            .authenticate(
+                "fp-term",
+                None,
+                "test",
+                DeviceRole::Client,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            (terminal.device_id, terminal.user_id),
+            (device_id, tomas.user_id.clone())
+        );
+        // A code works once.
+        assert!(auth.approve_login(&tomas, &request.code).is_err());
+
+        // A per-daemon user, who has no passkey, approves nothing.
+        let pairing = auth.mint("bob", None, super::PAIRING_TTL).unwrap();
+        let bob = auth
+            .authenticate(
+                "fp-bob",
+                Some(&pairing.code),
+                "test",
+                DeviceRole::Client,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        let request = auth.start_login("fp-term-2", "test").unwrap();
+        assert!(auth.approve_login(&bob, &request.code).is_err());
+
+        // People and their devices survive a restart.
+        drop(auth);
+        let auth = Auth::open(tmp.path()).unwrap();
+        assert!(auth.is_paired("fp-term"));
+        assert_eq!(auth.people()[0].devices.len(), 2);
+    }
+
+    #[test]
+    fn invites_and_roles() {
+        let (_tmp, auth) = open();
+        let (tomas, _) = claim(&auth);
+        let tomas_id = tomas.person_id.clone().unwrap();
+        let (invite, _) = auth.invite(Role::Member).unwrap();
+        let (_, creation) = auth.sign_in_challenge().unwrap();
+        let (_, registration) = Authenticator::register("sam", &creation.unwrap());
+        let accept = |registration| SignIn::AcceptInvite {
+            invite: invite.clone(),
+            person: NewPerson {
+                name: "Sam".into(),
+                passkey: PersonPasskey::Register { registration },
+            },
+        };
+        let sam = sign_in(&auth, "fp-sam", accept(registration)).unwrap();
+        assert_eq!(sam.role, Role::Member);
+        let sam_id = sam.person_id.clone().unwrap();
+        // An invite works once.
+        let (_, creation) = auth.sign_in_challenge().unwrap();
+        assert!(creation.is_none());
+        let (_tmp2, other) = open();
+        let (_, registration) = Authenticator::register("sam", &other.creation().unwrap());
+        assert!(sign_in(&auth, "fp-sam-2", accept(registration)).is_err());
+
+        // Roles change, but never leave the daemon without an owner.
+        let last = auth
+            .set_person_role(&tomas_id, Role::Member, None)
+            .unwrap_err();
+        assert_eq!(last.code, ErrorCode::Conflict);
+        assert_eq!(
+            auth.revoke_person(&tomas_id).unwrap_err().code,
+            ErrorCode::Conflict
+        );
+        auth.set_person_role(&sam_id, Role::Owner, None).unwrap();
+        auth.set_person_role(&tomas_id, Role::Member, None).unwrap();
+        assert_eq!(auth.role(&tomas.user_id), Some(Role::Member));
+
+        // Another daemon learns Sam from the card this one lists.
+        let (_tmp3, third) = open();
+        claim(&third);
+        let listed = auth
+            .people()
+            .into_iter()
+            .find(|person| person.person_id == sam_id)
+            .unwrap();
+        let card = PersonCard {
+            name: listed.name,
+            passkeys: listed.passkeys,
+        };
+        assert_eq!(
+            third
+                .set_person_role(&sam_id, Role::Member, None)
+                .unwrap_err()
+                .code,
+            ErrorCode::NotFound
+        );
+        third
+            .set_person_role(&sam_id, Role::Member, Some(card))
+            .unwrap();
+        assert_eq!(third.role(&sam.user_id), Some(Role::Member));
+        let empty = PersonCard {
+            name: "Kim".into(),
+            passkeys: Vec::new(),
+        };
+        let kim = herder_protocol::PersonId::new(uuid::Uuid::now_v7().to_string());
+        assert_eq!(
+            third
+                .set_person_role(&kim, Role::Member, Some(empty))
+                .unwrap_err()
+                .code,
+            ErrorCode::BadRequest
+        );
+    }
+
+    #[test]
+    fn revoking_a_person_or_device_disconnects_it() {
+        let (_tmp, auth) = open();
+        let (tomas, passkey) = claim(&auth);
+        let (invite, _) = auth.invite(Role::Owner).unwrap();
+        let (_, creation) = auth.sign_in_challenge().unwrap();
+        let (sam_passkey, registration) = Authenticator::register("sam", &creation.unwrap());
+        let connection = CancellationToken::new();
+        let sam = auth
+            .sign_in(
+                "fp-sam",
+                "test",
+                SignIn::AcceptInvite {
+                    invite,
+                    person: NewPerson {
+                        name: "Sam".into(),
+                        passkey: PersonPasskey::Register { registration },
+                    },
+                },
+                &connection,
+            )
+            .unwrap();
+        let phone = CancellationToken::new();
+        let tomas_phone = auth
+            .sign_in(
+                "fp-phone",
+                "test",
+                SignIn::Passkey {
+                    assertion: fresh(&auth, &passkey),
+                },
+                &phone,
+            )
+            .unwrap();
+        assert!(auth.revoke(&tomas_phone.device_id).unwrap());
+        assert!(phone.is_cancelled());
+        assert!(auth.is_paired("fp-mac"));
+
+        auth.revoke_person(sam.person_id.as_ref().unwrap()).unwrap();
+        assert!(connection.is_cancelled());
+        assert!(!auth.is_paired("fp-sam"));
+        let gone = SignIn::Passkey {
+            assertion: fresh(&auth, &sam_passkey),
+        };
+        assert!(sign_in(&auth, "fp-sam", gone).is_err());
+        assert_eq!(auth.people().len(), 1);
+        assert_eq!(auth.people()[0].person_id, tomas.person_id.unwrap());
+    }
+
+    #[test]
+    fn an_assertion_must_be_fresh_and_the_callers_own() {
+        let (_tmp, mut auth) = open();
+        let (tomas, passkey) = claim(&auth);
+        let tomas_id = tomas.person_id.unwrap();
+        let assertion = fresh(&auth, &passkey);
+        auth.verify_assertion(&tomas_id, &assertion).unwrap();
+        // Used once.
+        assert!(auth.verify_assertion(&tomas_id, &assertion).is_err());
+        // Never minted here.
+        assert!(
+            auth.verify_assertion(
+                &tomas_id,
+                &passkey.assert_raw("bm90LW1pbnRlZA", "https://herder.sh")
+            )
+            .is_err()
+        );
+        // By someone else's passkey.
+        let other = herder_protocol::PersonId::new(uuid::Uuid::now_v7().to_string());
+        assert!(
+            auth.verify_assertion(&other, &fresh(&auth, &passkey))
+                .is_err()
+        );
+        // Expired: challenges here last no time at all.
+        auth.passkeys = Passkeys::with_ttl(Duration::ZERO).unwrap();
+        let stale = fresh(&auth, &passkey);
+        let refused = auth.verify_assertion(&tomas_id, &stale).unwrap_err();
+        assert!(refused.message.contains("expired"), "{}", refused.message);
     }
 }
