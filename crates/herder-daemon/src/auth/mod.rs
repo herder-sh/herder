@@ -20,6 +20,8 @@
 //! Users and devices persist in `<data_dir>/auth.json`, written atomically on every change.
 
 pub mod control;
+pub mod invite;
+pub mod login;
 
 use std::collections::HashMap;
 use std::fs::File;
