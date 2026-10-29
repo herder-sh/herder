@@ -190,8 +190,7 @@ everything stops once the last clone is dropped.
 - `Machine` — `host_id`, `name`, `addresses` (in order of preference), `address:
   Option<String>` (the one the current connection uses; `None` while not connected),
   `fingerprint`, `connection`, `quality`, `role`, `person_id` (`Option<PersonId>`: the person
-  this device acts for there, from its latest hello; `None` before the first connection and
-  for a per-daemon user), `herder_version` (`Option<String>`: the
+  this device acts for there, from its latest hello; `None` before the first connection), `herder_version` (`Option<String>`: the
   daemon's herder version from its latest hello; `None` before the first connection and from
   daemons before `UpdateDaemon`), `sessions`, `hosts`, `projects`, `accounts`, `failover`, `providers` (`Vec<ProviderStatus>`:
   each runnable provider's CLI on the machine, as last listed; `latest_version` when a newer

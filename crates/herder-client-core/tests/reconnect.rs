@@ -1051,11 +1051,9 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
     daemon.sign_in(&member, "bob", daemon.addr).await.unwrap();
     wait_connection(&member, connected).await;
     assert_eq!(member.machines()[0].role, Some(Role::Member));
-    assert_eq!(
-        member.machines()[0].person_id,
-        None,
-        "a per-daemon user is no person"
-    );
+    let bob = member.machines()[0].person_id.clone();
+    assert!(bob.is_some(), "the machine names the person the member is");
+    assert_ne!(bob, other.machines()[0].person_id, "a person of their own");
     for refused in [
         member
             .attach_terminal(host.clone(), terminal_id.clone())
