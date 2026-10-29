@@ -110,8 +110,19 @@ pub fn print_pairing(info: &PairingInfo) -> Result<()> {
     Ok(())
 }
 
-/// Shows how to become the owner of this daemon, which has none: the `herder://own` link as a
-/// QR code, and the code the app should show too.
+/// `herder claim`: opens the window in which the running daemon takes a new owner, and shows
+/// how to approve it from the app.
+pub fn claim(config: Option<PathBuf>) -> Result<()> {
+    let config = herder_daemon::Config::load(config.as_deref())?;
+    match control::request(&config.data_dir, &Request::Claim)? {
+        Response::Own(info) => print_own(&info),
+        Response::Error { message } => bail!("{message}"),
+        _ => bail!("the daemon sent an unexpected answer"),
+    }
+}
+
+/// Shows how to become an owner of this daemon, which has none or ran `herder claim`: the
+/// `herder://own` link as a QR code, and the code the app should show too.
 pub fn print_own(info: &OwnInfo) -> Result<()> {
     let uri = own_link(info, &herder_daemon::host_name());
     let qr = QrCode::new(uri.as_bytes())?
