@@ -53,6 +53,8 @@ struct TestBackend {
     store: Arc<Mutex<Store>>,
     commands: Arc<AtomicUsize>,
     worktree: PathBuf,
+    /// The devices hosts replicate from, as a vault knows them.
+    replicated: Arc<Mutex<Vec<DeviceId>>>,
 }
 
 impl Backend for TestBackend {
@@ -153,6 +155,10 @@ impl Backend for TestBackend {
         }
         Ok(self.worktree.clone())
     }
+
+    async fn replicated(&self) -> anyhow::Result<Vec<DeviceId>> {
+        Ok(self.replicated.lock().unwrap().clone())
+    }
 }
 
 /// A running server, with the journal writer the session manager would own.
@@ -167,6 +173,8 @@ struct Daemon {
     hub: Arc<Hub>,
     store: Arc<Mutex<Store>>,
     commands: Arc<AtomicUsize>,
+    /// The devices hosts replicate from, when the daemon plays a vault.
+    replicated: Arc<Mutex<Vec<DeviceId>>>,
     shutdown: CancellationToken,
     /// The daemon's config file, which the settings commands change.
     config: PathBuf,
@@ -195,10 +203,12 @@ impl Daemon {
             Store::open(tmp.path().join("journal.sqlite3")).unwrap(),
         ));
         let commands = Arc::new(AtomicUsize::new(0));
+        let replicated = Arc::new(Mutex::new(Vec::new()));
         let backend = TestBackend {
             store: Arc::clone(&store),
             commands: Arc::clone(&commands),
             worktree: tmp.path().to_owned(),
+            replicated: Arc::clone(&replicated),
         };
         let hub = Arc::new(Hub::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -267,6 +277,7 @@ impl Daemon {
             hub,
             store,
             commands,
+            replicated,
             shutdown,
             config,
             control,
@@ -2549,4 +2560,304 @@ async fn a_fresh_daemon_gets_its_first_owner_by_an_assertion_and_their_devices_n
         panic!("expected the invite refused");
     };
     assert_eq!(error.code, ErrorCode::Forbidden);
+}
+
+/// Moves `owner` to the person `0192f3a4-…`, holding no passkey here, with `also`.
+fn claim(daemon: &Daemon, owner: &UserId, also: &[UserId]) {
+    daemon
+        .auth
+        .claim_as(
+            owner,
+            &herder_protocol::PersonId::new("0192f3a4-5b6c-7d8e-9f00-112233445566"),
+            "Tomas".into(),
+            Vec::new(),
+            also,
+            &[],
+        )
+        .unwrap();
+}
+
+#[tokio::test]
+async fn after_a_claim_the_owners_history_reads_as_the_person() {
+    let daemon = Daemon::start().await;
+    let owner = daemon.client().await.hello(Vec::new()).await.user_id;
+    let bob = DeviceKey::generate().unwrap();
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let bob = daemon
+        .client_on(&bob, Some(&code))
+        .await
+        .hello(Vec::new())
+        .await
+        .user_id;
+    // Sessions by both, journaled under their per-daemon ids.
+    let session = daemon.create_session("s1");
+    let by = |user: &UserId| {
+        daemon
+            .store
+            .lock()
+            .unwrap()
+            .append(NewEvent {
+                session_id: session.clone(),
+                at: jiff::Timestamp::now(),
+                by: Some(user.clone()),
+                body: added("i1", "hi"),
+            })
+            .unwrap()
+    };
+    by(&owner);
+    by(&bob);
+
+    let person = UserId::new("0192f3a4-5b6c-7d8e-9f00-112233445566");
+    claim(&daemon, &owner, &[]);
+    let mut client = daemon.client().await;
+    assert_eq!(client.hello(Vec::new()).await.user_id, person);
+    client.subscribe(&session, 0).await;
+    client.read_until(|view| view.last_seq() == 3).await;
+    let authors: Vec<_> = client.view.events.iter().map(|e| e.by.clone()).collect();
+    assert_eq!(authors, [None, Some(person.clone()), Some(bob)]);
+
+    // Live events under the old id too.
+    let event = by(&owner);
+    daemon.hub.event(&event);
+    client.read_until(|view| view.last_seq() == 4).await;
+    assert_eq!(client.view.events[3].by, Some(person));
+}
+
+#[tokio::test]
+async fn after_a_claim_agents_act_for_the_person_by_any_of_their_old_ids() {
+    let daemon = Daemon::start().await;
+    let mut client = daemon.client().await;
+    let owner = client.hello(Vec::new()).await.user_id;
+    // The person's id on the machine a forked session came from.
+    let elsewhere = UserId::new("01JA0HOSTUSER");
+    claim(&daemon, &owner, std::slice::from_ref(&elsewhere));
+
+    // A bot person linked to the old id is still linked, as the person.
+    let bot = herder_protocol::Bot {
+        bot_id: herder_protocol::BotId::new("tg"),
+        kind: herder_protocol::BotKind::Telegram,
+        name: "trash-can".into(),
+        token: "TELEGRAM_TOKEN".parse().unwrap(),
+        app_token: None,
+        allow: vec![herder_protocol::BotUser {
+            external_user_id: "1".into(),
+            display_name: "Ada".into(),
+            dm: true,
+            channels: true,
+            approve: false,
+            notify: false,
+            owner: false,
+            user_id: Some(owner.clone()),
+        }],
+        defaults: herder_protocol::BotDefaults::default(),
+        channel_bindings: Vec::new(),
+        instructions: None,
+    };
+    assert!(matches!(
+        client
+            .command("c1", CommandBody::PutBot { bot: Box::new(bot) })
+            .await,
+        ServerMessage::CommandAccepted { .. }
+    ));
+    let via_ada = UserId::new("via trash-can, Ada");
+    for by in [owner, elsewhere, via_ada] {
+        let settings = daemon
+            .control
+            .command(SessionId::new("s1"), by.clone(), CommandBody::GetSettings)
+            .await;
+        assert!(
+            matches!(settings, Ok(CommandResult::Settings { .. })),
+            "{by}: {settings:?}"
+        );
+    }
+}
+
+/// Appends an event `by` sent to `session` on `daemon`'s journal, as a host's would be, or
+/// as the vault holds it once replicated.
+fn journal(daemon: &Daemon, session: &SessionId, by: &UserId) -> Event {
+    daemon
+        .store
+        .lock()
+        .unwrap()
+        .append(NewEvent {
+            session_id: session.clone(),
+            at: jiff::Timestamp::now(),
+            by: Some(by.clone()),
+            body: added("i1", "hi"),
+        })
+        .unwrap()
+}
+
+/// The authors of `session`'s events on `daemon`, as a newly connected client reads them.
+async fn authors(daemon: &Daemon, session: &SessionId) -> Vec<Option<UserId>> {
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    client.subscribe(session, 0).await;
+    let head = daemon
+        .store
+        .lock()
+        .unwrap()
+        .read_since(session, 0, 100)
+        .unwrap()
+        .len();
+    client.read_until(|view| view.events.len() == head).await;
+    client.view.events.into_iter().map(|e| e.by).collect()
+}
+
+async fn claimed(
+    client: &mut Client,
+    id: &str,
+    person: NewPerson,
+    also: Vec<UserId>,
+) -> CommandResult {
+    let body = CommandBody::ClaimUsers {
+        person: Box::new(person),
+        also,
+    };
+    match client.command(id, body).await {
+        ServerMessage::CommandAccepted { result, .. } => result,
+        other => panic!("the claim was refused: {other:?}"),
+    }
+}
+
+async fn challenge(client: &mut Client, id: &str) -> (PasskeyChallenge, Option<PasskeyCreation>) {
+    let ServerMessage::CommandAccepted {
+        result:
+            CommandResult::PasskeyChallenge {
+                challenge,
+                registration,
+            },
+        ..
+    } = client.command(id, CommandBody::PasskeyChallenge).await
+    else {
+        panic!("expected a passkey challenge");
+    };
+    (challenge, registration)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_claim_makes_the_person_owner_of_a_host_and_its_vault_and_their_sessions_theirs() {
+    // Today's fleet: a host and a vault, each with its own owner user for this device, and on
+    // the vault a machine paired as a user, which replicates.
+    let host = Daemon::start().await;
+    let vault = Daemon::start().await;
+    let mut on_host = host.client().await;
+    let host_user = on_host.hello(Vec::new()).await.user_id;
+    let mut on_vault = vault.client().await;
+    let vault_user = on_vault.hello(Vec::new()).await.user_id;
+    let machine = DeviceKey::generate().unwrap();
+    let code = vault
+        .auth
+        .mint("trash-can-01", None, PAIRING_TTL)
+        .unwrap()
+        .code;
+    let machine = vault
+        .client_on(&machine, Some(&code))
+        .await
+        .hello(Vec::new())
+        .await;
+    vault.replicated.lock().unwrap().push(machine.device_id);
+    // And on the host, a user from before with a CLI device.
+    let cli = DeviceKey::generate().unwrap();
+    let code = host.auth.mint("tomas", None, PAIRING_TTL).unwrap().code;
+    let leftover = host
+        .client_on(&cli, Some(&code))
+        .await
+        .hello(Vec::new())
+        .await
+        .user_id;
+
+    // A session on the host by the owner, which the vault holds as replicated, and one on the
+    // vault's own owner.
+    let session = host.create_session("s1");
+    journal(&host, &session, &host_user);
+    let copy = vault.create_session("s1");
+    journal(&vault, &copy, &host_user);
+    journal(&vault, &copy, &vault_user);
+
+    // The app creates the passkey on the host and claims it.
+    let (_, creation) = challenge(&mut on_host, "c1").await;
+    let creation = creation.expect("an owner without a passkey can create one");
+    let (passkey, registration) = Authenticator::register("tomas", &creation);
+    let person = NewPerson {
+        name: "Tomas".into(),
+        passkey: PersonPasskey::Register { registration },
+    };
+    let CommandResult::Claimed {
+        person_id,
+        hosts,
+        leftovers,
+    } = claimed(&mut on_host, "c2", person, Vec::new()).await
+    else {
+        panic!("expected the claim");
+    };
+    assert!(hosts.is_empty());
+    let left: Vec<_> = leftovers.iter().map(|user| &user.user_id).collect();
+    assert_eq!(left, [&leftover], "the CLI's user needs a decision");
+    // It's me, with a fresh assertion.
+    let (fresh, _) = challenge(&mut on_host, "d1").await;
+    let decide = CommandBody::DecideLeftover {
+        user_id: leftover.clone(),
+        decision: LeftoverDecision::ItsMe,
+        assertion: Box::new(passkey.assert(&fresh)),
+    };
+    assert!(matches!(
+        on_host.command("d2", decide).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+    assert!(host.auth.leftovers().is_empty());
+    assert_eq!(host.auth.resolve(&leftover).as_str(), person_id.as_str());
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::People { people },
+        ..
+    } = on_host.command("c3", CommandBody::ListPeople).await
+    else {
+        panic!("expected the people");
+    };
+
+    // The same passkey claims the vault, which learns the person's id on the host too.
+    let (challenge, _) = challenge(&mut on_vault, "c4").await;
+    let person = NewPerson {
+        name: "Tomas".into(),
+        passkey: PersonPasskey::Existing {
+            person_id: person_id.clone(),
+            key: people[0].passkeys[0].clone(),
+            assertion: passkey.assert(&challenge),
+        },
+    };
+    let CommandResult::Claimed {
+        person_id: on_the_vault,
+        hosts,
+        leftovers,
+    } = claimed(&mut on_vault, "c5", person, vec![host_user.clone()]).await
+    else {
+        panic!("expected the claim");
+    };
+    assert_eq!(on_the_vault, person_id);
+    assert_eq!(hosts, ["trash-can-01"], "the machine is a host now");
+    assert!(leftovers.is_empty());
+
+    // The person owns both, and their devices sign in with no code.
+    let me = UserId::new(person_id.as_str());
+    for daemon in [&host, &vault] {
+        assert_eq!(daemon.auth.role(&me), Some(Role::Owner));
+        let phone = DeviceKey::generate().unwrap();
+        let signed_in = daemon
+            .client_on(&phone, None)
+            .await
+            .sign_in(|challenge, _| SignIn::Passkey {
+                assertion: passkey.assert(&challenge),
+            })
+            .await;
+        assert_eq!(signed_in.user_id, me);
+    }
+    // Old sessions show the person as author, on the host and as the vault holds them.
+    assert_eq!(authors(&host, &session).await, [None, Some(me.clone())]);
+    assert_eq!(
+        authors(&vault, &copy).await,
+        [None, Some(me.clone()), Some(me)]
+    );
 }

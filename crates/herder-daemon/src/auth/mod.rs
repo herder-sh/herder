@@ -24,11 +24,15 @@
 //! listed under them, and every connection from one acts as the person: its user id is the
 //! person's id. Per-daemon users stay until every install has moved to people.
 //!
+//! A claim ([`Auth::claim`]) moves an owner's user to a person, keeping a record of the ids they
+//! had, so history attributed to those ids reads as the person's.
+//!
 //! Users, people and devices persist in `<data_dir>/auth.json`, written atomically on every
 //! change.
 
 #[cfg(test)]
 pub(crate) mod authenticator;
+pub mod claim;
 pub mod control;
 pub mod passkeys;
 
@@ -111,6 +115,10 @@ pub struct User {
     pub role: Role,
     /// When the user's first device paired.
     pub created_at: Timestamp,
+    /// A machine paired as a user before hosts were their own, made a host by a claim: it is
+    /// listed with the vault's hosts, not its users.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host: bool,
 }
 
 /// A paired client device.
@@ -191,6 +199,9 @@ struct Users {
     devices: Vec<Device>,
     #[serde(default)]
     people: Vec<Person>,
+    /// User ids claims moved to people, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    moved: Vec<claim::Moved>,
 }
 
 impl Users {
@@ -204,8 +215,18 @@ impl Users {
             .find(|person| &person.person_id == person_id)
     }
 
-    /// The role of `user_id`, a user's or a person's, and the person it is.
+    /// The user `user_id` is now: the person a claim moved it to, or itself.
+    fn resolve<'a>(&'a self, user_id: &'a UserId) -> &'a UserId {
+        self.moved
+            .iter()
+            .find(|moved| &moved.user_id == user_id)
+            .map_or(user_id, |moved| &moved.person)
+    }
+
+    /// The role of `user_id`, a user's or a person's, and the person it is; an id a claim
+    /// moved is its person's.
     fn member(&self, user_id: &UserId) -> Option<(Role, Option<PersonId>)> {
+        let user_id = self.resolve(user_id);
         if let Some(user) = self.users.iter().find(|user| &user.user_id == user_id) {
             return Some((user.role, None));
         }
@@ -215,8 +236,9 @@ impl Users {
             .map(|person| (person.role, Some(person.person_id.clone())))
     }
 
-    /// The name of `user_id`, a user's or a person's.
+    /// The name of `user_id`, a user's or a person's; an id a claim moved is its person's.
     fn name(&self, user_id: &UserId) -> Option<&str> {
+        let user_id = self.resolve(user_id);
         self.users
             .iter()
             .find(|user| &user.user_id == user_id)
@@ -261,6 +283,15 @@ impl Users {
 struct Window {
     code: String,
     expires: Instant,
+    /// Opened by `herder claim` on the machine: it takes an owner though the daemon has one.
+    recovery: bool,
+}
+
+impl Window {
+    /// Whether the window still takes an owner, on a daemon that has one or not.
+    fn takes_owner(&self, now: Instant, has_owner: bool) -> bool {
+        self.expires > now && (self.recovery || !has_owner)
+    }
 }
 
 /// A device waiting for an app of a person to approve its login.
@@ -494,6 +525,7 @@ impl Auth {
                     name: pending.user.clone(),
                     role: pending.role,
                     created_at: now,
+                    host: false,
                 };
                 users.users.push(user.clone());
                 user
@@ -581,6 +613,19 @@ impl Auth {
         self.lock().users.name(user_id).map(str::to_owned)
     }
 
+    /// The person `user_id` is, or a claim moved it to; `None` for a per-daemon user.
+    pub fn person_of(&self, user_id: &UserId) -> Option<PersonId> {
+        self.lock()
+            .users
+            .member(user_id)
+            .and_then(|(_, person)| person)
+    }
+
+    /// The user `user_id` is now: the person a claim moved it to, or itself.
+    pub fn resolve(&self, user_id: &UserId) -> UserId {
+        self.lock().users.resolve(user_id).clone()
+    }
+
     /// Every paired device with its user, oldest first.
     pub fn devices(&self) -> Vec<(Device, User)> {
         let state = self.lock();
@@ -599,14 +644,14 @@ impl Auth {
             .collect()
     }
 
-    /// Every user, oldest first, each with their devices, oldest first: what `list_users` and
-    /// `herder pair --list` show.
+    /// Every user but hosts, oldest first, each with their devices, oldest first: what
+    /// `list_users` and `herder pair --list` show.
     pub fn users(&self) -> Vec<UserInfo> {
         let mut state = self.lock();
         state
             .connections
             .retain(|_, open| open.iter().any(|(_, token)| !token.is_cancelled()));
-        let mut users: Vec<&User> = state.users.users.iter().collect();
+        let mut users: Vec<&User> = state.users.users.iter().filter(|u| !u.host).collect();
         users.sort_by_key(|user| user.created_at);
         users
             .into_iter()
@@ -753,19 +798,32 @@ impl Auth {
     /// Opens the window in which this daemon takes its first owner, for [`PAIRING_TTL`], with
     /// a fresh code; what `herder install` shows. Refused once the daemon has an owner.
     pub fn open_claim(&self) -> Result<(String, Timestamp)> {
+        self.open_window(false)
+    }
+
+    /// Opens the window in which this daemon takes a new owner though it has owners, for
+    /// [`PAIRING_TTL`], with a fresh code: what `herder claim` shows in a shell on the machine,
+    /// for someone who lost every device. Only the system user running the daemon reaches the
+    /// control socket that opens it, the same trust as `herder pair`.
+    pub fn open_recovery(&self) -> Result<(String, Timestamp)> {
+        self.open_window(true)
+    }
+
+    fn open_window(&self, recovery: bool) -> Result<(String, Timestamp)> {
         let mut state = self.lock();
-        if state.users.has_owner() {
+        if !recovery && state.users.has_owner() {
             bail!("this daemon has an owner already");
         }
         let code = random_code(SHORT_CODE_LEN, 3)?;
         state.claim = Some(Window {
             code: normalize(&code),
             expires: Instant::now() + PAIRING_TTL,
+            recovery,
         });
         let expires_at = Timestamp::now()
             .checked_add(PAIRING_TTL)
             .context("the claim would expire too far in the future")?;
-        info!("claim window opened");
+        info!(recovery, "claim window opened");
         Ok((code, expires_at))
     }
 
@@ -792,7 +850,7 @@ impl Auth {
             let claiming = state
                 .claim
                 .as_ref()
-                .is_some_and(|claim| claim.expires > now && !state.users.has_owner());
+                .is_some_and(|claim| claim.takes_owner(now, state.users.has_owner()));
             claiming || !state.invites.is_empty()
         };
         let creation = match creating {
@@ -874,14 +932,13 @@ impl Auth {
                 asserted.person_id
             }
             SignIn::ClaimOwnership { code, person } => {
-                let open = state
-                    .claim
-                    .as_ref()
-                    .is_some_and(|claim| claim.expires > now && claim.code == normalize(&code));
-                if !open || users.has_owner() {
+                let open = state.claim.as_ref().is_some_and(|claim| {
+                    claim.takes_owner(now, users.has_owner()) && claim.code == normalize(&code)
+                });
+                if !open {
                     return Err(forbidden(
                         "the code is wrong or expired, or this daemon has an owner already; \
-                         run `herder install` on it again for a new code",
+                         run `herder claim` on it for a new code",
                     ));
                 }
                 let proven = self.verify_new_person(&person)?;

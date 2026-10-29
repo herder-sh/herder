@@ -41,6 +41,13 @@ enum Command {
     },
     /// Pair a device with the daemon running on this machine, or list and revoke devices.
     Pair(pair::Args),
+    /// Give the daemon on this machine a new owner, from the herder app, though it has one:
+    /// for someone who lost every device.
+    Claim {
+        /// Daemon config file, to find its data dir [default: $XDG_CONFIG_HOME/herder/daemon.toml].
+        #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
+        config: Option<PathBuf>,
+    },
     /// Pair this device with a daemon, from the link `herder pair` printed on its machine.
     Connect {
         /// The `herder://pair?...` link.
@@ -125,6 +132,7 @@ fn main() -> ExitCode {
             daemon(config, vault).map(|()| ExitCode::SUCCESS)
         }
         Some(Command::Pair(args)) => pair::run(args).map(|()| ExitCode::SUCCESS),
+        Some(Command::Claim { config }) => pair::claim(config).map(|()| ExitCode::SUCCESS),
         Some(Command::Connect { link }) => connect::run(&link).map(|()| ExitCode::SUCCESS),
         Some(Command::Session(args)) => session::run(args),
         Some(Command::Fork(args)) => fork::run(args).map(|()| ExitCode::SUCCESS),

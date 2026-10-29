@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use herder_protocol::{
     Account, AccountId, CommandBody, CommandId, CommandResult, DeviceId, ErrorCode, ErrorInfo,
-    Event, HostId, PasskeyAssertion, PersonId, Role, Seq, SessionHead, SessionId, TerminalPurpose,
-    UserId,
+    Event, HostId, LeftoverDecision, PasskeyAssertion, PersonId, Role, Seq, SessionHead, SessionId,
+    TerminalPurpose, UserId,
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -98,6 +98,12 @@ pub trait Backend: Send + Sync + 'static {
         &self,
         session_id: &SessionId,
     ) -> impl Future<Output = Result<PathBuf, ErrorInfo>> + Send;
+
+    /// The paired devices hosts replicate to this vault from, which a claim makes hosts of
+    /// when they are all a user's; a daemon has none.
+    fn replicated(&self) -> impl Future<Output = anyhow::Result<Vec<DeviceId>>> + Send {
+        std::future::ready(Ok(Vec::new()))
+    }
 }
 
 impl Backend for SessionManager {
@@ -313,13 +319,33 @@ impl<B: Backend> Shared<B> {
                 let (device_id, client) = self.auth.approve_login(identity, &code)?;
                 return Ok(CommandResult::LoginApproved { device_id, client });
             }
-            CommandBody::ClaimUsers { .. } | CommandBody::DecideLeftover { .. } => {
-                return Err(ErrorInfo {
-                    code: ErrorCode::Unsupported,
-                    message: "this daemon cannot move its users to people yet; update herder \
-                              on it"
-                        .to_owned(),
+            CommandBody::ClaimUsers { person, also } => {
+                let proven = self.auth.verify_new_person(&person)?;
+                let person_id = proven.person_id.clone();
+                let claimed = self.claim(&identity.user_id, proven, &also).await?;
+                return Ok(CommandResult::Claimed {
+                    person_id,
+                    hosts: claimed.hosts,
+                    leftovers: claimed.leftovers,
                 });
+            }
+            CommandBody::DecideLeftover {
+                user_id,
+                decision,
+                assertion,
+            } => {
+                // A connection opened before its claim acts as the person all the same.
+                let Some(person_id) = self.auth.person_of(&identity.user_id) else {
+                    return Err(ErrorInfo {
+                        code: ErrorCode::Forbidden,
+                        message: "claim this daemon with your passkey first".to_owned(),
+                    });
+                };
+                self.auth.verify_assertion(&person_id, &assertion)?;
+                match decision {
+                    LeftoverDecision::ItsMe => self.auth.claim_leftover(&user_id, &person_id)?,
+                    LeftoverDecision::Remove => self.auth.remove_user(&user_id)?,
+                }
             }
             CommandBody::RevokeDevice {
                 device_id,
@@ -492,14 +518,15 @@ impl<B: Backend> Shared<B> {
     }
 
     /// The paired user an agent acts as, and their role, for a turn whose prompt `by` sent:
-    /// `by` itself, or the user a bot's person is linked to.
+    /// `by` itself, or the user a bot's person is linked to, either as the person a claim moved
+    /// it to.
     async fn sender(
         &self,
         by: UserId,
         session_id: &SessionId,
     ) -> Result<(UserId, Role), ErrorInfo> {
         if let Some(role) = self.auth.role(&by) {
-            return Ok((by, role));
+            return Ok((self.auth.resolve(&by), role));
         }
         let forbidden = |message: String| ErrorInfo {
             code: ErrorCode::Forbidden,
@@ -527,12 +554,31 @@ impl<B: Backend> Shared<B> {
             )));
         };
         match self.auth.role(&user_id) {
-            Some(role) => Ok((user_id, role)),
+            Some(role) => Ok((self.auth.resolve(&user_id), role)),
             None => Err(forbidden(format!(
                 "this turn was sent by {name} via {bot}, who is linked to {user_id}, no longer \
                  paired with this daemon; an owner can link them again in the bot's People"
             ))),
         }
+    }
+
+    /// Moves the owner `caller` to `person`, with the ids `also` the person has on the other
+    /// machines claimed with this one, making hosts of the users this vault's hosts replicate
+    /// as: what `claim_users` does once the person proved their passkey.
+    async fn claim(
+        &self,
+        caller: &UserId,
+        person: auth::ProvenPerson,
+        also: &[UserId],
+    ) -> Result<auth::claim::Claimed, ErrorInfo> {
+        let replicated = self.backend.replicated().await.map_err(|err| {
+            warn!("cannot list the devices hosts replicate from: {err:#}");
+            ErrorInfo {
+                code: ErrorCode::Internal,
+                message: "cannot read the vault database".to_owned(),
+            }
+        })?;
+        self.auth.claim(caller, person, also, &replicated)
     }
 
     /// Refuses `bot` when it links a person to a user who is not paired with this daemon.

@@ -256,6 +256,7 @@ fn owner(dir: &Path) -> Result<()> {
             name: OWNER.into(),
             role: Role::Owner,
             created_at: Timestamp::now(),
+            host: false,
         }],
         "devices": [],
     });
