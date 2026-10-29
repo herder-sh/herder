@@ -14,44 +14,19 @@ extension XCUIApplication {
         task.tap()
     }
 
-    /// Taps `add` until the pairing sheet's link field shows, and returns the field. On a cold
-    /// launch the splash still fades over the Board when its button first shows, and takes a tap
-    /// that lands then.
-    @MainActor
-    func openPairing(_ add: XCUIElement) -> XCUIElement {
-        let field = descendants(matching: .any)["pairing-link"].firstMatch
-        for _ in 0..<3 where !field.exists {
-            add.tap()
-            _ = field.waitForExistence(timeout: 5)
-        }
-        XCTAssertTrue(field.exists, "Add to Fleet did not open the pairing sheet")
-        return field
+    /// The links of the fake daemons the tests run against (`fake_daemon --share` prints the
+    /// first; pass it to `xcodebuild test` as `TEST_RUNNER_HERDER_PAIR_LINK`), and `extra` ones.
+    static func fakeFleet(_ extra: [String] = []) throws -> String {
+        let link = try XCTUnwrap(ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
+        return ([link] + extra).joined(separator: " ")
     }
 
-    /// The link of the fake daemons the tests run against (`fake_daemon --share` prints it; pass
-    /// it to `xcodebuild test` as `TEST_RUNNER_HERDER_PAIR_LINK`).
-    static func pairLink() throws -> String {
-        try XCTUnwrap(ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
-    }
-
-    /// Pairs with the fake daemons unless an earlier test did: the link pairs once, so
-    /// `PairingUITests`, which runs first, leaves the app paired, and a test run on its own pairs.
-    ///
-    /// The app reads its machines before its first frame, so once the tab bar shows, the Board shows
-    /// "Add to Fleet" exactly when nothing is paired; no guess at how long a cold launch takes.
+    /// Launches the app on the fake daemons, which it joins at launch unless an earlier test
+    /// did (`Fleet.joinFakeFleet`), and waits for the Board.
     @MainActor
-    func pairUnlessPaired() throws {
+    func launchOnFakeFleet(_ extra: [String] = []) throws {
+        launchEnvironment["HERDER_FAKE_FLEET"] = try Self.fakeFleet(extra)
+        launch()
         XCTAssertTrue(tabBars.buttons["Board"].waitForExistence(timeout: 30), "the app did not show the Board")
-        let add = buttons["add-to-fleet"].firstMatch
-        guard add.exists else { return }
-        let link = try Self.pairLink()
-        let field = openPairing(add)
-        field.tap()
-        field.typeText(link)
-        let pair = buttons["Pair"]
-        XCTAssertTrue(pair.waitForExistence(timeout: 10))
-        pair.tap()
-        XCTAssertTrue(buttons["Done"].waitForExistence(timeout: 30))
-        buttons["Done"].tap()
     }
 }

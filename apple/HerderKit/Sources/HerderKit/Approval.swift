@@ -156,7 +156,9 @@ extension Fleet {
         case .machine:
             let pending = try await client.signIn(hosts: request.hosts, fingerprint: request.fingerprint)
             let person = try await owner(pending, authenticator: authenticator)
-            return try await pending.finish(signIn: .claimOwnership(code: request.code, person: person)).hostId
+            let hostId = try await pending.finish(signIn: .claimOwnership(code: request.code, person: person)).hostId
+            settleClaim(request, .success(hostId))
+            return hostId
         case .login:
             guard let hostId = machine(fingerprint: request.fingerprint)?.hostId else {
                 throw HerderError.Local(detail: "this device is not paired with \(request.name)")

@@ -8,9 +8,8 @@ import AppKit
 
 /// The sheets the app presents: short create flows only. Objects open as pages (`Page`).
 enum AppSheet: Identifiable, Hashable {
-    /// Add to Fleet, on what it adds: a vault already chosen, for one a machine backs up to, or
-    /// a `herder://pair` link the app was opened with already filled in.
-    case pair(PairKind, UnpairedVault? = nil, link: String = "")
+    /// Add to Fleet, on what it adds: a vault already chosen, for one a machine backs up to.
+    case pair(PairKind, UnpairedVault? = nil)
     /// A new session: pick its project first.
     case newSession
     /// A new project: a first session in a repository herder does not list yet.
@@ -40,8 +39,8 @@ extension AppSheet {
     func view(fleet: Fleet, drafted: @escaping (Draft) -> Void, openMachine: @escaping (HostId) -> Void,
               present: @escaping (AppSheet) -> Void) -> some View {
         switch self {
-        case .pair(let kind, let vault, let link):
-            AddMachineSheet(fleet: fleet, kind: kind, vault: vault, text: link) { present(.approve($0)) }
+        case .pair(let kind, let vault):
+            AddMachineSheet(fleet: fleet, kind: kind, vault: vault) { present(.approve($0)) }
         case .newSession: ProjectPicker(fleet: fleet, newProject: false, picked: drafted)
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
         case .addAccount: AddAccountSheet(fleet: fleet)

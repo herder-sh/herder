@@ -2,13 +2,12 @@ import XCTest
 
 /// On iPhone a session opens on its transcript, not the keyboard, and dragging the transcript
 /// puts the keyboard away. Opens the session of `fake-host-1` waiting on an approval, against the
-/// fake daemons of `PairingUITests`, pairing first unless an earlier test did.
+/// fake daemons of `FakeFleetUITests`, pairing first unless an earlier test did.
 final class SessionKeyboardUITests: XCTestCase {
     @MainActor
     func testSessionOpensWithoutTheKeyboardAndDraggingTheTranscriptDismissesIt() throws {
         let app = XCUIApplication()
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet()
 
         app.openWaitingTask()
         // With the approval pinned, the transcript still shows.

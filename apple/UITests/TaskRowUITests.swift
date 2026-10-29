@@ -1,14 +1,13 @@
 import XCTest
 
 /// A tap on a task row opens its session, on the Board, in a project and in Chats, and a swipe
-/// archives it. Against the fake daemons of `PairingUITests`, pairing first unless an earlier
+/// archives it. Against the fake daemons of `FakeFleetUITests`, pairing first unless an earlier
 /// test did; it starts the chat it taps, so it runs after `TabsUITests`, which wants none.
 final class TaskRowUITests: XCTestCase {
     @MainActor
     func testTappingATaskRowOpensItsSessionAndSwipingArchivesIt() throws {
         let app = XCUIApplication()
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet()
 
         // The Board: the session waiting on an approval.
         let waiting = app.taskRow(NSPredicate(format: "label BEGINSWITH 'Waiting for you, '"))

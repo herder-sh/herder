@@ -30,6 +30,10 @@ public final class Fleet {
     var toast: Toast?
     /// A session started away from its list, as Fix with AI starts one, for the window to show.
     var revealed: SessionKey?
+    /// A claim a vault setup asks you to approve, for the window to show its approval sheet.
+    var claiming: ApprovalRequest?
+    /// The vault setups waiting on their claim's approval; see `claim(_:)`.
+    @ObservationIgnored var claims: [ApprovalRequest: CheckedContinuation<HostId, Error>] = [:]
     /// The installs, logins and AWS sign-ins this device started; see `Activity`.
     var activity = Activity()
     /// Every owned machine's bots, as Integrations last asked; see `FleetBots`.
@@ -148,6 +152,7 @@ public final class Fleet {
 
     /// Follows the client's changes until it stops; runs for as long as the fleet is shown.
     public func follow() async {
+        await joinFakeFleet()
         // Subscribe before reading, so a change between `init` and now is not missed.
         let changes = client.changes()
         let network = Task { await self.wakeOnNetworkChanges() }
@@ -158,7 +163,7 @@ public final class Fleet {
         }
     }
 
-    private func update(_ machines: [Machine]) {
+    func update(_ machines: [Machine]) {
         self.machines = machines
         settleUpdates()
         fetchProjectIcons(machines)
@@ -626,21 +631,6 @@ public final class Fleet {
         } catch {
             toast = .failure("Could not unarchive", error)
         }
-    }
-
-    /// Pairs with every machine a `herder://pair` link names: one result per machine, in the
-    /// link's order.
-    @discardableResult
-    public func pair(link: String) async throws -> [PairResult] {
-        let results = try await client.pair(link: link)
-        update(client.machines())
-        return results
-    }
-
-    /// A link that pairs another device with every connected machine, as this device's user
-    /// with its role on each.
-    public func share() async throws -> SharedLink {
-        try await client.share()
     }
 
     func rename(_ hostId: HostId, to name: String) throws {

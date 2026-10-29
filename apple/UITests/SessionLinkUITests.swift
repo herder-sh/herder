@@ -1,7 +1,7 @@
 import XCTest
 
 /// Opens sessions from `herder://session` links, as a bot's "Open in herder" button does, against
-/// the fake daemons of `PairingUITests` (pass the waiting session's id, the last line
+/// the fake daemons of `FakeFleetUITests` (pass the waiting session's id, the last line
 /// `fake_daemon --share` prints, as `TEST_RUNNER_HERDER_WAITING_SESSION`).
 final class SessionLinkUITests: XCTestCase {
     @MainActor
@@ -9,8 +9,7 @@ final class SessionLinkUITests: XCTestCase {
         let session = try XCTUnwrap(ProcessInfo.processInfo.environment["HERDER_WAITING_SESSION"],
                                     "needs HERDER_WAITING_SESSION")
         let app = XCUIApplication()
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet()
 
         app.open(try XCTUnwrap(URL(string: "herder://session?host=fake-host-1&session=\(session)")))
 
@@ -22,8 +21,7 @@ final class SessionLinkUITests: XCTestCase {
     @MainActor
     func testALinkToAnUnpairedMachineOffersAddMachine() throws {
         let app = XCUIApplication()
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet()
 
         app.open(try XCTUnwrap(URL(string: "herder://session?host=elsewhere&session=01JABC")))
 

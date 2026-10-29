@@ -2,7 +2,7 @@ import XCTest
 
 /// A long session that is still streaming opens at its end and follows it; scrolled up, what
 /// comes keeps the reader's place behind a New pill, which takes them back to the end. Against
-/// `fake_daemon --busy`, whose link it pairs a profile of its own with: pass it to `xcodebuild
+/// `fake_daemon --busy`, whose link a profile of its own joins: pass it to `xcodebuild
 /// test` as `TEST_RUNNER_HERDER_BUSY_LINK`. Skipped without it.
 final class TranscriptScrollUITests: XCTestCase {
     @MainActor
@@ -12,16 +12,9 @@ final class TranscriptScrollUITests: XCTestCase {
         }
         let app = XCUIApplication()
         app.launchEnvironment["HERDER_PROFILE"] = "transcript-scroll-\(UUID().uuidString)"
+        app.launchEnvironment["HERDER_FAKE_FLEET"] = link
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["Board"].waitForExistence(timeout: 30))
-        app.buttons["add-to-fleet"].firstMatch.tap()
-        let field = app.descendants(matching: .any)["pairing-link"].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 10))
-        field.tap()
-        field.typeText(link)
-        app.buttons["Pair"].tap()
-        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 30))
-        app.buttons["Done"].tap()
 
         let session = app.buttons.matching(NSPredicate(format: "label CONTAINS 'A long transcript, still streaming'")).firstMatch
         XCTAssertTrue(session.waitForExistence(timeout: 30))

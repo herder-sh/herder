@@ -1,14 +1,13 @@
 import XCTest
 
-/// Attaches a photo from the library to a prompt: against the fake daemons of `PairingUITests`,
+/// Attaches a photo from the library to a prompt: against the fake daemons of `FakeFleetUITests`,
 /// in the session of `fake-host-1` waiting on an approval, where the prompt queues. The
 /// simulator's library has photos of its own.
 final class PhotoAttachUITests: XCTestCase {
     @MainActor
     func testAPhotoPickedFromTheLibraryGoesWithThePrompt() throws {
         let app = XCUIApplication()
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet()
 
         app.openWaitingTask()
         let attach = app.descendants(matching: .any)["attach"].firstMatch

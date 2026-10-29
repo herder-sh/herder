@@ -1,25 +1,13 @@
 import XCTest
 
-/// Mentions a skill in the composer with `$`: against the fake daemons of `PairingUITests`, the
+/// Mentions a skill in the composer with `$`: against the fake daemons of `FakeFleetUITests`, the
 /// session of `fake-host-1` waiting on an approval has the project skill its repository checks
 /// in, `deploy`. The prompt queues behind the approval, so the queue shows the text sent.
 final class SkillMentionUITests: XCTestCase {
     @MainActor
     func testDollarOpensThePickerAndTheChosenSkillIsSentAsItsName() throws {
         let app = XCUIApplication()
-        app.launch()
-        if app.buttons["add-to-fleet"].firstMatch.waitForExistence(timeout: 2) {
-            let link = try XCTUnwrap(
-                ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
-            app.buttons["add-to-fleet"].firstMatch.tap()
-            let field = app.descendants(matching: .any)["pairing-link"].firstMatch
-            XCTAssertTrue(field.waitForExistence(timeout: 5))
-            field.tap()
-            field.typeText(link)
-            app.buttons["Pair"].tap()
-            XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 15))
-            app.buttons["Done"].tap()
-        }
+        try app.launchOnFakeFleet()
 
         app.openWaitingTask()
         let composer = app.descendants(matching: .any)["composer"].firstMatch
@@ -53,8 +41,7 @@ final class SkillMentionUITests: XCTestCase {
     @MainActor
     func testTabChoosesTheFirstSkill() throws {
         let app = XCUIApplication()
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet()
 
         app.openWaitingTask()
         let composer = app.descendants(matching: .any)["composer"].firstMatch

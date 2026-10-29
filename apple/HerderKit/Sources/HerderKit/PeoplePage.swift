@@ -128,7 +128,7 @@ final class FleetPeople {
                       expiresAt: Timestamp.date(expiresAt))
     }
 
-    /// `herder://invite?host=…&fp=…&invite=…`, as `herder://pair` names a machine.
+    /// `herder://invite?host=…&fp=…&invite=…`.
     nonisolated static func inviteLink(addresses: [String], fingerprint: String, invite: String) -> String {
         var link = URLComponents()
         link.scheme = "herder"

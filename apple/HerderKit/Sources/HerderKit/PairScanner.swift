@@ -2,26 +2,24 @@ import Foundation
 import Herder
 import SwiftUI
 
-/// The link Add to Fleet takes, in text from a QR code or the clipboard: the `herder://own`
-/// link `herder claim` prints, or the `herder://pair` link another device shares; alone, or
+/// The request Add to Fleet takes, in text from a QR code or the clipboard: the `herder://own`
+/// link `herder claim` prints, or the `herder://login` link `herder login` prints; alone, or
 /// somewhere in a copy of the command's output. Nil when there is none.
-func fleetLink(in text: String) -> String? {
+func approvalRequest(in text: String) -> ApprovalRequest? {
     text.split(whereSeparator: \.isWhitespace)
         .lazy
         .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'\"<>()`")) }
-        .first { word in
-            let own = URL(string: word).flatMap(ApprovalRequest.init(url:)).map { $0.kind == .machine } ?? false
-            return own || (try? parsePairingLink(link: word)) != nil
-        }
+        .compactMap { URL(string: $0).flatMap(ApprovalRequest.init(url:)) }
+        .first
 }
 
 #if os(iOS)
 import AVFoundation
 
 /// The camera, filling Add to Fleet's sheet in its form's place, looking for the QR code
-/// `herder claim` prints or another device shares; hands over the link in it.
+/// `herder claim` or `herder login` prints; hands over the request in it.
 struct PairScanner: View {
-    let scanned: (String) -> Void
+    let scanned: (ApprovalRequest) -> Void
     let close: () -> Void
     @State private var camera = QRCamera()
 
@@ -54,8 +52,8 @@ struct PairScanner: View {
         }
         .preferredColorScheme(.dark)
         .task {
-            await camera.start { link in
-                scanned(link)
+            await camera.start { request in
+                scanned(request)
                 close()
             }
         }
@@ -63,17 +61,17 @@ struct PairScanner: View {
     }
 }
 
-/// A capture session that reads QR codes until one holds a link Add to Fleet takes.
+/// A capture session that reads QR codes until one holds a request Add to Fleet takes.
 @MainActor
 @Observable
 private final class QRCamera: NSObject, AVCaptureMetadataOutputObjectsDelegate {
     private(set) var running = false
     private(set) var error: String?
-    private(set) var hint = "Point the camera at the QR code herder claim prints, or another device shows."
+    private(set) var hint = "Point the camera at the QR code herder claim or herder login prints."
     @ObservationIgnored nonisolated(unsafe) let session = AVCaptureSession()
-    @ObservationIgnored private var found: ((String) -> Void)?
+    @ObservationIgnored private var found: ((ApprovalRequest) -> Void)?
 
-    func start(found: @escaping (String) -> Void) async {
+    func start(found: @escaping (ApprovalRequest) -> Void) async {
         guard await AVCaptureDevice.requestAccess(for: .video) else {
             error = "herder needs the camera to scan the code: Settings › herder › Camera. Or paste the link instead."
             return
@@ -115,12 +113,12 @@ private final class QRCamera: NSObject, AVCaptureMetadataOutputObjectsDelegate {
 
     private func scanned(_ payloads: [String]) {
         guard let found, !payloads.isEmpty else { return }
-        guard let link = payloads.lazy.compactMap(fleetLink(in:)).first else {
-            hint = "That QR code is not a link herder claim prints."
+        guard let request = payloads.lazy.compactMap(approvalRequest(in:)).first else {
+            hint = "That QR code is not a link herder claim or herder login prints."
             return
         }
         self.found = nil
-        found(link)
+        found(request)
     }
 }
 

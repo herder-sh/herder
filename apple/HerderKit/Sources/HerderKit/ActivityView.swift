@@ -473,7 +473,7 @@ extension JobProgress {
     var tint: Color {
         switch self {
         case .queued, .ended: Theme.tertiary
-        case .starting, .installing, .settingUpVault, .pairingVault, .waitingForTurns, .downloading, .restarting: Theme.running
+        case .starting, .installing, .settingUpVault, .claimingVault, .waitingForTurns, .downloading, .restarting: Theme.running
         case .running, .approve: Theme.accent
         case .added, .signedIn, .installed, .updated, .upToDate, .vaultReady: Theme.success
         case .failed, .needsNewerHerder: Theme.failure

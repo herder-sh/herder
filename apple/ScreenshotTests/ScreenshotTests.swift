@@ -1,8 +1,8 @@
 import XCTest
 
-/// Takes the screenshots on herder.sh: pairs the app with the demo fleet whose shared link is in
+/// Takes the screenshots on herder.sh: launches the app on the demo fleet whose link is in
 /// `HERDER_PAIR_LINK` (`fake_daemon --demo` prints it; pass it to `xcodebuild test` as
-/// `TEST_RUNNER_HERDER_PAIR_LINK`), then opens each screen and attaches a screenshot of it, named
+/// `TEST_RUNNER_HERDER_PAIR_LINK`), which the app joins at launch, then opens each screen and attaches a screenshot of it, named
 /// after the image it becomes. The `screenshots` workflow exports them from the result bundle.
 ///
 /// A screen that cannot be reached is skipped with the view tree attached, so one run shows
@@ -17,11 +17,11 @@ final class ScreenshotTests: XCTestCase {
             ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
         // A profile of its own, so a run on a developer's Mac keeps off their pairings.
         app.launchEnvironment["HERDER_PROFILE"] = "screenshots"
+        app.launchEnvironment["HERDER_FAKE_FLEET"] = link
         app.launch()
         #if os(macOS)
         resize(to: CGSize(width: 1440, height: 900))
         #endif
-        try pair(link)
         #if os(macOS)
         let expand = app.buttons["Expand the sidebar"].firstMatch
         if app.windows.firstMatch.frame.width >= 1300, expand.waitForExistence(timeout: 5) { expand.click() }
@@ -808,24 +808,6 @@ final class ScreenshotTests: XCTestCase {
 
     private func finish() {
         XCTAssertTrue(missed.isEmpty, "could not reach: \(missed.joined(separator: ", "))")
-    }
-
-    private func pair(_ link: String) throws {
-        let add = app.buttons["add-to-fleet"].firstMatch
-        XCTAssertTrue(add.waitForExistence(timeout: 15), app.debugDescription)
-        press(add)
-        let field = app.descendants(matching: .any)["pairing-link"].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5), app.debugDescription)
-        press(field)
-        field.typeText(link)
-        settle()
-        shoot(platform("add-machine"))
-        let pairButton = app.buttons["Pair"].firstMatch
-        XCTAssertTrue(pairButton.waitForExistence(timeout: 5), app.debugDescription)
-        press(pairButton)
-        let done = app.buttons["Done"].firstMatch
-        XCTAssertTrue(done.waitForExistence(timeout: 30), app.debugDescription)
-        press(done)
     }
 
     /// Opens the session titled `title` from the Board, scrolling its row into view.
