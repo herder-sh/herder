@@ -35,12 +35,15 @@ stops, apart from the daemon's `herder service`. Everything the vault keeps is i
   LaunchAgent's plist, also readable by you only. Back it up with the dir.
 - its data: TLS identity, paired devices and hosts, `db/vault.db`.
 
-Once the vault is up, `install` prints a pairing code and the vault's addresses: add it in the
-app with Add to Fleet. It logs to `~/Library/Logs/herder/vault.log` on macOS, and to
-`journalctl --user -u herder-vault.service` on Linux.
+Once the vault is up, `install` prints a `herder://own` link, as a QR code, and a short code:
+scan it with the app and approve with your passkey to become the vault's owner. Your other
+devices then sign in with the same passkey, with no code. It logs to
+`~/Library/Logs/herder/vault.log` on macOS, and to `journalctl --user -u herder-vault.service`
+on Linux.
 
-Run `herder pair --config ~/.local/share/herder-vault/vault.toml` for another pairing code, and
-use the same `--config` with every command below that runs `/herder` in the pod.
+Run `herder claim --config ~/.local/share/herder-vault/vault.toml` to give the vault a new owner
+if you lose every device, and use the same `--config` with every command below that runs
+`/herder` in the pod.
 
 ```sh
 herder vault uninstall           # stops and removes the service, keeps its dir

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use super::{SECRETS_KEY_ENV, SecretsKey};
-use crate::auth::control::{self, PairingInfo, Request, Response};
+use crate::auth::control::{self, OwnInfo, PairingInfo, Request, Response};
 use crate::config::DEFAULT_PORT;
 use crate::service::{Service, Services};
 
@@ -98,10 +98,29 @@ impl LocalVault {
 
     /// Asks the vault for `request`, a pairing, once it takes requests: it may be starting.
     pub fn pair(&self, request: &Request) -> Result<PairingInfo> {
+        match self.ask(request)? {
+            Response::Paired(info) => Ok(info),
+            Response::Error { message } => bail!("{message}"),
+            _ => bail!("the vault sent an unexpected answer"),
+        }
+    }
+
+    /// Opens the window in which the vault takes its first owner, once it takes requests:
+    /// what the app claims it through.
+    pub fn own(&self) -> Result<OwnInfo> {
+        match self.ask(&Request::Own)? {
+            Response::Own(info) => Ok(info),
+            Response::Error { message } => bail!("{message}"),
+            _ => bail!("the vault sent an unexpected answer"),
+        }
+    }
+
+    /// The vault's answer to `request`, once it takes requests: it may be starting.
+    fn ask(&self, request: &Request) -> Result<Response> {
         let started = Instant::now();
-        let answer = loop {
+        loop {
             match control::request(&self.dir, request) {
-                Ok(answer) => break answer,
+                Ok(answer) => return Ok(answer),
                 Err(err) if started.elapsed() >= START_TIMEOUT => {
                     return Err(err).with_context(|| {
                         format!(
@@ -112,11 +131,6 @@ impl LocalVault {
                 }
                 Err(_) => std::thread::sleep(Duration::from_millis(250)),
             }
-        };
-        match answer {
-            Response::Paired(info) => Ok(info),
-            Response::Error { message } => bail!("{message}"),
-            _ => bail!("the vault sent an unexpected answer"),
         }
     }
 }
