@@ -1564,6 +1564,7 @@ fn attach(
         id,
         body: CommandBody::AttachTerminal {
             terminal_id: terminal_id.clone(),
+            assertion: None,
         },
     })
 }

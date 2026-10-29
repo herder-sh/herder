@@ -3915,7 +3915,7 @@
       ]
     },
     "PasskeyKey": {
-      "description": "A passkey's public key, as a daemon keeps it. Clients pass it on unchanged, to introduce\nits person to another daemon.",
+      "description": "A passkey's public key, as WebAuthn defines it, to introduce its person to another daemon.",
       "type": "object",
       "properties": {
         "credential_id": {
@@ -3923,7 +3923,8 @@
           "type": "string"
         },
         "public_key": {
-          "description": "The public key and its signature counter, in the daemon's own encoding."
+          "description": "The credential public key, a COSE_Key as the authenticator data carries it, base64url.",
+          "type": "string"
         }
       },
       "required": [

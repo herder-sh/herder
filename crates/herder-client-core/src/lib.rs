@@ -798,6 +798,7 @@ impl Client {
                 session_id,
                 cols,
                 rows,
+                assertion: None,
             })
             .await
     }

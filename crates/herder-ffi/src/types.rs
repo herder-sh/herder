@@ -687,6 +687,7 @@ pub enum CommandBody {
         session_id: SessionId,
         cols: u16,
         rows: u16,
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     ListDirectory {
         path: String,
@@ -785,29 +786,35 @@ pub enum CommandBody {
     },
     CreateSecretSet {
         set: String,
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     DeleteSecretSet {
         set: String,
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     PutSecret {
         set: String,
         name: String,
         description: String,
         value: SecretValue,
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     DeleteSecret {
         set: String,
         name: String,
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     GrantSecretSet {
         set: String,
         host_id: HostId,
         host_use: bool,
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     RevokeSecretSet {
         set: String,
         host_id: HostId,
         host_use: bool,
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     ListSecrets,
     GetSecretToStore {
@@ -818,6 +825,7 @@ pub enum CommandBody {
         session_id: SessionId,
         approval_id: ApprovalId,
         set: String,
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     ListSecretAudit {
         before: Option<u64>,
@@ -911,6 +919,7 @@ pub enum CommandBody {
     },
     AttachTerminal {
         terminal_id: TerminalId,
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     DetachTerminal {
         terminal_id: TerminalId,
@@ -1209,7 +1218,7 @@ pub struct PersonCard {
 #[uniffi::remote(Record)]
 pub struct PasskeyKey {
     pub credential_id: String,
-    pub public_key: Json,
+    pub public_key: String,
 }
 
 #[uniffi::remote(Record)]

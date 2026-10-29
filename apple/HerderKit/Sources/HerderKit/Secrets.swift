@@ -95,20 +95,20 @@ final class VaultSecrets {
     func createSet(_ name: String) async throws {
         let name = name.trimmingCharacters(in: .whitespaces)
         if let problem = Self.setNameProblem(name) { throw HerderError.Local(detail: problem) }
-        try await change(.createSecretSet(set: name))
+        try await change(.createSecretSet(set: name, assertion: nil))
     }
 
     func deleteSet(_ set: String) async throws {
-        try await change(.deleteSecretSet(set: set))
+        try await change(.deleteSecretSet(set: set, assertion: nil))
     }
 
     func deleteSecret(_ secret: SecretInfo) async throws {
-        try await change(.deleteSecret(set: secret.set, name: secret.name))
+        try await change(.deleteSecret(set: secret.set, name: secret.name, assertion: nil))
     }
 
     /// Grants `set` to `host`, or revokes it.
     func setGranted(_ granted: Bool, set: String, host: HostId) async throws {
-        try await change(granted ? .grantSecretSet(set: set, hostId: host, hostUse: false) : .revokeSecretSet(set: set, hostId: host, hostUse: false))
+        try await change(granted ? .grantSecretSet(set: set, hostId: host, hostUse: false, assertion: nil) : .revokeSecretSet(set: set, hostId: host, hostUse: false, assertion: nil))
     }
 
     /// Sends `command`, then asks for the lists again.
@@ -224,7 +224,7 @@ final class SecretEditor {
         }
         let command = CommandBody.putSecret(
             set: set, name: name.trimmingCharacters(in: .whitespaces),
-            description: description.trimmingCharacters(in: .whitespacesAndNewlines), value: value.text)
+            description: description.trimmingCharacters(in: .whitespacesAndNewlines), value: value.text, assertion: nil)
         clearFile()
         error = nil
         sending = true

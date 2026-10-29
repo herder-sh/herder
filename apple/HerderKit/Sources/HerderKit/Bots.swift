@@ -425,14 +425,14 @@ final class BotSetup {
                 throw HerderError.Local(detail: "the vault did not list its secrets")
             }
             if !sets.contains(where: { $0.name == set }) {
-                _ = try await send(vault, .createSecretSet(set: set))
+                _ = try await send(vault, .createSecretSet(set: set, assertion: nil))
             }
             for (secret, value) in tokens {
                 _ = try await send(vault, .putSecret(
                     set: set, name: secret, description: "\(kind.label) \(secret == Self.botTokenName ? "bot" : "app-level") token of the bot \(name)",
-                    value: value))
+                    value: value, assertion: nil))
             }
-            _ = try await send(vault, .grantSecretSet(set: set, hostId: hostId, hostUse: true))
+            _ = try await send(vault, .grantSecretSet(set: set, hostId: hostId, hostUse: true, assertion: nil))
             _ = try await send(hostId, .putBot(bot: Bot(
                 botId: botId, kind: kind, name: name,
                 token: "\(set)/\(Self.botTokenName)",

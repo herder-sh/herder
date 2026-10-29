@@ -1902,6 +1902,7 @@ dependencies = [
  "rustls",
  "semver",
  "serde",
+ "serde_cbor_2",
  "serde_json",
  "sha2 0.11.1",
  "slack-morphism",
@@ -1921,6 +1922,7 @@ dependencies = [
  "url",
  "uuid",
  "webauthn-rs",
+ "webauthn-rs-proto",
 ]
 
 [[package]]

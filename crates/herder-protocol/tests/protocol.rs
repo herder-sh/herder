@@ -124,7 +124,7 @@ fn assertion() -> PasskeyAssertion {
 fn passkey_key() -> PasskeyKey {
     PasskeyKey {
         credential_id: "Y3JlZA".into(),
-        public_key: json!({"cred": {"cred_id": "Y3JlZA", "counter": 0}}),
+        public_key: "pQECAyYgASFYIA".into(),
     }
 }
 
@@ -463,17 +463,25 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::RevokeVaultHost {
             host_id: HostId::new("01J9HOST"),
         }),
-        command(CommandBody::CreateSecretSet { set: "prod".into() }),
-        command(CommandBody::DeleteSecretSet { set: "prod".into() }),
+        command(CommandBody::CreateSecretSet {
+            set: "prod".into(),
+            assertion: None,
+        }),
+        command(CommandBody::DeleteSecretSet {
+            set: "prod".into(),
+            assertion: None,
+        }),
         command(CommandBody::PutSecret {
             set: "prod".into(),
             name: "STRIPE_KEY".into(),
             description: "Stripe API key for the prod account".into(),
             value: SecretValue::new("sk_test_123").unwrap(),
+            assertion: None,
         }),
         command(CommandBody::DeleteSecret {
             set: "prod".into(),
             name: "STRIPE_KEY".into(),
+            assertion: None,
         }),
         command(CommandBody::GetSecretToStore {
             session_id: SessionId::new("01J9SESSION"),
@@ -483,21 +491,25 @@ fn client_fixtures() -> Vec<ClientMessage> {
             session_id: SessionId::new("01J9SESSION"),
             approval_id: ApprovalId::new("secret-01J9"),
             set: "personal".into(),
+            assertion: None,
         }),
         command(CommandBody::GrantSecretSet {
             set: "prod".into(),
             host_id: HostId::new("01J9HOST"),
             host_use: false,
+            assertion: None,
         }),
         command(CommandBody::RevokeSecretSet {
             set: "prod".into(),
             host_id: HostId::new("01J9HOST"),
             host_use: false,
+            assertion: None,
         }),
         command(CommandBody::GrantSecretSet {
             set: "bots".into(),
             host_id: HostId::new("01J9HOST"),
             host_use: true,
+            assertion: None,
         }),
         command(CommandBody::ListSecrets),
         command(CommandBody::ListBots),
@@ -604,6 +616,13 @@ fn client_fixtures() -> Vec<ClientMessage> {
             session_id: session_id(),
             cols: 120,
             rows: 40,
+            assertion: None,
+        }),
+        command(CommandBody::OpenTerminal {
+            session_id: session_id(),
+            cols: 120,
+            rows: 40,
+            assertion: Some(Box::new(assertion())),
         }),
         command(CommandBody::AddAccount {
             account_id: AccountId::new("claude-work"),
@@ -704,6 +723,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
         }),
         command(CommandBody::AttachTerminal {
             terminal_id: terminal_id(),
+            assertion: None,
         }),
         command(CommandBody::DetachTerminal {
             terminal_id: terminal_id(),
@@ -4304,6 +4324,7 @@ fn secret_values_go_out_only_in_put_secret_fetches_and_stores() {
         name: "STRIPE_KEY".into(),
         description: "Stripe".into(),
         value: value.clone(),
+        assertion: None,
     };
     assert!(!format!("{put:?}").contains("sk_test_123"));
     assert_eq!(

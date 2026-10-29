@@ -305,7 +305,11 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
     assert_eq!(run(&sessions, &session_id, "true").await, "exit 0\n");
     let send = async |command| owner.send(HostId::new("vault"), command).await.unwrap();
     for set in ["prod", "dev"] {
-        send(CommandBody::CreateSecretSet { set: set.into() }).await;
+        send(CommandBody::CreateSecretSet {
+            set: set.into(),
+            assertion: None,
+        })
+        .await;
     }
     for (set, name, value) in [
         ("prod", "X", "expected"),
@@ -317,6 +321,7 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
             name: name.into(),
             description: format!("{name} for {set}"),
             value: SecretValue::new(value).unwrap(),
+            assertion: None,
         })
         .await;
     }
@@ -327,6 +332,7 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
                 set: set.into(),
                 host_id: HostId::new("devbox"),
                 host_use: false,
+                assertion: None,
             };
             // The host is known once it has replicated.
             if owner.send(HostId::new("vault"), grant).await.is_ok() {
@@ -517,12 +523,17 @@ async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
     owner.pair(link.to_string()).await.unwrap();
     let send = async |command| owner.send(HostId::new("vault"), command).await.unwrap();
     for (set, value) in [("prod", VALUE), ("dev", "lin_api_dev")] {
-        send(CommandBody::CreateSecretSet { set: set.into() }).await;
+        send(CommandBody::CreateSecretSet {
+            set: set.into(),
+            assertion: None,
+        })
+        .await;
         send(CommandBody::PutSecret {
             set: set.into(),
             name: "LINEAR_KEY".into(),
             description: "Linear API key".into(),
             value: SecretValue::new(value).unwrap(),
+            assertion: None,
         })
         .await;
     }
@@ -532,6 +543,7 @@ async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
             set: "prod".into(),
             host_id: HostId::new("devbox"),
             host_use: false,
+            assertion: None,
         };
         // The host is known once it has replicated.
         if owner.send(HostId::new("vault"), grant).await.is_ok() {

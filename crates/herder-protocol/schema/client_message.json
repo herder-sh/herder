@@ -1356,9 +1356,20 @@
           ]
         },
         {
-          "description": "Open a shell in the session's worktree and attach to it; owners only.",
+          "description": "Open a shell in the session's worktree and attach to it; owners only, and a person\nwith an assertion.",
           "type": "object",
           "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`; required when the caller is a person.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyAssertion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "cols": {
               "description": "Width in columns.",
               "type": "integer",
@@ -2098,7 +2109,7 @@
           ]
         },
         {
-          "description": "Mint a challenge for the caller's passkey to sign, which `invite`, `set_person_role`,\n`revoke_person`, `revoke_device` and `approve_login` carry an assertion over. It works\nonce, for [`crate::PASSKEY_CHALLENGE_SECS`]. A per-daemon owner, moving to a person\nwith `claim_users`, also gets what to create a passkey from. Answered with\n`passkey_challenge`. Refused with `forbidden` for a per-daemon member.",
+          "description": "Mint a challenge for the caller's passkey to sign, which the people commands, the\nterminal commands that open or attach one, and the secret changes carry an assertion\nover. It works once, for [`crate::PASSKEY_CHALLENGE_SECS`]. A per-daemon owner, moving to a person\nwith `claim_users`, also gets what to create a passkey from. Answered with\n`passkey_challenge`. Refused with `forbidden` for a per-daemon member.",
           "type": "object",
           "properties": {
             "type": {
@@ -2324,6 +2335,17 @@
           "description": "On a vault, create an empty set of secrets; owners only. Answered with `applied`.\nRefused with `bad_request` for a name [`crate::is_valid_secret_set_name`] refuses,\n`conflict` when the set exists, and `unsupported` on a daemon that is not a vault.",
           "type": "object",
           "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`; required when the caller is a person.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyAssertion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "set": {
               "description": "The set's name.",
               "type": "string"
@@ -2342,6 +2364,17 @@
           "description": "On a vault, delete an empty set of secrets and its grants; owners only. Answered with\n`applied`. Refused with `not_found` for an unknown set, `conflict` while it holds\nsecrets, and `unsupported` on a daemon that is not a vault.",
           "type": "object",
           "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`; required when the caller is a person.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyAssertion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "set": {
               "description": "The set.",
               "type": "string"
@@ -2360,6 +2393,17 @@
           "description": "On a vault, create a secret in a set, or replace its description and value; owners\nonly. The vault keeps the value encrypted and never sends it to a client. Answered with\n`applied`. Refused with `bad_request` for a name [`crate::is_valid_secret_name`]\nrefuses or a description that is not one line of at most\n[`crate::MAX_SECRET_DESCRIPTION_CHARS`], `not_found` for an unknown set, and\n`unsupported` on a daemon that is not a vault.",
           "type": "object",
           "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`; required when the caller is a person.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyAssertion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "description": {
               "description": "What it is for, on one line; agents read it to pick a secret.",
               "type": "string"
@@ -2393,6 +2437,17 @@
           "description": "On a vault, delete a secret; owners only. Answered with `applied`. Refused with\n`not_found` for an unknown set or secret, and `unsupported` on a daemon that is not a\nvault.",
           "type": "object",
           "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`; required when the caller is a person.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyAssertion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "name": {
               "description": "The secret's name.",
               "type": "string"
@@ -2416,6 +2471,17 @@
           "description": "On a vault, let a host fetch the secrets of a set for every session it runs, or, with\n`host_use`, for its own use, such as a bot's token, and not its sessions'; owners only.\nThe two are separate grants. Answered with `applied`; granting it again changes\nnothing. Refused with `not_found` for an unknown set or a host that never replicated\nhere, and `unsupported` on a daemon that is not a vault.",
           "type": "object",
           "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`; required when the caller is a person.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyAssertion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "host_id": {
               "description": "The host.",
               "$ref": "#/$defs/HostId"
@@ -2443,6 +2509,17 @@
           "description": "On a vault, stop a host fetching the secrets of a set for its sessions, or, with\n`host_use`, for its own use; owners only. Values the host fetched already stay in its\nmemory until they expire. Answered with `applied`. Refused with `not_found` when the set is not granted to the host that way,\nand `unsupported` on a daemon that is not a vault.",
           "type": "object",
           "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`; required when the caller is a person.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyAssertion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "host_id": {
               "description": "The host.",
               "$ref": "#/$defs/HostId"
@@ -2509,6 +2586,17 @@
             "approval_id": {
               "description": "The open `store_secret` approval.",
               "$ref": "#/$defs/ApprovalId"
+            },
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`; required when the caller is a person.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyAssertion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "session_id": {
               "description": "Session that asked.",
@@ -2854,9 +2942,20 @@
           ]
         },
         {
-          "description": "Start streaming a terminal's output; owners only.",
+          "description": "Start streaming a terminal's output; owners only, and a person with an assertion.",
           "type": "object",
           "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`; required when the caller is a person.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyAssertion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "terminal_id": {
               "description": "Target terminal.",
               "$ref": "#/$defs/TerminalId"
@@ -4565,7 +4664,7 @@
       ]
     },
     "PasskeyKey": {
-      "description": "A passkey's public key, as a daemon keeps it. Clients pass it on unchanged, to introduce\nits person to another daemon.",
+      "description": "A passkey's public key, as WebAuthn defines it, to introduce its person to another daemon.",
       "type": "object",
       "properties": {
         "credential_id": {
@@ -4573,7 +4672,8 @@
           "type": "string"
         },
         "public_key": {
-          "description": "The public key and its signature counter, in the daemon's own encoding."
+          "description": "The credential public key, a COSE_Key as the authenticator data carries it, base64url.",
+          "type": "string"
         }
       },
       "required": [

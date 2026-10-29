@@ -54,9 +54,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
-use webauthn_rs::prelude::{AuthenticationResult, Passkey};
+use webauthn_rs::prelude::AuthenticationResult;
 
-use passkeys::Passkeys;
+use passkeys::{Key, Passkeys};
 
 use crate::data_dir::write_private;
 use crate::ws::Identity;
@@ -167,7 +167,7 @@ pub struct Person {
     /// What they may do here.
     pub role: Role,
     /// Their passkeys' public keys and signature counters.
-    pub passkeys: Vec<Passkey>,
+    pub passkeys: Vec<Key>,
     /// When they joined this daemon.
     pub created_at: Timestamp,
 }
@@ -186,7 +186,7 @@ pub struct ProvenPerson {
     /// The name they gave.
     pub name: String,
     /// The passkey they hold.
-    pub passkey: Passkey,
+    pub passkey: Key,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -257,7 +257,7 @@ impl Users {
     }
 
     /// The passkeys of `person_id`; none for a person not on this daemon.
-    fn keys(&self, person_id: &PersonId) -> Vec<Passkey> {
+    fn keys(&self, person_id: &PersonId) -> Vec<Key> {
         self.person(person_id)
             .map(|person| person.passkeys.clone())
             .unwrap_or_default()
@@ -873,7 +873,7 @@ impl Auth {
                 key,
                 assertion,
             } => {
-                let mut passkey = passkeys::passkey(key)?;
+                let mut passkey = Key::from_wire(key)?;
                 let asserted = self.passkeys.verify(assertion, |id| {
                     if id == person_id {
                         vec![passkey.clone()]
@@ -881,7 +881,7 @@ impl Auth {
                         Vec::new()
                     }
                 })?;
-                passkey.update_credential(&asserted.result);
+                passkey.note(&asserted.result);
                 (asserted.person_id, passkey)
             }
         };
@@ -1105,7 +1105,7 @@ impl Auth {
                 let passkeys = card
                     .passkeys
                     .iter()
-                    .map(passkeys::passkey)
+                    .map(Key::from_wire)
                     .collect::<Result<Vec<_>, _>>()?;
                 if passkeys.is_empty() {
                     return Err(bad_request("a person needs at least one passkey"));
@@ -1167,7 +1167,7 @@ impl Auth {
                 person_id: person.person_id.clone(),
                 name: person.name.clone(),
                 role: person.role,
-                passkeys: person.passkeys.iter().map(passkeys::key).collect(),
+                passkeys: person.passkeys.iter().map(Key::wire).collect(),
                 devices: devices_of(&state, &person.user_id()),
             })
             .collect()
@@ -1439,7 +1439,7 @@ fn add_person(users: &mut Users, proven: ProvenPerson, role: Role) {
         if !person
             .passkeys
             .iter()
-            .any(|passkey| passkey.cred_id() == proven.passkey.cred_id())
+            .any(|passkey| passkey.credential_id == proven.passkey.credential_id)
         {
             person.passkeys.push(proven.passkey);
         }
@@ -1465,7 +1465,7 @@ fn note(users: &mut Users, person_id: &PersonId, result: &AuthenticationResult) 
     };
     let mut changed = false;
     for passkey in &mut person.passkeys {
-        changed |= passkey.update_credential(result) == Some(true);
+        changed |= passkey.note(result);
     }
     changed
 }
@@ -2050,27 +2050,37 @@ mod tests {
         let mut alice = pair(&auth, "fp-a", &code).unwrap();
         let (set, host_id) = (|| "prod".to_owned(), || herder_protocol::HostId::new("h1"));
         let commands = [
-            CommandBody::CreateSecretSet { set: set() },
-            CommandBody::DeleteSecretSet { set: set() },
+            CommandBody::CreateSecretSet {
+                set: set(),
+                assertion: None,
+            },
+            CommandBody::DeleteSecretSet {
+                set: set(),
+                assertion: None,
+            },
             CommandBody::PutSecret {
                 set: set(),
                 name: "STRIPE_KEY".into(),
                 description: "Stripe".into(),
                 value: herder_protocol::SecretValue::new("sk").unwrap(),
+                assertion: None,
             },
             CommandBody::DeleteSecret {
                 set: set(),
                 name: "STRIPE_KEY".into(),
+                assertion: None,
             },
             CommandBody::GrantSecretSet {
                 set: set(),
                 host_id: host_id(),
                 host_use: false,
+                assertion: None,
             },
             CommandBody::RevokeSecretSet {
                 set: set(),
                 host_id: host_id(),
                 host_use: false,
+                assertion: None,
             },
             CommandBody::ListSecrets,
             CommandBody::ListSecretAudit { before: None },
