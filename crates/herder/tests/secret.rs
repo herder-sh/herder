@@ -10,8 +10,9 @@ use std::time::Duration;
 use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
-use herder_client_core::{Client, PairingUri};
+use herder_client_core::Client;
 use herder_daemon::Hub;
+use herder_daemon::auth::authenticator;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
@@ -280,12 +281,10 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
     // The owner keeps three secrets on the vault, two of them named alike, and grants their
     // sets to the host once it replicated there.
     let owner = Client::open(tmp.path().join("c").display().to_string(), "test".into()).unwrap();
-    let link = PairingUri {
-        hosts: vec![vault.addr.to_string()],
-        fingerprint: vault.fingerprint.clone(),
-        code: vault.auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-    };
-    owner.pair(link.to_string()).await.unwrap();
+    let hosts = vec![vault.addr.to_string()];
+    authenticator::sign_in(&vault.auth, &owner, hosts, &vault.fingerprint, "alice")
+        .await
+        .unwrap();
     let created = CommandBody::CreateSession {
         repo: None,
         project_id: None,
@@ -509,12 +508,10 @@ async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
 
     // The owner keeps the key in `prod`, granted to the host, and another in `dev`, not.
     let owner = Client::open(tmp.path().join("c").display().to_string(), "test".into()).unwrap();
-    let link = PairingUri {
-        hosts: vec![vault.addr.to_string()],
-        fingerprint: vault.fingerprint.clone(),
-        code: vault.auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-    };
-    owner.pair(link.to_string()).await.unwrap();
+    let hosts = vec![vault.addr.to_string()];
+    authenticator::sign_in(&vault.auth, &owner, hosts, &vault.fingerprint, "alice")
+        .await
+        .unwrap();
     let send = async |command| owner.send(HostId::new("vault"), command).await.unwrap();
     for (set, value) in [("prod", VALUE), ("dev", "lin_api_dev")] {
         send(CommandBody::CreateSecretSet { set: set.into() }).await;
