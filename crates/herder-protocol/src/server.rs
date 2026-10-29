@@ -668,6 +668,10 @@ pub enum CommandResult {
     PasskeyChallenge {
         /// What the passkey signs.
         challenge: PasskeyChallenge,
+        /// What a new passkey is created from, for `claim_users` with `register`; only for a
+        /// per-daemon owner, who is no person yet.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        registration: Option<PasskeyCreation>,
     },
     /// This daemon's people, answering `list_people`.
     People {

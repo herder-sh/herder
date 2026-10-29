@@ -9,8 +9,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
-    ClientMessage, Command, CommandId, Cursor, ErrorCode, ErrorInfo, EventBody, PROTOCOL_VERSION,
-    ServerHello, ServerMessage,
+    ClientMessage, Command, CommandId, Cursor, ErrorCode, ErrorInfo, EventBody,
+    PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello, ServerMessage, SignIn,
 };
 use serde::Deserialize;
 use tokio::net::TcpStream;
@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::{Backend, Shared, Tls, Ws, fingerprint};
+use super::{Backend, Identity, Shared, Tls, Ws, fingerprint};
 use crate::hub::{Outbox, OutboxState};
 use crate::{auth, session};
 
@@ -133,13 +133,18 @@ async fn read<B: Backend>(
             ),
         );
     }
-    let identity = match shared.auth.authenticate(
-        device,
-        hello.pairing_code.as_deref(),
-        &hello.client,
-        auth::DeviceRole::Client,
-        cancel,
-    ) {
+    let identity = if hello.sign_in && !shared.auth.is_paired(device) {
+        sign_in(&mut stream, shared, outbox, device, &hello.client, cancel).await
+    } else {
+        shared.auth.authenticate(
+            device,
+            hello.pairing_code.as_deref(),
+            &hello.client,
+            auth::DeviceRole::Client,
+            cancel,
+        )
+    };
+    let identity = match identity {
         Ok(identity) => identity,
         Err(error) => {
             outbox.push(ServerMessage::Error { error });
@@ -159,7 +164,7 @@ async fn read<B: Backend>(
         user_id: identity.user_id.clone(),
         device_id: identity.device_id.clone(),
         role: identity.role,
-        person_id: None,
+        person_id: identity.person_id.clone(),
         herder_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
     }));
     shared.hub.connect(outbox, identity.role);
@@ -373,6 +378,61 @@ fn error(outbox: &Outbox, code: ErrorCode, message: &str) {
             message: message.to_owned(),
         },
     });
+}
+
+/// Signs in a device the daemon does not know as a person: sends the challenge, then follows
+/// the device's `sign_in`, waiting for an app's approval for `start_login`.
+async fn sign_in<B: Backend>(
+    stream: &mut SplitStream<Ws>,
+    shared: &Arc<Shared<B>>,
+    outbox: &Arc<Outbox>,
+    device: &str,
+    client: &str,
+    cancel: &CancellationToken,
+) -> Result<Identity, ErrorInfo> {
+    let (challenge, registration) = shared.auth.sign_in_challenge()?;
+    outbox.push(ServerMessage::SignInChallenge {
+        challenge,
+        registration,
+    });
+    let refused = |message: &str| ErrorInfo {
+        code: ErrorCode::BadRequest,
+        message: message.to_owned(),
+    };
+    // A person gets the challenge's lifetime to answer it with their passkey.
+    let answer = tokio::time::timeout(Duration::from_secs(PASSKEY_CHALLENGE_SECS), next(stream))
+        .await
+        .map_err(|_| refused("no sign_in before the challenge expired"))?
+        .map_err(|_| refused("the connection failed"))?;
+    let method = match answer {
+        Some(Ok(ClientMessage::SignIn(method))) => method,
+        Some(Ok(_)) => return Err(refused("the answer to sign_in_challenge must be sign_in")),
+        Some(Err(err)) => return Err(refused(&err.message)),
+        None => return Err(refused("the connection closed")),
+    };
+    if method != SignIn::StartLogin {
+        return shared.auth.sign_in(device, client, method, cancel);
+    }
+    let request = shared.auth.start_login(device, client)?;
+    outbox.push(ServerMessage::LoginRequest {
+        code: request.code,
+        expires_at: request.expires_at,
+    });
+    let expired = || ErrorInfo {
+        code: ErrorCode::Forbidden,
+        message: "no app approved the login in time; run it again".to_owned(),
+    };
+    tokio::select! {
+        approved = tokio::time::timeout(auth::PAIRING_TTL, request.approved) => match approved {
+            Ok(Ok(())) => {}
+            _ => return Err(expired()),
+        },
+        // The device says nothing while it waits; anything it sends ends the wait.
+        _ = next(stream) => return Err(refused("the device stopped waiting for its login")),
+    }
+    shared
+        .auth
+        .authenticate(device, None, client, auth::DeviceRole::Client, cancel)
 }
 
 /// Answers a failed hello with an error; the connection then closes.

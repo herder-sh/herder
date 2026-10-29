@@ -1136,6 +1136,24 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     challenge: "Y2hhbGxlbmdl".into(),
                     expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
                 },
+                registration: None,
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::PasskeyChallenge {
+                challenge: PasskeyChallenge {
+                    rp_id: PASSKEY_RP_ID.into(),
+                    challenge: "Y2hhbGxlbmdl".into(),
+                    expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
+                },
+                registration: Some(PasskeyCreation {
+                    rp_id: PASSKEY_RP_ID.into(),
+                    challenge: "Y2hhbGxlbmdm".into(),
+                    person_id: person_id(),
+                    user_handle: "AZOq8nYbd1CnA0p0V0f1Rw".into(),
+                    expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
+                }),
             },
         },
         ServerMessage::CommandAccepted {

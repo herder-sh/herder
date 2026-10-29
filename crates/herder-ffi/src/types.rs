@@ -18,16 +18,16 @@ use herder_protocol::{
     FailoverTotal, FleetHost, FollowUp, FollowUpReason, FollowUpSettings, HistoryPart, HostId,
     HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LeftoverDecision,
     LibrarySkill, LinkedVault, LogFormat, LogSettings, McpServerSettings, McpTransport, Mergeable,
-    NewPerson, PasskeyAssertion, PasskeyChallenge, PasskeyKey, PasskeyRegistration, PermissionMode,
-    PersonCard, PersonId, PersonInfo, PersonPasskey, PrState, Pressure, Project, ProjectDiscovery,
-    ProjectId, PromptFile, PromptId, Provider, ProviderBinary, ProviderReload, ProviderStatus,
-    PullRequest, QuestionId, QueuedPrompt, RegistrationResponse, Relay, ResourceSettings,
-    ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef, SecretSet, SecretStoreRequest,
-    SecretValue, SessionHead, SessionId, SessionOrigin, SessionSkill, SessionStatus, SessionUsage,
-    SkillFile, SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose,
-    ThreadLink, Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UpdateStage,
-    UpdateWhen, UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId, UserInfo, VaultStatus,
-    VaultVolume,
+    NewPerson, PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey,
+    PasskeyRegistration, PermissionMode, PersonCard, PersonId, PersonInfo, PersonPasskey, PrState,
+    Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary,
+    ProviderReload, ProviderStatus, PullRequest, QuestionId, QueuedPrompt, RegistrationResponse,
+    Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef,
+    SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId, SessionOrigin,
+    SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource, SkillsStatus,
+    Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource,
+    TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow,
+    UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -1001,6 +1001,7 @@ pub enum CommandResult {
     },
     PasskeyChallenge {
         challenge: PasskeyChallenge,
+        registration: Option<PasskeyCreation>,
     },
     People {
         people: Vec<PersonInfo>,
@@ -1200,6 +1201,15 @@ pub struct PasskeyKey {
 pub struct PasskeyChallenge {
     pub rp_id: String,
     pub challenge: String,
+    pub expires_at: Timestamp,
+}
+
+#[uniffi::remote(Record)]
+pub struct PasskeyCreation {
+    pub rp_id: String,
+    pub challenge: String,
+    pub person_id: PersonId,
+    pub user_handle: String,
     pub expires_at: Timestamp,
 }
 

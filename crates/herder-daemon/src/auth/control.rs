@@ -69,6 +69,9 @@ pub enum Request {
         /// The host's name or id.
         host: String,
     },
+    /// Open the window in which a daemon with no owner takes its first (`herder service
+    /// install`).
+    Own,
 }
 
 /// The daemon's answer.
@@ -88,6 +91,8 @@ pub enum Response {
     Forked(fork::Forked),
     /// The host was forgotten.
     ForgotHost(Forgot),
+    /// The window for a first owner is open.
+    Own(OwnInfo),
     /// The request failed.
     Error {
         /// Why.
@@ -107,6 +112,19 @@ pub struct PairingInfo {
     /// What the device will connect as.
     pub device_role: DeviceRole,
     /// When the code stops working.
+    pub expires_at: Timestamp,
+    /// SHA-256 of the daemon's TLS certificate, lowercase hex.
+    pub fingerprint: String,
+    /// Addresses the daemon listens on, as `host:port`, most likely reachable first.
+    pub addresses: Vec<String>,
+}
+
+/// Everything an app needs to claim a daemon with no owner: what a `herder://own` link names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnInfo {
+    /// The code the app shows for the person to compare, `XXX-XXX`.
+    pub code: String,
+    /// When the window closes.
     pub expires_at: Timestamp,
     /// SHA-256 of the daemon's TLS certificate, lowercase hex.
     pub fingerprint: String,
@@ -234,6 +252,15 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
             Err(err) => failed(err),
         },
         Request::Fork(request) => fork(request, auth, daemon).await,
+        Request::Own => match auth.open_claim() {
+            Ok((code, expires_at)) => Response::Own(OwnInfo {
+                code,
+                expires_at,
+                fingerprint: daemon.fingerprint.clone(),
+                addresses: addresses(&daemon.listen),
+            }),
+            Err(err) => failed(err),
+        },
         Request::ForgetHost { host } => match &daemon.vault {
             Some(admin) => match admin.forget_host(&host).await {
                 Ok(forgot) => Response::ForgotHost(forgot),

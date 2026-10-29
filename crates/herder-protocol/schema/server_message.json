@@ -1635,6 +1635,17 @@
               "description": "What the passkey signs.",
               "$ref": "#/$defs/PasskeyChallenge"
             },
+            "registration": {
+              "description": "What a new passkey is created from, for `claim_users` with `register`; only for a\nper-daemon owner, who is no person yet.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyCreation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "type": "string",
               "const": "passkey_challenge"

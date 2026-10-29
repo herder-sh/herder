@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use herder_client_core::PairingUri;
 use herder_daemon::auth::DeviceRole;
-use herder_daemon::auth::control::{self, PairingInfo, Request, Response};
+use herder_daemon::auth::control::{self, OwnInfo, PairingInfo, Request, Response};
 use herder_protocol::{DeviceId, Role, Timestamp, UserInfo};
 use qrcode::QrCode;
 use qrcode::render::unicode::Dense1x2;
@@ -70,7 +70,7 @@ pub fn run(args: Args) -> Result<()> {
             Ok(())
         }
         Response::Error { message } => bail!("{message}"),
-        Response::Forked(_) | Response::ForgotHost(_) => {
+        Response::Forked(_) | Response::ForgotHost(_) | Response::Own(_) => {
             bail!("the daemon sent an unexpected answer")
         }
     }
@@ -108,6 +108,49 @@ pub fn print_pairing(info: &PairingInfo) -> Result<()> {
     println!("{uri}");
     println!("\nIn a terminal, run `herder connect '<link>'` with it, or paste it into herder.");
     Ok(())
+}
+
+/// Shows how to become the owner of this daemon, which has none: the `herder://own` link as a
+/// QR code, and the code the app should show too.
+pub fn print_own(info: &OwnInfo) -> Result<()> {
+    let uri = own_link(info, &herder_daemon::host_name());
+    let qr = QrCode::new(uri.as_bytes())?
+        .render::<Dense1x2>()
+        .quiet_zone(true)
+        .build();
+    let left = info.expires_at.duration_since(Timestamp::now()).as_secs();
+    let minutes = u64::try_from(left).unwrap_or(0).div_ceil(60);
+    println!(
+        "Become this machine's owner: scan the code with the herder app, or open the link.
+"
+    );
+    println!("{qr}");
+    println!(
+        "{uri}
+"
+    );
+    println!(
+        "  Code on your phone should read {}",
+        info.code.replace('-', " · ")
+    );
+    println!(
+        "
+The first person to approve within {minutes} minutes owns this machine."
+    );
+    Ok(())
+}
+
+/// The `herder://own` link of `info`, with the machine's `name` for the app to show.
+fn own_link(info: &OwnInfo, name: &str) -> String {
+    let mut query = url::form_urlencoded::Serializer::new(String::from("herder://own?"));
+    for address in &info.addresses {
+        query.append_pair("host", address);
+    }
+    query
+        .append_pair("fp", &info.fingerprint)
+        .append_pair("code", &info.code)
+        .append_pair("name", name);
+    query.finish()
 }
 
 /// The `herder://pair` link of `info`, followed by the role it grants and the machine's

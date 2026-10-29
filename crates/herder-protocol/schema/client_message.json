@@ -2098,7 +2098,7 @@
           ]
         },
         {
-          "description": "Mint a challenge for the caller's passkey to sign, which `invite`, `set_person_role`,\n`revoke_person`, `revoke_device` and `approve_login` carry an assertion over. It works\nonce, for [`crate::PASSKEY_CHALLENGE_SECS`]. Answered with `passkey_challenge`. Refused\nwith `forbidden` for a per-daemon user, who has no passkey.",
+          "description": "Mint a challenge for the caller's passkey to sign, which `invite`, `set_person_role`,\n`revoke_person`, `revoke_device` and `approve_login` carry an assertion over. It works\nonce, for [`crate::PASSKEY_CHALLENGE_SECS`]. A per-daemon owner, moving to a person\nwith `claim_users`, also gets what to create a passkey from. Answered with\n`passkey_challenge`. Refused with `forbidden` for a per-daemon member.",
           "type": "object",
           "properties": {
             "type": {

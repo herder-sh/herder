@@ -676,8 +676,9 @@ pub enum CommandBody {
     },
     /// Mint a challenge for the caller's passkey to sign, which `invite`, `set_person_role`,
     /// `revoke_person`, `revoke_device` and `approve_login` carry an assertion over. It works
-    /// once, for [`crate::PASSKEY_CHALLENGE_SECS`]. Answered with `passkey_challenge`. Refused
-    /// with `forbidden` for a per-daemon user, who has no passkey.
+    /// once, for [`crate::PASSKEY_CHALLENGE_SECS`]. A per-daemon owner, moving to a person
+    /// with `claim_users`, also gets what to create a passkey from. Answered with
+    /// `passkey_challenge`. Refused with `forbidden` for a per-daemon member.
     PasskeyChallenge,
     /// List the people of this daemon, each with their role, passkeys and devices; owners and
     /// members alike. Answered with `people`. It changes nothing, so a resend is answered
