@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en" data-theme="tokyo-night">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>herder · support</title>
+<meta name="description" content="Install herder, find the docs, and get help on GitHub.">
+<link rel="canonical" href="https://herder.sh/support">
+<meta name="theme-color" content="#1a1b26">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="fonts/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+<script>try{var t=localStorage.getItem("herder-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="bar">
+  <a class="brand" href="/" aria-label="herder home">
+    <svg class="mark" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><path fill="url(#bands-mark)" d="M312 252H472V292H512V532H552V492H712V532H752V772H672V572H512V772H432V332H352V452H272V292H312Z M112 112H472V160H160V652H112Z M552 112H912V912H652V864H864V160H552Z M112 712H160V864H572V912H112Z"/><defs><linearGradient id="bands-mark" gradientUnits="userSpaceOnUse" x1="0" y1="112" x2="0" y2="912"><stop offset="0" stop-color="var(--b1)"/><stop offset=".25" stop-color="var(--b1)"/><stop offset=".25" stop-color="var(--b2)"/><stop offset=".45" stop-color="var(--b2)"/><stop offset=".45" stop-color="var(--b3)"/><stop offset=".65" stop-color="var(--b3)"/><stop offset=".65" stop-color="var(--b4)"/><stop offset=".82" stop-color="var(--b4)"/><stop offset=".82" stop-color="var(--b5)"/><stop offset="1" stop-color="var(--b5)"/></linearGradient></defs></svg>
+    <span>herder</span>
+  </a>
+  <nav aria-label="Main">
+    <a href="/">home</a>
+    <a href="/support">support</a>
+    <a href="/privacy">privacy</a>
+    <a href="https://github.com/herder-sh/herder">github</a>
+  </nav>
+  <button class="theme" type="button" data-theme-next aria-label="Change theme (T)"><span class="swatch" aria-hidden="true"></span><span class="theme-name">tokyo night</span><kbd aria-hidden="true">T</kbd></button>
+</header>
+
+<main id="main">
+  <section class="doc">
+    <p class="eyebrow">support</p>
+    <h1 class="big">Get herder running, and get help.</h1>
+    <p class="sub">herder is free and open source. Help happens in the open, on GitHub.</p>
+
+    <h2>Install</h2>
+    <p>On a Linux machine (x86_64 or arm64) or an Apple silicon Mac:</p>
+    <div class="cmd">
+      <span class="prompt" aria-hidden="true">$</span>
+      <code id="install-cmd">curl -fsSL https://herder.sh/install | sh</code>
+      <button class="copy" type="button" data-copy="install-cmd" aria-label="Copy the install command"><span>copy</span></button>
+    </div>
+    <ol>
+      <li>Run <code>herder service install</code> to run the daemon now and at every boot.</li>
+      <li>Open the herder app on your Mac or iPhone, create your passkey and claim your machines. They join your Fleet.</li>
+      <li>Add Account in the app, or <kbd>n</kbd> in the terminal UI (bare <code>herder</code>): the vendor's own login runs on the machine.</li>
+      <li>Run <code>herder doctor</code>. It checks the machine and says how to fix anything that is not ready.</li>
+      <li><code>herder update</code> moves to the latest release.</li>
+    </ol>
+    <p>The Mac app is on the <a href="https://github.com/herder-sh/herder/releases/latest">releases page</a>.</p>
+
+    <h2>Docs</h2>
+    <ul>
+      <li><a href="https://github.com/herder-sh/herder#readme">README</a>: install, keeping accounts safe, using herder from a phone, the terminal UI.</li>
+      <li><a href="/#faq">FAQ</a>: what herder is, failover, the vault, the apps.</li>
+      <li><a href="/llms-full.txt">llms-full.txt</a>: everything on herder.sh as plain text, for you or your agent.</li>
+    </ul>
+
+    <h2>Report a bug or ask a question</h2>
+    <p>Open an issue on <a href="https://github.com/herder-sh/herder/issues">GitHub</a>. Say which version you run (<code>herder --version</code>), your OS, and paste what <code>herder doctor</code> prints. Leave out tokens, secrets and anything private: issues are public.</p>
+
+    <!-- owner: add the support contact email here -->
+    <h2>Contact</h2>
+    <p>For anything you would rather not post in public, open an issue asking for a private channel.</p>
+
+    <h2>Privacy</h2>
+    <p>herder collects no data. See the <a href="/privacy">privacy policy</a>.</p>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="foot-row">
+    <span class="brand small">herder</span>
+    <a href="https://github.com/herder-sh/herder">github</a>
+    <a href="https://github.com/herder-sh/herder/releases">releases</a>
+    <a href="https://github.com/herder-sh/herder/blob/main/LICENSE">apache-2.0</a>
+    <a href="/support">support</a>
+    <a href="/privacy">privacy</a>
+    <span class="hint">press <kbd>T</kbd> for another theme</span>
+  </div>
+  <p class="fine">herder is not affiliated with Anthropic, OpenAI, Cursor or OpenCode.</p>
+</footer>
+
+<div class="toast" role="status" aria-live="polite"></div>
+<script src="main.js" defer></script>
+</body>
+</html>

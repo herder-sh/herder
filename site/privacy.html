@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en" data-theme="tokyo-night">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>herder · privacy</title>
+<meta name="description" content="herder collects no data: sessions, secrets and logins stay on your own machines. What leaves them, and when.">
+<link rel="canonical" href="https://herder.sh/privacy">
+<meta name="theme-color" content="#1a1b26">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="fonts/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+<script>try{var t=localStorage.getItem("herder-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="bar">
+  <a class="brand" href="/" aria-label="herder home">
+    <svg class="mark" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><path fill="url(#bands-mark)" d="M312 252H472V292H512V532H552V492H712V532H752V772H672V572H512V772H432V332H352V452H272V292H312Z M112 112H472V160H160V652H112Z M552 112H912V912H652V864H864V160H552Z M112 712H160V864H572V912H112Z"/><defs><linearGradient id="bands-mark" gradientUnits="userSpaceOnUse" x1="0" y1="112" x2="0" y2="912"><stop offset="0" stop-color="var(--b1)"/><stop offset=".25" stop-color="var(--b1)"/><stop offset=".25" stop-color="var(--b2)"/><stop offset=".45" stop-color="var(--b2)"/><stop offset=".45" stop-color="var(--b3)"/><stop offset=".65" stop-color="var(--b3)"/><stop offset=".65" stop-color="var(--b4)"/><stop offset=".82" stop-color="var(--b4)"/><stop offset=".82" stop-color="var(--b5)"/><stop offset="1" stop-color="var(--b5)"/></linearGradient></defs></svg>
+    <span>herder</span>
+  </a>
+  <nav aria-label="Main">
+    <a href="/">home</a>
+    <a href="/support">support</a>
+    <a href="/privacy">privacy</a>
+    <a href="https://github.com/herder-sh/herder">github</a>
+  </nav>
+  <button class="theme" type="button" data-theme-next aria-label="Change theme (T)"><span class="swatch" aria-hidden="true"></span><span class="theme-name">tokyo night</span><kbd aria-hidden="true">T</kbd></button>
+</header>
+
+<main id="main">
+  <section class="doc">
+    <p class="eyebrow">privacy</p>
+    <h1 class="big">herder collects no data.</h1>
+    <p class="sub">herder is open-source software you run on your own machines. There is no herder account and no herder server: the apps and the terminal UI talk only to the daemons and the vault you run. This page says what leaves your machines, and when.</p>
+    <p class="fine">Last updated 29 October 2026. It covers the herder daemon and CLI, the Mac and iPhone apps, and this website.</p>
+
+    <h2>What stays with you</h2>
+    <ul>
+      <li><strong>Sessions, transcripts, attachments and settings</strong> are kept by the herder daemon on the machine that runs them, and by the vault you link them to, if you run one. herder never sends them to us: we have nowhere to receive them.</li>
+      <li><strong>Secrets</strong> live in your vault, and go only to the machines you grant them to.</li>
+      <li><strong>Provider logins</strong> (Claude, Codex, Cursor, OpenCode and the rest) stay in each vendor's own CLI, under its config directory on your machine. herder never reads, stores, copies or relays them; it only runs the unmodified CLI.</li>
+      <li><strong>Passkeys</strong> are created and kept by your device's keychain or your password manager. A daemon stores only each passkey's public key, and checks sign-ins against it on the machine itself.</li>
+    </ul>
+
+    <h2>The one third party: published artifacts</h2>
+    <p>An agent can publish an artifact of its work, such as a screenshot, recording, page or log, to show it in its thread. Unless the session's project marks its artifacts private, the daemon then uploads the file to <a href="https://krowk.com">krowk.com</a> for a public link that opens anywhere.</p>
+    <ul>
+      <li><strong>When:</strong> only when an agent publishes an artifact, never in the background.</li>
+      <li><strong>What is sent:</strong> the file itself, its file name, its media type, its size and its SHA-256 checksum. Nothing else from the session goes with it, and no herder or provider account.</li>
+      <li><strong>Who can see it:</strong> anyone who has the link. Links are made without a krowk account and expire after a day.</li>
+      <li><strong>Private projects:</strong> with private artifacts on, nothing is uploaded. The artifact is kept only with the session, on your daemon, and shown in the apps from there.</li>
+    </ul>
+    <p>krowk receives your machine's IP address with the upload, as any web server does.</p>
+
+    <h2>Other connections herder makes</h2>
+    <ul>
+      <li><strong>Updates:</strong> the daemon fetches herder releases from GitHub, and asks the npm registry for the latest version of the vendor CLIs it runs. These requests carry no data of yours.</li>
+      <li><strong>Integrations you turn on:</strong> if you connect a Slack or Telegram bot, or add MCP servers, herder talks to those services on your behalf, under their terms.</li>
+      <li><strong>The coding agents themselves</strong> talk to their vendors (Anthropic, OpenAI, Cursor and others) under those vendors' own privacy policies, exactly as they do without herder.</li>
+    </ul>
+
+    <h2>Analytics and crash reports</h2>
+    <p>The herder apps, daemon and CLI contain no analytics, tracking or crash-reporting code. If you share analytics with app developers in your Apple device's settings, Apple may pass us anonymous crash reports for the apps; that is Apple's setting, and off unless you turn it on.</p>
+    <p>This website is hosted on GitHub Pages. The homepage uses <a href="https://posthog.com">PostHog</a>, hosted in the EU, to count visits; it stores an anonymous identifier in your browser. Your theme choice is kept in your browser's local storage.</p>
+
+    <h2>Questions</h2>
+    <p>Ask on <a href="https://github.com/herder-sh/herder/issues">GitHub issues</a>, or see <a href="/support">support</a>. The code is open: every claim on this page can be checked in the <a href="https://github.com/herder-sh/herder">repository</a>.</p>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="foot-row">
+    <span class="brand small">herder</span>
+    <a href="https://github.com/herder-sh/herder">github</a>
+    <a href="https://github.com/herder-sh/herder/releases">releases</a>
+    <a href="https://github.com/herder-sh/herder/blob/main/LICENSE">apache-2.0</a>
+    <a href="/support">support</a>
+    <a href="/privacy">privacy</a>
+    <span class="hint">press <kbd>T</kbd> for another theme</span>
+  </div>
+  <p class="fine">herder is not affiliated with Anthropic, OpenAI, Cursor or OpenCode.</p>
+</footer>
+
+<div class="toast" role="status" aria-live="polite"></div>
+<script src="main.js" defer></script>
+</body>
+</html>
