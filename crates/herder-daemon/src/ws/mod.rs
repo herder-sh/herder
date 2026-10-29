@@ -279,7 +279,7 @@ impl<B: Backend> Shared<B> {
                 });
             }
             CommandBody::SetUserRole { user_id, role } => self.auth.set_role(&user_id, role)?,
-            CommandBody::RevokeDevice { device_id } => match self.auth.revoke(&device_id) {
+            CommandBody::RevokeDevice { device_id, .. } => match self.auth.revoke(&device_id) {
                 Ok(true) => {}
                 Ok(false) => {
                     return Err(ErrorInfo {

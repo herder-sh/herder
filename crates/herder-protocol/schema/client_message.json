@@ -18,6 +18,20 @@
       ]
     },
     {
+      "description": "How a device the daemon does not know signs in, answering `sign_in_challenge`; the\ndaemon then answers `hello`, or an error and closes the connection.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "sign_in"
+        }
+      },
+      "$ref": "#/$defs/SignIn",
+      "required": [
+        "type"
+      ]
+    },
+    {
       "description": "Stream a session's events after a cursor, then live; replaces any existing subscription.",
       "type": "object",
       "properties": {
@@ -256,6 +270,36 @@
           "type": "string",
           "const": "expired"
         }
+      ]
+    },
+    "AssertionResponse": {
+      "description": "The authenticator's part of a [`PasskeyAssertion`].",
+      "type": "object",
+      "properties": {
+        "authenticatorData": {
+          "description": "The authenticator data, base64url.",
+          "type": "string"
+        },
+        "clientDataJSON": {
+          "description": "The client data, base64url.",
+          "type": "string"
+        },
+        "signature": {
+          "description": "The signature, base64url.",
+          "type": "string"
+        },
+        "userHandle": {
+          "description": "The user handle, base64url; a passkey always gives it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "clientDataJSON",
+        "authenticatorData",
+        "signature"
       ]
     },
     "Attachment": {
@@ -623,6 +667,10 @@
           "items": {
             "$ref": "#/$defs/Cursor"
           }
+        },
+        "sign_in": {
+          "description": "Set by a device the daemon may not know that signs in as a person: rather than refuse\nit, the daemon answers `sign_in_challenge`, and the device then sends `sign_in`. A\ndevice the daemon knows gets `hello` as usual.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -2021,9 +2069,20 @@
           ]
         },
         {
-          "description": "Unpair a device and close its connections; owners only. Its user stays. Answered with\n`applied`. Refused with `not_found` when no such device is paired.",
+          "description": "Unpair a device and close its connections; owners only. Its user or person stays.\nAnswered with `applied`. Refused with `not_found` when no such device is paired.",
           "type": "object",
           "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`; required when the caller is a person.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PasskeyAssertion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "device_id": {
               "description": "The device.",
               "$ref": "#/$defs/DeviceId"
@@ -2036,6 +2095,140 @@
           "required": [
             "type",
             "device_id"
+          ]
+        },
+        {
+          "description": "Mint a challenge for the caller's passkey to sign, which `invite`, `set_person_role`,\n`revoke_person`, `revoke_device` and `approve_login` carry an assertion over. It works\nonce, for [`crate::PASSKEY_CHALLENGE_SECS`]. Answered with `passkey_challenge`. Refused\nwith `forbidden` for a per-daemon user, who has no passkey.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "passkey_challenge"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "List the people of this daemon, each with their role, passkeys and devices; owners and\nmembers alike. Answered with `people`. It changes nothing, so a resend is answered\nafresh.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "list_people"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Mint an invite that lets someone join this daemon as a person with `role`, registering\ntheir own passkey through it; owners only, with an assertion. Answered with `invite`.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "role": {
+              "description": "The role the invitee gets.",
+              "$ref": "#/$defs/Role"
+            },
+            "type": {
+              "type": "string",
+              "const": "invite"
+            }
+          },
+          "required": [
+            "type",
+            "role",
+            "assertion"
+          ]
+        },
+        {
+          "description": "Give `person_id` a role on this daemon; owners only, with an assertion. A person the\ndaemon does not know yet is added from `person`, as another daemon lists them, which is\nhow an app gives someone access to more machines. A role change closes their devices'\nconnections, so they reconnect with the new one. Answered with `applied`. Refused with\n`not_found` for an unknown person without `person`, `bad_request` for a card with no\nusable passkey, and `conflict` when it would leave the daemon with no owner.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "person": {
+              "description": "Who they are, for a person this daemon does not know yet.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PersonCard"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "person_id": {
+              "description": "The person.",
+              "$ref": "#/$defs/PersonId"
+            },
+            "role": {
+              "description": "Their new role.",
+              "$ref": "#/$defs/Role"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_person_role"
+            }
+          },
+          "required": [
+            "type",
+            "person_id",
+            "role",
+            "assertion"
+          ]
+        },
+        {
+          "description": "Remove a person from this daemon: forget their passkeys, unpair their devices and close\ntheir connections; owners only, with an assertion. Answered with `applied`. Refused with\n`not_found` for an unknown person, and `conflict` when it would leave the daemon with no\nowner.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "person_id": {
+              "description": "The person.",
+              "$ref": "#/$defs/PersonId"
+            },
+            "type": {
+              "type": "string",
+              "const": "revoke_person"
+            }
+          },
+          "required": [
+            "type",
+            "person_id",
+            "assertion"
+          ]
+        },
+        {
+          "description": "Approve the waiting `start_login` whose code the caller's app shows, signing that\ndevice in as the caller; any person, with an assertion. Answered with `login_approved`.\nRefused with `not_found` for a code no login is waiting with.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "code": {
+              "description": "The code, as the terminal shows it; case and separators do not matter.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "approve_login"
+            }
+          },
+          "required": [
+            "type",
+            "code",
+            "assertion"
           ]
         },
         {
@@ -4257,6 +4450,97 @@
         }
       ]
     },
+    "NewPerson": {
+      "description": "A person introduced to a daemon by a sign-in.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "How others see them; 1 to 64 printable characters. A person the daemon already knows\nkeeps the name it has.",
+          "type": "string"
+        },
+        "passkey": {
+          "description": "Their passkey.",
+          "$ref": "#/$defs/PersonPasskey"
+        }
+      },
+      "required": [
+        "name",
+        "passkey"
+      ]
+    },
+    "PasskeyAssertion": {
+      "description": "A WebAuthn assertion, as `PublicKeyCredential.toJSON()` encodes it.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The credential id, base64url.",
+          "type": "string"
+        },
+        "rawId": {
+          "description": "The same, base64url.",
+          "type": "string"
+        },
+        "response": {
+          "description": "What the authenticator signed.",
+          "$ref": "#/$defs/AssertionResponse"
+        },
+        "type": {
+          "description": "Always `public-key`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "rawId",
+        "response",
+        "type"
+      ]
+    },
+    "PasskeyKey": {
+      "description": "A passkey's public key, as a daemon keeps it. Clients pass it on unchanged, to introduce\nits person to another daemon.",
+      "type": "object",
+      "properties": {
+        "credential_id": {
+          "description": "The credential id, base64url.",
+          "type": "string"
+        },
+        "public_key": {
+          "description": "The public key and its signature counter, in the daemon's own encoding."
+        }
+      },
+      "required": [
+        "credential_id",
+        "public_key"
+      ]
+    },
+    "PasskeyRegistration": {
+      "description": "A new WebAuthn credential, as `PublicKeyCredential.toJSON()` encodes it.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The credential id, base64url.",
+          "type": "string"
+        },
+        "rawId": {
+          "description": "The same, base64url.",
+          "type": "string"
+        },
+        "response": {
+          "description": "What the authenticator made.",
+          "$ref": "#/$defs/RegistrationResponse"
+        },
+        "type": {
+          "description": "Always `public-key`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "rawId",
+        "response",
+        "type"
+      ]
+    },
     "PermissionMode": {
       "description": "How much the agent may do without asking.",
       "oneOf": [
@@ -4279,6 +4563,82 @@
           "description": "Does anything without asking.",
           "type": "string",
           "const": "full_access"
+        }
+      ]
+    },
+    "PersonCard": {
+      "description": "A person to add to a daemon that does not know them yet, as another daemon lists them.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "How others see them.",
+          "type": "string"
+        },
+        "passkeys": {
+          "description": "Their passkeys' public keys; at least one.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PasskeyKey"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "passkeys"
+      ]
+    },
+    "PersonId": {
+      "description": "Identifies a person across every daemon that knows them; a UUID string, opaque to receivers.",
+      "type": "string"
+    },
+    "PersonPasskey": {
+      "description": "The passkey a [`NewPerson`] proves they hold.",
+      "oneOf": [
+        {
+          "description": "A passkey created just now from the challenge's `registration`; the person is the one\nit names.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "register"
+            },
+            "registration": {
+              "description": "The new credential.",
+              "$ref": "#/$defs/PasskeyRegistration"
+            }
+          },
+          "required": [
+            "kind",
+            "registration"
+          ]
+        },
+        {
+          "description": "A passkey the person created before, as another daemon lists it, with an assertion by\nit over the challenge.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "The assertion.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "key": {
+              "description": "Its public key, as `list_people` gave it.",
+              "$ref": "#/$defs/PasskeyKey"
+            },
+            "kind": {
+              "type": "string",
+              "const": "existing"
+            },
+            "person_id": {
+              "description": "The person.",
+              "$ref": "#/$defs/PersonId"
+            }
+          },
+          "required": [
+            "kind",
+            "person_id",
+            "key",
+            "assertion"
+          ]
         }
       ]
     },
@@ -4462,6 +4822,24 @@
     "QuestionId": {
       "description": "Identifies a question within a session; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "RegistrationResponse": {
+      "description": "The authenticator's part of a [`PasskeyRegistration`].",
+      "type": "object",
+      "properties": {
+        "attestationObject": {
+          "description": "The attestation object, base64url.",
+          "type": "string"
+        },
+        "clientDataJSON": {
+          "description": "The client data, base64url.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clientDataJSON",
+        "attestationObject"
+      ]
     },
     "Relay": {
       "description": "Where a relayed history comes from: the host the client read it from.",
@@ -4744,6 +5122,88 @@
           "description": "Handed off to another host; read-only here.",
           "type": "string",
           "const": "moved"
+        }
+      ]
+    },
+    "SignIn": {
+      "description": "How a device the daemon does not know signs in, answering `sign_in_challenge`.",
+      "oneOf": [
+        {
+          "description": "As a person the daemon knows, with an assertion over the challenge by one of their\npasskeys. The device is listed under that person from then on.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "The assertion.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "method": {
+              "type": "string",
+              "const": "passkey"
+            }
+          },
+          "required": [
+            "method",
+            "assertion"
+          ]
+        },
+        {
+          "description": "Become the first owner of a daemon that has none, with the code `herder install`\nprinted; the window closes after ten minutes or once it has an owner. Refused with\n`forbidden` for a wrong or expired code.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "The code, as the terminal shows it; case and separators do not matter.",
+              "type": "string"
+            },
+            "method": {
+              "type": "string",
+              "const": "claim_ownership"
+            },
+            "person": {
+              "description": "Who claims it.",
+              "$ref": "#/$defs/NewPerson"
+            }
+          },
+          "required": [
+            "method",
+            "code",
+            "person"
+          ]
+        },
+        {
+          "description": "Join with an invite an owner minted, as the role it names.",
+          "type": "object",
+          "properties": {
+            "invite": {
+              "description": "The invite token.",
+              "type": "string"
+            },
+            "method": {
+              "type": "string",
+              "const": "accept_invite"
+            },
+            "person": {
+              "description": "Who joins.",
+              "$ref": "#/$defs/NewPerson"
+            }
+          },
+          "required": [
+            "method",
+            "invite",
+            "person"
+          ]
+        },
+        {
+          "description": "Sign in a device that holds no passkey, such as a terminal: the daemon answers\n`login_request` with a code, and the device waits, for up to ten minutes, until an app\nof the person approves it with `approve_login`.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "start_login"
+            }
+          },
+          "required": [
+            "method"
+          ]
         }
       ]
     },

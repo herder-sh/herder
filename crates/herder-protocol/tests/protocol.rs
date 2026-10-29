@@ -107,6 +107,31 @@ fn telegram_bot() -> Bot {
     }
 }
 
+fn assertion() -> PasskeyAssertion {
+    PasskeyAssertion {
+        id: "Y3JlZA".into(),
+        raw_id: "Y3JlZA".into(),
+        response: AssertionResponse {
+            client_data_json: "e30".into(),
+            authenticator_data: "YXV0aA".into(),
+            signature: "c2ln".into(),
+            user_handle: Some("AZOq8nYbd1CnA0p0V0f1Rw".into()),
+        },
+        kind: "public-key".into(),
+    }
+}
+
+fn passkey_key() -> PasskeyKey {
+    PasskeyKey {
+        credential_id: "Y3JlZA".into(),
+        public_key: json!({"cred": {"cred_id": "Y3JlZA", "counter": 0}}),
+    }
+}
+
+fn person_id() -> PersonId {
+    PersonId::new("0193aaf2-761b-7750-a703-4a745747f547")
+}
+
 fn command(body: CommandBody) -> ClientMessage {
     ClientMessage::Command(Command {
         id: CommandId::new("01J9COMMAND"),
@@ -127,13 +152,54 @@ fn client_fixtures() -> Vec<ClientMessage> {
                 after_seq: 7,
             }],
             pairing_code: None,
+            sign_in: false,
         }),
         ClientMessage::Hello(ClientHello {
             protocol_version: PROTOCOL_VERSION,
             client: "herder-ios/0.0.0".into(),
             resume: Vec::new(),
             pairing_code: Some("ABCDE-FGHJK".into()),
+            sign_in: false,
         }),
+        ClientMessage::Hello(ClientHello {
+            protocol_version: PROTOCOL_VERSION,
+            client: "herder-ios/0.7.0".into(),
+            resume: Vec::new(),
+            pairing_code: None,
+            sign_in: true,
+        }),
+        ClientMessage::SignIn(SignIn::Passkey {
+            assertion: assertion(),
+        }),
+        ClientMessage::SignIn(SignIn::ClaimOwnership {
+            code: "K7Q-4PD".into(),
+            person: NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Register {
+                    registration: PasskeyRegistration {
+                        id: "Y3JlZA".into(),
+                        raw_id: "Y3JlZA".into(),
+                        response: RegistrationResponse {
+                            client_data_json: "e30".into(),
+                            attestation_object: "o2NmbXQ".into(),
+                        },
+                        kind: "public-key".into(),
+                    },
+                },
+            },
+        }),
+        ClientMessage::SignIn(SignIn::AcceptInvite {
+            invite: "ABCDE-FGHJK-MNPQR-STVWX".into(),
+            person: NewPerson {
+                name: "Sam".into(),
+                passkey: PersonPasskey::Existing {
+                    person_id: person_id(),
+                    key: passkey_key(),
+                    assertion: assertion(),
+                },
+            },
+        }),
+        ClientMessage::SignIn(SignIn::StartLogin),
         ClientMessage::Subscribe(Cursor {
             session_id: session_id(),
             after_seq: 0,
@@ -335,6 +401,40 @@ fn client_fixtures() -> Vec<ClientMessage> {
         }),
         command(CommandBody::RevokeDevice {
             device_id: DeviceId::new("01J9DEVICE"),
+            assertion: None,
+        }),
+        command(CommandBody::RevokeDevice {
+            device_id: DeviceId::new("01J9DEVICE"),
+            assertion: Some(Box::new(assertion())),
+        }),
+        command(CommandBody::PasskeyChallenge),
+        command(CommandBody::ListPeople),
+        command(CommandBody::Invite {
+            role: Role::Member,
+            assertion: Box::new(assertion()),
+        }),
+        command(CommandBody::SetPersonRole {
+            person_id: person_id(),
+            role: Role::Owner,
+            person: None,
+            assertion: Box::new(assertion()),
+        }),
+        command(CommandBody::SetPersonRole {
+            person_id: person_id(),
+            role: Role::Member,
+            person: Some(PersonCard {
+                name: "Sam".into(),
+                passkeys: vec![passkey_key()],
+            }),
+            assertion: Box::new(assertion()),
+        }),
+        command(CommandBody::RevokePerson {
+            person_id: person_id(),
+            assertion: Box::new(assertion()),
+        }),
+        command(CommandBody::ApproveLogin {
+            code: "K7Q-4PD".into(),
+            assertion: Box::new(assertion()),
         }),
         command(CommandBody::PairVaultHost {
             host_name: "devbox".into(),
@@ -668,8 +768,35 @@ fn server_fixtures() -> Vec<ServerMessage> {
             user_id: UserId::new("01J9OWNER"),
             device_id: DeviceId::new("01J9DEVICE"),
             role: Role::Owner,
+            person_id: Some(person_id()),
             herder_version: Some("0.14.0".into()),
         }),
+        ServerMessage::SignInChallenge {
+            challenge: PasskeyChallenge {
+                rp_id: PASSKEY_RP_ID.into(),
+                challenge: "Y2hhbGxlbmdl".into(),
+                expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
+            },
+            registration: Some(PasskeyCreation {
+                rp_id: PASSKEY_RP_ID.into(),
+                challenge: "Y2hhbGxlbmdm".into(),
+                person_id: person_id(),
+                user_handle: "AZOq8nYbd1CnA0p0V0f1Rw".into(),
+                expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
+            }),
+        },
+        ServerMessage::SignInChallenge {
+            challenge: PasskeyChallenge {
+                rp_id: PASSKEY_RP_ID.into(),
+                challenge: "Y2hhbGxlbmdl".into(),
+                expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
+            },
+            registration: None,
+        },
+        ServerMessage::LoginRequest {
+            code: "K7Q-4PD".into(),
+            expires_at: "2026-10-03T12:10:00Z".parse().unwrap(),
+        },
         ServerMessage::Sessions {
             sessions: vec![
                 SessionHead {
@@ -978,6 +1105,52 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 fingerprint: "3f9a".repeat(16),
                 addresses: vec!["192.168.1.20:7447".into(), "[fd00::20]:7447".into()],
                 expires_at: "2026-10-03T12:10:00Z".parse().unwrap(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::PasskeyChallenge {
+                challenge: PasskeyChallenge {
+                    rp_id: PASSKEY_RP_ID.into(),
+                    challenge: "Y2hhbGxlbmdl".into(),
+                    expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
+                },
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::People {
+                people: vec![PersonInfo {
+                    person_id: person_id(),
+                    name: "Tomas".into(),
+                    role: Role::Owner,
+                    passkeys: vec![passkey_key()],
+                    devices: vec![UserDevice {
+                        device_id: DeviceId::new("01J9DEVICE"),
+                        client: "herder-ios/0.7.0".into(),
+                        paired_at: "2026-10-03T12:00:00Z".parse().unwrap(),
+                        last_seen: None,
+                        online: true,
+                        host_only: false,
+                    }],
+                }],
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::Invite {
+                invite: "ABCDE-FGHJK-MNPQR-STVWX".into(),
+                role: Role::Member,
+                fingerprint: "3f9a".repeat(16),
+                addresses: vec!["192.168.1.20:7447".into()],
+                expires_at: "2026-10-04T12:00:00Z".parse().unwrap(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::LoginApproved {
+                device_id: DeviceId::new("01J9DEVICE"),
+                client: "herder-tui/0.7.0".into(),
             },
         },
         ServerMessage::CommandAccepted {
@@ -1689,6 +1862,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         user_id: UserId::new("01J9MEMBER"),
         device_id: DeviceId::new("01J9DEVICE"),
         role: Role::Member,
+        person_id: None,
         herder_version: None,
     }));
     messages

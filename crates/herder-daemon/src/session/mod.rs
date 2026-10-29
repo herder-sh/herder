@@ -910,7 +910,13 @@ impl SessionManager {
             | CommandBody::PairDevice { .. }
             | CommandBody::ListUsers
             | CommandBody::SetUserRole { .. }
-            | CommandBody::RevokeDevice { .. } => {
+            | CommandBody::RevokeDevice { .. }
+            | CommandBody::PasskeyChallenge
+            | CommandBody::ListPeople
+            | CommandBody::Invite { .. }
+            | CommandBody::SetPersonRole { .. }
+            | CommandBody::RevokePerson { .. }
+            | CommandBody::ApproveLogin { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "the session manager does not handle this command yet",
@@ -2386,6 +2392,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
             | CommandBody::GetBotStatus
             | CommandBody::GetBotMemory { .. }
             | CommandBody::ListUsers
+            | CommandBody::ListPeople
             | CommandBody::GetSecretToStore { .. }
     )
 }

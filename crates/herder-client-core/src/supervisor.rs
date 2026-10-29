@@ -858,6 +858,7 @@ impl Supervisor {
             client: self.client.clone(),
             resume: Vec::new(),
             pairing_code: None,
+            sign_in: false,
         };
         Some(Box::pin(async move {
             connect(&better, &fingerprint, &device, hello)
@@ -984,6 +985,8 @@ impl Supervisor {
             | ServerMessage::TerminalOutput { .. }
             | ServerMessage::TerminalClosed { .. }
             | ServerMessage::Hello(_)
+            | ServerMessage::SignInChallenge { .. }
+            | ServerMessage::LoginRequest { .. }
             | ServerMessage::CommandAccepted { .. }
             | ServerMessage::CommandRejected { .. }
             | ServerMessage::Unknown => return,
@@ -1118,6 +1121,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
             client: supervisor.client.clone(),
             resume: supervisor.cursors(),
             pairing_code: None,
+            sign_in: false,
         };
         let connected = tokio::select! {
             () = supervisor.stop.cancelled() => return,

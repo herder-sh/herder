@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, AgentMessage, Bytes, CommandId, DaemonSettings, DeviceId, Event, FailoverTotal,
-    HostId, HostResources, Item, ItemId, Project, ProjectId, PromptId, Provider, SecretAccess,
-    SecretInfo, SecretSet, SecretValue, Seq, SessionId, SessionStatus, SessionUsage, TerminalId,
-    Timestamp, UsagePeriod, UsageTotal, UserId,
+    HostId, HostResources, Item, ItemId, PasskeyChallenge, PasskeyCreation, PersonId, PersonInfo,
+    Project, ProjectId, PromptId, Provider, SecretAccess, SecretInfo, SecretSet, SecretValue, Seq,
+    SessionId, SessionStatus, SessionUsage, TerminalId, Timestamp, UsagePeriod, UsageTotal, UserId,
 };
 
 /// A daemon-to-client message.
@@ -16,6 +16,25 @@ use crate::{
 pub enum ServerMessage {
     /// First message on every connection, answering the client's hello.
     Hello(ServerHello),
+    /// Answers the hello of a device the daemon does not know that set `sign_in`, before
+    /// `hello`: what its passkey signs for a `sign_in`.
+    SignInChallenge {
+        /// What an existing passkey signs, for every method but `start_login`.
+        challenge: PasskeyChallenge,
+        /// What a new passkey is created from, for `claim_ownership` and `accept_invite` with
+        /// `register`; absent while the daemon takes neither a claim nor an invite.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        registration: Option<PasskeyCreation>,
+    },
+    /// Answers `start_login`: the code the device shows, as a `herder://login` link and as
+    /// text, for an app of the person to approve with `approve_login`. `hello` follows once it
+    /// does, or an error once the request expires.
+    LoginRequest {
+        /// The code, `XXX-XXX`.
+        code: String,
+        /// When the request expires.
+        expires_at: Timestamp,
+    },
     /// Every session on this daemon; sent after hello and whenever a session is created or
     /// its status, account, project, title or queue changes.
     Sessions {
@@ -168,6 +187,10 @@ pub struct ServerHello {
     pub device_id: DeviceId,
     /// The user's role on this daemon.
     pub role: Role,
+    /// The person this connection acts for, whose id is also its `user_id`; absent for a
+    /// per-daemon user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person_id: Option<PersonId>,
     /// The daemon's herder version, as `herder --version` prints it; absent from daemons
     /// before `update_daemon`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -640,6 +663,37 @@ pub enum CommandResult {
         addresses: Vec<String>,
         /// When the code stops working.
         expires_at: Timestamp,
+    },
+    /// A challenge for the caller's passkey, answering `passkey_challenge`.
+    PasskeyChallenge {
+        /// What the passkey signs.
+        challenge: PasskeyChallenge,
+    },
+    /// This daemon's people, answering `list_people`.
+    People {
+        /// Oldest first.
+        people: Vec<PersonInfo>,
+    },
+    /// An invite that lets someone join this daemon as a person, answering `invite`:
+    /// everything a `herder://invite` link names.
+    Invite {
+        /// The token, for `accept_invite`.
+        invite: String,
+        /// The role the invitee gets.
+        role: Role,
+        /// SHA-256 of the daemon's TLS certificate, lowercase hex.
+        fingerprint: String,
+        /// Addresses the daemon advertises as `host:port`, most likely reachable first.
+        addresses: Vec<String>,
+        /// When the invite stops working.
+        expires_at: Timestamp,
+    },
+    /// The device signed in as the caller, answering `approve_login`.
+    LoginApproved {
+        /// The device, now listed under the caller.
+        device_id: DeviceId,
+        /// Its client, from its hello, e.g. `herder-tui/0.7.0`.
+        client: String,
     },
     /// This daemon's users, answering `list_users`.
     Users {

@@ -490,6 +490,7 @@ impl Client {
             client: self.inner.client.clone(),
             resume: Vec::new(),
             pairing_code: Some(uri.code),
+            sign_in: false,
         };
         let (ws, hello, _) =
             supervisor::connect(&saved.addresses, &saved.fingerprint, &device, hello)

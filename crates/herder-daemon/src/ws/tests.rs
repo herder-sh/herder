@@ -463,6 +463,7 @@ impl Client {
             client: "test".into(),
             resume,
             pairing_code: self.pairing_code.clone(),
+            sign_in: false,
         }))
         .await;
         let ServerMessage::Hello(hello) = self.recv().await else {
@@ -521,6 +522,7 @@ async fn hello_is_answered_with_the_protocol_version_and_lists() {
             client: "test".into(),
             resume: Vec::new(),
             pairing_code: None,
+            sign_in: false,
         }))
         .await;
     let ServerMessage::Hello(hello) = client.recv().await else {
@@ -553,6 +555,7 @@ async fn a_wrong_protocol_version_is_refused() {
             client: "test".into(),
             resume: Vec::new(),
             pairing_code: None,
+            sign_in: false,
         }))
         .await;
     let ServerMessage::Error { error } = client.recv().await else {
@@ -826,6 +829,7 @@ async fn refused(mut client: Client) -> ErrorInfo {
             client: "test".into(),
             resume: Vec::new(),
             pairing_code: client.pairing_code.clone(),
+            sign_in: false,
         }))
         .await;
     let ServerMessage::Error { error } = client.recv().await else {
@@ -1354,6 +1358,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
             client: "test".into(),
             resume: Vec::new(),
             pairing_code: None,
+            sign_in: false,
         }))
         .await;
     assert!(matches!(client.recv().await, ServerMessage::Hello(_)));
@@ -1568,6 +1573,7 @@ async fn an_owner_revokes_a_device_and_it_is_disconnected() {
     let bob_hello = bob.hello(Vec::new()).await;
     let revoke = CommandBody::RevokeDevice {
         device_id: bob_hello.device_id.clone(),
+        assertion: None,
     };
 
     assert_eq!(
@@ -1589,6 +1595,7 @@ async fn an_owner_revokes_a_device_and_it_is_disconnected() {
     assert!(listed[1].devices.is_empty(), "{listed:?}");
     let gone = CommandBody::RevokeDevice {
         device_id: bob_hello.device_id,
+        assertion: None,
     };
     assert_eq!(
         rejected(&mut owner, "v4", gone).await.code,
@@ -2083,6 +2090,7 @@ async fn agents_run_commands_as_their_user_within_its_role() {
         },
         CommandBody::RevokeDevice {
             device_id: DeviceId::new("d1"),
+            assertion: None,
         },
         CommandBody::PairVaultHost {
             host_name: "devbox".into(),

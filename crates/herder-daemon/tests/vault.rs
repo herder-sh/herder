@@ -926,6 +926,7 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
             after_seq: 0,
         }],
         pairing_code: None,
+        sign_in: false,
     });
     let reads = [
         hello,

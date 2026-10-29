@@ -510,6 +510,12 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::ListUsers
         | CommandBody::SetUserRole { .. }
         | CommandBody::RevokeDevice { .. }
+        | CommandBody::PasskeyChallenge
+        | CommandBody::ListPeople
+        | CommandBody::Invite { .. }
+        | CommandBody::SetPersonRole { .. }
+        | CommandBody::RevokePerson { .. }
+        | CommandBody::ApproveLogin { .. }
         | CommandBody::SetAccountSettings { .. }
         | CommandBody::SetResourceLimits { .. }
         | CommandBody::GetSettings
