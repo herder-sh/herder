@@ -9,22 +9,10 @@ final class SecretsUITests: XCTestCase {
     func testAddingASetAndASecretAndGrantingIt() throws {
         let link = try XCTUnwrap(ProcessInfo.processInfo.environment["HERDER_VAULT_LINK"], "needs HERDER_VAULT_LINK")
         let app = XCUIApplication()
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet([link])
 
         app.tabBars.buttons["Fleet"].tap()
         let open = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'vaults.paired.'")).firstMatch
-        if !open.waitForExistence(timeout: 5) {
-            // Pairs with the vault, once: its code works once.
-            app.navigationBars.buttons["add-to-fleet"].tap()
-            let field = app.descendants(matching: .any)["pairing-link"].firstMatch
-            XCTAssertTrue(field.waitForExistence(timeout: 10))
-            field.tap()
-            field.typeText(link)
-            app.buttons["Pair"].tap()
-            // One machine paired closes the sheet; a list of results waits for Done.
-            if app.buttons["Done"].waitForExistence(timeout: 10) { app.buttons["Done"].tap() }
-        }
         XCTAssertTrue(open.waitForExistence(timeout: 30), "Fleet shows no vault")
         for _ in 0..<5 where !open.isHittable { app.swipeUp() }
         open.tap()

@@ -1,8 +1,8 @@
 import Herder
 import SwiftUI
 
-/// Says when a session's agents act for a user its machine does not have, so the machine
-/// refuses their herder commands: a user since unpaired. A prompt of the reader's makes them
+/// Says when a session's agents act for someone its machine does not have, so the machine
+/// refuses their herder commands: someone since removed. A prompt of the reader's makes them
 /// act for the reader.
 struct ActsForBanner: View {
     let machine: Machine
@@ -18,11 +18,11 @@ struct ActsForBanner: View {
 
     var body: some View {
         Group {
-            if case .loaded(let users) = people.users, !users.contains(where: { $0.userId == actsFor }) {
+            if case .loaded(let people) = people.people, !people.contains(where: { $0.personId == actsFor }) {
                 SessionColumnLayout {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Image(systemName: "person.crop.circle.badge.exclamationmark").foregroundStyle(Theme.accent)
-                        Text("Agents here act as \(actsFor), who isn't paired with \(machine.name). Send a prompt and they act as you.")
+                        Text("Agents here act as \(actsFor), who isn't on \(machine.name) anymore. Send a prompt and they act as you.")
                             .foregroundStyle(Theme.text)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)

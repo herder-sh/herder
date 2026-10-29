@@ -93,6 +93,12 @@ struct FleetView: View {
             })) { request in
                 ActionRequestPresenter(fleet: fleet, request: request)
             }
+            // A vault this device set up asks to be claimed, as its `herder://own` link would.
+            .onChange(of: fleet.claiming) {
+                guard let request = fleet.claiming else { return }
+                fleet.claiming = nil
+                sheet = .approve(request)
+            }
             // As a link does: the new session shows once its machine lists it.
             .onChange(of: fleet.revealed) {
                 guard let key = fleet.revealed else { return }
@@ -253,8 +259,6 @@ struct FleetView: View {
         case .session(let key):
             linked = key
             resolveLink()
-        case .pair(let link):
-            sheet = .pair(.machine, link: link)
         case .approve(let request):
             sheet = .approve(request)
         case nil:

@@ -283,11 +283,11 @@ enum JobProgress: Equatable {
     case updated(from: String, to: String)
     /// The update ended, and the machine lists the CLI at the version it had.
     case upToDate(String)
-    /// The machine installs its vault, or with `install` off links to the one it has.
-    case settingUpVault(install: Bool)
-    /// This device pairs with the new vault.
-    case pairingVault
-    /// The vault is paired here, named so, and the machine linked to it.
+    /// The machine installs its vault and links to it.
+    case settingUpVault
+    /// You claim the new vault with your passkey.
+    case claimingVault
+    /// The vault is yours, named so, and the machine linked to it.
     case vaultReady(String)
     /// The machine's herder cannot set up a vault from here: install it there by hand.
     case needsNewerHerder
@@ -370,7 +370,7 @@ enum JobProgress: Equatable {
     var group: Group {
         switch self {
         case .running, .approve: .needsYou
-        case .starting, .installing, .settingUpVault, .pairingVault, .waitingForTurns, .downloading, .restarting: .running
+        case .starting, .installing, .settingUpVault, .claimingVault, .waitingForTurns, .downloading, .restarting: .running
         case .queued: .queued
         case .added, .signedIn, .ended, .installed, .updated, .upToDate, .vaultReady, .needsNewerHerder, .failed: .done
         }
@@ -408,7 +408,6 @@ extension JobKey {
         case (.awsSignIn(let profile), _): return "AWS sign-in to \(profile) on \(machine)"
         case (.vault, .vaultReady(let name)): return "Ran \(name)"
         case (.vault, .failed), (.vault, .needsNewerHerder): return "Running a vault on \(machine) failed"
-        case (.vault, .settingUpVault(install: false)): return "Pair and link the vault on \(machine)"
         case (.vault, _): return "Run a vault on \(machine)"
         case (.updateHerder, .updated): return "Updated herder on \(machine)"
         case (.updateHerder, .upToDate): return "herder on \(machine) is up to date"
@@ -440,10 +439,9 @@ extension JobProgress {
         case .added: "Sessions can use it now"
         case .signedIn: "Signed in"
         case .ended: "Stopped before it signed in"
-        case .settingUpVault(install: true): "Installing the vault’s service on \(machine) and linking to it"
-        case .settingUpVault(install: false): "Linking \(machine) to the vault installed there"
-        case .pairingVault: "Pairing this device with the vault"
-        case .vaultReady: "Paired here · \(machine) fetches secrets from it"
+        case .settingUpVault: "Installing the vault’s service on \(machine) and linking to it"
+        case .claimingVault: "Approve the vault with your passkey to own it"
+        case .vaultReady: "Yours · \(machine) fetches secrets from it"
         case .needsNewerHerder: "Its herder cannot do this from here: run \(VaultChoices.installCommand) on \(machine)"
         case .failed(let message): message
         }
@@ -463,8 +461,8 @@ extension JobProgress {
         case .installed(let version): version.isEmpty ? "Installed" : "Installed \(version)"
         case .updated(let from, let to): from.isEmpty || to.isEmpty ? "Updated" : "\(from) → \(to)"
         case .upToDate(let version): version.isEmpty ? "Up to date" : "Up to date \(version)"
-        case .settingUpVault(let install): install ? "Installing" : "Linking"
-        case .pairingVault: "Pairing"
+        case .settingUpVault: "Installing"
+        case .claimingVault: "Approving"
         case .vaultReady: "Ready"
         case .needsNewerHerder: "Needs a newer herder"
         case .waitingForTurns: "Waiting for turns"

@@ -57,10 +57,12 @@ final class FakeDaemon {
 }
 
 extension Fleet {
-    /// Pairs with `daemon`, the one machine its link names, as its owner or as a member.
+    /// Pairs with `daemon`, the one machine its link names, as its owner or as a member. The
+    /// fake daemon still hands out codes, which no screen of the app takes.
     @discardableResult
     func pair(_ daemon: FakeDaemon, member: Bool = false) async throws -> Machine {
-        let results = try await pair(link: member ? daemon.memberLink : daemon.link)
+        let results = try await client.pair(link: member ? daemon.memberLink : daemon.link)
+        update(client.machines())
         guard case .paired(let machine) = results.first, results.count == 1 else {
             throw HerderError.Pairing(detail: "did not pair: \(results)")
         }

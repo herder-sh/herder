@@ -20,19 +20,9 @@ final class ProfileTests: XCTestCase {
         // A copy with its own bundle id, so launching it leaves the installed app running.
         let app = XCUIApplication(url: URL(fileURLWithPath: path))
         app.launchEnvironment["HERDER_PROFILE"] = "profile-\(UUID().uuidString)"
+        // The app joins the fake daemons at launch (`Fleet.joinFakeFleet`).
+        app.launchEnvironment["HERDER_FAKE_FLEET"] = link
         app.launch()
-
-        let add = app.buttons["add-to-fleet"].firstMatch
-        XCTAssertTrue(add.waitForExistence(timeout: 15), app.debugDescription)
-        add.click()
-        let field = app.descendants(matching: .any)["pairing-link"].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5), app.debugDescription)
-        field.click()
-        field.typeText(link)
-        app.buttons["Pair"].firstMatch.click()
-        let done = app.buttons["Done"].firstMatch
-        XCTAssertTrue(done.waitForExistence(timeout: 30), app.debugDescription)
-        done.click()
 
         let busy = row(in: app, titled: "A long transcript, still streaming")
         let finished = row(in: app, titled: "Tidy the README badges")

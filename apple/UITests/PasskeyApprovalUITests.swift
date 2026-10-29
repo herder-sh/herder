@@ -11,8 +11,7 @@ final class PasskeyApprovalUITests: XCTestCase {
         let code = try XCTUnwrap(URLComponents(string: link)?.queryItems?.first { $0.name == "code" }?.value)
         let app = XCUIApplication()
         app.launchArguments = ["-softwarePasskey"]
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet()
 
         app.open(try XCTUnwrap(URL(string: link)))
 

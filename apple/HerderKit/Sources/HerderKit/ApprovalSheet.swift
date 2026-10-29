@@ -192,5 +192,7 @@ struct ApproveSheet: View {
                       vaults: fleet.machines.filter { !$0.hosts.isEmpty }.map(\.name),
                       open: { if let machine = approval.machine { open(machine) } },
                       linkVault: linkVault)
+            // A vault setup waiting on it fails once it closes unapproved; approved, it went on.
+            .onDisappear { fleet.settleClaim(approval.request, .failure(CancellationError())) }
     }
 }

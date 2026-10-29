@@ -1,13 +1,12 @@
 import XCTest
 
-/// Searches the Board on iPhone, against the fake daemons of `PairingUITests`: `fake-host-1` has a
+/// Searches the Board on iPhone, against the fake daemons of `FakeFleetUITests`: `fake-host-1` has a
 /// session waiting on an approval.
 final class SessionSearchUITests: XCTestCase {
     @MainActor
     func testSearchingTheBoardFiltersItsSessions() throws {
         let app = XCUIApplication()
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet()
         app.tabBars.buttons["Board"].tap()
 
         // In sight without pulling the Board down.

@@ -1,15 +1,14 @@
 import XCTest
 
 /// A tap on inline code in a message copies exactly its text and shows "Copied" over it. Sends a
-/// message with a code span in a new chat, against the fake daemons of `PairingUITests`, pairing
+/// message with a code span in a new chat, against the fake daemons of `FakeFleetUITests`, pairing
 /// first unless an earlier test did; it starts a chat, so it runs after `TabsUITests`, which
 /// wants none.
 final class TranscriptInlineCodeUITests: XCTestCase {
     @MainActor
     func testTappingInlineCodeCopiesIt() throws {
         let app = XCUIApplication()
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet()
 
         app.tabBars.buttons["Chats"].tap()
         app.navigationBars["Chats"].buttons["New Chat"].tap()

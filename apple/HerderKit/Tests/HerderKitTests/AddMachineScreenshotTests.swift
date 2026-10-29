@@ -72,7 +72,7 @@ private struct AddMachinePreview: View {
     }
 
     private var form: some View {
-        AddMachineForm(kind: $kind, vault: $vault, text: $text, vaults: [AddMachineScreenshotTests.vault]) { EmptyView() }
+        AddMachineForm(kind: $kind, vault: $vault, text: $text, vaults: [AddMachineScreenshotTests.vault])
     }
 }
 #endif

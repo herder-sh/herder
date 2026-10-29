@@ -11,7 +11,7 @@ struct BotPage: View {
     let botId: BotId
     @State private var bots: MachineBots
     @State private var knowledge: BotKnowledge
-    /// The machine's users, whom a person can be linked to.
+    /// The machine's people, whom a bot's person can be linked to.
     @State private var users: People
     @State private var saves = Autosave()
     @State private var sheet: BotSheet?
@@ -197,7 +197,7 @@ struct BotPage: View {
 
     @ViewBuilder private func personSheet(_ bot: Bot, id: String) -> some View {
         if let user = bot.allow.first(where: { $0.externalUserId == id }) {
-            let paired: [UserInfo] = if case .loaded(let loaded) = users.users { loaded } else { [] }
+            let paired: [PersonInfo] = if case .loaded(let loaded) = users.people { loaded } else { [] }
             BotPersonSheet(bot: bot.name, user: user, users: paired, saved: saves[id]) { next in
                 change(id) { bot in
                     if let index = bot.allow.firstIndex(where: { $0.externalUserId == id }) { bot.allow[index] = next }
@@ -389,8 +389,8 @@ struct BotPersonSheet: View {
     /// The bot's name.
     let bot: String
     let user: BotUser
-    /// The machine's users, whom they can be linked to.
-    var users: [UserInfo] = []
+    /// The machine's people, whom they can be linked to.
+    var users: [PersonInfo] = []
     var saved: SaveState?
     let set: (BotUser) -> Void
     let remove: () -> Void
@@ -423,7 +423,7 @@ struct BotPersonSheet: View {
                             set(next)
                         })) {
                             Text("None").tag(UserId?.none)
-                            ForEach(users, id: \.userId) { Text($0.name).tag(Optional($0.userId)) }
+                            ForEach(users, id: \.personId) { Text($0.name).tag(Optional($0.personId)) }
                         }
                         .pickerStyle(.inline)
                     }
@@ -442,7 +442,7 @@ struct BotPersonSheet: View {
     /// The user they are linked to, by name; their id when the machine no longer has them.
     private var linked: String {
         guard let userId = user.userId else { return "None" }
-        return users.first { $0.userId == userId }?.name ?? userId
+        return users.first { $0.personId == userId }?.name ?? userId
     }
 
     private func binding(_ key: WritableKeyPath<BotUser, Bool>) -> Binding<Bool> {

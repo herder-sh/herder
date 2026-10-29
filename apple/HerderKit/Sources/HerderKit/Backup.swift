@@ -7,7 +7,7 @@ enum BackupLink: Equatable {
     case vault
     /// It backs up to this vault.
     case linked(LinkedVault)
-    /// It backs up nowhere; `localVault` when a vault is installed on its machine, to pair
+    /// It backs up nowhere; `localVault` when a vault is installed on its machine, to claim
     /// and link.
     case nowhere(localVault: Bool)
 }
@@ -250,33 +250,38 @@ struct VaultChoices: View {
         }
         if vaults.isEmpty {
             RowDivider()
-            SettingRow(label: "Use a vault you have", hint: "Pair it with this device as its owner") {
-                PillButton(title: "Pair Vault…") { sheet = .pair(.vault) }
+            SettingRow(label: "Use a vault you have", hint: "Add it to your fleet as its owner") {
+                PillButton(title: "Add Vault…") { sheet = .pair(.vault) }
             }
         }
         RowDivider()
         runVault
     }
 
-    /// Running a vault on the machine, or pairing and linking the one installed there by hand,
-    /// as an Activity job: its step while it runs; the command to run there by hand when its
-    /// herder cannot do it.
+    /// Running a vault on the machine as an Activity job: its step while it runs; the command
+    /// to run there by hand when its herder cannot do it. One installed there by hand is
+    /// claimed with `herder claim` there, then used as any vault you own.
     @ViewBuilder private var runVault: some View {
-        let installed = fleet.backupLinks[machine.hostId] == .nowhere(localVault: true)
         let key = JobKey(hostId: machine.hostId, kind: .vault)
         let progress = fleet.activity[key] == nil ? nil : fleet.progress(key)
-        SettingRow(label: installed ? "A vault is installed on \(machine.name)" : "Run a vault on \(machine.name)",
-                   hint: progress.map { $0.detail(machine: machine.name, before: nil) }
-                       ?? (installed ? "Pair this device with it and link \(machine.name) to it"
-                           : "It runs next to the daemon, and this device pairs with it")) {
-            if let progress, !progress.finished {
-                JobBadge(progress: progress)
-            } else {
-                PillButton(title: installed ? "Pair and Link" : "Run a Vault on This Machine", prominent: true) {
-                    fleet.setUpVault(on: machine.hostId)
+        if fleet.backupLinks[machine.hostId] == .nowhere(localVault: true) && progress == nil {
+            SettingRow(label: "A vault is installed on \(machine.name)",
+                       hint: "Run \(PairKind.command) there to own it, then use it here") {
+                PillButton(title: "Add Vault…") { sheet = .pair(.vault) }
+            }
+        } else {
+            SettingRow(label: "Run a vault on \(machine.name)",
+                       hint: progress.map { $0.detail(machine: machine.name, before: nil) }
+                           ?? "It runs next to the daemon, and you approve it as its owner") {
+                if let progress, !progress.finished {
+                    JobBadge(progress: progress)
+                } else {
+                    PillButton(title: "Run a Vault on This Machine", prominent: true) {
+                        fleet.setUpVault(on: machine.hostId)
+                    }
+                    .disabled(working)
+                    .accessibilityIdentifier("run-vault")
                 }
-                .disabled(working)
-                .accessibilityIdentifier("run-vault")
             }
         }
         if progress == .needsNewerHerder {
@@ -284,15 +289,15 @@ struct VaultChoices: View {
                 .padding(.horizontal, Theme.cellPadding)
                 .padding(.bottom, 10)
             RowDivider()
-            SettingRow(label: "Then pair with the vault", hint: "With the code it prints") {
-                PillButton(title: "Pair Vault…") { sheet = .pair(.vault) }
+            SettingRow(label: "Then add the vault to your fleet", hint: "With the link it prints") {
+                PillButton(title: "Add Vault…") { sheet = .pair(.vault) }
             }
         }
     }
 }
 
 /// `herder vault install`, to copy and run on a machine whose herder cannot install a vault
-/// from here; it prints the code to pair with the vault.
+/// from here; it prints the link that makes you its owner.
 struct VaultInstallCommand: View {
     var body: some View {
         HStack(spacing: 8) {

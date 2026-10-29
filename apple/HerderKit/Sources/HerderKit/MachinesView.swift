@@ -506,8 +506,8 @@ private struct BackupCell: View {
             HStack(spacing: 6) {
                 Text(vault.backsUp).foregroundStyle(Theme.tertiary).lineLimit(1)
                 Spacer(minLength: 0)
-                PillButton(title: "Pair", prominent: true, action: pair)
-                    .help("Pair this device with \(vault.name) to see its backups and manage its secrets")
+                PillButton(title: "Add", prominent: true, action: pair)
+                    .help("Sign in to \(vault.name) with your passkey to see its backups and manage its secrets")
             }
         }
     }

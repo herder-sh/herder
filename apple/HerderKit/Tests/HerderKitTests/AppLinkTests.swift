@@ -4,7 +4,7 @@ import Herder
 import Testing
 
 struct AppLinkTests {
-    let pair = "herder://pair?host=127.0.0.1%3A7420&fp=" + String(repeating: "ab", count: 32) + "&code=ABCD2345"
+    let own = "herder://own?host=127.0.0.1%3A7420&fp=" + String(repeating: "ab", count: 32) + "&code=K7Q-4PD&name=devbox"
 
     private func link(_ text: String) -> AppLink? { URL(string: text).flatMap(AppLink.init(url:)) }
 
@@ -15,17 +15,24 @@ struct AppLinkTests {
             == .session(SessionKey(hostId: "fake-host-1", sessionId: "01JABC")))
     }
 
-    @Test func readsAPairLinkOfOneMachineOrSeveral() {
-        #expect(link(pair) == .pair(pair))
-        let shared = pair + "&host=10.0.0.9%3A7447&fp=" + String(repeating: "cd", count: 32) + "&code=MNPQR-STVWX"
-        #expect(link(shared) == .pair(shared))
+    @Test func readsAnOwnOrALoginLink() {
+        guard case .approve(let request)? = link(own) else { Issue.record("not an approval"); return }
+        #expect(request.kind == .machine && request.name == "devbox" && request.code == "K7Q-4PD")
+        let login = own.replacingOccurrences(of: "herder://own", with: "herder://login")
+        guard case .approve(let terminal)? = link(login) else { Issue.record("not an approval"); return }
+        #expect(terminal.kind == .login)
+    }
+
+    @Test func noLongerReadsAPairLink() {
+        let pair = "herder://pair?host=127.0.0.1%3A7420&fp=" + String(repeating: "ab", count: 32) + "&code=ABCD2345"
+        #expect(link(pair) == nil)
     }
 
     @Test func rejectsAMalformedLink() {
         #expect(link("herder://session?host=fake-host-1") == nil)
         #expect(link("herder://session?session=01JABC") == nil)
         #expect(link("herder://session?host=&session=01JABC") == nil)
-        #expect(link("herder://pair?host=127.0.0.1%3A7420") == nil)
+        #expect(link("herder://own?host=127.0.0.1%3A7420") == nil)
     }
 
     @Test func rejectsAnUnknownLink() {

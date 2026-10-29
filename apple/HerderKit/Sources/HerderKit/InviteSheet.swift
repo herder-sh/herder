@@ -71,7 +71,7 @@ struct InviteLinkView: View {
     var now: Date?
 
     var body: some View {
-        PairingLinkCode(link: invite.link, expiresAt: invite.expiresAt,
+        InviteLinkCode(link: invite.link, expiresAt: invite.expiresAt,
                         hint: "It works once. Whoever uses it joins as \(invite.role == .owner ? "an owner" : "a member"), with a passkey of their own.",
                         now: now)
     }

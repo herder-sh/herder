@@ -2,14 +2,13 @@ import XCTest
 
 /// A long press on a message selects a word of it, in place, with the edit menu over it: to
 /// select any part of the message, or copy all of it. Opens the session of `fake-host-1` waiting
-/// on an approval, against the fake daemons of `PairingUITests`, pairing first unless an
+/// on an approval, against the fake daemons of `FakeFleetUITests`, pairing first unless an
 /// earlier test did.
 final class TranscriptCopyUITests: XCTestCase {
     @MainActor
     func testLongPressingAMessageSelectsTextInIt() throws {
         let app = XCUIApplication()
-        app.launch()
-        try app.pairUnlessPaired()
+        try app.launchOnFakeFleet()
 
         app.openWaitingTask()
         let message = app.message("Run the tests.")

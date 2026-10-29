@@ -7,14 +7,11 @@ enum PairKind: CaseIterable, Hashable {
     case machine
     /// A vault: backups and secrets for the machines that link to it.
     case vault
-    /// Another device of the user's, with every machine this one has.
-    case device
 
     var title: String {
         switch self {
         case .machine: "A machine running herder"
         case .vault: "A vault"
-        case .device: "A device to this fleet"
         }
     }
 
@@ -22,7 +19,6 @@ enum PairKind: CaseIterable, Hashable {
         switch self {
         case .machine: "Runs your sessions"
         case .vault: "Backs up and keeps secrets"
-        case .device: "Your phone or another Mac"
         }
     }
 
@@ -30,7 +26,6 @@ enum PairKind: CaseIterable, Hashable {
         switch self {
         case .machine: "desktopcomputer"
         case .vault: "lock.shield"
-        case .device: "qrcode"
         }
     }
 
@@ -39,31 +34,13 @@ enum PairKind: CaseIterable, Hashable {
     static let command = "herder claim"
 }
 
-/// What was pasted or scanned into Add to Fleet: the `herder://own` link `herder claim` prints,
-/// approved with your passkey, or a `herder://pair` link another device of yours shared.
-enum PairInput: Equatable {
-    case own(ApprovalRequest)
-    case shared(link: String, machines: [PairingUri])
-
-    /// The link anywhere in `text`: alone, or in a copy of the command's output.
-    init?(_ text: String) {
-        guard let link = fleetLink(in: text) else { return nil }
-        if let request = URL(string: link).flatMap(ApprovalRequest.init(url:)), request.kind == .machine {
-            self = .own(request)
-        } else if let parsed = try? parsePairingLink(link: link) {
-            self = .shared(link: link, machines: parsed.machines)
-        } else {
-            return nil
-        }
-    }
-}
-
 /// Adds to the fleet: a machine or a vault, which `herder claim` on it offers to you, or a
-/// vault this device knows of, signed in to with your passkey; or another device of the user's
-/// from a link this one makes. Opens on `kind`, with `vault` chosen.
+/// vault this device knows of, signed in to with your passkey. Opens on `kind`, with `vault`
+/// chosen.
 struct AddMachineSheet: View {
     let fleet: Fleet
-    /// Hands a machine's `herder://own` link to the approval, which takes the sheet's place.
+    /// Hands the `herder://own` or `herder://login` link pasted or scanned to the approval, which
+    /// takes the sheet's place.
     let approve: (ApprovalRequest) -> Void
     @State private var kind: PairKind
     @State private var vault: UnpairedVault?
@@ -71,10 +48,6 @@ struct AddMachineSheet: View {
     @State private var vaults: [UnpairedVault] = []
     @State private var error: String?
     @State private var scanning = false
-    /// Each machine's result, once a link of several machines, or one that failed, paired.
-    @State private var results: [PairResult]?
-    @State private var shared: SharedLink?
-    @State private var shareError: String?
     @Environment(\.dismiss) private var dismiss
 
     init(fleet: Fleet, kind: PairKind, vault: UnpairedVault?, text: String = "",
@@ -90,7 +63,8 @@ struct AddMachineSheet: View {
         #if os(iOS)
         // The camera takes the sheet's place rather than opening over it.
         if scanning {
-            PairScanner(scanned: { text = $0 }, close: { scanning = false })
+            // The approval shows what the code names, to check before Face ID.
+            PairScanner(scanned: approve, close: { scanning = false })
                 .presentationBackground(Theme.sheet)
         } else {
             form
@@ -100,57 +74,24 @@ struct AddMachineSheet: View {
         #endif
     }
 
-    private var input: PairInput? { PairInput(text) }
+    private var input: ApprovalRequest? { approvalRequest(in: text) }
     /// The known vault chosen, which you sign in to rather than claim.
     private var chosen: UnpairedVault? { kind == .vault ? vault : nil }
 
     private var form: some View {
         SheetScaffold(title: "Add to Fleet", height: 640, hint: hint) {
-            if let results {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(results.enumerated()), id: \.offset) { PairResultRow(result: $0.element) }
-                }
-            } else {
-                AddMachineForm(kind: $kind, vault: $vault, text: $text, vaults: vaults, error: error,
-                               paired: { fingerprint in fleet.machines.first { $0.fingerprint == fingerprint }?.name },
-                               scan: scan) {
-                    if let shared {
-                        SharedLinkView(fleet: fleet, shared: shared)
-                    } else if let shareError {
-                        Text(shareError).font(.footnote).foregroundStyle(Theme.failure)
-                    } else {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text("Asking each machine for a code…").foregroundStyle(Theme.secondary)
-                        }
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity, minHeight: 200)
-                    }
-                }
-            }
+            AddMachineForm(kind: $kind, vault: $vault, text: $text, vaults: vaults, error: error,
+                           paired: { fingerprint in fleet.machine(fingerprint: fingerprint)?.name },
+                           scan: scan)
         } footer: {
             Spacer()
-            if results != nil {
-                ActionButton(title: "Done", style: .primary) { dismiss() }
-                    .frame(width: 160)
-                    .keyboardShortcut(.defaultAction)
-            } else if kind == .device {
-                ActionButton(title: "New Link", style: .secondary) { await share() }
-                    .frame(width: 140)
-                ActionButton(title: "Done", style: .primary) { dismiss() }
-                    .frame(width: 140)
-                    .keyboardShortcut(.defaultAction)
-            } else if let chosen {
+            if let chosen {
                 ActionButton(title: "Sign In with \(Biometry.name)", style: .primary) { await signIn(to: chosen) }
                     .frame(width: 200)
                     .keyboardShortcut(.defaultAction)
-            } else if case .shared = input {
-                ActionButton(title: "Pair", style: .primary) { await pair() }
-                    .frame(width: 160)
-                    .keyboardShortcut(.defaultAction)
             } else {
                 ActionButton(title: "Continue", style: .primary) {
-                    if case .own(let request) = input { approve(request) }
+                    if let input { approve(input) }
                 }
                 .frame(width: 160)
                 .disabled(input == nil)
@@ -158,16 +99,10 @@ struct AddMachineSheet: View {
             }
         }
         .task { vaults = await fleet.unpairedVaults() }
-        .task(id: kind) {
-            if kind == .device && shared == nil { await share() }
-        }
     }
 
     private var hint: String {
-        switch (kind, input) {
-        case (.machine, .own?), (.vault, .own?): chosen == nil ? "Next, check the code matches the terminal’s." : ""
-        default: ""
-        }
+        input != nil && chosen == nil ? "Next, check the code matches the terminal’s." : ""
     }
 
     private var scan: (() -> Void)? {
@@ -190,38 +125,10 @@ struct AddMachineSheet: View {
         }
     }
 
-    private func pair() async {
-        guard case .shared(let link, _) = input else { return }
-        do {
-            let results = try await fleet.pair(link: link)
-            // One machine that paired needs no report: it shows in the list.
-            if results.count == 1, case .paired = results[0] {
-                dismiss()
-            } else {
-                self.results = results
-            }
-        } catch {
-            self.error = describe(error)
-        }
-    }
-
-    private func share() async {
-        do {
-            shared = try await fleet.share()
-            shareError = nil
-        } catch HerderError.Pairing(let detail) {
-            shared = nil
-            shareError = "Cannot share: \(detail)."
-        } catch {
-            shared = nil
-            shareError = describe(error)
-        }
-    }
 }
 
-/// Add to Fleet's choice and its steps, on bindings alone so they can be drawn without a fleet;
-/// `device` is what the device choice shows.
-struct AddMachineForm<Device: View>: View {
+/// Add to Fleet's choice and its steps, on bindings alone so they can be drawn without a fleet.
+struct AddMachineForm: View {
     @Binding var kind: PairKind
     @Binding var vault: UnpairedVault?
     @Binding var text: String
@@ -232,15 +139,12 @@ struct AddMachineForm<Device: View>: View {
     var paired: (String) -> String? = { _ in nil }
     /// Opens the camera, where there is one.
     var scan: (() -> Void)?
-    @ViewBuilder var device: Device
 
-    private var input: PairInput? { PairInput(text) }
+    private var input: ApprovalRequest? { approvalRequest(in: text) }
 
     var body: some View {
         KindPicker(kind: $kind)
         switch kind {
-        case .device:
-            device
         case .machine:
             claimSteps(from: 1, on: "the machine")
         case .vault:
@@ -276,17 +180,9 @@ struct AddMachineForm<Device: View>: View {
         NumberedStep(number: number, title: "On \(machine), run") { CommandBox(command: PairKind.command) }
         NumberedStep(number: number + 1, title: pasteTitle) { inputField }
         if let input {
-            NumberedStep(number: number + 2, title: checkTitle(input)) {
-                LinkCard(input: input, paired: paired)
+            NumberedStep(number: number + 2, title: "Check, then approve with your passkey") {
+                LinkCard(request: input, paired: paired)
             }
-        }
-    }
-
-    private func checkTitle(_ input: PairInput) -> String {
-        switch input {
-        case .own: "Check, then approve with your passkey"
-        case .shared(_, let machines) where machines.count > 1: "Check these \(machines.count) machines, then pair"
-        case .shared: "Check, then pair"
         }
     }
 
@@ -342,7 +238,7 @@ struct AddMachineForm<Device: View>: View {
     }
 }
 
-/// The three things Add to Fleet adds, as tiles side by side, or as rows where they do not fit.
+/// The things Add to Fleet adds, as tiles side by side, or as rows where they do not fit.
 private struct KindPicker: View {
     @Binding var kind: PairKind
 
@@ -403,9 +299,9 @@ private struct CommandBox: View {
 }
 
 /// What a link names, to check before going on: the machine a `herder://own` link offers you,
-/// or the machines another device shared, each with its addresses and fingerprint.
+/// or the one a `herder://login` link signs a terminal in to, with its addresses and fingerprint.
 private struct LinkCard: View {
-    let input: PairInput
+    let request: ApprovalRequest
     let paired: (String) -> String?
 
     var body: some View {
@@ -420,15 +316,13 @@ private struct LinkCard: View {
                     Text(detail).font(.footnote).foregroundStyle(Theme.secondary)
                 }
             }
-            ForEach(Array(machines.enumerated()), id: \.offset) { _, machine in
-                Rectangle().fill(Theme.stroke).frame(height: 1)
-                VStack(alignment: .leading, spacing: 8) {
-                    DetailRow(label: "Addresses", value: machine.hosts.joined(separator: "\n"), mono: true)
-                    DetailRow(label: "Fingerprint", value: grouped(machine.fingerprint), mono: true)
-                    if let name = paired(machine.fingerprint) {
-                        Text("Already in your fleet as \(name).")
-                            .font(.footnote).foregroundStyle(Theme.secondary)
-                    }
+            Rectangle().fill(Theme.stroke).frame(height: 1)
+            VStack(alignment: .leading, spacing: 8) {
+                DetailRow(label: "Addresses", value: request.hosts.joined(separator: "\n"), mono: true)
+                DetailRow(label: "Fingerprint", value: grouped(request.fingerprint), mono: true)
+                if request.kind == .machine, let name = paired(request.fingerprint) {
+                    Text("Already in your fleet as \(name).")
+                        .font(.footnote).foregroundStyle(Theme.secondary)
                 }
             }
         }
@@ -439,48 +333,16 @@ private struct LinkCard: View {
     }
 
     private var title: String {
-        switch input {
-        case .own(let request): "You’ll own \(request.name)"
-        case .shared(_, let machines): "You’ll join \(machines.count == 1 ? "this machine" : "\(machines.count) machines") as yourself"
+        switch request.kind {
+        case .machine: "You’ll own \(request.name)"
+        case .login: "A terminal on \(request.name) signs in as you"
         }
     }
 
     private var detail: String {
-        switch input {
-        case .own: "Full control: sessions, terminals and secrets. Nobody else gets in until you add them."
-        case .shared: "With your role on each, as the device that shared the link has it."
-        }
-    }
-
-    private var machines: [(hosts: [String], fingerprint: String)] {
-        switch input {
-        case .own(let request): [(request.hosts, request.fingerprint)]
-        case .shared(_, let machines): machines.map { ($0.hosts, $0.fingerprint) }
-        }
-    }
-}
-
-/// One machine of a link: paired, or why not.
-private struct PairResultRow: View {
-    let result: PairResult
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            switch result {
-            case .paired(let machine):
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.success)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(machine.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                    Text("Paired").font(.caption).foregroundStyle(Theme.secondary)
-                }
-            case .failed(let addresses, let error):
-                Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.failure)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(addresses.first ?? "A machine").font(Theme.mono).foregroundStyle(Theme.text)
-                    Text("Not paired: \(error)").font(.caption).foregroundStyle(Theme.failure)
-                }
-            }
-            Spacer(minLength: 0)
+        switch request.kind {
+        case .machine: "Full control: sessions, terminals and secrets. Nobody else gets in until you add them."
+        case .login: "It gets its own sign-in under you, listed with your devices."
         }
     }
 }
