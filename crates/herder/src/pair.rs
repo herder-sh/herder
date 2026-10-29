@@ -1,29 +1,27 @@
-//! `herder pair`: mint a one-time pairing code on the running daemon, list or revoke devices.
+//! `herder pair`: pair a host with the vault running here, list or revoke devices; and `herder
+//! claim`, which gives the running daemon a new owner.
+//!
+//! People and their devices join through the app (`herder claim`, invites) and `herder login`,
+//! never through a code minted here.
 
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use herder_client_core::{OwnUri, PairingUri};
-use herder_daemon::auth::DeviceRole;
+use herder_client_core::OwnUri;
 use herder_daemon::auth::control::{self, OwnInfo, PairingInfo, Request, Response};
 use herder_protocol::{DeviceId, Role, Timestamp, UserInfo};
 use qrcode::QrCode;
 use qrcode::render::unicode::Dense1x2;
 
 #[derive(clap::Args)]
+#[group(required = true, multiple = false, args = ["host", "list", "revoke"])]
 pub struct Args {
-    /// User the new device acts as [default: your login name].
-    #[arg(long, value_name = "NAME", conflicts_with_all = ["list", "revoke", "host"])]
-    user: Option<String>,
-    /// Role of a new user [default: owner for a daemon's first user, member after].
-    #[arg(long, value_enum, conflicts_with_all = ["list", "revoke"])]
-    role: Option<RoleArg>,
     /// On a vault, pair the host named NAME to replicate here, and only that: it never reads
     /// other hosts, sessions or devices.
-    #[arg(long, value_name = "NAME", conflicts_with_all = ["list", "revoke", "role"])]
+    #[arg(long, value_name = "NAME")]
     host: Option<String>,
     /// List the users and their paired devices.
-    #[arg(long, conflicts_with = "revoke")]
+    #[arg(long)]
     list: bool,
     /// Unpair a device and disconnect it.
     #[arg(long, value_name = "DEVICE")]
@@ -31,14 +29,6 @@ pub struct Args {
     /// Daemon config file, to find its data dir [default: $XDG_CONFIG_HOME/herder/daemon.toml].
     #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
     config: Option<PathBuf>,
-}
-
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum RoleArg {
-    /// Full control, including terminals.
-    Owner,
-    /// Drives sessions; never gets a terminal.
-    Member,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -52,16 +42,13 @@ pub fn run(args: Args) -> Result<()> {
     } else if let Some(host) = args.host {
         Request::PairHost { host }
     } else {
-        Request::Pair {
-            user: args.user.unwrap_or_else(default_user),
-            role: args.role.map(|role| match role {
-                RoleArg::Owner => Role::Owner,
-                RoleArg::Member => Role::Member,
-            }),
-        }
+        bail!("pass --host, --list or --revoke");
     };
     match control::request(&config.data_dir, &request)? {
-        Response::Paired(info) => print_pairing(&info),
+        Response::Paired(info) => {
+            print_host_pairing(&info);
+            Ok(())
+        }
         Response::Users { users } => print_users(&users),
         Response::Revoked => {
             if let Request::Revoke { device_id } = request {
@@ -70,47 +57,10 @@ pub fn run(args: Args) -> Result<()> {
             Ok(())
         }
         Response::Error { message } => bail!("{message}"),
-        Response::Address { .. }
-        | Response::Forked(_)
-        | Response::ForgotHost(_)
-        | Response::Own(_) => {
+        Response::Address { .. } | Response::ForgotHost(_) | Response::Own(_) => {
             bail!("the daemon sent an unexpected answer")
         }
     }
-}
-
-/// The user a device pairs as unless told otherwise: the login name.
-pub fn default_user() -> String {
-    std::env::var("USER").unwrap_or_else(|_| "owner".to_owned())
-}
-
-pub fn print_pairing(info: &PairingInfo) -> Result<()> {
-    if info.device_role == DeviceRole::Host {
-        print_host_pairing(info);
-        return Ok(());
-    }
-    let uri = link(info, &herder_daemon::host_name());
-    let qr = QrCode::new(uri.as_bytes())?
-        .render::<Dense1x2>()
-        .quiet_zone(true)
-        .build();
-    let left = info.expires_at.duration_since(Timestamp::now()).as_secs();
-    let minutes = u64::try_from(left).unwrap_or(0).div_ceil(60);
-    println!(
-        "Pair a device as {} ({}): scan the code, or enter these in the app.\n",
-        info.user,
-        role_name(info.role)
-    );
-    for address in &info.addresses {
-        println!("  address      {address}");
-    }
-    println!("  fingerprint  {}", info.fingerprint);
-    println!("  code         {}", info.code);
-    println!("\nThe code works once, for the next {minutes} minutes.\n");
-    println!("{qr}");
-    println!("{uri}");
-    println!("\nIn a terminal, run `herder connect '<link>'` with it, or paste it into herder.");
-    Ok(())
 }
 
 /// `herder claim`: opens the window in which the running daemon takes a new owner, and shows
@@ -165,21 +115,6 @@ fn own_link(info: &OwnInfo, name: &str) -> String {
     .to_string()
 }
 
-/// The `herder://pair` link of `info`, followed by the role it grants and the machine's
-/// `name`, so the app says what pairing gets you before it pairs; the link's parser skips both.
-fn link(info: &PairingInfo, name: &str) -> String {
-    let uri = PairingUri {
-        hosts: info.addresses.clone(),
-        fingerprint: info.fingerprint.clone(),
-        code: info.code.clone(),
-    };
-    let extra = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("role", role_name(info.role))
-        .append_pair("name", name)
-        .finish();
-    format!("{uri}&{extra}")
-}
-
 fn print_host_pairing(info: &PairingInfo) {
     let left = info.expires_at.duration_since(Timestamp::now()).as_secs();
     let minutes = u64::try_from(left).unwrap_or(0).div_ceil(60);
@@ -210,7 +145,7 @@ fn print_users(users: &[UserInfo]) -> Result<()> {
         .flat_map(|user| user.devices.iter().map(move |device| (user, device)))
         .collect();
     if rows.is_empty() {
-        println!("no paired devices; run `herder pair` to pair one");
+        println!("no paired devices");
         return Ok(());
     }
     let user_width = rows
@@ -265,26 +200,6 @@ fn role_name(role: Role) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_link_names_the_role_and_the_machine() {
-        let info = PairingInfo {
-            code: "ABCDE-FGHJK".into(),
-            user: "tomas".into(),
-            role: Role::Owner,
-            device_role: DeviceRole::Client,
-            expires_at: Timestamp::now(),
-            fingerprint: "ab".repeat(32),
-            addresses: vec!["127.0.0.1:7448".into()],
-        };
-        let link = link(&info, "draugelis");
-        assert!(link.ends_with("&role=owner&name=draugelis"), "{link}");
-        let uri: PairingUri = link.parse().unwrap();
-        assert_eq!(
-            (uri.hosts, uri.code.as_str()),
-            (info.addresses, "ABCDE-FGHJK")
-        );
-    }
 
     #[test]
     fn the_own_link_names_the_machine_and_parses_back() {

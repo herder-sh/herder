@@ -1,9 +1,9 @@
-//! A host reading its vault the way clients do: the fleet, and a session's journal.
+//! A host reading the vault's session list the way clients do, to see which of its sessions
+//! another host took over.
 //!
 //! The host connects with its own device key, paired with the vault, and speaks the client
-//! protocol: hello with the session to replay as its one cursor, then `sync`, which the vault
-//! answers once the lists and the replay are sent, then `get_attachment` for every image the
-//! journal names. Nothing is subscribed beyond that.
+//! protocol: hello, then `sync`, which the vault answers once the lists are sent. Nothing is
+//! subscribed. A host never reads other hosts' journals.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,11 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
-use herder_protocol::{
-    Attachment, Bytes, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
-    Cursor, ErrorCode, ErrorInfo, Event, FleetHost, PROTOCOL_VERSION, ServerMessage, SessionHead,
-    SessionId,
-};
+use herder_protocol::{ClientHello, ClientMessage, PROTOCOL_VERSION, ServerMessage, SessionHead};
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -23,7 +19,6 @@ use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tracing::warn;
 
 use super::BUILD;
 use crate::config::VaultConfig;
@@ -31,34 +26,8 @@ use crate::config::VaultConfig;
 /// A connection to the vault.
 pub(super) type Ws = WebSocketStream<TlsStream<TcpStream>>;
 
-/// How long reading the vault may take, a long journal's replay included.
+/// How long reading the vault's session list may take.
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
-
-/// What the vault showed.
-#[derive(Debug, Default)]
-pub(super) struct View {
-    /// Every session it holds, each on the host that has it now.
-    pub(super) sessions: Vec<SessionHead>,
-    /// Every host, with its liveness.
-    pub(super) hosts: Vec<FleetHost>,
-    /// The journal asked for, oldest first.
-    pub(super) events: Vec<Event>,
-    /// Every image the journal names that the vault holds.
-    pub(super) attachments: Vec<(Attachment, Bytes)>,
-}
-
-/// The vault refusing this host, in its own words: they are meant for whoever asked the host
-/// to read it.
-#[derive(Debug)]
-pub(super) struct Refused(pub(super) ErrorInfo);
-
-impl std::fmt::Display for Refused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "the vault refused: {}", self.0.message)
-    }
-}
-
-impl std::error::Error for Refused {}
 
 /// Opens a WebSocket to the vault over TLS, pinned through `connector`.
 pub(super) async fn dial(vault: &VaultConfig, connector: &TlsConnector) -> Result<Ws> {
@@ -75,35 +44,21 @@ pub(super) async fn dial(vault: &VaultConfig, connector: &TlsConnector) -> Resul
     Ok(ws)
 }
 
-/// Reads the fleet from the vault as `device`, and the whole journal of `journal` if given.
-pub(super) async fn read(
-    vault: &VaultConfig,
-    device: &DeviceKey,
-    journal: Option<&SessionId>,
-) -> Result<View> {
-    tokio::time::timeout(READ_TIMEOUT, read_view(vault, device, journal))
+/// Every session the vault holds, each on the host that has it now, read as `device`.
+pub(super) async fn sessions(vault: &VaultConfig, device: &DeviceKey) -> Result<Vec<SessionHead>> {
+    tokio::time::timeout(READ_TIMEOUT, read_sessions(vault, device))
         .await
         .map_err(|_| anyhow!("the vault did not answer in {READ_TIMEOUT:?}"))?
         .with_context(|| format!("reading the vault at {}", vault.address))
 }
 
-async fn read_view(
-    vault: &VaultConfig,
-    device: &DeviceKey,
-    journal: Option<&SessionId>,
-) -> Result<View> {
+async fn read_sessions(vault: &VaultConfig, device: &DeviceKey) -> Result<Vec<SessionHead>> {
     let connector = TlsConnector::from(Arc::new(client_config(&vault.fingerprint, device)?));
     let mut ws = dial(vault, &connector).await?;
     let hello = ClientMessage::Hello(ClientHello {
         protocol_version: PROTOCOL_VERSION,
         client: BUILD.to_owned(),
-        resume: journal
-            .map(|session_id| Cursor {
-                session_id: session_id.clone(),
-                after_seq: 0,
-            })
-            .into_iter()
-            .collect(),
+        resume: Vec::new(),
         pairing_code: vault.pairing_code.clone(),
         sign_in: false,
     });
@@ -117,7 +72,7 @@ async fn read_view(
         ws.send(Message::text(serde_json::to_string(&message)?))
             .await?;
     }
-    let mut view = View::default();
+    let mut sessions = Vec::new();
     loop {
         let text = match ws.next().await {
             Some(Ok(Message::Text(text))) => text,
@@ -126,73 +81,12 @@ async fn read_view(
             Some(Err(err)) => return Err(err.into()),
         };
         match serde_json::from_str(&text)? {
-            ServerMessage::Sessions { sessions } => view.sessions = sessions,
-            ServerMessage::Hosts { hosts } => view.hosts = hosts,
-            ServerMessage::Event(event) if Some(&event.session_id) == journal => {
-                view.events.push(event);
-            }
-            ServerMessage::Error { error } => return Err(Refused(error).into()),
+            ServerMessage::Sessions { sessions: listed } => sessions = listed,
+            ServerMessage::Error { error } => bail!("the vault refused: {}", error.message),
             ServerMessage::Synced { token: synced } if synced == token => break,
             _ => {}
         }
     }
-    if let Some(session_id) = journal {
-        view.attachments = attachments(&mut ws, session_id, &view.events).await?;
-    }
     let _ = ws.close(None).await;
-    Ok(view)
-}
-
-/// Fetches every image and file `events` name, one at a time; one the vault does not hold,
-/// such as one its host lost, is left out.
-async fn attachments(
-    ws: &mut Ws,
-    session_id: &SessionId,
-    events: &[Event],
-) -> Result<Vec<(Attachment, Bytes)>> {
-    let named = events.iter().flat_map(|event| event.body.attachments());
-    let mut fetched = Vec::new();
-    for attachment in named {
-        let id = CommandId::new(format!("image-{}", attachment.attachment_id));
-        let command = ClientMessage::Command(Command {
-            id: id.clone(),
-            body: CommandBody::GetAttachment {
-                session_id: session_id.clone(),
-                attachment_id: attachment.attachment_id.clone(),
-            },
-        });
-        ws.send(Message::text(serde_json::to_string(&command)?))
-            .await?;
-        loop {
-            let text = match ws.next().await {
-                Some(Ok(Message::Text(text))) => text,
-                Some(Ok(Message::Close(_))) | None => bail!("the vault closed the connection"),
-                Some(Ok(_)) => continue,
-                Some(Err(err)) => return Err(err.into()),
-            };
-            match serde_json::from_str(&text)? {
-                ServerMessage::CommandAccepted {
-                    command_id,
-                    result: CommandResult::Attachment { data, .. },
-                } if command_id == id => {
-                    fetched.push((attachment.clone(), data));
-                    break;
-                }
-                ServerMessage::CommandRejected { command_id, error } if command_id == id => {
-                    if error.code != ErrorCode::NotFound {
-                        bail!("the vault refused an attachment: {}", error.message);
-                    }
-                    warn!(
-                        %session_id,
-                        attachment_id = %attachment.attachment_id,
-                        "the vault holds no copy of this attachment; it is not recovered"
-                    );
-                    break;
-                }
-                ServerMessage::Error { error } => bail!("the vault refused: {}", error.message),
-                _ => {}
-            }
-        }
-    }
-    Ok(fetched)
+    Ok(sessions)
 }

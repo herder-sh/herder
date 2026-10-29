@@ -498,39 +498,33 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
         "{local:?}"
     );
 
-    // A goes offline: B has no vault to find the session in, and C asks its vault.
+    // A goes offline: no machine the client reaches holds the session, and neither B nor C
+    // reads it from a vault of its own.
     a.shutdown.cancel();
     until(&client, "host-a is offline", |machines| {
         !matches!(machines[0].connection, ConnectionState::Connected)
     })
     .await;
-    let refused = client
-        .fork_session(
-            HostId::new("host-a"),
-            session_id.clone(),
-            HostId::new("host-b"),
-            None,
-        )
-        .await
-        .unwrap_err();
-    let Error::Rejected { info } = refused else {
-        panic!("expected a refusal, got {refused:?}");
-    };
-    assert_eq!(info.code, ErrorCode::NotFound);
-    assert_eq!(
-        info.message,
-        "host-a is offline and host-b has no vault to find the session in"
-    );
-    let refused = client
-        .fork_session(
-            HostId::new("host-a"),
-            session_id.clone(),
-            HostId::new("host-c"),
-            None,
-        )
-        .await
-        .unwrap_err();
-    assert!(refused.to_string().contains("vault"), "{refused}");
+    for destination in ["host-b", "host-c"] {
+        let refused = client
+            .fork_session(
+                HostId::new("host-a"),
+                session_id.clone(),
+                HostId::new(destination),
+                None,
+            )
+            .await
+            .unwrap_err();
+        let Error::Rejected { info } = refused else {
+            panic!("expected a refusal, got {refused:?}");
+        };
+        assert_eq!(info.code, ErrorCode::NotFound);
+        assert_eq!(
+            info.message,
+            "host-a is offline, and no other machine you are signed in to holds the session; \
+             sign in to its vault to fork it from there"
+        );
+    }
     b.shutdown.cancel();
     c.shutdown.cancel();
 }
@@ -540,7 +534,7 @@ async fn a_session_of_an_offline_machine_hands_off_through_a_vault_the_client_re
     let tmp = tempfile::tempdir().unwrap();
     let dirs = ["a", "b"].map(|name| tmp.path().join(name));
     clones(tmp.path(), &[&dirs[0], &dirs[1]]);
-    // A and B replicate to the vault as host-only devices, so B cannot read A's sessions there.
+    // A and B replicate to the vault as host-only devices: neither reads the other there.
     let vault = Vault::start(&tmp.path().join("vault")).await;
     let a = daemon(&dirs[0], "host-a", Some(vault.host_config("host-a"))).await;
     let b = daemon(&dirs[1], "host-b", Some(vault.host_config("host-b"))).await;

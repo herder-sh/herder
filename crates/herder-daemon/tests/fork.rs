@@ -1,7 +1,8 @@
-//! Forking a session: host A runs a session that is mid-turn, host B forks it from the vault,
-//! images included, and goes on with the fork, while A's session stays as it is; A forks it
-//! too, from its own journal. Hosts and vault run in process over TLS on localhost, each on its
-//! own runtime.
+//! Forking a session: host A runs a session that is mid-turn, and its owner forks it onto host
+//! B from the vault, images included: a terminal signed in to both with `herder login` reads
+//! the session there and relays it to B, which never reads the vault itself. B goes on with the
+//! fork, while A's session stays as it is; A forks it too, from its own journal. Hosts and vault
+//! run in process over TLS on localhost, each on its own runtime.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,18 +11,22 @@ use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, StartFuture, StartRequest};
+use herder_client_core::Client;
 use herder_daemon::Hub;
-use herder_daemon::auth::{Auth, DeviceRole, PAIRING_TTL};
+use herder_daemon::auth::authenticator;
+use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::config::{Retention, VaultConfig};
+use herder_daemon::login::Logins;
 use herder_daemon::session::fork::Forks;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
-use herder_daemon::vault::fork::FromVault;
+use herder_daemon::terminal::Terminals;
 use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
+use herder_daemon::ws::Identity;
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
     AccountId, Attachment, AttachmentId, Bytes, CommandBody, CommandResult, ErrorCode, Event,
     EventBody, FILE_MEDIA_TYPE, HistoryPart, HostId, Image, ItemBody, PermissionMode, Project,
-    ProjectId, Provider, Relay, SessionId, SessionStatus, TurnId, UserId,
+    ProjectId, Provider, Relay, Role, SessionId, SessionStatus, TurnId, UserId,
 };
 use herder_store::Store;
 use tokio::net::TcpListener;
@@ -68,6 +73,8 @@ struct Vault {
     _runtime: Runtime,
     config: VaultConfig,
     auth: Arc<Auth>,
+    /// Its owner's app, which approves the terminal's `herder login`.
+    owner: Identity,
 }
 
 impl Vault {
@@ -106,19 +113,12 @@ impl Vault {
             attachments: true,
             ..VaultConfig::new(addr.to_string(), fingerprint, None)
         };
+        let (_, owner) = authenticator::enroll(&auth, "alice", Role::Owner, "fp-alice-app");
         Self {
             _runtime: runtime,
             config,
             auth,
-        }
-    }
-
-    /// Where a host replicates to, pairing as `user` with a fresh client code: forking
-    /// another host's session reads the vault.
-    fn config(&self, user: &str) -> VaultConfig {
-        VaultConfig {
-            pairing_code: Some(self.auth.mint(user, None, PAIRING_TTL).unwrap().code),
-            ..self.config.clone()
+            owner,
         }
     }
 
@@ -171,12 +171,17 @@ impl Adapter for Seeds {
 }
 
 /// A host daemon: the fake provider on one account, a clone of the project, checkpoints, a
-/// replicator and forks.
+/// replicator, forks, and the WebSocket server its owner `alice` reaches it on.
 struct HostDaemon {
     runtime: Runtime,
     sessions: SessionManager,
     repo: PathBuf,
     seeds: Arc<Mutex<Vec<Vec<String>>>>,
+    auth: Arc<Auth>,
+    /// Its owner's app, which approves the terminal's `herder login`.
+    owner: Identity,
+    address: String,
+    fingerprint: String,
 }
 
 impl HostDaemon {
@@ -214,8 +219,9 @@ impl HostDaemon {
                     },
                 );
                 let changed = Arc::new(Notify::new());
+                let hub = Arc::new(Hub::default());
                 let sink = Arc::new(WakeOnEvent {
-                    next: Arc::new(Hub::default()) as Arc<dyn EventSink>,
+                    next: Arc::clone(&hub) as Arc<dyn EventSink>,
                     notify: Arc::clone(&changed),
                 });
                 let prefix = if host == "host-a" { "turn" } else { "b-turn" };
@@ -271,25 +277,43 @@ impl HostDaemon {
                     changed,
                     secrets: Default::default(),
                 };
-                tokio::spawn(replicator.run(shutdown));
+                tokio::spawn(replicator.run(shutdown.clone()));
                 sessions
                     .fork_from(Forks {
-                        host: me.id,
-                        vault: Some(FromVault {
-                            vault,
-                            device: Replicator::device_key(&dir).unwrap(),
-                        }),
+                        host: me.id.clone(),
                     })
                     .unwrap();
-                sessions
+                std::fs::create_dir_all(dir.join("tls")).unwrap();
+                let tls = herder_daemon::ws::Tls::load_or_create(&dir.join("tls"), &host).unwrap();
+                let fingerprint = tls.fingerprint().to_owned();
+                let auth = Arc::new(Auth::open(&dir).unwrap());
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap().to_string();
+                let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
+                let server = herder_daemon::ws::Server::new(
+                    tls,
+                    Arc::clone(&auth),
+                    hub,
+                    sessions.clone(),
+                    terminals,
+                    Logins::default(),
+                    me,
+                );
+                tokio::spawn(server.run(vec![listener], shutdown));
+                (sessions, auth, address, fingerprint)
             })
         };
-        let sessions = started.await;
+        let (sessions, auth, address, fingerprint) = started.await;
+        let (_, owner) = authenticator::enroll(&auth, "alice", Role::Owner, "fp-alice-app");
         Self {
             runtime,
             sessions,
             repo,
             seeds,
+            auth,
+            owner,
+            address,
+            fingerprint,
         }
     }
 
@@ -472,12 +496,8 @@ fn status(journal: &[Event]) -> Option<SessionStatus> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
     let tmp = tempfile::tempdir().unwrap();
-    let (a_dir, b_dir, c_dir) = (
-        tmp.path().join("a"),
-        tmp.path().join("b"),
-        tmp.path().join("c"),
-    );
-    clones(tmp.path(), &[&a_dir, &b_dir, &c_dir]);
+    let (a_dir, b_dir) = (tmp.path().join("a"), tmp.path().join("b"));
+    clones(tmp.path(), &[&a_dir, &b_dir]);
     let vault = Vault::start(&tmp.path().join("vault")).await;
 
     // Host A: a first turn completes and is checkpointed to origin, a second is still running.
@@ -486,7 +506,7 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         "host-a",
         "a-account",
         "fork_a.jsonl",
-        vault.config("a"),
+        vault.host_config("host-a"),
     )
     .await;
     let created = a
@@ -550,7 +570,7 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         "host-b",
         "b-account",
         "fork_b.jsonl",
-        vault.config("b"),
+        vault.host_config("host-b"),
     )
     .await;
     let vault_db = tmp.path().join("vault/vault.db");
@@ -569,55 +589,17 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // Host C, paired host-only, replicates but cannot read the vault to fork anything.
-    let c = HostDaemon::start(
-        &c_dir,
-        "host-c",
-        "c-account",
-        "fork_b.jsonl",
-        vault.host_config("host-c"),
+    // A is up and mid-turn: its owner forks the session onto B all the same, from a terminal
+    // signed in to the vault and to B with `herder login`.
+    let terminal = Client::open(
+        tmp.path().join("terminal").display().to_string(),
+        "herder-cli/test".into(),
     )
-    .await;
-    // Until its replicator has paired, C's own code would pair the fork's client connection
-    // and be refused for being a host's code; wait for C to replicate as itself.
-    let deadline = tokio::time::Instant::now() + TIMEOUT;
-    while VaultStore::open(&vault_db)
-        .unwrap()
-        .devices_of(&HostId::new("host-c"))
-        .unwrap()
-        .is_empty()
-    {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "host C never replicated to the vault"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let refused = c
-        .handle(CommandBody::ForkSession {
-            session_id: session_id.clone(),
-            account_id: None,
-            relay: None,
-        })
-        .await
-        .unwrap_err();
-    // In words the person handing off can act on, not a chain of causes.
-    assert_eq!(refused.code, ErrorCode::Forbidden);
-    assert_eq!(
-        refused.message,
-        "host-c only backs its sessions up to the vault, so it cannot read other machines' \
-         sessions; turn on \"Takes handoffs\" for it on the vault's page in the app"
-    );
-
-    // A is up and mid-turn: B forks its session all the same.
-    let forked = b
-        .handle(CommandBody::ForkSession {
-            session_id: session_id.clone(),
-            account_id: None,
-            relay: None,
-        })
-        .await
-        .unwrap();
+    .unwrap();
+    let (address, fingerprint) = (&vault.config.address, &vault.config.fingerprint);
+    log_in(&terminal, &vault.auth, &vault.owner, address, fingerprint).await;
+    log_in(&terminal, &b.auth, &b.owner, &b.address, &b.fingerprint).await;
+    let forked = fork_onto_b(&terminal, &session_id).await.unwrap();
     let CommandResult::SessionForked {
         session_id: fork,
         account_id,
@@ -643,7 +625,7 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
     assert!(!b_worktree.join(".env").exists());
     assert_eq!(git(&b_worktree, &["status", "--porcelain"]), "?? notes.txt");
     // Its journal is A's, under the fork's id, with B's paths and branch, then the fork from
-    // A and the switch to B's account, both by the user who forked it, and the turn A had
+    // A and the switch to B's account, both by the person who forked it, and the turn A had
     // open, failed as handed off.
     let b_journal = b.journal(&fork).await;
     assert!(b_journal.iter().all(|event| event.session_id == fork));
@@ -681,7 +663,8 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
     assert!(
         matches!(&tail[1].body, EventBody::AccountSwitched { account_id } if account_id.as_str() == "b-account")
     );
-    assert_eq!((&tail[0].by, &tail[1].by), (&Some(alice()), &Some(alice())));
+    let by = Some(b.owner.user_id.clone());
+    assert_eq!((&tail[0].by, &tail[1].by), (&by, &by));
     assert!(
         matches!(&tail[2].body, EventBody::TurnFailed { turn_id, error }
             if turn_id.as_str() == "turn-2" && error.message.contains("handed off")),
@@ -771,13 +754,21 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         Some(SessionStatus::Running)
     );
 
-    // A is gone: B forks its session from the vault alone.
+    // A is gone: its session forks onto B from the vault alone.
     a.runtime.kill().await;
-    let after_death = b.fork(&session_id).await;
+    let after_death = fork_onto_b(&terminal, &session_id).await.unwrap();
+    let CommandResult::SessionForked {
+        session_id: after_death,
+        ..
+    } = after_death
+    else {
+        panic!("expected a fork, got {after_death:?}");
+    };
     assert_ne!(after_death, fork);
     assert!(b.sessions.worktree(&after_death).await.is_ok());
 
-    // A session neither the host nor its vault holds is not found.
+    // B never reads the vault itself: a session it does not hold, and nobody relayed, is not
+    // found.
     let missing = b
         .handle(CommandBody::ForkSession {
             session_id: SessionId::new("nope"),
@@ -788,24 +779,47 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         .unwrap_err();
     assert_eq!(missing.code, ErrorCode::NotFound, "{missing:?}");
 
-    // Once its device may read the vault, C takes the handoff too, paired as it was.
-    for (device, user) in vault.auth.devices() {
-        if user.name == "host-c" {
-            assert!(
-                vault
-                    .auth
-                    .set_device_role(&device.device_id, DeviceRole::Client)
-                    .unwrap()
-            );
-        }
-    }
-    let on_c = c.fork(&session_id).await;
-    assert!(c.sessions.worktree(&on_c).await.is_ok());
-    c.runtime.kill().await;
 }
 
-/// A vault nothing answers at: a host configured with it forks only what it holds or is
-/// relayed.
+/// Signs `terminal` in to the daemon of `auth` at `address` with certificate `fingerprint`:
+/// `herder login`, approved by its owner's app `owner` with the code it shows.
+async fn log_in(
+    terminal: &Client,
+    auth: &Arc<Auth>,
+    owner: &Identity,
+    address: &str,
+    fingerprint: &str,
+) {
+    let (auth, owner) = (Arc::clone(auth), owner.clone());
+    let approve = move |code: &str, _| {
+        auth.approve_login(&owner, code).unwrap();
+    };
+    terminal
+        .log_in(vec![address.to_owned()], fingerprint.to_owned(), approve)
+        .await
+        .unwrap();
+}
+
+/// Forks `session_id` onto host B as `herder fork` does there: the terminal reads it from the
+/// vault, once both have sent what they hold, and relays it to B.
+async fn fork_onto_b(
+    terminal: &Client,
+    session_id: &SessionId,
+) -> Result<CommandResult, herder_client_core::Error> {
+    for host in ["vault", "host-b"] {
+        terminal.synced(HostId::new(host)).await.unwrap();
+    }
+    terminal
+        .fork_session(
+            HostId::new("vault"),
+            session_id.clone(),
+            HostId::new("host-b"),
+            None,
+        )
+        .await
+}
+
+/// A vault nothing answers at, for a host that backs up nowhere.
 fn dead_vault() -> VaultConfig {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
@@ -948,10 +962,10 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
         .await
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::NotFound, "{refused:?}");
-    // Without the relay, B looks in its vault, which does not answer.
+    // Without the relay, B does not look for the session anywhere else, its vault included.
     b.handle(upload(a_journal.clone())).await.unwrap();
     let refused = b.handle(fork_relayed(None)).await.unwrap_err();
-    assert!(refused.message.contains("vault"), "{refused:?}");
+    assert_eq!(refused.code, ErrorCode::NotFound, "{refused:?}");
 
     // The whole history, in two parts, the image and the file, forks onto B; a thread linked
     // to the session stays the original's.

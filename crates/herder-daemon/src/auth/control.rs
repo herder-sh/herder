@@ -1,4 +1,4 @@
-//! The local control socket `herder pair`, `herder login` and `herder fork` talk to, at
+//! The local control socket `herder pair`, `herder login` and `herder claim` talk to, at
 //! `<data_dir>/control.sock`.
 //!
 //! Only this user can reach it: the data dir is private to them. Each connection carries one
@@ -23,8 +23,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::{Auth, DeviceRole, PAIRING_TTL, Pairing};
-use crate::session::SessionManager;
-use crate::session::fork;
 use crate::vault::{Admin, Forgot};
 
 /// File name of the socket in the data dir.
@@ -36,10 +34,7 @@ const MAX_REQUEST: u64 = 64 * 1024;
 /// Time a request gets to arrive, and to be answered.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Time a fork gets to be answered: it may read the vault and fetch from `origin`.
-const FORK_TIMEOUT: Duration = Duration::from_secs(600);
-
-/// What `herder pair` and `herder fork` ask the daemon.
+/// What `herder pair`, `herder login` and `herder claim` ask the daemon.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
@@ -64,8 +59,6 @@ pub enum Request {
         /// The device.
         device_id: DeviceId,
     },
-    /// Fork a session onto this host (`herder fork`).
-    Fork(fork::Request),
     /// Drop a host and everything it replicated from this vault (`herder vault forget-host`).
     ForgetHost {
         /// The host's name or id.
@@ -99,8 +92,6 @@ pub enum Response {
     },
     /// The device was unpaired and disconnected.
     Revoked,
-    /// The session was forked onto this host.
-    Forked(fork::Forked),
     /// The host was forgotten.
     ForgotHost(Forgot),
     /// The window for a first owner is open.
@@ -144,15 +135,13 @@ pub struct OwnInfo {
     pub addresses: Vec<String>,
 }
 
-/// What the daemon tells `herder pair` about itself, and how it forks sessions.
+/// What the daemon tells `herder pair` about itself.
 #[derive(Clone)]
 pub struct Daemon {
     /// SHA-256 of its TLS certificate.
     pub fingerprint: String,
     /// The addresses its WebSocket server is bound to, as configured.
     pub listen: Vec<SocketAddr>,
-    /// Where forks go on; `None` on the vault, which runs no sessions.
-    pub sessions: Option<SessionManager>,
     /// What it holds, when it is a vault: the only daemon hosts pair with, and that forgets
     /// them.
     pub vault: Option<Admin>,
@@ -236,22 +225,6 @@ fn own(opened: anyhow::Result<(String, Timestamp)>, daemon: &Daemon) -> Response
     }
 }
 
-/// Forks as the daemon's first owner: only the system user running the daemon reaches the
-/// socket, and that is who paired as its owner.
-async fn fork(request: fork::Request, auth: &Auth, daemon: &Daemon) -> Response {
-    let Some(sessions) = &daemon.sessions else {
-        return Response::Error {
-            message: "the vault runs no sessions; fork on a host".to_owned(),
-        };
-    };
-    match sessions.fork(request, None, auth.owner()).await {
-        Ok(forked) => Response::Forked(forked),
-        Err(error) => Response::Error {
-            message: error.message,
-        },
-    }
-}
-
 async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
     let failed = |err: anyhow::Error| Response::Error {
         message: format!("{err:#}"),
@@ -282,7 +255,6 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
             },
             Err(err) => failed(err),
         },
-        Request::Fork(request) => fork(request, auth, daemon).await,
         Request::Own => own(auth.open_claim(), daemon),
         Request::Claim => own(auth.open_recovery(), daemon),
         Request::ForgetHost { host } => match &daemon.vault {
@@ -318,11 +290,7 @@ pub fn request(data_dir: &Path, request: &Request) -> Result<Response> {
             path.display()
         )
     })?;
-    let timeout = match request {
-        Request::Fork(_) => FORK_TIMEOUT,
-        _ => TIMEOUT,
-    };
-    stream.set_read_timeout(Some(timeout))?;
+    stream.set_read_timeout(Some(TIMEOUT))?;
     let mut text = serde_json::to_string(request)?;
     text.push('\n');
     stream.write_all(text.as_bytes())?;
@@ -494,7 +462,6 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
-            sessions: None,
             vault: None,
         };
         let shutdown = CancellationToken::new();
@@ -541,14 +508,6 @@ mod tests {
             device_id: DeviceId::new("nope"),
         };
         assert!(matches!(ask(revoke).await.unwrap(), Response::Error { .. }));
-        let fork = Request::Fork(fork::Request {
-            session_id: herder_protocol::SessionId::new("s1"),
-            account_id: None,
-        });
-        let Response::Error { message } = ask(fork).await.unwrap() else {
-            panic!("expected a refusal");
-        };
-        assert!(message.contains("fork on a host"), "{message}");
         shutdown.cancel();
         server.await.unwrap();
     }
@@ -560,7 +519,6 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
-            sessions: None,
             vault: None,
         };
         let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
@@ -591,7 +549,6 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
-            sessions: None,
             vault: Some(vault_admin(tmp.path(), &auth)),
         };
         let pair_host = Request::PairHost {
@@ -648,7 +605,6 @@ mod tests {
         let mut daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
-            sessions: None,
             vault: None,
         };
         let forget = || Request::ForgetHost {
