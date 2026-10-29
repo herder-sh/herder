@@ -17,8 +17,12 @@
 //! refused, so its key, if stolen, reads nothing. An owner may let a host read the vault too, so
 //! it can take handoffs ([`Auth::set_device_role`]), and take that back.
 //!
+//! A claim ([`Auth::claim`]) moves an owner to a person, keeping a record of the ids they had,
+//! so history attributed to those ids reads as the person's.
+//!
 //! Users and devices persist in `<data_dir>/auth.json`, written atomically on every change.
 
+pub mod claim;
 pub mod control;
 
 use std::collections::HashMap;
@@ -84,6 +88,10 @@ pub struct User {
     pub role: Role,
     /// When the user's first device paired.
     pub created_at: Timestamp,
+    /// A machine paired as a user before hosts were their own, made a host by a claim: it is
+    /// listed with the vault's hosts, not its users.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host: bool,
 }
 
 /// A paired client device.
@@ -129,11 +137,27 @@ struct Users {
     version: u32,
     users: Vec<User>,
     devices: Vec<Device>,
+    /// Ids moved to a person by claims, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    moved: Vec<claim::Moved>,
 }
 
 impl Users {
     fn user(&self, name: &str) -> Option<&User> {
         self.users.iter().find(|user| user.name == name)
+    }
+
+    /// The user `user_id` is now: the person it moved to, or itself.
+    fn resolve<'a>(&'a self, user_id: &'a UserId) -> &'a UserId {
+        self.moved
+            .iter()
+            .find(|moved| &moved.user_id == user_id)
+            .map_or(user_id, |moved| &moved.person)
+    }
+
+    fn find(&self, user_id: &UserId) -> Option<&User> {
+        let user_id = self.resolve(user_id);
+        self.users.iter().find(|user| &user.user_id == user_id)
     }
 }
 
@@ -344,6 +368,7 @@ impl Auth {
                     name: pending.user.clone(),
                     role: pending.role,
                     created_at: now,
+                    host: false,
                 };
                 users.users.push(user.clone());
                 user
@@ -410,24 +435,24 @@ impl Auth {
             .map(|user| user.user_id.clone())
     }
 
-    /// The role of `user_id`; `None` once no such user is paired.
+    /// The role of `user_id`, or of the person it moved to; `None` once no such user is
+    /// paired.
     pub fn role(&self, user_id: &UserId) -> Option<Role> {
-        self.lock()
-            .users
-            .users
-            .iter()
-            .find(|user| &user.user_id == user_id)
-            .map(|user| user.role)
+        self.lock().users.find(user_id).map(|user| user.role)
     }
 
-    /// The name of `user_id`; `None` once no such user is paired.
+    /// The name of `user_id`, or of the person it moved to; `None` once no such user is
+    /// paired.
     pub fn name(&self, user_id: &UserId) -> Option<String> {
         self.lock()
             .users
-            .users
-            .iter()
-            .find(|user| &user.user_id == user_id)
+            .find(user_id)
             .map(|user| user.name.clone())
+    }
+
+    /// The user `user_id` is now: the person a claim moved it to, or itself.
+    pub fn resolve(&self, user_id: &UserId) -> UserId {
+        self.lock().users.resolve(user_id).clone()
     }
 
     /// Every paired device with its user, oldest first.
@@ -448,41 +473,18 @@ impl Auth {
             .collect()
     }
 
-    /// Every user, oldest first, each with their devices, oldest first: what `list_users` and
-    /// `herder pair --list` show.
+    /// Every user but hosts, oldest first, each with their devices, oldest first: what
+    /// `list_users` and `herder pair --list` show.
     pub fn users(&self) -> Vec<UserInfo> {
         let mut state = self.lock();
         state
             .connections
             .retain(|_, open| open.iter().any(|(_, token)| !token.is_cancelled()));
-        let mut users: Vec<&User> = state.users.users.iter().collect();
+        let mut users: Vec<&User> = state.users.users.iter().filter(|u| !u.host).collect();
         users.sort_by_key(|user| user.created_at);
         users
             .into_iter()
-            .map(|user| UserInfo {
-                user_id: user.user_id.clone(),
-                name: user.name.clone(),
-                role: user.role,
-                devices: state
-                    .users
-                    .devices
-                    .iter()
-                    .filter(|device| device.user_id == user.user_id)
-                    .map(|device| UserDevice {
-                        device_id: device.device_id.clone(),
-                        client: device.client.clone(),
-                        paired_at: device.paired_at,
-                        last_seen: device.last_seen,
-                        online: state
-                            .connections
-                            .get(&device.device_id)
-                            .is_some_and(|open| {
-                                open.iter().any(|(_, token)| !token.is_cancelled())
-                            }),
-                        host_only: device.role == DeviceRole::Host,
-                    })
-                    .collect(),
-            })
+            .map(|user| user_info(&state, user))
             .collect()
     }
 
@@ -789,6 +791,32 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
         ));
     }
     Ok(())
+}
+
+/// `user` with their devices, oldest first, as `list_users` shows them.
+fn user_info(state: &State, user: &User) -> UserInfo {
+    UserInfo {
+        user_id: user.user_id.clone(),
+        name: user.name.clone(),
+        role: user.role,
+        devices: state
+            .users
+            .devices
+            .iter()
+            .filter(|device| device.user_id == user.user_id)
+            .map(|device| UserDevice {
+                device_id: device.device_id.clone(),
+                client: device.client.clone(),
+                paired_at: device.paired_at,
+                last_seen: device.last_seen,
+                online: state
+                    .connections
+                    .get(&device.device_id)
+                    .is_some_and(|open| open.iter().any(|(_, token)| !token.is_cancelled())),
+                host_only: device.role == DeviceRole::Host,
+            })
+            .collect(),
+    }
 }
 
 /// A device's identity, with what it may connect as.
