@@ -6,8 +6,8 @@ import Herder
 import SwiftUI
 import Testing
 
-/// Draws Add to Fleet at the Mac sheet's width and the iPhone's: a machine's link that says it
-/// makes you its owner, and a vault chosen from the Fleet page with its bare code typed. With
+/// Draws Add to Fleet at the Mac sheet's width and the iPhone's: the link `herder claim` printed
+/// on a machine, and a vault chosen from the Fleet page, to sign in to with your passkey. With
 /// `HERDER_SCREENSHOT_DIR` set, also writes them there. Drawn in a window, as its text fields are
 /// AppKit's, which `ImageRenderer` leaves out.
 @MainActor struct AddMachineScreenshotTests {
@@ -17,14 +17,14 @@ import Testing
 
     @Test(arguments: [(560.0, "mac"), (390.0, "ios")])
     func drawsAMachineLinkThatMakesYouOwner(width: Double, platform: String) throws {
-        let link = "herder://pair?host=192.168.1.20%3A7447&fp=\(Self.fingerprint)&code=7KQ2M-XW9PD&role=owner&name=work-mbp"
+        let link = "herder://own?host=192.168.1.20%3A7447&fp=\(Self.fingerprint)&code=K7Q-4PD&name=work-mbp"
         try shoot(AddMachinePreview(kind: .machine, vault: nil, text: link, height: 820), width: width, height: 820,
                   named: "\(platform)-add-machine.png")
     }
 
     @Test(arguments: [(560.0, "mac"), (390.0, "ios")])
-    func drawsAVaultChosenWithItsCode(width: Double, platform: String) throws {
-        try shoot(AddMachinePreview(kind: .vault, vault: Self.vault, text: "7KQ2M-XW9PD", height: 900), width: width, height: 900,
+    func drawsAVaultChosenToSignInTo(width: Double, platform: String) throws {
+        try shoot(AddMachinePreview(kind: .vault, vault: Self.vault, text: "", height: 900), width: width, height: 900,
                   named: "\(platform)-add-vault.png")
     }
 
@@ -54,11 +54,11 @@ private struct AddMachinePreview: View {
     var body: some View {
         // The Mac's scaffold is 560 wide; at the iPhone's width, the form as its sheet lays it out.
         ViewThatFits(in: .horizontal) {
-            SheetScaffold(title: "Add to Fleet", height: height, hint: "Check the fingerprint `herder pair` printed.") {
+            SheetScaffold(title: "Add to Fleet", height: height, hint: "Next, check the code matches the terminal’s.") {
                 form
             } footer: {
                 Spacer()
-                ActionButton(title: "Pair", style: .primary) {}.frame(width: 160)
+                ActionButton(title: "Continue", style: .primary) {}.frame(width: 160)
             }
             VStack(alignment: .leading, spacing: 18) {
                 Text("Add to Fleet").font(.title3.weight(.bold)).foregroundStyle(Theme.text)

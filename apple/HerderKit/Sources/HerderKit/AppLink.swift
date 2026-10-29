@@ -2,7 +2,7 @@ import Foundation
 import Herder
 
 /// What a `herder://` link opens: a session, as the bots' "Open in herder" button links it,
-/// Add to Fleet with the link `herder pair` prints, or the approval a new machine's or a
+/// Add to Fleet with the link another device shared, or the approval a new machine's or a
 /// terminal's link asks for.
 enum AppLink: Equatable {
     /// `herder://session?host=…&session=…`.
