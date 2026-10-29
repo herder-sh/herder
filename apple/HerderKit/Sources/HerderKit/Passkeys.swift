@@ -6,7 +6,7 @@ import Herder
 /// private key never leaving them. Machines store only its public key; each approval signs a
 /// challenge with it, behind Face ID.
 @MainActor protocol Authenticator {
-    /// Creates the passkey for `name`, returning what the machines store.
+    /// Creates the passkey for `name`, returning what the machines store, as WebAuthn JSON.
     func register(name: String, userId: Data, challenge: Data) async throws -> PasskeyRegistration
     /// Signs `challenge` with the passkey, after Face ID or Touch ID, as WebAuthn JSON.
     func assert(challenge: Data) async throws -> PasskeyAssertion
@@ -22,13 +22,6 @@ extension Authenticator {
     }
 }
 
-struct PasskeyRegistration: Equatable {
-    let credentialId: Data
-    /// The attestation object, holding the public key.
-    let attestation: Data
-    let clientData: Data
-}
-
 /// The passkey of the device's platform authenticator, through AuthenticationServices.
 @MainActor final class PlatformAuthenticator: NSObject, Authenticator {
     static let relyingParty = "herder.sh"
@@ -42,8 +35,12 @@ struct PasskeyRegistration: Equatable {
             as? ASAuthorizationPlatformPublicKeyCredentialRegistration,
             let attestation = credential.rawAttestationObject
         else { throw HerderError.Local(detail: "the passkey was not created") }
-        return PasskeyRegistration(credentialId: credential.credentialID, attestation: attestation,
-                                   clientData: credential.rawClientDataJSON)
+        let id = credential.credentialID.base64URLEncodedString()
+        return PasskeyRegistration(
+            id: id, rawId: id,
+            response: RegistrationResponse(clientDataJson: credential.rawClientDataJSON.base64URLEncodedString(),
+                                           attestationObject: attestation.base64URLEncodedString()),
+            kind: "public-key")
     }
 
     func assert(challenge: Data) async throws -> PasskeyAssertion {

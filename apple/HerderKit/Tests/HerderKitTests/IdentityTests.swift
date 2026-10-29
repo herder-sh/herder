@@ -13,7 +13,9 @@ import Testing
     func register(name: String, userId: Data, challenge: Data) async throws -> PasskeyRegistration {
         if let failure { throw failure }
         registered.append(name)
-        return PasskeyRegistration(credentialId: Data([1]), attestation: Data([2]), clientData: Data([3]))
+        return PasskeyRegistration(id: "AQ", rawId: "AQ",
+                                   response: RegistrationResponse(clientDataJson: "Aw", attestationObject: "Ag"),
+                                   kind: "public-key")
     }
 
     func assert(challenge: Data) async throws -> PasskeyAssertion {
