@@ -95,6 +95,12 @@ pub trait Backend: Send + Sync + 'static {
         &self,
         session_id: &SessionId,
     ) -> impl Future<Output = Result<PathBuf, ErrorInfo>> + Send;
+
+    /// The paired devices hosts replicate to this vault from, which a claim makes hosts of
+    /// when they are all a user's; a daemon has none.
+    fn replicated(&self) -> impl Future<Output = anyhow::Result<Vec<DeviceId>>> + Send {
+        std::future::ready(Ok(Vec::new()))
+    }
 }
 
 impl Backend for SessionManager {
@@ -421,6 +427,25 @@ impl<B: Backend> Shared<B> {
                  paired with this daemon; an owner can link them again in the bot's People"
             ))),
         }
+    }
+
+    /// Moves the owner `caller` to `person`, with the ids `also` the person has on the other
+    /// machines claimed with this one, making hosts of the users this vault's hosts replicate
+    /// as: what `claim_users` does once the person is known.
+    async fn claim(
+        &self,
+        caller: &UserId,
+        person: &UserId,
+        also: &[UserId],
+    ) -> Result<auth::claim::Claimed, ErrorInfo> {
+        let replicated = self.backend.replicated().await.map_err(|err| {
+            warn!("cannot list the devices hosts replicate from: {err:#}");
+            ErrorInfo {
+                code: ErrorCode::Internal,
+                message: "cannot read the vault database".to_owned(),
+            }
+        })?;
+        self.auth.claim(caller, person, also, &replicated)
     }
 
     /// Refuses `bot` when it links a person to a user who is not paired with this daemon.
