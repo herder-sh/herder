@@ -284,7 +284,7 @@ fn leftover(users: &Users, user_id: &UserId) -> Result<(), ErrorInfo> {
             message: format!("no user {user_id} on this daemon"),
         }),
         Some(user) if user.host || is_person(users, user_id) => Err(ErrorInfo {
-            code: ErrorCode::Conflict,
+            code: ErrorCode::NotFound,
             message: format!("{} is not left to decide on", user.name),
         }),
         Some(_) => Ok(()),
