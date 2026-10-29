@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use herder_client_core::PairingUri;
+use herder_client_core::{OwnUri, PairingUri};
 use herder_daemon::auth::DeviceRole;
 use herder_daemon::auth::control::{self, OwnInfo, PairingInfo, Request, Response};
 use herder_protocol::{DeviceId, Role, Timestamp, UserInfo};
@@ -156,15 +156,13 @@ The first person to approve within {minutes} minutes owns this machine."
 
 /// The `herder://own` link of `info`, with the machine's `name` for the app to show.
 fn own_link(info: &OwnInfo, name: &str) -> String {
-    let mut query = url::form_urlencoded::Serializer::new(String::from("herder://own?"));
-    for address in &info.addresses {
-        query.append_pair("host", address);
+    OwnUri {
+        hosts: info.addresses.clone(),
+        fingerprint: info.fingerprint.clone(),
+        code: info.code.clone(),
+        name: Some(name.to_owned()),
     }
-    query
-        .append_pair("fp", &info.fingerprint)
-        .append_pair("code", &info.code)
-        .append_pair("name", name);
-    query.finish()
+    .to_string()
 }
 
 /// The `herder://pair` link of `info`, followed by the role it grants and the machine's
@@ -285,6 +283,27 @@ mod tests {
         assert_eq!(
             (uri.hosts, uri.code.as_str()),
             (info.addresses, "ABCDE-FGHJK")
+        );
+    }
+
+    #[test]
+    fn the_own_link_names_the_machine_and_parses_back() {
+        let info = OwnInfo {
+            code: "K7Q-4PD".into(),
+            expires_at: Timestamp::now(),
+            fingerprint: "ab".repeat(32),
+            addresses: vec!["10.0.4.17:7447".into(), "[fd00::1]:7447".into()],
+        };
+        let link = own_link(&info, "new server");
+        assert!(
+            link.starts_with("herder://own?host=10.0.4.17%3A7447&host="),
+            "{link}"
+        );
+        assert!(link.ends_with("&code=K7Q-4PD&name=new+server"), "{link}");
+        let uri: OwnUri = link.parse().unwrap();
+        assert_eq!(
+            (uri.hosts, uri.code, uri.name),
+            (info.addresses, info.code, Some("new server".into()))
         );
     }
 }
