@@ -433,6 +433,10 @@ struct EmptyFleet: View {
                     #if os(macOS)
                     .frame(maxWidth: 220)
                     #endif
+                ExploreDemoButton()
+                    #if os(macOS)
+                    .frame(maxWidth: 220)
+                    #endif
             }
         }
     }

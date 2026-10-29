@@ -71,6 +71,9 @@ pub enum HerderError {
     /// The client stopped before the call finished.
     #[error("the client stopped")]
     Closed,
+    /// The client shows a demo ([`Client::open_demo`]): nothing is sent.
+    #[error("This is a demo; nothing is sent.")]
+    Demo,
 }
 
 impl From<client_core::Error> for HerderError {
@@ -82,6 +85,7 @@ impl From<client_core::Error> for HerderError {
             client_core::Error::Unreachable { message } => Self::Unreachable { detail: message },
             client_core::Error::Local { message } => Self::Local { detail: message },
             client_core::Error::Closed => Self::Closed,
+            client_core::Error::Demo => Self::Demo,
         }
     }
 }
@@ -322,6 +326,17 @@ impl Client {
     ) -> Result<Arc<Self>, HerderError> {
         let authenticator = Arc::new(Authenticator(authenticator));
         Self::start(|| client_core::Client::open_with_passkey(config_dir, client, authenticator))
+    }
+
+    /// Opens `demo`, the JSON of a recorded fleet (`fake_daemon --record-demo`), with no
+    /// profile and no connection: its machines show as connected with what was recorded,
+    /// and anything that would reach a daemon fails with [`HerderError::Demo`].
+    #[uniffi::constructor]
+    pub fn open_demo(demo: String) -> Result<Arc<Self>, HerderError> {
+        let demo = serde_json::from_str(&demo).map_err(|error| client_core::Error::Local {
+            message: format!("the demo is not one: {error}"),
+        })?;
+        Self::start(|| Ok(client_core::Client::open_demo(demo)))
     }
 
     /// Approves `request_id`, one of a machine's `approvals`, asking the authenticator for an

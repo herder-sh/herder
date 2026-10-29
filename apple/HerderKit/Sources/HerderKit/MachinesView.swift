@@ -103,6 +103,7 @@ struct MachinesView: View {
     var showsSections = false
     @State private var unpaired: [UnpairedVault] = []
     @Environment(\.pages) private var pages
+    @Environment(\.exploreDemo) private var exploreDemo
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -128,6 +129,10 @@ struct MachinesView: View {
                     } actions: {
                         PillButton(title: "Add to Fleet", symbol: "plus", prominent: true) { sheet = .pair(.machine) }
                             .accessibilityIdentifier("add-to-fleet")
+                        if let exploreDemo {
+                            PillButton(title: "Explore a demo") { exploreDemo() }
+                                .accessibilityIdentifier("explore-demo")
+                        }
                     }
                     .padding(.top, 60)
                 } else {
