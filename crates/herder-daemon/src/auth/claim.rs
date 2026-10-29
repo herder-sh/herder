@@ -14,12 +14,12 @@
 //! ([`Auth::leftovers`]): the person themselves ([`Auth::claim_leftover`]), or someone to
 //! remove ([`Auth::remove_user`]).
 
+use super::passkeys::Key;
 use herder_protocol::{
     DeviceId, ErrorInfo, PersonId, Role, ServerMessage, Timestamp, UserId, UserInfo,
 };
 use serde::{Deserialize, Serialize};
 use tracing::info;
-use webauthn_rs::prelude::Passkey;
 
 use super::{
     Auth, DeviceRole, Person, ProvenPerson, State, Users, conflict, devices_of, disconnect,
@@ -74,7 +74,7 @@ impl Auth {
         caller: &UserId,
         person_id: &PersonId,
         name: String,
-        passkeys: Vec<Passkey>,
+        passkeys: Vec<Key>,
         also: &[UserId],
         replicated: &[DeviceId],
     ) -> Result<Claimed, ErrorInfo> {

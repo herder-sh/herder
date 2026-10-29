@@ -239,17 +239,17 @@ public final class Fleet {
                 throw HerderError.Local(detail: "the vault did not list its secrets")
             }
             if !sets.contains(where: { $0.name == set }) {
-                _ = try await client.send(hostId: vault.hostId, command: .createSecretSet(set: set))
+                _ = try await client.send(hostId: vault.hostId, command: .createSecretSet(set: set, assertion: nil))
             }
             guard case .secretToStore(let value) = try await client.send(
                 hostId: key.hostId, command: .getSecretToStore(sessionId: key.sessionId, approvalId: request.requestId))
             else { throw HerderError.Local(detail: "the machine did not hand over the value") }
             _ = try await client.send(
                 hostId: vault.hostId,
-                command: .putSecret(set: set, name: secret.name, description: secret.description, value: value))
+                command: .putSecret(set: set, name: secret.name, description: secret.description, value: value, assertion: nil))
             _ = try await client.send(
                 hostId: key.hostId,
-                command: .confirmSecretStored(sessionId: key.sessionId, approvalId: request.requestId, set: set))
+                command: .confirmSecretStored(sessionId: key.sessionId, approvalId: request.requestId, set: set, assertion: nil))
             refusals[key] = nil
         } catch {
             refusals[key] = describe(error)

@@ -692,7 +692,10 @@ fn dialog_input(
                     form.sending = true;
                     form.error = None;
                     let done = format!("created the set {set}");
-                    let command = CommandBody::CreateSecretSet { set };
+                    let command = CommandBody::CreateSecretSet {
+                        set,
+                        assertion: None,
+                    };
                     return (
                         Some(Dialog::NewSet(form)),
                         Ok(vec![change(vault, command, done)]),
@@ -740,6 +743,7 @@ fn dialog_input(
                                     set: set.clone(),
                                     host_id: host_id.clone(),
                                     host_use: false,
+                                    assertion: None,
                                 },
                                 format!("revoked {set} from {name}"),
                             )
@@ -749,6 +753,7 @@ fn dialog_input(
                                     set: set.clone(),
                                     host_id: host_id.clone(),
                                     host_use: false,
+                                    assertion: None,
                                 },
                                 format!("granted {set} to {name}"),
                             )
@@ -780,13 +785,17 @@ fn dialog_input(
             }
             let (command, done) = match &pick {
                 Pick::Set(set) => (
-                    CommandBody::DeleteSecretSet { set: set.clone() },
+                    CommandBody::DeleteSecretSet {
+                        set: set.clone(),
+                        assertion: None,
+                    },
                     format!("deleted the set {set}"),
                 ),
                 Pick::Secret { set, name } => (
                     CommandBody::DeleteSecret {
                         set: set.clone(),
                         name: name.clone(),
+                        assertion: None,
                     },
                     format!("deleted {set}/{name}"),
                 ),
@@ -840,6 +849,7 @@ fn put(vault: &HostId, mut form: Form<PutSecret>) -> Next {
         name,
         description,
         value,
+        assertion: None,
     };
     form.sending = true;
     form.error = None;
@@ -996,7 +1006,10 @@ mod tests {
         let effects = press(&mut app, KeyCode::Enter);
         assert_eq!(
             commands(&effects),
-            [CommandBody::CreateSecretSet { set: "ci".into() }]
+            [CommandBody::CreateSecretSet {
+                set: "ci".into(),
+                assertion: None
+            }]
         );
         // Applied: the dialog closes and the lists are asked for again.
         let (_, origin) = sent(effects);
@@ -1041,6 +1054,7 @@ mod tests {
                 name: "NPM_TOKEN".into(),
                 description: "publishes packages to npm".into(),
                 value: SecretValue::new("npm_s3cr3t").unwrap(),
+                assertion: None,
             }]
         );
         // Sent: the form keeps no value, and the effect's own Debug hides it.
@@ -1103,6 +1117,7 @@ mod tests {
                 name: "API_KEY".into(),
                 description: "coingate merchant api".into(),
                 value: SecretValue::new("new-value").unwrap(),
+                assertion: None,
             }]
         );
         answer(&mut app, effects, Ok(CommandResult::Applied));
@@ -1129,6 +1144,7 @@ mod tests {
             [CommandBody::DeleteSecret {
                 set: "coingate-prod".into(),
                 name: "DB_URL".into(),
+                assertion: None,
             }]
         );
         answer(&mut app, effects, Ok(CommandResult::Applied));
@@ -1140,7 +1156,8 @@ mod tests {
         assert_eq!(
             commands(&effects),
             [CommandBody::DeleteSecretSet {
-                set: "staging".into()
+                set: "staging".into(),
+                assertion: None,
             }]
         );
         // A set with secrets is refused: the vault says why, in the dialog.
@@ -1163,6 +1180,7 @@ mod tests {
                 set: "coingate-prod".into(),
                 host_id: HostId::new("devbox"),
                 host_use: false,
+                assertion: None,
             }]
         );
         // Keys wait for the vault.
@@ -1181,6 +1199,7 @@ mod tests {
                 set: "coingate-prod".into(),
                 host_id: HostId::new("laptop"),
                 host_use: false,
+                assertion: None,
             }]
         );
         answer(&mut app, effects, Ok(CommandResult::Applied));

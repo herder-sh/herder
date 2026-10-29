@@ -195,12 +195,25 @@ impl<B: Backend> Shared<B> {
         command_id: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
+        // A connection opened before its claim acts as the person all the same.
+        if let Some(assertion) = fresh_assertion(&command)
+            && self.auth.person_of(&identity.user_id).is_some()
+        {
+            let Some(assertion) = assertion else {
+                return Err(ErrorInfo {
+                    code: ErrorCode::Forbidden,
+                    message: "this needs a fresh assertion by your passkey (Face ID)".to_owned(),
+                });
+            };
+            self.assert(identity, assertion)?;
+        }
         let terminals = &self.terminals;
         match command {
             CommandBody::OpenTerminal {
                 session_id,
                 cols,
                 rows,
+                ..
             } => {
                 let cwd = self.backend.worktree(&session_id).await?;
                 let terminal_id = terminals.open(session_id, &cwd, cols, rows, outbox)?;
@@ -264,7 +277,7 @@ impl<B: Backend> Shared<B> {
                 let terminal_id = terminals.open_aws_login(profile, command, cols, rows, outbox)?;
                 return Ok(CommandResult::TerminalOpened { terminal_id });
             }
-            CommandBody::AttachTerminal { terminal_id } => {
+            CommandBody::AttachTerminal { terminal_id, .. } => {
                 terminals.attach(&terminal_id, outbox)?
             }
             CommandBody::DetachTerminal { terminal_id } => {
@@ -347,22 +360,7 @@ impl<B: Backend> Shared<B> {
                     LeftoverDecision::Remove => self.auth.remove_user(&user_id)?,
                 }
             }
-            CommandBody::RevokeDevice {
-                device_id,
-                assertion,
-            } => {
-                if identity.person_id.is_some() {
-                    let Some(assertion) = assertion else {
-                        return Err(ErrorInfo {
-                            code: ErrorCode::Forbidden,
-                            message: "revoking a device needs a fresh assertion by your passkey"
-                                .to_owned(),
-                        });
-                    };
-                    self.assert(identity, &assertion)?;
-                }
-                self.revoke_device(&device_id)?;
-            }
+            CommandBody::RevokeDevice { device_id, .. } => self.revoke_device(&device_id)?,
             command => return self.run(&identity.user_id, command_id, command).await,
         }
         Ok(CommandResult::Applied)
@@ -390,14 +388,14 @@ impl<B: Backend> Shared<B> {
 
     /// Refuses unless `assertion`, over a fresh challenge, is by `identity`'s person.
     fn assert(&self, identity: &Identity, assertion: &PasskeyAssertion) -> Result<(), ErrorInfo> {
-        let Some(person_id) = &identity.person_id else {
+        let Some(person_id) = self.auth.person_of(&identity.user_id) else {
             return Err(ErrorInfo {
                 code: ErrorCode::Forbidden,
                 message: "this needs a person's passkey; sign in to this daemon with yours"
                     .to_owned(),
             });
         };
-        self.auth.verify_assertion(person_id, assertion)
+        self.auth.verify_assertion(&person_id, assertion)
     }
 
     /// A challenge for the caller's passkey; a per-daemon owner also gets what to create one
@@ -656,6 +654,25 @@ impl<B: Backend> Shared<B> {
     }
 }
 
+/// The assertion `command` carries when it is one a person runs only with a fresh one:
+/// opening or attaching a terminal, revoking a device, and every change to secrets. The people
+/// commands carry theirs in a field of their own.
+fn fresh_assertion(command: &CommandBody) -> Option<Option<&PasskeyAssertion>> {
+    match command {
+        CommandBody::OpenTerminal { assertion, .. }
+        | CommandBody::AttachTerminal { assertion, .. }
+        | CommandBody::RevokeDevice { assertion, .. }
+        | CommandBody::CreateSecretSet { assertion, .. }
+        | CommandBody::DeleteSecretSet { assertion, .. }
+        | CommandBody::PutSecret { assertion, .. }
+        | CommandBody::DeleteSecret { assertion, .. }
+        | CommandBody::GrantSecretSet { assertion, .. }
+        | CommandBody::RevokeSecretSet { assertion, .. }
+        | CommandBody::ConfirmSecretStored { assertion, .. } => Some(assertion.as_deref()),
+        _ => None,
+    }
+}
+
 /// The accounts with a login running in `terminals`.
 fn logging_in(terminals: &Terminals) -> Vec<AccountId> {
     terminals
@@ -811,6 +828,14 @@ impl<B: Backend> Control for AgentControl<B> {
                 });
             }
             let (user_id, role) = shared.sender(user_id, &session_id).await?;
+            if fresh_assertion(&command).is_some() && shared.auth.person_of(&user_id).is_some() {
+                return Err(ErrorInfo {
+                    code: ErrorCode::Forbidden,
+                    message: "this needs the Face ID of the person the agent acts for; ask them \
+                              to do it in a herder app"
+                        .to_owned(),
+                });
+            }
             auth::authorize(role, &command)?;
             let command_id = CommandId::new(ulid::Ulid::generate().to_string());
             shared.run(&user_id, &command_id, command).await

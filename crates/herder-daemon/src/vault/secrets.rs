@@ -147,7 +147,7 @@ pub(super) async fn command(
     };
     let now = Timestamp::now();
     match command {
-        CommandBody::CreateSecretSet { set } => {
+        CommandBody::CreateSecretSet { set, .. } => {
             if !is_valid_secret_set_name(&set) {
                 return Err(bad_set(&set));
             }
@@ -163,7 +163,7 @@ pub(super) async fn command(
             }
             info!(set, "secret set created");
         }
-        CommandBody::DeleteSecretSet { set } => {
+        CommandBody::DeleteSecretSet { set, .. } => {
             let deleted = {
                 let set = set.clone();
                 run(store, move |store| store.delete_secret_set(&set)).await?
@@ -184,6 +184,7 @@ pub(super) async fn command(
             name,
             description,
             value,
+            ..
         } => {
             if !is_valid_secret_name(&name) {
                 return Err(bad_name(&name));
@@ -224,7 +225,7 @@ pub(super) async fn command(
             }
             info!(set, name, "secret stored");
         }
-        CommandBody::DeleteSecret { set, name } => {
+        CommandBody::DeleteSecret { set, name, .. } => {
             let deleted = {
                 let (set, name) = (set.clone(), name.clone());
                 run(store, move |store| store.delete_secret(&set, &name)).await?
@@ -241,6 +242,7 @@ pub(super) async fn command(
             set,
             host_id,
             host_use,
+            ..
         } => {
             let granted = {
                 let (set, host_id) = (set.clone(), host_id.clone());
@@ -266,6 +268,7 @@ pub(super) async fn command(
             set,
             host_id,
             host_use,
+            ..
         } => {
             let revoked = {
                 let (set, host_id) = (set.clone(), host_id.clone());

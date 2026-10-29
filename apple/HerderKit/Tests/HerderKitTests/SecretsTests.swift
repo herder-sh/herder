@@ -55,11 +55,11 @@ struct SecretsTests {
         try await secrets.deleteSecret(secrets.secrets(in: "prod")[0])
         try await secrets.deleteSet("ci")
         #expect(vault.changes == [
-            .createSecretSet(set: "ci"),
-            .grantSecretSet(set: "prod", hostId: "laptop", hostUse: false),
-            .revokeSecretSet(set: "prod", hostId: "devbox", hostUse: false),
-            .deleteSecret(set: "prod", name: "API_KEY"),
-            .deleteSecretSet(set: "ci"),
+            .createSecretSet(set: "ci", assertion: nil),
+            .grantSecretSet(set: "prod", hostId: "laptop", hostUse: false, assertion: nil),
+            .revokeSecretSet(set: "prod", hostId: "devbox", hostUse: false, assertion: nil),
+            .deleteSecret(set: "prod", name: "API_KEY", assertion: nil),
+            .deleteSecretSet(set: "ci", assertion: nil),
         ])
         // Each change is followed by both lists.
         #expect(vault.sent.count == 2 + 5 * 3)
@@ -86,7 +86,7 @@ struct SecretsTests {
 
         #expect(await editor.save())
         #expect(vault.changes == [
-            .putSecret(set: "prod", name: "NPM_TOKEN", description: "publishes packages to npm", value: "npm_s3cr3t"),
+            .putSecret(set: "prod", name: "NPM_TOKEN", description: "publishes packages to npm", value: "npm_s3cr3t", assertion: nil),
         ])
         #expect(heldWhileSending == "")
         #expect(editor.value.isEmpty)
@@ -165,7 +165,7 @@ struct SecretsTests {
         #expect(editor.value.text == pem)
         #expect(await editor.save())
         #expect(vault.changes == [
-            .putSecret(set: "prod", name: "ASC_PRIVATE_KEY", description: "App Store Connect API key", value: pem),
+            .putSecret(set: "prod", name: "ASC_PRIVATE_KEY", description: "App Store Connect API key", value: pem, assertion: nil),
         ])
         #expect(editor.file == nil)
         #expect(editor.value.isEmpty)

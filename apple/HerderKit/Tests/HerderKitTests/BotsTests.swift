@@ -171,7 +171,7 @@ struct BotsTests {
         setup.botToken.text = "xoxb-1"
         setup.appToken.text = "xapp-2"
         #expect(await setup.save())
-        guard case .putSecret(_, _, let description, _) = sent.commands.first(where: {
+        guard case .putSecret(_, _, let description, _, _) = sent.commands.first(where: {
             if case .putSecret = $0.1 { true } else { false }
         })?.1 else { Issue.record("no bot token"); return }
         #expect(description == "Slack bot token of the bot draugelis")
@@ -205,12 +205,12 @@ struct BotsTests {
         #expect(setup.botToken.isEmpty && setup.appToken.isEmpty)
         let commands = sent.commands
         #expect(commands.map(\.0) == ["vault", "vault", "vault", "vault", "vault", "devbox"])
-        #expect(commands[1].1 == .createSecretSet(set: "bot-trash-can"))
-        guard case .putSecret(let set, let name, _, let value) = commands[2].1 else { Issue.record("no bot token"); return }
+        #expect(commands[1].1 == .createSecretSet(set: "bot-trash-can", assertion: nil))
+        guard case .putSecret(let set, let name, _, let value, _) = commands[2].1 else { Issue.record("no bot token"); return }
         #expect([set, name, value] == ["bot-trash-can", "BOT_TOKEN", "xoxb-1"])
-        guard case .putSecret(_, let app, _, let appValue) = commands[3].1 else { Issue.record("no app token"); return }
+        guard case .putSecret(_, let app, _, let appValue, _) = commands[3].1 else { Issue.record("no app token"); return }
         #expect([app, appValue] == ["APP_TOKEN", "xapp-2"])
-        #expect(commands[4].1 == .grantSecretSet(set: "bot-trash-can", hostId: "devbox", hostUse: true))
+        #expect(commands[4].1 == .grantSecretSet(set: "bot-trash-can", hostId: "devbox", hostUse: true, assertion: nil))
         #expect(commands[5].1 == .putBot(bot: Bot(
             botId: "trash-can", kind: .slack, name: "Trash Can", token: "bot-trash-can/BOT_TOKEN",
             appToken: "bot-trash-can/APP_TOKEN", allow: [], defaults: Self.defaults, channelBindings: [], instructions: nil)))
@@ -224,7 +224,7 @@ struct BotsTests {
         setup.botToken.text = "xoxb-1"
         setup.appToken.text = "xapp-2"
         #expect(await setup.save())
-        #expect(!sent.commands.contains { $0.1 == .createSecretSet(set: "bot-trash-can") })
+        #expect(!sent.commands.contains { $0.1 == .createSecretSet(set: "bot-trash-can", assertion: nil) })
     }
 
     @Test func aSlackBotNeedsBothTokensAndSendsNothingWithout() async {

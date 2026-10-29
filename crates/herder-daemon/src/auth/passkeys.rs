@@ -1,6 +1,10 @@
 //! Passkey ceremonies for [`PASSKEY_RP_ID`], verified offline by webauthn-rs against the public
 //! keys the daemon stores.
 //!
+//! A key is kept, and travels, as WebAuthn defines it: the credential id and the COSE_Key from
+//! the authenticator data ([`Key`]). webauthn-rs's own credential is rebuilt from it for each
+//! verification, never stored.
+//!
 //! Every challenge is minted here, works once and expires after [`PASSKEY_CHALLENGE_SECS`]; an
 //! assertion or registration names its challenge in its client data, which is how it finds its
 //! ceremony. Challenges live in memory only, so a restart voids them.
@@ -16,15 +20,18 @@ use herder_protocol::{
     ErrorCode, ErrorInfo, PASSKEY_CHALLENGE_SECS, PASSKEY_RP_ID, PasskeyAssertion,
     PasskeyChallenge, PasskeyCreation, PasskeyKey, PasskeyRegistration, PersonId, Timestamp,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_cbor_2::Value;
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 use webauthn_rs::Webauthn;
 use webauthn_rs::prelude::{
-    AuthenticationResult, DiscoverableAuthentication, DiscoverableKey, Passkey,
+    AttestationFormat, AuthenticationResult, COSEKey, COSEKeyType, Credential,
+    DiscoverableAuthentication, DiscoverableKey, ParsedAttestation, Passkey,
     PasskeyRegistration as Registering, PublicKeyCredential, RegisterPublicKeyCredential,
 };
+use webauthn_rs_proto::{RegisteredExtensions, UserVerificationPolicy};
 
 /// How long a challenge stays valid.
 const TTL: Duration = Duration::from_secs(PASSKEY_CHALLENGE_SECS);
@@ -32,25 +39,123 @@ const TTL: Duration = Duration::from_secs(PASSKEY_CHALLENGE_SECS);
 /// The origin the platform's passkey API reports for an app associated with [`PASSKEY_RP_ID`].
 const ORIGIN: &str = "https://herder.sh";
 
-/// What a person may be added with: a passkey's public key, as daemons keep it.
-pub fn key(passkey: &Passkey) -> PasskeyKey {
-    PasskeyKey {
-        credential_id: URL_SAFE_NO_PAD.encode(passkey.cred_id()),
-        // A passkey is plain data; encoding it to a JSON value cannot fail.
-        public_key: serde_json::to_value(passkey).unwrap_or_default(),
+/// Backup eligible, in the authenticator data's flags.
+const BACKUP_ELIGIBLE: u8 = 0x08;
+
+/// Backed up, in the authenticator data's flags.
+const BACKED_UP: u8 = 0x10;
+
+/// Offset of the flags in the authenticator data, after the RP id hash.
+const FLAGS_AT: usize = 32;
+
+/// A passkey's public key as this daemon keeps it: WebAuthn's credential id and COSE_Key, and
+/// the signature counter it last showed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Key {
+    /// The credential id, base64url.
+    pub credential_id: String,
+    /// The COSE_Key, base64url.
+    pub public_key: String,
+    /// Its signature counter at its last use; synced passkeys always show 0.
+    #[serde(default)]
+    pub counter: u32,
+}
+
+impl Key {
+    /// The key as the protocol carries it.
+    pub fn wire(&self) -> PasskeyKey {
+        PasskeyKey {
+            credential_id: self.credential_id.clone(),
+            public_key: self.public_key.clone(),
+        }
+    }
+
+    /// The key `key` carries, once its id and COSE_Key decode.
+    pub fn from_wire(key: &PasskeyKey) -> Result<Self, ErrorInfo> {
+        let parsed = Self {
+            credential_id: key.credential_id.clone(),
+            public_key: key.public_key.clone(),
+            counter: 0,
+        };
+        parsed.credential(false, false)?;
+        Ok(parsed)
+    }
+
+    /// The key webauthn-rs registered.
+    fn registered(passkey: Passkey) -> Result<Self, ErrorInfo> {
+        let credential = Credential::from(passkey);
+        Ok(Self {
+            credential_id: URL_SAFE_NO_PAD.encode(&credential.cred_id),
+            public_key: URL_SAFE_NO_PAD.encode(cose_encode(&credential.cred)?),
+            counter: credential.counter,
+        })
+    }
+
+    /// Notes a verified use; whether the counter moved.
+    pub fn note(&mut self, result: &AuthenticationResult) -> bool {
+        let used = URL_SAFE_NO_PAD.encode(result.cred_id()) == self.credential_id;
+        if !used || result.counter() <= self.counter {
+            return false;
+        }
+        self.counter = result.counter();
+        true
+    }
+
+    /// webauthn-rs's credential for this key, as backed up as the assertion says: whether a
+    /// passkey syncs is the authenticator's to say, and a key from another daemon does not
+    /// carry it.
+    fn credential(&self, backup_eligible: bool, backed_up: bool) -> Result<Credential, ErrorInfo> {
+        let malformed = || bad_request("not a passkey's credential id and COSE public key");
+        let cred_id = URL_SAFE_NO_PAD
+            .decode(&self.credential_id)
+            .map_err(|_| malformed())?;
+        let bytes = URL_SAFE_NO_PAD
+            .decode(&self.public_key)
+            .map_err(|_| malformed())?;
+        let value: Value = serde_cbor_2::from_slice(&bytes).map_err(|_| malformed())?;
+        let cred = COSEKey::try_from(&value).map_err(|_| malformed())?;
+        Ok(Credential {
+            cred_id,
+            cred,
+            counter: self.counter,
+            transports: None,
+            user_verified: true,
+            backup_eligible,
+            backup_state: backed_up,
+            registration_policy: UserVerificationPolicy::Required,
+            extensions: RegisteredExtensions::none(),
+            attestation: ParsedAttestation::default(),
+            attestation_format: AttestationFormat::None,
+        })
     }
 }
 
-/// The passkey a [`PasskeyKey`] carries, if it is one and its id matches.
-pub fn passkey(key: &PasskeyKey) -> Result<Passkey, ErrorInfo> {
-    let passkey: Passkey = serde_json::from_value(key.public_key.clone())
-        .map_err(|err| bad_request(&format!("not a passkey's public key: {err}")))?;
-    if URL_SAFE_NO_PAD.encode(passkey.cred_id()) != key.credential_id {
-        return Err(bad_request(
-            "the passkey's credential id does not match its key",
-        ));
-    }
-    Ok(passkey)
+/// `key` as a COSE_Key, the encoding the authenticator data carries.
+fn cose_encode(key: &COSEKey) -> Result<Vec<u8>, ErrorInfo> {
+    let int = |value: i64| Value::Integer(value.into());
+    let alg = int(i64::from(key.type_ as i32));
+    let entries = match &key.key {
+        COSEKeyType::EC_EC2(ec2) => vec![
+            (int(1), int(2)),
+            (int(3), alg),
+            (int(-1), int(ec2.curve.clone() as i64)),
+            (int(-2), Value::Bytes(ec2.x.clone())),
+            (int(-3), Value::Bytes(ec2.y.clone())),
+        ],
+        COSEKeyType::EC_OKP(okp) => vec![
+            (int(1), int(1)),
+            (int(3), alg),
+            (int(-1), int(okp.curve.clone() as i64)),
+            (int(-2), Value::Bytes(okp.x.clone())),
+        ],
+        COSEKeyType::RSA(rsa) => vec![
+            (int(1), int(3)),
+            (int(3), alg),
+            (int(-1), Value::Bytes(rsa.n.clone())),
+            (int(-2), Value::Bytes(rsa.e.to_vec())),
+        ],
+    };
+    serde_cbor_2::to_vec(&Value::Map(entries.into_iter().collect())).map_err(internal)
 }
 
 /// The person a passkey identifies, from its user handle.
@@ -62,7 +167,7 @@ pub fn person_of(uuid: Uuid) -> PersonId {
 pub struct Asserted {
     /// The person whose passkey signed.
     pub person_id: PersonId,
-    /// Feed to [`Passkey::update_credential`] on each of their passkeys.
+    /// Feed to [`Key::note`] on each of their keys.
     pub result: AuthenticationResult,
 }
 
@@ -148,7 +253,7 @@ impl Passkeys {
     pub fn verify(
         &self,
         assertion: &PasskeyAssertion,
-        keys: impl FnOnce(&PersonId) -> Vec<Passkey>,
+        keys: impl FnOnce(&PersonId) -> Vec<Key>,
     ) -> Result<Asserted, ErrorInfo> {
         let credential: PublicKeyCredential = convert(assertion)?;
         let challenge = challenge_of(&credential.response.client_data_json)?;
@@ -158,7 +263,20 @@ impl Passkeys {
             .identify_discoverable_authentication(&credential)
             .map_err(|_| forbidden("the passkey gave no person"))?;
         let person_id = person_of(uuid);
-        let keys: Vec<DiscoverableKey> = keys(&person_id).iter().map(Into::into).collect();
+        let flags = credential
+            .response
+            .authenticator_data
+            .get(FLAGS_AT)
+            .copied()
+            .unwrap_or_default();
+        let (eligible, backed_up) = (flags & BACKUP_ELIGIBLE != 0, flags & BACKED_UP != 0);
+        let keys = keys(&person_id)
+            .iter()
+            .map(|key| {
+                let passkey = Passkey::from(key.credential(eligible, backed_up)?);
+                Ok(DiscoverableKey::from(&passkey))
+            })
+            .collect::<Result<Vec<_>, ErrorInfo>>()?;
         if keys.is_empty() {
             return Err(forbidden("this passkey's person is not on this daemon"));
         }
@@ -177,7 +295,7 @@ impl Passkeys {
     pub fn register(
         &self,
         registration: &PasskeyRegistration,
-    ) -> Result<(PersonId, Passkey), ErrorInfo> {
+    ) -> Result<(PersonId, Key), ErrorInfo> {
         let credential: RegisterPublicKeyCredential = convert(registration)?;
         let challenge = challenge_of(&credential.response.client_data_json)?;
         let (state, uuid) = take(&self.registrations, &challenge)?;
@@ -188,7 +306,7 @@ impl Passkeys {
                 debug!("passkey registration refused: {err}");
                 forbidden("the new passkey does not verify")
             })?;
-        Ok((person_of(uuid), passkey))
+        Ok((person_of(uuid), Key::registered(passkey)?))
     }
 }
 
@@ -246,5 +364,44 @@ fn internal(err: impl std::fmt::Display) -> ErrorInfo {
     ErrorInfo {
         code: ErrorCode::Internal,
         message: "passkeys failed on this daemon".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use herder_protocol::PasskeyKey;
+    use serde_cbor_2::Value;
+
+    use super::{Key, Passkeys};
+    use crate::auth::authenticator::Authenticator;
+
+    #[test]
+    fn a_registered_key_is_webauthns_credential_id_and_cose_key() {
+        let passkeys = Passkeys::new().unwrap();
+        let (passkey, registration) =
+            Authenticator::register("tomas", &passkeys.creation().unwrap());
+        let (_, key) = passkeys.register(&registration).unwrap();
+        assert_eq!(key.credential_id, registration.id);
+        let decode = |bytes: &[u8]| serde_cbor_2::from_slice::<Value>(bytes).unwrap();
+        let ours = decode(&URL_SAFE_NO_PAD.decode(&key.public_key).unwrap());
+        assert_eq!(ours, decode(&passkey.cose_key()));
+
+        // The wire carries exactly that, and reads back as the same key.
+        let wire = key.wire();
+        assert_eq!(Key::from_wire(&wire).unwrap(), Key { counter: 0, ..key });
+    }
+
+    #[test]
+    fn a_key_that_is_no_cose_key_is_refused() {
+        let id = URL_SAFE_NO_PAD.encode([1; 16]);
+        for public_key in ["not base64!", "AAAA", &URL_SAFE_NO_PAD.encode([0xa0])] {
+            let key = PasskeyKey {
+                credential_id: id.clone(),
+                public_key: public_key.to_owned(),
+            };
+            assert!(Key::from_wire(&key).is_err(), "{public_key}");
+        }
     }
 }

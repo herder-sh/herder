@@ -1300,18 +1300,27 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         .unwrap();
 
     for set in ["prod", "dev", "other"] {
-        let created = CommandBody::CreateSecretSet { set: set.into() };
+        let created = CommandBody::CreateSecretSet {
+            set: set.into(),
+            assertion: None,
+        };
         assert_eq!(
             secret_command(&client, created).await,
             Ok(CommandResult::Applied)
         );
     }
-    let again = CommandBody::CreateSecretSet { set: "prod".into() };
+    let again = CommandBody::CreateSecretSet {
+        set: "prod".into(),
+        assertion: None,
+    };
     assert_eq!(
         secret_command(&client, again).await,
         Err(ErrorCode::Conflict)
     );
-    let bad = CommandBody::CreateSecretSet { set: "Prod".into() };
+    let bad = CommandBody::CreateSecretSet {
+        set: "Prod".into(),
+        assertion: None,
+    };
     assert_eq!(
         secret_command(&client, bad).await,
         Err(ErrorCode::BadRequest)
@@ -1327,6 +1336,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
             name: name.into(),
             description: format!("{name} of {set}"),
             value: SecretValue::new(value).unwrap(),
+            assertion: None,
         };
         assert_eq!(
             secret_command(&client, put).await,
@@ -1338,6 +1348,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         name: "TOKEN".into(),
         description: "x".into(),
         value: SecretValue::new("x").unwrap(),
+        assertion: None,
     };
     assert_eq!(
         secret_command(&client, nowhere).await,
@@ -1348,6 +1359,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
             set: set.into(),
             host_id: host_id(),
             host_use: false,
+            assertion: None,
         };
         assert_eq!(
             secret_command(&client, grant).await,
@@ -1358,6 +1370,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         set: "other".into(),
         host_id: HostId::new("stranger"),
         host_use: false,
+        assertion: None,
     };
     assert_eq!(
         secret_command(&client, stranger).await,
@@ -1421,6 +1434,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         set: "prod".into(),
         host_id: host_id(),
         host_use: false,
+        assertion: None,
     };
     assert_eq!(
         secret_command(&client, revoke).await,
@@ -1472,7 +1486,10 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
     assert!(!wire.contains("-value"), "{wire}");
 
     // Sets go once they are empty; deleting a secret takes it out of the host's reach.
-    let busy = CommandBody::DeleteSecretSet { set: "dev".into() };
+    let busy = CommandBody::DeleteSecretSet {
+        set: "dev".into(),
+        assertion: None,
+    };
     assert_eq!(
         secret_command(&client, busy).await,
         Err(ErrorCode::Conflict)
@@ -1480,6 +1497,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
     let delete = CommandBody::DeleteSecret {
         set: "dev".into(),
         name: "TOKEN".into(),
+        assertion: None,
     };
     assert_eq!(
         secret_command(&client, delete).await,
@@ -1487,7 +1505,10 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
     );
     let gone = fetch(&host, "s4", &["TOKEN"]).await.unwrap_err();
     assert_eq!(gone.code, SecretErrorCode::Unknown);
-    let delete = CommandBody::DeleteSecretSet { set: "dev".into() };
+    let delete = CommandBody::DeleteSecretSet {
+        set: "dev".into(),
+        assertion: None,
+    };
     assert_eq!(
         secret_command(&client, delete).await,
         Ok(CommandResult::Applied)
@@ -1534,7 +1555,10 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         ("bots", "SLACK_TOKEN", "slack-v1"),
         ("mail", "SMTP_PASSWORD", "smtp-value"),
     ] {
-        let created = CommandBody::CreateSecretSet { set: set.into() };
+        let created = CommandBody::CreateSecretSet {
+            set: set.into(),
+            assertion: None,
+        };
         assert_eq!(
             secret_command(&client, created).await,
             Ok(CommandResult::Applied)
@@ -1544,6 +1568,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
             name: name.into(),
             description: format!("{name} of {set}"),
             value: SecretValue::new(value).unwrap(),
+            assertion: None,
         };
         assert_eq!(
             secret_command(&client, put).await,
@@ -1574,6 +1599,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
             set: set.into(),
             host_id: host_id(),
             host_use: true,
+            assertion: None,
         };
         assert_eq!(
             secret_command(&client, grant).await,
@@ -1639,6 +1665,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         name: "SLACK_TOKEN".into(),
         description: "the bot's token".into(),
         value: SecretValue::new("slack-v2").unwrap(),
+        assertion: None,
     };
     assert_eq!(
         secret_command(&client, put).await,
@@ -1652,6 +1679,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         set: "bots".into(),
         host_id: host_id(),
         host_use: false,
+        assertion: None,
     };
     assert_eq!(
         secret_command(&client, sessions_grant).await,
@@ -1661,6 +1689,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         set: "bots".into(),
         host_id: host_id(),
         host_use: true,
+        assertion: None,
     };
     assert_eq!(
         secret_command(&client, revoke).await,
@@ -1710,17 +1739,22 @@ async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
         .map(one_machine)
         .unwrap();
     for command in [
-        CommandBody::CreateSecretSet { set: "prod".into() },
+        CommandBody::CreateSecretSet {
+            set: "prod".into(),
+            assertion: None,
+        },
         CommandBody::PutSecret {
             set: "prod".into(),
             name: "TOKEN".into(),
             description: "Token".into(),
             value: SecretValue::new("token-value").unwrap(),
+            assertion: None,
         },
         CommandBody::GrantSecretSet {
             set: "prod".into(),
             host_id: host_id(),
             host_use: false,
+            assertion: None,
         },
     ] {
         assert_eq!(
@@ -1812,17 +1846,22 @@ async fn a_host_backs_up_and_fetches_secrets_only_as_its_switches_say() {
     })
     .await;
     for command in [
-        CommandBody::CreateSecretSet { set: "prod".into() },
+        CommandBody::CreateSecretSet {
+            set: "prod".into(),
+            assertion: None,
+        },
         CommandBody::PutSecret {
             set: "prod".into(),
             name: "TOKEN".into(),
             description: "Token".into(),
             value: SecretValue::new("token-value").unwrap(),
+            assertion: None,
         },
         CommandBody::GrantSecretSet {
             set: "prod".into(),
             host_id: host_id(),
             host_use: false,
+            assertion: None,
         },
     ] {
         assert_eq!(

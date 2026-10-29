@@ -127,7 +127,7 @@ impl Authenticator {
     }
 
     /// The public key as a COSE_Key: EC2, ES256, P-256, x, y.
-    fn cose_key(&self) -> Vec<u8> {
+    pub fn cose_key(&self) -> Vec<u8> {
         // An uncompressed point: 0x04, x, y.
         let point = self.key.public_key().as_ref();
         let mut key = head(5, 5);

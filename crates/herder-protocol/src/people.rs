@@ -4,7 +4,8 @@
 //! passkey public keys and their role on it; the private keys never leave the person's devices.
 //! A device the daemon does not know signs in by setting [`crate::ClientHello::sign_in`]: the
 //! daemon answers `sign_in_challenge`, and the device answers with a [`SignIn`]. Owner-only
-//! people commands carry an assertion over a fresh `passkey_challenge`.
+//! people commands, opening or attaching a terminal and every change to secrets carry an
+//! assertion over a fresh `passkey_challenge` when the caller is a person.
 //!
 //! Passkey messages follow WebAuthn's JSON encoding (`PublicKeyCredential.toJSON()`): camelCase
 //! names, and binary values as base64url without padding.
@@ -167,14 +168,13 @@ pub struct RegistrationResponse {
     pub attestation_object: String,
 }
 
-/// A passkey's public key, as a daemon keeps it. Clients pass it on unchanged, to introduce
-/// its person to another daemon.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// A passkey's public key, as WebAuthn defines it, to introduce its person to another daemon.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PasskeyKey {
     /// The credential id, base64url.
     pub credential_id: String,
-    /// The public key and its signature counter, in the daemon's own encoding.
-    pub public_key: serde_json::Value,
+    /// The credential public key, a COSE_Key as the authenticator data carries it, base64url.
+    pub public_key: String,
 }
 
 /// A person to add to a daemon that does not know them yet, as another daemon lists them.

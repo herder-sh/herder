@@ -2490,6 +2490,7 @@ async fn an_agent_stores_a_file_as_a_secret_once_an_owner_allows_it() {
             session_id: session.clone(),
             approval_id: approval_id.clone(),
             set: "work".into(),
+            assertion: None,
         })
         .await;
 
@@ -2561,6 +2562,7 @@ async fn a_denied_store_secret_stores_nothing_and_keeps_the_file() {
         session_id: session.clone(),
         approval_id,
         set: "personal".into(),
+        assertion: None,
     };
     let late = daemon.manager.handle(alice(), confirm).await.unwrap_err();
     assert_eq!(late.code, ErrorCode::NotFound);

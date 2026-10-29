@@ -37,6 +37,7 @@ rustls.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_cbor_2.workspace = true
 sha2.workspace = true
 slack-morphism.workspace = true
 tar.workspace = true
@@ -55,6 +56,7 @@ ureq.workspace = true
 url.workspace = true
 uuid.workspace = true
 webauthn-rs.workspace = true
+webauthn-rs-proto.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

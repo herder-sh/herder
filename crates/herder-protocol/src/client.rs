@@ -367,7 +367,8 @@ pub enum CommandBody {
         /// Compose project of one of the session's containers.
         project: String,
     },
-    /// Open a shell in the session's worktree and attach to it; owners only.
+    /// Open a shell in the session's worktree and attach to it; owners only, and a person
+    /// with an assertion.
     OpenTerminal {
         /// Target session.
         session_id: SessionId,
@@ -375,6 +376,9 @@ pub enum CommandBody {
         cols: u16,
         /// Height in rows.
         rows: u16,
+        /// An assertion over a fresh `passkey_challenge`; required when the caller is a person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     /// Add an account: run the provider's own login in its config dir, in a login terminal
     /// this connection is attached to; owners only. The account joins the account list once
@@ -674,9 +678,9 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assertion: Option<Box<PasskeyAssertion>>,
     },
-    /// Mint a challenge for the caller's passkey to sign, which `invite`, `set_person_role`,
-    /// `revoke_person`, `revoke_device` and `approve_login` carry an assertion over. It works
-    /// once, for [`crate::PASSKEY_CHALLENGE_SECS`]. A per-daemon owner, moving to a person
+    /// Mint a challenge for the caller's passkey to sign, which the people commands, the
+    /// terminal commands that open or attach one, and the secret changes carry an assertion
+    /// over. It works once, for [`crate::PASSKEY_CHALLENGE_SECS`]. A per-daemon owner, moving to a person
     /// with `claim_users`, also gets what to create a passkey from. Answered with
     /// `passkey_challenge`. Refused with `forbidden` for a per-daemon member.
     PasskeyChallenge,
@@ -769,6 +773,9 @@ pub enum CommandBody {
     CreateSecretSet {
         /// The set's name.
         set: String,
+        /// An assertion over a fresh `passkey_challenge`; required when the caller is a person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     /// On a vault, delete an empty set of secrets and its grants; owners only. Answered with
     /// `applied`. Refused with `not_found` for an unknown set, `conflict` while it holds
@@ -776,6 +783,9 @@ pub enum CommandBody {
     DeleteSecretSet {
         /// The set.
         set: String,
+        /// An assertion over a fresh `passkey_challenge`; required when the caller is a person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     /// On a vault, create a secret in a set, or replace its description and value; owners
     /// only. The vault keeps the value encrypted and never sends it to a client. Answered with
@@ -792,6 +802,9 @@ pub enum CommandBody {
         description: String,
         /// The value.
         value: SecretValue,
+        /// An assertion over a fresh `passkey_challenge`; required when the caller is a person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     /// On a vault, delete a secret; owners only. Answered with `applied`. Refused with
     /// `not_found` for an unknown set or secret, and `unsupported` on a daemon that is not a
@@ -801,6 +814,9 @@ pub enum CommandBody {
         set: String,
         /// The secret's name.
         name: String,
+        /// An assertion over a fresh `passkey_challenge`; required when the caller is a person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     /// On a vault, let a host fetch the secrets of a set for every session it runs, or, with
     /// `host_use`, for its own use, such as a bot's token, and not its sessions'; owners only.
@@ -815,6 +831,9 @@ pub enum CommandBody {
         /// Whether the grant is for the host's own use rather than its sessions'.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         host_use: bool,
+        /// An assertion over a fresh `passkey_challenge`; required when the caller is a person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     /// On a vault, stop a host fetching the secrets of a set for its sessions, or, with
     /// `host_use`, for its own use; owners only. Values the host fetched already stay in its
@@ -828,6 +847,9 @@ pub enum CommandBody {
         /// Whether the grant is the one for the host's own use.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         host_use: bool,
+        /// An assertion over a fresh `passkey_challenge`; required when the caller is a person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     /// On a vault, list every set of secrets with its grants, and every secret without its
     /// value; owners only. Answered with `secrets`. It changes nothing, so a resend is answered
@@ -856,6 +878,9 @@ pub enum CommandBody {
         approval_id: ApprovalId,
         /// The set the value was put in, which the owner may have picked over the agent's.
         set: String,
+        /// An assertion over a fresh `passkey_challenge`; required when the caller is a person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     /// On a vault, list the latest fetches of secrets by hosts, newest first, at most
     /// [`crate::MAX_SECRET_AUDIT_ENTRIES`]; owners only. Answered with `secret_audit`. It
@@ -987,10 +1012,13 @@ pub enum CommandBody {
         /// The bot.
         bot_id: BotId,
     },
-    /// Start streaming a terminal's output; owners only.
+    /// Start streaming a terminal's output; owners only, and a person with an assertion.
     AttachTerminal {
         /// Target terminal.
         terminal_id: TerminalId,
+        /// An assertion over a fresh `passkey_challenge`; required when the caller is a person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assertion: Option<Box<PasskeyAssertion>>,
     },
     /// Stop streaming a terminal's output; the shell keeps running.
     DetachTerminal {

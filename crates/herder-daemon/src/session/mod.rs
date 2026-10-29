@@ -836,6 +836,7 @@ impl SessionManager {
                 session_id,
                 approval_id,
                 set,
+                ..
             } => (
                 session_id,
                 Request::ConfirmSecretStored { approval_id, set },

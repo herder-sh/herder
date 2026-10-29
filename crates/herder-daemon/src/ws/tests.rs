@@ -30,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Backend, Host, Server, Tls};
 use crate::auth::authenticator::Authenticator;
-use crate::auth::passkeys::{self, Passkeys};
+use crate::auth::passkeys::Passkeys;
 use crate::auth::{Auth, PAIRING_TTL};
 use crate::aws::Aws;
 use crate::hub::{self, DELTA_BACKLOG, Hub};
@@ -547,6 +547,24 @@ impl Client {
         self.recv().await
     }
 
+    /// Sends a command and skips what the server broadcasts until its answer.
+    async fn answer(&mut self, id: &str, body: CommandBody) -> ServerMessage {
+        self.send(&ClientMessage::Command(Command {
+            id: CommandId::new(id),
+            body,
+        }))
+        .await;
+        loop {
+            let message = self.recv().await;
+            if matches!(
+                message,
+                ServerMessage::CommandAccepted { .. } | ServerMessage::CommandRejected { .. }
+            ) {
+                return message;
+            }
+        }
+    }
+
     async fn subscribe(&mut self, session: &SessionId, after_seq: Seq) {
         self.send(&ClientMessage::Subscribe(Cursor {
             session_id: session.clone(),
@@ -1032,6 +1050,7 @@ async fn a_paired_device_pairs_another_as_its_own_user_and_role() {
                 session_id: SessionId::new("s1"),
                 cols: 80,
                 rows: 24,
+                assertion: None,
             };
             let ServerMessage::CommandRejected { error, .. } = paired.command("t", open).await
             else {
@@ -1088,6 +1107,7 @@ async fn terminals_are_for_owners_only() {
                 session_id: session.clone(),
                 cols: 80,
                 rows: 24,
+                assertion: None,
             },
         })
     };
@@ -1371,6 +1391,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
         session_id: session.clone(),
         cols: 80,
         rows: 24,
+        assertion: None,
     };
     client
         .send(&ClientMessage::Command(Command {
@@ -1448,6 +1469,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     );
     let attach = CommandBody::AttachTerminal {
         terminal_id: terminal_id.clone(),
+        assertion: None,
     };
     let ServerMessage::TerminalOutput { data, .. } = client.command("c3", attach).await else {
         panic!("expected the scrollback");
@@ -1483,7 +1505,10 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
         }
     }
     assert_eq!(closed, Some((terminal_id.clone(), Some(3))));
-    let attach = CommandBody::AttachTerminal { terminal_id };
+    let attach = CommandBody::AttachTerminal {
+        terminal_id,
+        assertion: None,
+    };
     assert!(matches!(
         client.command("c5", attach).await,
         ServerMessage::CommandRejected { error, .. } if error.code == ErrorCode::NotFound
@@ -2019,6 +2044,7 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
         name: "API_KEY".into(),
         description: "The API key".into(),
         value: herder_protocol::SecretValue::new("s3cret").unwrap(),
+        assertion: None,
     };
     let refused = control
         .command(SessionId::new("s1"), via("Ada"), value)
@@ -2133,6 +2159,7 @@ async fn agents_run_commands_as_their_user_within_its_role() {
             session_id: SessionId::new("s1"),
             cols: 80,
             rows: 24,
+            assertion: None,
         },
         CommandBody::LogInAccount {
             account_id: AccountId::new("claude-main"),
@@ -2186,7 +2213,7 @@ async fn agents_run_commands_as_their_user_within_its_role() {
                     person_id: PersonId::new("p1"),
                     key: PasskeyKey {
                         credential_id: "Y3JlZA".into(),
-                        public_key: serde_json::Value::Null,
+                        public_key: "pQ".into(),
                     },
                     assertion: stale_assertion(),
                 },
@@ -2435,7 +2462,7 @@ async fn a_fresh_daemon_gets_its_first_owner_by_an_assertion_and_their_devices_n
     let elsewhere = Passkeys::new().unwrap();
     let (passkey, registration) = Authenticator::register("tomas", &elsewhere.creation().unwrap());
     let (person_id, key) = elsewhere.register(&registration).unwrap();
-    let key = passkeys::key(&key);
+    let key = key.wire();
 
     // `herder service install` printed the code; the app shows the same one.
     let (code, _) = daemon.auth.open_claim().unwrap();
@@ -2868,7 +2895,7 @@ async fn fresh(client: &mut Client, passkey: &Authenticator) -> Box<PasskeyAsser
         result: CommandResult::PasskeyChallenge { challenge, .. },
         ..
     } = client
-        .command(
+        .answer(
             &ulid::Ulid::generate().to_string(),
             CommandBody::PasskeyChallenge,
         )
@@ -2993,4 +3020,94 @@ async fn an_invited_member_connects_a_role_change_applies_and_a_revoke_disconnec
     assert!(sam.try_recv().await.is_none(), "the revoke closed it");
     let again = daemon.client_on(&laptop, None).await;
     assert_eq!(refused(again).await.code, ErrorCode::Forbidden);
+}
+
+/// A fresh daemon claimed by Tomas from his Mac: its connection, and his passkey.
+async fn owned_by_tomas(daemon: &Daemon) -> (Client, ServerHello, Authenticator) {
+    let (code, _) = daemon.auth.open_claim().unwrap();
+    let mac = DeviceKey::generate().unwrap();
+    let mut client = daemon.client_on(&mac, None).await;
+    let mut passkey = None;
+    let hello = client
+        .sign_in(|_, registration| {
+            let (made, registration) = Authenticator::register("tomas", &registration.unwrap());
+            passkey = Some(made);
+            SignIn::ClaimOwnership {
+                code,
+                person: NewPerson {
+                    name: "Tomas".into(),
+                    passkey: PersonPasskey::Register { registration },
+                },
+            }
+        })
+        .await;
+    (client, hello, passkey.unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_person_opens_a_terminal_and_changes_secrets_only_with_a_fresh_assertion() {
+    let daemon = Daemon::start_fresh().await;
+    let session = daemon.create_session("s1");
+    let (mut mac, tomas, passkey) = owned_by_tomas(&daemon).await;
+    let open = |assertion| CommandBody::OpenTerminal {
+        session_id: session.clone(),
+        cols: 80,
+        rows: 24,
+        assertion,
+    };
+    for (id, assertion) in [("bare", None), ("stale", Some(Box::new(stale_assertion())))] {
+        let ServerMessage::CommandRejected { error, .. } = mac.answer(id, open(assertion)).await
+        else {
+            panic!("expected the terminal refused");
+        };
+        assert_eq!(error.code, ErrorCode::Forbidden, "{}", error.message);
+    }
+    let assertion = Some(fresh(&mut mac, &passkey).await);
+    let opened = mac.answer("fresh", open(assertion.clone())).await;
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::TerminalOpened { terminal_id },
+        ..
+    } = opened
+    else {
+        panic!("expected the terminal opened, got {opened:?}");
+    };
+    // An assertion works once.
+    let ServerMessage::CommandRejected { error, .. } = mac.answer("again", open(assertion)).await
+    else {
+        panic!("expected a replayed assertion refused");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    let attach = CommandBody::AttachTerminal {
+        terminal_id,
+        assertion: None,
+    };
+    let ServerMessage::CommandRejected { .. } = mac.answer("attach", attach).await else {
+        panic!("expected attaching refused without an assertion");
+    };
+
+    // Every change to secrets is the same; this daemon is no vault, so a fresh one gets as far
+    // as that.
+    let create = |assertion| CommandBody::CreateSecretSet {
+        set: "prod".into(),
+        assertion,
+    };
+    let ServerMessage::CommandRejected { error, .. } = mac.answer("set", create(None)).await else {
+        panic!("expected the secret change refused");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    let assertion = Some(fresh(&mut mac, &passkey).await);
+    let ServerMessage::CommandRejected { error, .. } = mac.answer("set2", create(assertion)).await
+    else {
+        panic!("expected the secret change to reach the vault check");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported, "{}", error.message);
+
+    // An agent acting for a person has no passkey, so it never gets that far.
+    let refused = daemon
+        .control
+        .command(session, tomas.user_id, create(None))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::Forbidden);
+    assert!(refused.message.contains("Face ID"), "{}", refused.message);
 }
