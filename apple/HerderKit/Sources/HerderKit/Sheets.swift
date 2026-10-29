@@ -29,13 +29,16 @@ enum AppSheet: Identifiable, Hashable {
     case addBot
     /// A one-time code that pairs someone new with a machine.
     case invite(HostId)
+    /// Approving a new machine's `herder://own` link or a terminal's `herder://login` one.
+    case approve(ApprovalRequest)
 
     var id: Self { self }
 }
 
 extension AppSheet {
     @MainActor @ViewBuilder
-    func view(fleet: Fleet, drafted: @escaping (Draft) -> Void) -> some View {
+    func view(fleet: Fleet, drafted: @escaping (Draft) -> Void, openMachine: @escaping (HostId) -> Void,
+              present: @escaping (AppSheet) -> Void) -> some View {
         switch self {
         case .pair(let kind, let vault, let link): AddMachineSheet(fleet: fleet, kind: kind, vault: vault, text: link)
         case .newSession: ProjectPicker(fleet: fleet, newProject: false, picked: drafted)
@@ -48,6 +51,8 @@ extension AppSheet {
         case .addBot: AddBotSheet(fleet: fleet)
         case .invite(let hostId):
             InviteSheet(fleet: fleet, hostId: hostId)
+        case .approve(let request):
+            ApproveSheet(fleet: fleet, request: request, open: openMachine) { present(.pair(.vault)) }
         }
     }
 }
