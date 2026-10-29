@@ -1,4 +1,4 @@
-//! The local control socket `herder pair` and `herder fork` talk to, at
+//! The local control socket `herder pair`, `herder login` and `herder fork` talk to, at
 //! `<data_dir>/control.sock`.
 //!
 //! Only this user can reach it: the data dir is private to them. Each connection carries one
@@ -55,6 +55,8 @@ pub enum Request {
         /// The host's name; the user its device acts as.
         host: String,
     },
+    /// Where the daemon listens and its certificate, for `herder login`.
+    Address,
     /// List the users and their paired devices.
     Users,
     /// Unpair a device.
@@ -83,6 +85,13 @@ pub enum Request {
 pub enum Response {
     /// A pairing code was minted.
     Paired(PairingInfo),
+    /// Where the daemon listens.
+    Address {
+        /// SHA-256 of its TLS certificate, lowercase hex.
+        fingerprint: String,
+        /// Addresses it listens on, as `host:port`, most likely reachable first.
+        addresses: Vec<String>,
+    },
     /// The users and their paired devices, as `list_users` answers.
     Users {
         /// Oldest first.
@@ -258,6 +267,10 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
         Request::PairHost { host } => match auth.mint_host(&host, PAIRING_TTL) {
             Ok(pairing) => paired(pairing, daemon),
             Err(err) => failed(err),
+        },
+        Request::Address => Response::Address {
+            fingerprint: daemon.fingerprint.clone(),
+            addresses: addresses(&daemon.listen),
         },
         Request::Users => Response::Users {
             users: auth.users(),
@@ -492,6 +505,13 @@ mod tests {
             tokio::task::spawn_blocking(move || request(&dir, &req).unwrap())
         };
 
+        assert_eq!(
+            ask(Request::Address).await.unwrap(),
+            Response::Address {
+                fingerprint: "ab".repeat(32),
+                addresses: vec!["127.0.0.1:7447".into()],
+            }
+        );
         let pair = Request::Pair {
             user: "alice".into(),
             role: None,

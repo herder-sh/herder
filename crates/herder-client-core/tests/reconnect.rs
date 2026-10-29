@@ -1,7 +1,8 @@
 //! The client against a real daemon, with the fake adapter, over TLS on localhost: pairing, a
 //! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, an
 //! account login, an AWS sign-in, resource figures, the sync barrier, renaming and forgetting a machine, a
-//! reconnect through a chosen address, and the app lifecycle: suspension, wake probes and the offline cache.
+//! reconnect through a chosen address, the app lifecycle: suspension, wake probes and the offline cache,
+//! and a new device asked to sign in as a person.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -11,11 +12,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
-use herder_client_core::PairingUri;
 use herder_client_core::{
     Client, ConnectionState, Error, Machine, NewAccount, PairResult, PairingLink,
     SessionSubscription, SessionUpdate, TerminalEvent, TerminalStream,
 };
+use herder_client_core::{LoginUri, PairingUri};
+use herder_daemon::auth::authenticator::Authenticator;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::aws::Aws;
 use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
@@ -27,8 +29,8 @@ use herder_daemon::{Hub, session};
 use herder_protocol::{
     AccountId, AwsDeviceCode, AwsProfile, CommandBody, CommandResult, Constraint, Container,
     ContainerState, ErrorCode, Event, EventBody, FailoverSettings, HostId, HostResources, ItemBody,
-    PermissionMode, Provider, Role, SessionId, SessionStatus, SessionUsage, TerminalPurpose,
-    TurnId,
+    NewPerson, PermissionMode, PersonPasskey, Provider, Role, SessionId, SessionStatus,
+    SessionUsage, SignIn, TerminalPurpose, TurnId,
 };
 use herder_store::Store;
 use tokio::net::{TcpListener, TcpStream};
@@ -1961,4 +1963,150 @@ async fn an_aws_sign_in_relays_its_device_code_and_exit() {
     let mut screen = Screen::default();
     assert_eq!(login_exit(&stream, &mut screen).await, Some(0));
     daemon.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_device_is_asked_to_sign_in_and_a_terminal_gets_a_code_to_show() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("client");
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
+    let hosts = vec![daemon.addr.to_string()];
+
+    let pending = tokio::time::timeout(
+        TIMEOUT,
+        client.sign_in(hosts.clone(), daemon.fingerprint.clone()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(pending.challenge().rp_id, herder_protocol::PASSKEY_RP_ID);
+    let wrong = pending
+        .finish(herder_protocol::SignIn::StartLogin)
+        .await
+        .unwrap_err();
+    assert!(matches!(wrong, Error::Local { .. }), "{wrong:?}");
+
+    let (shown, code) = tokio::sync::oneshot::channel();
+    let fingerprint = daemon.fingerprint.clone();
+    let login = {
+        let (client, hosts) = (client.clone(), hosts.clone());
+        tokio::spawn(async move {
+            client
+                .log_in(hosts, fingerprint, move |code, _| {
+                    let _ = shown.send(code.to_owned());
+                })
+                .await
+        })
+    };
+    let code = tokio::time::timeout(TIMEOUT, code).await.unwrap().unwrap();
+    assert_eq!(code.len(), 7, "{code}");
+    assert_eq!(&code[3..4], "-", "{code}");
+    let link = LoginUri {
+        hosts,
+        fingerprint: daemon.fingerprint.clone(),
+        code: code.clone(),
+    }
+    .to_string();
+    assert_eq!(link.parse::<LoginUri>().unwrap().code, code);
+    assert!(!login.is_finished(), "a login waits for an app's approval");
+    login.abort();
+    assert!(client.machines().is_empty(), "nothing is saved before it");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_app_claims_a_machine_and_approves_a_terminal_that_logs_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let hosts = vec![daemon.addr.to_string()];
+
+    // The app claims the fresh machine with a new passkey, with the code its terminal shows.
+    let app = Client::open(
+        tmp.path().join("app").display().to_string(),
+        "herder-app/0".into(),
+    )
+    .unwrap();
+    let (claim, _) = daemon.auth.open_claim().unwrap();
+    let pending = tokio::time::timeout(
+        TIMEOUT,
+        app.sign_in(hosts.clone(), daemon.fingerprint.clone()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let (passkey, registration) = Authenticator::register(
+        "tomas",
+        &pending.registration().expect("a fresh machine offers one"),
+    );
+    let claimed = pending
+        .finish(SignIn::ClaimOwnership {
+            code: claim,
+            person: NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Register { registration },
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(claimed.host_id, HostId::new("host-1"));
+    wait_connection(&app, connected).await;
+    assert_eq!(app.machines()[0].role, Some(Role::Owner));
+
+    // A terminal logs in; the app approves the code it shows with the passkey.
+    let terminal = Client::open(
+        tmp.path().join("terminal").display().to_string(),
+        "herder-cli/0".into(),
+    )
+    .unwrap();
+    let (shown, code) = tokio::sync::oneshot::channel();
+    let login = {
+        let (terminal, hosts) = (terminal.clone(), hosts.clone());
+        let fingerprint = daemon.fingerprint.clone();
+        tokio::spawn(async move {
+            terminal
+                .log_in(hosts, fingerprint, move |code, _| {
+                    let _ = shown.send(code.to_owned());
+                })
+                .await
+        })
+    };
+    let code = tokio::time::timeout(TIMEOUT, code).await.unwrap().unwrap();
+    let CommandResult::PasskeyChallenge { challenge, .. } = app
+        .send(claimed.host_id.clone(), CommandBody::PasskeyChallenge)
+        .await
+        .unwrap()
+    else {
+        panic!("expected a passkey challenge");
+    };
+    let approve = CommandBody::ApproveLogin {
+        code,
+        assertion: Box::new(passkey.assert(&challenge)),
+    };
+    let CommandResult::LoginApproved { client, .. } =
+        app.send(claimed.host_id.clone(), approve).await.unwrap()
+    else {
+        panic!("expected the login approved");
+    };
+    assert_eq!(client, "herder-cli/0");
+
+    let machine = tokio::time::timeout(TIMEOUT, login)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(machine.host_id, claimed.host_id);
+    wait_connection(&terminal, connected).await;
+    assert_eq!(terminal.machines()[0].role, Some(Role::Owner));
 }

@@ -106,6 +106,23 @@ impl Client {
 }
 
 impl Client {
+    pub async fn sign_in(
+        &self,
+        hosts: Vec<String>,
+        fingerprint: String,
+    ) -> Result<PendingSignIn, Error> {}
+}
+
+impl Client {
+    pub async fn log_in(
+        &self,
+        hosts: Vec<String>,
+        fingerprint: String,
+        shown: impl FnOnce(&str, Timestamp) + Send,
+    ) -> Result<Machine, Error> {}
+}
+
+impl Client {
     pub async fn share(&self) -> Result<SharedLink, Error> {}
 }
 
@@ -342,13 +359,50 @@ pub struct PairingLink {
     pub machines: Vec<PairingUri>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoginUri {
+    pub hosts: Vec<String>,
+    pub fingerprint: String,
+    pub code: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnUri {
+    pub hosts: Vec<String>,
+    pub fingerprint: String,
+    pub code: String,
+}
+
 impl fmt::Display for PairingUri {}
 
 impl FromStr for PairingUri {}
 
+impl fmt::Display for LoginUri {}
+
+impl FromStr for LoginUri {}
+
+impl fmt::Display for OwnUri {}
+
+impl FromStr for OwnUri {}
+
 impl fmt::Display for PairingLink {}
 
 impl FromStr for PairingLink {}
+
+// opaque: private fields
+pub struct PendingSignIn {}
+
+impl PendingSignIn {
+    pub fn challenge(&self) -> PasskeyChallenge {}
+}
+
+impl PendingSignIn {
+    pub fn registration(&self) -> Option<PasskeyCreation> {}
+}
+
+impl PendingSignIn {
+    pub async fn finish(&self, sign_in: SignIn) -> Result<Machine, Error> {}
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalEvent {

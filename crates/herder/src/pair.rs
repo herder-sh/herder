@@ -70,7 +70,10 @@ pub fn run(args: Args) -> Result<()> {
             Ok(())
         }
         Response::Error { message } => bail!("{message}"),
-        Response::Forked(_) | Response::ForgotHost(_) | Response::Own(_) => {
+        Response::Address { .. }
+        | Response::Forked(_)
+        | Response::ForgotHost(_)
+        | Response::Own(_) => {
             bail!("the daemon sent an unexpected answer")
         }
     }

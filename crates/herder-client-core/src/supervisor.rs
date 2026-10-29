@@ -29,8 +29,8 @@ use futures_util::stream::{FuturesUnordered, SplitSink};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor, ErrorInfo,
-    FailoverSettings, PROTOCOL_VERSION, Project, Role, ServerHello, ServerMessage, SessionId,
-    TerminalId, Timestamp,
+    FailoverSettings, PROTOCOL_VERSION, PasskeyChallenge, PasskeyCreation, Project, Role,
+    ServerHello, ServerMessage, SessionId, TerminalId, Timestamp,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
@@ -80,7 +80,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often a connection saves what changed to the offline cache.
 const SAVE_INTERVAL: Duration = Duration::from_secs(30);
 
-type Ws = WebSocketStream<TlsStream<TcpStream>>;
+pub(crate) type Ws = WebSocketStream<TlsStream<TcpStream>>;
 
 /// Answer to a command, as the daemon gave it.
 type Answer = Result<CommandResult, ErrorInfo>;
@@ -1589,6 +1589,34 @@ pub(crate) async fn connect(
     device: &DeviceKey,
     hello: ClientHello,
 ) -> Result<(Ws, ServerHello, String), String> {
+    match open(addresses, fingerprint, device, hello).await? {
+        (ws, Opened::Hello(hello), address) => Ok((ws, *hello, address)),
+        (_, Opened::SignIn { .. }, address) => Err(format!(
+            "{address}: the daemon asked this device to sign in"
+        )),
+    }
+}
+
+/// What a daemon first answers a hello with.
+pub(crate) enum Opened {
+    /// It knows the device.
+    Hello(Box<ServerHello>),
+    /// It asks the device, which set `sign_in`, to sign in.
+    SignIn {
+        /// What an existing passkey signs.
+        challenge: PasskeyChallenge,
+        /// What a new passkey is created from, when the daemon takes a claim or an invite.
+        registration: Option<PasskeyCreation>,
+    },
+}
+
+/// [`connect`], also taking a daemon's request to sign in as an answer.
+pub(crate) async fn open(
+    addresses: &[String],
+    fingerprint: &str,
+    device: &DeviceKey,
+    hello: ClientHello,
+) -> Result<(Ws, Opened, String), String> {
     let config = client_config(fingerprint, device).map_err(|err| format!("{err:#}"))?;
     let connector = TlsConnector::from(Arc::new(config));
     let attempt = |address: &String| {
@@ -1615,7 +1643,7 @@ pub(crate) async fn connect(
         let waiting = !queue.as_slice().is_empty();
         tokio::select! {
             Some((address, result)) = running.next() => match result {
-                Ok((ws, hello)) => return Ok((ws, hello, address)),
+                Ok((ws, opened)) => return Ok((ws, opened, address)),
                 Err(err) => errors.push(format!("{address}: {err:#}")),
             },
             () = &mut next_start, if waiting => {
@@ -1636,7 +1664,7 @@ async fn connect_to(
     address: &str,
     connector: &TlsConnector,
     hello: &ClientHello,
-) -> anyhow::Result<(Ws, ServerHello)> {
+) -> anyhow::Result<(Ws, Opened)> {
     let tcp = TcpStream::connect(address).await.context("connecting")?;
     tcp.set_nodelay(true)?;
     // The certificate is pinned by fingerprint, so the name is never checked.
@@ -1648,6 +1676,31 @@ async fn connect_to(
         .context("the WebSocket upgrade")?;
     let text = serde_json::to_string(&ClientMessage::Hello(hello.clone()))?;
     ws.send(Message::text(text)).await?;
+    match receive(&mut ws).await? {
+        ServerMessage::Hello(hello) if hello.protocol_version == PROTOCOL_VERSION => {
+            Ok((ws, Opened::Hello(Box::new(hello))))
+        }
+        ServerMessage::Hello(hello) => Err(anyhow!(
+            "the daemon speaks protocol {}, this client {PROTOCOL_VERSION}",
+            hello.protocol_version
+        )),
+        ServerMessage::SignInChallenge {
+            challenge,
+            registration,
+        } if hello.sign_in => Ok((
+            ws,
+            Opened::SignIn {
+                challenge,
+                registration,
+            },
+        )),
+        ServerMessage::Error { error } => Err(anyhow!(error.message)),
+        _ => Err(anyhow!("the daemon did not say hello")),
+    }
+}
+
+/// The next message the daemon sends on `ws`.
+pub(crate) async fn receive(ws: &mut Ws) -> anyhow::Result<ServerMessage> {
     loop {
         let text = match ws.next().await {
             Some(Ok(Message::Text(text))) => text,
@@ -1655,17 +1708,7 @@ async fn connect_to(
             Some(Ok(_)) => continue,
             Some(Err(err)) => return Err(err.into()),
         };
-        return match serde_json::from_str(&text)? {
-            ServerMessage::Hello(hello) if hello.protocol_version == PROTOCOL_VERSION => {
-                Ok((ws, hello))
-            }
-            ServerMessage::Hello(hello) => Err(anyhow!(
-                "the daemon speaks protocol {}, this client {PROTOCOL_VERSION}",
-                hello.protocol_version
-            )),
-            ServerMessage::Error { error } => Err(anyhow!(error.message)),
-            _ => Err(anyhow!("the daemon did not say hello")),
-        };
+        return Ok(serde_json::from_str(&text)?);
     }
 }
 

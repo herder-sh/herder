@@ -1,6 +1,10 @@
 //! A software authenticator for tests, holding the recorded test passkeys of
 //! `fixtures/passkeys.json`: it makes registrations and assertions over a daemon's live
 //! challenges exactly as a platform authenticator encodes them, so tests never need a real one.
+//!
+//! Test support only: other crates' tests reach it through the `test-authenticator` feature,
+//! which only dev-dependencies turn on, so no release build has it. It panics on bad fixtures,
+//! as a test should.
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use herder_client_core::{
-    ConnectionQuality, ConnectionState, Machine, NewAccount, PairResult, PairingLink, PairingUri,
-    SessionUpdate, SharedLink, SkippedMachine, TerminalEvent,
+    ConnectionQuality, ConnectionState, LoginUri, Machine, NewAccount, OwnUri, PairResult,
+    PairingLink, PairingUri, SessionUpdate, SharedLink, SkippedMachine, TerminalEvent,
 };
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
@@ -24,10 +24,10 @@ use herder_protocol::{
     ProviderReload, ProviderStatus, PullRequest, QuestionId, QueuedPrompt, RegistrationResponse,
     Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef,
     SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId, SessionOrigin,
-    SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource, SkillsStatus,
-    Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource,
-    TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow,
-    UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
+    SessionSkill, SessionStatus, SessionUsage, SignIn, SkillFile, SkillReload, SkillSource,
+    SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings,
+    TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal,
+    UsageWindow, UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -181,6 +181,20 @@ pub struct PairingUri {
 #[uniffi::remote(Record)]
 pub struct PairingLink {
     pub machines: Vec<PairingUri>,
+}
+
+#[uniffi::remote(Record)]
+pub struct LoginUri {
+    pub hosts: Vec<String>,
+    pub fingerprint: String,
+    pub code: String,
+}
+
+#[uniffi::remote(Record)]
+pub struct OwnUri {
+    pub hosts: Vec<String>,
+    pub fingerprint: String,
+    pub code: String,
 }
 
 #[uniffi::remote(Enum)]
@@ -1227,6 +1241,14 @@ pub struct AssertionResponse {
     pub authenticator_data: String,
     pub signature: String,
     pub user_handle: Option<String>,
+}
+
+#[uniffi::remote(Enum)]
+pub enum SignIn {
+    Passkey { assertion: PasskeyAssertion },
+    ClaimOwnership { code: String, person: NewPerson },
+    AcceptInvite { invite: String, person: NewPerson },
+    StartLogin,
 }
 
 #[uniffi::remote(Record)]
