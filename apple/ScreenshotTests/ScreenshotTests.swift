@@ -1,8 +1,10 @@
 import XCTest
 
 /// Takes the screenshots on herder.sh: launches the app on the demo fleet whose link is in
-/// `HERDER_PAIR_LINK` (`fake_daemon --demo` prints it; pass it to `xcodebuild test` as
-/// `TEST_RUNNER_HERDER_PAIR_LINK`), which the app joins at launch, then opens each screen and attaches a screenshot of it, named
+/// `HERDER_PAIR_LINK`, with the demo user's passkey in `HERDER_PASSKEY` (`fake_daemon --demo`
+/// prints both; pass them to `xcodebuild test` as `TEST_RUNNER_HERDER_PAIR_LINK` and
+/// `TEST_RUNNER_HERDER_PASSKEY`), which the app signs in to at launch, then opens each screen
+/// and attaches a screenshot of it, named
 /// after the image it becomes. The `screenshots` workflow exports them from the result bundle.
 ///
 /// A screen that cannot be reached is skipped with the view tree attached, so one run shows
@@ -15,9 +17,12 @@ final class ScreenshotTests: XCTestCase {
     func testScreenshots() throws {
         let link = try XCTUnwrap(
             ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
+        let passkey = try XCTUnwrap(
+            ProcessInfo.processInfo.environment["HERDER_PASSKEY"], "needs HERDER_PASSKEY")
         // A profile of its own, so a run on a developer's Mac keeps off their pairings.
         app.launchEnvironment["HERDER_PROFILE"] = "screenshots"
         app.launchEnvironment["HERDER_FAKE_FLEET"] = link
+        app.launchEnvironment["HERDER_FAKE_PASSKEY"] = passkey
         app.launch()
         #if os(macOS)
         resize(to: CGSize(width: 1440, height: 900))
@@ -558,12 +563,12 @@ final class ScreenshotTests: XCTestCase {
                 settle()
                 shoot("mac-machine-settings-mcp")
             }
-            // Its backup to the demo's vault: the switches, and whether it takes handoffs.
+            // Its backup to the demo's vault and its switches.
             let backup = app.buttons["section-index-Backup"].firstMatch
             if wait(backup, "Backup in the section index") {
                 press(backup)
-                let handoffs = app.descendants(matching: .any)["takes-handoffs"].firstMatch
-                if wait(handoffs, "Takes handoffs switch") {
+                let switches = app.staticTexts["Back up sessions"].firstMatch
+                if wait(switches, "Back up sessions switch") {
                     settle()
                     shoot("mac-machine-backup")
                 }

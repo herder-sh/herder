@@ -83,7 +83,7 @@ struct HandoffTests {
         }
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
-        let host = try await fleet.pair(daemon)
+        let host = try await fleet.signIn(to: daemon)
         let original = try await fleet.createSession(
             on: host.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
             mode: .ask, prompt: "Say hello.")
@@ -132,7 +132,7 @@ struct HandoffTests {
         }
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
-        let host = try await fleet.pair(daemon)
+        let host = try await fleet.signIn(to: daemon)
         try await fleet.client.synced(hostId: host.hostId)
 
         // The hold account's turn runs until it is interrupted: the archive waits for it to end.

@@ -41,11 +41,12 @@ codesign --force --deep --sign - --entitlements apple/App/herder.entitlements "$
 
 # The daemons run until their stdin closes: when this script exits.
 exec 3> >(target/debug/examples/fake_daemon --busy > "$out/fake_daemon.out")
-for _ in $(seq 180); do [ -s "$out/fake_daemon.out" ] && break; sleep 1; done
-[ -s "$out/fake_daemon.out" ] || { echo "the fake daemons did not start" >&2; exit 1; }
+for _ in $(seq 180); do [ "$(wc -l < "$out/fake_daemon.out")" -ge 2 ] && break; sleep 1; done
+[ "$(wc -l < "$out/fake_daemon.out")" -ge 2 ] || { echo "the fake daemons did not start" >&2; exit 1; }
 
 TEST_RUNNER_HERDER_PROFILE_APP=$app \
 TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$out/fake_daemon.out") \
+TEST_RUNNER_HERDER_PASSKEY=$(sed -n 2p "$out/fake_daemon.out") \
 TEST_RUNNER_HERDER_PROFILE_SCENE=$scene \
 TEST_RUNNER_HERDER_PROFILE_SECONDS=$((seconds + 5)) \
   xcodebuild test-without-building -project apple/herder.xcodeproj -scheme herder-macOS-Profile \

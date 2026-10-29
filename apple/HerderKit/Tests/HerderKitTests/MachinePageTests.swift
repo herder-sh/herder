@@ -74,7 +74,7 @@ struct CapacityTests {
 
 struct BackupFreshnessTests {
     private func replication(last: String?, lagMs: UInt64?) -> HostReplication {
-        HostReplication(hostId: "a", sessions: 1, events: 10, lastEventAt: last, lagMs: lagMs, read: false)
+        HostReplication(hostId: "a", sessions: 1, events: 10, lastEventAt: last, lagMs: lagMs)
     }
 
     @Test func saysHowFarTheVaultGot() throws {

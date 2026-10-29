@@ -185,8 +185,8 @@ backs up to it, and Add to Fleet to pair with it. Vault has no sidebar section o
 The vault's page (`VaultPage`) reads "Connected · backing up 2 hosts · last batch 3 min. ago".
 Its owners get two tabs: **Overview** and **Secrets** (the sets, their grants and secrets, and the
 recent access). Overview is a strip of quiet chips (sessions, with the per-state breakdown on
-hover; idle; archived; size), then a hosts table: freshness, sessions, top projects and the
-Takes handoffs switch. Freshness (`Freshness`) is always relative: "✓ caught up" with the last
+hover; idle; archived; size), then a hosts table: freshness, sessions and top projects.
+Freshness (`Freshness`) is always relative: "✓ caught up" with the last
 batch's age, or "6 h behind" with a "Why?" popover, when the host has been offline that long or
 its last batch arrived that late (more than five minutes). The gear opens the vault's machine
 page (connection, forget). Screenshots: `machines.png`, `vault-page.png` (HerderKit's
@@ -732,8 +732,8 @@ protocol has no plan, no daily usage and no command to remove an account. Screen
   cores and about how many turns fit (`TurnLoad.fit`: a core and 2 GB a turn, a quarter of the
   cores left to the rest); running and waiting turns behind ⓘ.
 - **Backup** (`BackupSection`, owners only): the vault it backs up to and how far that got
-  ("Caught up · 3m ago"), **Stop…**, the **Back up sessions** and **Secrets** switches and, when
-  this device owns the vault, **Takes handoffs from other machines**. It shows where the machine
+  ("Caught up · 3m ago"), **Stop…**, and the **Back up sessions** and **Secrets** switches. It
+  shows where the machine
   last said it backs up (`Fleet.backupLinks`) while it asks again.
 - **Connection**: the name on this device, and the addresses, which unfold to reorder, add,
   remove and connect through them, with the link's health since the app opened.

@@ -81,7 +81,7 @@ struct DoneTests {
             }
             let following = Task { await fleet.follow() }
             defer { following.cancel() }
-            let machine = try await fleet.pair(daemon)
+            let machine = try await fleet.signIn(to: daemon)
             try await fleet.client.synced(hostId: machine.hostId)
             // The hold account's turn runs until it is interrupted.
             key = try await fleet.createSession(

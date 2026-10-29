@@ -90,7 +90,7 @@ extension Fleet {
 }
 
 /// A machine's Backup section: the vault it backs up to and how far that got, its Back up
-/// switch, whether it takes handoffs, and stopping; or the ways to get a vault to back up to.
+/// switch, and stopping; or the ways to get a vault to back up to.
 /// It shows where the machine last said it backs up while it asks again.
 struct BackupSection: View {
     let fleet: Fleet
@@ -100,8 +100,6 @@ struct BackupSection: View {
     @State private var confirmingStop = false
     @State private var error: String?
     @State private var saves = Autosave()
-    /// Takes handoffs as just switched, until the vault's status says so.
-    @State private var handoffs: Bool?
 
     var body: some View {
         let link = fleet.backupLinks[machine.hostId]
@@ -137,8 +135,7 @@ struct BackupSection: View {
     }
 
     /// The vault, how far it got with this machine, the Back up switch, and Stop. The paired
-    /// vault reports how far it got and whether the machine takes handoffs; one not paired here,
-    /// nothing.
+    /// vault reports how far it got; one not paired here, nothing.
     @ViewBuilder private func linked(_ vault: LinkedVault) -> some View {
         let paired = fleet.pairedVault(vault)
         let replication = paired?.vault?.hosts.first { $0.hostId == machine.hostId }
@@ -151,26 +148,6 @@ struct BackupSection: View {
         VaultLinkSwitch(fleet: fleet, hostId: machine.hostId, vault: vault, key: \.backup, label: "Back up sessions",
                         hint: "Every session is replicated to the vault")
             .disabled(working)
-        if let paired, paired.role == .owner, let replication {
-            RowDivider()
-            SettingRow(label: "Takes handoffs from other machines",
-                       hint: "It may read their sessions from the vault", saved: saves["handoffs"]) {
-                Toggle("Takes handoffs from other machines", isOn: Binding(get: { handoffs ?? replication.read }, set: { on in
-                    handoffs = on
-                    Task {
-                        await saves.save("handoffs") {
-                            try await fleet.setTakesHandoffs(on, host: machine.hostId, vault: paired.hostId)
-                        }
-                        if case .failed = saves["handoffs"] { handoffs = nil }
-                    }
-                }))
-                .labelsHidden()
-                .toggleStyle(.settings)
-                .accessibilityIdentifier("takes-handoffs")
-            }
-            // The vault's status follows the change; until then the switch shows it.
-            .onChange(of: replication.read) { handoffs = nil }
-        }
     }
 
     /// Asks the machine again; a failure shows only while there is nothing known to show.

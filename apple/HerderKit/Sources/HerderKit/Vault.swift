@@ -83,9 +83,6 @@ struct VaultStats: Hashable, Identifiable {
         let freshness: Freshness
         /// When the vault stored its latest batch, once it has stored one since it started.
         var lastBatch: Date?
-        /// Whether it may read the vault, so it can take handoffs of other hosts' sessions;
-        /// `nil` until the vault's status arrives.
-        var takesHandoffs: Bool?
     }
 
     var id: HostId { hostId }
@@ -162,8 +159,7 @@ struct VaultStats: Hashable, Identifiable {
                 // The batch's newest event is the newest stored, and it arrived `lag` after it.
                 lastBatch: replication?.lagMs.flatMap { lag in
                     lastEvent.map { $0.addingTimeInterval(TimeInterval(lag) / 1000) }
-                },
-                takesHandoffs: replication?.read)
+                })
         }
         .sorted { $0.name.lowercased() < $1.name.lowercased() }
     }
@@ -213,12 +209,6 @@ extension Fleet {
     /// The paired vaults' statistics.
     var vaults: [VaultStats] {
         machines.compactMap { VaultStats(machine: $0, sessions: sessions) }
-    }
-
-    /// Lets `hostId` read `vault` so it can take handoffs of other hosts' sessions, or makes
-    /// it only back up there again. The host stays paired; the vault's status follows.
-    func setTakesHandoffs(_ on: Bool, host hostId: HostId, vault: HostId) async throws {
-        _ = try await client.send(hostId: vault, command: .setVaultHostAccess(hostId: hostId, read: on))
     }
 
     /// The vaults the connected machines back up to that this device is not paired with. Only

@@ -7,13 +7,16 @@ import Herder
 final class FakeDaemon {
     static let path = ProcessInfo.processInfo.environment["HERDER_FAKE_DAEMON"]
 
+    /// Its `herder://fleet` link.
     let link: String
+    /// Its owner's recorded passkey, as the daemon prints it (`RecordedPasskey`).
+    let passkey: String
     let repo: String
     let account: String
     /// The account whose turn runs until it is interrupted (`fixtures/hold.jsonl`).
     let holdAccount: String
-    /// Pairs a device as a member, where `link` pairs it as the owner.
-    let memberLink: String
+    /// A member's recorded passkey, where `passkey` is the owner's.
+    let memberPasskey: String
     /// A repository with a skill to import, `changelog`, in a folder of its name.
     let skillSource: String
     /// The account whose turn asks a question (`fixtures/question.jsonl`).
@@ -30,9 +33,9 @@ final class FakeDaemon {
         process.standardInput = stdin
         process.standardOutput = stdout
         try process.run()
-        let lines = try Self.readLines(7, from: stdout.fileHandleForReading)
-        (link, repo, account, holdAccount, memberLink, skillSource, questionAccount) = (
-            lines[0], lines[1], lines[2], lines[3], lines[4], lines[5], lines[6]
+        let lines = try Self.readLines(8, from: stdout.fileHandleForReading)
+        (link, passkey, repo, account, holdAccount, memberPasskey, skillSource, questionAccount) = (
+            lines[0], lines[1], lines[2], lines[3], lines[4], lines[5], lines[6], lines[7]
         )
     }
 
@@ -57,14 +60,18 @@ final class FakeDaemon {
 }
 
 extension Fleet {
-    /// Pairs with `daemon`, the one machine its link names, as its owner or as a member. The
-    /// fake daemon still hands out codes, which no screen of the app takes.
+    /// Signs in to `daemon`, the one machine its link names, as its owner or as a member, with
+    /// their recorded passkey.
     @discardableResult
-    func pair(_ daemon: FakeDaemon, member: Bool = false) async throws -> Machine {
-        let results = try await client.pair(link: member ? daemon.memberLink : daemon.link)
+    func signIn(to daemon: FakeDaemon, member: Bool = false) async throws -> Machine {
+        let at = try parseFleetLink(link: daemon.link).machines[0]
+        guard let passkey = RecordedPasskey(member ? daemon.memberPasskey : daemon.passkey) else {
+            throw HerderError.Local(detail: "the fake daemon printed no passkey")
+        }
+        let hostId = try await signIn(hosts: at.hosts, fingerprint: at.fingerprint, with: passkey)
         update(client.machines())
-        guard case .paired(let machine) = results.first, results.count == 1 else {
-            throw HerderError.Pairing(detail: "did not pair: \(results)")
+        guard let machine = client.machines().first(where: { $0.hostId == hostId }) else {
+            throw HerderError.UnknownMachine(hostId: hostId)
         }
         return machine
     }

@@ -70,9 +70,9 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
     }
     vault.vault = VaultStatus(sessions: UInt64(stored.count), events: 52_000, storageBytes: 245_000_000, hosts: [
         HostReplication(hostId: "h-mbp", sessions: 3, events: 20_000,
-                        lastEventAt: now.addingTimeInterval(-6 * 3600 - 120).ISO8601Format(), lagMs: 40, read: true),
+                        lastEventAt: now.addingTimeInterval(-6 * 3600 - 120).ISO8601Format(), lagMs: 40),
         HostReplication(hostId: "h-can", sessions: 4, events: 32_000,
-                        lastEventAt: now.addingTimeInterval(-180).ISO8601Format(), lagMs: 25, read: true),
+                        lastEventAt: now.addingTimeInterval(-180).ISO8601Format(), lagMs: 25),
     ])
     vault.quality.lastRttMs = 20
     return [mbp, can, draugelis, vault]

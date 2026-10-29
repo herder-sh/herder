@@ -1,8 +1,7 @@
 import Herder
 import SwiftUI
 
-/// A vault's page: how current its copy of each host is, with their sessions and whether they
-/// take handoffs, and who is on it; for its owners a Secrets tab: each set with the hosts it is granted to and
+/// A vault's page: how current its copy of each host is, with their sessions, and who is on it; for its owners a Secrets tab: each set with the hosts it is granted to and
 /// the secrets in it, and the latest fetches. Owners create and delete sets, add, replace and
 /// delete secrets, and grant a set to the vault's hosts or revoke it. A value is typed into a
 /// secure field and never shown again.
@@ -400,10 +399,7 @@ struct VaultOverview: View {
                 if let size = vault.size { Chip(text: size) }
             }
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 4) {
-                    SectionHeading(title: "Hosts", count: vault.hosts.count)
-                    InfoButton(text: "A host that takes handoffs may read other hosts' sessions from the vault, so you can hand one off to it.")
-                }
+                SectionHeading(title: "Hosts", count: vault.hosts.count)
                 if vault.hosts.isEmpty {
                     Text("No host backs up to this vault yet. Link one from its machine's Backup settings.")
                         .font(.subheadline).foregroundStyle(Theme.tertiary)
@@ -446,13 +442,6 @@ struct VaultOverview: View {
                 },
             ]
         }
-        columns.append(SortableColumn("Takes handoffs", width: 110) { host in
-            if vault.owned, let takesHandoffs = host.takesHandoffs {
-                HandoffToggle(fleet: fleet, vault: vault.hostId, host: host.id, takesHandoffs: takesHandoffs)
-            } else {
-                Text(host.takesHandoffs.map { $0 ? "On" : "Off" } ?? "–").foregroundStyle(Theme.secondary)
-            }
-        })
         return columns
     }
 
@@ -494,46 +483,6 @@ private struct FreshnessCell: View {
                 if let last = host.lastBatch ?? { if case .caughtUp(let last) = host.freshness { last } else { nil } }() {
                     RelativeTime(date: last).font(Theme.meta).foregroundStyle(Theme.tertiary).lineLimit(1)
                 }
-            }
-        }
-    }
-}
-
-/// Whether a host may read the vault, so a session can be handed off to it, for the vault's
-/// owners. Shows the change at once and keeps it until the vault's status agrees.
-private struct HandoffToggle: View {
-    let fleet: Fleet
-    let vault: HostId
-    let host: HostId
-    let takesHandoffs: Bool
-    @State private var asked: Bool?
-    @State private var error: String?
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Toggle("Takes handoffs", isOn: Binding(get: { asked ?? takesHandoffs }, set: { change($0) }))
-                .toggleStyle(.settings)
-                .labelsHidden()
-                .controlSize(.small)
-                .disabled(asked != nil)
-                .accessibilityIdentifier("takes-handoffs-\(host)")
-            if let error {
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.failure).help(error)
-            }
-        }
-        .onChange(of: takesHandoffs) { asked = nil }
-    }
-
-    private func change(_ on: Bool) {
-        asked = on
-        error = nil
-        Task {
-            do {
-                try await fleet.setTakesHandoffs(on, host: host, vault: vault)
-                if on == takesHandoffs { asked = nil }
-            } catch {
-                self.error = describe(error)
-                asked = nil
             }
         }
     }

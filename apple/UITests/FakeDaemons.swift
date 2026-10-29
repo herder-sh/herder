@@ -16,9 +16,16 @@ extension XCUIApplication {
 
     /// The links of the fake daemons the tests run against (`fake_daemon --share` prints the
     /// first; pass it to `xcodebuild test` as `TEST_RUNNER_HERDER_PAIR_LINK`), and `extra` ones.
+    /// The app signs in to them with the passkey the fake daemons print, which every one of them
+    /// knows: pass it as `TEST_RUNNER_HERDER_PASSKEY`.
     static func fakeFleet(_ extra: [String] = []) throws -> String {
         let link = try XCTUnwrap(ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
         return ([link] + extra).joined(separator: " ")
+    }
+
+    /// The fake daemons' owner's passkey (`TEST_RUNNER_HERDER_PASSKEY`).
+    static func fakePasskey() throws -> String {
+        try XCTUnwrap(ProcessInfo.processInfo.environment["HERDER_PASSKEY"], "needs HERDER_PASSKEY")
     }
 
     /// Launches the app on the fake daemons, which it joins at launch unless an earlier test
@@ -26,6 +33,7 @@ extension XCUIApplication {
     @MainActor
     func launchOnFakeFleet(_ extra: [String] = []) throws {
         launchEnvironment["HERDER_FAKE_FLEET"] = try Self.fakeFleet(extra)
+        launchEnvironment["HERDER_FAKE_PASSKEY"] = try Self.fakePasskey()
         launch()
         XCTAssertTrue(tabBars.buttons["Board"].waitForExistence(timeout: 30), "the app did not show the Board")
     }

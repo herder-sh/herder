@@ -13,7 +13,7 @@ struct McpServersTests {
         }
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
-        let machine = try await fleet.pair(daemon)
+        let machine = try await fleet.signIn(to: daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         #expect(try await fleet.mcpServers(on: machine.hostId).isEmpty)
 

@@ -1,8 +1,8 @@
 import XCTest
 
 /// Holds the Mac app on a scene for `profile-mac.sh` to record: launches the copy of the app at
-/// `HERDER_PROFILE_APP` on a fresh profile, pairs it with `fake_daemon --busy` through
-/// `HERDER_PAIR_LINK`, opens the scene `HERDER_PROFILE_SCENE` names (`session`, the busy
+/// `HERDER_PROFILE_APP` on a fresh profile, signs it in to `fake_daemon --busy` through
+/// `HERDER_PAIR_LINK` with the passkey `HERDER_PASSKEY`, opens the scene `HERDER_PROFILE_SCENE` names (`session`, the busy
 /// session's streaming transcript; `board`; or `switch`, which goes back and forth between the
 /// busy session and a finished one every two seconds), prints `herder-profile-ready <the app's
 /// pid>` and holds the scene `HERDER_PROFILE_SECONDS`. Pass each to `xcodebuild test` as
@@ -14,6 +14,7 @@ final class ProfileTests: XCTestCase {
         let environment = ProcessInfo.processInfo.environment
         let path = try XCTUnwrap(environment["HERDER_PROFILE_APP"], "needs HERDER_PROFILE_APP")
         let link = try XCTUnwrap(environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
+        let passkey = try XCTUnwrap(environment["HERDER_PASSKEY"], "needs HERDER_PASSKEY")
         let scene = environment["HERDER_PROFILE_SCENE"] ?? "session"
         let seconds = Double(environment["HERDER_PROFILE_SECONDS"] ?? "") ?? 20
 
@@ -22,6 +23,7 @@ final class ProfileTests: XCTestCase {
         app.launchEnvironment["HERDER_PROFILE"] = "profile-\(UUID().uuidString)"
         // The app joins the fake daemons at launch (`Fleet.joinFakeFleet`).
         app.launchEnvironment["HERDER_FAKE_FLEET"] = link
+        app.launchEnvironment["HERDER_FAKE_PASSKEY"] = passkey
         app.launch()
 
         let busy = row(in: app, titled: "A long transcript, still streaming")
