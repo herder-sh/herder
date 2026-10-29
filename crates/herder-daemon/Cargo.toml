@@ -59,6 +59,8 @@ webauthn-rs.workspace = true
 webauthn-rs-proto.workspace = true
 
 [dev-dependencies]
+# The integration tests sign people in with the software authenticator.
+herder-daemon = { workspace = true, features = ["test-authenticator"] }
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
