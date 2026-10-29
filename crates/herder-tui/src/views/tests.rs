@@ -861,9 +861,8 @@ fn typed(app: &mut App, text: &str) {
     }
 }
 
-pub(super) const LINK: &str = "herder://pair?host=192.168.1.5%3A7447&host=10.0.0.2%3A7447\
-                    &fp=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\
-                    &code=ABCDE-FGHJK";
+pub(super) const LINK: &str = "herder://fleet?host=192.168.1.5%3A7447&host=10.0.0.2%3A7447\
+                    &fp=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
 #[test]
 fn the_machines_panel_shows_connections_and_fingerprints() {
@@ -973,7 +972,9 @@ fn the_add_dialog_shows_the_fingerprint_to_check() {
     press(&mut app, KeyCode::Enter);
     let mut paired = fake::machine("h2", "laptop", &[]);
     paired.fingerprint = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into();
-    app.update(Msg::Paired(Ok(Box::new(paired))));
+    app.update(Msg::LoginCode("K7Q-4PD".into()));
+    insta::assert_snapshot!("login_code", render(&mut app, 90, 20).backend());
+    app.update(Msg::SignedIn(Ok(Box::new(paired))));
     insta::assert_snapshot!("paired", render(&mut app, 90, 16).backend());
 }
 
@@ -1425,7 +1426,6 @@ fn a_vaults_status_shows_in_the_machines_panel() {
                 events: 1000,
                 last_event_at: Some(herder_protocol::Timestamp::now()),
                 lag_ms: Some(40),
-                read: false,
             },
             HostReplication {
                 host_id: HostId::new("laptop"),
@@ -1433,7 +1433,6 @@ fn a_vaults_status_shows_in_the_machines_panel() {
                 events: 250,
                 last_event_at: None,
                 lag_ms: None,
-                read: false,
             },
         ],
     });

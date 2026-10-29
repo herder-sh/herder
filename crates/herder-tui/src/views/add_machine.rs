@@ -1,7 +1,8 @@
-//! The add-machine dialog: the link `herder pair` prints, or its address, fingerprint and
-//! code; then the fingerprint to check before pairing; then what was paired.
+//! The add-machine dialog: the `herder://fleet` link an app shares, or a machine's address and
+//! fingerprint; then the fingerprint to check; then the code an app of yours approves; then the
+//! machine this terminal signed in to.
 
-use herder_client_core::{ConnectionState, Machine, PairingUri};
+use herder_client_core::{ConnectionState, FleetMachine, LoginUri, Machine};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -63,24 +64,53 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, add: &AddMachine, h
                 Hint::new("esc", "cancel"),
             ],
         ),
-        Step::Confirm(uri) => (
-            confirm(app, ui, uri),
-            vec![Hint::new("enter", "pair"), Hint::new("esc", "back")],
+        Step::Confirm(machine) => (
+            confirm(app, ui, machine),
+            vec![Hint::new("enter", "sign in"), Hint::new("esc", "back")],
         ),
-        Step::Pairing(uri) => (
+        Step::SigningIn(machine, None) => (
             vec![Part::Text(
                 format!(
-                    "Pairing with {}{}",
-                    uri.hosts.join(", "),
+                    "Asking {} for a code{}",
+                    machine.hosts.join(", "),
                     ui.glyphs.ellipsis
                 ),
                 ui.text(),
             )],
             vec![Hint::new("esc", "close")],
         ),
-        Step::Paired(machine) => (
+        Step::SigningIn(machine, Some(code)) => {
+            let link = LoginUri {
+                hosts: machine.hosts.clone(),
+                fingerprint: machine.fingerprint.clone(),
+                code: code.clone(),
+            };
+            (
+                vec![
+                    Part::Text(
+                        "Open this link on a device with a herder app of yours, and approve it \
+                         there with Face ID:"
+                            .into(),
+                        ui.text(),
+                    ),
+                    Part::Blank,
+                    Part::Text(link.to_string(), ui.accent()),
+                    Part::Blank,
+                    Part::Fact(
+                        "code",
+                        code.clone(),
+                        Style::new()
+                            .fg(ui.theme.warning)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Part::Text("Check the app shows the same code.".into(), ui.muted()),
+                ],
+                vec![Hint::new("esc", "close")],
+            )
+        }
+        Step::SignedIn(machine) => (
             vec![
-                Part::Text(format!("Paired with {}.", machine.name), ui.strong()),
+                Part::Text(format!("Signed in to {}.", machine.name), ui.strong()),
                 Part::Blank,
                 Part::Fact("host id", machine.host_id.to_string(), ui.text()),
                 Part::Fact("fingerprint", grouped(&machine.fingerprint), ui.text()),
@@ -126,13 +156,16 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, add: &AddMachine, h
 fn edit<'a>(ui: Ui, form: &'a Form, failed: Option<&String>) -> Vec<Part<'a>> {
     let mut parts = vec![
         Part::Text(
-            "On the machine to add, run `herder pair` and paste the link it prints.".into(),
+            "Paste the link a herder app of yours shares under Add to Fleet › A device.".into(),
             ui.muted(),
         ),
         Part::Blank,
-        Part::Field(Field::Link, "link", &form.link, "herder://pair?…"),
+        Part::Field(Field::Link, "link", &form.link, "herder://fleet?…"),
         Part::Blank,
-        Part::Text("or what it prints, line by line:".into(), ui.muted()),
+        Part::Text(
+            "or the machine's address and fingerprint, as its page in the app shows them:".into(),
+            ui.muted(),
+        ),
         Part::Field(Field::Host, "address", &form.host, "host[:7447]"),
         Part::Field(
             Field::Fingerprint,
@@ -140,7 +173,6 @@ fn edit<'a>(ui: Ui, form: &'a Form, failed: Option<&String>) -> Vec<Part<'a>> {
             &form.fingerprint,
             "64 hex digits",
         ),
-        Part::Field(Field::Code, "code", &form.code, "one-time code"),
     ];
     if let Some(failed) = failed {
         parts.push(Part::Blank);
@@ -202,13 +234,13 @@ fn grouped(fingerprint: &str) -> String {
         .join(" ")
 }
 
-/// The check before pairing: where to, and the fingerprint to compare.
-fn confirm<'a>(app: &App, ui: Ui, uri: &PairingUri) -> Vec<Part<'a>> {
-    let fingerprint = uri.fingerprint.to_ascii_lowercase();
+/// The check before signing in: where to, and the fingerprint to compare.
+fn confirm<'a>(app: &App, ui: Ui, machine: &FleetMachine) -> Vec<Part<'a>> {
+    let fingerprint = machine.fingerprint.to_ascii_lowercase();
     let mut parts = vec![
-        Part::Text("Pair with this daemon?".into(), ui.strong()),
+        Part::Text("Sign in to this daemon?".into(), ui.strong()),
         Part::Blank,
-        Part::Fact("address", uri.hosts.join(", "), ui.text()),
+        Part::Fact("address", machine.hosts.join(", "), ui.text()),
         Part::Fact(
             "fingerprint",
             grouped(&fingerprint),
@@ -218,14 +250,14 @@ fn confirm<'a>(app: &App, ui: Ui, uri: &PairingUri) -> Vec<Part<'a>> {
         ),
         Part::Blank,
         Part::Text(
-            "Check it is the fingerprint `herder pair` printed on that machine.".into(),
+            "Check it is the fingerprint the machine's page in the app shows.".into(),
             ui.text(),
         ),
     ];
     if let Some(known) = app.machines.iter().find(|m| m.fingerprint == fingerprint) {
         parts.push(Part::Text(
             format!(
-                "Already paired as {}: pairing again gives it a new key.",
+                "Already signed in as {}: signing in again gives it a new key.",
                 known.name
             ),
             ui.muted(),

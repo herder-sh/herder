@@ -1,4 +1,4 @@
-//! The screen shown while no machine is paired: how to pair one, through the add-machine dialog.
+//! The screen shown while this terminal is signed in to no machine: how to sign in to one.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -10,14 +10,14 @@ use crate::ui::Ui;
 pub(super) fn draw(frame: &mut Frame, area: Rect, ui: Ui) {
     let command = ui.accent();
     let text = Text::from(vec![
-        Line::styled("No machines paired yet.", ui.strong()),
+        Line::styled("No machines yet.", ui.strong()),
         Line::raw(""),
-        Line::raw("On a machine running the herder daemon, run"),
+        Line::raw("Sign this terminal in to a machine with"),
         Line::raw(""),
-        Line::styled("herder pair", command),
+        Line::styled("herder login", command),
         Line::raw(""),
-        Line::raw("It prints a one-time pairing link. Press a here and paste it,"),
-        Line::raw("or paste it anywhere in herder."),
+        Line::raw("or press a here and paste the link a herder app of yours shares,"),
+        Line::raw("then approve this terminal in that app."),
     ])
     .centered();
     let height = u16::try_from(text.height()).unwrap_or(u16::MAX);

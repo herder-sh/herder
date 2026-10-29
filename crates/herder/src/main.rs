@@ -1,6 +1,5 @@
 //! The single herder binary: `herder daemon` runs the daemon, bare `herder` opens the TUI.
 
-mod connect;
 mod dev;
 mod doctor;
 mod fork;
@@ -51,11 +50,6 @@ enum Command {
     },
     /// Sign this terminal in as a person: an app of yours approves the code it shows.
     Login(login::Args),
-    /// Pair this device with a daemon, from the link `herder pair` printed on its machine.
-    Connect {
-        /// The `herder://pair?...` link.
-        link: String,
-    },
     /// Create, prompt, wait on and archive sessions from scripts.
     Session(session::Args),
     /// Fork a session onto this host: its history goes on in a new session here.
@@ -137,7 +131,6 @@ fn main() -> ExitCode {
         Some(Command::Pair(args)) => pair::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Claim { config }) => pair::claim(config).map(|()| ExitCode::SUCCESS),
         Some(Command::Login(args)) => login::run(args).map(|()| ExitCode::SUCCESS),
-        Some(Command::Connect { link }) => connect::run(&link).map(|()| ExitCode::SUCCESS),
         Some(Command::Session(args)) => session::run(args),
         Some(Command::Fork(args)) => fork::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Secret { command }) => secret::run(command).map(|()| ExitCode::SUCCESS),

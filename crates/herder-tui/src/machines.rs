@@ -3,15 +3,16 @@
 //!
 //! The panel lists every paired machine with its connection, role, accounts, addresses and
 //! pinned fingerprint, and renames the selected one on this device or forgets it here. Its add
-//! dialog pairs a new one: paste the `herder://pair` link `herder pair`
-//! printed, or type its address, fingerprint and code; check the fingerprint; pair. Pasting a
-//! link anywhere in the TUI opens the dialog at that check.
+//! dialog signs this terminal in to another: paste the `herder://fleet` link an app of yours
+//! shares, or type the machine's address and fingerprint; check the fingerprint; then an app
+//! of yours approves the code the dialog shows, as for `herder login`. Pasting a link anywhere
+//! in the TUI opens the dialog at that check.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 
 use herder_client_core::Machine;
-use herder_client_core::PairingUri;
+use herder_client_core::{FleetLink, FleetMachine};
 use herder_protocol::{HostId, VaultVolume};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -71,7 +72,7 @@ impl MachinePanel {
 pub struct AddMachine {
     /// What the user entered.
     pub form: Form,
-    /// Where pairing stands.
+    /// Where signing in stands.
     pub step: Step,
 }
 
@@ -83,25 +84,24 @@ pub enum Step {
     Edit,
     /// Entering again after a failure.
     Failed(String),
-    /// Checking the fingerprint before pairing.
-    Confirm(PairingUri),
-    /// Waiting for the daemon to accept the code.
-    Pairing(PairingUri),
-    /// Paired.
-    Paired(Box<Machine>),
+    /// Checking the fingerprint before signing in.
+    Confirm(FleetMachine),
+    /// Waiting for an app of the person to approve the login: its code, once the machine
+    /// gave one.
+    SigningIn(FleetMachine, Option<String>),
+    /// Signed in.
+    SignedIn(Box<Machine>),
 }
 
-/// The add-machine form: a pasted link, or what `herder pair` prints field by field.
+/// The add-machine form: a pasted link, or the machine's address and fingerprint.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Form {
-    /// The `herder://pair` link.
+    /// The `herder://fleet` link, of one machine.
     pub link: String,
     /// The daemon's address, `host[:port]`.
     pub host: String,
     /// SHA-256 of the daemon's certificate.
     pub fingerprint: String,
-    /// The one-time pairing code.
-    pub code: String,
     /// The field being typed in.
     pub focus: Field,
 }
@@ -116,12 +116,10 @@ pub enum Field {
     Host,
     /// The fingerprint.
     Fingerprint,
-    /// The code.
-    Code,
 }
 
 impl Field {
-    const ALL: [Field; 4] = [Field::Link, Field::Host, Field::Fingerprint, Field::Code];
+    const ALL: [Field; 3] = [Field::Link, Field::Host, Field::Fingerprint];
 
     fn next(self, forward: bool) -> Field {
         let len = Self::ALL.len();
@@ -134,7 +132,7 @@ impl Field {
 impl Form {
     /// Whether nothing is typed in any field.
     fn is_empty(&self) -> bool {
-        [&self.link, &self.host, &self.fingerprint, &self.code]
+        [&self.link, &self.host, &self.fingerprint]
             .iter()
             .all(|field| field.is_empty())
     }
@@ -144,21 +142,24 @@ impl Form {
             Field::Link => &mut self.link,
             Field::Host => &mut self.host,
             Field::Fingerprint => &mut self.fingerprint,
-            Field::Code => &mut self.code,
         }
     }
 
-    /// The pairing link the form describes: the link if one is entered, else the fields.
-    pub fn uri(&self) -> Result<PairingUri, String> {
+    /// The machine the form names: the link's if one is entered, else the fields'.
+    pub fn machine(&self) -> Result<FleetMachine, String> {
         let link = self.link.trim();
         if !link.is_empty() {
-            return link
+            let link: FleetLink = link
                 .parse()
-                .map_err(|err: herder_client_core::Error| err.to_string());
+                .map_err(|err: herder_client_core::Error| err.to_string())?;
+            let count = link.machines.len();
+            return <[FleetMachine; 1]>::try_from(link.machines)
+                .map(|[machine]| machine)
+                .map_err(|_| format!("the link names {count} machines; add them one at a time"));
         }
         let host = self.host.trim();
         if host.is_empty() {
-            return Err("paste the link, or enter the address, fingerprint and code".to_owned());
+            return Err("paste the link, or enter the address and fingerprint".to_owned());
         }
         let fingerprint: String = self
             .fingerprint
@@ -167,16 +168,14 @@ impl Form {
             .collect::<String>()
             .to_ascii_lowercase();
         if fingerprint.len() != 64 || !fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err("the fingerprint is 64 hex digits, as `herder pair` prints it".to_owned());
+            return Err(
+                "the fingerprint is 64 hex digits, as the machine's page in the app shows it"
+                    .to_owned(),
+            );
         }
-        let code = self.code.trim();
-        if code.is_empty() {
-            return Err("enter the pairing code".to_owned());
-        }
-        Ok(PairingUri {
+        Ok(FleetMachine {
             hosts: vec![with_port(host)],
             fingerprint,
-            code: code.to_owned(),
         })
     }
 }
@@ -224,7 +223,7 @@ pub enum Input {
     Left,
     /// Pick the next choice.
     Right,
-    /// Go on: check the form, pair, or finish.
+    /// Go on: check the form, sign in, or finish.
     Submit,
     /// Type a character.
     Char(char),
@@ -286,7 +285,7 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             _ => return None,
         },
         Some(AddMachine {
-            step: Step::Confirm(_) | Step::Paired(_),
+            step: Step::Confirm(_) | Step::SignedIn(_),
             ..
         }) => match key.code {
             KeyCode::Enter => Input::Submit,
@@ -294,7 +293,7 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             _ => return None,
         },
         Some(AddMachine {
-            step: Step::Pairing(_),
+            step: Step::SigningIn(..),
             ..
         }) => match key.code {
             KeyCode::Esc | KeyCode::Backspace => Input::Close,
@@ -427,7 +426,7 @@ impl App {
             return Vec::new();
         };
         match (&add.step, input) {
-            (Step::Edit | Step::Failed(_), Input::Close) | (Step::Pairing(_), Input::Close) => {
+            (Step::Edit | Step::Failed(_), Input::Close) | (Step::SigningIn(..), Input::Close) => {
                 panel.add = None;
             }
             (Step::Edit | Step::Failed(_), Input::Submit) => add.check(),
@@ -444,21 +443,21 @@ impl App {
             (Step::Edit | Step::Failed(_), Input::Clear) => add.form.field().clear(),
             (Step::Edit | Step::Failed(_), Input::Focus(field)) => add.form.focus = field,
             (Step::Confirm(_), Input::Close) => add.step = Step::Edit,
-            (Step::Confirm(uri), Input::Submit) => {
-                let link = uri.to_string();
-                add.step = Step::Pairing(uri.clone());
-                return vec![Effect::Pair(link)];
+            (Step::Confirm(machine), Input::Submit) => {
+                let machine = machine.clone();
+                add.step = Step::SigningIn(machine.clone(), None);
+                return vec![Effect::LogIn(machine)];
             }
-            (Step::Paired(_), Input::Submit | Input::Close) => self.machine_panel = None,
+            (Step::SignedIn(_), Input::Submit | Input::Close) => self.machine_panel = None,
             _ => {}
         }
         Vec::new()
     }
 
-    /// Pasted text for the machines panel: into the add dialog's field, or a pairing link to
-    /// open the dialog with. Returns whether it took the text; a link pasted while the composer,
+    /// Pasted text for the machines panel: into the add dialog's field, or a link to open the
+    /// dialog with. Returns whether it took the text; a link pasted while the composer,
     /// one of its dialogs or the PR link prompt has the keys is left to them.
-    pub(crate) fn paste_pairing(&mut self, text: &str) -> bool {
+    pub(crate) fn paste_link(&mut self, text: &str) -> bool {
         let text = text.trim();
         let Some(panel) = &mut self.machine_panel else {
             let composing = self.focus == Focus::Composer
@@ -488,22 +487,34 @@ impl App {
         true
     }
 
-    /// The outcome of pairing, for the dialog if it still waits for it.
-    pub(crate) fn paired(&mut self, result: Result<Box<Machine>, String>) {
+    /// The code the machine gave the login, for the dialog to show while it waits.
+    pub(crate) fn login_code(&mut self, code: String) {
+        if let Some(Step::SigningIn(_, shown)) = self
+            .machine_panel
+            .as_mut()
+            .and_then(|panel| panel.add.as_mut())
+            .map(|add| &mut add.step)
+        {
+            *shown = Some(code);
+        }
+    }
+
+    /// The outcome of signing in, for the dialog if it still waits for it.
+    pub(crate) fn signed_in(&mut self, result: Result<Box<Machine>, String>) {
         let Some(panel) = &mut self.machine_panel else {
             return;
         };
         let Some(add) = panel
             .add
             .as_mut()
-            .filter(|a| matches!(a.step, Step::Pairing(_)))
+            .filter(|a| matches!(a.step, Step::SigningIn(..)))
         else {
             return;
         };
         match result {
             Ok(machine) => {
                 panel.chosen = Some(machine.host_id.clone());
-                add.step = Step::Paired(machine);
+                add.step = Step::SignedIn(machine);
             }
             Err(error) => add.step = Step::Failed(error),
         }
@@ -527,8 +538,8 @@ impl AddMachine {
 
     /// Moves on to the fingerprint check if the form is complete.
     fn check(&mut self) {
-        self.step = match self.form.uri() {
-            Ok(uri) => Step::Confirm(uri),
+        self.step = match self.form.machine() {
+            Ok(machine) => Step::Confirm(machine),
             Err(error) => Step::Failed(error),
         };
     }
@@ -567,11 +578,16 @@ mod tests {
             .step
     }
 
-    fn link() -> String {
-        PairingUri {
+    fn target() -> FleetMachine {
+        FleetMachine {
             hosts: vec!["127.0.0.1:7447".into()],
             fingerprint: FP.into(),
-            code: "ABCDE-FGHJK".into(),
+        }
+    }
+
+    fn link() -> String {
+        FleetLink {
+            machines: vec![target()],
         }
         .to_string()
     }
@@ -612,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn a_typed_link_is_checked_then_paired() {
+    fn a_typed_link_is_checked_then_signed_in_to() {
         let mut app = App::default();
         press(&mut app, KeyCode::Char('a'));
         typed(&mut app, "herder://nope");
@@ -624,22 +640,24 @@ mod tests {
         )));
         typed(&mut app, &link());
         press(&mut app, KeyCode::Enter);
-        let Step::Confirm(uri) = step(&app) else {
-            panic!("{:?}", step(&app));
-        };
-        assert_eq!(uri.fingerprint, FP);
+        assert_eq!(*step(&app), Step::Confirm(target()));
         // Back to the form, and on again.
         press(&mut app, KeyCode::Esc);
         assert_eq!(*step(&app), Step::Edit);
         press(&mut app, KeyCode::Enter);
-        assert_eq!(press(&mut app, KeyCode::Enter), [Effect::Pair(link())]);
-        assert!(matches!(step(&app), Step::Pairing(_)));
-        // Keys other than Esc do nothing while pairing.
+        assert_eq!(press(&mut app, KeyCode::Enter), [Effect::LogIn(target())]);
+        assert_eq!(*step(&app), Step::SigningIn(target(), None));
+        // Keys other than Esc do nothing while signing in; the code shows once given.
         assert_eq!(press(&mut app, KeyCode::Enter), []);
+        app.update(Msg::LoginCode("K7Q-4PD".into()));
+        assert_eq!(
+            *step(&app),
+            Step::SigningIn(target(), Some("K7Q-4PD".into()))
+        );
 
         let new = machine("h9", "laptop", &[]);
-        app.update(Msg::Paired(Ok(Box::new(new.clone()))));
-        assert_eq!(*step(&app), Step::Paired(Box::new(new)));
+        app.update(Msg::SignedIn(Ok(Box::new(new.clone()))));
+        assert_eq!(*step(&app), Step::SignedIn(Box::new(new)));
         assert_eq!(
             app.machine_panel.as_ref().unwrap().chosen,
             Some(HostId::new("h9"))
@@ -649,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn the_fields_make_a_link() {
+    fn the_fields_name_a_machine() {
         let mut app = App::default();
         press(&mut app, KeyCode::Char('a'));
         press(&mut app, KeyCode::Tab);
@@ -657,19 +675,19 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(
             *step(&app),
-            Step::Failed("the fingerprint is 64 hex digits, as `herder pair` prints it".into())
+            Step::Failed(
+                "the fingerprint is 64 hex digits, as the machine's page in the app shows it"
+                    .into()
+            )
         );
         press(&mut app, KeyCode::Tab);
         typed(&mut app, &FP.to_ascii_uppercase());
-        press(&mut app, KeyCode::Down);
-        typed(&mut app, "abcde-fghjk");
         press(&mut app, KeyCode::Enter);
         assert_eq!(
             *step(&app),
-            Step::Confirm(PairingUri {
+            Step::Confirm(FleetMachine {
                 hosts: vec!["box.lan:7447".into()],
                 fingerprint: FP.into(),
-                code: "abcde-fghjk".into(),
             })
         );
     }
@@ -685,13 +703,16 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_pairing_returns_to_the_form_with_the_error() {
+    fn a_failed_sign_in_returns_to_the_form_with_the_error() {
         let mut app = App::default();
         app.update(Msg::Paste(format!("{}\n", link())));
         assert!(matches!(step(&app), Step::Confirm(_)));
         press(&mut app, KeyCode::Enter);
-        app.update(Msg::Paired(Err("pairing failed: bad code".into())));
-        assert_eq!(*step(&app), Step::Failed("pairing failed: bad code".into()));
+        app.update(Msg::SignedIn(Err("nobody approved it in time".into())));
+        assert_eq!(
+            *step(&app),
+            Step::Failed("nobody approved it in time".into())
+        );
         // The form keeps the link, to try again.
         let form = &app
             .machine_panel
@@ -711,14 +732,27 @@ mod tests {
         assert_eq!(app.machine_panel, None);
         app.update(Msg::Paste(link()));
         assert!(matches!(step(&app), Step::Confirm(_)));
-        // A link pasted while pairing changes nothing.
+        // A link pasted while signing in changes nothing.
         press(&mut app, KeyCode::Enter);
         app.update(Msg::Paste(link()));
-        assert!(matches!(step(&app), Step::Pairing(_)));
-        // Closing while pairing drops the dialog; the late outcome is ignored.
+        assert!(matches!(step(&app), Step::SigningIn(..)));
+        // Closing while signing in drops the dialog; the late outcome is ignored.
         press(&mut app, KeyCode::Esc);
-        app.update(Msg::Paired(Ok(Box::new(machine("h9", "laptop", &[])))));
+        app.update(Msg::SignedIn(Ok(Box::new(machine("h9", "laptop", &[])))));
         assert_eq!(app.machine_panel.as_ref().unwrap().add, None);
+    }
+
+    #[test]
+    fn a_link_of_several_machines_is_added_one_at_a_time() {
+        let mut app = App::default();
+        let two = FleetLink {
+            machines: vec![target(), target()],
+        };
+        app.update(Msg::Paste(two.to_string()));
+        assert_eq!(
+            *step(&app),
+            Step::Failed("the link names 2 machines; add them one at a time".into())
+        );
     }
 
     #[test]
