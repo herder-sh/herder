@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# The software authenticator of `auth::authenticator`, for other crates' tests; dev-only.
+test-authenticator = []
+
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true
