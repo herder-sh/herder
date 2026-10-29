@@ -2192,7 +2192,12 @@ impl mcp::Control for Commands {
         })
     }
 
-    fn command(&self, user_id: UserId, command: CommandBody) -> mcp::ControlFuture<CommandResult> {
+    fn command(
+        &self,
+        _: SessionId,
+        user_id: UserId,
+        command: CommandBody,
+    ) -> mcp::ControlFuture<CommandResult> {
         let refused = matches!(command, CommandBody::RestartDaemon);
         self.ran.lock().unwrap().push((user_id, command));
         Box::pin(async move {

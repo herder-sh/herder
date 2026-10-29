@@ -32,6 +32,26 @@ func created(task: String? = nil, parent: SessionId? = nil, branch: String = "he
 }
 
 struct SessionModelTests {
+    @Test func agentsActForTheLatestPromptsSenderAndAForkForWhoForkedIt() {
+        var script = Script()
+        let prompt = { (id: String) in
+            EventBody.itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: id, turnId: "t1",
+                                           body: .userMessage(text: "Go.", attachments: [])))
+        }
+        var model = SessionModel(key: script.key)
+        model.apply(script.event(created(), by: "a-user"))
+        model.apply(script.event(prompt("i1"), by: "a-user"))
+        #expect(model.actsFor == "a-user")
+        // Forked here: the history before was prompted on another machine, by its users.
+        model.apply(script.event(.sessionForked(fromSession: "original", fromHost: "host-a"), by: "b-user"))
+        #expect(model.actsFor == "b-user")
+        // An agent's message prompts for no one.
+        model.apply(script.event(prompt("i2")))
+        #expect(model.actsFor == "b-user")
+        model.apply(script.event(prompt("i3"), by: "carol"))
+        #expect(model.actsFor == "carol")
+    }
+
     @Test func aGeneratedTitleNamesTheSessionOverItsBranch() {
         var script = Script()
         var model = script.model([created()])

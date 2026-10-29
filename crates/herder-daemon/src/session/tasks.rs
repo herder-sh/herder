@@ -35,8 +35,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use herder_protocol::{
-    CommandResult, ErrorInfo, EventBody, PermissionMode, SecretError, SecretErrorCode, SecretRef,
-    SessionId, SessionStatus, UserId,
+    CommandResult, ErrorInfo, Event, EventBody, PermissionMode, SecretError, SecretErrorCode,
+    SecretRef, SessionId, SessionStatus, UserId,
 };
 use herder_store::Session;
 use herder_tasktools::{
@@ -300,6 +300,25 @@ pub(super) fn no_vault() -> SecretError {
     }
 }
 
+/// Who sent the latest prompt in `events` that a person sent. A fork's history before its
+/// `session_forked` was prompted on another host, `by` that host's users, none of them this
+/// daemon's: the fork stands for the user who forked it until someone prompts it here.
+fn prompter(events: &[Event]) -> Option<UserId> {
+    for event in events.iter().rev() {
+        match &event.body {
+            EventBody::ItemAdded { item }
+                if matches!(item.body, herder_protocol::ItemBody::UserMessage { .. })
+                    && event.by.is_some() =>
+            {
+                return event.by.clone();
+            }
+            EventBody::SessionForked { .. } => return event.by.clone(),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn success<T: Serialize>(output: Result<T, ToolError>) -> Result<CallToolResult, ToolError> {
     CallToolResult::success(&output?).map_err(|err| tool_internal(err.to_string()))
 }
@@ -365,9 +384,9 @@ impl SessionManager {
         input: CommandInput,
     ) -> Result<CommandResult, ToolError> {
         let control = self.control()?;
-        let user_id = self.acts_for(caller).await?;
+        let user_id = self.acts_for(caller.clone()).await?;
         control
-            .command(user_id, input.command)
+            .command(caller, user_id, input.command)
             .await
             .map_err(tool_error)
     }
@@ -420,7 +439,7 @@ impl SessionManager {
 
     /// The user who sent the latest prompt of `session`, or for a child its primary's, that
     /// a person sent: the prompt behind the current turn, as agents' messages and the daemon's
-    /// follow-ups prompt for no one. An agent acts for them.
+    /// follow-ups prompt for no one. An agent acts for them; see [`prompter`].
     pub(super) async fn acts_for(&self, mut session: SessionId) -> Result<UserId, ToolError> {
         loop {
             let events = self
@@ -441,15 +460,7 @@ impl SessionManager {
                 session = parent.clone();
                 continue;
             }
-            let sender = events.iter().rev().find_map(|event| match &event.body {
-                EventBody::ItemAdded { item }
-                    if matches!(item.body, herder_protocol::ItemBody::UserMessage { .. }) =>
-                {
-                    event.by.clone()
-                }
-                _ => None,
-            });
-            return sender.ok_or_else(|| {
+            return prompter(&events).ok_or_else(|| {
                 ToolError::new(
                     ErrorCode::NotAllowed,
                     "no user of this daemon prompted your session, so it runs no herder commands",
@@ -832,5 +843,67 @@ fn mode_name(mode: PermissionMode) -> &'static str {
         PermissionMode::Ask => "ask",
         PermissionMode::AutoEdit => "auto_edit",
         PermissionMode::FullAccess => "full_access",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use herder_protocol::{HostId, Item, ItemBody, ItemId, TurnId};
+
+    use super::*;
+
+    fn event(by: Option<&str>, body: EventBody) -> Event {
+        Event {
+            session_id: SessionId::new("fork"),
+            seq: 1,
+            at: "2026-10-28T14:33:56Z".parse().unwrap(),
+            by: by.map(UserId::new),
+            body,
+        }
+    }
+
+    fn prompt(by: Option<&str>) -> Event {
+        let item = Item {
+            agent_message: None,
+            follow_up: None,
+            parent_call_id: None,
+            id: ItemId::new("item"),
+            turn_id: TurnId::new("turn"),
+            body: ItemBody::UserMessage {
+                text: "Go.".into(),
+                attachments: Vec::new(),
+            },
+        };
+        event(by, EventBody::ItemAdded { item })
+    }
+
+    fn forked(by: Option<&str>) -> Event {
+        let body = EventBody::SessionForked {
+            from_session: SessionId::new("original"),
+            from_host: HostId::new("host-a"),
+        };
+        event(by, body)
+    }
+
+    #[test]
+    fn a_fork_acts_for_who_forked_it_not_for_who_prompted_its_original() {
+        // The original was prompted on host A by A's user; this host's user forked it.
+        let mut events = vec![prompt(Some("a-user")), forked(Some("b-user"))];
+        assert_eq!(prompter(&events), Some(UserId::new("b-user")));
+
+        // An agent's message or a follow-up prompts for no one.
+        events.push(prompt(None));
+        assert_eq!(prompter(&events), Some(UserId::new("b-user")));
+
+        // Someone prompts the fork here: it acts for them.
+        events.push(prompt(Some("carol")));
+        assert_eq!(prompter(&events), Some(UserId::new("carol")));
+
+        // A fork nobody here asked for acts for no one, not for A's user.
+        assert_eq!(prompter(&[prompt(Some("a-user")), forked(None)]), None);
+        assert_eq!(
+            prompter(&[prompt(Some("alice"))]),
+            Some(UserId::new("alice"))
+        );
     }
 }

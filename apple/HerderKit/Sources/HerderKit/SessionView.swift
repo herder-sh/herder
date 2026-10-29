@@ -38,6 +38,10 @@ struct SessionView: View {
             if let parent = model?.parent {
                 ChildBanner(fleet: fleet, parent: SessionKey(hostId: key.hostId, sessionId: parent), open: open)
             }
+            if let machine = fleet.machines.first(where: { $0.hostId == key.hostId }),
+               let actsFor = model?.parent.map({ fleet.session(SessionKey(hostId: key.hostId, sessionId: $0))?.actsFor }) ?? model?.actsFor {
+                ActsForBanner(fleet: fleet, machine: machine, actsFor: actsFor)
+            }
             header(model, summary)
                 .overlay(alignment: .leading) {
                     if model?.parent != nil { Rectangle().fill(Theme.child).frame(width: 3) }
