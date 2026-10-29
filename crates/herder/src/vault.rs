@@ -15,7 +15,7 @@ use crate::pair;
 #[derive(clap::Subcommand)]
 pub enum Command {
     /// Run a vault on this machine as its own service, next to the daemon, with its own data
-    /// dir, port and secrets key, and print a code to pair the app with it.
+    /// dir, port and secrets key, and show how to become its owner from the app.
     Install {
         /// Port the vault listens on, on every interface [default: 7448]. Only for a new
         /// vault: an installed one keeps the `listen` in its vault.toml.
@@ -61,12 +61,9 @@ fn install(port: Option<u16>) -> Result<()> {
         services: Arc::new(service::System),
     };
     vault.install(&mut |step| println!("{step}"))?;
-    let info = vault.pair(&Request::Pair {
-        user: pair::default_user(),
-        role: None,
-    })?;
+    let info = vault.own()?;
     println!();
-    pair::print_pairing(&info)?;
+    pair::print_own(&info)?;
     println!(
         "\nTo back up a host to this vault, mint it a host code with:\n  herder pair --config {} --host <name>",
         vault_install::config_path(&vault.dir).display()
