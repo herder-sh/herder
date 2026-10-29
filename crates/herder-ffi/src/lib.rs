@@ -10,10 +10,9 @@
 //!   pending future (cancelling a Swift `Task` or a Kotlin coroutine) aborts the call.
 //! - [`HerderError`], client-core's `Error` under a name and with field names that do not
 //!   clash with Swift's `Error` or Kotlin's `Throwable.message`.
-//! - [`parse_pairing_uri`] and [`pairing_uri_to_string`], `PairingUri`'s `FromStr` and
-//!   `Display`, and [`parse_pairing_link`] and [`pairing_link_to_string`], `PairingLink`'s,
-//!   which UniFFI cannot export as trait impls on a record; likewise [`parse_login_uri`],
-//!   [`login_uri_to_string`], [`parse_own_uri`] and [`own_uri_to_string`].
+//! - [`parse_fleet_link`] and [`fleet_link_to_string`], `FleetLink`'s `FromStr` and
+//!   `Display`, which UniFFI cannot export as trait impls on a record; likewise
+//!   [`parse_login_uri`], [`login_uri_to_string`], [`parse_own_uri`] and [`own_uri_to_string`].
 //! - [`image_media_types`], [`max_image_bytes`], [`max_file_bytes`], [`max_file_name_bytes`]
 //!   and [`max_prompt_attachment_bytes`], the protocol's limits on a prompt's images and files,
 //!   which UniFFI cannot export as constants.
@@ -25,8 +24,7 @@ use std::sync::Arc;
 
 use herder_client_core as client_core;
 use herder_client_core::{
-    LoginUri, Machine, NewAccount, OwnUri, PairResult, PairingLink, PairingUri, SessionUpdate,
-    SharedLink, TerminalEvent,
+    FleetLink, LoginUri, Machine, NewAccount, OwnUri, SessionUpdate, TerminalEvent,
 };
 use herder_protocol::{
     AccountId, AwsProfile, CommandBody, CommandResult, ErrorInfo, HostId, PasskeyAssertion,
@@ -40,17 +38,10 @@ uniffi::setup_scaffolding!();
 /// Why a client call failed; client-core's `Error`.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum HerderError {
-    /// The pairing link is not a valid `herder://pair` link.
+    /// The link is not a valid `herder://` link of its kind.
     #[error("{detail}")]
     InvalidLink {
         /// What is wrong with it.
-        detail: String,
-    },
-    /// Pairing failed: no address answered, the certificate did not match, or the daemon
-    /// refused the code.
-    #[error("pairing failed: {detail}")]
-    Pairing {
-        /// Why.
         detail: String,
     },
     /// No paired machine has this host id.
@@ -86,7 +77,6 @@ impl From<client_core::Error> for HerderError {
     fn from(error: client_core::Error) -> Self {
         match error {
             client_core::Error::InvalidLink { message } => Self::InvalidLink { detail: message },
-            client_core::Error::Pairing { message } => Self::Pairing { detail: message },
             client_core::Error::UnknownMachine { host_id } => Self::UnknownMachine { host_id },
             client_core::Error::Rejected { info } => Self::Rejected { info },
             client_core::Error::Unreachable { message } => Self::Unreachable { detail: message },
@@ -229,27 +219,16 @@ pub fn max_bot_fact_chars() -> u64 {
     herder_protocol::MAX_BOT_FACT_CHARS as u64
 }
 
-/// Parses a `herder://pair` link, to confirm it before pairing.
+/// Parses a `herder://fleet` link, which another device of yours shares, to sign in to each
+/// of its machines with your passkey.
 #[uniffi::export]
-pub fn parse_pairing_uri(link: String) -> Result<PairingUri, HerderError> {
-    Ok(link.parse::<PairingUri>()?)
+pub fn parse_fleet_link(link: String) -> Result<FleetLink, HerderError> {
+    Ok(link.parse::<FleetLink>()?)
 }
 
-/// Formats a pairing link as `herder://pair?…`.
+/// Formats a fleet link as `herder://fleet?…`, for a QR code.
 #[uniffi::export]
-pub fn pairing_uri_to_string(uri: PairingUri) -> String {
-    uri.to_string()
-}
-
-/// Parses a `herder://pair` link of one or more machines, to confirm it before pairing.
-#[uniffi::export]
-pub fn parse_pairing_link(link: String) -> Result<PairingLink, HerderError> {
-    Ok(link.parse::<PairingLink>()?)
-}
-
-/// Formats a link of one or more machines as `herder://pair?…`, for a QR code.
-#[uniffi::export]
-pub fn pairing_link_to_string(link: PairingLink) -> String {
+pub fn fleet_link_to_string(link: FleetLink) -> String {
     link.to_string()
 }
 
@@ -385,18 +364,10 @@ impl Client {
         })
     }
 
-    /// Pairs with every machine a `herder://pair` link names and saves each that paired;
-    /// one result per machine, in the link's order.
-    pub async fn pair(&self, link: String) -> Result<Vec<PairResult>, HerderError> {
-        let client = self.inner.clone();
-        call(&self.handle, async move { client.pair(link).await }).await
-    }
-
-    /// Makes a link that pairs another device with every connected machine, as this
-    /// device's user with its role on each; machines that gave no code are skipped.
-    pub async fn share(&self) -> Result<SharedLink, HerderError> {
-        let client = self.inner.clone();
-        call(&self.handle, async move { client.share().await }).await
+    /// The `herder://fleet` link of this device's machines, for another device of yours to
+    /// sign in to each with its passkey; `None` while no machine is saved.
+    pub fn share(&self) -> Option<FleetLink> {
+        self.inner.share()
     }
 
     /// Connects to the machine at `hosts` with certificate `fingerprint` under a new device

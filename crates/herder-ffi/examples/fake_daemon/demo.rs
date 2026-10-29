@@ -33,8 +33,8 @@
 //! own. Their teammates Sam and Kim are users of the machines too ([`TEAMMATES`]).
 //! `devbox` backs up to a vault, `vault`, which the user owns too.
 //!
-//! [`Demo::start`] returns once all of it is in place, with the link a device paired with every
-//! machine shares, as `--share` prints.
+//! [`Demo::start`] returns once all of it is in place, with the link a device signed in to every
+//! machine shares, as `--share` prints, and the user's passkey to sign in with.
 //!
 //! `fake_daemon --busy` adds the load the apps are profiled under (`apple/scripts/profile-mac.sh`):
 //! on `devbox`, a session with [`BUSY_TURNS`] finished turns, about 2,000 items, whose next turn
@@ -51,8 +51,9 @@ use anyhow::{Context, Result, bail, ensure};
 use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
-use herder_client_core::{Client, ConnectionState, PairResult, PairingUri};
-use herder_daemon::auth::{Auth, PAIRING_TTL, User};
+use herder_client_core::{Client, ConnectionState};
+use herder_daemon::auth::authenticator::{self, Authenticator};
+use herder_daemon::auth::{Auth, User};
 use herder_daemon::bots::{Bots, Runtime as BotsRuntime, runner};
 use herder_daemon::config::Retention;
 use herder_daemon::login::{self, Logins};
@@ -447,7 +448,7 @@ const MACHINES: &[(&str, u32, u64, &[Account])] = &[
 
 /// The machine the demo's user is a member on: another user owns it.
 const MEMBER_ON: &str = "laptop";
-/// The name the demo's devices pair as.
+/// The demo's user, a person with the recorded passkey of that name.
 const USER: &str = "tomas";
 /// Who else uses each machine: Pat and Kim own `laptop`, where the user is a member.
 const TEAMMATES: &[(&str, &str, Role)] = &[
@@ -467,8 +468,10 @@ const VAULT: &str = "vault";
 
 /// The running demo; [`Demo::stop`] stops it and removes everything it created.
 pub struct Demo {
-    /// The link a device paired with every machine shares.
+    /// The link a device signed in to every machine shares.
     pub link: String,
+    /// The user's passkey, as `Authenticator::export` gives it, to sign in with.
+    pub passkey: String,
     daemons: Vec<Daemon>,
     vault: DemoVault,
     _tmp: TempDir,
@@ -488,11 +491,10 @@ impl Demo {
         std::fs::create_dir(&profile)?;
         let client = Client::open(profile.display().to_string(), "demo".into())?;
         for daemon in &daemons {
-            for result in client.pair(daemon.link.clone()).await? {
-                if let PairResult::Failed { error, .. } = result {
-                    bail!("the demo device did not pair: {error}");
-                }
-            }
+            let hosts = vec![daemon.address.clone()];
+            authenticator::sign_in(&daemon.auth, &client, hosts, &daemon.fingerprint, USER)
+                .await
+                .context("the demo device did not sign in")?;
         }
         let changes = client.changes();
         tokio::time::timeout(TIMEOUT, async {
@@ -518,12 +520,10 @@ impl Demo {
         }
         let vault = DemoVault::start(&tmp.path().join(VAULT)).await?;
         demo.back_up(&vault).await?;
-        let shared = client.share().await?;
-        if let Some(skipped) = shared.skipped.first() {
-            bail!("{} was not shared: {}", skipped.host_id, skipped.error);
-        }
+        let shared = client.share().context("the demo device has no machines")?;
         Ok(Self {
-            link: shared.link.to_string(),
+            link: shared.to_string(),
+            passkey: Authenticator::known(USER).export(),
             daemons,
             vault,
             _tmp: tmp,
@@ -586,14 +586,19 @@ impl Demo {
         Ok(scenes)
     }
 
-    /// The users of the machine `host`, as its People list shows them.
-    pub fn users(&self, host: &str) -> Result<Vec<herder_protocol::UserInfo>> {
+    /// Who is on the machine `host`, people and the users from before them, by name and role,
+    /// as its People list shows them.
+    pub fn team(&self, host: &str) -> Result<Vec<(String, Role)>> {
         let daemon = self
             .daemons
             .iter()
             .find(|daemon| daemon.id.as_str() == host)
             .with_context(|| format!("no machine {host}"))?;
-        Ok(Auth::open(&daemon.data_dir)?.users())
+        let auth = Auth::open(&daemon.data_dir)?;
+        let people = auth.people().into_iter().map(|p| (p.name, p.role));
+        Ok(people
+            .chain(auth.users().into_iter().map(|u| (u.name, u.role)))
+            .collect())
     }
 }
 
@@ -604,14 +609,13 @@ struct Scenario<'a> {
 }
 
 impl Scenario<'_> {
-    /// Pairs the demo's device with `vault` as its owner and links [`BACKS_UP`] to it, as the
+    /// Signs the demo's device in to `vault` as its owner and links [`BACKS_UP`] to it, as the
     /// apps' Back Up does, then waits until the vault holds what the machine has.
     async fn back_up(&self, vault: &DemoVault) -> Result<()> {
-        for result in self.client.pair(vault.link.clone()).await? {
-            if let PairResult::Failed { error, .. } = result {
-                bail!("the demo device did not pair with the vault: {error}");
-            }
-        }
+        let hosts = vec![vault.address.clone()];
+        authenticator::sign_in(&vault.auth, self.client, hosts, &vault.fingerprint, USER)
+            .await
+            .context("the demo device did not sign in to the vault")?;
         let vault_id = HostId::new(VAULT);
         let CommandResult::HostPairing { code, .. } = self
             .client
@@ -1010,8 +1014,8 @@ fn finished(turns: usize) -> impl Fn(&[EventBody]) -> bool {
 
 /// The demo's vault, which [`BACKS_UP`] backs up to.
 struct DemoVault {
-    /// A pairing link for its owner.
-    link: String,
+    /// Who is on it: the user, its owner.
+    auth: Arc<Auth>,
     address: String,
     fingerprint: String,
     shutdown: CancellationToken,
@@ -1027,19 +1031,14 @@ impl DemoVault {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let address = listener.local_addr()?.to_string();
         let fingerprint = tls.fingerprint().to_owned();
-        let link = PairingUri {
-            hosts: vec![address.clone()],
-            fingerprint: fingerprint.clone(),
-            code: auth.mint(USER, None, PAIRING_TTL)?.code,
-        }
-        .to_string();
+        authenticator::enroll_known(&auth, USER, Role::Owner, "demo-vault-owner");
         let host = Host {
             id: HostId::new(VAULT),
             name: VAULT.into(),
         };
         let server = vault::Server::new(
             tls,
-            auth,
+            Arc::clone(&auth),
             store,
             host,
             vault::LIVENESS_TIMEOUT,
@@ -1049,7 +1048,7 @@ impl DemoVault {
         let shutdown = CancellationToken::new();
         let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
         Ok(Self {
-            link,
+            auth,
             address,
             fingerprint,
             shutdown,
@@ -1060,7 +1059,7 @@ impl DemoVault {
 
 /// Writes the users file a daemon opens with, as though the machine's [`TEAMMATES`] had
 /// paired, so the People page has a team to show. With no owner among them, the demo's user
-/// becomes the owner when they pair.
+/// becomes the owner when they sign in.
 fn teammates(dir: &Path, machine: &str) -> Result<()> {
     let users: Vec<User> = TEAMMATES
         .iter()
@@ -1081,7 +1080,11 @@ fn teammates(dir: &Path, machine: &str) -> Result<()> {
 /// A running machine.
 struct Daemon {
     id: HostId,
-    link: String,
+    /// Where it listens, and its certificate's fingerprint.
+    address: String,
+    fingerprint: String,
+    /// Who is on it.
+    auth: Arc<Auth>,
     /// Its clone of each repository, by name.
     repos: HashMap<&'static str, String>,
     sessions: SessionManager,
@@ -1272,12 +1275,16 @@ impl Daemon {
             None,
         )?);
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let role = (name == MEMBER_ON).then_some(Role::Member);
-        let link = PairingUri {
-            hosts: vec![listener.local_addr()?.to_string()],
-            fingerprint: tls.fingerprint().to_owned(),
-            code: auth.mint(USER, role, PAIRING_TTL)?.code,
+        let role = if name == MEMBER_ON {
+            Role::Member
+        } else {
+            Role::Owner
         };
+        authenticator::enroll_known(&auth, USER, role, &format!("{name}-{USER}"));
+        let (address, fingerprint) = (
+            listener.local_addr()?.to_string(),
+            tls.fingerprint().to_owned(),
+        );
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
         let (binaries, recipes) = clis(dir, name)?;
         let logins = Logins::new(
@@ -1295,7 +1302,7 @@ impl Daemon {
         providers.publish_to(Arc::clone(&hub));
         let server = Server::new(
             tls,
-            auth,
+            Arc::clone(&auth),
             hub,
             sessions.clone(),
             terminals,
@@ -1323,7 +1330,9 @@ impl Daemon {
         let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
         Ok(Self {
             id: host.id,
-            link: link.to_string(),
+            address,
+            fingerprint,
+            auth,
             repos,
             sessions,
             data_dir: dir.to_owned(),

@@ -2,9 +2,9 @@
 
 UniFFI bindings of `herder-client-core` for the Swift apps. The API is
 client-core's (`crates/herder-client-core/API.md`), with three additions described in
-`src/lib.rs`: the client owns its tokio runtime, errors are `HerderError`, and pairing links parse and format with `parsePairingUri` and
-`pairingUriToString` (one machine) and `parsePairingLink` and `pairingLinkToString` (one or
-more, as `Client.share` makes them). Protocol ids, providers and timestamps are strings (timestamps RFC 3339),
+`src/lib.rs`: the client owns its tokio runtime, errors are `HerderError`, and links parse
+and format with `parseFleetLink` and `fleetLinkToString` (as `Client.share` makes them),
+`parseLoginUri` and `loginUriToString`, and `parseOwnUri` and `ownUriToString`. Protocol ids, providers and timestamps are strings (timestamps RFC 3339),
 terminal bytes are byte arrays and a tool call's input is JSON text.
 
 The `apple` workflow builds and tests the Swift package (through `apple/scripts/build-ffi.sh`);
@@ -13,9 +13,11 @@ this is what it does.
 ## The fake daemon
 
 `cargo run -p herder-ffi --example fake_daemon` starts a daemon whose one account (`fake`)
-runs on the fake adapter, replaying `fixtures/hello.jsonl`. It prints a pairing link, the path
-of a git repository to create a session on, and the account, one per line, and runs until its
-stdin closes.
+runs on the fake adapter, replaying `fixtures/hello.jsonl`. It prints its `herder://fleet`
+link, its owner's recorded test passkey (`<credential id>.<PKCS#8 key>.<user handle>`,
+base64url) to sign in
+with in place of Face ID, the path of a git repository to create a session on, and the
+account, one per line, and runs until its stdin closes.
 
 ## Swift: an xcframework, and a sample program (macOS)
 

@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use herder_client_core::{
-    ConnectionQuality, ConnectionState, LoginUri, Machine, NewAccount, OwnUri, PairResult,
-    PairingLink, PairingUri, SessionUpdate, SharedLink, SkippedMachine, TerminalEvent,
+    ConnectionQuality, ConnectionState, FleetLink, FleetMachine, LoginUri, Machine, NewAccount,
+    OwnUri, SessionUpdate, TerminalEvent,
 };
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
@@ -176,15 +176,14 @@ pub struct NewAccount {
 }
 
 #[uniffi::remote(Record)]
-pub struct PairingUri {
+pub struct FleetMachine {
     pub hosts: Vec<String>,
     pub fingerprint: String,
-    pub code: String,
 }
 
 #[uniffi::remote(Record)]
-pub struct PairingLink {
-    pub machines: Vec<PairingUri>,
+pub struct FleetLink {
+    pub machines: Vec<FleetMachine>,
 }
 
 #[uniffi::remote(Record)]
@@ -200,31 +199,6 @@ pub struct OwnUri {
     pub fingerprint: String,
     pub code: String,
     pub name: Option<String>,
-}
-
-#[uniffi::remote(Enum)]
-pub enum PairResult {
-    Paired {
-        machine: Machine,
-    },
-    Failed {
-        addresses: Vec<String>,
-        error: String,
-    },
-}
-
-#[uniffi::remote(Record)]
-pub struct SharedLink {
-    pub link: PairingLink,
-    pub shared: Vec<HostId>,
-    pub skipped: Vec<SkippedMachine>,
-    pub expires_at: Timestamp,
-}
-
-#[uniffi::remote(Record)]
-pub struct SkippedMachine {
-    pub host_id: HostId,
-    pub error: String,
 }
 
 #[uniffi::remote(Enum)]
@@ -739,16 +713,6 @@ pub enum CommandBody {
     },
     UnlinkVault,
     InstallVault,
-    LinkLocalVault,
-    PairDevice {
-        user: Option<String>,
-        role: Option<Role>,
-    },
-    ListUsers,
-    SetUserRole {
-        user_id: UserId,
-        role: Role,
-    },
     RevokeDevice {
         device_id: DeviceId,
         assertion: Option<Box<PasskeyAssertion>>,
@@ -840,10 +804,6 @@ pub enum CommandBody {
     },
     ListSecretAudit {
         before: Option<u64>,
-    },
-    SetVaultHostAccess {
-        host_id: HostId,
-        read: bool,
     },
     SetSkillsRepo {
         url: String,
@@ -1028,7 +988,7 @@ pub enum CommandResult {
         data_dir: String,
         is_vault: bool,
     },
-    DevicePairing {
+    OwnershipClaim {
         code: String,
         fingerprint: String,
         addresses: Vec<String>,
@@ -1056,9 +1016,6 @@ pub enum CommandResult {
     LoginApproved {
         device_id: DeviceId,
         client: String,
-    },
-    Users {
-        users: Vec<UserInfo>,
     },
     HostPairing {
         code: String,
@@ -1502,7 +1459,6 @@ pub struct HostReplication {
     pub events: u64,
     pub last_event_at: Option<Timestamp>,
     pub lag_ms: Option<u64>,
-    pub read: bool,
 }
 
 #[uniffi::remote(Enum)]

@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 16;
+pub const CLIENT_API_VERSION: u32 = 17;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -11,7 +11,6 @@ pub struct NewAccount {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     InvalidLink { message: String },
-    Pairing { message: String },
     UnknownMachine { host_id: HostId },
     Rejected { info: ErrorInfo },
     Unreachable { message: String },
@@ -45,26 +44,6 @@ pub struct Machine {
     pub session_skills: HashMap<SessionId, Vec<SessionSkill>>,
     pub update: Option<UpdateStage>,
     pub approvals: Vec<ApprovalRequest>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum PairResult {
-    Paired { machine: Machine },
-    Failed { addresses: Vec<String>, error: String },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SharedLink {
-    pub link: PairingLink,
-    pub shared: Vec<HostId>,
-    pub skipped: Vec<SkippedMachine>,
-    pub expires_at: Timestamp,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SkippedMachine {
-    pub host_id: HostId,
-    pub error: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,10 +91,6 @@ impl Client {
 }
 
 impl Client {
-    pub async fn pair(&self, link: String) -> Result<Vec<PairResult>, Error> {}
-}
-
-impl Client {
     pub async fn sign_in(
         &self,
         hosts: Vec<String>,
@@ -133,7 +108,7 @@ impl Client {
 }
 
 impl Client {
-    pub async fn share(&self) -> Result<SharedLink, Error> {}
+    pub fn share(&self) -> Option<FleetLink> {}
 }
 
 impl Client {
@@ -374,15 +349,14 @@ impl ProviderHint {
 pub fn provider_hints(machine: &Machine, all: &[Machine]) -> Vec<ProviderHint> {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PairingUri {
-    pub hosts: Vec<String>,
-    pub fingerprint: String,
-    pub code: String,
+pub struct FleetLink {
+    pub machines: Vec<FleetMachine>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PairingLink {
-    pub machines: Vec<PairingUri>,
+pub struct FleetMachine {
+    pub hosts: Vec<String>,
+    pub fingerprint: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -400,9 +374,9 @@ pub struct OwnUri {
     pub name: Option<String>,
 }
 
-impl fmt::Display for PairingUri {}
+impl fmt::Display for FleetLink {}
 
-impl FromStr for PairingUri {}
+impl FromStr for FleetLink {}
 
 impl fmt::Display for LoginUri {}
 
@@ -411,10 +385,6 @@ impl FromStr for LoginUri {}
 impl fmt::Display for OwnUri {}
 
 impl FromStr for OwnUri {}
-
-impl fmt::Display for PairingLink {}
-
-impl FromStr for PairingLink {}
 
 // opaque: private fields
 pub struct PendingSignIn {}

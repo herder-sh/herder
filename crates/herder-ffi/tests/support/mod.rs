@@ -5,8 +5,8 @@
 //! [`DEMO_SKILLS`], and [`FakeDaemon::skill_source`] is a repository to import a skill from.
 //! It admits [`MAX_TURNS`] turns at once on a host that always has room otherwise, and an
 //! owner may change that limit. Adding an OpenCode account runs [`fake_login`], which logs in
-//! at once. Its owner, [`OWNER`], is set up before anyone pairs, so a member
-//! can pair too.
+//! at once. Its owner, [`OWNER`], and a member, [`MEMBER`], are people with recorded passkeys,
+//! there before anyone signs in, so a device signs in as either with its passkey.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,8 +15,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, ensure};
 use herder_adapters::fake::FakeAdapter;
-use herder_client_core::PairingUri;
-use herder_daemon::auth::{Auth, PAIRING_TTL, User};
+use herder_client_core::{FleetLink, FleetMachine};
+use herder_daemon::auth::Auth;
+use herder_daemon::auth::authenticator;
 use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
@@ -26,7 +27,7 @@ use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Config, Hub, session};
-use herder_protocol::{AccountId, CommandBody, HostId, Provider, Role, Timestamp, TurnId, UserId};
+use herder_protocol::{AccountId, CommandBody, HostId, Provider, Role, TurnId};
 use herder_store::Store;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -45,8 +46,11 @@ pub const APPROVAL_ACCOUNT: &str = "approval";
 /// An account whose turn asks a question, for the apps to answer with an image.
 pub const QUESTION_ACCOUNT: &str = "question";
 
-/// The daemon's owner, whom [`FakeDaemon::link`] pairs as.
-pub const OWNER: &str = "sample";
+/// The daemon's owner, by the recorded passkey of that name: [`FakeDaemon::passkey`].
+pub const OWNER: &str = "tomas";
+
+/// A member of the daemon, by the recorded passkey of that name: [`FakeDaemon::member_passkey`].
+pub const MEMBER: &str = "guest";
 
 /// Turns the daemon runs at once until an owner changes it.
 pub const MAX_TURNS: u32 = 4;
@@ -86,14 +90,16 @@ impl ReadHost for Roomy {
 
 /// A running daemon; [`FakeDaemon::stop`] stops it and removes everything it created.
 pub struct FakeDaemon {
-    /// A pairing link with a fresh code, for the owner, [`OWNER`].
+    /// The `herder://fleet` link of the daemon, which a device signs in to with a passkey.
     pub link: String,
-    /// A pairing link with a fresh code, for a member, `guest`.
-    pub member_link: String,
-    /// Who is on the daemon, for a test to sign people in to it.
-    // Each of the fake_daemon example and the tests, which share this module, uses only some
-    // of it.
+    /// The owner's passkey, [`OWNER`], as `Authenticator::export` gives it.
+    // The fake_daemon example prints the passkeys; the tests sign people in through `auth`.
     #[allow(dead_code)]
+    pub passkey: String,
+    /// The member's passkey, [`MEMBER`], likewise.
+    #[allow(dead_code)]
+    pub member_passkey: String,
+    /// Who is on the daemon, for a test to sign people in to it.
     pub auth: Arc<Auth>,
     /// Absolute path of a git repository with one commit, holding [`PROJECT_SKILL`].
     pub repo: String,
@@ -113,7 +119,6 @@ impl FakeDaemon {
         let library = library(tmp.path())?;
         let skill_source = repo(&tmp.path().join("imports"), &[IMPORTED_SKILL], "")?;
         std::fs::create_dir_all(dir.join("tls"))?;
-        owner(&dir)?;
 
         let tls = Tls::load_or_create(&dir.join("tls"), name)?;
         let auth = Arc::new(Auth::open(&dir)?);
@@ -191,15 +196,17 @@ impl FakeDaemon {
             async move { admission.run(&hub, shutdown).await }
         });
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let link = |user: &str, role: Option<Role>| -> Result<String> {
-            let uri = PairingUri {
+        let link = FleetLink {
+            machines: vec![FleetMachine {
                 hosts: vec![listener.local_addr()?.to_string()],
                 fingerprint: tls.fingerprint().to_owned(),
-                code: auth.mint(user, role, PAIRING_TTL)?.code,
-            };
-            Ok(uri.to_string())
-        };
-        let (link, member_link) = (link(OWNER, None)?, link("guest", Some(Role::Member))?);
+            }],
+        }
+        .to_string();
+        let (passkey, member_passkey) = (
+            enroll(&auth, OWNER, Role::Owner),
+            enroll(&auth, MEMBER, Role::Member),
+        );
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
         let logins = Logins::new(
             HashMap::from([(Provider::Opencode, fake_login())]),
@@ -226,7 +233,8 @@ impl FakeDaemon {
         let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
         Ok(Self {
             link,
-            member_link,
+            passkey,
+            member_passkey,
             auth,
             repo: app,
             skill_source,
@@ -258,23 +266,12 @@ fn fake_login() -> LoginProgram {
     }
 }
 
-/// Writes the users file the daemon opens with [`OWNER`] as its owner, as though they had
-/// paired, so a member's code can be minted before they do. The file's shape is the daemon's
-/// own (`herder_daemon::auth`).
-fn owner(dir: &Path) -> Result<()> {
-    let users = serde_json::json!({
-        "version": 1,
-        "users": [User {
-            user_id: UserId::new("owner"),
-            name: OWNER.into(),
-            role: Role::Owner,
-            created_at: Timestamp::now(),
-            host: false,
-        }],
-        "devices": [],
-    });
-    std::fs::write(dir.join("auth.json"), serde_json::to_vec(&users)?)?;
-    Ok(())
+/// Puts the person `name` on `auth` as `role`, with their recorded passkey, as though a device
+/// of theirs had signed in; their passkey, exported for a client to sign with. They are the
+/// same person on every fake daemon, so one passkey signs in to all of them.
+pub fn enroll(auth: &Auth, name: &str, role: Role) -> String {
+    let (passkey, _) = authenticator::enroll_known(auth, name, role, &format!("{name}-enrolled"));
+    passkey.export()
 }
 
 /// A git repository with one commit holding `skills`, each a `SKILL.md` in `<prefix><name>`.

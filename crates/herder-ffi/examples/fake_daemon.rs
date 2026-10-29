@@ -1,18 +1,20 @@
 //! The daemon the Swift and Kotlin samples connect to, as a sidecar process: see
-//! `tests/support`. Prints a pairing link, the repository's path, the account to run on, the
-//! account whose turns run until interrupted, a member's pairing link, a repository to import a
-//! skill from and the account that asks a question, one per line, then runs until stdin closes.
+//! `tests/support`. Prints its `herder://fleet` link, its owner's passkey, the repository's
+//! path, the account to run on, the account whose turns run until interrupted, a member's
+//! passkey, a repository to import a skill from and the account that asks a question, one per
+//! line, then runs until stdin closes. A passkey is the recorded test passkey of its person, as
+//! `Authenticator::export` gives it, for a client under test to sign in with in place of Face
+//! ID.
 //!
 //! `fake_daemon [NAME]` names the host (`fake-host` by default), to run several side by side.
-//! `fake_daemon --share` runs two, `fake-host-1` and `fake-host-2`, and prints instead the link
-//! a device paired with both shares (`Client::share`), which pairs with both at once; the
-//! repository is the first's, and the first has a session waiting on an approval, whose id it
-//! prints last.
-//! `fake_daemon --demo` runs the demo fleet of the site's screenshots ([`demo`]) and prints
-//! only the link a device paired with all of it shares; `fake_daemon --busy` adds the load the
-//! apps are profiled under.
-//! `fake_daemon --vault` runs a vault that keeps secrets ([`vault`]) and prints only its
-//! owner's pairing link.
+//! `fake_daemon --share` runs two, `fake-host-1` and `fake-host-2`, with the same owner, and
+//! prints instead the link a device signed in to both shares (`Client::share`); the repository
+//! is the first's, and the first has a session waiting on an approval, whose id it prints last.
+//! `fake_daemon --demo` runs the demo fleet of the site's screenshots ([`demo`]) and prints only
+//! the link a device signed in to all of it shares and the user's passkey; `fake_daemon --busy`
+//! adds the load the apps are profiled under.
+//! `fake_daemon --vault` runs a vault that keeps secrets ([`vault`]) and prints only its link
+//! and its owner's passkey.
 //! `fake_daemon --own` runs `fake-own`, which waits for a new owner as after `herder claim`, and
 //! prints only the `herder://own` link that claim prints.
 
@@ -26,7 +28,8 @@ mod vault;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use herder_client_core::{Client, ConnectionState, OwnUri, PairResult, PairingUri};
+use herder_client_core::{Client, ConnectionState, FleetLink, OwnUri};
+use herder_daemon::auth::authenticator;
 use herder_protocol::{AccountId, CommandBody, CommandResult, HostId, SessionId};
 use tokio::io::AsyncReadExt;
 
@@ -35,13 +38,13 @@ async fn main() -> Result<()> {
     let (daemons, link, waiting) = match std::env::args().nth(1).as_deref() {
         Some(flag @ ("--demo" | "--busy")) => {
             let demo = demo::Demo::start(flag == "--busy").await?;
-            println!("{}", demo.link);
+            println!("{}\n{}", demo.link, demo.passkey);
             tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
             return demo.stop().await;
         }
         Some("--vault") => {
             let vault = vault::Vault::start().await?;
-            println!("{}", vault.link);
+            println!("{}\n{}", vault.link, vault.passkey);
             tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
             return vault.stop().await;
         }
@@ -66,11 +69,12 @@ async fn main() -> Result<()> {
         }
     };
     println!(
-        "{link}\n{}\n{}\n{}\n{}\n{}",
+        "{link}\n{}\n{}\n{}\n{}\n{}\n{}",
+        daemons[0].passkey,
         daemons[0].repo,
         support::ACCOUNT,
         support::HOLD_ACCOUNT,
-        daemons[0].member_link,
+        daemons[0].member_passkey,
         daemons[0].skill_source
     );
     println!("{}", support::QUESTION_ACCOUNT);
@@ -84,17 +88,23 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Pairs a device with every daemon, starts a session on the first that waits on an approval,
-/// and returns the link the device shares and that session's id.
+/// Signs a device in to every daemon as their owner, starts a session on the first that waits
+/// on an approval, and returns the link the device shares and that session's id.
 async fn share(daemons: &[support::FakeDaemon]) -> Result<(String, SessionId)> {
     let profile = tempfile::tempdir()?;
     let client = Client::open(profile.path().display().to_string(), "fake-daemon".into())?;
     for daemon in daemons {
-        for result in client.pair(daemon.link.clone()).await? {
-            if let PairResult::Failed { error, .. } = result {
-                bail!("the sharing device did not pair: {error}");
-            }
-        }
+        let link: FleetLink = daemon.link.parse()?;
+        let machine = link.machines.into_iter().next().context("an empty link")?;
+        authenticator::sign_in(
+            &daemon.auth,
+            &client,
+            machine.hosts,
+            &machine.fingerprint,
+            support::OWNER,
+        )
+        .await
+        .context("the sharing device did not sign in")?;
     }
     let changes = client.changes();
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -141,20 +151,20 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<(String, SessionId)> {
             },
         )
         .await?;
-    let shared = client.share().await?;
-    if let Some(skipped) = shared.skipped.first() {
-        bail!("{} was not shared: {}", skipped.host_id, skipped.error);
-    }
-    Ok((shared.link.to_string(), session_id))
+    let shared = client
+        .share()
+        .context("the sharing device has no machines")?;
+    Ok((shared.to_string(), session_id))
 }
 
 /// Opens `daemon` to a new owner, as `herder claim` does, and returns the link it prints.
 fn own_link(daemon: &support::FakeDaemon) -> Result<String> {
-    let pairing: PairingUri = daemon.link.parse()?;
+    let link: FleetLink = daemon.link.parse()?;
+    let machine = link.machines.into_iter().next().context("an empty link")?;
     let (code, _) = daemon.auth.open_recovery()?;
     let uri = OwnUri {
-        hosts: pairing.hosts,
-        fingerprint: pairing.fingerprint,
+        hosts: machine.hosts,
+        fingerprint: machine.fingerprint,
         code,
         name: Some("fake-own".into()),
     };

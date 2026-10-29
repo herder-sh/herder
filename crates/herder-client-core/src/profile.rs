@@ -29,7 +29,7 @@ pub(crate) struct SavedMachine {
     pub(crate) host_id: HostId,
     /// The daemon's host name, from its hello.
     pub(crate) name: String,
-    /// Addresses from the pairing link, as `host:port`, tried in order.
+    /// Addresses from the link signed in with, as `host:port`, tried in order.
     pub(crate) addresses: Vec<String>,
     /// SHA-256 of the daemon's certificate, lowercase hex.
     pub(crate) fingerprint: String,

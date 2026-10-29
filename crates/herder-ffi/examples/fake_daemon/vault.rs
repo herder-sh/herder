@@ -1,16 +1,16 @@
 //! `fake_daemon --vault`: a vault that keeps secrets, for the apps' secrets screen and its UI
 //! test. Two hosts, `devbox` and `laptop`, have replicated to it and are offline; it holds no
-//! sessions, sets or secrets until a client adds them.
+//! sessions, sets or secrets until a client adds them. Its owner is the fake daemons' owner.
 
 use std::sync::Arc;
 
 use anyhow::Result;
-use herder_client_core::PairingUri;
-use herder_daemon::auth::{Auth, PAIRING_TTL};
+use herder_client_core::{FleetLink, FleetMachine};
+use herder_daemon::auth::Auth;
 use herder_daemon::config::Retention;
 use herder_daemon::vault::{LIVENESS_TIMEOUT, SecretsKey, Server, VaultStore};
 use herder_daemon::ws::{Host, Tls};
-use herder_protocol::{DeviceId, HostId};
+use herder_protocol::{DeviceId, HostId, Role};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -21,8 +21,10 @@ pub const HOSTS: [(&str, &str); 2] = [("devbox", "devbox"), ("laptop", "laptop")
 
 /// A running vault; [`Vault::stop`] stops it and removes everything it created.
 pub struct Vault {
-    /// A pairing link with a fresh code, for its owner.
+    /// The `herder://fleet` link of the vault.
     pub link: String,
+    /// Its owner's passkey, as `Authenticator::export` gives it.
+    pub passkey: String,
     shutdown: CancellationToken,
     server: JoinHandle<()>,
     _tmp: TempDir,
@@ -41,12 +43,14 @@ impl Vault {
             store.bind(&DeviceId::new(id), &HostId::new(id), name, None, &[])?;
         }
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let link = PairingUri {
-            hosts: vec![listener.local_addr()?.to_string()],
-            fingerprint: tls.fingerprint().to_owned(),
-            code: auth.mint("sample", None, PAIRING_TTL)?.code,
+        let link = FleetLink {
+            machines: vec![FleetMachine {
+                hosts: vec![listener.local_addr()?.to_string()],
+                fingerprint: tls.fingerprint().to_owned(),
+            }],
         }
         .to_string();
+        let passkey = super::support::enroll(&auth, super::support::OWNER, Role::Owner);
         let host = Host {
             id: HostId::new("fake-vault"),
             name: "fake-vault".into(),
@@ -64,6 +68,7 @@ impl Vault {
         let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
         Ok(Self {
             link,
+            passkey,
             shutdown,
             server,
             _tmp: tmp,

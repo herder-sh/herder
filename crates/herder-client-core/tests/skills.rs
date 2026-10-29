@@ -10,11 +10,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use herder_client_core::{Client, ConnectionState, PairResult, PairingUri};
+use herder_client_core::{Client, ConnectionState};
+use herder_daemon::auth::authenticator::Authenticator;
 use herder_daemon::ws::Tls;
 use herder_protocol::{
-    ClientMessage, CommandBody, CommandResult, DeviceId, ErrorCode, ErrorInfo, HostId,
-    PROTOCOL_VERSION, Role, ServerHello, ServerMessage, SkillsStatus, UserId,
+    ClientHello, ClientMessage, CommandBody, CommandResult, DeviceId, ErrorCode, ErrorInfo, HostId,
+    PASSKEY_RP_ID, PROTOCOL_VERSION, PasskeyChallenge, Role, ServerHello, ServerMessage, SignIn,
+    SkillsStatus, UserId,
 };
 use rustls::client::danger::HandshakeSignatureValid;
 use rustls::crypto::WebPkiSupportedAlgorithms;
@@ -104,15 +106,6 @@ impl Fake {
         fake
     }
 
-    fn link(&self) -> String {
-        PairingUri {
-            hosts: vec![self.addr.to_string()],
-            fingerprint: self.fingerprint.clone(),
-            code: "code".into(),
-        }
-        .to_string()
-    }
-
     /// Drops every connection and stops listening.
     fn go_offline(&self) {
         self.online.lock().unwrap().cancel();
@@ -191,10 +184,41 @@ impl Fake {
             return;
         };
         let send = |message: &ServerMessage| Message::text(serde_json::to_string(message).unwrap());
-        // The hello; any code pairs.
+        // The hello; a device signing in gets a challenge, and any assertion signs it in.
+        let Some(Ok(Message::Text(text))) = ws.next().await else {
+            return;
+        };
+        let Ok(ClientMessage::Hello(ClientHello { sign_in: true, .. })) =
+            serde_json::from_str(&text)
+        else {
+            // A device signed in before reconnects with its key.
+            return self.session(ws).await;
+        };
+        let challenge = ServerMessage::SignInChallenge {
+            challenge: PasskeyChallenge {
+                rp_id: PASSKEY_RP_ID.into(),
+                challenge: "Y2hhbGxlbmdl".into(),
+                expires_at: jiff::Timestamp::now(),
+            },
+            registration: None,
+        };
+        if ws.send(send(&challenge)).await.is_err() {
+            return;
+        }
         let Some(Ok(Message::Text(_))) = ws.next().await else {
             return;
         };
+        self.session(ws).await;
+    }
+
+    /// The rest of a connection once the device is in: the hello, then commands.
+    async fn session(
+        &self,
+        mut ws: tokio_tungstenite::WebSocketStream<
+            tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+        >,
+    ) {
+        let send = |message: &ServerMessage| Message::text(serde_json::to_string(message).unwrap());
         let hello = ServerMessage::Hello(ServerHello {
             protocol_version: PROTOCOL_VERSION,
             host_id: HostId::new(&self.id),
@@ -357,12 +381,14 @@ impl ClientCertVerifier for AnyDevice {
     }
 }
 
+/// Signs `client` in to `fake` with a passkey, which the fake takes from anyone.
 async fn pair(client: &Client, fake: &Fake) {
-    let results = client.pair(fake.link()).await.unwrap();
-    assert!(
-        matches!(results.as_slice(), [PairResult::Paired { .. }]),
-        "{results:?}"
-    );
+    let pending = client
+        .sign_in(vec![fake.addr.to_string()], fake.fingerprint.clone())
+        .await
+        .unwrap();
+    let assertion = Authenticator::new("alice", &[]).assert(&pending.challenge());
+    pending.finish(SignIn::Passkey { assertion }).await.unwrap();
 }
 
 /// Waits until `done` holds, checking whenever the client's machines change and at least

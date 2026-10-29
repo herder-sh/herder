@@ -1,8 +1,8 @@
-//! Machine addresses: how a typed one is completed, and the order a pairing link's are saved in.
+//! Machine addresses: how a typed one is completed, and the order a link's are saved in.
 //!
 //! The saved order is the order of preference: connecting starts at the first address and gives
-//! each later one a head start less. A pairing link lists the daemon's addresses in interface
-//! order, so pairing sorts them direct routes first: private network addresses (reached at home
+//! each later one a head start less. A link lists the daemon's addresses in interface order, so
+//! signing in sorts them direct routes first: private network addresses (reached at home
 //! or through a VPN into it, such as UniFi Teleport), then other addresses, then Tailscale. The
 //! user can reorder them after that with [`crate::Client::set_addresses`]; nothing re-sorts them.
 

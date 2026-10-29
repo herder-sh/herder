@@ -69,8 +69,6 @@ fn the_objects_and_their_futures_are_send() {
              terminal: TerminalStream,
              changes: Changes| {
         let host = HostId::new("h");
-        future(client.pair(String::new()));
-        future(client.share());
         future(client.sign_in(Vec::new(), String::new()));
         future(client.log_in(Vec::new(), String::new(), |_, _| {}));
         future(client.synced(host.clone()));
