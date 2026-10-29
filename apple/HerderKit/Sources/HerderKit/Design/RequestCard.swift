@@ -15,6 +15,8 @@ struct RequestCard: View {
     @State private var answer = ""
     /// The choices ticked on a multi-select question, sent together with Submit.
     @State private var picks = Picks()
+    /// The set a `store_secret` goes to, when the user picked another than the agent's.
+    @State private var storeSet: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -30,7 +32,13 @@ struct RequestCard: View {
             if case .approval = request.kind {
                 HStack(spacing: 10) {
                     ActionButton(title: "Deny", style: .secondary) { await fleet.answer(request, allow: false) }
-                    ActionButton(title: "Allow", style: .primary) { await fleet.answer(request, allow: true) }
+                    ActionButton(title: "Allow", style: .primary) {
+                        if let secret = request.secret {
+                            await fleet.storeSecret(request, secret, in: storeSet ?? secret.set)
+                        } else {
+                            await fleet.answer(request, allow: true)
+                        }
+                    }
                 }
             }
             if let refusal = fleet.refusals[request.session.key] {
@@ -41,7 +49,10 @@ struct RequestCard: View {
         .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.accent, lineWidth: 1.5))
         // The next question of a batch starts with nothing ticked.
-        .onChange(of: request.requestId) { picks = Picks() }
+        .onChange(of: request.requestId) {
+            picks = Picks()
+            storeSet = nil
+        }
     }
 
     private var header: some View {
@@ -64,6 +75,11 @@ struct RequestCard: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             switch request.kind {
+            case .approval where request.secret != nil:
+                if let secret = request.secret {
+                    SecretStoreAsk(fleet: fleet, hostId: request.session.key.hostId, secret: secret, picked: $storeSet)
+                }
+                reasonLines
             case .approval(let summary):
                 Text(summary)
                     .font(Theme.mono)

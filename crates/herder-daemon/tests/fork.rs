@@ -1099,6 +1099,13 @@ async fn a_session_handed_off_mid_turn_runs_its_prompt_again_on_the_fork() {
         dead_vault(),
     )
     .await;
+    // A's users are A's: alice on B has another id there.
+    let mut a_journal = a_journal;
+    for event in &mut a_journal {
+        if event.by.is_some() {
+            event.by = Some(UserId::new("alice-on-a"));
+        }
+    }
     b.handle(CommandBody::UploadHistory {
         session_id: session_id.clone(),
         part: HistoryPart::Events {
@@ -1135,7 +1142,8 @@ async fn a_session_handed_off_mid_turn_runs_its_prompt_again_on_the_fork() {
     };
 
     // Unprompted, the fork fails the turn A had open as handed off, and runs its prompt again,
-    // with its image, by the user who sent it, on a CLI seeded with the transcript.
+    // with its image, by the user who forked it, a user of B, on a CLI seeded with the
+    // transcript.
     let b_journal = b
         .journal_until(&fork, |body| {
             matches!(body, EventBody::TurnCompleted { turn_id, .. } if turn_id.as_str() == "b-turn-1")

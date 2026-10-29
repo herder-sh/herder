@@ -179,6 +179,11 @@ impl HostSecrets {
         }
     }
 
+    /// Whether the host is linked to a vault with secrets on.
+    pub fn linked(&self) -> bool {
+        self.lock().linked
+    }
+
     /// Sends requests to a connection that just opened, in place of any earlier one, until
     /// the returned guard drops.
     pub(super) fn attach(&self) -> (Attached<'_>, mpsc::UnboundedReceiver<Ask>) {
@@ -367,7 +372,8 @@ async fn ask<T>(
 fn no_vault() -> SecretError {
     refusal(
         SecretErrorCode::NoVault,
-        "this host is not linked to a vault, so it has no secrets",
+        "this host is not linked to a vault with Secrets on, so it has no secrets; an owner \
+         links it to one in the herder app, on the machine's page under Secrets",
     )
 }
 

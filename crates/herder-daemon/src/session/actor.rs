@@ -15,8 +15,8 @@ use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
     CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, FollowUp, Image,
     Item, ItemBody, ItemId, MAX_PROMPT_ATTACHMENT_BYTES, PermissionMode, PrState, PromptFile,
-    PromptId, QuestionId, Route, SecretRef, SessionId, SessionStatus, Timestamp, TurnError, TurnId,
-    UserId,
+    PromptId, QuestionId, Route, SecretRef, SecretStoreRequest, SecretValue, SessionId,
+    SessionStatus, Timestamp, TurnError, TurnId, UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -148,6 +148,30 @@ pub(super) enum Request {
     },
     /// Another host took the session over: stop it and make it read-only here.
     MovedAway,
+    /// The agent's `store_secret` read `value`: asks the user to approve `store`; `done`
+    /// learns the set an owner stored it in, or why it was not. Refused unless a turn runs.
+    StoreSecret {
+        store: SecretStoreRequest,
+        value: SecretValue,
+        done: oneshot::Sender<Result<String, ToolError>>,
+    },
+    /// The value of the open `store_secret` approval `approval_id`, for an owner's app.
+    GetSecretToStore {
+        approval_id: ApprovalId,
+    },
+    /// An owner's app put the value of the open `store_secret` approval `approval_id` on the
+    /// vault, in `set`.
+    ConfirmSecretStored {
+        approval_id: ApprovalId,
+        set: String,
+    },
+}
+
+/// An agent's `store_secret` waiting for an owner: the value it read, never journaled, and
+/// who learns the outcome.
+struct PendingStore {
+    value: SecretValue,
+    done: oneshot::Sender<Result<String, ToolError>>,
 }
 
 /// What a switch to another account changes.
@@ -267,6 +291,8 @@ pub(super) struct Actor {
     last_reply: Option<String>,
     /// Approval requests of the running turn not yet answered, oldest first.
     approvals: Vec<(ApprovalId, Open)>,
+    /// The `store_secret` ones among them.
+    stores: HashMap<ApprovalId, PendingStore>,
     /// Questions of the running turn not yet answered, with the choices each offers.
     questions: HashMap<QuestionId, (Picks, Open)>,
     /// A child's tool calls of the running turn, by item: what its approval requests ask for.
@@ -320,6 +346,7 @@ impl Actor {
             started: HashSet::new(),
             last_reply: None,
             approvals: Vec::new(),
+            stores: HashMap::new(),
             questions: HashMap::new(),
             tool_calls: HashMap::new(),
             setup: None,
@@ -842,6 +869,33 @@ impl Actor {
             }
             Request::SetUp { command, timeout } => self.set_up(command, timeout).await,
             Request::MovedAway => self.moved_away().await,
+            Request::StoreSecret { store, value, done } => {
+                self.ask_store(store, value, done).await?;
+            }
+            Request::GetSecretToStore { approval_id } => {
+                let Some(pending) = self.stores.get(&approval_id) else {
+                    return Err(no_store(&approval_id));
+                };
+                return Ok(CommandResult::SecretToStore {
+                    value: pending.value.clone(),
+                });
+            }
+            Request::ConfirmSecretStored { approval_id, set } => {
+                let Some(open) = self.approvals.iter().position(|(id, _)| *id == approval_id)
+                else {
+                    return Err(no_store(&approval_id));
+                };
+                if !self.stores.contains_key(&approval_id) {
+                    return Err(no_store(&approval_id));
+                }
+                let store = self
+                    .resolve_approval(by, open, ApprovalDecision::Allow, Answerer::User)
+                    .await
+                    .map_err(super::internal)?;
+                if let Some(store) = store {
+                    let _ = store.done.send(Ok(set));
+                }
+            }
             Request::FromPrimary { .. } | Request::Unarchive | Request::RemoveWorktree => {}
         }
         Ok(CommandResult::Applied)
@@ -859,19 +913,37 @@ impl Actor {
         let Some(open) = self.approvals.iter().position(|(id, _)| *id == approval_id) else {
             return Err(self.not_open(&approval_id).await);
         };
-        self.resolve_approval(by, open, decision, Answerer::User)
+        if decision == ApprovalDecision::Allow && self.stores.contains_key(&approval_id) {
+            return Err(error(
+                ErrorCode::BadRequest,
+                "allow storing a secret from its card in a herder app, as an owner of this \
+                 machine and of its vault: the app puts the value on the vault",
+            ));
+        }
+        let store = self
+            .resolve_approval(by, open, decision, Answerer::User)
             .await
-            .map_err(super::internal)
+            .map_err(super::internal)?;
+        if let Some(store) = store {
+            let denied = ToolError::new(
+                tasktools::ErrorCode::NotAllowed,
+                "the user denied storing the secret; nothing was stored",
+            );
+            let _ = store.done.send(Err(denied));
+        }
+        Ok(())
     }
 
-    /// Journals the answer to the open approval at `open`, then lets the agent go on.
+    /// Journals the answer to the open approval at `open`, then lets the agent go on: the CLI
+    /// that asked, or, for a `store_secret`, the tool call, which the caller tells through the
+    /// [`PendingStore`] returned.
     async fn resolve_approval(
         &mut self,
         by: Option<UserId>,
         open: usize,
         decision: ApprovalDecision,
         answered_by: Answerer,
-    ) -> Result<()> {
+    ) -> Result<Option<PendingStore>> {
         let approval_id = self.approvals[open].0.clone();
         let body = EventBody::ApprovalResolved {
             approval_id: approval_id.clone(),
@@ -881,7 +953,10 @@ impl Actor {
         self.record(by, body).await?;
         let (approval_id, open) = self.approvals.remove(open);
         self.withdraw(&open, RequestRef::Approval(approval_id.clone()));
-        if let Some(adapter) = &self.adapter {
+        let store = self.stores.remove(&approval_id);
+        if store.is_none()
+            && let Some(adapter) = &self.adapter
+        {
             // A closed channel means the CLI is gone; its `exited` fails the turn.
             let _ = adapter.commands.send(AdapterCommand::AnswerApproval {
                 approval_id,
@@ -889,7 +964,81 @@ impl Actor {
             });
         }
         self.settle().await;
+        Ok(store)
+    }
+
+    /// Asks the user to approve the agent's `store_secret` of `value`, as `store` describes
+    /// it, in the running turn; `done` learns the outcome. Always the user's: an owner's app
+    /// stores it, never the primary session.
+    async fn ask_store(
+        &mut self,
+        store: SecretStoreRequest,
+        value: SecretValue,
+        done: oneshot::Sender<Result<String, ToolError>>,
+    ) -> Result<(), ErrorInfo> {
+        let Some(turn_id) = self.turn.clone() else {
+            return Err(error(
+                ErrorCode::Conflict,
+                "store_secret is asked for in a turn, and none is running",
+            ));
+        };
+        let approval_id = ApprovalId::new(format!("secret-{}", ulid::Ulid::generate()));
+        let summary = format!(
+            "Store {} ({} B) as {} in {}",
+            store.path, store.bytes, store.name, store.set
+        );
+        let tool_call_id = self
+            .store_call(&turn_id)
+            .await
+            .unwrap_or_else(|| ItemId::new(approval_id.to_string()));
+        let open = Open {
+            route: Route::User,
+            deadline: None,
+            request: tasktools::Request::Approval {
+                approval_id: approval_id.clone(),
+                summary: summary.clone(),
+            },
+        };
+        self.log(EventBody::ApprovalRequested {
+            approval_id: approval_id.clone(),
+            turn_id,
+            tool_call_id,
+            summary,
+            routed_to: Route::User,
+            reason: self
+                .session
+                .parent
+                .is_some()
+                .then_some(EscalationReason::ExceedsAuthority),
+            secret: Some(store),
+        })
+        .await;
+        self.put(&open);
+        self.approvals.push((approval_id.clone(), open));
+        self.stores
+            .insert(approval_id, PendingStore { value, done });
+        self.settle().await;
         Ok(())
+    }
+
+    /// The latest `store_secret` tool call of `turn_id`, which the approval is for; `None` when
+    /// the adapter journaled none, or the journal cannot be read.
+    async fn store_call(&self, turn_id: &TurnId) -> Option<ItemId> {
+        let events = self
+            .inner
+            .journal
+            .all(self.session.session_id.clone())
+            .await
+            .ok()?;
+        events.into_iter().rev().find_map(|event| match event.body {
+            EventBody::ItemAdded { item }
+                if item.turn_id == *turn_id
+                    && matches!(&item.body, ItemBody::ToolCall { name, .. } if name.ends_with("store_secret")) =>
+            {
+                Some(item.id)
+            }
+            _ => None,
+        })
     }
 
     /// Sends the answer to an open question to the agent and journals it; a text answer tells
@@ -998,8 +1147,10 @@ impl Actor {
                 else {
                     return Ok(());
                 };
+                // A `store_secret` is routed to the user, so it never gets here.
                 self.resolve_approval(None, open, decision, answered_by)
                     .await
+                    .map(drop)
                     .map_err(internal)
             }
             PrimaryAct::Escalate { request, note } => {
@@ -1243,6 +1394,8 @@ impl Actor {
             self.withdraw(&open, RequestRef::Approval(approval_id.clone()));
             self.log(voided(approval_id)).await;
         }
+        // Dropping them tells each `store_secret` it expired.
+        self.stores.clear();
         for (question_id, (_, open)) in std::mem::take(&mut self.questions) {
             self.withdraw(&open, RequestRef::Question(question_id));
         }
@@ -2355,6 +2508,7 @@ impl Actor {
                     summary,
                     routed_to: open.route,
                     reason,
+                    secret: None,
                 })
                 .await;
                 self.put(&open);
@@ -3060,6 +3214,14 @@ fn describe(request: &RequestRef) -> String {
 }
 
 /// An approval the daemon closed because no answer can reach the agent any more.
+/// Why a `store_secret` command for `approval_id` is refused: it is not open, or not one.
+fn no_store(approval_id: &ApprovalId) -> ErrorInfo {
+    error(
+        ErrorCode::NotFound,
+        format!("approval {approval_id} is not an open request to store a secret"),
+    )
+}
+
 fn voided(approval_id: ApprovalId) -> EventBody {
     EventBody::ApprovalResolved {
         approval_id,

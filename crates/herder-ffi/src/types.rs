@@ -21,11 +21,11 @@ use herder_protocol::{
     PermissionMode, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId,
     Provider, ProviderBinary, ProviderReload, ProviderStatus, PullRequest, QuestionId,
     QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo,
-    SecretRef, SecretSet, SecretValue, SessionHead, SessionId, SessionOrigin, SessionSkill,
-    SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource, SkillsStatus, Terminal,
-    TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource, TurnError,
-    TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow, UserDevice,
-    UserId, UserInfo, VaultStatus, VaultVolume,
+    SecretRef, SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId, SessionOrigin,
+    SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource, SkillsStatus,
+    Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource,
+    TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow,
+    UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -77,7 +77,7 @@ uniffi::custom_type!(Bytes, Vec<u8>, {
     try_lift: |bytes| Ok(Bytes(bytes)),
 });
 
-// A secret's value, sent to a vault and never back; refused as `SecretValue::new` refuses it.
+// A secret's value, sent to a vault, and back only as an agent's `store_secret` read it; refused as `SecretValue::new` refuses it.
 uniffi::custom_type!(SecretValue, String, {
     remote,
     lower: |value| value.expose().to_owned(),
@@ -271,6 +271,7 @@ pub enum EventBody {
         summary: String,
         routed_to: Route,
         reason: Option<EscalationReason>,
+        secret: Option<SecretStoreRequest>,
     },
     ApprovalEscalated {
         approval_id: ApprovalId,
@@ -761,6 +762,15 @@ pub enum CommandBody {
         host_use: bool,
     },
     ListSecrets,
+    GetSecretToStore {
+        session_id: SessionId,
+        approval_id: ApprovalId,
+    },
+    ConfirmSecretStored {
+        session_id: SessionId,
+        approval_id: ApprovalId,
+        set: String,
+    },
     ListSecretAudit {
         before: Option<u64>,
     },
@@ -970,6 +980,9 @@ pub enum CommandResult {
     SecretAudit {
         entries: Vec<SecretAccess>,
     },
+    SecretToStore {
+        value: SecretValue,
+    },
     Bots {
         bots: Vec<Bot>,
     },
@@ -1130,6 +1143,17 @@ pub struct SecretInfo {
     pub name: String,
     pub description: String,
     pub updated_at: Timestamp,
+}
+
+#[uniffi::remote(Record)]
+pub struct SecretStoreRequest {
+    pub path: String,
+    pub bytes: u64,
+    pub fingerprint: String,
+    pub set: String,
+    pub name: String,
+    pub description: String,
+    pub delete_file_after: bool,
 }
 
 #[uniffi::remote(Record)]

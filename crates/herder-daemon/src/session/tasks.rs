@@ -261,6 +261,7 @@ impl ToolHandler for TaskTools {
                 ToolCall::Overview(OverviewInput {}) => success(manager.overview(caller).await),
                 ToolCall::Command(input) => success(manager.command(caller, input).await),
                 ToolCall::Secrets(SecretsInput {}) => success(manager.list_secrets().await),
+                ToolCall::StoreSecret(input) => success(manager.store_secret(caller, input).await),
                 ToolCall::Remember(input) => success(manager.remember(caller, input).await),
                 ToolCall::Forget(input) => success(manager.forget(caller, input).await),
             };
@@ -294,7 +295,10 @@ impl ToolHandler for TaskTools {
 pub(super) fn no_vault() -> SecretError {
     SecretError {
         code: SecretErrorCode::NoVault,
-        message: "this host is not linked to a vault, so it has no secrets".into(),
+        message:
+            "this host is not linked to a vault with Secrets on, so it has no secrets; an owner \
+         links it to one in the herder app, on the machine's page under Secrets"
+                .into(),
         secret: None,
         candidates: Vec::new(),
     }
@@ -309,7 +313,7 @@ fn tool_internal(message: impl Into<String>) -> ToolError {
 }
 
 /// A session command's failure as a tool error.
-fn tool_error(error: ErrorInfo) -> ToolError {
+pub(super) fn tool_error(error: ErrorInfo) -> ToolError {
     use herder_protocol::ErrorCode as Command;
     let code = match error.code {
         Command::NotFound => ErrorCode::NotFound,
@@ -376,7 +380,8 @@ impl SessionManager {
     async fn list_secrets(&self) -> Result<SecretsOutput, ToolError> {
         let unavailable = |message: String| ToolError::new(ErrorCode::Unavailable, message);
         let secrets = self.inner.secrets.get().ok_or_else(|| {
-            unavailable("this host is not linked to a vault, so it has no secrets".into())
+            unavailable("this host is not linked to a vault with Secrets on, so it has no secrets; an owner \
+         links it to one in the herder app, on the machine's page under Secrets".into())
         })?;
         let listed = secrets
             .list()
@@ -420,7 +425,9 @@ impl SessionManager {
 
     /// The user who sent the latest prompt of `session`, or for a child its primary's, that
     /// a person sent: the prompt behind the current turn, as agents' messages and the daemon's
-    /// follow-ups prompt for no one. An agent acts for them.
+    /// follow-ups prompt for no one. An agent acts for them. A session forked here from another
+    /// host, as a handoff, acts for the user who forked it until someone prompts it here: the
+    /// prompts before are by users of that host, not of this one.
     pub(super) async fn acts_for(&self, mut session: SessionId) -> Result<UserId, ToolError> {
         loop {
             let events = self
@@ -445,10 +452,12 @@ impl SessionManager {
                 EventBody::ItemAdded { item }
                     if matches!(item.body, herder_protocol::ItemBody::UserMessage { .. }) =>
                 {
-                    event.by.clone()
+                    event.by.clone().map(Some)
                 }
+                EventBody::SessionForked { .. } => Some(event.by.clone()),
                 _ => None,
             });
+            let sender = sender.flatten();
             return sender.ok_or_else(|| {
                 ToolError::new(
                     ErrorCode::NotAllowed,
@@ -793,7 +802,7 @@ impl SessionManager {
     }
 
     /// The calling session; it holds a token, so it exists.
-    async fn caller(&self, caller: &SessionId) -> Result<Session, ToolError> {
+    pub(super) async fn caller(&self, caller: &SessionId) -> Result<Session, ToolError> {
         self.inner
             .journal
             .session(caller.clone())

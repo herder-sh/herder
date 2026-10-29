@@ -2234,6 +2234,57 @@
           ]
         },
         {
+          "description": "On a host, the value an agent's `store_secret` read for the open approval\n`approval_id` of `session_id`, for an owner's app to put on the vault; owners only.\nAnswered with `secret_to_store`; it is neither journaled nor kept, and changes nothing,\nso a resend is answered afresh. Refused with `not_found` once the approval is not open\nor is not a `store_secret` one.",
+          "type": "object",
+          "properties": {
+            "approval_id": {
+              "description": "The open `store_secret` approval.",
+              "$ref": "#/$defs/ApprovalId"
+            },
+            "session_id": {
+              "description": "Session that asked.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "get_secret_to_store"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "approval_id"
+          ]
+        },
+        {
+          "description": "On a host, allow an agent's `store_secret` once the owner's app has put its value on\nthe host's vault, in `set`: the approval resolves as allowed, the host deletes the file\nwhen the agent asked, and the agent learns the secret is stored. Owners only. Answered\nwith `applied`; refused with `not_found` once the approval is not open or is not a\n`store_secret` one.",
+          "type": "object",
+          "properties": {
+            "approval_id": {
+              "description": "The open `store_secret` approval.",
+              "$ref": "#/$defs/ApprovalId"
+            },
+            "session_id": {
+              "description": "Session that asked.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "set": {
+              "description": "The set the value was put in, which the owner may have picked over the agent's.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "confirm_secret_stored"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "approval_id",
+            "set"
+          ]
+        },
+        {
           "description": "On a vault, list the latest fetches of secrets by hosts, newest first, at most\n[`crate::MAX_SECRET_AUDIT_ENTRIES`]; owners only. Answered with `secret_audit`. It\nchanges nothing, so a resend is answered afresh. Refused with `unsupported` on a daemon\nthat is not a vault.",
           "type": "object",
           "properties": {
@@ -3132,6 +3183,17 @@
               "description": "Who is asked first; a user can always answer, whatever the route.",
               "$ref": "#/$defs/Route",
               "default": "user"
+            },
+            "secret": {
+              "description": "For an agent's `store_secret`, what to store; always routed to the user. Only an\nowner allows it, from an app: `get_secret_to_store`, then `put_secret` on the\nhost's vault, then `confirm_secret_stored`. `answer_approval` may only deny it.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SecretStoreRequest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "summary": {
               "description": "One-line description of what the agent wants to do.",
@@ -4558,6 +4620,51 @@
       "description": "A secret as a host's session names it: `NAME`, or `set/NAME` when more than one set granted to the host has `NAME`.",
       "type": "string",
       "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[A-Z_][A-Z0-9_]*$"
+    },
+    "SecretStoreRequest": {
+      "description": "What an agent asked to store as a secret with `store_secret`, as its approval request\nshows it: where the host read the value, and where it is to go. Never the value.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "The value's size in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "delete_file_after": {
+          "description": "Whether the host deletes the file once the owner confirms the vault stored it.",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "What it is for, on one line.",
+          "type": "string"
+        },
+        "fingerprint": {
+          "description": "The first 8 hex digits of the value's SHA-256, to tell values apart without them.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The secret's name, as [`is_valid_secret_name`] accepts it.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The file on the host the value was read from, as the agent named it.",
+          "type": "string"
+        },
+        "set": {
+          "description": "The set the agent asked for; the owner who allows it may pick another.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "fingerprint",
+        "set",
+        "name",
+        "description",
+        "delete_file_after"
+      ]
     },
     "SecretValue": {
       "description": "A secret's value. Its `Debug` never shows it, so logging a message that carries one leaks\nnothing; read it with [`Self::expose`].",

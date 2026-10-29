@@ -23,7 +23,8 @@ pub use tools::{
     EscalateOutput, ForgetInput, ForgetOutput, MemoryFact, OverviewInput, OverviewOutput,
     PublishInput, PublishOutput, RememberInput, RememberOutput, Request, RequestRef, SecretEntry,
     SecretsInput, SecretsOutput, SendInput, SendOutput, SendSessionInput, SendSessionOutput,
-    SpawnInput, SpawnOutput, StatusInput, StatusOutput, WaitForInput, WaitForOutput,
+    SpawnInput, SpawnOutput, StatusInput, StatusOutput, StoreSecretInput, StoreSecretOutput,
+    WaitForInput, WaitForOutput,
 };
 
 /// One of the task tools.
@@ -51,6 +52,8 @@ pub enum Tool {
     Command,
     /// The secrets the session may use, without values.
     Secrets,
+    /// Store a file's contents as a secret on the vault, once an owner allows it.
+    StoreSecret,
     /// Keep a fact in the bot's memory; a bot's sessions only.
     Remember,
     /// Drop a fact from the bot's memory; a bot's sessions only.
@@ -59,7 +62,7 @@ pub enum Tool {
 
 impl Tool {
     /// Every tool, in `tools/list` order.
-    pub const ALL: [Tool; 13] = [
+    pub const ALL: [Tool; 14] = [
         Tool::Spawn,
         Tool::Send,
         Tool::SendSession,
@@ -71,6 +74,7 @@ impl Tool {
         Tool::Overview,
         Tool::Command,
         Tool::Secrets,
+        Tool::StoreSecret,
         Tool::Remember,
         Tool::Forget,
     ];
@@ -92,6 +96,7 @@ impl Tool {
             Tool::Overview => "overview",
             Tool::Command => "command",
             Tool::Secrets => "secrets",
+            Tool::StoreSecret => "store_secret",
             Tool::Remember => "remember",
             Tool::Forget => "forget",
         }
@@ -223,6 +228,21 @@ impl Tool {
                  publish a value. Fails with `unavailable` when this host has no vault or \
                  cannot reach it now."
             }
+            Tool::StoreSecret => {
+                "Store a file's contents as a secret on this machine's vault without ever \
+                 seeing them: when the user asks to keep a key, token or password file as a \
+                 secret, e.g. \"store ~/Downloads/AuthKey_X.p8 as ASC_PRIVATE_KEY in \
+                 personal\". herder reads `from_file` on this machine itself and asks the \
+                 user to approve; an owner of the vault allows it in a herder app, which may \
+                 pick another set, and the call returns once they answered. Never read, print \
+                 or copy the file yourself. There is no way to pass a value: when the user \
+                 typed a secret in the chat, do not write it to a file; ask them to add it in \
+                 the app, on the vault's Secrets tab (Add secret). With `delete_file_after`, \
+                 the file is deleted once the vault stored the value. Returns the set, name, \
+                 size and a short fingerprint, never the value. Fails with `unavailable` when \
+                 this machine is not linked to a vault with Secrets on, and `not_allowed` \
+                 when the user denies it."
+            }
             Tool::Remember => {
                 "Save a fact to the chat bot's memory, which every future conversation with the \
                  bot is told. Save only durable facts a future conversation needs: people's \
@@ -260,6 +280,7 @@ impl Tool {
             Tool::Overview => tool_schema::<OverviewInput>(),
             Tool::Command => tool_schema::<CommandInput>(),
             Tool::Secrets => tool_schema::<SecretsInput>(),
+            Tool::StoreSecret => tool_schema::<StoreSecretInput>(),
             Tool::Remember => tool_schema::<RememberInput>(),
             Tool::Forget => tool_schema::<ForgetInput>(),
         }
@@ -278,6 +299,7 @@ impl Tool {
             Tool::Publish => tool_schema::<PublishOutput>(),
             Tool::Overview => tool_schema::<OverviewOutput>(),
             Tool::Secrets => tool_schema::<SecretsOutput>(),
+            Tool::StoreSecret => tool_schema::<StoreSecretOutput>(),
             Tool::Remember => tool_schema::<RememberOutput>(),
             Tool::Forget => tool_schema::<ForgetOutput>(),
             Tool::Command => json_schema!({
@@ -409,6 +431,8 @@ pub enum ToolCall {
     Command(CommandInput),
     /// `secrets`.
     Secrets(SecretsInput),
+    /// `store_secret`.
+    StoreSecret(StoreSecretInput),
     /// `remember`.
     Remember(RememberInput),
     /// `forget`.
@@ -436,6 +460,16 @@ impl ToolCall {
             Tool::Overview => serde_json::from_value(arguments).map(ToolCall::Overview),
             Tool::Command => serde_json::from_value(arguments).map(ToolCall::Command),
             Tool::Secrets => serde_json::from_value(arguments).map(ToolCall::Secrets),
+            Tool::StoreSecret if arguments.get("value").is_some() => {
+                return Err(ToolError::new(
+                    ErrorCode::InvalidArguments,
+                    "store_secret never takes a value, so none passes through the \
+                     conversation: name the file holding it with `from_file`, or, for a value \
+                     the user typed, ask them to add it in the herder app, on the vault's \
+                     Secrets tab (Add secret)",
+                ));
+            }
+            Tool::StoreSecret => serde_json::from_value(arguments).map(ToolCall::StoreSecret),
             Tool::Remember => serde_json::from_value(arguments).map(ToolCall::Remember),
             Tool::Forget => serde_json::from_value(arguments).map(ToolCall::Forget),
         };
@@ -465,6 +499,7 @@ impl ToolCall {
             ToolCall::Overview(_) => Tool::Overview,
             ToolCall::Command(_) => Tool::Command,
             ToolCall::Secrets(_) => Tool::Secrets,
+            ToolCall::StoreSecret(_) => Tool::StoreSecret,
             ToolCall::Remember(_) => Tool::Remember,
             ToolCall::Forget(_) => Tool::Forget,
         }
@@ -480,8 +515,8 @@ pub enum ErrorCode {
     /// `spawn` was called by a child; children cannot spawn children.
     DepthExceeded,
     /// `spawn` asked for a provider outside the task's providers or a permission mode above the
-    /// caller's own, or `command` was refused: beyond the user's role, never run for an agent,
-    /// or invalid for the daemon's state.
+    /// caller's own, `command` was refused: beyond the user's role, never run for an agent,
+    /// or invalid for the daemon's state, or the user denied `store_secret`.
     NotAllowed,
     /// The session, question or approval request belongs to another session's task.
     NotYourChild,
@@ -494,7 +529,7 @@ pub enum ErrorCode {
     HostBusy,
     /// `publish` could not upload the artifact for its public link.
     UploadFailed,
-    /// `secrets` found this host without a vault, or unable to reach it now.
+    /// `secrets` or `store_secret` found this host without a vault, or unable to reach it now.
     Unavailable,
     /// The daemon failed.
     Internal,

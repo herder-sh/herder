@@ -2332,3 +2332,283 @@ async fn secrets_are_unavailable_on_a_host_without_a_vault() {
         "invalid_arguments"
     );
 }
+
+#[tokio::test]
+async fn a_session_handed_off_here_acts_for_whoever_took_it_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let commands = Arc::new(Commands::default());
+    daemon.manager.serve_control(commands.clone()).unwrap();
+    // Its prompts so far are by a user of the host it ran on, unknown here.
+    let elsewhere = UserId::new("user-of-another-host");
+    let session = daemon.create_with(PermissionMode::Ask).await;
+    daemon.start_as(elsewhere.clone(), &session).await;
+    let mut tools = daemon.connect(&session);
+    let settings = json!({ "command": { "type": "get_settings" } });
+    tools.ok("command", settings.clone()).await;
+    assert_eq!(commands.ran.lock().unwrap().last().unwrap().0, elsewhere);
+
+    let mut store = Store::open(dir.path().join("herder.db")).unwrap();
+    store
+        .append(NewEvent {
+            session_id: session.clone(),
+            at: Timestamp::now(),
+            by: Some(alice()),
+            body: EventBody::SessionForked {
+                from_session: SessionId::new("original"),
+                from_host: HostId::new("host-a"),
+            },
+        })
+        .unwrap();
+    tools.ok("command", settings).await;
+    assert_eq!(commands.ran.lock().unwrap().last().unwrap().0, alice());
+}
+
+/// A PEM key as an App Store Connect `.p8` holds one; no journal, log or result may hold it.
+const KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgSECRETMARKER\n-----END PRIVATE KEY-----\n";
+
+/// A daemon linked to a vault with Secrets on, and a session of it in a turn that hangs, so
+/// its agent can call `store_secret`.
+async fn storing(dir: &Path) -> (Daemon, SessionId) {
+    let daemon = Daemon::open(dir).await;
+    let secrets = Arc::new(herder_daemon::vault::HostSecrets::default());
+    secrets.set_linked(true);
+    daemon.manager.use_secrets(secrets).unwrap();
+    let session = daemon.primary(PermissionMode::FullAccess).await;
+    let hang = CommandBody::SendPrompt {
+        session_id: session.clone(),
+        text: "Hang.".into(),
+        images: Vec::new(),
+        files: Vec::new(),
+    };
+    daemon.manager.handle(alice(), hang).await.unwrap();
+    daemon
+        .until_n(&session, 2, |event| {
+            matches!(event, EventBody::TurnStarted { .. })
+        })
+        .await;
+    (daemon, session)
+}
+
+/// The open `store_secret` approval of `session`, with what it shows.
+async fn store_request(
+    daemon: &Daemon,
+    session: &SessionId,
+) -> (ApprovalId, herder_protocol::SecretStoreRequest) {
+    daemon
+        .until(session, |event| {
+            matches!(
+                event,
+                EventBody::ApprovalRequested {
+                    secret: Some(_),
+                    ..
+                }
+            )
+        })
+        .await;
+    last(&daemon.journal(session).await, |event| match &event.body {
+        EventBody::ApprovalRequested {
+            approval_id,
+            secret: Some(secret),
+            routed_to: Route::User,
+            ..
+        } => Some((approval_id.clone(), secret.clone())),
+        _ => None,
+    })
+}
+
+/// Whether any file under `dir` holds `text`: the journal's database, its WAL, and anything
+/// else the daemon wrote.
+fn anywhere(dir: &Path, text: &str) -> bool {
+    std::fs::read_dir(dir).unwrap().any(|entry| {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            return anywhere(&path, text);
+        }
+        let bytes = std::fs::read(&path).unwrap_or_default();
+        bytes
+            .windows(text.len())
+            .any(|window| window == text.as_bytes())
+    })
+}
+
+#[tokio::test]
+async fn an_agent_stores_a_file_as_a_secret_once_an_owner_allows_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = tempfile::tempdir().unwrap();
+    let key = downloads.path().join("AuthKey_X.p8");
+    std::fs::write(&key, KEY).unwrap();
+    let (daemon, session) = storing(dir.path()).await;
+    let mut tools = daemon.connect(&session);
+    let arguments = json!({
+        "set": "personal",
+        "name": "ASC_PRIVATE_KEY",
+        "description": "App Store Connect API key",
+        "from_file": key.to_str().unwrap(),
+        "delete_file_after": true,
+    });
+    let call = tokio::spawn(async move { tools.call("store_secret", arguments).await });
+
+    let (approval_id, request) = store_request(&daemon, &session).await;
+    assert_eq!(request.path, key.to_str().unwrap());
+    assert_eq!(request.bytes, KEY.len() as u64);
+    assert_eq!(request.fingerprint.len(), 8);
+    assert_eq!(
+        (request.set.as_str(), request.name.as_str()),
+        ("personal", "ASC_PRIVATE_KEY")
+    );
+    assert_eq!(daemon.status(&session).await, SessionStatus::NeedsYou);
+
+    // Only an owner's app allows it, by putting the value on the vault.
+    let allow = CommandBody::AnswerApproval {
+        session_id: session.clone(),
+        approval_id: approval_id.clone(),
+        decision: ApprovalDecision::Allow,
+    };
+    let refused = daemon.manager.handle(alice(), allow).await.unwrap_err();
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    let take = CommandBody::GetSecretToStore {
+        session_id: session.clone(),
+        approval_id: approval_id.clone(),
+    };
+    let Ok(CommandResult::SecretToStore { value }) = daemon
+        .manager
+        .handle_once(alice(), command_id(), take)
+        .await
+    else {
+        panic!("expected the value");
+    };
+    assert_eq!(value.expose(), KEY, "newlines and all");
+    assert!(key.exists(), "the file stays until the vault stored it");
+    daemon
+        .user_answers(CommandBody::ConfirmSecretStored {
+            session_id: session.clone(),
+            approval_id: approval_id.clone(),
+            set: "work".into(),
+        })
+        .await;
+
+    let result = call.await.unwrap();
+    assert!(!result.is_error, "{result:?}");
+    assert_eq!(
+        result.structured_content.unwrap(),
+        json!({
+            "set": "work",
+            "name": "ASC_PRIVATE_KEY",
+            "bytes": KEY.len(),
+            "fingerprint": request.fingerprint,
+            "file_deleted": true,
+        })
+    );
+    assert!(!result.content[0].text.contains("SECRETMARKER"));
+    assert!(!key.exists());
+    let journal = daemon.journal(&session).await;
+    assert!(journal.iter().any(|event| matches!(
+        &event.body,
+        EventBody::ApprovalResolved { approval_id: id, decision: ApprovalOutcome::Allow, .. }
+            if *id == approval_id
+    )));
+    assert_eq!(daemon.status(&session).await, SessionStatus::Running);
+    assert!(!anywhere(dir.path(), "SECRETMARKER"));
+
+    // It is no longer open.
+    let again = CommandBody::GetSecretToStore {
+        session_id: session.clone(),
+        approval_id,
+    };
+    let gone = daemon.manager.handle(alice(), again).await.unwrap_err();
+    assert_eq!(gone.code, ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn a_denied_store_secret_stores_nothing_and_keeps_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = tempfile::tempdir().unwrap();
+    let key = downloads.path().join("AuthKey_X.p8");
+    std::fs::write(&key, KEY).unwrap();
+    let (daemon, session) = storing(dir.path()).await;
+    let mut tools = daemon.connect(&session);
+    let arguments = json!({
+        "set": "personal",
+        "name": "ASC_PRIVATE_KEY",
+        "description": "App Store Connect API key",
+        "from_file": key.to_str().unwrap(),
+        "delete_file_after": true,
+    });
+    let call = tokio::spawn(async move {
+        let result = tools.call("store_secret", arguments).await;
+        (tools, result)
+    });
+    let (approval_id, _) = store_request(&daemon, &session).await;
+    daemon
+        .user_answers(CommandBody::AnswerApproval {
+            session_id: session.clone(),
+            approval_id: approval_id.clone(),
+            decision: ApprovalDecision::Deny,
+        })
+        .await;
+    let (mut tools, result) = call.await.unwrap();
+    assert!(result.is_error);
+    let error: Value = serde_json::from_str(&result.content[0].text).unwrap();
+    assert_eq!(error["code"], "not_allowed");
+    assert!(key.exists());
+    let confirm = CommandBody::ConfirmSecretStored {
+        session_id: session.clone(),
+        approval_id,
+        set: "personal".into(),
+    };
+    let late = daemon.manager.handle(alice(), confirm).await.unwrap_err();
+    assert_eq!(late.code, ErrorCode::NotFound);
+
+    // What it refuses before asking anyone.
+    let store = |from_file: &str| {
+        json!({
+            "set": "personal",
+            "name": "ASC_PRIVATE_KEY",
+            "description": "",
+            "from_file": from_file,
+        })
+    };
+    let mut typed = store(key.to_str().unwrap());
+    typed["value"] = json!("typed in the chat");
+    assert_eq!(
+        tools.fails("store_secret", typed).await,
+        "invalid_arguments"
+    );
+    let large = downloads.path().join("large");
+    std::fs::write(
+        &large,
+        "k".repeat(herder_protocol::MAX_SECRET_VALUE_BYTES + 1),
+    )
+    .unwrap();
+    assert_eq!(
+        tools
+            .fails("store_secret", store(large.to_str().unwrap()))
+            .await,
+        "invalid_arguments"
+    );
+    assert_eq!(
+        tools.fails("store_secret", store("missing.p8")).await,
+        "invalid_arguments"
+    );
+    assert!(!anywhere(dir.path(), "SECRETMARKER"));
+}
+
+#[tokio::test]
+async fn store_secret_is_unavailable_on_a_host_without_a_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let store = json!({
+        "set": "personal",
+        "name": "KEY",
+        "description": "",
+        "from_file": "key.p8",
+    });
+    assert_eq!(tools.fails("store_secret", store).await, "unavailable");
+}
+
+fn command_id() -> herder_protocol::CommandId {
+    herder_protocol::CommandId::new("take-1")
+}
