@@ -1047,6 +1047,7 @@ fn owned_by_another(dir: &Path) -> Result<()> {
             name: "pat".into(),
             role: Role::Owner,
             created_at: Timestamp::now(),
+            host: false,
         }],
         "devices": [],
     });
