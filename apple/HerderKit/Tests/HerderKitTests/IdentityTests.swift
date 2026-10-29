@@ -30,18 +30,21 @@ struct ApprovalTests {
     static let machine = ApprovalRequest(kind: .machine, name: "new-server", code: "K7Q4PD", fingerprint: fingerprint,
                                          hosts: ["10.0.4.17:7447"], os: "Linux", version: "0.17.0")
 
-    @Test func aMachinesLinkSaysWhatAsks() throws {
-        let url = try #require(URL(string: "herder://own?host=10.0.4.17%3A7447&fp=\(Self.fingerprint)&code=K7Q4PD&name=new-server&os=Linux&v=0.17.0"))
-        #expect(AppLink(url: url) == .approve(Self.machine))
+    @Test func aMachinesLinkSaysWhereItListens() throws {
+        let url = try #require(URL(string: "herder://own?host=10.0.4.17%3A7447&host=new-server.local%3A7447&fp=\(Self.fingerprint)&code=K7Q4PD"))
+        #expect(AppLink(url: url) == .approve(ApprovalRequest(
+            kind: .machine, name: "10.0.4.17", code: "K7Q4PD", fingerprint: Self.fingerprint,
+            hosts: ["10.0.4.17:7447", "new-server.local:7447"])))
         #expect(Self.machine.about == "Linux · 10.0.4.17 · herder 0.17.0")
     }
 
     @Test func aTerminalsLinkAsksToSignIn() throws {
-        let url = try #require(URL(string: "herder://login?host=%5Bfe80%3A%3A1%5D%3A7447&fp=\(Self.fingerprint)&code=K7Q4PD"))
+        let url = try #require(URL(string: "herder://login?host=%5Bfe80%3A%3A1%5D%3A7447&fp=\(Self.fingerprint)&code=K7Q-4PD"))
         guard case .approve(let request) = AppLink(url: url) else { Issue.record("not an approval"); return }
         #expect(request.kind == .login)
         #expect(request.name == "fe80::1")
         #expect(request.about == "fe80::1")
+        #expect(request.spokenCode == "K7Q · 4PD")
     }
 
     @Test func aLinkWithoutItsCodeOpensNothing() throws {
