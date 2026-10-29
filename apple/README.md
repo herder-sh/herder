@@ -72,13 +72,16 @@ open the session waiting on an approval on the first from its card on Home:
 ```sh
 cargo run -p herder-ffi --example fake_daemon -- --share   # the shared link first, the waiting session last
 cargo run -p herder-ffi --example fake_daemon -- --vault   # a vault that keeps secrets
+cargo run -p herder-ffi --example fake_daemon -- --own     # a machine to approve as its owner
 TEST_RUNNER_HERDER_PAIR_LINK='<link>' TEST_RUNNER_HERDER_WAITING_SESSION='<session id>' \
-TEST_RUNNER_HERDER_VAULT_LINK='<vault link>' xcodebuild test -skipPackagePluginValidation -project apple/herder.xcodeproj \
+TEST_RUNNER_HERDER_VAULT_LINK='<vault link>' TEST_RUNNER_HERDER_OWN_LINK='<own link>' xcodebuild test -skipPackagePluginValidation -project apple/herder.xcodeproj \
   -scheme herder-iOS -destination 'platform=iOS Simulator,name=iPhone 18 Pro'
 ```
 
 A pairing code works once, so start new fake daemons for each run, and erase the app from the
 simulator (`xcrun simctl uninstall booted sh.herder.Herder`) so it starts with no machines.
+The approval test signs with a software passkey the app has only in debug builds launched with
+`-softwarePasskey`, as no simulator answers Face ID for a test.
 
 To try the app against it, run `cargo run -p herder-ffi --example fake_daemon` and paste the
 link it prints into **Add to Fleet**. For a real machine, run `herder pair` on it: on iOS, scan

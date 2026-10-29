@@ -63,7 +63,7 @@ struct FleetView: View {
     /// Why a link's session did not open, for the alert that says so.
     @State private var linkProblem: SessionLinkTarget?
     /// Your herder passkey, which signs every change to people and every approval.
-    @State private var authenticator = PlatformAuthenticator()
+    @State private var authenticator = passkeyAuthenticator()
     /// The request of a device without a passkey on show, and those put off by closing the sheet.
     @State private var actionRequest: ActionRequest?
     @State private var putOff: Set<ActionRequest.ID> = []

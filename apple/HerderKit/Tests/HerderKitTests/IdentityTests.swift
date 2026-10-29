@@ -101,6 +101,13 @@ struct ApprovalTests {
         #expect(Fleet.keyed(nil, in: people) == nil)
     }
 
+    @Test func aNewPasskeyIsNamedAsYourMachinesKnowYouElseNeverEmpty() {
+        #expect(Fleet.ownerName("Tomas", fullName: "Tomas A") == "Tomas")
+        #expect(Fleet.ownerName(nil, fullName: "Tomas A") == "Tomas A")
+        // iOS has no user name.
+        #expect(Fleet.ownerName(nil, fullName: "") == "Owner")
+    }
+
     @Test func closingFaceIDAsksAgainButARefusalSaysWhy() async {
         let authenticator = FakeAuthenticator()
         authenticator.failure = ASAuthorizationError(.canceled)

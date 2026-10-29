@@ -181,7 +181,7 @@ struct AddMachineSheet: View {
     private func signIn(to vault: UnpairedVault) async {
         do {
             _ = try await fleet.signIn(hosts: [vault.address], fingerprint: vault.fingerprint,
-                                       with: PlatformAuthenticator())
+                                       with: passkeyAuthenticator())
             dismiss()
         } catch {
             if !isCancelled(error) {

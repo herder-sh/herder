@@ -182,7 +182,7 @@ struct ApproveSheet: View {
         self.fleet = fleet
         self.open = open
         self.linkVault = linkVault
-        _approval = State(initialValue: Approval(request, authenticator: PlatformAuthenticator()) {
+        _approval = State(initialValue: Approval(request, authenticator: passkeyAuthenticator()) {
             try await fleet.approve(request, with: $0)
         })
     }

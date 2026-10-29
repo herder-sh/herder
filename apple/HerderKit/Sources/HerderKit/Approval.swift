@@ -192,9 +192,15 @@ extension Fleet {
         guard let creation = pending.registration(),
               let userId = Data(base64URL: creation.userHandle), let challenge = Data(base64URL: creation.challenge)
         else { throw HerderError.Local(detail: "the machine did not offer to make a passkey") }
-        let name = people.people.values.joined().first { $0.personId == me }?.name ?? NSFullUserName()
+        let name = Self.ownerName(people.people.values.joined().first { $0.personId == me }?.name, fullName: NSFullUserName())
         let registration = try await authenticator.register(name: name, userId: userId, challenge: challenge)
         return NewPerson(name: name, passkey: .register(registration: registration))
+    }
+
+    /// Your name for a new passkey: as your machines know you, else the device's user's, else
+    /// "Owner", as iOS has no user name and a machine takes no empty one.
+    nonisolated static func ownerName(_ known: String?, fullName: String) -> String {
+        known ?? (fullName.isEmpty ? "Owner" : fullName)
     }
 
     /// You as a machine lists you with your passkeys, when one does.
