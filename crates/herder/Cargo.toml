@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+futures-util.workspace = true
 herder-adapters.workspace = true
 herder-client-core.workspace = true
 herder-daemon.workspace = true
@@ -28,7 +29,7 @@ toml.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-futures-util.workspace = true
+herder-daemon = { workspace = true, features = ["test-authenticator"] }
 herder-store.workspace = true
 rustls.workspace = true
 tempfile.workspace = true

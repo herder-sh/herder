@@ -1,5 +1,5 @@
 //! Two real daemons, with the fake adapter, over TLS on localhost, each with a clone of one
-//! repository: the client core pairs with both, and the session list shows one project with
+//! repository: the client core signs in to both as their owner, and the session list shows one project with
 //! the sessions of both machines.
 
 use std::collections::HashMap;
@@ -8,10 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
-use herder_client_core::PairingUri;
-use herder_client_core::{Client, PairResult};
+use herder_client_core::Client;
 use herder_daemon::Hub;
-use herder_daemon::auth::{Auth, PAIRING_TTL};
+use herder_daemon::auth::{Auth, authenticator};
 use herder_daemon::login::Logins;
 use herder_daemon::projects::{Discovery, OnSessionsChanged, Overrides, ProjectsConfig};
 use herder_daemon::session::{
@@ -56,8 +55,9 @@ fn clone(dir: &Path) -> String {
     dir.to_str().unwrap().to_owned()
 }
 
-/// Starts a daemon named `name` on `dir`, with project discovery; returns a pairing link.
-async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken) -> String {
+/// Starts a daemon named `name` on `dir`, with project discovery, and signs `client` in to it
+/// as its owner.
+async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken, client: &Client) {
     std::fs::create_dir_all(dir.join("tls")).unwrap();
     let tls = Tls::load_or_create(&dir.join("tls"), name).unwrap();
     let auth = Arc::new(Auth::open(dir).unwrap());
@@ -127,13 +127,10 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken) 
         host,
     );
     tokio::spawn(server.run(vec![listener], shutdown.clone()));
-    let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-    PairingUri {
-        hosts: vec![addr.to_string()],
-        fingerprint,
-        code,
-    }
-    .to_string()
+    let hosts = vec![addr.to_string()];
+    authenticator::sign_in(&auth, client, hosts, &fingerprint, "alice")
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -154,12 +151,7 @@ async fn two_paired_daemons_with_clones_of_one_repo_show_one_project() {
     )
     .unwrap();
     for (id, name, repo) in &machines {
-        let link = daemon(&tmp.path().join(name), id, name, &shutdown).await;
-        let paired = client.pair(link).await.unwrap();
-        assert!(
-            matches!(&paired[..], [PairResult::Paired { .. }]),
-            "{paired:?}"
-        );
+        daemon(&tmp.path().join(name), id, name, &shutdown, &client).await;
         let command = CommandBody::CreateSession {
             repo: Some(repo.clone()),
             project_id: None,

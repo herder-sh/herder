@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use herder_client_core::{Client, Error, Machine, PairResult, PairingUri};
+use herder_daemon::auth::authenticator::{Authenticator, Join};
 use herder_daemon::auth::control::{self, Request, Response};
 use herder_daemon::service::{Service, Services};
 use herder_daemon::vault::install::LocalVault;
@@ -98,21 +99,15 @@ impl Daemon {
             .unwrap()
     }
 
-    /// A pairing link for a client of `user` with `role`, as `herder pair` prints it.
-    async fn link(&self, user: &str, role: Option<Role>) -> String {
-        let request = Request::Pair {
-            user: user.into(),
-            role,
+    /// Signs `client` in as the daemon's first owner, the new person `name`, with the code
+    /// `herder service install` shows.
+    async fn claim(&self, client: &Client, name: &str) -> (Authenticator, Machine) {
+        let Response::Own(info) = self.control(Request::Own).await else {
+            panic!("no claim code");
         };
-        let Response::Paired(info) = self.control(request).await else {
-            panic!("no pairing code");
-        };
-        PairingUri {
-            hosts: info.addresses,
-            fingerprint: info.fingerprint,
-            code: info.code,
-        }
-        .to_string()
+        Join::claim(info.code)
+            .join(client, info.addresses, &info.fingerprint, name)
+            .await
     }
 
     async fn stop(self) {
@@ -194,6 +189,39 @@ fn one_machine(results: Vec<PairResult>) -> Machine {
     }
 }
 
+/// Signs `member` in to `machine` as the new person `name`, a member, by an invite `owner`
+/// makes with `passkey`.
+async fn invite(
+    owner: &Client,
+    passkey: &Authenticator,
+    machine: &HostId,
+    member: &Client,
+    name: &str,
+) -> HostId {
+    let CommandResult::PasskeyChallenge { challenge, .. } =
+        send(owner, machine, CommandBody::PasskeyChallenge).await
+    else {
+        panic!("expected a passkey challenge");
+    };
+    let invite = CommandBody::Invite {
+        role: Role::Member,
+        assertion: Box::new(passkey.assert(&challenge)),
+    };
+    let CommandResult::Invite {
+        invite,
+        fingerprint,
+        addresses,
+        ..
+    } = send(owner, machine, invite).await
+    else {
+        panic!("expected an invite");
+    };
+    let (_, joined) = Join::invite(invite)
+        .join(member, addresses, &fingerprint, name)
+        .await;
+    joined.host_id
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     let tmp = tempfile::tempdir().unwrap();
@@ -206,20 +234,11 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
 
     // The owner pairs with both; a member pairs with the host.
     let owner = open(&tmp.path().join("owner"));
-    let on_vault = owner
-        .pair(vault.link("alice", None).await)
-        .await
-        .map(one_machine)
-        .unwrap();
-    let on_host = owner
-        .pair(host.link("alice", None).await)
-        .await
-        .map(one_machine)
-        .unwrap();
+    let (alice_on_vault, on_vault) = vault.claim(&owner, "alice").await;
+    let (alice, on_host) = host.claim(&owner, "alice").await;
     let (vault_id, host_id) = (on_vault.host_id.clone(), on_host.host_id.clone());
     let member = open(&tmp.path().join("member"));
-    let link = host.link("bob", Some(Role::Member)).await;
-    let as_member = member.pair(link).await.map(one_machine).unwrap().host_id;
+    let as_member = invite(&owner, &alice, &host_id, &member, "bob").await;
     machine_when(&owner, |m| {
         m.host_id == host_id && m.role == Some(Role::Owner)
     })
@@ -257,8 +276,8 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         account_id: None,
         relay: None,
     };
-    // Even without a vault the running daemon supports local forks. A missing source is
-    // not found, rather than forks being unsupported.
+    // The running daemon forks its own sessions, and histories a client relays; a session it
+    // does not hold is not found, rather than forks being unsupported.
     assert_eq!(
         refused(&owner, &host_id, missing_fork.clone()).await,
         ErrorCode::NotFound
@@ -324,13 +343,7 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         );
     }
     let vault_member = open(&tmp.path().join("vault-member"));
-    let link = vault.link("carol", Some(Role::Member)).await;
-    let carol_vault = vault_member
-        .pair(link)
-        .await
-        .map(one_machine)
-        .unwrap()
-        .host_id;
+    let carol_vault = invite(&owner, &alice_on_vault, &vault_id, &vault_member, "carol").await;
     for command in [
         CommandBody::PairVaultHost {
             host_name: "devbox".into(),
@@ -430,11 +443,10 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
             .any(|u| u.name == "devbox" && u.devices.iter().any(|d| d.host_only)),
         "{users:?}"
     );
-    // Fork lookup now reaches the vault without restarting. This host-only device cannot
-    // read other sessions as a client, so the vault refuses the read.
+    // Linked, the host still never reads the vault to fork.
     assert_eq!(
         refused(&owner, &host_id, missing_fork.clone()).await,
-        ErrorCode::Forbidden
+        ErrorCode::NotFound
     );
     let reads = |read: bool| {
         let (host_id, vault_id) = (host_id.clone(), vault_id.clone());
@@ -450,8 +462,8 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     };
     machine_when(&owner, reads(false)).await;
 
-    // The owner lets it take handoffs: the same device reads the vault, with no pairing
-    // again, and the session is just not there.
+    // The owner lets it take handoffs: the vault lets the same device read, with no pairing
+    // again, yet the host still forks only what it holds or is relayed.
     let access = |read| CommandBody::SetVaultHostAccess {
         host_id: host_id.clone(),
         read,
@@ -480,10 +492,6 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         CommandResult::Applied
     );
     machine_when(&owner, reads(false)).await;
-    assert_eq!(
-        refused(&owner, &host_id, missing_fork.clone()).await,
-        ErrorCode::Forbidden
-    );
     // A host that never replicated here, and a daemon that is no vault, are refused.
     let stranger_host = CommandBody::SetVaultHostAccess {
         host_id: HostId::new("never-replicated"),
@@ -509,7 +517,7 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         send(&owner, &host_id, CommandBody::UnlinkVault).await,
         CommandResult::Applied
     );
-    // Unlink also stops fork lookup from reaching the old vault.
+    // Unlinked, it forks as before.
     assert_eq!(
         refused(&owner, &host_id, missing_fork).await,
         ErrorCode::NotFound
@@ -600,15 +608,10 @@ async fn an_owner_runs_a_vault_on_the_host_from_a_client() {
     };
     let host = Daemon::start_with(&tmp.path().join("host"), "", false, Some(local)).await;
     let owner = open(&tmp.path().join("owner"));
-    let host_id = owner
-        .pair(host.link("alice", None).await)
-        .await
-        .map(one_machine)
-        .unwrap()
-        .host_id;
+    let (alice, on_host) = host.claim(&owner, "alice").await;
+    let host_id = on_host.host_id;
     let member = open(&tmp.path().join("member"));
-    let link = host.link("bob", Some(Role::Member)).await;
-    let as_member = member.pair(link).await.map(one_machine).unwrap().host_id;
+    let as_member = invite(&owner, &alice, &host_id, &member, "bob").await;
     machine_when(&owner, |m| {
         m.host_id == host_id && m.role == Some(Role::Owner)
     })
@@ -725,12 +728,7 @@ async fn a_daemon_without_a_local_vault_refuses_to_install_one() {
     let tmp = tempfile::tempdir().unwrap();
     let host = Daemon::start(&tmp.path().join("host"), "", false).await;
     let owner = open(&tmp.path().join("owner"));
-    let host_id = owner
-        .pair(host.link("alice", None).await)
-        .await
-        .map(one_machine)
-        .unwrap()
-        .host_id;
+    let host_id = host.claim(&owner, "alice").await.1.host_id;
     assert_eq!(
         refused(&owner, &host_id, CommandBody::InstallVault).await,
         ErrorCode::Unsupported

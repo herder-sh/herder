@@ -90,19 +90,15 @@ pub(crate) async fn fork(
         )
         .await;
     }
-    // No machine the client reaches has it: the destination's vault is the only other copy.
-    let link = send(&destination, CommandBody::GetVaultLink).await?;
-    if !matches!(link, CommandResult::VaultLink { vault: Some(_), .. }) {
-        return Err(rejected(
-            ErrorCode::NotFound,
-            format!(
-                "{} is offline and {} has no vault to find the session in",
-                head_name(view.as_ref(), &source_id),
-                destination.view().name
-            ),
-        ));
-    }
-    send(&destination, fork(None)).await
+    // No machine the client reaches has it, and hosts never read each other's sessions.
+    Err(rejected(
+        ErrorCode::NotFound,
+        format!(
+            "{} is offline, and no other machine you are signed in to holds the session; sign \
+             in to its vault to fork it from there",
+            head_name(view.as_ref(), &source_id)
+        ),
+    ))
 }
 
 /// The head of `session_id` among the sessions `view` lists.

@@ -13,10 +13,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use herder_client_core::PairingUri;
 use herder_client_core::auth::client_config;
-use herder_client_core::{Client, Error, Machine, PairResult, SessionSubscription};
+use herder_client_core::{Client, Error, Machine, SessionSubscription};
 use herder_daemon::Hub;
+use herder_daemon::auth::authenticator::{Authenticator, Join};
 use herder_daemon::auth::{Auth, DeviceRole, PAIRING_TTL};
 use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::session::{Accounts, Adapters, EventSink, SessionManager, Setup};
@@ -161,14 +161,16 @@ impl Vault {
         )
     }
 
-    /// A pairing link for a client of `user`, as `herder pair` on the vault prints it.
-    fn pairing_link(&self, user: &str) -> String {
-        PairingUri {
-            hosts: vec![self.addr.to_string()],
-            fingerprint: self.fingerprint.clone(),
-            code: self.auth.mint(user, None, PAIRING_TTL).unwrap().code,
-        }
-        .to_string()
+    /// Signs `client` in as the vault's owner, the person `alice`, who claims it first.
+    async fn join(&self, client: &Client) -> (Authenticator, Machine) {
+        Join::open(&self.auth, herder_protocol::Role::Owner)
+            .join(
+                client,
+                vec![self.addr.to_string()],
+                &self.fingerprint,
+                "alice",
+            )
+            .await
     }
 
     /// Every event the vault holds of `host-1`, by session; read from its database file.
@@ -437,13 +439,6 @@ fn assert_gap_free(vault_dir: &Path) {
 }
 
 /// The machine a link of one machine paired with.
-fn one_machine(results: Vec<PairResult>) -> Machine {
-    match <[PairResult; 1]>::try_from(results) {
-        Ok([PairResult::Paired { machine }]) => machine,
-        other => panic!("expected one paired machine: {other:?}"),
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sessions_appear_in_the_vault_and_follow_live() {
     let tmp = tempfile::tempdir().unwrap();
@@ -608,11 +603,7 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
         "test".into(),
     )
     .unwrap();
-    let paired = client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap();
+    let (passkey, paired) = vault.join(&client).await;
     let vault_id = paired.host_id;
     assert_eq!(vault_id.as_str(), "vault");
     let machine = machine_when(&client, |m| m.sessions.len() == 2).await;
@@ -699,22 +690,24 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
         client.send(vault_id.clone(), archive).await,
         Err(Error::Rejected { info: error }) if error.code == ErrorCode::ReadOnly
     ));
-    // A client of the vault shares it on, with the vault's own address.
-    let Ok(CommandResult::DevicePairing {
+    // A client of the vault invites someone, with the vault's own address.
+    let Ok(CommandResult::PasskeyChallenge { challenge, .. }) = client
+        .send(vault_id.clone(), CommandBody::PasskeyChallenge)
+        .await
+    else {
+        panic!("expected a passkey challenge");
+    };
+    let invite = CommandBody::Invite {
+        role: herder_protocol::Role::Member,
+        assertion: Box::new(passkey.assert(&challenge)),
+    };
+    let Ok(CommandResult::Invite {
         addresses,
         fingerprint,
         ..
-    }) = client
-        .send(
-            vault_id.clone(),
-            CommandBody::PairDevice {
-                user: None,
-                role: None,
-            },
-        )
-        .await
+    }) = client.send(vault_id.clone(), invite).await
     else {
-        panic!("expected a device pairing");
+        panic!("expected an invite");
     };
     assert_eq!(
         (addresses, fingerprint),
@@ -765,11 +758,7 @@ async fn a_client_of_the_vault_sees_what_it_holds_of_each_host() {
         "test".into(),
     )
     .unwrap();
-    client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap();
+    vault.join(&client).await;
     let machine = machine_when(&client, |m| m.vault.as_ref().is_some_and(|v| v.events == 8)).await;
     let status = machine.vault.unwrap();
     assert_eq!((status.sessions, status.events), (2, 8));
@@ -816,12 +805,7 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
         "test".into(),
     )
     .unwrap();
-    let vault_id = client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap()
-        .host_id;
+    let vault_id = vault.join(&client).await.1.host_id;
 
     // The host's device comes back but falls silent after its hello, as a host whose machine
     // hangs or whose network drops without closing the connection would.
@@ -1011,11 +995,7 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
         "test".into(),
     )
     .unwrap();
-    client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap();
+    vault.join(&client).await;
     let machine = machine_when(&client, |m| m.sessions.len() == 3).await;
     assert_eq!(machine.hosts.len(), 1);
     vault.runtime.kill().await;
@@ -1068,12 +1048,7 @@ async fn images_are_not_backed_up_unless_the_host_says_so_and_never_fail_it() {
         "test".into(),
     )
     .unwrap();
-    let vault_id = client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap()
-        .host_id;
+    let vault_id = vault.join(&client).await.1.host_id;
     let fetch = CommandBody::GetAttachment {
         session_id: SessionId::new("s1"),
         attachment_id: AttachmentId::new("img1x0"),
@@ -1175,11 +1150,7 @@ async fn a_hosts_images_stay_within_its_cap_and_the_hosts_list_shows_usage() {
         "test".into(),
     )
     .unwrap();
-    client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap();
+    vault.join(&client).await;
     let machine = machine_when(&client, |m| {
         m.hosts
             .first()
@@ -1213,11 +1184,7 @@ async fn a_forgotten_host_leaves_nothing_on_the_vault() {
         "test".into(),
     )
     .unwrap();
-    client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap();
+    vault.join(&client).await;
     machine_when(&client, |m| m.sessions.len() == 2).await;
 
     // Never while it is online.
@@ -1237,17 +1204,37 @@ async fn a_forgotten_host_leaves_nothing_on_the_vault() {
         (host_id(), 2, 1)
     );
     assert!(Vault::held(&vault_dir).is_empty());
-    // Its device is unpaired; the client's stays.
-    let devices = vault.auth.devices();
-    assert_eq!(devices.len(), 1);
-    assert_eq!(devices[0].0.role, DeviceRole::Client);
+    // Its device is unpaired; the person's stays.
+    assert!(vault.auth.devices().is_empty());
+    assert_eq!(vault.auth.people()[0].devices.len(), 1);
     machine_when(&client, |m| m.hosts.is_empty() && m.sessions.is_empty()).await;
     vault.runtime.kill().await;
 }
 
-/// Runs a secret command on the vault as the paired `client`.
-async fn secret_command(client: &Client, command: CommandBody) -> Result<CommandResult, ErrorCode> {
-    match client.send(HostId::new("vault"), command).await {
+/// Runs a secret command on the vault as the signed-in `client`, with a fresh assertion of
+/// its person's `passkey` where the command carries one.
+async fn secret_command(
+    client: &Client,
+    passkey: &Authenticator,
+    mut command: CommandBody,
+) -> Result<CommandResult, ErrorCode> {
+    let vault = HostId::new("vault");
+    if let CommandBody::CreateSecretSet { assertion, .. }
+    | CommandBody::DeleteSecretSet { assertion, .. }
+    | CommandBody::PutSecret { assertion, .. }
+    | CommandBody::DeleteSecret { assertion, .. }
+    | CommandBody::GrantSecretSet { assertion, .. }
+    | CommandBody::RevokeSecretSet { assertion, .. } = &mut command
+    {
+        let Ok(CommandResult::PasskeyChallenge { challenge, .. }) = client
+            .send(vault.clone(), CommandBody::PasskeyChallenge)
+            .await
+        else {
+            panic!("expected a passkey challenge");
+        };
+        *assertion = Some(Box::new(passkey.assert(&challenge)));
+    }
+    match client.send(vault, command).await {
         Ok(result) => Ok(result),
         Err(Error::Rejected { info }) => Err(info.code),
         Err(other) => panic!("the command failed: {other:?}"),
@@ -1294,11 +1281,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         "test".into(),
     )
     .unwrap();
-    client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap();
+    let (passkey, _) = vault.join(&client).await;
 
     for set in ["prod", "dev", "other"] {
         let created = CommandBody::CreateSecretSet {
@@ -1306,7 +1289,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, created).await,
+            secret_command(&client, &passkey, created).await,
             Ok(CommandResult::Applied)
         );
     }
@@ -1315,7 +1298,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, again).await,
+        secret_command(&client, &passkey, again).await,
         Err(ErrorCode::Conflict)
     );
     let bad = CommandBody::CreateSecretSet {
@@ -1323,7 +1306,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, bad).await,
+        secret_command(&client, &passkey, bad).await,
         Err(ErrorCode::BadRequest)
     );
     for (set, name, value) in [
@@ -1340,7 +1323,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, put).await,
+            secret_command(&client, &passkey, put).await,
             Ok(CommandResult::Applied)
         );
     }
@@ -1352,7 +1335,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, nowhere).await,
+        secret_command(&client, &passkey, nowhere).await,
         Err(ErrorCode::NotFound)
     );
     for set in ["prod", "dev"] {
@@ -1363,7 +1346,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, grant).await,
+            secret_command(&client, &passkey, grant).await,
             Ok(CommandResult::Applied)
         );
     }
@@ -1374,12 +1357,12 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, stranger).await,
+        secret_command(&client, &passkey, stranger).await,
         Err(ErrorCode::NotFound)
     );
 
     // The owner sees every set and secret, never a value.
-    let listed = secret_command(&client, CommandBody::ListSecrets)
+    let listed = secret_command(&client, &passkey, CommandBody::ListSecrets)
         .await
         .unwrap();
     let CommandResult::Secrets { sets, secrets } = &listed else {
@@ -1438,7 +1421,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, revoke).await,
+        secret_command(&client, &passkey, revoke).await,
         Ok(CommandResult::Applied)
     );
     let revoked = fetch(&host, "s3", &["prod/TOKEN"]).await.unwrap_err();
@@ -1449,9 +1432,13 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
     );
 
     // One audit row per value handed out, newest first, without the value.
-    let audit = secret_command(&client, CommandBody::ListSecretAudit { before: None })
-        .await
-        .unwrap();
+    let audit = secret_command(
+        &client,
+        &passkey,
+        CommandBody::ListSecretAudit { before: None },
+    )
+    .await
+    .unwrap();
     let CommandResult::SecretAudit { entries } = &audit else {
         panic!("expected the audit: {audit:?}");
     };
@@ -1477,7 +1464,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         before: Some(entries[1].id),
     };
     let CommandResult::SecretAudit { entries: older } =
-        secret_command(&client, older).await.unwrap()
+        secret_command(&client, &passkey, older).await.unwrap()
     else {
         panic!("expected the audit");
     };
@@ -1492,7 +1479,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, busy).await,
+        secret_command(&client, &passkey, busy).await,
         Err(ErrorCode::Conflict)
     );
     let delete = CommandBody::DeleteSecret {
@@ -1501,7 +1488,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, delete).await,
+        secret_command(&client, &passkey, delete).await,
         Ok(CommandResult::Applied)
     );
     let gone = fetch(&host, "s4", &["TOKEN"]).await.unwrap_err();
@@ -1511,7 +1498,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, delete).await,
+        secret_command(&client, &passkey, delete).await,
         Ok(CommandResult::Applied)
     );
     host.runtime.kill().await;
@@ -1547,11 +1534,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         "test".into(),
     )
     .unwrap();
-    client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap();
+    let (passkey, _) = vault.join(&client).await;
     for (set, name, value) in [
         ("bots", "SLACK_TOKEN", "slack-v1"),
         ("mail", "SMTP_PASSWORD", "smtp-value"),
@@ -1561,7 +1544,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, created).await,
+            secret_command(&client, &passkey, created).await,
             Ok(CommandResult::Applied)
         );
         let put = CommandBody::PutSecret {
@@ -1572,7 +1555,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, put).await,
+            secret_command(&client, &passkey, put).await,
             Ok(CommandResult::Applied)
         );
     }
@@ -1603,11 +1586,11 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, grant).await,
+            secret_command(&client, &passkey, grant).await,
             Ok(CommandResult::Applied)
         );
     }
-    let listed = secret_command(&client, CommandBody::ListSecrets)
+    let listed = secret_command(&client, &passkey, CommandBody::ListSecrets)
         .await
         .unwrap();
     let CommandResult::Secrets { sets, .. } = &listed else {
@@ -1638,9 +1621,13 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
     assert!(host.secrets.list().await.unwrap().is_empty());
 
     // The audit shows the host's use, under its purpose, with no session.
-    let audit = secret_command(&client, CommandBody::ListSecretAudit { before: None })
-        .await
-        .unwrap();
+    let audit = secret_command(
+        &client,
+        &passkey,
+        CommandBody::ListSecretAudit { before: None },
+    )
+    .await
+    .unwrap();
     let CommandResult::SecretAudit { entries } = &audit else {
         panic!("expected the audit");
     };
@@ -1669,7 +1656,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, put).await,
+        secret_command(&client, &passkey, put).await,
         Ok(CommandResult::Applied)
     );
     held_until(&slack, |held| holds(held, "slack-v2")).await;
@@ -1683,7 +1670,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, sessions_grant).await,
+        secret_command(&client, &passkey, sessions_grant).await,
         Err(ErrorCode::NotFound)
     );
     let revoke = CommandBody::RevokeSecretSet {
@@ -1693,7 +1680,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, revoke).await,
+        secret_command(&client, &passkey, revoke).await,
         Ok(CommandResult::Applied)
     );
     let revoked = held_until(&slack, |held| matches!(held, Held::Denied(_))).await;
@@ -1734,11 +1721,7 @@ async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
         "test".into(),
     )
     .unwrap();
-    client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap();
+    let (passkey, _) = vault.join(&client).await;
     for command in [
         CommandBody::CreateSecretSet {
             set: "prod".into(),
@@ -1759,7 +1742,7 @@ async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
         },
     ] {
         assert_eq!(
-            secret_command(&client, command).await,
+            secret_command(&client, &passkey, command).await,
             Ok(CommandResult::Applied)
         );
     }
@@ -1830,11 +1813,7 @@ async fn a_host_backs_up_and_fetches_secrets_only_as_its_switches_say() {
         "test".into(),
     )
     .unwrap();
-    client
-        .pair(vault.pairing_link("alice"))
-        .await
-        .map(one_machine)
-        .unwrap();
+    let (passkey, _) = vault.join(&client).await;
 
     // Backup off: the host connects, so its sessions get secrets, but replicates nothing.
     let config = VaultConfig {
@@ -1866,7 +1845,7 @@ async fn a_host_backs_up_and_fetches_secrets_only_as_its_switches_say() {
         },
     ] {
         assert_eq!(
-            secret_command(&client, command).await,
+            secret_command(&client, &passkey, command).await,
             Ok(CommandResult::Applied)
         );
     }

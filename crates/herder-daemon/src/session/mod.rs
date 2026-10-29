@@ -757,7 +757,7 @@ impl SessionManager {
                     session_id,
                     account_id,
                 };
-                let forked = self.fork(request, relay, Some(by)).await?;
+                let forked = self.fork(request, relay, by).await?;
                 return Ok(CommandResult::SessionForked {
                     session_id: forked.session_id,
                     account_id: forked.account_id,

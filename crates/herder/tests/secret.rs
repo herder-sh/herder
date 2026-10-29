@@ -10,8 +10,9 @@ use std::time::Duration;
 use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
-use herder_client_core::{Client, PairingUri};
+use herder_client_core::{Assertion, Client};
 use herder_daemon::Hub;
+use herder_daemon::auth::authenticator::{self, Authenticator};
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
@@ -23,7 +24,7 @@ use herder_daemon::ws::{Host, Tls};
 use herder_daemon::{mcp, session};
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, EventBody, HostId, Item, ItemBody, ItemId,
-    PermissionMode, Provider, SecretValue, SessionId, UserId,
+    PasskeyChallenge, PermissionMode, Provider, SecretValue, SessionId, UserId,
 };
 use herder_store::Store;
 use serde_json::{Value, json};
@@ -32,6 +33,16 @@ use tokio::net::TcpListener;
 use tokio::sync::{Notify, mpsc};
 use tokio_util::sync::CancellationToken;
 
+/// The owner's passkey as an app's Face ID, which the owner's client signs secret changes with.
+#[derive(Default)]
+struct FaceId(Mutex<Option<Arc<Authenticator>>>);
+
+impl herder_client_core::Authenticator for FaceId {
+    fn assert(&self, _: HostId, challenge: PasskeyChallenge) -> Assertion {
+        let passkey = self.0.lock().unwrap().clone();
+        Box::pin(async move { Ok(passkey.expect("the owner signed in").assert(&challenge)) })
+    }
+}
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A CLI whose agent runs every prompt with `sh -c`, in the session's environment and folder,
@@ -279,13 +290,18 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
 
     // The owner keeps three secrets on the vault, two of them named alike, and grants their
     // sets to the host once it replicated there.
-    let owner = Client::open(tmp.path().join("c").display().to_string(), "test".into()).unwrap();
-    let link = PairingUri {
-        hosts: vec![vault.addr.to_string()],
-        fingerprint: vault.fingerprint.clone(),
-        code: vault.auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-    };
-    owner.pair(link.to_string()).await.unwrap();
+    let face_id = Arc::new(FaceId::default());
+    let owner = Client::open_with_passkey(
+        tmp.path().join("c").display().to_string(),
+        "test".into(),
+        face_id.clone(),
+    )
+    .unwrap();
+    let hosts = vec![vault.addr.to_string()];
+    authenticator::sign_in(&vault.auth, &owner, hosts, &vault.fingerprint, "alice")
+        .await
+        .unwrap();
+    *face_id.0.lock().unwrap() = Authenticator::of(&vault.auth, "alice").map(Arc::new);
     let created = CommandBody::CreateSession {
         repo: None,
         project_id: None,
@@ -514,13 +530,18 @@ async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
     sessions.use_mcp_servers(Arc::new(servers)).unwrap();
 
     // The owner keeps the key in `prod`, granted to the host, and another in `dev`, not.
-    let owner = Client::open(tmp.path().join("c").display().to_string(), "test".into()).unwrap();
-    let link = PairingUri {
-        hosts: vec![vault.addr.to_string()],
-        fingerprint: vault.fingerprint.clone(),
-        code: vault.auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-    };
-    owner.pair(link.to_string()).await.unwrap();
+    let face_id = Arc::new(FaceId::default());
+    let owner = Client::open_with_passkey(
+        tmp.path().join("c").display().to_string(),
+        "test".into(),
+        face_id.clone(),
+    )
+    .unwrap();
+    let hosts = vec![vault.addr.to_string()];
+    authenticator::sign_in(&vault.auth, &owner, hosts, &vault.fingerprint, "alice")
+        .await
+        .unwrap();
+    *face_id.0.lock().unwrap() = Authenticator::of(&vault.auth, "alice").map(Arc::new);
     let send = async |command| owner.send(HostId::new("vault"), command).await.unwrap();
     for (set, value) in [("prod", VALUE), ("dev", "lin_api_dev")] {
         send(CommandBody::CreateSecretSet {

@@ -40,7 +40,7 @@ enum Command {
         #[arg(long)]
         vault: bool,
     },
-    /// Pair a device with the daemon running on this machine, or list and revoke devices.
+    /// Pair a host with the vault running on this machine, or list and revoke devices.
     Pair(pair::Args),
     /// Give the daemon on this machine a new owner, from the herder app, though it has one:
     /// for someone who lost every device.
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn parses_pair_flags() {
-        let cli = Cli::try_parse_from(["herder", "pair", "--user", "bob", "--role", "member"]);
+        let cli = Cli::try_parse_from(["herder", "pair", "--host", "devbox"]);
         assert!(matches!(cli.unwrap().command, Some(Command::Pair(_))));
         for args in [
             &["herder", "pair", "--list"][..],
@@ -347,11 +347,10 @@ mod tests {
             assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
         }
         for args in [
-            &["herder", "pair", "--list", "--revoke", "01J"][..],
-            &["herder", "pair", "--list", "--user", "bob"],
-            &["herder", "pair", "--role", "admin"],
-            &["herder", "pair", "--host", "devbox", "--user", "bob"],
-            &["herder", "pair", "--host", "devbox", "--role", "owner"],
+            &["herder", "pair"][..],
+            &["herder", "pair", "--list", "--revoke", "01J"],
+            &["herder", "pair", "--user", "bob"],
+            &["herder", "pair", "--role", "owner"],
             &["herder", "pair", "--host", "devbox", "--list"],
         ] {
             assert!(Cli::try_parse_from(args).is_err(), "{args:?}");

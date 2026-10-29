@@ -29,7 +29,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 
 use super::{Backend, Host, Server, Tls};
-use crate::auth::authenticator::Authenticator;
+use crate::auth::authenticator::{self, Authenticator};
 use crate::auth::passkeys::Passkeys;
 use crate::auth::{Auth, PAIRING_TTL};
 use crate::aws::Aws;
@@ -187,16 +187,22 @@ struct Daemon {
 }
 
 impl Daemon {
+    /// A daemon whose owner is the person `tomas`, signed in on the owner's device.
     async fn start() -> Arc<Self> {
-        Self::start_with(true).await
+        Self::start_with(Owner::Person).await
     }
 
     /// A daemon with no owner, nobody paired: as `herder service install` leaves it.
     async fn start_fresh() -> Arc<Self> {
-        Self::start_with(false).await
+        Self::start_with(Owner::None).await
     }
 
-    async fn start_with(paired_owner: bool) -> Arc<Self> {
+    /// A daemon from before people, unclaimed: its owner is the per-daemon user `owner`.
+    async fn start_unclaimed() -> Arc<Self> {
+        Self::start_with(Owner::User).await
+    }
+
+    async fn start_with(seeded: Owner) -> Arc<Self> {
         let tmp = tempfile::tempdir().unwrap();
         let tls = Tls::load_or_create(tmp.path(), "localhost").unwrap();
         let store = Arc::new(Mutex::new(
@@ -221,18 +227,13 @@ impl Daemon {
             name: "localhost".into(),
         };
         let fingerprint = tls.fingerprint().to_owned();
-        let auth = Arc::new(Auth::open(tmp.path()).unwrap());
         let owner = DeviceKey::generate().unwrap();
-        if paired_owner {
-            let code = auth.mint("owner", None, PAIRING_TTL).unwrap().code;
-            auth.authenticate(
-                &owner.fingerprint(),
-                Some(&code),
-                "test",
-                crate::auth::DeviceRole::Client,
-                &CancellationToken::new(),
-            )
-            .unwrap();
+        if seeded == Owner::User {
+            std::fs::write(tmp.path().join("auth.json"), legacy_owner(&owner)).unwrap();
+        }
+        let auth = Arc::new(Auth::open(tmp.path()).unwrap());
+        if seeded == Owner::Person {
+            authenticator::enroll(&auth, "tomas", Role::Owner, &owner.fingerprint());
         }
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
         let server = Server::new(
@@ -333,12 +334,51 @@ impl Daemon {
             .unwrap()
     }
 
+    /// A device signed in as the new person `name`, a member.
+    fn member(&self, name: &str) -> DeviceKey {
+        let device = DeviceKey::generate().unwrap();
+        authenticator::enroll(&self.auth, name, Role::Member, &device.fingerprint());
+        device
+    }
+
     /// A client on `device`, sending `code` if given.
     async fn client_on(&self, device: &DeviceKey, code: Option<&str>) -> Client {
         Client::connect(self.addr, &self.fingerprint, device, code, None)
             .await
             .unwrap()
     }
+}
+
+/// Who owns a test daemon as it starts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Owner {
+    None,
+    /// A person, by passkey.
+    Person,
+    /// A per-daemon user, as installs from before people have one.
+    User,
+}
+
+/// The users file of an install from before people, whose owner `owner` paired `device`.
+fn legacy_owner(device: &DeviceKey) -> String {
+    serde_json::json!({
+        "version": 0,
+        "users": [{
+            "user_id": "01J9A0OWNER00000000000000",
+            "name": "owner",
+            "role": "owner",
+            "created_at": "2026-10-03T09:41:40.130129Z",
+        }],
+        "devices": [{
+            "device_id": "01J9A0DOWNER0000000000000",
+            "user_id": "01J9A0OWNER00000000000000",
+            "client": "herder-ios/0.1.0",
+            "fingerprint": device.fingerprint(),
+            "paired_at": "2026-10-03T09:41:40.130129Z",
+            "role": "client",
+        }],
+    })
+    .to_string()
 }
 
 impl Drop for Daemon {
@@ -933,7 +973,7 @@ async fn refused(mut client: Client) -> ErrorInfo {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_device_pairs_with_a_code_and_is_known_afterwards() {
-    let daemon = Daemon::start().await;
+    let daemon = Daemon::start_unclaimed().await;
     let pairing = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap();
     assert_eq!(pairing.role, Role::Member);
     let device = DeviceKey::generate().unwrap();
@@ -972,7 +1012,7 @@ async fn an_unpaired_device_is_refused() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_expired_code_is_refused() {
-    let daemon = Daemon::start().await;
+    let daemon = Daemon::start_unclaimed().await;
     let code = daemon.auth.mint("bob", None, Duration::ZERO).unwrap().code;
     let device = DeviceKey::generate().unwrap();
     let error = refused(daemon.client_on(&device, Some(&code)).await).await;
@@ -982,7 +1022,7 @@ async fn an_expired_code_is_refused() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_code_pairs_one_device_only() {
-    let daemon = Daemon::start().await;
+    let daemon = Daemon::start_unclaimed().await;
     let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
     let first = DeviceKey::generate().unwrap();
     daemon
@@ -1028,7 +1068,7 @@ async fn every_listen_address_serves_clients() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_paired_device_pairs_another_as_its_own_user_and_role() {
-    let daemon = Daemon::start().await;
+    let daemon = Daemon::start_unclaimed().await;
     let member = DeviceKey::generate().unwrap();
     let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
     let mut bob = daemon.client_on(&member, Some(&code)).await;
@@ -1101,22 +1141,21 @@ async fn a_pinned_client_rejects_a_changed_certificate() {
 async fn terminals_are_for_owners_only() {
     let daemon = Daemon::start().await;
     let session = daemon.create_session("s1");
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut member = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
     member.hello(Vec::new()).await;
-    let open = |id: &str| {
+    let open = |id: &str, assertion| {
         ClientMessage::Command(Command {
             id: CommandId::new(id),
             body: CommandBody::OpenTerminal {
                 session_id: session.clone(),
                 cols: 80,
                 rows: 24,
-                assertion: None,
+                assertion,
             },
         })
     };
-    member.send(&open("c1")).await;
+    member.send(&open("c1", None)).await;
     let ServerMessage::CommandRejected { error, .. } = member.recv().await else {
         panic!("expected a rejection");
     };
@@ -1166,10 +1205,12 @@ async fn terminals_are_for_owners_only() {
         ));
     }
 
-    // The owner opens one; the member never hears of it.
+    // The owner opens one, with Face ID; the member never hears of it.
     let mut owner = daemon.client().await;
     owner.hello(Vec::new()).await;
-    owner.send(&open("c3")).await;
+    let passkey = Authenticator::of(&daemon.auth, "tomas").unwrap();
+    let assertion = fresh(&mut owner, &passkey).await;
+    owner.send(&open("c3", Some(assertion))).await;
     assert!(
         matches!(owner.recv().await, ServerMessage::Terminals { terminals } if terminals.len() == 1)
     );
@@ -1197,9 +1238,8 @@ async fn terminals_are_for_owners_only() {
 async fn compose_down_is_for_owners_only() {
     let daemon = Daemon::start().await;
     let session = daemon.create_session("s1");
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut member = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
     member.hello(Vec::new()).await;
     let down = || CommandBody::ComposeDown {
         session_id: session.clone(),
@@ -1224,9 +1264,8 @@ async fn compose_down_is_for_owners_only() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn only_owners_change_the_skill_library() {
     let daemon = Daemon::start().await;
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut member = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
     member.hello(Vec::new()).await;
     let commands = || {
         [
@@ -1280,9 +1319,8 @@ async fn only_owners_change_the_skill_library() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn browsing_folders_is_for_owners_only_and_never_remembered() {
     let daemon = Daemon::start().await;
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut member = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
     member.hello(Vec::new()).await;
     let list = || CommandBody::ListDirectory {
         path: "/srv".into(),
@@ -1332,9 +1370,8 @@ async fn browsing_folders_is_for_owners_only_and_never_remembered() {
 #[tokio::test]
 async fn members_fetch_project_icons_afresh_on_every_resend() {
     let daemon = Daemon::start().await;
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut member = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
     member.hello(Vec::new()).await;
     for _ in 0..2 {
         let body = CommandBody::GetProjectIcon {
@@ -1351,9 +1388,8 @@ async fn members_fetch_project_icons_afresh_on_every_resend() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn forking_a_session_is_for_owners_only() {
     let daemon = Daemon::start().await;
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut member = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
     member.hello(Vec::new()).await;
     let fork = || CommandBody::ForkSession {
         session_id: SessionId::new("s1"),
@@ -1392,11 +1428,12 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     let session = daemon.create_session("s1");
     let mut client = daemon.client().await;
     client.hello(Vec::new()).await;
+    let passkey = Authenticator::of(&daemon.auth, "tomas").unwrap();
     let open = CommandBody::OpenTerminal {
         session_id: session.clone(),
         cols: 80,
         rows: 24,
-        assertion: None,
+        assertion: Some(fresh(&mut client, &passkey).await),
     };
     client
         .send(&ClientMessage::Command(Command {
@@ -1475,7 +1512,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     );
     let attach = CommandBody::AttachTerminal {
         terminal_id: terminal_id.clone(),
-        assertion: None,
+        assertion: Some(fresh(&mut client, &passkey).await),
     };
     let ServerMessage::TerminalOutput { data, .. } = client.command("c3", attach).await else {
         panic!("expected the scrollback");
@@ -1513,7 +1550,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     assert_eq!(closed, Some((terminal_id.clone(), Some(3))));
     let attach = CommandBody::AttachTerminal {
         terminal_id,
-        assertion: None,
+        assertion: Some(fresh(&mut client, &passkey).await),
     };
     assert!(matches!(
         client.command("c5", attach).await,
@@ -1524,9 +1561,8 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revoking_a_device_disconnects_and_refuses_it() {
     let daemon = Daemon::start().await;
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut client = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut client = daemon.client_on(&device, None).await;
     let hello = client.hello(Vec::new()).await;
     assert!(daemon.auth.revoke(&hello.device_id).unwrap());
     assert!(
@@ -1567,7 +1603,7 @@ async fn rejected(client: &mut Client, id: &str, body: CommandBody) -> ErrorInfo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn everyone_lists_the_users_with_their_devices() {
-    let daemon = Daemon::start().await;
+    let daemon = Daemon::start_unclaimed().await;
     let mut owner = daemon.client().await;
     let owner_hello = owner.hello(Vec::new()).await;
     let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
@@ -1599,7 +1635,7 @@ async fn everyone_lists_the_users_with_their_devices() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_owner_changes_roles_but_never_leaves_no_owner() {
-    let daemon = Daemon::start().await;
+    let daemon = Daemon::start_unclaimed().await;
     let mut owner = daemon.client().await;
     let owner_hello = owner.hello(Vec::new()).await;
 
@@ -1661,7 +1697,7 @@ async fn an_owner_changes_roles_but_never_leaves_no_owner() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_owner_revokes_a_device_and_it_is_disconnected() {
-    let daemon = Daemon::start().await;
+    let daemon = Daemon::start_unclaimed().await;
     let mut owner = daemon.client().await;
     owner.hello(Vec::new()).await;
     let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
@@ -1702,7 +1738,7 @@ async fn an_owner_revokes_a_device_and_it_is_disconnected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_owner_mints_codes_for_others_and_a_member_only_for_themselves() {
-    let daemon = Daemon::start().await;
+    let daemon = Daemon::start_unclaimed().await;
     let mut owner = daemon.client().await;
     owner.hello(Vec::new()).await;
     let invite = |user: &str, role| CommandBody::PairDevice {
@@ -1880,9 +1916,8 @@ async fn updates_are_refused_for_members_and_where_no_service_restarts_the_daemo
     let update = CommandBody::UpdateDaemon {
         when: herder_protocol::UpdateWhen::Idle,
     };
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut member = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
     member.hello(Vec::new()).await;
     assert!(matches!(
         member.command("m1", update.clone()).await,
@@ -1935,9 +1970,8 @@ async fn owners_put_and_list_bots_and_members_are_refused() {
         }
     );
 
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut member = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
     member.hello(Vec::new()).await;
     let remove = CommandBody::RemoveBot {
         bot_id: bot.bot_id.clone(),
@@ -1978,9 +2012,8 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
     let daemon = Daemon::start().await;
     let mut owner_client = daemon.client().await;
     let owner = owner_client.hello(Vec::new()).await.user_id;
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut member_client = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut member_client = daemon.client_on(&device, None).await;
     let member = member_client.hello(Vec::new()).await.user_id;
     let person = |id: &str, name: &str, user_id: Option<&UserId>| herder_protocol::BotUser {
         external_user_id: id.into(),
@@ -2120,10 +2153,9 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
 async fn agents_run_commands_as_their_user_within_its_role() {
     let daemon = Daemon::start().await;
     let owner = daemon.client().await.hello(Vec::new()).await.user_id;
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
+    let device = daemon.member("bob");
     let member = daemon
-        .client_on(&device, Some(&code))
+        .client_on(&device, None)
         .await
         .hello(Vec::new())
         .await
@@ -2409,9 +2441,8 @@ async fn an_owner_signs_the_host_in_to_aws() {
     ));
 
     // A member sees neither the profiles nor a sign-in.
-    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-    let device = DeviceKey::generate().unwrap();
-    let mut member = daemon.client_on(&device, Some(&code)).await;
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
     member.hello(Vec::new()).await;
     for (id, body) in [("m1", CommandBody::ListAwsProfiles), ("m2", login("prod"))] {
         assert!(matches!(
@@ -2613,7 +2644,7 @@ fn claim(daemon: &Daemon, owner: &UserId, also: &[UserId]) {
 
 #[tokio::test]
 async fn after_a_claim_the_owners_history_reads_as_the_person() {
-    let daemon = Daemon::start().await;
+    let daemon = Daemon::start_unclaimed().await;
     let owner = daemon.client().await.hello(Vec::new()).await.user_id;
     let bob = DeviceKey::generate().unwrap();
     let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
@@ -2659,7 +2690,7 @@ async fn after_a_claim_the_owners_history_reads_as_the_person() {
 
 #[tokio::test]
 async fn after_a_claim_agents_act_for_the_person_by_any_of_their_old_ids() {
-    let daemon = Daemon::start().await;
+    let daemon = Daemon::start_unclaimed().await;
     let mut client = daemon.client().await;
     let owner = client.hello(Vec::new()).await.user_id;
     // The person's id on the machine a forked session came from.
@@ -2773,8 +2804,8 @@ async fn challenge(client: &mut Client, id: &str) -> (PasskeyChallenge, Option<P
 async fn one_claim_makes_the_person_owner_of_a_host_and_its_vault_and_their_sessions_theirs() {
     // Today's fleet: a host and a vault, each with its own owner user for this device, and on
     // the vault a machine paired as a user, which replicates.
-    let host = Daemon::start().await;
-    let vault = Daemon::start().await;
+    let host = Daemon::start_unclaimed().await;
+    let vault = Daemon::start_unclaimed().await;
     let mut on_host = host.client().await;
     let host_user = on_host.hello(Vec::new()).await.user_id;
     let mut on_vault = vault.client().await;

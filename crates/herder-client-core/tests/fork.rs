@@ -11,8 +11,9 @@ use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, StartFuture, StartRequest};
-use herder_client_core::{Client, ConnectionState, Error, PairResult};
+use herder_client_core::{Client, ConnectionState, Error};
 use herder_daemon::Hub;
+use herder_daemon::auth::authenticator;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::login::Logins;
@@ -109,14 +110,35 @@ impl Adapter for Seeing {
 }
 
 /// A running daemon.
+/// Where a client signs in to a machine as its owner, the person `alice`.
+struct Entry {
+    auth: Arc<Auth>,
+    hosts: Vec<String>,
+    fingerprint: String,
+}
+
+impl Entry {
+    async fn sign_in(&self, client: &Client) {
+        authenticator::sign_in(
+            &self.auth,
+            client,
+            self.hosts.clone(),
+            &self.fingerprint,
+            "alice",
+        )
+        .await
+        .unwrap();
+    }
+}
+
 struct Daemon {
-    link: String,
+    entry: Entry,
     repo: String,
     shutdown: CancellationToken,
 }
 
 /// Starts a daemon on `<dir>/app`, with project discovery, checkpoints and `vault` as its
-/// `[vault]`; pairs as its owner with the returned link.
+/// `[vault]`; a client signs in as its owner at its entry.
 async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
     let shutdown = CancellationToken::new();
     std::fs::create_dir_all(dir.join("tls")).unwrap();
@@ -214,15 +236,12 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
     );
     server.link_vault(Arc::new(link)).unwrap();
     tokio::spawn(server.run(vec![listener], shutdown.clone()));
-    let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
-    let link = herder_client_core::PairingUri {
-        hosts: vec![addr.to_string()],
-        fingerprint,
-        code,
-    }
-    .to_string();
     Daemon {
-        link,
+        entry: Entry {
+            auth,
+            hosts: vec![addr.to_string()],
+            fingerprint,
+        },
         repo: dir.join("app").to_str().unwrap().to_owned(),
         shutdown,
     }
@@ -238,14 +257,14 @@ fn dead_vault() -> VaultConfig {
 
 /// A running vault that backs up images.
 struct Vault {
-    link: String,
+    entry: Entry,
     config: VaultConfig,
     auth: Arc<Auth>,
     shutdown: CancellationToken,
 }
 
 impl Vault {
-    /// Starts a vault on `dir`; pairs a client as its owner with the returned link.
+    /// Starts a vault on `dir`; a client signs in as its owner at its entry.
     async fn start(dir: &Path) -> Self {
         std::fs::create_dir_all(dir.join("tls")).unwrap();
         let tls = Tls::load_or_create(&dir.join("tls"), "vault").unwrap();
@@ -269,18 +288,17 @@ impl Vault {
         );
         let shutdown = CancellationToken::new();
         tokio::spawn(server.run(vec![listener], shutdown.clone()));
-        let link = herder_client_core::PairingUri {
+        let entry = Entry {
+            auth: Arc::clone(&auth),
             hosts: vec![addr.clone()],
             fingerprint: fingerprint.clone(),
-            code: auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-        }
-        .to_string();
+        };
         let config = VaultConfig {
             attachments: true,
             ..VaultConfig::new(addr, fingerprint, None)
         };
         Self {
-            link,
+            entry,
             config,
             auth,
             shutdown,
@@ -353,11 +371,7 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
     )
     .unwrap();
     for daemon in [&a, &b, &c] {
-        let paired = client.pair(daemon.link.clone()).await.unwrap();
-        assert!(
-            matches!(&paired[..], [PairResult::Paired { .. }]),
-            "{paired:?}"
-        );
+        daemon.entry.sign_in(&client).await;
     }
     let session_id = create(&client, "host-a", &a.repo).await;
     // B and C know their clones of the project by a session of their own.
@@ -484,39 +498,33 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
         "{local:?}"
     );
 
-    // A goes offline: B has no vault to find the session in, and C asks its vault.
+    // A goes offline: no machine the client reaches holds the session, and neither B nor C
+    // reads it from a vault of its own.
     a.shutdown.cancel();
     until(&client, "host-a is offline", |machines| {
         !matches!(machines[0].connection, ConnectionState::Connected)
     })
     .await;
-    let refused = client
-        .fork_session(
-            HostId::new("host-a"),
-            session_id.clone(),
-            HostId::new("host-b"),
-            None,
-        )
-        .await
-        .unwrap_err();
-    let Error::Rejected { info } = refused else {
-        panic!("expected a refusal, got {refused:?}");
-    };
-    assert_eq!(info.code, ErrorCode::NotFound);
-    assert_eq!(
-        info.message,
-        "host-a is offline and host-b has no vault to find the session in"
-    );
-    let refused = client
-        .fork_session(
-            HostId::new("host-a"),
-            session_id.clone(),
-            HostId::new("host-c"),
-            None,
-        )
-        .await
-        .unwrap_err();
-    assert!(refused.to_string().contains("vault"), "{refused}");
+    for destination in ["host-b", "host-c"] {
+        let refused = client
+            .fork_session(
+                HostId::new("host-a"),
+                session_id.clone(),
+                HostId::new(destination),
+                None,
+            )
+            .await
+            .unwrap_err();
+        let Error::Rejected { info } = refused else {
+            panic!("expected a refusal, got {refused:?}");
+        };
+        assert_eq!(info.code, ErrorCode::NotFound);
+        assert_eq!(
+            info.message,
+            "host-a is offline, and no other machine you are signed in to holds the session; \
+             sign in to its vault to fork it from there"
+        );
+    }
     b.shutdown.cancel();
     c.shutdown.cancel();
 }
@@ -526,7 +534,7 @@ async fn a_session_of_an_offline_machine_hands_off_through_a_vault_the_client_re
     let tmp = tempfile::tempdir().unwrap();
     let dirs = ["a", "b"].map(|name| tmp.path().join(name));
     clones(tmp.path(), &[&dirs[0], &dirs[1]]);
-    // A and B replicate to the vault as host-only devices, so B cannot read A's sessions there.
+    // A and B replicate to the vault as host-only devices: neither reads the other there.
     let vault = Vault::start(&tmp.path().join("vault")).await;
     let a = daemon(&dirs[0], "host-a", Some(vault.host_config("host-a"))).await;
     let b = daemon(&dirs[1], "host-b", Some(vault.host_config("host-b"))).await;
@@ -535,12 +543,8 @@ async fn a_session_of_an_offline_machine_hands_off_through_a_vault_the_client_re
         "herder-tui/test".into(),
     )
     .unwrap();
-    for link in [&a.link, &b.link, &vault.link] {
-        let paired = client.pair(link.clone()).await.unwrap();
-        assert!(
-            matches!(&paired[..], [PairResult::Paired { .. }]),
-            "{paired:?}"
-        );
+    for entry in [&a.entry, &b.entry, &vault.entry] {
+        entry.sign_in(&client).await;
     }
     let session_id = create(&client, "host-a", &a.repo).await;
     create(&client, "host-b", &b.repo).await;

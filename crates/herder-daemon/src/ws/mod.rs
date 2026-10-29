@@ -237,7 +237,8 @@ impl<B: Backend> Shared<B> {
                     config_dir: config_dir.as_deref(),
                 };
                 let login = self.logins.start(&account, &logging_in(terminals))?;
-                return open_login(terminals, account_id, login, cols, rows, outbox);
+                let opened = open_login(terminals, account_id, login, cols, rows, outbox);
+                return self.opened_by(identity, opened);
             }
             CommandBody::LogInAccount {
                 account_id,
@@ -245,7 +246,8 @@ impl<B: Backend> Shared<B> {
                 rows,
             } => {
                 let login = self.logins.again(&account_id, &logging_in(terminals))?;
-                return open_login(terminals, account_id, login, cols, rows, outbox);
+                let opened = open_login(terminals, account_id, login, cols, rows, outbox);
+                return self.opened_by(identity, opened);
             }
             CommandBody::InstallProvider {
                 provider,
@@ -269,7 +271,9 @@ impl<B: Backend> Shared<B> {
                         None => format!("{name} install ended"),
                     }
                 });
-                return open_install(terminals, provider, command, cols, rows, outbox, on_exit);
+                let opened =
+                    open_install(terminals, provider, command, cols, rows, outbox, on_exit);
+                return self.opened_by(identity, opened);
             }
             CommandBody::AwsSsoLogin {
                 profile,
@@ -278,7 +282,7 @@ impl<B: Backend> Shared<B> {
             } => {
                 let command = self.aws()?.sso_login(&profile)?;
                 let terminal_id = terminals.open_aws_login(profile, command, cols, rows, outbox)?;
-                return Ok(CommandResult::TerminalOpened { terminal_id });
+                return self.opened_by(identity, Ok(CommandResult::TerminalOpened { terminal_id }));
             }
             CommandBody::AttachTerminal { terminal_id, .. } => {
                 terminals.attach(&terminal_id, outbox)?;
@@ -660,6 +664,19 @@ impl<B: Backend> Shared<B> {
             code: ErrorCode::Unsupported,
             message: "this daemon does not sign in to AWS".to_owned(),
         })
+    }
+
+    /// `opened`, having noted the terminal it opened as `identity`'s device's, which re-attaches
+    /// it without a fresh assertion, as one it opened with `open_terminal`.
+    fn opened_by(
+        &self,
+        identity: &Identity,
+        opened: Result<CommandResult, ErrorInfo>,
+    ) -> Result<CommandResult, ErrorInfo> {
+        if let Ok(CommandResult::TerminalOpened { terminal_id }) = &opened {
+            self.approvals.attached(&identity.device_id, terminal_id);
+        }
+        opened
     }
 
     /// A one-time code that pairs another device as `identity`'s user, with this daemon's

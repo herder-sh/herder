@@ -18,8 +18,9 @@
 //! in the vault's hello. An owner links a host to a vault, or unlinks it, from a client while
 //! the host runs ([`Link`]).
 //!
-//! Another host can fork any session the vault holds, whether its host is up or gone
-//! ([`fork`]); the fork is a new session of that host. A host that replicates a session id
+//! A person can fork any session the vault holds onto another host, whether its host is up
+//! or gone: their client reads it from the vault and relays it there
+//! ([`crate::session::fork`]). A host never reads other hosts' sessions. A host that replicates a session id
 //! another host replicated before takes it over: the vault then shows the session on that
 //! host, and the old host makes its copy read-only.
 //!
@@ -34,7 +35,6 @@
 mod client;
 mod conn;
 mod fleet;
-pub mod fork;
 mod host_secrets;
 pub mod install;
 mod link;
@@ -270,7 +270,6 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         auth::control::Daemon {
             fingerprint: fingerprint.clone(),
             listen: listen.clone(),
-            sessions: None,
             vault: Some(server.admin()),
         },
         shutdown.clone(),

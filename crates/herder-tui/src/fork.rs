@@ -1,8 +1,8 @@
 //! Forking a session onto a host, and where a moved session went.
 //!
 //! Any top-level session can be forked: its history goes on in a new session on a host this
-//! device is paired with as an owner, which reads the session from itself, or from its vault
-//! when the session is another host's, whether that host is up or gone. The original stays as
+//! device is paired with as an owner. A session of another host, up or gone, is read by this
+//! device from a machine that lists it, its host or a vault, and relayed. The original stays as
 //! it is. The fork dialog picks the host, sends it `fork_session`, then opens the new session
 //! there. Without such a host it shows the command to run on one, `herder fork <session>`.
 //! A vault's copy of a session whose host is offline offers the fork in place of its composer.

@@ -35,12 +35,15 @@ stops, apart from the daemon's `herder service`. Everything the vault keeps is i
   LaunchAgent's plist, also readable by you only. Back it up with the dir.
 - its data: TLS identity, paired devices and hosts, `db/vault.db`.
 
-Once the vault is up, `install` prints a pairing code and the vault's addresses: add it in the
-app with Add to Fleet. It logs to `~/Library/Logs/herder/vault.log` on macOS, and to
-`journalctl --user -u herder-vault.service` on Linux.
+Once the vault is up, `install` prints a `herder://own` link, as a QR code, and a short code:
+scan it with the app and approve with your passkey to become the vault's owner. Your other
+devices then sign in with the same passkey, with no code. It logs to
+`~/Library/Logs/herder/vault.log` on macOS, and to `journalctl --user -u herder-vault.service`
+on Linux.
 
-Run `herder pair --config ~/.local/share/herder-vault/vault.toml` for another pairing code, and
-use the same `--config` with every command below that runs `/herder` in the pod.
+Run `herder claim --config ~/.local/share/herder-vault/vault.toml` to give the vault a new owner
+if you lose every device, and use the same `--config` with every command below that runs
+`/herder` in the pod.
 
 ```sh
 herder vault uninstall           # stops and removes the service, keeps its dir
@@ -103,34 +106,23 @@ running host. A host links to one vault at most.
 
 A host paired with `--host` may only replicate its own sessions. It reads nothing on the
 vault: no hosts, sessions, transcripts, PRs, attachments or devices, so a shared machine, or
-a stolen copy of its device key, sees nothing of the others. It cannot `herder fork`
-another host's session either, nor take a session handed off to it, since that reads the
-vault, until an owner turns on "Takes handoffs" for it (see [Devices](#devices)).
+a stolen copy of its device key, sees nothing of the others. No host ever reads another
+host's sessions.
 
-## Pair a client
+## Sign in
 
-`herder pair` without `--host` mints a client code, as on any daemon: the device reads every
-host's sessions, read-only. A host that should be able to `herder fork` sessions of other
-hosts, or take handoffs, is paired with a client code instead (`/herder pair --user devbox`);
-it replicates as well. A host already paired with `--host` needs no new code: turn on "Takes
-handoffs" for it instead.
+People reach the vault as themselves, with their passkey: its first owner claims it from the
+app, and invites the rest. A terminal signs in with `herder login <address> --fingerprint
+<hex>`, approved from the app. To fork another host's session onto a host, from the vault
+when that host is gone, run `herder fork <session>` on it from a terminal signed in to both
+the vault and that host: the terminal reads the session from the vault as you and hands it
+over.
 
 ## Devices
 
 `kubectl exec -n herder herder-vault-0 -- /herder pair --list` lists paired devices; the
 `ACCESS` column says which are `host` (replicate only) and which `client` (read everything).
 `--revoke <device>` unpairs one, and a host revoked this way pairs again with a new code.
-
-In the app, each host on the vault's page has a "Takes handoffs" switch, for the vault's
-owners. Turned on, every device the host replicates from may read the vault as a client too,
-so the host can fork other hosts' sessions and take handoffs; it stays paired, and its
-replication goes on. Turned off, it is host-only again, and its open client connections
-close.
-
-Devices paired before host codes existed could both replicate and read. The first time a
-vault with host codes starts, every device that has replicated as a host becomes host-only;
-the rest stay clients. To let such a host fork other hosts' sessions, turn on "Takes handoffs"
-for it.
 
 ## Storage
 

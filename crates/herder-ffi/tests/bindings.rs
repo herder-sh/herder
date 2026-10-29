@@ -10,11 +10,11 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
-use herder_client_core::PairResult;
+use herder_client_core::Machine;
+use herder_daemon::auth::authenticator::Join;
 use herder_ffi::{
     Client, HerderError, image_media_types, max_file_bytes, max_file_name_bytes, max_image_bytes,
-    max_project_icon_bytes, max_prompt_attachment_bytes, pairing_link_to_string,
-    pairing_uri_to_string, parse_pairing_link, parse_pairing_uri,
+    max_project_icon_bytes, max_prompt_attachment_bytes, pairing_uri_to_string, parse_pairing_uri,
 };
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, DirectoryEntry, EventBody, ItemBody, McpServerSettings,
@@ -47,32 +47,35 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
+/// Signs `client` in to `daemon`, where its owner's link points, as the new person `name` with
+/// `role`, through the bindings.
+async fn sign_in(daemon: &FakeDaemon, client: &Client, name: &str, role: Role) -> Machine {
+    let join = Join::open(&daemon.auth, role);
+    let at = parse_pairing_uri(daemon.link.clone()).unwrap();
+    let pending = client.sign_in(at.hosts, at.fingerprint).await.unwrap();
+    let (_, sign_in) = join.sign_in(name, &pending.registration().unwrap());
+    pending.finish(sign_in).await.unwrap()
+}
+
 #[test]
-fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
+fn a_client_signs_in_and_streams_a_session_without_a_runtime_of_its_callers() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let daemon = runtime.block_on(FakeDaemon::start("fake-host")).unwrap();
     let config = tempfile::tempdir().unwrap();
 
-    let link = parse_pairing_uri(daemon.link.clone()).unwrap();
-    assert_eq!(pairing_uri_to_string(link), daemon.link);
+    for link in [&daemon.link, &daemon.member_link] {
+        let uri = parse_pairing_uri(link.clone()).unwrap();
+        assert_eq!(&pairing_uri_to_string(uri), link);
+    }
     let client = Client::open(
         config.path().display().to_string(),
         "herder-ffi-test/0".into(),
     )
     .unwrap();
-    let results = block_on(client.pair(daemon.link.clone())).unwrap();
-    let [PairResult::Paired { machine }] = &results[..] else {
-        panic!("expected one paired machine: {results:?}");
-    };
+    let machine = block_on(sign_in(&daemon, &client, "alice", Role::Owner));
     assert_eq!(machine.name, "fake-host");
     let host = machine.host_id.clone();
     block_on(client.synced(host.clone())).unwrap();
-    // The paired device shares the machine on: one link, its code minted for this user.
-    let shared = block_on(client.share()).unwrap();
-    assert_eq!(shared.shared, std::slice::from_ref(&host));
-    assert!(shared.skipped.is_empty());
-    let text = pairing_link_to_string(shared.link.clone());
-    assert_eq!(parse_pairing_link(text).unwrap(), shared.link);
     // The connection's first ping goes out as soon as it is up; its round trip comes through.
     let changes = client.changes();
     while client.machines()[0].quality.last_rtt_ms.is_none() {
@@ -171,11 +174,7 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
         "herder-ffi-test/0".into(),
     )
     .unwrap();
-    let paired = block_on(guest.pair(daemon.member_link.clone())).unwrap();
-    assert!(
-        matches!(&paired[..], [PairResult::Paired { .. }]),
-        "{paired:?}"
-    );
+    block_on(sign_in(&daemon, &guest, "guest", Role::Member));
     block_on(guest.synced(host.clone())).unwrap();
     assert_eq!(guest.machines()[0].role, Some(Role::Member));
     assert_eq!(summary(&guest), totals);

@@ -6,5 +6,21 @@
   "sam": {
     "credential_id": "pjoRJ1r4wKCCV4QUG--VTQ",
     "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg9pxO4MHKuYcgj6laPypm5IYH1yvynY8E5Ym24_YIlfuhRANCAARmCWImb5xUE0d4Oshd9WcqUuR_pVXIJNCPvVIQtFroan2Hnrl1dvUmfKyKgo3vZoWqWxFQSzhuHSrqoDj9EnhR"
+  },
+  "alice": {
+    "credential_id": "ul9HBU6dx_eMyljPiNzr8g",
+    "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQglDvhCitzM-Vb00XzVgz6w6ruQLyaR_RTkmlRPDX8i9uhRANCAATNvNIHsZf_WyANXVi7YFDbhkbvIeyoQbhO3inD4-F0MMtp6jBATzuoYs_IXvXzPuRlq-lECbahaHOSgxlpqNXD"
+  },
+  "bob": {
+    "credential_id": "kySwcb_3NAjIvSWP5Es2bA",
+    "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgn1a9lybGZLq9jUZtJ7JNd-E-lYzmUI1B4BMxUS3zC7qhRANCAASisxS8vE2OF7jIQDPVNmCDhQTB9SUc9utkczqLKcH_XVcig_lRCiS66k4oBKqOH96n4keK4tAKkGxSOfqhEi1k"
+  },
+  "carol": {
+    "credential_id": "YRxcciNIMrFn2CMv6zSPyQ",
+    "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgk3O53LPpLTX2pUDp3R1Z27Vwqe5EchK7heCwU8CLpoehRANCAARP1vEdgmEFPF-H5gD3_fF5cFmWEFAvyz_6fvxvI2tSR7T7nt19n96YhbfH0wruclzo3gIkxKNUCUmuBJ8udjrA"
+  },
+  "guest": {
+    "credential_id": "motfa-XBjRSd_mua-eQ8sA",
+    "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg6B9p76Fe_hOux0qh_n7gif_7ZnUTUhT2PvlWd-fDgC6hRANCAAQK7IMhnD4Mpjjq4vgqToCCqJ8NNhCMyt5I_dIdYBqx0CXq5X7ke1ROtH_hPPF6nvpdIh3hhaGg1Va9rzGMLT-f"
   }
 }

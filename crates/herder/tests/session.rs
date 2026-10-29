@@ -1,6 +1,6 @@
 //! `herder session` as a script drives it: the real binary against a daemon in this process
-//! whose sessions run the fake adapter on a script in `fixtures`, paired through
-//! `herder connect`, every answer read as JSON.
+//! whose sessions run the fake adapter on a script in `fixtures`, signed in through
+//! `herder login` as its owner's app approves it, every answer read as JSON.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -9,29 +9,39 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
-use herder_client_core::PairingUri;
-use herder_daemon::auth::{Auth, PAIRING_TTL};
+use herder_client_core::LoginUri;
+use herder_daemon::auth::Auth;
+use herder_daemon::auth::authenticator;
 use herder_daemon::login::Logins;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
-use herder_daemon::ws::{Host, Server, Tls};
+use herder_daemon::ws::{Host, Identity, Server, Tls};
 use herder_daemon::{Hub, session};
-use herder_protocol::{AccountId, HostId, Provider, TurnId};
+use herder_protocol::{AccountId, HostId, Provider, Role, TurnId};
 use herder_store::Store;
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Starts a daemon on `dir` with one fake account, `work`, and returns a pairing link for it.
-async fn daemon(dir: &Path, shutdown: CancellationToken) -> String {
+/// A daemon running in this process, owned by the person `tomas`.
+struct Daemon {
+    auth: Arc<Auth>,
+    /// The owner's app, which approves logins.
+    owner: Identity,
+    address: String,
+    fingerprint: String,
+}
+
+/// Starts a daemon on `dir` with one fake account, `work`.
+async fn daemon(dir: &Path, shutdown: CancellationToken) -> Daemon {
     daemon_with_switches(dir, shutdown, false).await
 }
 
-async fn daemon_with_switches(dir: &Path, shutdown: CancellationToken, switching: bool) -> String {
+async fn daemon_with_switches(dir: &Path, shutdown: CancellationToken, switching: bool) -> Daemon {
     daemon_playing(dir, shutdown, switching, "session.jsonl").await
 }
 
@@ -42,13 +52,14 @@ async fn daemon_playing(
     shutdown: CancellationToken,
     switching: bool,
     script: &str,
-) -> String {
+) -> Daemon {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(script);
     std::fs::create_dir_all(dir.join("tls")).unwrap();
     let tls = Tls::load_or_create(&dir.join("tls"), "test-host").unwrap();
     let auth = Arc::new(Auth::open(dir).unwrap());
+    let (_, owner) = authenticator::enroll(&auth, "tomas", Role::Owner, "fp-owner-app");
     let hub = Arc::new(Hub::default());
     let fake = Provider::Other("fake".into());
     let mut adapters = Adapters::new();
@@ -91,12 +102,12 @@ async fn daemon_playing(
     };
     let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let link = PairingUri {
-        hosts: vec![listener.local_addr().unwrap().to_string()],
+    let daemon = Daemon {
+        auth: Arc::clone(&auth),
+        owner,
+        address: listener.local_addr().unwrap().to_string(),
         fingerprint: tls.fingerprint().to_owned(),
-        code: auth.mint("alice", None, PAIRING_TTL).unwrap().code,
-    }
-    .to_string();
+    };
     let host = Host {
         id: HostId::new("host-1"),
         name: "test-host".into(),
@@ -104,7 +115,41 @@ async fn daemon_playing(
     let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
     let server = Server::new(tls, auth, hub, sessions, terminals, Logins::default(), host);
     tokio::spawn(server.run(vec![listener], shutdown));
-    link
+    daemon
+}
+
+/// Signs the terminal of the profile in `home` in to `daemon`: `herder login`, approved by the
+/// owner's app with the code it shows.
+async fn log_in(home: &Path, daemon: &Daemon) {
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_herder"))
+        .args([
+            "login",
+            &daemon.address,
+            "--fingerprint",
+            &daemon.fingerprint,
+        ])
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let link = tokio::time::timeout(TIMEOUT, async {
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if let Some((_, link)) = line.split_once("open ") {
+                return link.to_owned();
+            }
+        }
+        panic!("herder login showed no link");
+    })
+    .await
+    .unwrap();
+    let code = link.parse::<LoginUri>().unwrap().code;
+    daemon.auth.approve_login(&daemon.owner, &code).unwrap();
+    while lines.next_line().await.unwrap().is_some() {}
+    let status = tokio::time::timeout(TIMEOUT, child.wait()).await.unwrap();
+    assert!(status.unwrap().success());
 }
 
 /// A git repository with one commit.
@@ -168,11 +213,10 @@ async fn a_script_runs_a_session_from_new_to_archive() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let shutdown = CancellationToken::new();
-    let link = daemon(&tmp.path().join("daemon"), shutdown.clone()).await;
+    let daemon = daemon(&tmp.path().join("daemon"), shutdown.clone()).await;
     let repo = repo(&tmp.path().join("repo"));
 
-    let paired = herder(&home, &["connect", &link], "").await;
-    assert!(paired.status.success(), "{paired:?}");
+    log_in(&home, &daemon).await;
 
     // New, with the prompt on stdin; the only machine and the only account are the defaults.
     let created = session(&home, &["new", "--repo", &repo], "Say hello.\n", 0).await;
@@ -262,11 +306,10 @@ async fn wait_returns_needs_you_when_the_sessions_account_needs_logging_in() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let shutdown = CancellationToken::new();
-    let daemon = tmp.path().join("daemon");
-    let link = daemon_playing(&daemon, shutdown.clone(), false, "signed_out.jsonl").await;
+    let dir = tmp.path().join("daemon");
+    let daemon = daemon_playing(&dir, shutdown.clone(), false, "signed_out.jsonl").await;
     let repo = repo(&tmp.path().join("repo"));
-    let paired = herder(&home, &["connect", &link], "").await;
-    assert!(paired.status.success(), "{paired:?}");
+    log_in(&home, &daemon).await;
 
     let created = session(&home, &["new", "--repo", &repo], "Say hello.\n", 0).await;
     let id = created["session_id"].as_str().unwrap().to_owned();
@@ -280,14 +323,9 @@ async fn session_switch_uses_account_provider_and_model_commands() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let shutdown = CancellationToken::new();
-    let link = daemon_with_switches(&tmp.path().join("daemon"), shutdown.clone(), true).await;
+    let daemon = daemon_with_switches(&tmp.path().join("daemon"), shutdown.clone(), true).await;
     let repo = repo(&tmp.path().join("repo"));
-    assert!(
-        herder(&home, &["connect", &link], "")
-            .await
-            .status
-            .success()
-    );
+    log_in(&home, &daemon).await;
     let created = session(&home, &["new", "--repo", &repo, "--account", "Work"], "", 0).await;
     let id = created["session_id"].as_str().unwrap();
     session(

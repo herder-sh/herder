@@ -834,8 +834,9 @@ impl Client {
     /// - else, while a machine that lists the session is connected (`source`, else the
     ///   machine the session runs on, else a vault of this client's that backs it up), this
     ///   client reads the session's journal and images there and relays them to `destination`
-    ///   (`upload_history`), even when `destination` has a vault;
-    /// - else `destination` reads it from its vault, failing with `not_found` when it has none.
+    ///   (`upload_history`);
+    /// - else it fails with `not_found`: a host never reads other hosts' sessions, from them
+    ///   or from its vault.
     pub async fn fork_session(
         &self,
         source: HostId,

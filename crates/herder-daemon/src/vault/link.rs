@@ -25,7 +25,6 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use super::fork::FromVault;
 use super::install::LocalVault;
 use super::{HostSecrets, Replicator};
 use crate::auth::control::Request;
@@ -79,7 +78,9 @@ impl Link {
             changing: tokio::sync::Mutex::new(()),
             state: Mutex::new(State::default()),
         };
-        link.configure_forks(None)?;
+        link.setup.sessions.fork_from(Forks {
+            host: link.setup.host.id.clone(),
+        })?;
         if let Some(vault) = vault {
             link.replicate(vault)?;
         }
@@ -89,21 +90,6 @@ impl Link {
     /// The vault this host replicates to now.
     pub fn vault(&self) -> Option<VaultConfig> {
         self.lock().vault.clone()
-    }
-
-    /// Keeps fork lookup aligned with the live vault link, including no vault.
-    fn configure_forks(&self, vault: Option<VaultConfig>) -> Result<()> {
-        self.setup.sessions.fork_from(Forks {
-            host: self.setup.host.id.clone(),
-            vault: vault
-                .map(|vault| {
-                    Ok::<_, anyhow::Error>(FromVault {
-                        vault,
-                        device: Replicator::device_key(&self.setup.data_dir)?,
-                    })
-                })
-                .transpose()?,
-        })
     }
 
     /// Applies `get_vault_link`, `link_vault`, `set_vault_link` or `unlink_vault`.
@@ -329,7 +315,6 @@ impl Link {
             return Err(not_linked());
         };
         self.save(None).await?;
-        self.configure_forks(None).map_err(internal)?;
         let mut state = self.lock();
         state.vault = None;
         if let Some(replicating) = state.replicating.take() {
@@ -352,7 +337,6 @@ impl Link {
     /// Connects to `vault` to do what its switches say, in place of any replicator running;
     /// with both off, it does not connect.
     fn replicate(&self, vault: VaultConfig) -> Result<()> {
-        self.configure_forks(Some(vault.clone()))?;
         let stop = if vault.backup || vault.secrets {
             let replicator = self.replicator(vault.clone())?;
             let stop = self.setup.shutdown.child_token();

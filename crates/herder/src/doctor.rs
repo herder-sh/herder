@@ -182,8 +182,8 @@ fn config_check(explicit: Option<&Path>) -> (Check, Option<Config>) {
         Check::fail(
             SUBJECT,
             format!("{path} not found"),
-            "pair a herder client (run: herder pair) and add an account from it, which writes \
-             the file"
+            "claim this machine from the herder app (run: herder claim) and add an account \
+             from it, which writes the file"
                 .into(),
         )
     };
