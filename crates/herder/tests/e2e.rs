@@ -18,8 +18,9 @@ use herder_adapters::claude;
 use herder_adapters::fixture::Fixture;
 use herder_adapters::transport::Transport;
 use herder_adapters::{Adapter, StartFuture, StartRequest};
-use herder_client_core::PairingUri;
+use herder_client_core::OwnUri;
 use herder_client_core::auth::{DeviceKey, client_config};
+use herder_daemon::auth::authenticator::Join;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters};
 use herder_protocol::{
     Account, AccountId, ApprovalDecision, ApprovalId, ClientHello, ClientMessage, Command,
@@ -99,12 +100,11 @@ async fn wait_for(path: &Path) {
     }
 }
 
-/// Runs `herder pair` for `user` against the daemon of `config` and reads the link it prints.
-async fn pair(config: &Path, user: &str) -> PairingUri {
+/// Runs `herder claim` against the daemon of `config` and reads the link it prints.
+async fn own(config: &Path) -> OwnUri {
     let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_herder"))
-        .args(["pair", "--config"])
+        .args(["claim", "--config"])
         .arg(config)
-        .args(["--user", user])
         .env_remove("HERDER_CONFIG")
         .output()
         .await
@@ -112,13 +112,13 @@ async fn pair(config: &Path, user: &str) -> PairingUri {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
-        "herder pair: {stdout}{}",
+        "herder claim: {stdout}{}",
         String::from_utf8_lossy(&output.stderr)
     );
     stdout
         .lines()
-        .find(|line| line.starts_with("herder://pair?"))
-        .unwrap_or_else(|| panic!("no pairing link in {stdout}"))
+        .find(|line| line.starts_with("herder://own?"))
+        .unwrap_or_else(|| panic!("no owner link in {stdout}"))
         .parse()
         .unwrap()
 }
@@ -350,9 +350,9 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
     });
     wait_for(&data_dir.join("control.sock")).await;
 
-    // Pair: `herder pair` mints a code over the control socket; the device presents it once,
-    // pinning the fingerprint the link carries.
-    let link = pair(&config_path, "alice").await;
+    // Claim: `herder claim` opens the owner window over the control socket; the device claims
+    // it with a new passkey, pinning the fingerprint the link carries.
+    let link = own(&config_path).await;
     let host = &link.hosts[0];
     let device = DeviceKey::generate().unwrap();
     let wrong_pin = "0".repeat(64);
@@ -368,15 +368,20 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             protocol_version: PROTOCOL_VERSION,
             client: "herder-e2e".into(),
             resume: Vec::new(),
-            pairing_code: Some(link.code.clone()),
-            sign_in: false,
+            pairing_code: None,
+            sign_in: true,
             passkey: false,
         }))
         .await;
+    let ServerMessage::SignInChallenge { registration, .. } = client.recv().await else {
+        panic!("expected a sign-in challenge");
+    };
+    let (_, sign_in) = Join::claim(link.code.clone()).sign_in("alice", &registration.unwrap());
+    client.send(&ClientMessage::SignIn(sign_in)).await;
     let ServerMessage::Hello(hello) = client.recv().await else {
         panic!("expected a hello");
     };
-    // The daemon's first user is its owner; `by` names them by user id.
+    // The daemon's first person is its owner; `by` names them by user id.
     assert_eq!(hello.role, Role::Owner);
     let alice = hello.user_id;
     assert!(matches!(

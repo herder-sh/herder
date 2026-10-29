@@ -25,8 +25,9 @@ use futures_util::{SinkExt, StreamExt};
 use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
-use herder_client_core::PairingUri;
 use herder_client_core::auth::{DeviceKey, client_config};
+use herder_client_core::{OwnUri, PairingUri};
+use herder_daemon::auth::authenticator::Join;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters};
 use herder_daemon::vault::VaultStore;
 use herder_protocol::{
@@ -316,7 +317,20 @@ async fn herder(args: &[&str]) -> (bool, String) {
     (output.status.success(), text)
 }
 
-/// Mints a pairing code for `user` on the daemon of `config` with `herder pair`.
+/// Opens the owner window of the daemon of `config` with `herder claim`.
+async fn own(config: &Path) -> OwnUri {
+    let (ok, output) = herder(&["claim", "--config", config.to_str().unwrap()]).await;
+    assert!(ok, "herder claim: {output}");
+    output
+        .lines()
+        .find(|line| line.starts_with("herder://own?"))
+        .unwrap_or_else(|| panic!("no owner link in {output}"))
+        .parse()
+        .unwrap()
+}
+
+/// Mints a pairing code for `user` on the daemon of `config` with `herder pair`: how a host
+/// pairs with the vault as a user, to read the sessions a fork takes over.
 async fn pair(config: &Path, user: &str) -> PairingUri {
     let (ok, output) =
         herder(&["pair", "--config", config.to_str().unwrap(), "--user", user]).await;
@@ -413,13 +427,13 @@ struct Client {
 }
 
 impl Client {
-    /// Connects to `addr` as `device`, pinning `fingerprint`, and says hello, presenting
-    /// `pairing_code` on the first connection.
+    /// Connects to `addr` as `device`, pinning `fingerprint`, and says hello; on the first
+    /// connection, claims the daemon with the code `claim` as the new person `alice`.
     async fn connect(
         addr: &str,
         fingerprint: &str,
         device: &DeviceKey,
-        pairing_code: Option<String>,
+        claim: Option<String>,
     ) -> Self {
         let config = client_config(fingerprint, device).unwrap();
         let addr: SocketAddr = addr.parse().unwrap();
@@ -441,11 +455,18 @@ impl Client {
                 protocol_version: PROTOCOL_VERSION,
                 client: "herder-drill".into(),
                 resume: Vec::new(),
-                pairing_code,
-                sign_in: false,
+                pairing_code: None,
+                sign_in: claim.is_some(),
                 passkey: false,
             }))
             .await;
+        if let Some(code) = claim {
+            let ServerMessage::SignInChallenge { registration, .. } = client.recv().await else {
+                panic!("expected a sign-in challenge");
+            };
+            let (_, sign_in) = Join::claim(code).sign_in("alice", &registration.unwrap());
+            client.send(&ClientMessage::SignIn(sign_in)).await;
+        }
         let hello = client.recv().await;
         assert!(
             matches!(hello, ServerMessage::Hello(_)),
@@ -590,7 +611,7 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     // Host A runs a session whose turns change code; each is checkpointed to origin.
     let mut a = Process::host(&a_config);
     wait_for(&a_dir.join("data/control.sock")).await;
-    let a_link = pair(&a_config, "alice").await;
+    let a_link = own(&a_config).await;
     let device = DeviceKey::generate().unwrap();
     let mut client = Client::connect(
         &a_link.hosts[0],
@@ -720,7 +741,7 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     // The session's history goes on on B, the fork's agent seeded with the transcript from A:
     // the turn A died in runs again there, unprompted, and B's worktree is A's last checkpoint
     // with only that turn's edit made again.
-    let b_link = pair(&b_config, "alice").await;
+    let b_link = own(&b_config).await;
     let mut client = Client::connect(
         &b_link.hosts[0],
         &b_link.fingerprint,

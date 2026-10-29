@@ -21,8 +21,9 @@ use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, McpServer, StartFuture,
     StartRequest,
 };
-use herder_client_core::PairingUri;
+use herder_client_core::OwnUri;
 use herder_client_core::auth::{DeviceKey, client_config};
+use herder_daemon::auth::authenticator::Join;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters};
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, ClientHello,
@@ -384,22 +385,21 @@ async fn wait_for(path: &Path) {
     }
 }
 
-/// Runs `herder pair` for `user` against the daemon of `config` and reads the link it prints.
-async fn pair(config: &Path, user: &str) -> PairingUri {
+/// Runs `herder claim` against the daemon of `config` and reads the link it prints.
+async fn own(config: &Path) -> OwnUri {
     let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_herder"))
-        .args(["pair", "--config"])
+        .args(["claim", "--config"])
         .arg(config)
-        .args(["--user", user])
         .env_remove("HERDER_CONFIG")
         .output()
         .await
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "herder pair: {stdout}");
+    assert!(output.status.success(), "herder claim: {stdout}");
     stdout
         .lines()
-        .find(|line| line.starts_with("herder://pair?"))
-        .unwrap_or_else(|| panic!("no pairing link in {stdout}"))
+        .find(|line| line.starts_with("herder://own?"))
+        .unwrap_or_else(|| panic!("no owner link in {stdout}"))
         .parse()
         .unwrap()
 }
@@ -474,8 +474,8 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
     });
     wait_for(&data_dir.join("control.sock")).await;
 
-    // Alice pairs and owns the daemon.
-    let link = pair(&config_path, "alice").await;
+    // Alice claims the daemon with a new passkey.
+    let link = own(&config_path).await;
     let device = DeviceKey::generate().unwrap();
     let mut client = Client::connect(&link.hosts[0], &link.fingerprint, &device).await;
     client
@@ -483,11 +483,16 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             protocol_version: PROTOCOL_VERSION,
             client: "herder-multi-agent".into(),
             resume: Vec::new(),
-            pairing_code: Some(link.code.clone()),
-            sign_in: false,
+            pairing_code: None,
+            sign_in: true,
             passkey: false,
         }))
         .await;
+    let ServerMessage::SignInChallenge { registration, .. } = client.recv().await else {
+        panic!("expected a sign-in challenge");
+    };
+    let (_, sign_in) = Join::claim(link.code.clone()).sign_in("alice", &registration.unwrap());
+    client.send(&ClientMessage::SignIn(sign_in)).await;
     let ServerMessage::Hello(hello) = client.recv().await else {
         panic!("expected a hello");
     };
