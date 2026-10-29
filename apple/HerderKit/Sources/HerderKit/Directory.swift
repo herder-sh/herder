@@ -33,10 +33,10 @@ struct Directory: Equatable {
         var paired: [HostId: [String]] = [:]
     }
 
-    /// Where your passkey is kept, once you have one.
+    /// Whether you have a passkey, and where it is kept when that is known.
     enum Passkey: Equatable {
         case none
-        case stored(in: String)
+        case stored(in: String?)
     }
 
     var columns: [Column]
@@ -140,29 +140,30 @@ extension Directory.Device {
 }
 
 extension Directory {
-    /// The fleet's people from each machine's users, until the daemons know one person across
-    /// machines: a user is the same person wherever they have the same name. You are whoever
-    /// pairs this device; your devices are yours across the machines, by kind.
-    static func merging(_ users: [HostId: [UserInfo]], columns: [Column], me name: String,
+    /// The fleet's people from each machine's, one person per person id. Your devices are yours
+    /// across the machines, by kind.
+    static func merging(_ people: [HostId: [PersonInfo]], columns: [Column], me: PersonId?,
                         thisClient: String) -> Directory {
-        var people: [String: Person] = [:]
-        var order: [String] = []
+        var found: [PersonId: Person] = [:]
+        var order: [PersonId] = []
+        var keyed = false
         for column in columns {
-            for user in People.people(users[column.id] ?? []) {
-                let key = user.name.lowercased()
-                if people[key] == nil {
-                    people[key] = Person(id: key, name: user.name.capitalized, roles: [:])
-                    order.append(key)
+            for info in people[column.id] ?? [] {
+                if found[info.personId] == nil {
+                    found[info.personId] = Person(id: info.personId, name: info.name, roles: [:])
+                    order.append(info.personId)
                 }
-                people[key]?.roles[column.id] = user.role
+                found[info.personId]?.roles[column.id] = info.role
+                if info.personId == me, !info.passkeys.isEmpty { keyed = true }
             }
         }
-        let me = people[name.lowercased()] ?? Person(id: name.lowercased(), name: name.capitalized, roles: [:])
-        let mine = columns.flatMap { column in
-            (users[column.id] ?? []).filter { $0.name.lowercased() == me.id }.flatMap(\.devices).map { (column.id, $0) }
+        let mine = me.flatMap { found[$0] } ?? Person(id: me ?? "", name: "You", roles: [:])
+        let devices = columns.flatMap { column in
+            (people[column.id] ?? []).filter { $0.personId == mine.id }.flatMap(\.devices).map { (column.id, $0) }
         }
-        return Directory(columns: columns, me: me, devices: devices(mine, thisClient: thisClient),
-                         teammates: order.filter { $0 != me.id }.compactMap { people[$0] })
+        return Directory(columns: columns, me: mine, passkey: keyed ? .stored(in: nil) : .none,
+                         devices: Self.devices(devices, thisClient: thisClient),
+                         teammates: order.filter { $0 != mine.id }.compactMap { found[$0] })
     }
 
     /// Your devices, one per kind of client: each machine pairs a device of its own.

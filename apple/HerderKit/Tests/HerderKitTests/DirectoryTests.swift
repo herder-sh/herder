@@ -37,50 +37,27 @@ struct DirectoryTests {
         let oct27 = Timestamp.date("2026-10-27T10:00:00Z")!.formatted(.dateTime.month(.abbreviated).day())
         #expect(directory.devices.map { $0.seen(now: now) } == ["today", "2 hours ago", oct27])
     }
+}
 
-    @Test func machinesUsersMergeIntoOnePersonEach() {
-        let users: [HostId: [UserInfo]] = [
-            "devbox": [
-                UserInfo(userId: "u1", name: "tomas", role: .owner, devices: [
-                    PeopleTests.device("d1", "herder-macos/0.17.0", online: true, lastSeen: "2026-10-29T11:00:00Z"),
-                ]),
-                UserInfo(userId: "u2", name: "sam", role: .member, devices: []),
-                UserInfo(userId: "u3", name: "studio", role: .member, devices: [
-                    PeopleTests.device("d2", "herder/0.17.0", online: true, hostOnly: true),
-                ]),
-            ],
-            "laptop": [
-                UserInfo(userId: "u4", name: "pat", role: .owner, devices: []),
-                UserInfo(userId: "u5", name: "Tomas", role: .member, devices: [
-                    PeopleTests.device("d3", "herder-ios/0.17.0", lastSeen: "2026-10-29T09:00:00Z"),
-                ]),
-            ],
-        ]
-        let directory = Directory.merging(users, columns: [.init(id: "devbox", name: "devbox"), .init(id: "laptop", name: "laptop")],
-                                          me: "tomas", thisClient: "herder-macos/0.17.0")
-        #expect(directory.me.roles == ["devbox": .owner, "laptop": .member])
-        #expect(directory.teammates.map(\.name) == ["Sam", "Pat"])
-        #expect(directory.devices.map(\.title) == ["This Mac", "iPhone"])
-    }
+func person(_ id: String, _ name: String, _ role: Role, passkey: Bool = true, devices: [UserDevice] = []) -> PersonInfo {
+    PersonInfo(personId: id, name: name, role: role,
+               passkeys: passkey ? [PasskeyKey(credentialId: "cred-\(id)", publicKey: "{}")] : [], devices: devices)
 }
 
 @MainActor
 struct FleetPeopleTests {
-    nonisolated static let users: [HostId: [UserInfo]] = [
+    nonisolated static let mac = FleetPeople.thisClient + "/0.17.0"
+    nonisolated static let people: [HostId: [PersonInfo]] = [
         "devbox": [
-            UserInfo(userId: "u1", name: "tomas", role: .owner, devices: [
-                PeopleTests.device("d1", FleetPeople.thisClient + "/0.17.0", online: true),
-            ]),
-            UserInfo(userId: "u2", name: "sam", role: .member, devices: [
-                PeopleTests.device("d2", FleetPeople.thisClient + "/0.17.0", online: true),
-            ]),
+            person("p-tomas", "Tomas", .owner, devices: [PeopleTests.device("d1", mac, online: true)]),
+            person("p-sam", "Sam", .member, devices: [PeopleTests.device("d2", mac, online: true)]),
         ],
         "laptop": [
-            UserInfo(userId: "u3", name: "pat", role: .owner, devices: []),
-            UserInfo(userId: "u4", name: "tomas", role: .member, devices: [
-                PeopleTests.device("d3", FleetPeople.thisClient + "/0.17.0", online: true),
+            person("p-pat", "Pat", .owner),
+            person("p-tomas", "Tomas", .member, devices: [
+                PeopleTests.device("d3", mac, online: true),
+                PeopleTests.device("d4", "herder-ios/0.17.0", lastSeen: "2026-10-29T09:00:00Z"),
             ]),
-            UserInfo(userId: "u5", name: "sam", role: .member, devices: []),
         ],
     ]
 
@@ -90,40 +67,81 @@ struct FleetPeopleTests {
     private func model() -> (FleetPeople, () -> [CommandBody]) {
         var sent: [CommandBody] = []
         let people = FleetPeople { hostId, command in
-            if command == .listUsers { return .users(users: Self.users[hostId] ?? []) }
-            sent.append(command)
-            return .applied
+            switch command {
+            case .listPeople: return .people(people: Self.people[hostId] ?? [])
+            case .passkeyChallenge:
+                return .passkeyChallenge(challenge: PasskeyChallenge(rpId: "herder.sh", challenge: "c-\(hostId)",
+                                                                     expiresAt: "2026-10-29T12:01:00Z"),
+                                         registration: nil)
+            case .invite(let role, _):
+                sent.append(command)
+                return .invite(invite: "tok", role: role, fingerprint: "ab12", addresses: ["devbox.lan:7447"],
+                               expiresAt: "2026-10-29T12:10:00Z")
+            default:
+                sent.append(command)
+                return .applied
+            }
         }
         return (people, { sent })
     }
 
-    @Test func youAreWhoThisAppPairsAsWithTheMachinesRole() {
-        #expect(FleetPeople.me(Self.users, machines: machines) == "tomas")
+    /// Signs as the challenge's machine, so each command shows which challenge it carries.
+    private let sign: PasskeySigner = { challenge in
+        PasskeyAssertion(id: "cred", rawId: "cred", response: AssertionResponse(
+            clientDataJson: challenge.challenge, authenticatorData: "", signature: "", userHandle: nil), kind: "public-key")
     }
 
-    @Test func theDirectoryHasAColumnPerMachineThatListedItsUsers() async throws {
+    private func assertion(_ host: String) async throws -> PasskeyAssertion {
+        try await sign(PasskeyChallenge(rpId: "herder.sh", challenge: "c-\(host)", expiresAt: ""))
+    }
+
+    @Test func youAreThePersonThisAppSignsInAsWithTheMachinesRole() {
+        #expect(FleetPeople.me(Self.people, machines: machines) == "p-tomas")
+    }
+
+    @Test func theDirectoryHasOnePersonPerPersonIdAndAColumnPerMachine() async throws {
         let (people, _) = model()
         await people.reload(machines)
         let directory = try #require(people.directory(machines, localNames: []))
         #expect(directory.columns.map(\.name) == ["devbox", "laptop"])
         #expect(directory.me.name == "Tomas")
+        #expect(directory.me.roles == ["devbox": .owner, "laptop": .member])
+        #expect(directory.passkey == .stored(in: nil))
         #expect(directory.teammates.map(\.name) == ["Sam", "Pat"])
-        let laptop = directory.only("laptop")
-        #expect(laptop.columns.map(\.id) == ["laptop"])
-        #expect(laptop.teammates.map(\.name) == ["Sam", "Pat"])
+        #expect(directory.devices.map(\.title) == ["This Mac", "iPhone"])
+        #expect(directory.devices[0].paired == ["devbox": ["d1"], "laptop": ["d3"]])
         #expect(directory.only("devbox").teammates.map(\.name) == ["Sam"])
     }
 
-    @Test func aRoleChangeGoesToEachMachineTheyAreOn() async throws {
+    @Test func aRoleChangeCarriesEachMachinesOwnChallengeAndIntroducesNewcomers() async throws {
         let (people, sent) = model()
         await people.reload(machines)
         let directory = try #require(people.directory(machines, localNames: []))
         let sam = directory.teammates[0]
-        try await people.setRole(.owner, of: sam, on: directory.columns, machines: machines)
-        #expect(sent() == [.setUserRole(userId: "u2", role: .owner), .setUserRole(userId: "u5", role: .owner)])
-        let pat = directory.teammates[1]
+        try await people.setRole(.member, of: sam, on: directory.columns, machines: machines, sign: sign)
+        let card = PersonCard(name: "Sam", passkeys: [PasskeyKey(credentialId: "cred-p-sam", publicKey: "{}")])
+        // devbox has Sam as a member already; laptop learns who Sam is.
+        #expect(sent() == [.setPersonRole(personId: "p-sam", role: .member, person: card, assertion: try await assertion("laptop"))])
+        try await people.setRole(nil, of: sam, on: directory.columns, machines: machines, sign: sign)
+        #expect(sent().last == .revokePerson(personId: "p-sam", assertion: try await assertion("devbox")))
+    }
+
+    @Test func anInviteIsALinkToTheMachine() async throws {
+        let (people, _) = model()
+        let invite = try await people.invite(.owner, on: "devbox", sign: sign)
+        #expect(invite.role == .owner)
+        #expect(invite.link == "herder://invite?host=devbox.lan:7447&fp=ab12&invite=tok")
+        #expect(invite.expiresAt == Timestamp.date("2026-10-29T12:10:00Z"))
+    }
+
+    @Test func withoutAPasskeyNothingIsSent() async throws {
+        let (people, sent) = model()
+        await people.reload(machines)
+        let directory = try #require(people.directory(machines, localNames: []))
         await #expect(throws: HerderError.self) {
-            try await people.setRole(.member, of: pat, on: directory.columns, machines: machines)
+            try await people.setRole(.owner, of: directory.teammates[0], on: directory.columns, machines: machines,
+                                     sign: { _ in throw HerderError.Local(detail: "no passkey") })
         }
+        #expect(sent().isEmpty)
     }
 }

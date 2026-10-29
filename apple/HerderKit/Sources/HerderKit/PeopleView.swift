@@ -99,7 +99,8 @@ struct PeopleView: View {
     @ViewBuilder private func name(_ person: Directory.Person, mine: Bool) -> some View {
         Text(person.name).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
         if mine, case .stored(let keychain) = directory.passkey {
-            Pill(text: "● passkey · \(keychain)", tint: Theme.switchOn).fixedSize()
+            Pill(text: (["● passkey"] + [keychain].compactMap(\.self)).joined(separator: " · "), tint: Theme.switchOn)
+                .fixedSize()
         }
     }
 
