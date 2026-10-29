@@ -379,14 +379,15 @@ impl<B: Backend> Shared<B> {
     }
 
     /// The paired user an agent acts as, and their role, for a turn whose prompt `by` sent:
-    /// `by` itself, or the user a bot's person is linked to.
+    /// `by` itself, or the user a bot's person is linked to, either as the person a claim moved
+    /// it to.
     async fn sender(
         &self,
         by: UserId,
         session_id: &SessionId,
     ) -> Result<(UserId, Role), ErrorInfo> {
         if let Some(role) = self.auth.role(&by) {
-            return Ok((by, role));
+            return Ok((self.auth.resolve(&by), role));
         }
         let forbidden = |message: String| ErrorInfo {
             code: ErrorCode::Forbidden,
@@ -414,7 +415,7 @@ impl<B: Backend> Shared<B> {
             )));
         };
         match self.auth.role(&user_id) {
-            Some(role) => Ok((user_id, role)),
+            Some(role) => Ok((self.auth.resolve(&user_id), role)),
             None => Err(forbidden(format!(
                 "this turn was sent by {name} via {bot}, who is linked to {user_id}, no longer \
                  paired with this daemon; an owner can link them again in the bot's People"
