@@ -165,7 +165,7 @@ extension Fleet {
         guard request.kind == .login else {
             throw HerderError.Local(detail: "this herder cannot take a new machine yet")
         }
-        guard case .passkeyChallenge(let challenge) = try await client.send(hostId: try hostId(of: request),
+        guard case .passkeyChallenge(let challenge, _) = try await client.send(hostId: try hostId(of: request),
                                                                            command: .passkeyChallenge)
         else { throw HerderError.Local(detail: "\(request.name) did not send a challenge") }
         return challenge
