@@ -980,9 +980,11 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
     )
     .await;
     let relay = Relay::start(daemon.addr).await;
-    let client = Client::open(
+    let face_id = Arc::new(FaceId::default());
+    let client = Client::open_with_passkey(
         tmp.path().join("client").display().to_string(),
         "herder-test/0".into(),
+        face_id.clone(),
     )
     .unwrap();
     let host = daemon
@@ -990,6 +992,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         .await
         .unwrap()
         .host_id;
+    face_id.hold(&daemon.auth, "alice");
     let created = client
         .send(
             host.clone(),
@@ -1022,9 +1025,10 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
     assert!(!screen.events.contains(&TerminalEvent::Reattached));
 
     // Another owner client attaches and gets the scrollback; a member gets nothing.
-    let other = Client::open(
+    let other = Client::open_with_passkey(
         tmp.path().join("other").display().to_string(),
         "herder-test/0".into(),
+        face_id.clone(),
     )
     .unwrap();
     daemon.sign_in(&other, "alice", daemon.addr).await.unwrap();
@@ -1112,9 +1116,11 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
     let tmp = tempfile::tempdir().unwrap();
     let daemon_dir = tmp.path().join("daemon");
     let daemon = Daemon::start(&daemon_dir, 0, "mid_turn.jsonl", Arc::default()).await;
-    let client = Client::open(
+    let face_id = Arc::new(FaceId::default());
+    let client = Client::open_with_passkey(
         tmp.path().join("client").display().to_string(),
         "herder-test/0".into(),
+        face_id.clone(),
     )
     .unwrap();
     let host = daemon
@@ -1122,6 +1128,7 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
         .await
         .unwrap()
         .host_id;
+    face_id.hold(&daemon.auth, "alice");
     let config_dir = tmp.path().join("codex-2");
     let new_account = |account_id: &str| NewAccount {
         account_id: AccountId::new(account_id),
@@ -1264,9 +1271,11 @@ async fn logging_an_account_in_again_relays_its_login_in_its_own_dir() {
     // The account's config dir, holding a login that expired.
     let account_dir = daemon_dir.join("account");
     std::fs::create_dir_all(&account_dir).unwrap();
-    let client = Client::open(
+    let face_id = Arc::new(FaceId::default());
+    let client = Client::open_with_passkey(
         tmp.path().join("client").display().to_string(),
         "herder-test/0".into(),
+        face_id.clone(),
     )
     .unwrap();
     let host = daemon
@@ -1274,6 +1283,7 @@ async fn logging_an_account_in_again_relays_its_login_in_its_own_dir() {
         .await
         .unwrap()
         .host_id;
+    face_id.hold(&daemon.auth, "alice");
 
     // Members never see a login.
     let member = Client::open(
@@ -1933,9 +1943,11 @@ async fn an_aws_sign_in_relays_its_device_code_and_exit() {
     )
     .unwrap();
     std::fs::set_permissions(bin.join("aws"), std::fs::Permissions::from_mode(0o755)).unwrap();
-    let client = Client::open(
+    let face_id = Arc::new(FaceId::default());
+    let client = Client::open_with_passkey(
         tmp.path().join("client").display().to_string(),
         "herder-test/0".into(),
+        face_id.clone(),
     )
     .unwrap();
     let host = daemon
@@ -1943,6 +1955,7 @@ async fn an_aws_sign_in_relays_its_device_code_and_exit() {
         .await
         .unwrap()
         .host_id;
+    face_id.hold(&daemon.auth, "alice");
     assert_eq!(
         client.list_aws_profiles(host.clone()).await.unwrap(),
         [
@@ -2141,6 +2154,13 @@ async fn an_app_claims_a_machine_and_approves_a_terminal_that_logs_in() {
 struct FaceId {
     passkey: std::sync::Mutex<Option<Arc<Authenticator>>>,
     prompts: AtomicU64,
+}
+
+impl FaceId {
+    /// Holds the passkey of `auth`'s person `name`, once they are there.
+    fn hold(&self, auth: &Auth, name: &str) {
+        *self.passkey.lock().unwrap() = Authenticator::of(auth, name).map(Arc::new);
+    }
 }
 
 impl herder_client_core::Authenticator for FaceId {

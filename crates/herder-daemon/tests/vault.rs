@@ -1226,8 +1226,9 @@ async fn secret_command(
     | CommandBody::GrantSecretSet { assertion, .. }
     | CommandBody::RevokeSecretSet { assertion, .. } = &mut command
     {
-        let Ok(CommandResult::PasskeyChallenge { challenge, .. }) =
-            client.send(vault.clone(), CommandBody::PasskeyChallenge).await
+        let Ok(CommandResult::PasskeyChallenge { challenge, .. }) = client
+            .send(vault.clone(), CommandBody::PasskeyChallenge)
+            .await
         else {
             panic!("expected a passkey challenge");
         };
@@ -1431,9 +1432,13 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
     );
 
     // One audit row per value handed out, newest first, without the value.
-    let audit = secret_command(&client, &passkey, CommandBody::ListSecretAudit { before: None })
-        .await
-        .unwrap();
+    let audit = secret_command(
+        &client,
+        &passkey,
+        CommandBody::ListSecretAudit { before: None },
+    )
+    .await
+    .unwrap();
     let CommandResult::SecretAudit { entries } = &audit else {
         panic!("expected the audit: {audit:?}");
     };
@@ -1616,9 +1621,13 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
     assert!(host.secrets.list().await.unwrap().is_empty());
 
     // The audit shows the host's use, under its purpose, with no session.
-    let audit = secret_command(&client, &passkey, CommandBody::ListSecretAudit { before: None })
-        .await
-        .unwrap();
+    let audit = secret_command(
+        &client,
+        &passkey,
+        CommandBody::ListSecretAudit { before: None },
+    )
+    .await
+    .unwrap();
     let CommandResult::SecretAudit { entries } = &audit else {
         panic!("expected the audit");
     };
