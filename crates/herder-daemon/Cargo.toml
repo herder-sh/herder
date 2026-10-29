@@ -7,8 +7,8 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# The software authenticator of `auth::authenticator`, for other crates' tests; dev-only.
-test-authenticator = []
+# Helpers for other crates' tests, such as the software authenticator; dev-only.
+test-support = []
 
 [dependencies]
 anyhow.workspace = true

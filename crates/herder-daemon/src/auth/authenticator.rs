@@ -2,7 +2,7 @@
 //! `fixtures/passkeys.json`: it makes registrations and assertions over a daemon's live
 //! challenges exactly as a platform authenticator encodes them, so tests never need a real one.
 //!
-//! Test support only: other crates' tests reach it through the `test-authenticator` feature,
+//! Test support only: other crates' tests reach it through the `test-support` feature,
 //! which only dev-dependencies turn on, so no release build has it. It panics on bad fixtures,
 //! as a test should.
 

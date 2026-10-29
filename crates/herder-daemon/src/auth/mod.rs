@@ -30,7 +30,7 @@
 //! Users, people and devices persist in `<data_dir>/auth.json`, written atomically on every
 //! change.
 
-#[cfg(any(test, feature = "test-authenticator"))]
+#[cfg(any(test, feature = "test-support"))]
 pub mod authenticator;
 pub mod claim;
 pub mod control;
