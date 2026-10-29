@@ -8,21 +8,24 @@ import Herder
 @MainActor protocol Authenticator {
     /// Creates the passkey for `name`, returning what the machines store.
     func register(name: String, userId: Data, challenge: Data) async throws -> PasskeyRegistration
-    /// Signs `challenge` with the passkey, after Face ID or Touch ID.
+    /// Signs `challenge` with the passkey, after Face ID or Touch ID, as WebAuthn JSON.
     func assert(challenge: Data) async throws -> PasskeyAssertion
+}
+
+extension Authenticator {
+    /// Signs a machine's challenge: what People and the approval sheets sign with.
+    func sign(_ challenge: PasskeyChallenge) async throws -> PasskeyAssertion {
+        guard let bytes = Data(base64URL: challenge.challenge) else {
+            throw HerderError.Local(detail: "the machine sent a challenge that is not base64url")
+        }
+        return try await assert(challenge: bytes)
+    }
 }
 
 struct PasskeyRegistration: Equatable {
     let credentialId: Data
     /// The attestation object, holding the public key.
     let attestation: Data
-    let clientData: Data
-}
-
-struct PasskeyAssertion: Equatable {
-    let credentialId: Data
-    let authenticatorData: Data
-    let signature: Data
     let clientData: Data
 }
 
@@ -48,8 +51,15 @@ struct PasskeyAssertion: Equatable {
         guard let credential = try await perform(request).credential
             as? ASAuthorizationPlatformPublicKeyCredentialAssertion
         else { throw HerderError.Local(detail: "the passkey did not sign") }
-        return PasskeyAssertion(credentialId: credential.credentialID, authenticatorData: credential.rawAuthenticatorData,
-                                signature: credential.signature, clientData: credential.rawClientDataJSON)
+        let id = credential.credentialID.base64URLEncodedString()
+        return PasskeyAssertion(
+            id: id, rawId: id,
+            response: AssertionResponse(
+                clientDataJson: credential.rawClientDataJSON.base64URLEncodedString(),
+                authenticatorData: credential.rawAuthenticatorData.base64URLEncodedString(),
+                signature: credential.signature.base64URLEncodedString(),
+                userHandle: credential.userID.base64URLEncodedString()),
+            kind: "public-key")
     }
 
     private func perform(_ request: ASAuthorizationRequest) async throws -> ASAuthorization {
@@ -94,4 +104,17 @@ extension PlatformAuthenticator: ASAuthorizationControllerDelegate, ASAuthorizat
 /// Whether `error` is the person closing the Face ID prompt, which is no failure to report.
 func isCancelled(_ error: Error) -> Bool {
     (error as? ASAuthorizationError)?.code == .canceled
+}
+
+extension Data {
+    /// Base64url without padding, as WebAuthn JSON encodes bytes.
+    func base64URLEncodedString() -> String {
+        base64EncodedString().replacing("+", with: "-").replacing("/", with: "_").replacing("=", with: "")
+    }
+
+    init?(base64URL: String) {
+        var text = base64URL.replacing("-", with: "+").replacing("_", with: "/")
+        text += String(repeating: "=", count: (4 - text.count % 4) % 4)
+        self.init(base64Encoded: text)
+    }
 }
