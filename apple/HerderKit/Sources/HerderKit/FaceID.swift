@@ -9,7 +9,7 @@ final class FaceID: PasskeyAuthenticator {
     private let passkey: @MainActor @Sendable () -> Authenticator
 
     /// `passkey` makes the authenticator for each action; tests pass a fake.
-    init(_ passkey: @escaping @MainActor @Sendable () -> Authenticator = { PlatformAuthenticator() }) {
+    init(_ passkey: @escaping @MainActor @Sendable () -> Authenticator = { passkeyAuthenticator() }) {
         self.passkey = passkey
     }
 

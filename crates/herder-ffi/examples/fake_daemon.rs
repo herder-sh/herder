@@ -13,6 +13,8 @@
 //! apps are profiled under.
 //! `fake_daemon --vault` runs a vault that keeps secrets ([`vault`]) and prints only its
 //! owner's pairing link.
+//! `fake_daemon --own` runs `fake-own`, which waits for a new owner as after `herder claim`, and
+//! prints only the `herder://own` link that claim prints.
 
 #[path = "fake_daemon/demo.rs"]
 mod demo;
@@ -24,7 +26,7 @@ mod vault;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use herder_client_core::{Client, ConnectionState, PairResult};
+use herder_client_core::{Client, ConnectionState, OwnUri, PairResult, PairingUri};
 use herder_protocol::{AccountId, CommandBody, CommandResult, HostId, SessionId};
 use tokio::io::AsyncReadExt;
 
@@ -42,6 +44,12 @@ async fn main() -> Result<()> {
             println!("{}", vault.link);
             tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
             return vault.stop().await;
+        }
+        Some("--own") => {
+            let daemon = support::FakeDaemon::start("fake-own").await?;
+            println!("{}", own_link(&daemon)?);
+            tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
+            return daemon.stop().await;
         }
         Some("--share") => {
             let daemons = vec![
@@ -138,4 +146,17 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<(String, SessionId)> {
         bail!("{} was not shared: {}", skipped.host_id, skipped.error);
     }
     Ok((shared.link.to_string(), session_id))
+}
+
+/// Opens `daemon` to a new owner, as `herder claim` does, and returns the link it prints.
+fn own_link(daemon: &support::FakeDaemon) -> Result<String> {
+    let pairing: PairingUri = daemon.link.parse()?;
+    let (code, _) = daemon.auth.open_recovery()?;
+    let uri = OwnUri {
+        hosts: pairing.hosts,
+        fingerprint: pairing.fingerprint,
+        code,
+        name: Some("fake-own".into()),
+    };
+    Ok(uri.to_string())
 }

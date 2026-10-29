@@ -144,6 +144,10 @@ jobs:
           (sleep 3600 | target/debug/examples/fake_daemon --vault > "$RUNNER_TEMP/fake_vault.out" &)
           for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_vault.out" ] && break; sleep 1; done
           [ -s "$RUNNER_TEMP/fake_vault.out" ] || { echo "the fake vault did not start"; exit 1; }
+          # And a machine waiting for an owner, whose herder://own link the app approves.
+          (sleep 3600 | target/debug/examples/fake_daemon --own > "$RUNNER_TEMP/fake_own.out" &)
+          for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_own.out" ] && break; sleep 1; done
+          [ -s "$RUNNER_TEMP/fake_own.out" ] || { echo "the fake machine to own did not start"; exit 1; }
           # After a slow first boot the simulator can refuse to launch the test runner ("Unknown
           # application display identifier"), before any test runs. No pairing code is spent by
           # then, so try again, a few times. Waiting does not clear it, but a reboot does.
@@ -152,6 +156,7 @@ jobs:
             TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
             TEST_RUNNER_HERDER_WAITING_SESSION=$(sed -n 8p "$RUNNER_TEMP/fake_daemon.out") \
             TEST_RUNNER_HERDER_VAULT_LINK=$(head -1 "$RUNNER_TEMP/fake_vault.out") \
+            TEST_RUNNER_HERDER_OWN_LINK=$(head -1 "$RUNNER_TEMP/fake_own.out") \
               xcodebuild test-without-building -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
               -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
               2>&1 | tee "$RUNNER_TEMP/ios-tests.log"

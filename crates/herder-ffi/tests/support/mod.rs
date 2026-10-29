@@ -91,7 +91,8 @@ pub struct FakeDaemon {
     /// A pairing link with a fresh code, for a member, `guest`.
     pub member_link: String,
     /// Who is on the daemon, for a test to sign people in to it.
-    // The fake_daemon example, which shares this module, signs no one in: it prints the links.
+    // Each of the fake_daemon example and the tests, which share this module, uses only some
+    // of it.
     #[allow(dead_code)]
     pub auth: Arc<Auth>,
     /// Absolute path of a git repository with one commit, holding [`PROJECT_SKILL`].
