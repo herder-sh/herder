@@ -380,7 +380,11 @@ impl<B: Backend> Shared<B> {
 
     /// The paired user an agent acts as, and their role, for a turn whose prompt `by` sent:
     /// `by` itself, or the user a bot's person is linked to.
-    async fn sender(&self, by: UserId) -> Result<(UserId, Role), ErrorInfo> {
+    async fn sender(
+        &self,
+        by: UserId,
+        session_id: &SessionId,
+    ) -> Result<(UserId, Role), ErrorInfo> {
         if let Some(role) = self.auth.role(&by) {
             return Ok((by, role));
         }
@@ -393,8 +397,12 @@ impl<B: Backend> Shared<B> {
             None => None,
         };
         let Some((bot, person)) = person else {
+            let host = &self.host;
             return Err(forbidden(format!(
-                "this turn was sent by {by}, who is no longer paired with this daemon"
+                "this turn was sent by {by}, who isn't paired with {}; prompt the session yourself \
+                 in a herder app and its agents act for you: \
+                 herder://session?host={}&session={session_id}",
+                host.name, host.id
             )));
         };
         let name = &person.display_name;
@@ -565,7 +573,12 @@ impl<B: Backend> Control for AgentControl<B> {
         })
     }
 
-    fn command(&self, user_id: UserId, command: CommandBody) -> ControlFuture<CommandResult> {
+    fn command(
+        &self,
+        session_id: SessionId,
+        user_id: UserId,
+        command: CommandBody,
+    ) -> ControlFuture<CommandResult> {
         let shared = self.shared();
         Box::pin(async move {
             let shared = shared?;
@@ -612,7 +625,7 @@ impl<B: Backend> Control for AgentControl<B> {
                         .to_owned(),
                 });
             }
-            let (user_id, role) = shared.sender(user_id).await?;
+            let (user_id, role) = shared.sender(user_id, &session_id).await?;
             auth::authorize(role, &command)?;
             let command_id = CommandId::new(ulid::Ulid::generate().to_string());
             shared.run(&user_id, &command_id, command).await

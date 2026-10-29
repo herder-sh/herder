@@ -131,10 +131,16 @@ pub trait Control: Send + Sync + 'static {
     /// Every session, project and account on this host.
     fn overview(&self) -> ControlFuture<Overview>;
 
-    /// Runs `command` as `user_id`, with that user's role, as a client of theirs would. Refuses
-    /// commands that need a connection (terminals, and so adding or logging in accounts and
-    /// installing providers) or mint a pairing code, which an agent must never get.
-    fn command(&self, user_id: UserId, command: CommandBody) -> ControlFuture<CommandResult>;
+    /// Runs `command` as `user_id`, whom the agent of `session_id` acts for, with that user's
+    /// role, as a client of theirs would. Refuses commands that need a connection (terminals,
+    /// and so adding or logging in accounts and installing providers) or mint a pairing code,
+    /// which an agent must never get.
+    fn command(
+        &self,
+        session_id: SessionId,
+        user_id: UserId,
+        command: CommandBody,
+    ) -> ControlFuture<CommandResult>;
 }
 
 /// What [`Control`] returns.

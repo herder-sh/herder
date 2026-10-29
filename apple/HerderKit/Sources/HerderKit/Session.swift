@@ -67,6 +67,9 @@ struct SessionModel {
     var mode: PermissionMode?
     var parent: SessionId?
     var task: String?
+    /// The user its agents act for, as the machine picks them: whoever sent its latest prompt,
+    /// or who forked it, whose history before was prompted by another machine's users.
+    var actsFor: UserId?
     /// The title a user or the small model gave the session, from `title_changed`.
     var titled: String?
     var status: SessionStatus = .idle
@@ -150,6 +153,11 @@ struct SessionModel {
         timeline.append(TimelineEntry(seq: event.seq, at: at, text: Self.describe(event.body), by: event.by))
         updatedAt = at
         if case .itemAdded(let item) = event.body { itemTimes["\(item.turnId)/\(item.id)"] = at }
+        switch event.body {
+        case .itemAdded(let item): if case .userMessage = item.body, let by = event.by { actsFor = by }
+        case .sessionForked: actsFor = event.by
+        default: break
+        }
         switch event.body {
         case .sessionCreated(let repo, let worktree, let branch, let provider, let accountId, let model, let mode, let parent, _, let task, _, _, _):
             self.repo = repo

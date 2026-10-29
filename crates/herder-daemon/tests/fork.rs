@@ -297,9 +297,18 @@ impl HostDaemon {
         &self,
         command: CommandBody,
     ) -> Result<CommandResult, herder_protocol::ErrorInfo> {
+        self.handle_as(alice(), command).await
+    }
+
+    /// Runs `command` for `user_id`, a user of this host.
+    async fn handle_as(
+        &self,
+        user_id: UserId,
+        command: CommandBody,
+    ) -> Result<CommandResult, herder_protocol::ErrorInfo> {
         let sessions = self.sessions.clone();
         self.runtime
-            .run(async move { sessions.handle(alice(), command).await })
+            .run(async move { sessions.handle(user_id, command).await })
             .await
     }
 
@@ -1090,7 +1099,9 @@ async fn a_session_handed_off_mid_turn_runs_its_prompt_again_on_the_fork() {
         })
         .unwrap();
 
-    // A client relays the session to host B and hands it off there.
+    // A client relays the session to host B and hands it off there, as host B's user for the
+    // same person, where A's user is unknown.
+    let b_user = UserId::new("alice-on-b");
     let b = HostDaemon::start(
         &b_dir,
         "host-b",
@@ -1099,32 +1110,32 @@ async fn a_session_handed_off_mid_turn_runs_its_prompt_again_on_the_fork() {
         dead_vault(),
     )
     .await;
-    b.handle(CommandBody::UploadHistory {
-        session_id: session_id.clone(),
-        part: HistoryPart::Events {
-            events: a_journal.clone(),
-        },
-    })
-    .await
-    .unwrap();
-    b.handle(CommandBody::UploadHistory {
-        session_id: session_id.clone(),
-        part: HistoryPart::Image {
-            attachment_id: attachments[0].attachment_id.clone(),
-            image,
-        },
-    })
-    .await
-    .unwrap();
-    let forked = b
-        .handle(CommandBody::ForkSession {
+    let events = HistoryPart::Events {
+        events: a_journal.clone(),
+    };
+    let image = HistoryPart::Image {
+        attachment_id: attachments[0].attachment_id.clone(),
+        image,
+    };
+    for part in [events, image] {
+        let upload = CommandBody::UploadHistory {
             session_id: session_id.clone(),
-            account_id: None,
-            relay: Some(Relay {
-                host_id: HostId::new("host-a"),
-                project_id: project(),
-            }),
-        })
+            part,
+        };
+        b.handle_as(b_user.clone(), upload).await.unwrap();
+    }
+    let forked = b
+        .handle_as(
+            b_user.clone(),
+            CommandBody::ForkSession {
+                session_id: session_id.clone(),
+                account_id: None,
+                relay: Some(Relay {
+                    host_id: HostId::new("host-a"),
+                    project_id: project(),
+                }),
+            },
+        )
         .await
         .unwrap();
     let CommandResult::SessionForked {
@@ -1135,7 +1146,7 @@ async fn a_session_handed_off_mid_turn_runs_its_prompt_again_on_the_fork() {
     };
 
     // Unprompted, the fork fails the turn A had open as handed off, and runs its prompt again,
-    // with its image, by the user who sent it, on a CLI seeded with the transcript.
+    // with its image, by the user who forked it, on a CLI seeded with the transcript.
     let b_journal = b
         .journal_until(&fork, |body| {
             matches!(body, EventBody::TurnCompleted { turn_id, .. } if turn_id.as_str() == "b-turn-1")
@@ -1175,7 +1186,7 @@ async fn a_session_handed_off_mid_turn_runs_its_prompt_again_on_the_fork() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(rerun, ("b-turn-1", &Some(alice()), "Fix it.", &attachments));
+    assert_eq!(rerun, ("b-turn-1", &Some(b_user), "Fix it.", &attachments));
     let seeds = b.seeds.lock().unwrap().clone();
     assert_eq!(seeds, [["Fix it.", "On it."]]);
     let b_journal = b

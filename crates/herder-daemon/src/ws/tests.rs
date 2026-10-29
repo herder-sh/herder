@@ -1940,15 +1940,26 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
     };
     let via = |name: &str| UserId::new(format!("via trash-can, {name}"));
     // Past the owners-only check, a host with no vault keeps no secrets.
-    let ada = control.command(via("Ada"), put_secret()).await.unwrap_err();
+    let ada = control
+        .command(SessionId::new("s1"), via("Ada"), put_secret())
+        .await
+        .unwrap_err();
     assert_ne!(ada.code, ErrorCode::Forbidden, "{ada:?}");
     assert!(matches!(
-        control.command(via("Ada"), CommandBody::GetSettings).await,
+        control
+            .command(SessionId::new("s1"), via("Ada"), CommandBody::GetSettings)
+            .await,
         Ok(CommandResult::Settings { .. })
     ));
-    let bob = control.command(via("Bob"), put_secret()).await.unwrap_err();
+    let bob = control
+        .command(SessionId::new("s1"), via("Bob"), put_secret())
+        .await
+        .unwrap_err();
     assert_eq!(bob.code, ErrorCode::Forbidden);
-    let kim = control.command(via("Kim"), put_secret()).await.unwrap_err();
+    let kim = control
+        .command(SessionId::new("s1"), via("Kim"), put_secret())
+        .await
+        .unwrap_err();
     assert_eq!(kim.code, ErrorCode::Forbidden);
     assert_eq!(
         kim.message,
@@ -1956,12 +1967,18 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
          can link them in the bot's People"
     );
     let gone = control
-        .command(UserId::new("gone"), CommandBody::GetSettings)
+        .command(
+            SessionId::new("s1"),
+            UserId::new("gone"),
+            CommandBody::GetSettings,
+        )
         .await
         .unwrap_err();
     assert_eq!(
         gone.message,
-        "this turn was sent by gone, who is no longer paired with this daemon"
+        "this turn was sent by gone, who isn't paired with localhost; prompt the session \
+         yourself in a herder app and its agents act for you: \
+         herder://session?host=host&session=s1"
     );
 
     // Two people of one name share a link only when both have it.
@@ -1971,7 +1988,7 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
         ServerMessage::CommandAccepted { .. }
     ));
     let twin = control
-        .command(via("Ada"), CommandBody::GetSettings)
+        .command(SessionId::new("s1"), via("Ada"), CommandBody::GetSettings)
         .await
         .unwrap_err();
     assert_eq!(twin.code, ErrorCode::Forbidden);
@@ -1993,12 +2010,18 @@ async fn agents_run_commands_as_their_user_within_its_role() {
     let browse = || CommandBody::ListDirectory { path: "/".into() };
 
     assert!(matches!(
-        control.command(owner.clone(), browse()).await,
+        control
+            .command(SessionId::new("s1"), owner.clone(), browse())
+            .await,
         Ok(CommandResult::Directory { .. })
     ));
     assert!(matches!(
         control
-            .command(owner.clone(), CommandBody::GetSettings)
+            .command(
+                SessionId::new("s1"),
+                owner.clone(),
+                CommandBody::GetSettings
+            )
             .await,
         Ok(CommandResult::Settings { .. })
     ));
@@ -2006,7 +2029,10 @@ async fn agents_run_commands_as_their_user_within_its_role() {
 
     // A member's agent gets a member's rights only.
     for command in [browse(), CommandBody::GetSettings] {
-        let error = control.command(member.clone(), command).await.unwrap_err();
+        let error = control
+            .command(SessionId::new("s1"), member.clone(), command)
+            .await
+            .unwrap_err();
         assert_eq!(error.code, ErrorCode::Forbidden);
     }
 
@@ -2068,11 +2094,14 @@ async fn agents_run_commands_as_their_user_within_its_role() {
         },
     ];
     for command in refused {
-        let error = control.command(owner.clone(), command).await.unwrap_err();
+        let error = control
+            .command(SessionId::new("s1"), owner.clone(), command)
+            .await
+            .unwrap_err();
         assert_eq!(error.code, ErrorCode::Forbidden);
     }
     let gone = control
-        .command(UserId::new("gone"), browse())
+        .command(SessionId::new("s1"), UserId::new("gone"), browse())
         .await
         .unwrap_err();
     assert_eq!(gone.code, ErrorCode::Forbidden);

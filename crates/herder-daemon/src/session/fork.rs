@@ -22,8 +22,8 @@
 //! A turn the original had open is failed on the fork, its open approvals expired, as after a
 //! restart, but saying it was handed off. When a user's prompt opened it, that prompt, with its
 //! images and files, runs again on the fork right away, as failover retries a turn: queued `by` the
-//! same user, it starts the CLI seeded with the transcript, which holds the failed turn's
-//! partial items. A turn opened otherwise, by an agent's message or a follow-up,
+//! user who forked it, since the original's sender is a user of its own host, not of this one,
+//! it starts the CLI seeded with the transcript, which holds the failed turn's partial items. A turn opened otherwise, by an agent's message or a follow-up,
 //! which belong to the host they were sent to, leaves the fork `needs_you`. The original is not
 //! told: its client interrupts it.
 
@@ -431,7 +431,7 @@ impl SessionManager {
             *created_worktree = worktree.path.to_string_lossy().into_owned();
             branch.clone_from(&worktree.branch);
         }
-        let rerun = open_prompt(&events);
+        let rerun = open_prompt(&events, by.clone());
         let journal = &inner.journal;
         journal.import(events).await.map_err(internal)?;
         let body = EventBody::SessionForked {
@@ -590,9 +590,9 @@ impl SessionManager {
     }
 }
 
-/// The prompt a user sent for a turn `events` leave open, to run again; `None` when no turn
-/// is open, or an agent's message or a follow-up opened it.
-fn open_prompt(events: &[Event]) -> Option<QueuedPrompt> {
+/// The prompt a user sent for a turn `events` leave open, to run again `by` the user who
+/// forked them; `None` when no turn is open, or an agent's message or a follow-up opened it.
+fn open_prompt(events: &[Event], by: Option<UserId>) -> Option<QueuedPrompt> {
     let mut open = None;
     for event in events {
         match &event.body {
@@ -602,7 +602,7 @@ fn open_prompt(events: &[Event]) -> Option<QueuedPrompt> {
                         let prompt = QueuedPrompt {
                             prompt_id: actor::new_prompt_id(),
                             agent_message: None,
-                            by: event.by.clone(),
+                            by: by.clone(),
                             text: text.clone(),
                             attachments: attachments.clone(),
                             retry: false,
