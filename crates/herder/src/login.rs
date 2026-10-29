@@ -16,7 +16,7 @@ pub struct Args {
     /// A remote daemon's address, `host:port` [default: the daemon running on this machine].
     #[arg(value_name = "ADDRESS", requires = "fingerprint")]
     address: Option<String>,
-    /// SHA-256 of the remote daemon's certificate, as `herder pair` shows it there.
+    /// SHA-256 of the remote daemon's certificate, as the link `herder claim` shows there names it.
     #[arg(long, value_name = "HEX", requires = "address")]
     fingerprint: Option<String>,
     /// Config file of the local daemon, to find its data dir [default:
