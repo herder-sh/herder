@@ -10,13 +10,14 @@ version=$(cargo metadata --no-deps --format-version 1 |
   jq -r '.packages[] | select(.name == "herder") | .version')
 name="herder-app-$version-macos-arm64"
 derived=$(mktemp -d)
+entitlements=$(apple/scripts/adhoc-entitlements.sh)
 
 xcodegen generate --spec apple/project.yml
 xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
   -scheme herder-macOS -configuration Release -destination "generic/platform=macOS" \
   -derivedDataPath "$derived" COMPILER_INDEX_STORE_ENABLE=NO \
   MARKETING_VERSION="$version" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
-  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
+  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CODE_SIGN_ENTITLEMENTS="$entitlements"
 
 app="$derived/Build/Products/Release/herder.app"
 codesign --verify --strict --deep "$app"
