@@ -30,8 +30,10 @@ final class PhotoAttachUITests: XCTestCase {
         photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         app.buttons["Done"].tap()
 
+        // The picker hands the photo over out of process after it closes, which on a loaded CI
+        // simulator has taken past 15 seconds: the strip showed just after the wait gave up.
         let strip = app.descendants(matching: .any)["attachment-strip"].firstMatch
-        XCTAssertTrue(strip.waitForExistence(timeout: 15), "the picked photo was not attached")
+        XCTAssertTrue(strip.waitForExistence(timeout: 60), "the picked photo was not attached")
         app.buttons["Send"].tap()
         XCTAssertTrue(strip.waitForNonExistence(timeout: 10), "the photo did not go with the prompt")
         // The prompt, its photo's marker, queues behind the approval on the machine.
