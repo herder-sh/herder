@@ -281,6 +281,15 @@ impl Users {
 struct Window {
     code: String,
     expires: Instant,
+    /// Opened by `herder claim` on the machine: it takes an owner though the daemon has one.
+    recovery: bool,
+}
+
+impl Window {
+    /// Whether the window still takes an owner, on a daemon that has one or not.
+    fn takes_owner(&self, now: Instant, has_owner: bool) -> bool {
+        self.expires > now && (self.recovery || !has_owner)
+    }
 }
 
 /// A device waiting for an app of a person to approve its login.
@@ -787,19 +796,32 @@ impl Auth {
     /// Opens the window in which this daemon takes its first owner, for [`PAIRING_TTL`], with
     /// a fresh code; what `herder install` shows. Refused once the daemon has an owner.
     pub fn open_claim(&self) -> Result<(String, Timestamp)> {
+        self.open_window(false)
+    }
+
+    /// Opens the window in which this daemon takes a new owner though it has owners, for
+    /// [`PAIRING_TTL`], with a fresh code: what `herder claim` shows in a shell on the machine,
+    /// for someone who lost every device. Only the system user running the daemon reaches the
+    /// control socket that opens it, the same trust as `herder pair`.
+    pub fn open_recovery(&self) -> Result<(String, Timestamp)> {
+        self.open_window(true)
+    }
+
+    fn open_window(&self, recovery: bool) -> Result<(String, Timestamp)> {
         let mut state = self.lock();
-        if state.users.has_owner() {
+        if !recovery && state.users.has_owner() {
             bail!("this daemon has an owner already");
         }
         let code = random_code(SHORT_CODE_LEN, 3)?;
         state.claim = Some(Window {
             code: normalize(&code),
             expires: Instant::now() + PAIRING_TTL,
+            recovery,
         });
         let expires_at = Timestamp::now()
             .checked_add(PAIRING_TTL)
             .context("the claim would expire too far in the future")?;
-        info!("claim window opened");
+        info!(recovery, "claim window opened");
         Ok((code, expires_at))
     }
 
@@ -826,7 +848,7 @@ impl Auth {
             let claiming = state
                 .claim
                 .as_ref()
-                .is_some_and(|claim| claim.expires > now && !state.users.has_owner());
+                .is_some_and(|claim| claim.takes_owner(now, state.users.has_owner()));
             claiming || !state.invites.is_empty()
         };
         let creation = match creating {
@@ -908,14 +930,13 @@ impl Auth {
                 asserted.person_id
             }
             SignIn::ClaimOwnership { code, person } => {
-                let open = state
-                    .claim
-                    .as_ref()
-                    .is_some_and(|claim| claim.expires > now && claim.code == normalize(&code));
-                if !open || users.has_owner() {
+                let open = state.claim.as_ref().is_some_and(|claim| {
+                    claim.takes_owner(now, users.has_owner()) && claim.code == normalize(&code)
+                });
+                if !open {
                     return Err(forbidden(
                         "the code is wrong or expired, or this daemon has an owner already; \
-                         run `herder install` on it again for a new code",
+                         run `herder claim` on it for a new code",
                     ));
                 }
                 let proven = self.verify_new_person(&person)?;

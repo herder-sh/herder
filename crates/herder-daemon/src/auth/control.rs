@@ -72,6 +72,9 @@ pub enum Request {
     /// Open the window in which a daemon with no owner takes its first (`herder service
     /// install`).
     Own,
+    /// Open the window in which a daemon takes a new owner though it has owners (`herder
+    /// claim`), for someone who lost every device.
+    Claim,
 }
 
 /// The daemon's answer.
@@ -209,6 +212,21 @@ async fn answer(stream: UnixStream, auth: &Auth, daemon: &Daemon) -> Result<()> 
     Ok(())
 }
 
+/// The window `opened`, as a `herder://own` link names it.
+fn own(opened: anyhow::Result<(String, Timestamp)>, daemon: &Daemon) -> Response {
+    match opened {
+        Ok((code, expires_at)) => Response::Own(OwnInfo {
+            code,
+            expires_at,
+            fingerprint: daemon.fingerprint.clone(),
+            addresses: addresses(&daemon.listen),
+        }),
+        Err(err) => Response::Error {
+            message: format!("{err:#}"),
+        },
+    }
+}
+
 /// Forks as the daemon's first owner: only the system user running the daemon reaches the
 /// socket, and that is who paired as its owner.
 async fn fork(request: fork::Request, auth: &Auth, daemon: &Daemon) -> Response {
@@ -252,15 +270,8 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
             Err(err) => failed(err),
         },
         Request::Fork(request) => fork(request, auth, daemon).await,
-        Request::Own => match auth.open_claim() {
-            Ok((code, expires_at)) => Response::Own(OwnInfo {
-                code,
-                expires_at,
-                fingerprint: daemon.fingerprint.clone(),
-                addresses: addresses(&daemon.listen),
-            }),
-            Err(err) => failed(err),
-        },
+        Request::Own => own(auth.open_claim(), daemon),
+        Request::Claim => own(auth.open_recovery(), daemon),
         Request::ForgetHost { host } => match &daemon.vault {
             Some(admin) => match admin.forget_host(&host).await {
                 Ok(forgot) => Response::ForgotHost(forgot),
@@ -520,6 +531,37 @@ mod tests {
         assert!(message.contains("fork on a host"), "{message}");
         shutdown.cancel();
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn herder_claim_opens_the_owner_window_though_the_daemon_has_an_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let auth = Auth::open(tmp.path()).unwrap();
+        let daemon = Daemon {
+            fingerprint: "ab".repeat(32),
+            listen: vec!["127.0.0.1:7447".parse().unwrap()],
+            sessions: None,
+            vault: None,
+        };
+        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        auth.authenticate(
+            "fp-a",
+            Some(&code),
+            "test",
+            DeviceRole::Client,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let Response::Error { message } = handle(Request::Own, &auth, &daemon).await else {
+            panic!("a daemon with an owner opens no first-owner window");
+        };
+        assert!(message.contains("owner already"), "{message}");
+        let Response::Own(info) = handle(Request::Claim, &auth, &daemon).await else {
+            panic!("herder claim opens the window");
+        };
+        assert_eq!(info.code.len(), "XXX-XXX".len());
+        assert_eq!(info.fingerprint, daemon.fingerprint);
+        assert_eq!(info.addresses, ["127.0.0.1:7447"]);
     }
 
     #[tokio::test]
