@@ -2,42 +2,39 @@ use herder_protocol::{ErrorCode, Event, EventBody, QueuedPrompt, SessionId};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::auth::PAIRING_TTL;
 use crate::ws::Identity;
 
-/// A vault as the claim finds it: `tomas`, its owner, with a phone; `owner`, a user from
-/// before with a CLI device; and `trash-can-01`, a machine paired as a user, replicating.
+/// A vault as the claim finds it, recorded from a real one's `auth.json` with ids and
+/// fingerprints made up: `tomas`, its owner, with a phone; `owner`, a user from before with a
+/// CLI device; `trash-can-01`, a machine paired as a user, which replicates as a client to take
+/// handoffs; `draugelis`, a machine paired with `herder pair --host`; and `bob`, a member.
+const VAULT: &str = include_str!("fixtures/vault-auth.json");
+
 struct Vault {
     tmp: tempfile::TempDir,
     auth: Auth,
     tomas: Identity,
     owner: Identity,
     machine: Identity,
+    bob: Identity,
 }
 
 fn vault() -> Vault {
     let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(super::super::FILE), VAULT).unwrap();
     let auth = Auth::open(tmp.path()).unwrap();
-    let pair = |user: &str, fingerprint: &str| {
-        let code = auth.mint(user, None, PAIRING_TTL).unwrap().code;
-        auth.authenticate(
-            fingerprint,
-            Some(&code),
-            "herder-ios/0.1.0",
-            DeviceRole::Client,
-            &CancellationToken::new(),
-        )
-        .unwrap()
-    };
-    let tomas = pair("tomas", "fp-phone");
-    let owner = pair("owner", "fp-cli");
-    let machine = pair("trash-can-01", "fp-trash-can");
+    let tomas = connect(&auth, "fp-phone").unwrap();
+    let owner = connect(&auth, "fp-cli").unwrap();
+    let machine = connect(&auth, "fp-trash-can").unwrap();
+    let bob = connect(&auth, "fp-bob").unwrap();
+    assert_eq!(tomas.role, Role::Owner);
     Vault {
         tmp,
         auth,
         tomas,
         owner,
         machine,
+        bob,
     }
 }
 
@@ -105,9 +102,10 @@ fn a_claim_moves_the_owner_to_the_person_makes_machines_hosts_and_leaves_the_res
         &replicated,
     )
     .unwrap();
-    assert_eq!(claimed.hosts, ["trash-can-01"]);
+    // So is draugelis's, a host-only device.
+    assert_eq!(claimed.hosts, ["trash-can-01", "draugelis"]);
     let left: Vec<_> = claimed.leftovers.iter().map(|u| u.name.as_str()).collect();
-    assert_eq!(left, ["owner"]);
+    assert_eq!(left, ["owner", "bob"]);
     assert_eq!(v.auth.leftovers(), claimed.leftovers);
 
     // The owner's phone is the person's now, an owner still.
@@ -131,8 +129,16 @@ fn a_claim_moves_the_owner_to_the_person_makes_machines_hosts_and_leaves_the_res
 
     // The machine is listed with the hosts, not the users, and still replicates.
     let users: Vec<_> = v.auth.users().into_iter().map(|u| u.name).collect();
-    assert_eq!(users, ["owner"], "the owner is a person now");
+    assert_eq!(users, ["owner", "bob"], "the owner is a person now");
     assert!(connect(&v.auth, "fp-trash-can").is_ok());
+    let draugelis = v.auth.authenticate(
+        "fp-draugelis",
+        None,
+        "test",
+        DeviceRole::Host,
+        &CancellationToken::new(),
+    );
+    assert!(draugelis.is_ok());
 }
 
 #[test]
@@ -182,24 +188,13 @@ fn the_claim_survives_a_restart() {
         "the phone is the person's"
     );
     let left: Vec<_> = auth.leftovers().into_iter().map(|u| u.name).collect();
-    assert_eq!(left, ["owner"]);
+    assert_eq!(left, ["owner", "bob"]);
 }
 
 #[test]
 fn only_an_owner_claims_and_only_for_one_person() {
     let v = vault();
-    let bob = {
-        let code = v.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
-        v.auth
-            .authenticate(
-                "fp-bob",
-                Some(&code),
-                "test",
-                DeviceRole::Client,
-                &CancellationToken::new(),
-            )
-            .unwrap()
-    };
+    let bob = &v.bob;
     assert_eq!(bob.role, Role::Member);
     let refused = claim(&v.auth, &bob.user_id, &[], &[]).unwrap_err();
     assert_eq!(refused.code, ErrorCode::Forbidden);
@@ -229,17 +224,10 @@ fn only_an_owner_claims_and_only_for_one_person() {
 fn a_leftover_is_the_person_or_removed() {
     let v = vault();
     let bob = {
-        let code = v.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
         let connection = CancellationToken::new();
         let bob = v
             .auth
-            .authenticate(
-                "fp-bob",
-                Some(&code),
-                "test",
-                DeviceRole::Client,
-                &connection,
-            )
+            .authenticate("fp-bob", None, "test", DeviceRole::Client, &connection)
             .unwrap();
         (bob, connection)
     };
@@ -288,34 +276,6 @@ fn a_leftover_is_the_person_or_removed() {
             .code,
         ErrorCode::NotFound
     );
-}
-
-#[test]
-fn a_host_only_device_makes_a_machine_without_replicating_here() {
-    let tmp = tempfile::tempdir().unwrap();
-    let auth = Auth::open(tmp.path()).unwrap();
-    let code = auth.mint("tomas", None, PAIRING_TTL).unwrap().code;
-    let tomas = auth
-        .authenticate(
-            "fp-phone",
-            Some(&code),
-            "test",
-            DeviceRole::Client,
-            &CancellationToken::new(),
-        )
-        .unwrap();
-    let code = auth.mint_host("draugelis", PAIRING_TTL).unwrap().code;
-    auth.authenticate(
-        "fp-draugelis",
-        Some(&code),
-        "test",
-        DeviceRole::Host,
-        &CancellationToken::new(),
-    )
-    .unwrap();
-    let claimed = claim(&auth, &tomas.user_id, &[], &[]).unwrap();
-    assert_eq!(claimed.hosts, ["draugelis"]);
-    assert!(claimed.leftovers.is_empty());
 }
 
 #[test]
