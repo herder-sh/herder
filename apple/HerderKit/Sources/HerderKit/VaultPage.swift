@@ -297,10 +297,12 @@ private struct SecretRow: View {
 }
 
 /// Adds a secret to a set or replaces one: its name, description and value, typed into a
-/// secure field. The value is gone once saved, or refused.
+/// secure field or read from a file, which keeps a multi-line value such as a PEM key whole.
+/// The value is gone once saved, or refused.
 private struct SecretEditorSheet: View {
     @Bindable var editor: SecretEditor
     @Environment(\.dismiss) private var dismiss
+    @State private var choosingFile = false
 
     var body: some View {
         SheetScaffold(title: editor.replacing ? "Replace \(editor.name)" : "Add Secret",
@@ -316,19 +318,15 @@ private struct SecretEditorSheet: View {
                     .accessibilityIdentifier("secret-description")
             }
             Field(label: "Value") {
-                SecureField("Value", text: $editor.value.text)
-                    .textFieldStyle(.plain)
-                    .font(Theme.mono)
-                    .foregroundStyle(Theme.text)
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
-                    .padding(12)
-                    .frame(minHeight: 44)
-                    .background(.card, in: .rect(cornerRadius: Theme.corner))
-                    .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
-                    .accessibilityIdentifier("secret-value")
+                HStack(spacing: 8) {
+                    if let file = editor.file {
+                        fromFile(file)
+                    } else {
+                        valueField
+                    }
+                    PillButton(title: "Add from file…") { choosingFile = true }
+                        .accessibilityIdentifier("secret-from-file")
+                }
             }
             if let error = editor.error {
                 Text(error).font(.footnote).foregroundStyle(Theme.failure)
@@ -344,6 +342,42 @@ private struct SecretEditorSheet: View {
             .disabled(editor.sending)
             .accessibilityIdentifier("secret-save")
         }
+        .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.item]) { result in
+            if case .success(let url) = result { editor.read(url) }
+        }
+    }
+
+    /// The file the value was read from, never the value, with a way to drop it.
+    private func fromFile(_ file: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "doc.text").foregroundStyle(Theme.secondary)
+            Text("From \(file) (\(editor.value.text.utf8.count) B)")
+                .font(.subheadline).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 0)
+            IconButton(symbol: "xmark", help: "Type a Value Instead") { editor.clearFile() }
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+        .accessibilityIdentifier("secret-file")
+    }
+
+    /// A typed value, in a secure field, which takes one line.
+    private var valueField: some View {
+        SecureField("Value", text: $editor.value.text)
+            .textFieldStyle(.plain)
+            .font(Theme.mono)
+            .foregroundStyle(Theme.text)
+            .autocorrectionDisabled()
+            #if os(iOS)
+            .textInputAutocapitalization(.never)
+            #endif
+            .padding(12)
+            .frame(minHeight: 44)
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
+            .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+            .accessibilityIdentifier("secret-value")
     }
 }
 

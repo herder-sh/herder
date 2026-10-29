@@ -1932,19 +1932,36 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
 
     // A turn Ada prompted acts as the owner she is linked to; Bob's as a member; Kim's as no one.
     let control = &daemon.control;
-    let put_secret = || CommandBody::PutSecret {
+    let list_secrets = || CommandBody::ListSecrets;
+    let via = |name: &str| UserId::new(format!("via trash-can, {name}"));
+    // Past the owners-only check, a host with no vault keeps no secrets.
+    let ada = control
+        .command(SessionId::new("s1"), via("Ada"), list_secrets())
+        .await
+        .unwrap_err();
+    assert_ne!(ada.code, ErrorCode::Forbidden, "{ada:?}");
+    // But no agent handles a secret's value, an owner's turn's neither.
+    let value = CommandBody::PutSecret {
         set: "prod".into(),
         name: "API_KEY".into(),
         description: "The API key".into(),
         value: herder_protocol::SecretValue::new("s3cret").unwrap(),
     };
-    let via = |name: &str| UserId::new(format!("via trash-can, {name}"));
-    // Past the owners-only check, a host with no vault keeps no secrets.
-    let ada = control
-        .command(SessionId::new("s1"), via("Ada"), put_secret())
+    let refused = control
+        .command(SessionId::new("s1"), via("Ada"), value)
         .await
         .unwrap_err();
-    assert_ne!(ada.code, ErrorCode::Forbidden, "{ada:?}");
+    assert_eq!(refused.code, ErrorCode::Forbidden);
+    assert!(refused.message.contains("store_secret"), "{refused:?}");
+    let take = CommandBody::GetSecretToStore {
+        session_id: SessionId::new("s1"),
+        approval_id: herder_protocol::ApprovalId::new("secret-1"),
+    };
+    let refused = control
+        .command(SessionId::new("s1"), via("Ada"), take)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::Forbidden);
     assert!(matches!(
         control
             .command(SessionId::new("s1"), via("Ada"), CommandBody::GetSettings)
@@ -1952,12 +1969,12 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
         Ok(CommandResult::Settings { .. })
     ));
     let bob = control
-        .command(SessionId::new("s1"), via("Bob"), put_secret())
+        .command(SessionId::new("s1"), via("Bob"), list_secrets())
         .await
         .unwrap_err();
     assert_eq!(bob.code, ErrorCode::Forbidden);
     let kim = control
-        .command(SessionId::new("s1"), via("Kim"), put_secret())
+        .command(SessionId::new("s1"), via("Kim"), list_secrets())
         .await
         .unwrap_err();
     assert_eq!(kim.code, ErrorCode::Forbidden);

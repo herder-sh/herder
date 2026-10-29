@@ -80,6 +80,8 @@ struct PendingRequest: Hashable, Identifiable {
     var note: String?
     /// The session's other requests, answered after this one.
     var more = 0
+    /// For an agent's `store_secret`, what to store: Allow puts it on the vault.
+    var secret: SecretStoreRequest?
     var step: Step?
 }
 

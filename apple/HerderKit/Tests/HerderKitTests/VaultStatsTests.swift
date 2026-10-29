@@ -103,7 +103,7 @@ struct VaultStatsTests {
             running.key: running.model([created(), .sessionStatusChanged(status: .running, retryAt: nil)]),
             asking.key: asking.model([
                 created(), .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "s",
-                                              routedTo: .user, reason: nil),
+                                              routedTo: .user, reason: nil, secret: nil),
             ]),
         ]
         let stats = try #require(VaultStats(machine: machine, sessions: sessions, now: now))

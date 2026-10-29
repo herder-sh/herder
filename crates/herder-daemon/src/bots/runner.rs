@@ -1645,13 +1645,18 @@ fn asked(session_id: &SessionId, body: &EventBody) -> Option<(String, Post)> {
             approval_id,
             summary,
             routed_to: Route::User,
+            secret,
             ..
         } => Some((
             approval_id.to_string(),
             Post::Approval {
                 session_id: session_id.clone(),
                 approval_id: approval_id.clone(),
-                summary: summary.clone(),
+                // A chat can deny it, but only an owner's app stores the value on the vault.
+                summary: match secret {
+                    Some(_) => format!("{summary}; an owner allows this in the herder app"),
+                    None => summary.clone(),
+                },
                 resolved: None,
             },
         )),

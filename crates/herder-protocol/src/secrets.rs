@@ -16,6 +16,15 @@
 //! vault records each fetch ([`SecretAccess`]), never the value. Hosts keep fetched values in
 //! memory only, and hand a session's to its command as environment variables.
 //!
+//! An agent stores a secret without seeing it with `store_secret`: the host reads a file on
+//! its own machine and asks for approval ([`SecretStoreRequest`]). An owner allows it from an
+//! app, which takes the value from the host once
+//! ([`CommandBody::GetSecretToStore`](crate::CommandBody::GetSecretToStore)), puts it on the
+//! vault with `put_secret`, as the owner, and tells the host
+//! ([`CommandBody::ConfirmSecretStored`](crate::CommandBody::ConfirmSecretStored)). That is the
+//! only result carrying a value, of a host's own file, to an owner of the host; it is never
+//! journaled nor kept.
+//!
 //! On a host, a secret is named `NAME` when exactly one set granted to the host has it, and
 //! `set/NAME` otherwise ([`SecretRef`]); the environment variable is `NAME` either way.
 
@@ -165,6 +174,26 @@ impl JsonSchema for SecretRef {
             "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[A-Z_][A-Z0-9_]*$"
         })
     }
+}
+
+/// What an agent asked to store as a secret with `store_secret`, as its approval request
+/// shows it: where the host read the value, and where it is to go. Never the value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretStoreRequest {
+    /// The file on the host the value was read from, as the agent named it.
+    pub path: String,
+    /// The value's size in bytes.
+    pub bytes: u64,
+    /// The first 8 hex digits of the value's SHA-256, to tell values apart without them.
+    pub fingerprint: String,
+    /// The set the agent asked for; the owner who allows it may pick another.
+    pub set: String,
+    /// The secret's name, as [`is_valid_secret_name`] accepts it.
+    pub name: String,
+    /// What it is for, on one line.
+    pub description: String,
+    /// Whether the host deletes the file once the owner confirms the vault stored it.
+    pub delete_file_after: bool,
 }
 
 /// A secret, without its value.

@@ -100,7 +100,7 @@ import Testing
             var events = [script.event(created()), script.event(.titleChanged(title: session.0, source: .auto))]
             if session.3 {
                 events.append(script.event(.approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i",
-                                                              summary: "Run kubectl", routedTo: .user, reason: nil)))
+                                                              summary: "Run kubectl", routedTo: .user, reason: nil, secret: nil)))
             }
             fleet.applyForTesting(SessionUpdate(events: events, streaming: []), to: script.key)
         }

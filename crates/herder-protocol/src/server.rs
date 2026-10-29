@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AccountId, AgentMessage, Bytes, CommandId, DaemonSettings, DeviceId, Event, FailoverTotal,
     HostId, HostResources, Item, ItemId, Project, ProjectId, PromptId, Provider, SecretAccess,
-    SecretInfo, SecretSet, Seq, SessionId, SessionStatus, SessionUsage, TerminalId, Timestamp,
-    UsagePeriod, UsageTotal, UserId,
+    SecretInfo, SecretSet, SecretValue, Seq, SessionId, SessionStatus, SessionUsage, TerminalId,
+    Timestamp, UsagePeriod, UsageTotal, UserId,
 };
 
 /// A daemon-to-client message.
@@ -660,6 +660,11 @@ pub enum CommandResult {
         sets: Vec<SecretSet>,
         /// Every secret, ordered by set, then name.
         secrets: Vec<SecretInfo>,
+    },
+    /// The value an agent's `store_secret` read, answering `get_secret_to_store`.
+    SecretToStore {
+        /// The value, for the owner's app to put on the vault.
+        value: SecretValue,
     },
     /// The bots this daemon's host holds, answering `list_bots`.
     Bots {

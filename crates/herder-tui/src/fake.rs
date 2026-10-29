@@ -429,6 +429,7 @@ pub fn approval(id: &str, summary: &str) -> EventBody {
         summary: summary.to_owned(),
         routed_to: herder_protocol::Route::User,
         reason: None,
+        secret: None,
     }
 }
 
@@ -1063,6 +1064,7 @@ pub fn chat_approval() -> App {
             summary: "$ rm -rf target/".to_owned(),
             routed_to: herder_protocol::Route::User,
             reason: None,
+            secret: None,
         },
     ];
     feed(

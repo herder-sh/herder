@@ -468,6 +468,8 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::SetPermissionMode { session_id, .. }
         | CommandBody::AnswerApproval { session_id, .. }
         | CommandBody::AnswerQuestion { session_id, .. }
+        | CommandBody::GetSecretToStore { session_id, .. }
+        | CommandBody::ConfirmSecretStored { session_id, .. }
         | CommandBody::SwitchAccount { session_id, .. }
         | CommandBody::SwitchProvider { session_id, .. }
         | CommandBody::RenameSession { session_id, .. }

@@ -261,6 +261,7 @@ impl ToolHandler for TaskTools {
                 ToolCall::Overview(OverviewInput {}) => success(manager.overview(caller).await),
                 ToolCall::Command(input) => success(manager.command(caller, input).await),
                 ToolCall::Secrets(SecretsInput {}) => success(manager.list_secrets().await),
+                ToolCall::StoreSecret(input) => success(manager.store_secret(caller, input).await),
                 ToolCall::Remember(input) => success(manager.remember(caller, input).await),
                 ToolCall::Forget(input) => success(manager.forget(caller, input).await),
             };
@@ -294,7 +295,10 @@ impl ToolHandler for TaskTools {
 pub(super) fn no_vault() -> SecretError {
     SecretError {
         code: SecretErrorCode::NoVault,
-        message: "this host is not linked to a vault, so it has no secrets".into(),
+        message:
+            "this host is not linked to a vault with Secrets on, so it has no secrets; an owner \
+         links it to one in the herder app, on the machine's page under Secrets"
+                .into(),
         secret: None,
         candidates: Vec::new(),
     }
@@ -328,7 +332,7 @@ fn tool_internal(message: impl Into<String>) -> ToolError {
 }
 
 /// A session command's failure as a tool error.
-fn tool_error(error: ErrorInfo) -> ToolError {
+pub(super) fn tool_error(error: ErrorInfo) -> ToolError {
     use herder_protocol::ErrorCode as Command;
     let code = match error.code {
         Command::NotFound => ErrorCode::NotFound,
@@ -395,7 +399,8 @@ impl SessionManager {
     async fn list_secrets(&self) -> Result<SecretsOutput, ToolError> {
         let unavailable = |message: String| ToolError::new(ErrorCode::Unavailable, message);
         let secrets = self.inner.secrets.get().ok_or_else(|| {
-            unavailable("this host is not linked to a vault, so it has no secrets".into())
+            unavailable("this host is not linked to a vault with Secrets on, so it has no secrets; an owner \
+         links it to one in the herder app, on the machine's page under Secrets".into())
         })?;
         let listed = secrets
             .list()
@@ -804,7 +809,7 @@ impl SessionManager {
     }
 
     /// The calling session; it holds a token, so it exists.
-    async fn caller(&self, caller: &SessionId) -> Result<Session, ToolError> {
+    pub(super) async fn caller(&self, caller: &SessionId) -> Result<Session, ToolError> {
         self.inner
             .journal
             .session(caller.clone())

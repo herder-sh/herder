@@ -745,6 +745,30 @@ pub enum CommandBody {
     /// value; owners only. Answered with `secrets`. It changes nothing, so a resend is answered
     /// afresh. Refused with `unsupported` on a daemon that is not a vault.
     ListSecrets,
+    /// On a host, the value an agent's `store_secret` read for the open approval
+    /// `approval_id` of `session_id`, for an owner's app to put on the vault; owners only.
+    /// Answered with `secret_to_store`; it is neither journaled nor kept, and changes nothing,
+    /// so a resend is answered afresh. Refused with `not_found` once the approval is not open
+    /// or is not a `store_secret` one.
+    GetSecretToStore {
+        /// Session that asked.
+        session_id: SessionId,
+        /// The open `store_secret` approval.
+        approval_id: ApprovalId,
+    },
+    /// On a host, allow an agent's `store_secret` once the owner's app has put its value on
+    /// the host's vault, in `set`: the approval resolves as allowed, the host deletes the file
+    /// when the agent asked, and the agent learns the secret is stored. Owners only. Answered
+    /// with `applied`; refused with `not_found` once the approval is not open or is not a
+    /// `store_secret` one.
+    ConfirmSecretStored {
+        /// Session that asked.
+        session_id: SessionId,
+        /// The open `store_secret` approval.
+        approval_id: ApprovalId,
+        /// The set the value was put in, which the owner may have picked over the agent's.
+        set: String,
+    },
     /// On a vault, list the latest fetches of secrets by hosts, newest first, at most
     /// [`crate::MAX_SECRET_AUDIT_ENTRIES`]; owners only. Answered with `secret_audit`. It
     /// changes nothing, so a resend is answered afresh. Refused with `unsupported` on a daemon

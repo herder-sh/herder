@@ -57,7 +57,7 @@ struct TranscriptTests {
         var model = script.model([
             created(), .turnStarted(turnId: "t1"),
             item("c1", .toolCall(name: "Bash", input: "{}")),
-            .approvalRequested(approvalId: "a1", turnId: "t1", toolCallId: "c1", summary: "Run command?", routedTo: .user, reason: nil),
+            .approvalRequested(approvalId: "a1", turnId: "t1", toolCallId: "c1", summary: "Run command?", routedTo: .user, reason: nil, secret: nil),
             .approvalResolved(approvalId: "a1", decision: .allow, answeredBy: .user),
             item("a", .assistantMessage(text: "Waiting for the command.")),
         ])

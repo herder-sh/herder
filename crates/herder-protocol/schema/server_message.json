@@ -1649,6 +1649,24 @@
           ]
         },
         {
+          "description": "The value an agent's `store_secret` read, answering `get_secret_to_store`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "secret_to_store"
+            },
+            "value": {
+              "description": "The value, for the owner's app to put on the vault.",
+              "$ref": "#/$defs/SecretValue"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
           "description": "The bots this daemon's host holds, answering `list_bots`.",
           "type": "object",
           "properties": {
@@ -2356,6 +2374,17 @@
               "description": "Who is asked first; a user can always answer, whatever the route.",
               "$ref": "#/$defs/Route",
               "default": "user"
+            },
+            "secret": {
+              "description": "For an agent's `store_secret`, what to store; always routed to the user. Only an\nowner allows it, from an app: `get_secret_to_store`, then `put_secret` on the\nhost's vault, then `confirm_secret_stored`. `answer_approval` may only deny it.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SecretStoreRequest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "summary": {
               "description": "One-line description of what the agent wants to do.",
@@ -4301,6 +4330,55 @@
         "name",
         "hosts"
       ]
+    },
+    "SecretStoreRequest": {
+      "description": "What an agent asked to store as a secret with `store_secret`, as its approval request\nshows it: where the host read the value, and where it is to go. Never the value.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "The value's size in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "delete_file_after": {
+          "description": "Whether the host deletes the file once the owner confirms the vault stored it.",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "What it is for, on one line.",
+          "type": "string"
+        },
+        "fingerprint": {
+          "description": "The first 8 hex digits of the value's SHA-256, to tell values apart without them.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The secret's name, as [`is_valid_secret_name`] accepts it.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The file on the host the value was read from, as the agent named it.",
+          "type": "string"
+        },
+        "set": {
+          "description": "The set the agent asked for; the owner who allows it may pick another.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "fingerprint",
+        "set",
+        "name",
+        "description",
+        "delete_file_after"
+      ]
+    },
+    "SecretValue": {
+      "description": "A secret's value. Its `Debug` never shows it, so logging a message that carries one leaks\nnothing; read it with [`Self::expose`].",
+      "type": "string"
     },
     "ServerHello": {
       "description": "Opening message of the daemon on a connection.",

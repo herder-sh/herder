@@ -31,10 +31,10 @@ struct ListsTests {
         _ = newer.event(.turnStarted(turnId: "x"))
         let sessions = [
             older.key: older.model([
-                created(), .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "old", routedTo: .user, reason: nil),
+                created(), .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "old", routedTo: .user, reason: nil, secret: nil),
             ]),
             newer.key: newer.model([
-                created(), .approvalRequested(approvalId: "b", turnId: "t", toolCallId: "i", summary: "new", routedTo: .user, reason: nil),
+                created(), .approvalRequested(approvalId: "b", turnId: "t", toolCallId: "i", summary: "new", routedTo: .user, reason: nil, secret: nil),
             ]),
         ]
         let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B"])], sessions: sessions)
@@ -80,7 +80,7 @@ struct ListsTests {
             older.key: older.model([created(task: "First", parent: "01A")]),
             younger.key: younger.model([
                 created(task: "Second", parent: "01A"),
-                .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "s", routedTo: .user, reason: nil),
+                .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "s", routedTo: .user, reason: nil, secret: nil),
             ]),
             other.key: other.model([created(task: "Solo")]),
         ]

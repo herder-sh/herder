@@ -150,6 +150,55 @@ struct SecretsTests {
         #expect(listed.map(\.name) == ["devbox", "Laptop", nil])
     }
 
+    @Test func addFromFileKeepsAMultiLineValueWhole() async throws {
+        let pem = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMG\r\nByqGSM49AgEG\n-----END PRIVATE KEY-----\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("AuthKey_\(UUID()).p8")
+        try Data(pem.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let vault = Vault()
+        let editor = SecretEditor(secrets: vault.model(), set: "prod")
+        editor.name = "ASC_PRIVATE_KEY"
+        editor.description = "App Store Connect API key"
+
+        editor.read(url)
+        #expect(editor.file == url.lastPathComponent)
+        #expect(editor.value.text == pem)
+        #expect(await editor.save())
+        #expect(vault.changes == [
+            .putSecret(set: "prod", name: "ASC_PRIVATE_KEY", description: "App Store Connect API key", value: pem),
+        ])
+        #expect(editor.file == nil)
+        #expect(editor.value.isEmpty)
+    }
+
+    @Test func addFromFileRefusesWhatCannotBeASecret() throws {
+        let dir = FileManager.default.temporaryDirectory
+        let binary = dir.appendingPathComponent("binary-\(UUID())")
+        try Data([0xff, 0xfe, 0xfd]).write(to: binary)
+        let large = dir.appendingPathComponent("large-\(UUID())")
+        try Data(repeating: 0x6b, count: 64 * 1024 + 1).write(to: large)
+        defer {
+            try? FileManager.default.removeItem(at: binary)
+            try? FileManager.default.removeItem(at: large)
+        }
+        let editor = SecretEditor(secrets: Vault().model(), set: "prod")
+        editor.read(binary)
+        #expect(editor.file == nil)
+        #expect(editor.error?.contains("not text") == true)
+        editor.read(large)
+        #expect(editor.file == nil)
+        #expect(editor.error?.contains("64 KiB") == true)
+    }
+
+    @Test func aStoreSecretCardAsksWhatGoesWhere() {
+        let secret = SecretStoreRequest(
+            path: "~/Downloads/AuthKey_9WJ.p8", bytes: 257, fingerprint: "2bb80d53", set: "personal",
+            name: "ASC_PRIVATE_KEY", description: "App Store Connect API key", deleteFileAfter: true)
+        #expect(SecretStoreAsk.question(secret, set: "personal", vault: "herder-vault-0")
+            == "Store ~/Downloads/AuthKey_9WJ.p8 (257 B) as ASC_PRIVATE_KEY in personal on herder-vault-0?")
+        #expect(SecretStoreAsk.detail(secret) == "Fingerprint 2bb80d53 · the file is deleted once the vault stored it")
+    }
+
     @Test func secretNamesAreEnvironmentVariables() {
         #expect(VaultSecrets.isValidSecretName("API_KEY"))
         #expect(VaultSecrets.isValidSecretName("_X1"))
