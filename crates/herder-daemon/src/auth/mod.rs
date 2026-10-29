@@ -742,6 +742,9 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
         command,
         CommandBody::SetUserRole { .. }
             | CommandBody::RevokeDevice { .. }
+            | CommandBody::Invite { .. }
+            | CommandBody::SetPersonRole { .. }
+            | CommandBody::RevokePerson { .. }
             | CommandBody::PairDevice { user: Some(_), .. }
             | CommandBody::PairDevice { role: Some(_), .. }
     );

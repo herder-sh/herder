@@ -12,9 +12,9 @@ use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Account, AccountId, AwsDeviceCode, AwsProfile, ClientHello, ClientMessage, Command,
     CommandBody, CommandId, CommandResult, Cursor, DaemonSettings, DeviceId, ErrorCode, ErrorInfo,
-    Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION, PermissionMode, Provider,
-    Role, Seq, ServerHello, ServerMessage, SessionHead, SessionId, Terminal, TerminalPurpose,
-    TurnId, UserId, UserInfo,
+    Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION, PasskeyAssertion,
+    PermissionMode, PersonId, Provider, Role, Seq, ServerHello, ServerMessage, SessionHead,
+    SessionId, Terminal, TerminalPurpose, TurnId, UserId, UserInfo,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -2092,6 +2092,26 @@ async fn agents_run_commands_as_their_user_within_its_role() {
             device_id: DeviceId::new("d1"),
             assertion: None,
         },
+        CommandBody::PasskeyChallenge,
+        CommandBody::ListPeople,
+        CommandBody::Invite {
+            role: Role::Member,
+            assertion: assertion(),
+        },
+        CommandBody::SetPersonRole {
+            person_id: PersonId::new("p1"),
+            role: Role::Owner,
+            person: None,
+            assertion: assertion(),
+        },
+        CommandBody::RevokePerson {
+            person_id: PersonId::new("p1"),
+            assertion: assertion(),
+        },
+        CommandBody::ApproveLogin {
+            code: "K7Q-4PD".into(),
+            assertion: assertion(),
+        },
         CommandBody::PairVaultHost {
             host_name: "devbox".into(),
         },
@@ -2320,4 +2340,19 @@ async fn an_owner_signs_the_host_in_to_aws() {
         .send(&ClientMessage::Sync { token: "t".into() })
         .await;
     assert!(matches!(member.recv().await, ServerMessage::Synced { .. }));
+}
+
+/// An assertion no daemon would accept: agents are refused before one is read.
+fn assertion() -> Box<PasskeyAssertion> {
+    Box::new(PasskeyAssertion {
+        id: "AA".into(),
+        raw_id: "AA".into(),
+        response: herder_protocol::AssertionResponse {
+            client_data_json: "e30".into(),
+            authenticator_data: "AA".into(),
+            signature: "AA".into(),
+            user_handle: None,
+        },
+        kind: "public-key".into(),
+    })
 }

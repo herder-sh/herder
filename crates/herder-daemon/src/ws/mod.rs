@@ -605,6 +605,12 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::ListUsers
                     | CommandBody::SetUserRole { .. }
                     | CommandBody::RevokeDevice { .. }
+                    | CommandBody::PasskeyChallenge
+                    | CommandBody::ListPeople
+                    | CommandBody::Invite { .. }
+                    | CommandBody::SetPersonRole { .. }
+                    | CommandBody::RevokePerson { .. }
+                    | CommandBody::ApproveLogin { .. }
                     | CommandBody::PairVaultHost { .. }
                     | CommandBody::InstallVault
                     | CommandBody::LinkLocalVault
