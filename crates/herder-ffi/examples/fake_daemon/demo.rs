@@ -29,7 +29,8 @@
 //! ([`MCP_SERVERS`]): stdio and HTTP ones, a disabled one and one for a single project. Their
 //! skill library is one repository ([`SKILLS`]), with one skill turned off on `studio`.
 //!
-//! The user owns `devbox` and `studio` and is a member on `laptop`, which someone else owns.
+//! The user, Tomas, owns `devbox` and `studio` and is a member on `laptop`, which Pat and Kim
+//! own. Their teammates Sam and Kim are users of the machines too ([`TEAMMATES`]).
 //! `devbox` backs up to a vault, `vault`, which the user owns too.
 //!
 //! [`Demo::start`] returns once all of it is in place, with the link a device paired with every
@@ -446,6 +447,17 @@ const MACHINES: &[(&str, u32, u64, &[Account])] = &[
 
 /// The machine the demo's user is a member on: another user owns it.
 const MEMBER_ON: &str = "laptop";
+/// The name the demo's devices pair as.
+const USER: &str = "tomas";
+/// Who else uses each machine: Pat and Kim own `laptop`, where the user is a member.
+const TEAMMATES: &[(&str, &str, Role)] = &[
+    ("devbox", "sam", Role::Member),
+    ("devbox", "kim", Role::Member),
+    ("studio", "sam", Role::Member),
+    ("laptop", "pat", Role::Owner),
+    ("laptop", "kim", Role::Owner),
+    ("laptop", "sam", Role::Member),
+];
 
 /// The machine that backs up to the demo's vault.
 const BACKS_UP: &str = "devbox";
@@ -572,6 +584,16 @@ impl Demo {
             }
         }
         Ok(scenes)
+    }
+
+    /// The users of the machine `host`, as its People list shows them.
+    pub fn users(&self, host: &str) -> Result<Vec<herder_protocol::UserInfo>> {
+        let daemon = self
+            .daemons
+            .iter()
+            .find(|daemon| daemon.id.as_str() == host)
+            .with_context(|| format!("no machine {host}"))?;
+        Ok(Auth::open(&daemon.data_dir)?.users())
     }
 }
 
@@ -1008,7 +1030,7 @@ impl DemoVault {
         let link = PairingUri {
             hosts: vec![address.clone()],
             fingerprint: fingerprint.clone(),
-            code: auth.mint("sam", None, PAIRING_TTL)?.code,
+            code: auth.mint(USER, None, PAIRING_TTL)?.code,
         }
         .to_string();
         let host = Host {
@@ -1036,20 +1058,21 @@ impl DemoVault {
     }
 }
 
-/// Writes the users file a daemon opens with `pat` as its owner, as though they had paired,
-/// so the demo's user can be paired as a member. The file's shape is the daemon's own
-/// (`herder_daemon::auth`).
-fn owned_by_another(dir: &Path) -> Result<()> {
-    let users = json!({
-        "version": 1,
-        "users": [User {
-            user_id: UserId::new("pat"),
-            name: "pat".into(),
-            role: Role::Owner,
+/// Writes the users file a daemon opens with, as though the machine's [`TEAMMATES`] had
+/// paired, so the People page has a team to show. With no owner among them, the demo's user
+/// becomes the owner when they pair.
+fn teammates(dir: &Path, machine: &str) -> Result<()> {
+    let users: Vec<User> = TEAMMATES
+        .iter()
+        .filter(|(on, _, _)| *on == machine)
+        .map(|(_, name, role)| User {
+            user_id: UserId::new(*name),
+            name: (*name).into(),
+            role: *role,
             created_at: Timestamp::now(),
-        }],
-        "devices": [],
-    });
+        })
+        .collect();
+    let users = json!({ "version": 1, "users": users, "devices": [] });
     std::fs::write(dir.join("auth.json"), serde_json::to_vec(&users)?)?;
     Ok(())
 }
@@ -1082,9 +1105,7 @@ impl Daemon {
             repos.insert(*repo, clone(origins, repo, &dir.join("src"))?);
         }
         let tls = Tls::load_or_create(&dir.join("tls"), name)?;
-        if name == MEMBER_ON {
-            owned_by_another(dir)?;
-        }
+        teammates(dir, name)?;
         let auth = Arc::new(Auth::open(dir)?);
         let hub = Arc::new(Hub::default());
         let scripted = Arc::new(Scripted {
@@ -1254,7 +1275,7 @@ impl Daemon {
         let link = PairingUri {
             hosts: vec![listener.local_addr()?.to_string()],
             fingerprint: tls.fingerprint().to_owned(),
-            code: auth.mint("sam", role, PAIRING_TTL)?.code,
+            code: auth.mint(USER, role, PAIRING_TTL)?.code,
         };
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
         let (binaries, recipes) = clis(dir, name)?;

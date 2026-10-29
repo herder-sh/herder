@@ -114,6 +114,7 @@ struct MachinesView: View {
                     VStack(spacing: 10) {
                         skillsLink
                         providersLink
+                        peopleLink
                         integrationsLink
                     }
                 }
@@ -340,6 +341,25 @@ struct MachinesView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("providers-link")
+    }
+
+    private var peopleLink: some View {
+        Button { pages.open(.people(nil)) } label: {
+            Card(padding: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: "person.2.circle").foregroundStyle(Theme.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("People").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                        Text("Who can use each machine").font(.caption).foregroundStyle(Theme.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("people-link")
     }
 
     private var integrationsLink: some View {
