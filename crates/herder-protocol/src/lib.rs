@@ -66,10 +66,10 @@ pub use secrets::{
     is_valid_secret_purpose, is_valid_secret_set_name,
 };
 pub use server::{
-    Account, AwsDeviceCode, AwsProfile, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo,
-    FailoverSettings, FleetHost, HostReplication, HostUsage, LinkedVault, ProviderStatus,
-    QueuedPrompt, Role, ServerHello, ServerMessage, SessionHead, Terminal, TerminalPurpose,
-    UsageWindow, UserDevice, UserInfo, VaultStatus, VaultVolume,
+    Account, ApprovalRequest, AwsDeviceCode, AwsProfile, CommandResult, DirectoryEntry, ErrorCode,
+    ErrorInfo, FailoverSettings, FleetHost, HostReplication, HostUsage, LinkedVault,
+    ProviderStatus, QueuedPrompt, Role, ServerHello, ServerMessage, SessionHead, Terminal,
+    TerminalPurpose, UsageWindow, UserDevice, UserInfo, VaultStatus, VaultVolume,
 };
 pub use settings::{
     BackupSettings, DaemonSettings, FollowUpSettings, HERDER_MCP_SERVER, LogFormat, LogSettings,

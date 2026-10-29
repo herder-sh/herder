@@ -28,9 +28,9 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::{FuturesUnordered, SplitSink};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
-    ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor, ErrorInfo,
-    FailoverSettings, PROTOCOL_VERSION, PasskeyChallenge, PasskeyCreation, Project, Role,
-    ServerHello, ServerMessage, SessionId, TerminalId, Timestamp,
+    ApprovalRequest, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
+    Cursor, ErrorInfo, FailoverSettings, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge,
+    PasskeyCreation, Project, Role, ServerHello, ServerMessage, SessionId, TerminalId, Timestamp,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
@@ -131,6 +131,8 @@ pub(crate) struct Supervisor {
     config_dir: PathBuf,
     /// Names the client in daemon logs.
     client: String,
+    /// Whether the client signs passkey assertions, as its hello says.
+    passkey: bool,
     /// Held across each offline cache save, from taking the state to writing it.
     saving: Mutex<()>,
     /// Whether the offline cache was read into the state; it is, before the first connect.
@@ -169,6 +171,8 @@ struct State {
     streams: HashMap<TerminalId, Attached>,
     /// Whether something the offline cache holds changed since the last save.
     dirty: bool,
+    /// Requests of this person's devices without a passkey, open on the machine.
+    approvals: Vec<ApprovalRequest>,
 }
 
 impl State {
@@ -283,6 +287,9 @@ struct Attached {
     /// Answers the first attach, for [`Supervisor::attach_terminal`]; `None` once answered,
     /// and for a terminal this client opened.
     ready: Option<oneshot::Sender<Result<(), ErrorInfo>>>,
+    /// Goes with the first attach, which the person this client acts as may need for it;
+    /// later re-attaches need none.
+    assertion: Option<Box<PasskeyAssertion>>,
 }
 
 struct Log {
@@ -308,6 +315,7 @@ impl Supervisor {
         saved: SavedMachine,
         config_dir: PathBuf,
         client: String,
+        passkey: bool,
         changed: Arc<watch::Sender<u64>>,
         stop: CancellationToken,
     ) -> Result<Arc<Self>, Error> {
@@ -327,6 +335,7 @@ impl Supervisor {
             stop,
             config_dir,
             client,
+            passkey,
             saving: Mutex::new(()),
             loaded: watch::Sender::new(false),
         });
@@ -489,6 +498,7 @@ impl Supervisor {
             skills: state.skills.clone(),
             session_skills: state.session_skills.clone(),
             update: state.update.clone(),
+            approvals: state.approvals.clone(),
         }
     }
 
@@ -567,10 +577,11 @@ impl Supervisor {
     }
 
     /// Attaches to `terminal_id` and streams it, once a connection is up; one stream per
-    /// terminal per client.
+    /// terminal per client. `assertion` goes with the first attach.
     pub(crate) async fn attach_terminal(
         self: &Arc<Self>,
         terminal_id: TerminalId,
+        assertion: Option<Box<PasskeyAssertion>>,
     ) -> Result<TerminalStream, Error> {
         let (events, receiver) = mpsc::unbounded_channel();
         let (ready, answer) = oneshot::channel();
@@ -586,6 +597,7 @@ impl Supervisor {
                 size: None,
                 sent: false,
                 ready: Some(ready),
+                assertion,
             };
             state.streams.insert(terminal_id.clone(), attached);
         }
@@ -645,7 +657,7 @@ impl Supervisor {
                 let _ = attached.events.send(TerminalEvent::Reattached);
             }
             attached.sent = true;
-            messages.push(attach(terminal_id, attaching));
+            messages.push(attach(terminal_id, attached.assertion.take(), attaching));
             if let Some((cols, rows)) = attached.size {
                 messages.push(once(CommandBody::ResizeTerminal {
                     terminal_id: terminal_id.clone(),
@@ -669,7 +681,7 @@ impl Supervisor {
             return None;
         }
         attached.sent = true;
-        Some(attach(terminal_id, attaching))
+        Some(attach(terminal_id, attached.assertion.take(), attaching))
     }
 
     /// Settles the daemon's answer to an attach: a refused one ends the stream.
@@ -725,6 +737,7 @@ impl Supervisor {
                 size,
                 sent: true,
                 ready: None,
+                assertion: None,
             };
             self.lock().streams.insert(terminal_id, attached);
         }
@@ -811,6 +824,7 @@ impl Supervisor {
             state.skills = None;
             state.session_skills.clear();
             state.update = None;
+            state.approvals.clear();
             state.address = None;
             state.quality.disconnected();
         }
@@ -859,6 +873,7 @@ impl Supervisor {
             resume: Vec::new(),
             pairing_code: None,
             sign_in: false,
+            passkey: self.passkey,
         };
         Some(Box::pin(async move {
             connect(&better, &fingerprint, &device, hello)
@@ -927,6 +942,17 @@ impl Supervisor {
             }
             ServerMessage::VaultStatus(status) => {
                 state.vault = Some(status);
+                return self.notify_after(state);
+            }
+            ServerMessage::ApprovalRequest(request) => {
+                state
+                    .approvals
+                    .retain(|open| open.request_id != request.request_id);
+                state.approvals.push(request);
+                return self.notify_after(state);
+            }
+            ServerMessage::ApprovalClosed { request_id } => {
+                state.approvals.retain(|open| open.request_id != request_id);
                 return self.notify_after(state);
             }
             ServerMessage::SkillsStatus(status) => {
@@ -1122,6 +1148,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
             resume: supervisor.cursors(),
             pairing_code: None,
             sign_in: false,
+            passkey: supervisor.passkey,
         };
         let connected = tokio::select! {
             () = supervisor.stop.cancelled() => return,
@@ -1543,7 +1570,8 @@ fn answered(
         };
         let early = early.remove(terminal_id).unwrap_or_default();
         if supervisor.opened(terminal_id.clone(), events, size, early) {
-            message = Some(attach(terminal_id, attaching));
+            // This device opened it, so the daemon needs no assertion to attach it.
+            message = Some(attach(terminal_id, None, attaching));
         }
     }
     if let Err(Ok(CommandResult::TerminalOpened { terminal_id })) = reply.send(result) {
@@ -1556,6 +1584,7 @@ fn answered(
 /// An attach of `terminal_id` with a fresh id, recorded in `attaching`.
 fn attach(
     terminal_id: &TerminalId,
+    assertion: Option<Box<PasskeyAssertion>>,
     attaching: &mut HashMap<CommandId, TerminalId>,
 ) -> ClientMessage {
     let id = new_command_id();
@@ -1564,7 +1593,7 @@ fn attach(
         id,
         body: CommandBody::AttachTerminal {
             terminal_id: terminal_id.clone(),
-            assertion: None,
+            assertion,
         },
     })
 }

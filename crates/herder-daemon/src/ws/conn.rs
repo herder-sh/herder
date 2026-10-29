@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
-    ClientMessage, Command, CommandId, Cursor, ErrorCode, ErrorInfo, EventBody,
+    ClientMessage, Command, CommandId, CommandResult, Cursor, ErrorCode, ErrorInfo, EventBody,
     PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello, ServerMessage, SignIn,
 };
 use serde::Deserialize;
@@ -88,6 +88,7 @@ pub(super) async fn serve<B: Backend>(
         debug!(%peer, "connection failed: {err:#}");
     }
     shared.hub.disconnect(&outbox);
+    shared.approvals.disconnect(&outbox);
     shared.terminals.disconnect(&outbox);
     outbox.finish();
     let _ = writer.await;
@@ -174,6 +175,8 @@ async fn read<B: Backend>(
         herder_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
     }));
     shared.hub.connect(outbox, identity.role);
+    let person = shared.auth.resolve(&identity.user_id);
+    shared.approvals.connect(&person, outbox, hello.passkey);
     match shared.backend.sessions().await {
         Ok(sessions) => shared.hub.initial_sessions(outbox, sessions),
         Err(err) => {
@@ -223,6 +226,14 @@ async fn read<B: Backend>(
                     });
                     continue;
                 }
+                let waiting = match shared.approval(&identity, &hello.client, hello.passkey, &body)
+                {
+                    Ok(waiting) => waiting,
+                    Err(error) => {
+                        outbox.push(answered(id, Err(error)));
+                        continue;
+                    }
+                };
                 let key = (identity.user_id.clone(), id.clone());
                 let query = session::changes_nothing(&body);
                 let apply = {
@@ -230,24 +241,29 @@ async fn read<B: Backend>(
                     let identity = identity.clone();
                     let outbox = Arc::clone(outbox);
                     let id = id.clone();
-                    async move { shared.apply(&identity, &outbox, &id, body).await }
+                    let approved = waiting.is_some();
+                    async move { shared.apply(&identity, &outbox, &id, body, approved).await }
                 };
+                if let Some(waiting) = waiting {
+                    // The device waits for its person without holding up its other messages.
+                    let shared = Arc::clone(shared);
+                    let outbox = Arc::clone(outbox);
+                    tokio::spawn(async move {
+                        let answer = match shared.approvals.wait(waiting).await {
+                            Ok(()) => shared.commands.apply(key, apply).await,
+                            Err(error) => Err(error),
+                        };
+                        outbox.push(answered(id, answer));
+                    });
+                    continue;
+                }
                 // A query's answer is not kept: it may be large, and asking again is harmless.
                 let answer = if query {
                     apply.await
                 } else {
                     shared.commands.apply(key, apply).await
                 };
-                outbox.push(match answer {
-                    Ok(result) => ServerMessage::CommandAccepted {
-                        command_id: id,
-                        result,
-                    },
-                    Err(error) => ServerMessage::CommandRejected {
-                        command_id: id,
-                        error,
-                    },
-                });
+                outbox.push(answered(id, answer));
             }
             // A command this build cannot read, such as one from a newer client, is refused
             // as that command, so the client does not wait for an answer forever.
@@ -439,6 +455,14 @@ async fn sign_in<B: Backend>(
     shared
         .auth
         .authenticate(device, None, client, auth::DeviceRole::Client, cancel)
+}
+
+/// The answer to command `command_id`.
+fn answered(command_id: CommandId, answer: Result<CommandResult, ErrorInfo>) -> ServerMessage {
+    match answer {
+        Ok(result) => ServerMessage::CommandAccepted { command_id, result },
+        Err(error) => ServerMessage::CommandRejected { command_id, error },
+    }
 }
 
 /// Answers a failed hello with an error; the connection then closes.

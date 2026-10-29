@@ -927,6 +927,7 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
         }],
         pairing_code: None,
         sign_in: false,
+        passkey: false,
     });
     let reads = [
         hello,

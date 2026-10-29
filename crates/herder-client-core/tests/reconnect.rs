@@ -29,8 +29,8 @@ use herder_daemon::{Hub, session};
 use herder_protocol::{
     AccountId, AwsDeviceCode, AwsProfile, CommandBody, CommandResult, Constraint, Container,
     ContainerState, ErrorCode, Event, EventBody, FailoverSettings, HostId, HostResources, ItemBody,
-    NewPerson, PermissionMode, PersonPasskey, Provider, Role, SessionId, SessionStatus,
-    SessionUsage, SignIn, TerminalPurpose, TurnId,
+    NewPerson, PasskeyChallenge, PermissionMode, PersonPasskey, Provider, Role, SessionId,
+    SessionStatus, SessionUsage, SignIn, TerminalPurpose, TurnId,
 };
 use herder_store::Store;
 use tokio::net::{TcpListener, TcpStream};
@@ -2109,4 +2109,164 @@ async fn an_app_claims_a_machine_and_approves_a_terminal_that_logs_in() {
     assert_eq!(machine.host_id, claimed.host_id);
     wait_connection(&terminal, connected).await;
     assert_eq!(terminal.machines()[0].role, Some(Role::Owner));
+}
+
+/// The test passkey as an app's Face ID, counting its prompts; it holds the passkey once the
+/// app claims the machine with it.
+#[derive(Default)]
+struct FaceId {
+    passkey: std::sync::Mutex<Option<Arc<Authenticator>>>,
+    prompts: AtomicU64,
+}
+
+impl herder_client_core::Authenticator for FaceId {
+    fn assert(&self, _: HostId, challenge: PasskeyChallenge) -> herder_client_core::Assertion {
+        self.prompts.fetch_add(1, Ordering::SeqCst);
+        let passkey = self.passkey.lock().unwrap().clone();
+        Box::pin(async move {
+            Ok(passkey
+                .expect("the app claimed the machine")
+                .assert(&challenge))
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_app_signs_with_face_id_and_approves_what_a_terminal_asks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let hosts = vec![daemon.addr.to_string()];
+    let face_id = Arc::new(FaceId::default());
+    let app = Client::open_with_passkey(
+        tmp.path().join("app").display().to_string(),
+        "herder-app/0".into(),
+        face_id.clone(),
+    )
+    .unwrap();
+    let (claim, _) = daemon.auth.open_claim().unwrap();
+    let pending = app
+        .sign_in(hosts.clone(), daemon.fingerprint.clone())
+        .await
+        .unwrap();
+    let (passkey, registration) = Authenticator::register(
+        "tomas",
+        &pending.registration().expect("a fresh machine offers one"),
+    );
+    let passkey = Arc::new(passkey);
+    *face_id.passkey.lock().unwrap() = Some(Arc::clone(&passkey));
+    let host = pending
+        .finish(SignIn::ClaimOwnership {
+            code: claim,
+            person: NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Register { registration },
+            },
+        })
+        .await
+        .unwrap()
+        .host_id;
+    wait_connection(&app, connected).await;
+
+    // Opening a terminal asks Face ID once; attaching the terminal it opened asks nothing.
+    let session = create_session(&app, &host, repo(&tmp.path().join("repo"))).await;
+    let stream = tokio::time::timeout(
+        TIMEOUT,
+        app.open_terminal(host.clone(), session.clone(), 80, 24),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(face_id.prompts.load(Ordering::SeqCst), 1);
+    drop(stream);
+
+    // A terminal logs in, approved by the app.
+    let terminal = Client::open(
+        tmp.path().join("terminal").display().to_string(),
+        "herder-tui/0".into(),
+    )
+    .unwrap();
+    let (shown, code) = tokio::sync::oneshot::channel();
+    let login = {
+        let (terminal, hosts) = (terminal.clone(), hosts.clone());
+        let fingerprint = daemon.fingerprint.clone();
+        tokio::spawn(async move {
+            terminal
+                .log_in(hosts, fingerprint, move |code, _| {
+                    let _ = shown.send(code.to_owned());
+                })
+                .await
+        })
+    };
+    let code = tokio::time::timeout(TIMEOUT, code).await.unwrap().unwrap();
+    let CommandResult::PasskeyChallenge { challenge, .. } = app
+        .send(host.clone(), CommandBody::PasskeyChallenge)
+        .await
+        .unwrap()
+    else {
+        panic!("expected a passkey challenge");
+    };
+    let approve = CommandBody::ApproveLogin {
+        code,
+        assertion: Box::new(passkey.assert(&challenge)),
+    };
+    app.send(host.clone(), approve).await.unwrap();
+    tokio::time::timeout(TIMEOUT, login)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    wait_connection(&terminal, connected).await;
+
+    // It has no passkey: what needs one waits for the app, which approves it with Face ID.
+    let asked = {
+        let (terminal, host, session) = (terminal.clone(), host.clone(), session.clone());
+        tokio::spawn(async move { terminal.open_terminal(host, session, 80, 24).await })
+    };
+    wait_machine(&app, |machine| !machine.approvals.is_empty()).await;
+    let request = app.machines()[0].approvals[0].clone();
+    assert_eq!(
+        (request.action.as_str(), request.client.as_str()),
+        ("Open a terminal", "herder-tui/0")
+    );
+    app.approve_action(host.clone(), request.request_id)
+        .await
+        .unwrap();
+    assert_eq!(face_id.prompts.load(Ordering::SeqCst), 2);
+    tokio::time::timeout(TIMEOUT, asked)
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("the approved terminal opens");
+    wait_machine(&app, |machine| machine.approvals.is_empty()).await;
+
+    // Refused on the app, the terminal is told so.
+    let asked = {
+        let (terminal, host) = (terminal.clone(), host.clone());
+        let change = CommandBody::CreateSecretSet {
+            set: "prod".into(),
+            assertion: None,
+        };
+        tokio::spawn(async move { terminal.send(host, change).await })
+    };
+    wait_machine(&app, |machine| !machine.approvals.is_empty()).await;
+    let request = app.machines()[0].approvals[0].clone();
+    app.refuse_action(host.clone(), request.request_id)
+        .await
+        .unwrap();
+    let refused = tokio::time::timeout(TIMEOUT, asked).await.unwrap().unwrap();
+    let Err(Error::Rejected { info }) = refused else {
+        panic!("expected the refused change rejected, got {refused:?}");
+    };
+    assert_eq!(info.code, ErrorCode::Forbidden);
+    assert_eq!(
+        face_id.prompts.load(Ordering::SeqCst),
+        2,
+        "refusing needs no Face ID"
+    );
 }

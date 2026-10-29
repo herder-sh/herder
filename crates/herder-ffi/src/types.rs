@@ -10,24 +10,24 @@ use herder_client_core::{
 };
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
-    ApprovalId, ApprovalOutcome, AssertionResponse, Attachment, AttachmentId, AwsDeviceCode,
-    AwsProfile, BackupSettings, Bot, BotDefaults, BotError, BotFact, BotId, BotKind, BotMemory,
-    BotPlace, BotState, BotStatus, BotUser, Bytes, ChannelBinding, CiStatus, CommandBody,
-    CommandResult, Constraint, Container, ContainerState, DaemonSettings, DeviceId, DirectoryEntry,
-    ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FactId, FailoverSettings,
-    FailoverTotal, FleetHost, FollowUp, FollowUpReason, FollowUpSettings, HistoryPart, HostId,
-    HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LeftoverDecision,
-    LibrarySkill, LinkedVault, LogFormat, LogSettings, McpServerSettings, McpTransport, Mergeable,
-    NewPerson, PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey,
-    PasskeyRegistration, PermissionMode, PersonCard, PersonId, PersonInfo, PersonPasskey, PrState,
-    Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary,
-    ProviderReload, ProviderStatus, PullRequest, QuestionId, QueuedPrompt, RegistrationResponse,
-    Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef,
-    SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId, SessionOrigin,
-    SessionSkill, SessionStatus, SessionUsage, SignIn, SkillFile, SkillReload, SkillSource,
-    SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings,
-    TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal,
-    UsageWindow, UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
+    ApprovalId, ApprovalOutcome, ApprovalRequest, AssertionResponse, Attachment, AttachmentId,
+    AwsDeviceCode, AwsProfile, BackupSettings, Bot, BotDefaults, BotError, BotFact, BotId, BotKind,
+    BotMemory, BotPlace, BotState, BotStatus, BotUser, Bytes, ChannelBinding, CiStatus,
+    CommandBody, CommandResult, Constraint, Container, ContainerState, DaemonSettings, DeviceId,
+    DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FactId,
+    FailoverSettings, FailoverTotal, FleetHost, FollowUp, FollowUpReason, FollowUpSettings,
+    HistoryPart, HostId, HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId,
+    LeftoverDecision, LibrarySkill, LinkedVault, LogFormat, LogSettings, McpServerSettings,
+    McpTransport, Mergeable, NewPerson, PasskeyAssertion, PasskeyChallenge, PasskeyCreation,
+    PasskeyKey, PasskeyRegistration, PermissionMode, PersonCard, PersonId, PersonInfo,
+    PersonPasskey, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId,
+    Provider, ProviderBinary, ProviderReload, ProviderStatus, PullRequest, QuestionId,
+    QueuedPrompt, RegistrationResponse, Relay, ResourceSettings, ReviewStatus, Role, Route,
+    SecretAccess, SecretInfo, SecretRef, SecretSet, SecretStoreRequest, SecretValue, SessionHead,
+    SessionId, SessionOrigin, SessionSkill, SessionStatus, SessionUsage, SignIn, SkillFile,
+    SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink,
+    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen,
+    UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -137,6 +137,8 @@ pub struct Machine {
     pub session_skills: HashMap<SessionId, Vec<SessionSkill>>,
     #[uniffi(default = None)]
     pub update: Option<UpdateStage>,
+    #[uniffi(default)]
+    pub approvals: Vec<ApprovalRequest>,
 }
 
 #[uniffi::remote(Enum)]
@@ -774,6 +776,13 @@ pub enum CommandBody {
         decision: LeftoverDecision,
         assertion: Box<PasskeyAssertion>,
     },
+    ApproveAction {
+        request_id: String,
+        assertion: Box<PasskeyAssertion>,
+    },
+    RefuseAction {
+        request_id: String,
+    },
     ApproveLogin {
         code: String,
         assertion: Box<PasskeyAssertion>,
@@ -1201,6 +1210,14 @@ pub struct UserInfo {
 }
 
 #[uniffi::remote(Record)]
+pub struct ApprovalRequest {
+    pub request_id: String,
+    pub action: String,
+    pub client: String,
+    pub expires_at: Timestamp,
+}
+
+#[uniffi::remote(Record)]
 pub struct PersonInfo {
     pub person_id: PersonId,
     pub name: String,
@@ -1376,6 +1393,7 @@ pub enum ErrorCode {
     Unsupported,
     ReadOnly,
     Internal,
+    AssertionRequired,
 }
 
 // Machine lists

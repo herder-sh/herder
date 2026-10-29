@@ -10,6 +10,19 @@ use crate::{
     SessionId, SessionStatus, SessionUsage, TerminalId, Timestamp, UsagePeriod, UsageTotal, UserId,
 };
 
+/// What a device without a passkey asks its person to approve; see `approval_request`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ApprovalRequest {
+    /// The request.
+    pub request_id: String,
+    /// What the device asks to do, e.g. `Open a terminal`.
+    pub action: String,
+    /// The device asking, by its client, e.g. `herder-tui/0.17.0`.
+    pub client: String,
+    /// When the request expires, refused.
+    pub expires_at: Timestamp,
+}
+
 /// A daemon-to-client message.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -25,6 +38,17 @@ pub enum ServerMessage {
         /// `register`; absent while the daemon takes neither a claim nor an invite.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         registration: Option<PasskeyCreation>,
+    },
+    /// A device of the person this connection acts for, one that holds no passkey such as a
+    /// terminal signed in with `herder login`, asks to do something that needs one: approve it
+    /// with `approve_action` and an assertion, or refuse it with `refuse_action`. Sent to the
+    /// person's connections that said `passkey` in their hello, and again, after hello, to one
+    /// that connects while the request is open.
+    ApprovalRequest(ApprovalRequest),
+    /// An `approval_request` was approved, refused or expired, on this or another device.
+    ApprovalClosed {
+        /// The request.
+        request_id: String,
     },
     /// Answers `start_login`: the code the device shows, as a `herder://login` link and as
     /// text, for an app of the person to approve with `approve_login`. `hello` follows once it
@@ -811,4 +835,7 @@ pub enum ErrorCode {
     ReadOnly,
     /// The daemon failed.
     Internal,
+    /// The caller is a person and this needs a fresh assertion by their passkey: ask for a
+    /// `passkey_challenge` and send the command again with one.
+    AssertionRequired,
 }

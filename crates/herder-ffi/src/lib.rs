@@ -29,8 +29,8 @@ use herder_client_core::{
     SharedLink, TerminalEvent,
 };
 use herder_protocol::{
-    AccountId, AwsProfile, CommandBody, CommandResult, ErrorInfo, HostId, PasskeyChallenge,
-    PasskeyCreation, SessionId, SignIn, TerminalId,
+    AccountId, AwsProfile, CommandBody, CommandResult, ErrorInfo, HostId, PasskeyAssertion,
+    PasskeyChallenge, PasskeyCreation, SessionId, SignIn, TerminalId,
 };
 use tokio::runtime::{Handle, Runtime};
 use tokio_util::task::AbortOnDropHandle;
@@ -93,6 +93,69 @@ impl From<client_core::Error> for HerderError {
             client_core::Error::Local { message } => Self::Local { detail: message },
             client_core::Error::Closed => Self::Closed,
         }
+    }
+}
+
+impl From<uniffi::UnexpectedUniFFICallbackError> for HerderError {
+    fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::Local {
+            detail: format!("the app's passkey callback failed: {}", error.reason),
+        }
+    }
+}
+
+/// Signs passkey challenges for the person a client acts as: the app's passkey API, asking
+/// for Face ID. Pass one to [`Client::open_with_passkey`]; client-core's `Authenticator`.
+#[uniffi::export(with_foreign)]
+#[async_trait::async_trait]
+pub trait PasskeyAuthenticator: Send + Sync {
+    /// Signs `challenge`, which the machine `host_id` minted, asking the user; throws when
+    /// they cancel, which fails the command that needed it.
+    async fn assert(
+        &self,
+        host_id: HostId,
+        challenge: PasskeyChallenge,
+    ) -> Result<PasskeyAssertion, HerderError>;
+}
+
+/// The app's [`PasskeyAuthenticator`] as client-core's `Authenticator`.
+struct Authenticator(Arc<dyn PasskeyAuthenticator>);
+
+impl client_core::Authenticator for Authenticator {
+    fn assert(&self, host_id: HostId, challenge: PasskeyChallenge) -> client_core::Assertion {
+        let app = Arc::clone(&self.0);
+        Box::pin(async move {
+            app.assert(host_id, challenge)
+                .await
+                .map_err(|error| client_core::Error::Local {
+                    message: error.to_string(),
+                })
+        })
+    }
+}
+
+impl Client {
+    /// Starts the client's runtime, and the client `open` makes within it.
+    fn start(
+        open: impl FnOnce() -> Result<client_core::Client, client_core::Error>,
+    ) -> Result<Arc<Self>, HerderError> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("herder")
+            .enable_all()
+            .build()
+            .map_err(|error| HerderError::Local {
+                detail: format!("cannot start the async runtime: {error}"),
+            })?;
+        let inner = {
+            let _entered = runtime.enter();
+            open()?
+        };
+        Ok(Arc::new(Self {
+            inner,
+            handle: runtime.handle().clone(),
+            _runtime: ClientRuntime(Some(runtime)),
+        }))
     }
 }
 
@@ -266,23 +329,47 @@ impl Client {
     /// `client` names the client in daemon logs.
     #[uniffi::constructor]
     pub fn open(config_dir: String, client: String) -> Result<Arc<Self>, HerderError> {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("herder")
-            .enable_all()
-            .build()
-            .map_err(|error| HerderError::Local {
-                detail: format!("cannot start the async runtime: {error}"),
-            })?;
-        let inner = {
-            let _entered = runtime.enter();
-            client_core::Client::open(config_dir, client)?
-        };
-        Ok(Arc::new(Self {
-            inner,
-            handle: runtime.handle().clone(),
-            _runtime: ClientRuntime(Some(runtime)),
-        }))
+        Self::start(|| client_core::Client::open(config_dir, client))
+    }
+
+    /// Opens the profile as [`Client::open`] does, for an app that signs passkey assertions
+    /// with `authenticator`: terminal and secret commands that need one ask it, and the
+    /// machines list what the person's devices without a passkey ask to approve.
+    #[uniffi::constructor]
+    pub fn open_with_passkey(
+        config_dir: String,
+        client: String,
+        authenticator: Arc<dyn PasskeyAuthenticator>,
+    ) -> Result<Arc<Self>, HerderError> {
+        let authenticator = Arc::new(Authenticator(authenticator));
+        Self::start(|| client_core::Client::open_with_passkey(config_dir, client, authenticator))
+    }
+
+    /// Approves `request_id`, one of a machine's `approvals`, asking the authenticator for an
+    /// assertion: the device that asked does what it asked, once.
+    pub async fn approve_action(
+        &self,
+        host_id: HostId,
+        request_id: String,
+    ) -> Result<(), HerderError> {
+        let client = self.inner.clone();
+        call(&self.handle, async move {
+            client.approve_action(host_id, request_id).await
+        })
+        .await
+    }
+
+    /// Refuses `request_id`, one of a machine's `approvals`.
+    pub async fn refuse_action(
+        &self,
+        host_id: HostId,
+        request_id: String,
+    ) -> Result<(), HerderError> {
+        let client = self.inner.clone();
+        call(&self.handle, async move {
+            client.refuse_action(host_id, request_id).await
+        })
+        .await
     }
 
     /// Every paired machine, in pairing order.

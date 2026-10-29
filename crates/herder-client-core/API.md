@@ -88,6 +88,9 @@ Rules the surface keeps, and `public_api` checks the object rules:
   plain functions.
 - `Client::log_in` takes a closure and is Rust-only, for `herder login`; the FFI layer does
   not export it. An app signs in with `Client::sign_in` and approves logins with `send`.
+- The one callback is the `Authenticator` an app passes to `Client::open_with_passkey`: the
+  platform's passkey API, which only the app can call. The FFI layer exports it as a foreign
+  trait, `PasskeyAuthenticator`, with an async `assert`.
 
 The `auth` module is Rust-only plumbing (TLS device keys and certificate pinning) for whatever
 else connects to a daemon as a device: the vault's replicator in `herder-daemon`, and tests.
@@ -145,6 +148,7 @@ everything stops once the last clone is dropped.
 | Method | Does |
 | ------ | ---- |
 | `open(config_dir: String, client: String) -> Result<Client, Error>` | Opens the profile in `config_dir`, starts from its offline cache, and starts connecting to every saved machine. `client` names the client in daemon logs. |
+| `open_with_passkey(config_dir: String, client: String, authenticator: Arc<dyn Authenticator>) -> Result<Client, Error>` | `open` for a client that signs passkey assertions, as the apps do with Face ID. See [Passkeys](#passkeys). |
 | `machines() -> Vec<Machine>` | Every paired machine, in pairing order. |
 | `changes() -> Changes` | Notifications that `machines()` changed. |
 | `async pair(link: String) -> Result<Vec<PairResult>, Error>` | Pairs with every machine a `herder://pair` link names, at once, and saves each that paired; one `PairResult` per machine, in the link's order. Fails only with `InvalidLink`. |
@@ -167,6 +171,8 @@ everything stops once the last clone is dropped.
 | `async list_aws_profiles(host_id: HostId) -> Result<Vec<AwsProfile>, Error>` | The profiles of the machine's `~/.aws/config`, in its order; owners only. Empty when it has none. |
 | `async aws_sso_login(host_id: HostId, profile: String, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Signs the machine in to AWS IAM Identity Center with a device code, in a terminal; owners only. `unsupported` without the AWS CLI, `bad_request` for an unknown profile. |
 | `async attach_terminal(host_id: HostId, terminal_id: TerminalId) -> Result<TerminalStream, Error>` | Attaches to an open terminal; owners only, one stream per terminal per client. |
+| `async approve_action(host_id: HostId, request_id: String) -> Result<(), Error>` | Approves one of a machine's `approvals` with an assertion the `Authenticator` signs: the device that asked does what it asked, once. `Local` without an authenticator, `not_found` once the request is closed. |
+| `async refuse_action(host_id: HostId, request_id: String) -> Result<(), Error>` | Refuses one of a machine's `approvals`; the device that asked is told so. |
 | `async close_terminal(host_id: HostId, terminal_id: TerminalId) -> Result<(), Error>` | Closes a terminal, streamed or not, by hanging up its program; every stream of it ends with `TerminalEvent::Closed`. Owners only; `not_found` for a terminal that is not open. Cancels a login: it adds no account, and the config dir the machine created for it is removed. |
 
 ### Streams (objects)
@@ -193,7 +199,10 @@ everything stops once the last clone is dropped.
   library as the daemon has it; `None` until it sends it and while not connected),
   `session_skills` (`HashMap<SessionId, Vec<SessionSkill>>`: the skills each live session's
   agent may use; empty while not connected), `update` (`Option<UpdateStage>`: where an
-  owner's `UpdateDaemon` stands; `None` until one starts and while not connected).
+  owner's `UpdateDaemon` stands; `None` until one starts and while not connected),
+  `approvals` (`Vec<ApprovalRequest>`: what this person's devices without a passkey ask to
+  do there, oldest first; empty while not connected and for a client without an
+  `Authenticator`).
 - `ConnectionQuality` — `connected_since: Option<Timestamp>` (when the current connection
   was established; `None` while not connected), `reconnects: u32` (connections established
   after the first, since the client opened), `last_rtt_ms`, `average_rtt_ms`, `min_rtt_ms`,
@@ -331,6 +340,39 @@ host part:
 herder://login?host=10.0.4.17%3A7447&fp=<hex>&code=K7Q-4PD
 herder://own?host=10.0.4.17%3A7447&fp=<hex>&code=K7Q-4PD&name=new-server
 ```
+
+## Passkeys
+
+On a machine where the device acts as a person, opening or attaching a terminal and every
+change to secrets need a fresh passkey assertion.
+
+- A client opened with `open_with_passkey` says so in its hello. `send`, `open_terminal` and
+  `attach_terminal` send such a command without an assertion first. The machine runs it when
+  it needs none: a re-attach of a terminal this device opened or attached since the machine
+  started, as after a reconnect, which so asks for no Face ID. Otherwise it refuses with
+  `assertion_required`, and the client asks for a `passkey_challenge`, has the
+  `Authenticator` sign it, and sends the command once more with the assertion. A cancelled
+  Face ID fails the call with the authenticator's error.
+- Its machines list what the person's devices without a passkey ask for, in
+  `Machine::approvals`; the app shows each and settles it with `approve_action` (Face ID) or
+  `refuse_action`. A request closes, and leaves the list, once settled on any device or
+  expired (two minutes).
+- A client opened with `open`, such as the TUI, has no passkey. The machine holds such a
+  command and asks the person's apps instead; the call returns once one approves it, or
+  fails with `Rejected` (`forbidden`) once refused or expired, or at once when no app of the
+  person is connected.
+
+| Rust | Does |
+| ---- | ---- |
+| `trait Authenticator: Send + Sync { fn assert(&self, host_id: HostId, challenge: PasskeyChallenge) -> Assertion }` | Signs `challenge`, asking the user; `Assertion` is a boxed `Send` future of `Result<PasskeyAssertion, Error>`. |
+
+## Changes in version 15
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Client::open_with_passkey`, `Authenticator`, `Assertion` | A person's terminal and secret commands need a fresh assertion; the app signs them with Face ID through this callback. |
+| — | `Machine::approvals: Vec<ApprovalRequest>` | The app shows what a terminal without a passkey asks to do. A new field breaks code that builds a `Machine`. |
+| — | `Client::approve_action`, `Client::refuse_action` | The app settles those requests. |
 
 ## Changes in version 14
 

@@ -355,11 +355,20 @@ fn send(
     tx: mpsc::UnboundedSender<Msg>,
 ) {
     let client = client.clone();
+    let signed = command.fresh_assertion().is_some();
     tokio::spawn(async move {
-        let result = client
-            .send(host_id.clone(), command)
-            .await
-            .map_err(|err| err.to_string());
+        let sent = client.send(host_id.clone(), command);
+        tokio::pin!(sent);
+        // The TUI has no passkey: a person's phone approves such a command, which takes a
+        // while.
+        let result = tokio::select! {
+            result = &mut sent => result,
+            () = tokio::time::sleep(terminal::HINT_AFTER), if signed => {
+                let _ = tx.send(Msg::Notice(terminal::PHONE_HINT.to_owned()));
+                sent.await
+            }
+        };
+        let result = result.map_err(|err| err.to_string());
         let _ = tx.send(Msg::Sent { origin, result });
     });
 }

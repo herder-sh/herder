@@ -489,6 +489,7 @@ impl Client {
             resume,
             pairing_code: self.pairing_code.clone(),
             sign_in: false,
+            passkey: false,
         }))
         .await;
         let ServerMessage::Hello(hello) = self.recv().await else {
@@ -510,6 +511,7 @@ impl Client {
             resume: Vec::new(),
             pairing_code: None,
             sign_in: true,
+            passkey: true,
         }))
         .await;
         let ServerMessage::SignInChallenge {
@@ -607,6 +609,7 @@ async fn hello_is_answered_with_the_protocol_version_and_lists() {
             resume: Vec::new(),
             pairing_code: None,
             sign_in: false,
+            passkey: false,
         }))
         .await;
     let ServerMessage::Hello(hello) = client.recv().await else {
@@ -640,6 +643,7 @@ async fn a_wrong_protocol_version_is_refused() {
             resume: Vec::new(),
             pairing_code: None,
             sign_in: false,
+            passkey: false,
         }))
         .await;
     let ServerMessage::Error { error } = client.recv().await else {
@@ -914,6 +918,7 @@ async fn refused(mut client: Client) -> ErrorInfo {
             resume: Vec::new(),
             pairing_code: client.pairing_code.clone(),
             sign_in: false,
+            passkey: false,
         }))
         .await;
     let ServerMessage::Error { error } = client.recv().await else {
@@ -1446,6 +1451,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
             resume: Vec::new(),
             pairing_code: None,
             sign_in: false,
+            passkey: false,
         }))
         .await;
     assert!(matches!(client.recv().await, ServerMessage::Hello(_)));
@@ -2516,6 +2522,7 @@ async fn a_fresh_daemon_gets_its_first_owner_by_an_assertion_and_their_devices_n
             resume: Vec::new(),
             pairing_code: None,
             sign_in: true,
+            passkey: false,
         }))
         .await;
     assert!(matches!(
@@ -2970,6 +2977,7 @@ async fn an_invited_member_connects_a_role_change_applies_and_a_revoke_disconnec
         resume: Vec::new(),
         pairing_code: None,
         sign_in: true,
+        passkey: false,
     }))
     .await;
     assert!(
@@ -3024,9 +3032,13 @@ async fn an_invited_member_connects_a_role_change_applies_and_a_revoke_disconnec
 
 /// A fresh daemon claimed by Tomas from his Mac: its connection, and his passkey.
 async fn owned_by_tomas(daemon: &Daemon) -> (Client, ServerHello, Authenticator) {
+    owned_from(daemon, &DeviceKey::generate().unwrap()).await
+}
+
+/// A fresh daemon claimed by Tomas from `mac`: its connection, and his passkey.
+async fn owned_from(daemon: &Daemon, mac: &DeviceKey) -> (Client, ServerHello, Authenticator) {
     let (code, _) = daemon.auth.open_claim().unwrap();
-    let mac = DeviceKey::generate().unwrap();
-    let mut client = daemon.client_on(&mac, None).await;
+    let mut client = daemon.client_on(mac, None).await;
     let mut passkey = None;
     let hello = client
         .sign_in(|_, registration| {
@@ -3055,17 +3067,26 @@ async fn a_person_opens_a_terminal_and_changes_secrets_only_with_a_fresh_asserti
         rows: 24,
         assertion,
     };
-    for (id, assertion) in [("bare", None), ("stale", Some(Box::new(stale_assertion())))] {
+    // The Mac signs assertions: without one it is told to send one.
+    let refusals = [
+        ("bare", None, ErrorCode::AssertionRequired),
+        (
+            "stale",
+            Some(Box::new(stale_assertion())),
+            ErrorCode::Forbidden,
+        ),
+    ];
+    for (id, assertion, code) in refusals {
         let ServerMessage::CommandRejected { error, .. } = mac.answer(id, open(assertion)).await
         else {
             panic!("expected the terminal refused");
         };
-        assert_eq!(error.code, ErrorCode::Forbidden, "{}", error.message);
+        assert_eq!(error.code, code, "{}", error.message);
     }
     let assertion = Some(fresh(&mut mac, &passkey).await);
     let opened = mac.answer("fresh", open(assertion.clone())).await;
     let ServerMessage::CommandAccepted {
-        result: CommandResult::TerminalOpened { terminal_id },
+        result: CommandResult::TerminalOpened { .. },
         ..
     } = opened
     else {
@@ -3077,13 +3098,6 @@ async fn a_person_opens_a_terminal_and_changes_secrets_only_with_a_fresh_asserti
         panic!("expected a replayed assertion refused");
     };
     assert_eq!(error.code, ErrorCode::Forbidden);
-    let attach = CommandBody::AttachTerminal {
-        terminal_id,
-        assertion: None,
-    };
-    let ServerMessage::CommandRejected { .. } = mac.answer("attach", attach).await else {
-        panic!("expected attaching refused without an assertion");
-    };
 
     // Every change to secrets is the same; this daemon is no vault, so a fresh one gets as far
     // as that.
@@ -3094,7 +3108,7 @@ async fn a_person_opens_a_terminal_and_changes_secrets_only_with_a_fresh_asserti
     let ServerMessage::CommandRejected { error, .. } = mac.answer("set", create(None)).await else {
         panic!("expected the secret change refused");
     };
-    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(error.code, ErrorCode::AssertionRequired);
     let assertion = Some(fresh(&mut mac, &passkey).await);
     let ServerMessage::CommandRejected { error, .. } = mac.answer("set2", create(assertion)).await
     else {
@@ -3110,4 +3124,219 @@ async fn a_person_opens_a_terminal_and_changes_secrets_only_with_a_fresh_asserti
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::Forbidden);
     assert!(refused.message.contains("Face ID"), "{}", refused.message);
+}
+
+/// Reads `client`'s messages until the one `pick` takes.
+async fn until<T>(client: &mut Client, pick: impl Fn(ServerMessage) -> Option<T>) -> T {
+    loop {
+        if let Some(found) = pick(client.recv().await) {
+            return found;
+        }
+    }
+}
+
+/// The answer to `command_id`, skipping everything else.
+async fn answer_to(client: &mut Client, command_id: &str) -> ServerMessage {
+    let id = CommandId::new(command_id);
+    until(client, |message| match &message {
+        ServerMessage::CommandAccepted { command_id, .. }
+        | ServerMessage::CommandRejected { command_id, .. }
+            if *command_id == id =>
+        {
+            Some(message)
+        }
+        _ => None,
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_device_reattaches_its_own_terminal_without_an_assertion_but_no_other_device_does() {
+    let daemon = Daemon::start_fresh().await;
+    let session = daemon.create_session("s1");
+    let mac_key = DeviceKey::generate().unwrap();
+    let (mut mac, _, passkey) = owned_from(&daemon, &mac_key).await;
+    let open = CommandBody::OpenTerminal {
+        session_id: session,
+        cols: 80,
+        rows: 24,
+        assertion: Some(fresh(&mut mac, &passkey).await),
+    };
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::TerminalOpened { terminal_id },
+        ..
+    } = mac.answer("open", open).await
+    else {
+        panic!("expected the terminal opened");
+    };
+    let attach = |assertion| CommandBody::AttachTerminal {
+        terminal_id: terminal_id.clone(),
+        assertion,
+    };
+
+    // The Mac reconnects, and re-attaches with no Face ID.
+    drop(mac);
+    let mut again = daemon.client_on(&mac_key, None).await;
+    again.hello(Vec::new()).await;
+    let reattached = again.answer("reattach", attach(None)).await;
+    assert!(
+        matches!(reattached, ServerMessage::CommandAccepted { .. }),
+        "{reattached:?}"
+    );
+
+    // His iPhone never had it: it needs one.
+    let mut phone = daemon
+        .client_on(&DeviceKey::generate().unwrap(), None)
+        .await;
+    phone
+        .sign_in(|challenge, _| SignIn::Passkey {
+            assertion: passkey.assert(&challenge),
+        })
+        .await;
+    let ServerMessage::CommandRejected { error, .. } = phone.answer("bare", attach(None)).await
+    else {
+        panic!("expected the phone's attach refused");
+    };
+    assert_eq!(error.code, ErrorCode::AssertionRequired);
+    let signed = attach(Some(fresh(&mut phone, &passkey).await));
+    let attached = phone.answer("signed", signed).await;
+    assert!(
+        matches!(attached, ServerMessage::CommandAccepted { .. }),
+        "{attached:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_terminal_without_a_passkey_asks_the_phone_and_waits_for_it() {
+    let daemon = Daemon::start_fresh().await;
+    let session = daemon.create_session("s1");
+    let (mut mac, _, passkey) = owned_by_tomas(&daemon).await;
+
+    // A terminal signs in with `herder login`, approved from the Mac.
+    let mut tui = daemon
+        .client_on(&DeviceKey::generate().unwrap(), None)
+        .await;
+    tui.send(&ClientMessage::Hello(ClientHello {
+        protocol_version: PROTOCOL_VERSION,
+        client: "herder-tui/0.17.0".into(),
+        resume: Vec::new(),
+        pairing_code: None,
+        sign_in: true,
+        passkey: false,
+    }))
+    .await;
+    assert!(matches!(
+        tui.recv().await,
+        ServerMessage::SignInChallenge { .. }
+    ));
+    tui.send(&ClientMessage::SignIn(SignIn::StartLogin)).await;
+    let ServerMessage::LoginRequest { code, .. } = tui.recv().await else {
+        panic!("expected a login request");
+    };
+    let approve = CommandBody::ApproveLogin {
+        code,
+        assertion: fresh(&mut mac, &passkey).await,
+    };
+    assert!(matches!(
+        mac.answer("login", approve).await,
+        ServerMessage::CommandAccepted { .. }
+    ));
+    let ServerMessage::Hello(hello) = tui.recv().await else {
+        panic!("expected a hello");
+    };
+    tui.lists(&hello).await;
+
+    // It opens a terminal: the Mac is asked, approves with Face ID, and the terminal opens.
+    tui.send(&ClientMessage::Command(Command {
+        id: CommandId::new("open"),
+        body: CommandBody::OpenTerminal {
+            session_id: session,
+            cols: 80,
+            rows: 24,
+            assertion: None,
+        },
+    }))
+    .await;
+    let request = until(&mut mac, |message| match message {
+        ServerMessage::ApprovalRequest(request) => Some(request),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        (request.action.as_str(), request.client.as_str()),
+        ("Open a terminal", "herder-tui/0.17.0")
+    );
+    let approve = CommandBody::ApproveAction {
+        request_id: request.request_id.clone(),
+        assertion: fresh(&mut mac, &passkey).await,
+    };
+    assert!(matches!(
+        mac.answer("approve", approve).await,
+        ServerMessage::CommandAccepted { .. }
+    ));
+    let opened = answer_to(&mut tui, "open").await;
+    assert!(
+        matches!(
+            opened,
+            ServerMessage::CommandAccepted {
+                result: CommandResult::TerminalOpened { .. },
+                ..
+            }
+        ),
+        "{opened:?}"
+    );
+    // An approval works once.
+    let again = CommandBody::RefuseAction {
+        request_id: request.request_id,
+    };
+    let ServerMessage::CommandRejected { error, .. } = mac.answer("again", again).await else {
+        panic!("expected the closed request refused");
+    };
+    assert_eq!(error.code, ErrorCode::NotFound);
+
+    // Refused on the Mac, the secret change is refused on the terminal.
+    tui.send(&ClientMessage::Command(Command {
+        id: CommandId::new("set"),
+        body: CommandBody::CreateSecretSet {
+            set: "prod".into(),
+            assertion: None,
+        },
+    }))
+    .await;
+    let request = until(&mut mac, |message| match message {
+        ServerMessage::ApprovalRequest(request) => Some(request),
+        _ => None,
+    })
+    .await;
+    assert_eq!(request.action, "Create the secret set prod");
+    let refuse = CommandBody::RefuseAction {
+        request_id: request.request_id,
+    };
+    assert!(matches!(
+        mac.answer("refuse", refuse).await,
+        ServerMessage::CommandAccepted { .. }
+    ));
+    let ServerMessage::CommandRejected { error, .. } = answer_to(&mut tui, "set").await else {
+        panic!("expected the refused change rejected");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert!(error.message.contains("refused"), "{}", error.message);
+
+    // With no app of his connected, nobody can approve: refused at once.
+    drop(mac);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    tui.send(&ClientMessage::Command(Command {
+        id: CommandId::new("alone"),
+        body: CommandBody::OpenTerminal {
+            session_id: SessionId::new("s1"),
+            cols: 80,
+            rows: 24,
+            assertion: None,
+        },
+    }))
+    .await;
+    let ServerMessage::CommandRejected { error, .. } = answer_to(&mut tui, "alone").await else {
+        panic!("expected the lone terminal refused");
+    };
+    assert!(error.message.contains("herder app"), "{}", error.message);
 }

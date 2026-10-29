@@ -153,6 +153,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             }],
             pairing_code: None,
             sign_in: false,
+            passkey: false,
         }),
         ClientMessage::Hello(ClientHello {
             protocol_version: PROTOCOL_VERSION,
@@ -160,6 +161,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             resume: Vec::new(),
             pairing_code: Some("ABCDE-FGHJK".into()),
             sign_in: false,
+            passkey: false,
         }),
         ClientMessage::Hello(ClientHello {
             protocol_version: PROTOCOL_VERSION,
@@ -167,6 +169,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             resume: Vec::new(),
             pairing_code: None,
             sign_in: true,
+            passkey: true,
         }),
         ClientMessage::SignIn(SignIn::Passkey {
             assertion: assertion(),
@@ -452,6 +455,13 @@ fn client_fixtures() -> Vec<ClientMessage> {
             user_id: UserId::new("01J9USES"),
             decision: LeftoverDecision::Remove,
             assertion: Box::new(assertion()),
+        }),
+        command(CommandBody::ApproveAction {
+            request_id: "01J9REQUEST".into(),
+            assertion: Box::new(assertion()),
+        }),
+        command(CommandBody::RefuseAction {
+            request_id: "01J9REQUEST".into(),
         }),
         command(CommandBody::ApproveLogin {
             code: "K7Q-4PD".into(),
@@ -833,6 +843,15 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
             },
             registration: None,
+        },
+        ServerMessage::ApprovalRequest(ApprovalRequest {
+            request_id: "01J9REQUEST".into(),
+            action: "Open a terminal".into(),
+            client: "herder-tui/0.17.0".into(),
+            expires_at: "2026-10-03T12:02:00Z".parse().unwrap(),
+        }),
+        ServerMessage::ApprovalClosed {
+            request_id: "01J9REQUEST".into(),
         },
         ServerMessage::LoginRequest {
             code: "K7Q-4PD".into(),
@@ -1916,6 +1935,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         ErrorCode::Unsupported,
         ErrorCode::ReadOnly,
         ErrorCode::Internal,
+        ErrorCode::AssertionRequired,
     ] {
         let error = ErrorInfo {
             code,
