@@ -2,37 +2,36 @@
 import Testing
 
 struct PairScannerTests {
+    let own = "herder://own?host=127.0.0.1%3A7420&fp=" + String(repeating: "ab", count: 32) + "&code=K7Q-4PD"
     let link = "herder://pair?host=127.0.0.1%3A7420&fp=" + String(repeating: "ab", count: 32) + "&code=ABCD2345"
 
     @Test func findsTheLinkAlone() {
-        #expect(pairingLink(in: link) == link)
-        #expect(pairingLink(in: "  \(link)\n") == link)
+        #expect(fleetLink(in: own) == own)
+        #expect(fleetLink(in: "  \(link)\n") == link)
     }
 
-    @Test func findsTheLinkInHerderPairOutput() {
+    @Test func findsTheLinkInHerderClaimOutput() {
         let output = """
-            Pair a device as alice (owner): scan the code, or enter these in the app.
+            Scan the code with the herder app, or open this link:
 
-              address      127.0.0.1:7420
-              code         ABCD2345
+            \(own)
 
-            \(link)
-
-            In a terminal, run `herder connect '<link>'` with it, or paste it into herder.
+            Check that the app shows K7Q · 4PD.
             """
-        #expect(pairingLink(in: output) == link)
-        #expect(pairingLink(in: "herder connect '\(link)'") == link)
+        #expect(fleetLink(in: output) == own)
+        #expect(fleetLink(in: "open '\(own)'") == own)
     }
 
     @Test func findsALinkOfSeveralMachines() {
         let shared = link + "&host=10.0.0.9%3A7447&fp=" + String(repeating: "cd", count: 32) + "&code=MNPQR-STVWX"
-        #expect(pairingLink(in: shared) == shared)
-        #expect(pairingLink(in: "Pair with \(shared) now") == shared)
+        #expect(fleetLink(in: shared) == shared)
+        #expect(fleetLink(in: "Pair with \(shared) now") == shared)
     }
 
-    @Test func rejectsWhatIsNotAPairingLink() {
-        #expect(pairingLink(in: "") == nil)
-        #expect(pairingLink(in: "https://herder.sh") == nil)
-        #expect(pairingLink(in: "herder://pair?host=127.0.0.1%3A7420") == nil)
+    @Test func rejectsWhatIsNotAFleetLink() {
+        #expect(fleetLink(in: "") == nil)
+        #expect(fleetLink(in: "https://herder.sh") == nil)
+        #expect(fleetLink(in: "herder://pair?host=127.0.0.1%3A7420") == nil)
+        #expect(fleetLink(in: own.replacingOccurrences(of: "own", with: "login")) == nil)
     }
 }

@@ -1,21 +1,25 @@
+import Foundation
 import Herder
 import SwiftUI
 
-/// The `herder://pair` link, of one machine or several, in text from a QR code or the
-/// clipboard: the link alone, or a copy of `herder pair`'s output with the link somewhere in
-/// it. Nil when there is none.
-func pairingLink(in text: String) -> String? {
+/// The link Add to Fleet takes, in text from a QR code or the clipboard: the `herder://own`
+/// link `herder claim` prints, or the `herder://pair` link another device shares; alone, or
+/// somewhere in a copy of the command's output. Nil when there is none.
+func fleetLink(in text: String) -> String? {
     text.split(whereSeparator: \.isWhitespace)
         .lazy
         .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'\"<>()`")) }
-        .first { (try? parsePairingLink(link: $0)) != nil }
+        .first { word in
+            let own = URL(string: word).flatMap(ApprovalRequest.init(url:)).map { $0.kind == .machine } ?? false
+            return own || (try? parsePairingLink(link: word)) != nil
+        }
 }
 
 #if os(iOS)
 import AVFoundation
 
 /// The camera, filling Add to Fleet's sheet in its form's place, looking for the QR code
-/// `herder pair` prints or another device shares; hands over the pairing link in it.
+/// `herder claim` prints or another device shares; hands over the link in it.
 struct PairScanner: View {
     let scanned: (String) -> Void
     let close: () -> Void
@@ -59,13 +63,13 @@ struct PairScanner: View {
     }
 }
 
-/// A capture session that reads QR codes until one holds a pairing link.
+/// A capture session that reads QR codes until one holds a link Add to Fleet takes.
 @MainActor
 @Observable
 private final class QRCamera: NSObject, AVCaptureMetadataOutputObjectsDelegate {
     private(set) var running = false
     private(set) var error: String?
-    private(set) var hint = "Point the camera at the QR code herder pair prints, or another device shows."
+    private(set) var hint = "Point the camera at the QR code herder claim prints, or another device shows."
     @ObservationIgnored nonisolated(unsafe) let session = AVCaptureSession()
     @ObservationIgnored private var found: ((String) -> Void)?
 
@@ -111,8 +115,8 @@ private final class QRCamera: NSObject, AVCaptureMetadataOutputObjectsDelegate {
 
     private func scanned(_ payloads: [String]) {
         guard let found, !payloads.isEmpty else { return }
-        guard let link = payloads.lazy.compactMap(pairingLink(in:)).first else {
-            hint = "That QR code is not a herder pairing link."
+        guard let link = payloads.lazy.compactMap(fleetLink(in:)).first else {
+            hint = "That QR code is not a link herder claim prints."
             return
         }
         self.found = nil
