@@ -447,6 +447,10 @@ impl Backend for Fleet {
         }
     }
 
+    async fn replicated(&self) -> anyhow::Result<Vec<DeviceId>> {
+        blocking(&self.store, |store| store.host_devices()).await
+    }
+
     async fn worktree(&self, session_id: &SessionId) -> Result<PathBuf, ErrorInfo> {
         Err(self.read_only(session_id).await)
     }
