@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case board, chats, skills, providers, machines, integrations
+    case board, chats, skills, providers, machines, people, integrations
     case project(String)
     /// The bots' conversations: one bot's, by its `BotGroup.id`, or every bot's for `nil`.
     case bots(String?)
@@ -20,7 +20,7 @@ enum CompactTab: Hashable, CaseIterable {
         case .project: self = .projects
         case .chats, .bots: self = .chats
         case .board: self = .board
-        case .skills, .providers, .machines, .integrations: self = .machines
+        case .skills, .providers, .machines, .people, .integrations: self = .machines
         }
     }
 

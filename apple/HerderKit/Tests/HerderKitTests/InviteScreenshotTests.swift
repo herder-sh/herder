@@ -6,29 +6,11 @@ import Herder
 import SwiftUI
 import Testing
 
-/// Draws the People section as the app's dark appearance shows it, at the Mac's page width and
-/// the iPhone's: for an owner, with the role menus, Revoke and Invite; for a member, the list
-/// only; while asking and after a refusal; and the link an invite made. Attaches each; with
-/// `HERDER_SCREENSHOT_DIR` set, also writes them there as `people-<state>-<width>.png`.
-@MainActor struct PeopleScreenshotTests {
+/// Draws the link an invite made as the app's dark appearance shows it, at the Mac's sheet width
+/// and the iPhone's. Attaches each; with `HERDER_SCREENSHOT_DIR` set, also writes them there as
+/// `people-invite-<width>.png`.
+@MainActor struct InviteScreenshotTests {
     private let now = Timestamp.date("2026-10-26T09:00:00Z")!
-
-    @Test(arguments: [("mac", 920.0), ("iphone", 390.0)])
-    func drawsEachState(width: (name: String, points: Double)) async throws {
-        let users = People.people(PeopleTests.team)
-        let states: [(String, Load<[UserInfo]>, Bool, String?)] = [
-            ("owner", .loaded(users), true, nil),
-            ("member", .loaded(users), false, nil),
-            ("asking", .asking, true, nil),
-            ("refused", .loaded(users), true, "the last owner cannot be made a member; make someone else an owner first"),
-            ("failed", .failed("the machine did not answer"), false, nil),
-        ]
-        for (state, people, owner, error) in states {
-            let list = PeopleList(people: people, owner: owner, error: error, now: now,
-                                  setRole: { _, _ in }, revoke: { _ in }, invite: {})
-            try await shoot(list, width: width.points, named: "people-\(state)-\(width.name).png")
-        }
-    }
 
     @Test(arguments: [("mac", 560.0), ("iphone", 390.0)])
     func drawsAnInvite(width: (name: String, points: Double)) async throws {
