@@ -507,14 +507,14 @@ async fn release_recovered(
     host: &Host,
     sessions: &SessionManager,
 ) -> Result<()> {
-    let view = client::read(vault, device, None).await?;
+    let held = client::sessions(vault, device).await?;
     let local: HashMap<SessionId, SessionStatus> = sessions
         .sessions()
         .await?
         .into_iter()
         .map(|head| (head.session_id, head.status))
         .collect();
-    for head in view.sessions {
+    for head in held {
         let (Some(holder), Some(status)) = (&head.host_id, local.get(&head.session_id)) else {
             continue;
         };

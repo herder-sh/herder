@@ -3,11 +3,13 @@
 //! Everything runs on this machine in scratch dirs, as separate processes: a vault (`herder
 //! daemon` in vault mode), hosts A and B, a bare git `origin` both hosts clone. A runs a few
 //! turns that change code, each checkpointed to `origin`, and is SIGKILLed in the middle of the
-//! next one. `herder fork` on B forks the session from the vault; the fork's worktree must be
-//! A's last checkpoint exactly, and the session's history goes on there. A, started again on
-//! its old data dir, keeps its session as it was.
+//! next one. The owner's terminal on B, signed in to the vault and to B with `herder login`,
+//! forks the session there with `herder fork`: it reads the session from the vault and relays
+//! it to B, which never reads the vault itself. The fork's worktree must be A's last checkpoint
+//! exactly, and the session's history goes on there. A, started again on its old data dir,
+//! keeps its session as it was.
 //!
-//! The vault and `herder fork` / `herder pair` are the herder binary. A host is this test
+//! The vault and `herder fork` / `herder login` / `herder pair` are the herder binary. A host is this test
 //! binary run again as a child ([`drill_host`]): `herder_daemon::serve`, the function `herder
 //! daemon` runs, with a scripted agent ([`Agent`]) in place of a vendor CLI, so no provider is
 //! ever called. Run the drill on its own with `cargo test -p herder --test disaster_drill`.
@@ -26,8 +28,8 @@ use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
 use herder_client_core::auth::{DeviceKey, client_config};
-use herder_client_core::{OwnUri, PairingUri};
-use herder_daemon::auth::authenticator::Join;
+use herder_client_core::{LoginUri, OwnUri};
+use herder_daemon::auth::authenticator::{Authenticator, Join};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters};
 use herder_daemon::vault::VaultStore;
 use herder_protocol::{
@@ -38,6 +40,7 @@ use herder_protocol::{
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use rustls::pki_types::ServerName;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_rustls::TlsConnector;
@@ -301,14 +304,21 @@ async fn wait_for(path: &Path) {
     }
 }
 
-/// Runs the herder binary with `args`; returns whether it succeeded and its stdout and stderr.
-async fn herder(args: &[&str]) -> (bool, String) {
-    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_herder"))
+/// The herder binary run with `args` from the terminal whose profile is in `home`.
+fn herder_command(home: &Path, args: &[&str]) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_herder"));
+    command
         .args(args)
         .env_remove("HERDER_CONFIG")
-        .output()
-        .await
-        .unwrap();
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join("config"));
+    command
+}
+
+/// Runs the herder binary with `args` from the terminal whose profile is in `home`; returns
+/// whether it succeeded and its stdout and stderr.
+async fn herder(home: &Path, args: &[&str]) -> (bool, String) {
+    let output = herder_command(home, args).output().await.unwrap();
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -319,7 +329,8 @@ async fn herder(args: &[&str]) -> (bool, String) {
 
 /// Opens the owner window of the daemon of `config` with `herder claim`.
 async fn own(config: &Path) -> OwnUri {
-    let (ok, output) = herder(&["claim", "--config", config.to_str().unwrap()]).await;
+    let home = config.parent().unwrap();
+    let (ok, output) = herder(home, &["claim", "--config", config.to_str().unwrap()]).await;
     assert!(ok, "herder claim: {output}");
     output
         .lines()
@@ -329,18 +340,46 @@ async fn own(config: &Path) -> OwnUri {
         .unwrap()
 }
 
-/// Mints a pairing code for `user` on the daemon of `config` with `herder pair`: how a host
-/// pairs with the vault as a user, to read the sessions a fork takes over.
-async fn pair(config: &Path, user: &str) -> PairingUri {
-    let (ok, output) =
-        herder(&["pair", "--config", config.to_str().unwrap(), "--user", user]).await;
+/// Pairs the host named `host` to replicate to the vault of `config` with `herder pair
+/// --host`: the `[vault]` table of its daemon.toml, as printed.
+async fn pair_host(config: &Path, host: &str) -> String {
+    let home = config.parent().unwrap();
+    let args = ["pair", "--config", config.to_str().unwrap(), "--host", host];
+    let (ok, output) = herder(home, &args).await;
     assert!(ok, "herder pair: {output}");
-    output
+    let table: Vec<_> = output
         .lines()
-        .find(|line| line.starts_with("herder://pair?"))
-        .unwrap_or_else(|| panic!("no pairing link in {output}"))
-        .parse()
-        .unwrap()
+        .map(str::trim)
+        .filter(|line| *line == "[vault]" || line.contains(" = \""))
+        .collect();
+    assert_eq!(table.len(), 4, "{output}");
+    table.join("\n")
+}
+
+/// Signs the terminal whose profile is in `home` in to a daemon with `herder login` and
+/// `args`, approved by the owner's `app` with the code it shows.
+async fn log_in(home: &Path, args: &[&str], app: &mut Client) {
+    let mut child = herder_command(home, &[&["login"], args].concat())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let link = tokio::time::timeout(TIMEOUT, async {
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if let Some((_, link)) = line.split_once("open ") {
+                return link.to_owned();
+            }
+        }
+        panic!("herder login showed no link");
+    })
+    .await
+    .unwrap();
+    app.approve_login(link.parse::<LoginUri>().unwrap().code)
+        .await;
+    while lines.next_line().await.unwrap().is_some() {}
+    let status = tokio::time::timeout(TIMEOUT, child.wait()).await.unwrap();
+    assert!(status.unwrap().success());
 }
 
 /// Runs git in `dir`, panicking on failure; returns trimmed stdout.
@@ -424,6 +463,8 @@ fn worktree_files(worktree: &Path) -> BTreeMap<String, String> {
 struct Client {
     ws: WebSocketStream<TlsStream<TcpStream>>,
     events: Vec<Event>,
+    /// The passkey of the person who claimed the daemon on this connection.
+    passkey: Option<Authenticator>,
 }
 
 impl Client {
@@ -449,6 +490,7 @@ impl Client {
         let mut client = Self {
             ws,
             events: Vec::new(),
+            passkey: None,
         };
         client
             .send(&ClientMessage::Hello(ClientHello {
@@ -464,7 +506,8 @@ impl Client {
             let ServerMessage::SignInChallenge { registration, .. } = client.recv().await else {
                 panic!("expected a sign-in challenge");
             };
-            let (_, sign_in) = Join::claim(code).sign_in("alice", &registration.unwrap());
+            let (passkey, sign_in) = Join::claim(code).sign_in("alice", &registration.unwrap());
+            client.passkey = Some(passkey);
             client.send(&ClientMessage::SignIn(sign_in)).await;
         }
         let hello = client.recv().await;
@@ -519,6 +562,26 @@ impl Client {
                 _ => {}
             }
         }
+    }
+
+    /// Approves the login of the terminal showing `code`, with a fresh assertion of the
+    /// passkey this connection claimed the daemon with.
+    async fn approve_login(&mut self, code: String) {
+        let CommandResult::PasskeyChallenge { challenge, .. } =
+            self.command(CommandBody::PasskeyChallenge).await.unwrap()
+        else {
+            panic!("expected a passkey challenge");
+        };
+        let assertion = self.passkey.as_ref().unwrap().assert(&challenge);
+        let approve = CommandBody::ApproveLogin {
+            code,
+            assertion: Box::new(assertion),
+        };
+        let approved = self.command(approve).await.unwrap();
+        assert!(
+            matches!(approved, CommandResult::LoginApproved { .. }),
+            "{approved:?}"
+        );
     }
 
     async fn subscribe(&mut self, session_id: &SessionId) {
@@ -586,22 +649,28 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     clones(root, &[&a_dir, &b_dir]);
     let origin = root.join("origin.git");
 
-    // The vault, and a pairing code on it for each host.
+    // The vault, claimed by its owner's app, and a host pairing code on it for each host.
     let vault_config = write_config(&root.join("vault"), free_port(), "mode = \"vault\"\n");
     let _vault = Process::vault(&vault_config);
     wait_for(&root.join("vault/data/control.sock")).await;
+    let device = DeviceKey::generate().unwrap();
+    let vault_link = own(&vault_config).await;
+    let mut vault_app = Client::connect(
+        &vault_link.hosts[0],
+        &vault_link.fingerprint,
+        &device,
+        Some(vault_link.code.clone()),
+    )
+    .await;
     let host_config = async |dir: &Path, port: u16| {
-        let link = pair(&vault_config, dir.file_name().unwrap().to_str().unwrap()).await;
+        let vault = pair_host(&vault_config, dir.file_name().unwrap().to_str().unwrap()).await;
         let app = dir.join("app");
         write_config(
             dir,
             port,
             &format!(
-                "{RESOURCES}\n[[project]]\nremotes = [\"https://{PROJECT}\"]\npaths = [{:?}]\n\n[vault]\naddress = {:?}\nfingerprint = {:?}\npairing_code = {:?}\n",
+                "{RESOURCES}\n[[project]]\nremotes = [\"https://{PROJECT}\"]\npaths = [{:?}]\n\n{vault}\n",
                 app.to_str().unwrap(),
-                link.hosts[0],
-                link.fingerprint,
-                link.code,
             ),
         )
     };
@@ -612,7 +681,6 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     let mut a = Process::host(&a_config);
     wait_for(&a_dir.join("data/control.sock")).await;
     let a_link = own(&a_config).await;
-    let device = DeviceKey::generate().unwrap();
     let mut client = Client::connect(
         &a_link.hosts[0],
         &a_link.fingerprint,
@@ -705,14 +773,36 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     let lost = a_dir.join("lost-worktrees");
     std::fs::rename(&a_disk, &lost).unwrap();
 
-    // B forks it from the vault.
+    // The owner claims B, signs B's terminal in to the vault and to B, and forks the session
+    // there from the vault.
+    let b_link = own(&b_config).await;
+    let mut client = Client::connect(
+        &b_link.hosts[0],
+        &b_link.fingerprint,
+        &device,
+        Some(b_link.code.clone()),
+    )
+    .await;
+    let terminal = root.join("terminal");
+    let vault_login = [
+        vault_link.hosts[0].as_str(),
+        "--fingerprint",
+        &vault_link.fingerprint,
+    ];
+    log_in(&terminal, &vault_login, &mut vault_app).await;
+    log_in(
+        &terminal,
+        &["--config", b_config.to_str().unwrap()],
+        &mut client,
+    )
+    .await;
     let fork = [
         "fork",
         "--config",
         b_config.to_str().unwrap(),
         session_id.as_str(),
     ];
-    let (ok, output) = herder(&fork).await;
+    let (ok, output) = herder(&terminal, &fork).await;
     assert!(ok, "herder fork: {output}");
     let forked = output
         .lines()
@@ -723,10 +813,6 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     assert_ne!(forked, session_id);
     assert!(
         output.contains(&format!("from {session_id} of {a_host}")),
-        "{output}"
-    );
-    assert!(
-        output.contains(&format!("files restored from {last_checkpoint}")),
         "{output}"
     );
     assert!(output.contains("on account b-account"), "{output}");
@@ -741,14 +827,6 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     // The session's history goes on on B, the fork's agent seeded with the transcript from A:
     // the turn A died in runs again there, unprompted, and B's worktree is A's last checkpoint
     // with only that turn's edit made again.
-    let b_link = own(&b_config).await;
-    let mut client = Client::connect(
-        &b_link.hosts[0],
-        &b_link.fingerprint,
-        &device,
-        Some(b_link.code.clone()),
-    )
-    .await;
     client.subscribe(&forked).await;
     client
         .until(|body| matches!(body, EventBody::AccountSwitched { .. }))

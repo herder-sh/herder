@@ -309,7 +309,6 @@ pub async fn serve(
         auth::control::Daemon {
             fingerprint: tls.fingerprint().to_owned(),
             listen: listen.clone(),
-            sessions: Some(sessions.clone()),
             vault: None,
         },
         shutdown.clone(),

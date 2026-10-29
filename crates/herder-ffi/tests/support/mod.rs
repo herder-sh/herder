@@ -211,7 +211,6 @@ impl FakeDaemon {
         };
         sessions.fork_from(session::fork::Forks {
             host: host.id.clone(),
-            vault: None,
         })?;
         let server = Server::new(
             tls,

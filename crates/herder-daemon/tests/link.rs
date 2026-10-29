@@ -276,8 +276,8 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         account_id: None,
         relay: None,
     };
-    // Even without a vault the running daemon supports local forks. A missing source is
-    // not found, rather than forks being unsupported.
+    // The running daemon forks its own sessions, and histories a client relays; a session it
+    // does not hold is not found, rather than forks being unsupported.
     assert_eq!(
         refused(&owner, &host_id, missing_fork.clone()).await,
         ErrorCode::NotFound
@@ -443,11 +443,10 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
             .any(|u| u.name == "devbox" && u.devices.iter().any(|d| d.host_only)),
         "{users:?}"
     );
-    // Fork lookup now reaches the vault without restarting. This host-only device cannot
-    // read other sessions as a client, so the vault refuses the read.
+    // Linked, the host still never reads the vault to fork.
     assert_eq!(
         refused(&owner, &host_id, missing_fork.clone()).await,
-        ErrorCode::Forbidden
+        ErrorCode::NotFound
     );
     let reads = |read: bool| {
         let (host_id, vault_id) = (host_id.clone(), vault_id.clone());
@@ -463,8 +462,8 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     };
     machine_when(&owner, reads(false)).await;
 
-    // The owner lets it take handoffs: the same device reads the vault, with no pairing
-    // again, and the session is just not there.
+    // The owner lets it take handoffs: the vault lets the same device read, with no pairing
+    // again, yet the host still forks only what it holds or is relayed.
     let access = |read| CommandBody::SetVaultHostAccess {
         host_id: host_id.clone(),
         read,
@@ -493,10 +492,6 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         CommandResult::Applied
     );
     machine_when(&owner, reads(false)).await;
-    assert_eq!(
-        refused(&owner, &host_id, missing_fork.clone()).await,
-        ErrorCode::Forbidden
-    );
     // A host that never replicated here, and a daemon that is no vault, are refused.
     let stranger_host = CommandBody::SetVaultHostAccess {
         host_id: HostId::new("never-replicated"),
@@ -522,7 +517,7 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         send(&owner, &host_id, CommandBody::UnlinkVault).await,
         CommandResult::Applied
     );
-    // Unlink also stops fork lookup from reaching the old vault.
+    // Unlinked, it forks as before.
     assert_eq!(
         refused(&owner, &host_id, missing_fork).await,
         ErrorCode::NotFound

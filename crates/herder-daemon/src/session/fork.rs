@@ -1,11 +1,10 @@
 //! Forks: a session's history copied into a new session that goes on here.
 //!
-//! The session to fork is found on this host, else in the history a client relayed from its
-//! host ([`SessionManager::upload_history`]), else in the vault this host replicates to
-//! ([`crate::vault::fork`]), wherever it runs and whether its host is up or gone. A relayed
-//! history is taken as it is, without asking the vault: hosts do not talk to each other, but
-//! the client is connected to both, reads the session from its host and uploads it here, in
-//! parts that each fit a WebSocket message. Only owners may upload one, and its events are
+//! The session to fork is found on this host, else in the history a client relayed
+//! ([`SessionManager::upload_history`]) from wherever it read the session: its host, or the
+//! vault when that host is gone. A host never reads other hosts' sessions, from them or from
+//! its vault: the client, signed in to both as the person forking, reads the session there and
+//! uploads it here, in parts that each fit a WebSocket message. Only owners may upload one, and its events are
 //! imported as history, as a vault copy's are. The original
 //! is left as it is. The fork gets a new id; its journal is the original's with that id, minus
 //! the pull requests and other branches the original tracked, so it owns only its own branch.
@@ -41,7 +40,6 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use super::{SessionManager, actor, attachments, error, internal, worktree_error};
-use crate::vault::fork::FromVault;
 use crate::worktree::{self, checkpoint};
 
 /// What `fork_session` and `herder fork` ask for.
@@ -74,12 +72,10 @@ pub struct Forked {
     pub checkpoint: Option<String>,
 }
 
-/// Where forks find sessions: this host, and the vault it replicates to, if any.
+/// Where forks find sessions: this host.
 pub struct Forks {
     /// This host.
     pub host: HostId,
-    /// The vault, for sessions of other hosts.
-    pub vault: Option<FromVault>,
 }
 
 /// A session to fork, as its host or the vault holds it.
@@ -167,9 +163,8 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Lets `fork_session` and `herder fork` fork sessions of this host, and of other hosts
-    /// through `forks.vault`. Replaces the source when the vault link changes. Without it,
-    /// forks are refused.
+    /// Lets `fork_session` fork sessions of this host, and the histories clients relay of
+    /// other hosts' sessions. Without it, forks are refused.
     pub fn fork_from(&self, forks: Forks) -> anyhow::Result<()> {
         *self
             .inner
@@ -179,14 +174,13 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Forks `request.session_id` onto this host, `by` the user who asked; `None` when nobody
-    /// has paired with this host yet, as when `herder fork` recovers a session onto a new one.
-    /// With `relay`, a session not on this host is the history `by` uploaded from that host.
+    /// Forks `request.session_id` onto this host, `by` the user who asked. With `relay`, a
+    /// session not on this host is the history `by` uploaded from where it is.
     pub async fn fork(
         &self,
         request: Request,
         relay: Option<Relay>,
-        by: Option<UserId>,
+        by: UserId,
     ) -> Result<Forked, ErrorInfo> {
         let forks = self
             .inner
@@ -211,18 +205,17 @@ impl SessionManager {
         let source = if local {
             self.local_source(session_id, &forks.host).await?
         } else if let Some(relay) = relay {
-            self.relayed_source(session_id, relay, by.as_ref(), &forks.host)?
-        } else if let Some(vault) = &forks.vault {
-            vault.source(session_id).await?
+            self.relayed_source(session_id, relay, &by, &forks.host)?
         } else {
             return Err(error(
                 ErrorCode::NotFound,
                 format!(
-                    "session {session_id} is not on this host, which has no [vault] to find it in"
+                    "session {session_id} is not on this host; fork it from a client signed in \
+                     to the machine that holds it"
                 ),
             ));
         };
-        self.fork_source(source, request.account_id, by).await
+        self.fork_source(source, request.account_id, Some(by)).await
     }
 
     /// The history `by` uploaded of `session_id`, from `relay.host_id`, to fork. It is checked
@@ -231,7 +224,7 @@ impl SessionManager {
         &self,
         session_id: &SessionId,
         relay: Relay,
-        by: Option<&UserId>,
+        by: &UserId,
         host: &HostId,
     ) -> Result<Source, ErrorInfo> {
         if relay.host_id == *host {
@@ -240,12 +233,11 @@ impl SessionManager {
                 format!("session {session_id} is not on this host"),
             ));
         }
-        let upload = by.and_then(|by| {
-            self.inner
-                .uploads
-                .lock()
-                .remove(&(by.clone(), session_id.clone()))
-        });
+        let upload = self
+            .inner
+            .uploads
+            .lock()
+            .remove(&(by.clone(), session_id.clone()));
         let Some(upload) = upload else {
             return Err(error(
                 ErrorCode::BadRequest,
