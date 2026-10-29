@@ -24,7 +24,7 @@ tokio = { workspace = true, features = ["signal", "sync", "time"] }
 
 [dev-dependencies]
 herder-adapters.workspace = true
-herder-daemon.workspace = true
+herder-daemon = { workspace = true, features = ["test-authenticator"] }
 herder-store.workspace = true
 insta.workspace = true
 tempfile.workspace = true

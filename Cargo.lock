@@ -1884,6 +1884,7 @@ dependencies = [
  "futures-util",
  "herder-adapters",
  "herder-client-core",
+ "herder-daemon",
  "herder-protocol",
  "herder-store",
  "herder-tasktools",

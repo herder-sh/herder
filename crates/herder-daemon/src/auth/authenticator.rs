@@ -9,12 +9,18 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use herder_protocol::{
-    AssertionResponse, PASSKEY_RP_ID, PasskeyAssertion, PasskeyChallenge, PasskeyCreation,
-    PasskeyRegistration, RegistrationResponse,
+    AssertionResponse, NewPerson, PASSKEY_RP_ID, PasskeyAssertion, PasskeyChallenge,
+    PasskeyCreation, PasskeyRegistration, PersonPasskey, RegistrationResponse, Role, SignIn,
 };
 use ring::digest::{SHA256, digest};
 use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair, KeyPair};
+
+use herder_client_core::{Client, Machine};
+use tokio_util::sync::CancellationToken;
+
+use super::Auth;
+use crate::ws::Identity;
 
 const FIXTURES: &str = include_str!("fixtures/passkeys.json");
 
@@ -33,7 +39,8 @@ pub struct Authenticator {
 }
 
 impl Authenticator {
-    /// The recorded passkey `name` (`tomas` or `sam`), for the person `user_handle` names.
+    /// The recorded passkey `name` (`tomas`, `sam`, `alice`, `bob`, `carol` or `guest`), for
+    /// the person `user_handle` names.
     pub fn new(name: &str, user_handle: &[u8]) -> Self {
         let fixtures: serde_json::Value = serde_json::from_str(FIXTURES).unwrap();
         let fixture = &fixtures[name];
@@ -84,6 +91,19 @@ impl Authenticator {
             kind: "public-key".to_owned(),
         };
         (authenticator, registration)
+    }
+
+    /// Signs the device with certificate `fingerprint` in to `auth` as this passkey's person,
+    /// with a fresh assertion.
+    pub fn sign_in(&self, auth: &Auth, fingerprint: &str) -> Identity {
+        let assertion = self.assert(&auth.challenge().unwrap());
+        auth.sign_in(
+            fingerprint,
+            "test",
+            SignIn::Passkey { assertion },
+            &CancellationToken::new(),
+        )
+        .unwrap()
     }
 
     /// Signs `challenge`.
@@ -137,6 +157,82 @@ impl Authenticator {
         key.extend(bytes(&point[33..65]));
         key
     }
+}
+
+/// A way in for a new person: the first owner's claim of a daemon with no owner, or an invite
+/// to one that has an owner.
+pub struct Join {
+    code: String,
+    claim: bool,
+}
+
+impl Join {
+    /// Opens the way in to `auth` for a person with `role`. Open it before the device asks for
+    /// its sign-in challenge, so the challenge offers a passkey to create.
+    pub fn open(auth: &Auth, role: Role) -> Self {
+        if role == Role::Owner && auth.owner().is_none() {
+            return Self::claim(auth.open_claim().unwrap().0);
+        }
+        Self::invite(auth.invite(role).unwrap().0)
+    }
+
+    /// The claim of a daemon with no owner, by the code `herder service install` showed.
+    pub fn claim(code: String) -> Self {
+        Self { code, claim: true }
+    }
+
+    /// An invite, by its code.
+    pub fn invite(code: String) -> Self {
+        Self { code, claim: false }
+    }
+
+    /// Signs `client` in to the daemon at `hosts` with certificate `fingerprint` as the new
+    /// person `name`, with the recorded passkey `name`: what a test does where a device paired
+    /// with a code.
+    pub async fn join(
+        self,
+        client: &Client,
+        hosts: Vec<String>,
+        fingerprint: &str,
+        name: &str,
+    ) -> (Authenticator, Machine) {
+        let pending = client.sign_in(hosts, fingerprint.to_owned()).await.unwrap();
+        let (passkey, sign_in) = self.sign_in(name, &pending.registration().unwrap());
+        (passkey, pending.finish(sign_in).await.unwrap())
+    }
+
+    /// How the device signs in: creating the recorded passkey `name` from `creation`, for the
+    /// person `name`.
+    pub fn sign_in(self, name: &str, creation: &PasskeyCreation) -> (Authenticator, SignIn) {
+        let (passkey, registration) = Authenticator::register(name, creation);
+        let person = NewPerson {
+            name: name.to_owned(),
+            passkey: PersonPasskey::Register { registration },
+        };
+        let sign_in = match self.claim {
+            true => SignIn::ClaimOwnership {
+                code: self.code,
+                person,
+            },
+            false => SignIn::AcceptInvite {
+                invite: self.code,
+                person,
+            },
+        };
+        (passkey, sign_in)
+    }
+}
+
+/// Signs the device with certificate `fingerprint` in to `auth` as the new person `name`, with
+/// `role` and the recorded passkey `name`: how a test puts someone on a daemon without a client.
+pub fn enroll(auth: &Auth, name: &str, role: Role, fingerprint: &str) -> (Authenticator, Identity) {
+    let join = Join::open(auth, role);
+    let (_, creation) = auth.sign_in_challenge().unwrap();
+    let (passkey, sign_in) = join.sign_in(name, &creation.unwrap());
+    let identity = auth
+        .sign_in(fingerprint, "test", sign_in, &CancellationToken::new())
+        .unwrap();
+    (passkey, identity)
 }
 
 fn client_data(kind: &str, challenge: &str) -> Vec<u8> {
