@@ -349,6 +349,7 @@ mod tests {
             session_skills: Default::default(),
             update: None,
             herder_version: None,
+            person_id: None,
             approvals: Vec::new(),
         }
     }

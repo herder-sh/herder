@@ -30,7 +30,8 @@ use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ApprovalRequest, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
     Cursor, ErrorInfo, FailoverSettings, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge,
-    PasskeyCreation, Project, Role, ServerHello, ServerMessage, SessionId, TerminalId, Timestamp,
+    PasskeyCreation, PersonId, Project, Role, ServerHello, ServerMessage, SessionId, TerminalId,
+    Timestamp,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
@@ -150,6 +151,7 @@ struct State {
     connection: Option<ConnectionState>,
     quality: Quality,
     role: Option<Role>,
+    person_id: Option<PersonId>,
     herder_version: Option<String>,
     sessions: Vec<herder_protocol::SessionHead>,
     hosts: Vec<herder_protocol::FleetHost>,
@@ -484,6 +486,7 @@ impl Supervisor {
                 .unwrap_or(ConnectionState::Connecting),
             quality: state.quality.view(),
             role: state.role,
+            person_id: state.person_id.clone(),
             herder_version: state.herder_version.clone(),
             sessions: state.sessions.clone(),
             hosts: state.hosts.clone(),
@@ -1161,6 +1164,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
                 {
                     let mut state = supervisor.lock();
                     state.role = Some(hello.role);
+                    state.person_id = hello.person_id;
                     state.herder_version = hello.herder_version;
                     state.address = Some(address.clone());
                     state.dirty = true;

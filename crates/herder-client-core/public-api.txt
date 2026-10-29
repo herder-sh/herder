@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 15;
+pub const CLIENT_API_VERSION: u32 = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -29,6 +29,7 @@ pub struct Machine {
     pub connection: ConnectionState,
     pub quality: ConnectionQuality,
     pub role: Option<Role>,
+    pub person_id: Option<PersonId>,
     pub herder_version: Option<String>,
     pub sessions: Vec<SessionHead>,
     pub hosts: Vec<FleetHost>,

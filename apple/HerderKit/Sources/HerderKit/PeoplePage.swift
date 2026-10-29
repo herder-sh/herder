@@ -72,21 +72,13 @@ final class FleetPeople {
             Directory.Column(id: machine.hostId, name: machine.hostId == local ? "this Mac" : machine.name,
                              vault: !machine.hosts.isEmpty || machine.vault != nil)
         }
-        return .merging(people, columns: columns, me: Self.me(people, machines: machines),
+        return .merging(people, columns: columns, me: Self.me(machines),
                         thisClient: Self.thisClient + "/")
     }
 
-    /// You: on each machine, the person with this app's device online and the role the machine
-    /// gave this device; the one most machines agree on.
-    nonisolated static func me(_ people: [HostId: [PersonInfo]], machines: [Machine]) -> PersonId? {
-        var votes: [PersonId: Int] = [:]
-        for machine in machines {
-            let mine = (people[machine.hostId] ?? []).filter { person in
-                person.role == machine.role
-                    && person.devices.contains { $0.online && $0.client.hasPrefix(thisClient + "/") }
-            }
-            for person in mine { votes[person.personId, default: 0] += 1 }
-        }
+    /// You: the person the machines say this device acts for, the one most of them name.
+    nonisolated static func me(_ machines: [Machine]) -> PersonId? {
+        let votes = Dictionary(grouping: machines.compactMap(\.personId), by: \.self).mapValues(\.count)
         return votes.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key
     }
 
