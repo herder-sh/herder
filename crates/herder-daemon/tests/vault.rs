@@ -1211,9 +1211,29 @@ async fn a_forgotten_host_leaves_nothing_on_the_vault() {
     vault.runtime.kill().await;
 }
 
-/// Runs a secret command on the vault as the paired `client`.
-async fn secret_command(client: &Client, command: CommandBody) -> Result<CommandResult, ErrorCode> {
-    match client.send(HostId::new("vault"), command).await {
+/// Runs a secret command on the vault as the signed-in `client`, with a fresh assertion of
+/// its person's `passkey` where the command carries one.
+async fn secret_command(
+    client: &Client,
+    passkey: &Authenticator,
+    mut command: CommandBody,
+) -> Result<CommandResult, ErrorCode> {
+    let vault = HostId::new("vault");
+    if let CommandBody::CreateSecretSet { assertion, .. }
+    | CommandBody::DeleteSecretSet { assertion, .. }
+    | CommandBody::PutSecret { assertion, .. }
+    | CommandBody::DeleteSecret { assertion, .. }
+    | CommandBody::GrantSecretSet { assertion, .. }
+    | CommandBody::RevokeSecretSet { assertion, .. } = &mut command
+    {
+        let Ok(CommandResult::PasskeyChallenge { challenge, .. }) =
+            client.send(vault.clone(), CommandBody::PasskeyChallenge).await
+        else {
+            panic!("expected a passkey challenge");
+        };
+        *assertion = Some(Box::new(passkey.assert(&challenge)));
+    }
+    match client.send(vault, command).await {
         Ok(result) => Ok(result),
         Err(Error::Rejected { info }) => Err(info.code),
         Err(other) => panic!("the command failed: {other:?}"),
@@ -1260,7 +1280,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         "test".into(),
     )
     .unwrap();
-    vault.join(&client).await;
+    let (passkey, _) = vault.join(&client).await;
 
     for set in ["prod", "dev", "other"] {
         let created = CommandBody::CreateSecretSet {
@@ -1268,7 +1288,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, created).await,
+            secret_command(&client, &passkey, created).await,
             Ok(CommandResult::Applied)
         );
     }
@@ -1277,7 +1297,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, again).await,
+        secret_command(&client, &passkey, again).await,
         Err(ErrorCode::Conflict)
     );
     let bad = CommandBody::CreateSecretSet {
@@ -1285,7 +1305,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, bad).await,
+        secret_command(&client, &passkey, bad).await,
         Err(ErrorCode::BadRequest)
     );
     for (set, name, value) in [
@@ -1302,7 +1322,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, put).await,
+            secret_command(&client, &passkey, put).await,
             Ok(CommandResult::Applied)
         );
     }
@@ -1314,7 +1334,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, nowhere).await,
+        secret_command(&client, &passkey, nowhere).await,
         Err(ErrorCode::NotFound)
     );
     for set in ["prod", "dev"] {
@@ -1325,7 +1345,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, grant).await,
+            secret_command(&client, &passkey, grant).await,
             Ok(CommandResult::Applied)
         );
     }
@@ -1336,12 +1356,12 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, stranger).await,
+        secret_command(&client, &passkey, stranger).await,
         Err(ErrorCode::NotFound)
     );
 
     // The owner sees every set and secret, never a value.
-    let listed = secret_command(&client, CommandBody::ListSecrets)
+    let listed = secret_command(&client, &passkey, CommandBody::ListSecrets)
         .await
         .unwrap();
     let CommandResult::Secrets { sets, secrets } = &listed else {
@@ -1400,7 +1420,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, revoke).await,
+        secret_command(&client, &passkey, revoke).await,
         Ok(CommandResult::Applied)
     );
     let revoked = fetch(&host, "s3", &["prod/TOKEN"]).await.unwrap_err();
@@ -1411,7 +1431,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
     );
 
     // One audit row per value handed out, newest first, without the value.
-    let audit = secret_command(&client, CommandBody::ListSecretAudit { before: None })
+    let audit = secret_command(&client, &passkey, CommandBody::ListSecretAudit { before: None })
         .await
         .unwrap();
     let CommandResult::SecretAudit { entries } = &audit else {
@@ -1439,7 +1459,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         before: Some(entries[1].id),
     };
     let CommandResult::SecretAudit { entries: older } =
-        secret_command(&client, older).await.unwrap()
+        secret_command(&client, &passkey, older).await.unwrap()
     else {
         panic!("expected the audit");
     };
@@ -1454,7 +1474,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, busy).await,
+        secret_command(&client, &passkey, busy).await,
         Err(ErrorCode::Conflict)
     );
     let delete = CommandBody::DeleteSecret {
@@ -1463,7 +1483,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, delete).await,
+        secret_command(&client, &passkey, delete).await,
         Ok(CommandResult::Applied)
     );
     let gone = fetch(&host, "s4", &["TOKEN"]).await.unwrap_err();
@@ -1473,7 +1493,7 @@ async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, delete).await,
+        secret_command(&client, &passkey, delete).await,
         Ok(CommandResult::Applied)
     );
     host.runtime.kill().await;
@@ -1509,7 +1529,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         "test".into(),
     )
     .unwrap();
-    vault.join(&client).await;
+    let (passkey, _) = vault.join(&client).await;
     for (set, name, value) in [
         ("bots", "SLACK_TOKEN", "slack-v1"),
         ("mail", "SMTP_PASSWORD", "smtp-value"),
@@ -1519,7 +1539,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, created).await,
+            secret_command(&client, &passkey, created).await,
             Ok(CommandResult::Applied)
         );
         let put = CommandBody::PutSecret {
@@ -1530,7 +1550,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, put).await,
+            secret_command(&client, &passkey, put).await,
             Ok(CommandResult::Applied)
         );
     }
@@ -1561,11 +1581,11 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
             assertion: None,
         };
         assert_eq!(
-            secret_command(&client, grant).await,
+            secret_command(&client, &passkey, grant).await,
             Ok(CommandResult::Applied)
         );
     }
-    let listed = secret_command(&client, CommandBody::ListSecrets)
+    let listed = secret_command(&client, &passkey, CommandBody::ListSecrets)
         .await
         .unwrap();
     let CommandResult::Secrets { sets, .. } = &listed else {
@@ -1596,7 +1616,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
     assert!(host.secrets.list().await.unwrap().is_empty());
 
     // The audit shows the host's use, under its purpose, with no session.
-    let audit = secret_command(&client, CommandBody::ListSecretAudit { before: None })
+    let audit = secret_command(&client, &passkey, CommandBody::ListSecretAudit { before: None })
         .await
         .unwrap();
     let CommandResult::SecretAudit { entries } = &audit else {
@@ -1627,7 +1647,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, put).await,
+        secret_command(&client, &passkey, put).await,
         Ok(CommandResult::Applied)
     );
     held_until(&slack, |held| holds(held, "slack-v2")).await;
@@ -1641,7 +1661,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, sessions_grant).await,
+        secret_command(&client, &passkey, sessions_grant).await,
         Err(ErrorCode::NotFound)
     );
     let revoke = CommandBody::RevokeSecretSet {
@@ -1651,7 +1671,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
         assertion: None,
     };
     assert_eq!(
-        secret_command(&client, revoke).await,
+        secret_command(&client, &passkey, revoke).await,
         Ok(CommandResult::Applied)
     );
     let revoked = held_until(&slack, |held| matches!(held, Held::Denied(_))).await;
@@ -1692,7 +1712,7 @@ async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
         "test".into(),
     )
     .unwrap();
-    vault.join(&client).await;
+    let (passkey, _) = vault.join(&client).await;
     for command in [
         CommandBody::CreateSecretSet {
             set: "prod".into(),
@@ -1713,7 +1733,7 @@ async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
         },
     ] {
         assert_eq!(
-            secret_command(&client, command).await,
+            secret_command(&client, &passkey, command).await,
             Ok(CommandResult::Applied)
         );
     }
@@ -1784,7 +1804,7 @@ async fn a_host_backs_up_and_fetches_secrets_only_as_its_switches_say() {
         "test".into(),
     )
     .unwrap();
-    vault.join(&client).await;
+    let (passkey, _) = vault.join(&client).await;
 
     // Backup off: the host connects, so its sessions get secrets, but replicates nothing.
     let config = VaultConfig {
@@ -1816,7 +1836,7 @@ async fn a_host_backs_up_and_fetches_secrets_only_as_its_switches_say() {
         },
     ] {
         assert_eq!(
-            secret_command(&client, command).await,
+            secret_command(&client, &passkey, command).await,
             Ok(CommandResult::Applied)
         );
     }

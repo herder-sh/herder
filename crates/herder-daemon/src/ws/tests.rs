@@ -1144,18 +1144,18 @@ async fn terminals_are_for_owners_only() {
     let device = daemon.member("bob");
     let mut member = daemon.client_on(&device, None).await;
     member.hello(Vec::new()).await;
-    let open = |id: &str| {
+    let open = |id: &str, assertion| {
         ClientMessage::Command(Command {
             id: CommandId::new(id),
             body: CommandBody::OpenTerminal {
                 session_id: session.clone(),
                 cols: 80,
                 rows: 24,
-                assertion: None,
+                assertion,
             },
         })
     };
-    member.send(&open("c1")).await;
+    member.send(&open("c1", None)).await;
     let ServerMessage::CommandRejected { error, .. } = member.recv().await else {
         panic!("expected a rejection");
     };
@@ -1205,10 +1205,12 @@ async fn terminals_are_for_owners_only() {
         ));
     }
 
-    // The owner opens one; the member never hears of it.
+    // The owner opens one, with Face ID; the member never hears of it.
     let mut owner = daemon.client().await;
     owner.hello(Vec::new()).await;
-    owner.send(&open("c3")).await;
+    let passkey = Authenticator::of(&daemon.auth, "tomas").unwrap();
+    let assertion = fresh(&mut owner, &passkey).await;
+    owner.send(&open("c3", Some(assertion))).await;
     assert!(
         matches!(owner.recv().await, ServerMessage::Terminals { terminals } if terminals.len() == 1)
     );
@@ -1426,11 +1428,12 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     let session = daemon.create_session("s1");
     let mut client = daemon.client().await;
     client.hello(Vec::new()).await;
+    let passkey = Authenticator::of(&daemon.auth, "tomas").unwrap();
     let open = CommandBody::OpenTerminal {
         session_id: session.clone(),
         cols: 80,
         rows: 24,
-        assertion: None,
+        assertion: Some(fresh(&mut client, &passkey).await),
     };
     client
         .send(&ClientMessage::Command(Command {
@@ -1509,7 +1512,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     );
     let attach = CommandBody::AttachTerminal {
         terminal_id: terminal_id.clone(),
-        assertion: None,
+        assertion: Some(fresh(&mut client, &passkey).await),
     };
     let ServerMessage::TerminalOutput { data, .. } = client.command("c3", attach).await else {
         panic!("expected the scrollback");
@@ -1547,7 +1550,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     assert_eq!(closed, Some((terminal_id.clone(), Some(3))));
     let attach = CommandBody::AttachTerminal {
         terminal_id,
-        assertion: None,
+        assertion: Some(fresh(&mut client, &passkey).await),
     };
     assert!(matches!(
         client.command("c5", attach).await,
