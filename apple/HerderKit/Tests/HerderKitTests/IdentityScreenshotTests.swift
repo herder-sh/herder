@@ -16,11 +16,15 @@ import Testing
 
     @Test func drawsApprovingAMachine() async throws {
         let approval = Approval(ApprovalTests.machine, authenticator: FakeAuthenticator(), challenge: { Data() }) { _ in }
-        let sheet = { ApprovalSheet(approval: approval, teammates: ["Sam", "Kim"],
-                                    vaults: ["herder-vault-0", "draugelis vault"], biometry: "Face ID") }
-        try await shoot(phone(sheet()), width: Self.phone.width, layer: .canvas, named: "identity-approve-iphone.png")
+        let sheet = { (biometry: String) in
+            ApprovalSheet(approval: approval, teammates: ["Sam", "Kim"], vaults: ["herder-vault-0", "draugelis vault"],
+                          biometry: biometry)
+        }
+        try await shoot(phone(sheet("Face ID")), width: Self.phone.width, layer: .canvas, named: "identity-approve-iphone.png")
+        try await shoot(sheet("Touch ID"), width: Self.mac, named: "identity-approve-mac.png")
         await approval.approve()
-        try await shoot(phone(sheet()), width: Self.phone.width, layer: .canvas, named: "identity-approved-iphone.png")
+        try await shoot(phone(sheet("Face ID")), width: Self.phone.width, layer: .canvas, named: "identity-approved-iphone.png")
+        try await shoot(sheet("Touch ID"), width: Self.mac, named: "identity-approved-mac.png")
     }
 
     @Test func drawsApprovingATerminal() async throws {
@@ -29,6 +33,7 @@ import Testing
         let approval = Approval(request, authenticator: FakeAuthenticator(), challenge: { Data() }) { _ in }
         try await shoot(phone(ApprovalSheet(approval: approval, biometry: "Face ID")), width: Self.phone.width, layer: .canvas,
                         named: "identity-login-iphone.png")
+        try await shoot(ApprovalSheet(approval: approval, biometry: "Touch ID"), width: Self.mac, named: "identity-login-mac.png")
         await approval.approve()
         try await shoot(phone(ApprovalSheet(approval: approval, biometry: "Face ID")), width: Self.phone.width, layer: .canvas,
                         named: "identity-login-done-iphone.png")
@@ -38,9 +43,13 @@ import Testing
     func drawsClaim(width: (name: String, points: Double)) async throws {
         let claim = Claim(.demo, authenticator: FakeAuthenticator()) { _, _, _ in }
         let sheet = ClaimSheet(claim: claim, name: "Tomas", userId: Data(), challenge: Data())
-            .frame(width: width.points)
+            // The iPhone's sheet fills the screen; the Mac's is its own height.
+            .frame(width: width.points, height: width.name == "iphone" ? Self.phone.height : nil)
         try await shoot(sheet, width: width.points, named: "identity-claim-\(width.name).png")
     }
+
+    /// The Mac's approval sheet.
+    private static let mac = 400.0
 
     /// An iPhone's screen: Fleet behind, the sheet risen from the bottom.
     private static let phone = CGSize(width: 390, height: 844)
