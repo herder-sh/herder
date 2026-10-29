@@ -31,7 +31,7 @@ uniffi.workspace = true
 [dev-dependencies]
 anyhow.workspace = true
 herder-adapters.workspace = true
-herder-daemon.workspace = true
+herder-daemon = { workspace = true, features = ["test-authenticator"] }
 herder-store.workspace = true
 serde.workspace = true
 tempfile.workspace = true

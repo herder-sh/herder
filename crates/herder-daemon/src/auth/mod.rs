@@ -27,8 +27,8 @@
 //! Users, people and devices persist in `<data_dir>/auth.json`, written atomically on every
 //! change.
 
-#[cfg(test)]
-pub(crate) mod authenticator;
+#[cfg(any(test, feature = "test-authenticator"))]
+pub mod authenticator;
 pub mod control;
 pub mod passkeys;
 
