@@ -62,12 +62,15 @@ struct FleetView: View {
     @State private var linked: SessionKey?
     /// Why a link's session did not open, for the alert that says so.
     @State private var linkProblem: SessionLinkTarget?
+    /// Your herder passkey, which signs every change to people and every approval.
+    @State private var authenticator = PlatformAuthenticator()
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
     var body: some View {
         screens
+            .environment(\.signPasskey) { try await authenticator.sign($0) }
             .onOpenURL(perform: open)
             #if os(macOS)
             // A link opens in the one window rather than a new one.

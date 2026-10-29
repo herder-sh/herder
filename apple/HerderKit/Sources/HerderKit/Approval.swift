@@ -102,7 +102,7 @@ final class Approval {
         case failed(String)
     }
 
-    typealias Challenge = @MainActor () async throws -> Data
+    typealias Challenge = @MainActor () async throws -> PasskeyChallenge
     typealias Send = @MainActor (PasskeyAssertion) async throws -> Void
 
     let request: ApprovalRequest
@@ -122,7 +122,7 @@ final class Approval {
     func approve() async {
         state = .signing
         do {
-            let assertion = try await authenticator.assert(challenge: try await challenge())
+            let assertion = try await authenticator.sign(try await challenge())
             try await send(assertion)
             state = .approved
         } catch {
@@ -160,14 +160,28 @@ extension Fleet {
         machines.first { $0.fingerprint.lowercased() == fingerprint.lowercased() }
     }
 
-    /// What the passkey signs to approve `request`: the challenge of the machine it names.
-    func passkeyChallenge(for request: ApprovalRequest) async throws -> Data {
-        throw HerderError.Local(detail: "this herder cannot approve \(request.name) yet")
+    /// What the passkey signs to approve `request`: a challenge of the machine it names.
+    func passkeyChallenge(for request: ApprovalRequest) async throws -> PasskeyChallenge {
+        guard request.kind == .login else {
+            throw HerderError.Local(detail: "this herder cannot take a new machine yet")
+        }
+        guard case .passkeyChallenge(let challenge) = try await client.send(hostId: try hostId(of: request),
+                                                                           command: .passkeyChallenge)
+        else { throw HerderError.Local(detail: "\(request.name) did not send a challenge") }
+        return challenge
     }
 
-    /// Sends the signed approval: the new machine records you as its owner, or the terminal is
-    /// signed in as you.
+    /// Sends the signed approval: the terminal is signed in as you.
     func approve(_ request: ApprovalRequest, assertion: PasskeyAssertion) async throws {
-        throw HerderError.Local(detail: "this herder cannot approve \(request.name) yet")
+        _ = try await client.send(hostId: try hostId(of: request),
+                                  command: .approveLogin(code: request.code, assertion: assertion))
+    }
+
+    /// The paired machine a terminal's link names, by its fingerprint.
+    private func hostId(of request: ApprovalRequest) throws -> HostId {
+        guard let machine = machine(fingerprint: request.fingerprint) else {
+            throw HerderError.Local(detail: "this device is not paired with \(request.name)")
+        }
+        return machine.hostId
     }
 }

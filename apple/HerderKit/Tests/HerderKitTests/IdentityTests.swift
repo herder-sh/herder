@@ -19,13 +19,17 @@ import Testing
     func assert(challenge: Data) async throws -> PasskeyAssertion {
         if let failure { throw failure }
         signed.append(challenge)
-        return PasskeyAssertion(credentialId: Data([1]), authenticatorData: Data([4]), signature: Data([5]),
-                                clientData: Data([6]))
+        return PasskeyAssertion(id: "AQ", rawId: "AQ",
+                                response: AssertionResponse(clientDataJson: "Bg", authenticatorData: "BA",
+                                                            signature: "BQ", userHandle: "AQ"),
+                                kind: "public-key")
     }
 }
 
 @MainActor
 struct ApprovalTests {
+    /// A challenge over the bytes 9, 9.
+    static let challenge = PasskeyChallenge(rpId: "herder.sh", challenge: "CQk", expiresAt: "2026-10-29T12:01:00Z")
     static let fingerprint = "ab129f3c" + String(repeating: "0", count: 52) + "e07d"
     static let machine = ApprovalRequest(kind: .machine, name: "new-server", code: "K7Q4PD", fingerprint: fingerprint,
                                          hosts: ["10.0.4.17:7447"], os: "Linux", version: "0.17.0")
@@ -52,6 +56,13 @@ struct ApprovalTests {
         #expect(AppLink(url: url) == nil)
     }
 
+    @Test func bytesRoundTripAsBase64URL() {
+        let bytes = Data([0xFB, 0xFF, 0x01])
+        #expect(bytes.base64URLEncodedString() == "-_8B")
+        #expect(Data(base64URL: "-_8B") == bytes)
+        #expect(Data(base64URL: "CQk") == Data([9, 9]))
+    }
+
     @Test func theCodeAndFingerprintReadAsTheTerminalPrintsThem() {
         #expect(Self.machine.spokenCode == "K7Q · 4PD")
         #expect(ApprovalRequest.halves("k7q4p") == "K7Q · 4P")
@@ -61,7 +72,7 @@ struct ApprovalTests {
     @Test func approvingSignsTheChallengeThenSendsIt() async {
         let authenticator = FakeAuthenticator()
         var sent: [PasskeyAssertion] = []
-        let approval = Approval(Self.machine, authenticator: authenticator, challenge: { Data([9, 9]) }) { sent.append($0) }
+        let approval = Approval(Self.machine, authenticator: authenticator, challenge: { Self.challenge }) { sent.append($0) }
         await approval.approve()
         #expect(authenticator.signed == [Data([9, 9])])
         #expect(sent.count == 1)
@@ -71,11 +82,11 @@ struct ApprovalTests {
     @Test func closingFaceIDAsksAgainButARefusalSaysWhy() async {
         let authenticator = FakeAuthenticator()
         authenticator.failure = ASAuthorizationError(.canceled)
-        let approval = Approval(Self.machine, authenticator: authenticator, challenge: { Data() }) { _ in }
+        let approval = Approval(Self.machine, authenticator: authenticator, challenge: { Self.challenge }) { _ in }
         await approval.approve()
         #expect(approval.state == .asking)
         authenticator.failure = nil
-        let refused = Approval(Self.machine, authenticator: authenticator, challenge: { Data() }) { _ in
+        let refused = Approval(Self.machine, authenticator: authenticator, challenge: { Self.challenge }) { _ in
             throw HerderError.Local(detail: "the code expired")
         }
         await refused.approve()
