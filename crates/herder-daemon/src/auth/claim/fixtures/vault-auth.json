@@ -1,0 +1,80 @@
+{
+  "version": 0,
+  "users": [
+    {
+      "user_id": "01J9A0TOMAS00000000000000",
+      "name": "tomas",
+      "role": "owner",
+      "created_at": "2026-10-03T09:41:40.130129Z"
+    },
+    {
+      "user_id": "01J9A0OWNER00000000000000",
+      "name": "owner",
+      "role": "member",
+      "created_at": "2026-10-09T14:02:11.402187Z"
+    },
+    {
+      "user_id": "01J9A0TRASHCAN00000000000",
+      "name": "trash-can-01",
+      "role": "member",
+      "created_at": "2026-10-11T08:15:52.981004Z"
+    },
+    {
+      "user_id": "01J9A0DRAUGELIS0000000000",
+      "name": "draugelis",
+      "role": "member",
+      "created_at": "2026-10-14T19:30:07.044518Z"
+    },
+    {
+      "user_id": "01J9A0BOB0000000000000000",
+      "name": "bob",
+      "role": "member",
+      "created_at": "2026-10-20T11:47:33.610275Z"
+    }
+  ],
+  "devices": [
+    {
+      "device_id": "01J9A0DPHONE0000000000000",
+      "user_id": "01J9A0TOMAS00000000000000",
+      "client": "herder-ios/0.1.0",
+      "fingerprint": "fp-phone",
+      "paired_at": "2026-10-03T09:41:40.130129Z",
+      "role": "client"
+    },
+    {
+      "device_id": "01J9A0DCLI000000000000000",
+      "user_id": "01J9A0OWNER00000000000000",
+      "client": "herder-cli/0.0.0",
+      "fingerprint": "fp-cli",
+      "paired_at": "2026-10-09T14:02:11.402187Z",
+      "role": "client",
+      "last_seen": "2026-10-28T17:20:45.118930Z"
+    },
+    {
+      "device_id": "01J9A0DTRASHCAN0000000000",
+      "user_id": "01J9A0TRASHCAN00000000000",
+      "client": "herder-daemon/0.12.0",
+      "fingerprint": "fp-trash-can",
+      "paired_at": "2026-10-11T08:15:52.981004Z",
+      "role": "client",
+      "last_seen": "2026-10-29T09:02:13.557201Z"
+    },
+    {
+      "device_id": "01J9A0DDRAUGELIS000000000",
+      "user_id": "01J9A0DRAUGELIS0000000000",
+      "client": "herder-daemon/0.14.0",
+      "fingerprint": "fp-draugelis",
+      "paired_at": "2026-10-14T19:30:07.044518Z",
+      "role": "host",
+      "last_seen": "2026-10-29T09:01:58.203117Z"
+    },
+    {
+      "device_id": "01J9A0DBOB000000000000000",
+      "user_id": "01J9A0BOB0000000000000000",
+      "client": "herder-macos/0.1.0",
+      "fingerprint": "fp-bob",
+      "paired_at": "2026-10-20T11:47:33.610275Z",
+      "role": "client"
+    }
+  ]
+}
