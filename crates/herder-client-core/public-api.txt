@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 13;
+pub const CLIENT_API_VERSION: u32 = 14;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -371,6 +371,7 @@ pub struct OwnUri {
     pub hosts: Vec<String>,
     pub fingerprint: String,
     pub code: String,
+    pub name: Option<String>,
 }
 
 impl fmt::Display for PairingUri {}

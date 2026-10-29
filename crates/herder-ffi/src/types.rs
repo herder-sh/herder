@@ -195,6 +195,7 @@ pub struct OwnUri {
     pub hosts: Vec<String>,
     pub fingerprint: String,
     pub code: String,
+    pub name: Option<String>,
 }
 
 #[uniffi::remote(Enum)]

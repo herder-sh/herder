@@ -50,16 +50,19 @@ pub struct LoginUri {
     pub code: String,
 }
 
-/// The `herder://own` link a fresh daemon shows: the machine waiting for its first owner, and
-/// the code that claims it (`claim_ownership`).
+/// The `herder://own` link `herder service install` shows on a fresh daemon: the machine
+/// waiting for its first owner, and the code that claims it (`claim_ownership`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnUri {
     /// Addresses the daemon may be reached at, as `host:port`; try them in order.
     pub hosts: Vec<String>,
     /// SHA-256 of the daemon's certificate, lowercase hex.
     pub fingerprint: String,
-    /// The claim code, as the daemon's terminal shows it.
+    /// The claim code, as the daemon's terminal shows it; the daemon ignores its case and
+    /// separators.
     pub code: String,
+    /// The machine's name, for the app to show while it asks; `None` when the link has none.
+    pub name: Option<String>,
 }
 
 /// Formats the link, `herder://pair?…`.
@@ -109,7 +112,7 @@ impl FromStr for LoginUri {
     }
 }
 
-/// Formats the link, `herder://own?…`.
+/// Formats the link, `herder://own?…`, with the name last.
 impl fmt::Display for OwnUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let uri = PairingUri {
@@ -117,24 +120,39 @@ impl fmt::Display for OwnUri {
             fingerprint: self.fingerprint.clone(),
             code: self.code.clone(),
         };
-        format(OWN, std::slice::from_ref(&uri), f)
+        format(OWN, std::slice::from_ref(&uri), f)?;
+        if let Some(name) = &self.name {
+            let name = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("name", name)
+                .finish();
+            write!(f, "&{name}")?;
+        }
+        Ok(())
     }
 }
 
 impl FromStr for OwnUri {
     type Err = Error;
 
-    /// Parses a `herder://own` link; fails with [`Error::InvalidLink`].
+    /// Parses a `herder://own` link, skipping parameters it does not know; fails with
+    /// [`Error::InvalidLink`].
     fn from_str(text: &str) -> Result<Self, Error> {
         let PairingUri {
             hosts,
             fingerprint,
             code,
         } = one(OWN, text)?;
+        // `one` checked it parses.
+        let name = Url::parse(text).ok().and_then(|url| {
+            url.query_pairs()
+                .find(|(key, _)| key == "name")
+                .map(|(_, name)| name.into_owned())
+        });
         Ok(Self {
             hosts,
             fingerprint,
             code,
+            name,
         })
     }
 }
@@ -358,11 +376,31 @@ mod tests {
             hosts: vec!["10.0.4.17:7447".into()],
             fingerprint: "cd".repeat(32),
             code: "K7Q-4PD".into(),
+            name: Some("new server".into()),
         };
         let text = own.to_string();
         assert!(text.starts_with("herder://own?host="), "{text}");
         assert_eq!(text.parse::<OwnUri>().unwrap(), own);
         assert!(text.parse::<LoginUri>().is_err());
         assert!("herder://login?host=a&fp=b".parse::<LoginUri>().is_err());
+
+        // As `herder service install` prints it, with parameters it does not know and a
+        // code typed loosely, which the daemon normalizes.
+        let printed: OwnUri = "herder://own?host=a%3A7447&host=b%3A7447&fp=ab&code=k7q4pd\
+                               &name=draugelis&role=owner"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            printed,
+            OwnUri {
+                hosts: vec!["a:7447".into(), "b:7447".into()],
+                fingerprint: "ab".into(),
+                code: "k7q4pd".into(),
+                name: Some("draugelis".into()),
+            }
+        );
+        let unnamed: OwnUri = "herder://own?host=a&fp=b&code=c".parse().unwrap();
+        assert_eq!(unnamed.name, None);
+        assert!(!unnamed.to_string().contains("name"));
     }
 }

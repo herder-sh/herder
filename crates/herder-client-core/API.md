@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 13`
+`CLIENT_API_VERSION = 14`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -211,8 +211,10 @@ everything stops once the last clone is dropped.
 - `LoginUri` — `hosts: Vec<String>`, `fingerprint: String`, `code: String` (`XXX-XXX`):
   the machine a terminal waits on in `herder login` and the code an app approves it with;
   `FromStr` and `Display` (`herder://login?…`).
-- `OwnUri` — the same fields: a fresh machine waiting for its first owner and its claim
-  code; `FromStr` and `Display` (`herder://own?…`).
+- `OwnUri` — the same fields and `name: Option<String>`: a fresh machine waiting for its
+  first owner, its claim code (case and separators do not matter) and its name to show;
+  `FromStr` (skipping parameters it does not know) and `Display` (`herder://own?…`, as
+  `herder service install` prints it).
 - `SharedLink` — what `share()` made: `link: PairingLink`, `shared: Vec<HostId>` (the
   machines it pairs with, in its order), `skipped: Vec<SkippedMachine>`, `expires_at:
   Timestamp` (when its first code stops working).
@@ -327,8 +329,14 @@ host part:
 
 ```
 herder://login?host=10.0.4.17%3A7447&fp=<hex>&code=K7Q-4PD
-herder://own?host=10.0.4.17%3A7447&fp=<hex>&code=K7Q-4PD
+herder://own?host=10.0.4.17%3A7447&fp=<hex>&code=K7Q-4PD&name=new-server
 ```
+
+## Changes in version 14
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| `OwnUri { hosts, fingerprint, code }` | `OwnUri { hosts, fingerprint, code, name: Option<String> }` | `herder service install` prints the machine's name in its `herder://own` link, and the app shows it while it asks to become the owner. One type now formats the link the CLI prints and parses it in the app. A new field breaks code that builds an `OwnUri`. |
 
 ## Changes in version 13
 
