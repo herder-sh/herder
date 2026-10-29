@@ -47,8 +47,7 @@ extension AppSheet {
         case .importSkill: SkillImportSheet(fleet: fleet)
         case .addBot: AddBotSheet(fleet: fleet)
         case .invite(let hostId):
-            InviteSheet(people: People(fleet: fleet, hostId: hostId),
-                        machine: fleet.machines.first { $0.hostId == hostId }?.name ?? "the machine")
+            InviteSheet(fleet: fleet, hostId: hostId)
         }
     }
 }
