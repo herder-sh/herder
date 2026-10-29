@@ -9,9 +9,9 @@
 //! session is driven on its host, which the error names.
 //!
 //! Owners link hosts to the vault from a client: `pair_vault_host` mints a host-only code, as
-//! `herder pair --host` does, for the client to hand the host with `link_vault`,
-//! `set_vault_host_access` lets a host's devices read the vault too, so it can take handoffs,
-//! and `revoke_vault_host` unpairs the devices a host replicates from once it stops backing up.
+//! `herder pair --host` does, for the client to hand the host with `link_vault`, and
+//! `revoke_vault_host` unpairs the devices a host replicates from once it stops backing up. No
+//! host reads the vault.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,7 +29,7 @@ use tracing::warn;
 
 use super::secrets::{self, SecretsKey};
 use super::{VaultStore, blocking};
-use crate::auth::{Auth, DeviceRole, PAIRING_TTL};
+use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::Hub;
 use crate::session::EventSink;
 use crate::ws::Backend;
@@ -99,22 +99,10 @@ impl Fleet {
                 () = shutdown.cancelled() => return,
                 () = self.status_changed.notified() => {}
             }
-            let read = blocking(&self.store, |store| {
-                let status = store.status()?;
-                let devices = status
-                    .hosts
-                    .iter()
-                    .map(|host| store.devices_of(&host.host_id))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((status, devices))
-            });
-            match read.await {
-                Ok((mut status, devices)) => {
-                    for (host, devices) in status.hosts.iter_mut().zip(devices) {
+            match blocking(&self.store, |store| store.status()).await {
+                Ok(mut status) => {
+                    for host in &mut status.hosts {
                         host.lag_ms = self.presence.lag_ms(&host.host_id);
-                        host.read = devices.iter().any(|device| {
-                            self.auth.device_role(device) == Some(DeviceRole::Client)
-                        });
                     }
                     self.hub.vault_status(status);
                 }
@@ -241,42 +229,6 @@ impl Fleet {
                 warn!("cannot look up a host's devices: {err:#}");
                 error(ErrorCode::Internal, "cannot read the vault database".into())
             })
-    }
-
-    /// Lets every device that replicates as `host_id` read the vault as a client, or makes
-    /// them host-only again, closing their client connections; clients get the new status.
-    async fn set_host_access(
-        &self,
-        host_id: HostId,
-        read: bool,
-    ) -> Result<CommandResult, ErrorInfo> {
-        let role = if read {
-            DeviceRole::Client
-        } else {
-            DeviceRole::Host
-        };
-        let mut changed = 0;
-        for device in &self.devices_of(&host_id).await? {
-            match self.auth.set_device_role(device, role) {
-                Ok(true) => changed += 1,
-                Ok(false) => {}
-                Err(err) => {
-                    warn!(device_id = %device, "cannot change a host's device: {err:#}");
-                    return Err(error(
-                        ErrorCode::Internal,
-                        "cannot save the paired devices".into(),
-                    ));
-                }
-            }
-        }
-        if changed == 0 {
-            return Err(error(
-                ErrorCode::NotFound,
-                format!("no paired device replicates as host {host_id}"),
-            ));
-        }
-        self.status_changed.notify_one();
-        Ok(CommandResult::Applied)
     }
 
     /// Unpairs every device that replicates as `host_id`, closing its connections.
@@ -413,14 +365,10 @@ impl Backend for Fleet {
             }
             CommandBody::PairVaultHost { host_name } => return self.pair_host(&host_name),
             CommandBody::RevokeVaultHost { host_id } => return self.revoke_host(host_id).await,
-            CommandBody::SetVaultHostAccess { host_id, read } => {
-                return self.set_host_access(host_id, read).await;
-            }
             CommandBody::LinkVault { .. }
             | CommandBody::SetVaultLink { .. }
             | CommandBody::UnlinkVault
-            | CommandBody::InstallVault
-            | CommandBody::LinkLocalVault => {
+            | CommandBody::InstallVault => {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "a vault links to no vault; link a host to it instead".into(),
@@ -498,7 +446,6 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::SetVaultLink { .. }
         | CommandBody::UnlinkVault
         | CommandBody::InstallVault
-        | CommandBody::LinkLocalVault
         | CommandBody::PairVaultHost { .. }
         | CommandBody::RevokeVaultHost { .. }
         | CommandBody::CreateSecretSet { .. }
@@ -509,10 +456,6 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::RevokeSecretSet { .. }
         | CommandBody::ListSecrets
         | CommandBody::ListSecretAudit { .. }
-        | CommandBody::SetVaultHostAccess { .. }
-        | CommandBody::PairDevice { .. }
-        | CommandBody::ListUsers
-        | CommandBody::SetUserRole { .. }
         | CommandBody::RevokeDevice { .. }
         | CommandBody::PasskeyChallenge
         | CommandBody::ListPeople

@@ -1583,7 +1583,7 @@
               "type": "boolean"
             },
             "local_vault": {
-              "description": "Whether a vault is installed on this machine, next to the daemon, as\n`install_vault` or `herder vault install` installs one; `link_local_vault` links to\nit.",
+              "description": "Whether a vault is installed on this machine, next to the daemon, as\n`install_vault` or `herder vault install` installs one.",
               "type": "boolean"
             },
             "type": {
@@ -1652,32 +1652,32 @@
           ]
         },
         {
-          "description": "A one-time code that pairs another device as the caller's user, answering\n`pair_device`: everything a `herder://pair` link names for this daemon. Also the answer\nto `install_vault` and `link_local_vault`, naming the vault on this machine.",
+          "description": "The window in which the caller claims the vault `install_vault` ran as its first owner,\nwith `claim_ownership` and this code; the vault's, not this daemon's.",
           "type": "object",
           "properties": {
             "addresses": {
-              "description": "Addresses the daemon advertises as `host:port`, most likely reachable first; not\nnecessarily the one the caller reached it on.",
+              "description": "Addresses the vault advertises as `host:port`, most likely reachable first.",
               "type": "array",
               "items": {
                 "type": "string"
               }
             },
             "code": {
-              "description": "The code, for the new device's hello.",
+              "description": "The claim code.",
               "type": "string"
             },
             "expires_at": {
-              "description": "When the code stops working.",
+              "description": "When the window closes.",
               "type": "string",
               "format": "date-time"
             },
             "fingerprint": {
-              "description": "SHA-256 of the daemon's TLS certificate, lowercase hex.",
+              "description": "SHA-256 of the vault's TLS certificate, lowercase hex.",
               "type": "string"
             },
             "type": {
               "type": "string",
-              "const": "device_pairing"
+              "const": "ownership_claim"
             }
           },
           "required": [
@@ -1835,27 +1835,6 @@
             "type",
             "device_id",
             "client"
-          ]
-        },
-        {
-          "description": "This daemon's users, answering `list_users`.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "users"
-            },
-            "users": {
-              "description": "Oldest first.",
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/UserInfo"
-              }
-            }
-          },
-          "required": [
-            "type",
-            "users"
           ]
         },
         {
@@ -3368,10 +3347,6 @@
             "null"
           ],
           "format": "date-time"
-        },
-        "read": {
-          "description": "Whether a device the host replicates from may read the vault as a client too, so the\nhost can take handoffs of other hosts' sessions; false for a host paired host-only.\n`set_vault_host_access` changes it.",
-          "type": "boolean"
         },
         "sessions": {
           "description": "Sessions of the host held, without copies another host took over.",
@@ -5744,7 +5719,7 @@
       "type": "string"
     },
     "UserInfo": {
-      "description": "A user of a daemon, with their devices, answering `list_users`.",
+      "description": "A per-daemon user of an install no person claimed yet, with their devices, as `claimed`\nlists the leftovers.",
       "type": "object",
       "properties": {
         "devices": {

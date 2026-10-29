@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use herder_client_core::{Client, Error, Machine, PairResult, PairingUri};
+use herder_client_core::{Client, Error, Machine};
 use herder_daemon::auth::authenticator::{Authenticator, Join};
 use herder_daemon::auth::control::{self, Request, Response};
 use herder_daemon::service::{Service, Services};
@@ -181,14 +181,6 @@ fn open(dir: &Path) -> Client {
     Client::open(dir.to_str().unwrap().to_owned(), "herder-test".into()).unwrap()
 }
 
-/// The machine a link of one machine paired with.
-fn one_machine(results: Vec<PairResult>) -> Machine {
-    match <[PairResult; 1]>::try_from(results) {
-        Ok([PairResult::Paired { machine }]) => machine,
-        other => panic!("expected one paired machine: {other:?}"),
-    }
-}
-
 /// Signs `member` in to `machine` as the new person `name`, a member, by an invite `owner`
 /// makes with `passkey`.
 async fn invite(
@@ -283,30 +275,6 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         ErrorCode::NotFound
     );
 
-    // A host code is host-only: a client cannot pair with it.
-    let CommandResult::HostPairing { code, .. } = send(
-        &owner,
-        &vault_id,
-        CommandBody::PairVaultHost {
-            host_name: "devbox".into(),
-        },
-    )
-    .await
-    else {
-        panic!("no host code");
-    };
-    let stranger = open(&tmp.path().join("stranger"));
-    let host_code_link = PairingUri {
-        hosts: on_vault.addresses.clone(),
-        fingerprint: on_vault.fingerprint.clone(),
-        code: code.clone(),
-    };
-    let as_host = stranger.pair(host_code_link.to_string()).await.unwrap();
-    assert!(
-        matches!(&as_host[..], [PairResult::Failed { .. }]),
-        "{as_host:?}"
-    );
-
     let CommandResult::HostPairing { code, .. } = send(
         &owner,
         &vault_id,
@@ -350,10 +318,6 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         },
         CommandBody::RevokeVaultHost {
             host_id: host_id.clone(),
-        },
-        CommandBody::SetVaultHostAccess {
-            host_id: host_id.clone(),
-            read: true,
         },
     ] {
         assert_eq!(
@@ -448,62 +412,13 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         refused(&owner, &host_id, missing_fork.clone()).await,
         ErrorCode::NotFound
     );
-    let reads = |read: bool| {
-        let (host_id, vault_id) = (host_id.clone(), vault_id.clone());
-        move |m: &Machine| {
-            m.host_id == vault_id
-                && m.vault.as_ref().is_some_and(|vault| {
-                    vault
-                        .hosts
-                        .iter()
-                        .any(|h| h.host_id == host_id && h.read == read)
-                })
-        }
-    };
-    machine_when(&owner, reads(false)).await;
-
-    // The owner lets it take handoffs: the vault lets the same device read, with no pairing
-    // again, yet the host still forks only what it holds or is relayed.
-    let access = |read| CommandBody::SetVaultHostAccess {
-        host_id: host_id.clone(),
-        read,
-    };
-    assert_eq!(
-        send(&owner, &vault_id, access(true)).await,
-        CommandResult::Applied
-    );
-    machine_when(&owner, reads(true)).await;
-    assert_eq!(
-        refused(&owner, &host_id, missing_fork.clone()).await,
-        ErrorCode::NotFound
-    );
-    // Replication went on all along.
+    // Replication goes on.
     assert!(
         owner
             .machines()
             .iter()
             .any(|m| m.host_id == vault_id
                 && m.hosts.iter().any(|h| h.host_id == host_id && h.online))
-    );
-
-    // And takes it back: host-only again.
-    assert_eq!(
-        send(&owner, &vault_id, access(false)).await,
-        CommandResult::Applied
-    );
-    machine_when(&owner, reads(false)).await;
-    // A host that never replicated here, and a daemon that is no vault, are refused.
-    let stranger_host = CommandBody::SetVaultHostAccess {
-        host_id: HostId::new("never-replicated"),
-        read: true,
-    };
-    assert_eq!(
-        refused(&owner, &vault_id, stranger_host).await,
-        ErrorCode::NotFound
-    );
-    assert_eq!(
-        refused(&owner, &host_id, access(true)).await,
-        ErrorCode::Unsupported
     );
 
     // A second link waits for the first to stop.
@@ -557,7 +472,7 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
             .any(|m| m.host_id == vault_id && !m.sessions.is_empty())
     );
 
-    drop((owner, member, stranger, vault_member));
+    drop((owner, member, vault_member));
     host.stop().await;
     vault.stop().await;
 }
@@ -618,12 +533,10 @@ async fn an_owner_runs_a_vault_on_the_host_from_a_client() {
     .await;
 
     // Members can do none of it.
-    for command in [CommandBody::InstallVault, CommandBody::LinkLocalVault] {
-        assert_eq!(
-            refused(&member, &as_member, command).await,
-            ErrorCode::Forbidden
-        );
-    }
+    assert_eq!(
+        refused(&member, &as_member, CommandBody::InstallVault).await,
+        ErrorCode::Forbidden
+    );
     let unlinked = CommandResult::VaultLink {
         is_vault: false,
         vault: None,
@@ -634,23 +547,17 @@ async fn an_owner_runs_a_vault_on_the_host_from_a_client() {
         send(&owner, &host_id, CommandBody::GetVaultLink).await,
         unlinked
     );
-    // No vault to pair with yet.
-    assert_eq!(
-        refused(&owner, &host_id, CommandBody::LinkLocalVault).await,
-        ErrorCode::NotFound
-    );
-
     // The owner has the host run one: its config and secrets key are written, its service
-    // installed, the host linked with secrets on and backup off, and the owner's device gets
-    // a code that pairs it with the vault as an owner.
-    let CommandResult::DevicePairing {
+    // installed, the host linked with secrets on and backup off, and the owner gets the
+    // window in which they claim the vault as its first owner.
+    let CommandResult::OwnershipClaim {
         code,
         fingerprint,
         addresses,
         ..
     } = send(&owner, &host_id, CommandBody::InstallVault).await
     else {
-        panic!("no pairing for the vault");
+        panic!("no claim of the vault");
     };
     let vault_dir = tmp.path().join("herder-vault");
     assert!(vault_dir.join("vault.toml").is_file());
@@ -671,30 +578,23 @@ async fn an_owner_runs_a_vault_on_the_host_from_a_client() {
     assert!(addresses.contains(&linked.address));
     let config = std::fs::read_to_string(&host.config).unwrap();
     assert!(config.contains("[vault]"), "{config}");
-    assert!(!config.contains(&code), "the device's code is not kept");
-    let link = PairingUri {
-        hosts: addresses,
-        fingerprint,
-        code,
-    }
-    .to_string();
-    let on_vault = owner.pair(link).await.map(one_machine).unwrap();
+    assert!(!config.contains(&code), "the claim code is not kept");
+    let (_, on_vault) = Join::claim(code)
+        .join(&owner, addresses, &fingerprint, "alice")
+        .await;
     machine_when(&owner, |m| {
         m.host_id == on_vault.host_id && m.role == Some(Role::Owner)
     })
     .await;
 
-    // A second run is refused, as is pairing again while linked.
+    // A second run is refused.
     assert_eq!(
         refused(&owner, &host_id, CommandBody::InstallVault).await,
         ErrorCode::Conflict
     );
-    assert_eq!(
-        refused(&owner, &host_id, CommandBody::LinkLocalVault).await,
-        ErrorCode::Conflict
-    );
 
-    // Unlinked, the installed vault is found and paired and linked again.
+    // Unlinked, the installed vault is found, and installing again is still refused: the
+    // host links to it with a host code, as to any vault.
     send(&owner, &host_id, CommandBody::UnlinkVault).await;
     let CommandResult::VaultLink {
         vault: None,
@@ -708,16 +608,6 @@ async fn an_owner_runs_a_vault_on_the_host_from_a_client() {
         refused(&owner, &host_id, CommandBody::InstallVault).await,
         ErrorCode::Conflict
     );
-    let CommandResult::DevicePairing { .. } =
-        send(&owner, &host_id, CommandBody::LinkLocalVault).await
-    else {
-        panic!("no pairing for the vault");
-    };
-    let CommandResult::VaultLink { vault: Some(_), .. } =
-        send(&owner, &host_id, CommandBody::GetVaultLink).await
-    else {
-        panic!("the host is not linked to its vault again");
-    };
 
     host.stop().await;
     services.shutdown.cancel();

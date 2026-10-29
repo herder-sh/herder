@@ -3,7 +3,7 @@
 //! # Listening
 //!
 //! `listen` is the address the daemon accepts clients on, or a list of them; every address is
-//! bound, and pairing links name each one other devices can reach:
+//! bound, and the links devices sign in with name each one other devices can reach:
 //!
 //! ```toml
 //! listen = "0.0.0.0:7447"                               # every interface; the default

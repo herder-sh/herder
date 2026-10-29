@@ -10,7 +10,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use herder_protocol::{
     AssertionResponse, NewPerson, PASSKEY_RP_ID, PasskeyAssertion, PasskeyChallenge,
-    PasskeyCreation, PasskeyRegistration, PersonPasskey, RegistrationResponse, Role, SignIn,
+    PasskeyCreation, PasskeyKey, PasskeyRegistration, PersonId, PersonPasskey,
+    RegistrationResponse, Role, SignIn,
 };
 use ring::digest::{SHA256, digest};
 use ring::rand::SystemRandom;
@@ -34,6 +35,7 @@ const ATTESTED: u8 = 0x40;
 /// One recorded passkey.
 pub struct Authenticator {
     credential_id: Vec<u8>,
+    pkcs8: Vec<u8>,
     key: EcdsaKeyPair,
     /// The person the passkey was created for, once registered.
     pub user_handle: Vec<u8>,
@@ -50,14 +52,16 @@ impl Authenticator {
                 .decode(fixture[field].as_str().unwrap())
                 .unwrap()
         };
+        let pkcs8 = decode("pkcs8");
         let key = EcdsaKeyPair::from_pkcs8(
             &ECDSA_P256_SHA256_ASN1_SIGNING,
-            &decode("pkcs8"),
+            &pkcs8,
             &SystemRandom::new(),
         )
         .unwrap();
         Self {
             credential_id: decode("credential_id"),
+            pkcs8,
             key,
             user_handle: user_handle.to_vec(),
         }
@@ -115,6 +119,24 @@ impl Authenticator {
             &CancellationToken::new(),
         )
         .unwrap()
+    }
+
+    /// The recorded passkey `name` of the one person every daemon [`enroll_known`] puts it on
+    /// knows, by a person id that follows from the name: as a person's passkey, synced to all
+    /// their devices, names them on every machine.
+    pub fn known(name: &str) -> Self {
+        Self::new(name, known_person(name).as_bytes())
+    }
+
+    /// The passkey as `<credential id>.<PKCS#8 private key>.<user handle>`, each base64url, for
+    /// an app under test to sign with in place of Face ID.
+    pub fn export(&self) -> String {
+        format!(
+            "{}.{}.{}",
+            URL_SAFE_NO_PAD.encode(&self.credential_id),
+            URL_SAFE_NO_PAD.encode(&self.pkcs8),
+            URL_SAFE_NO_PAD.encode(&self.user_handle)
+        )
     }
 
     /// Signs `challenge`.
@@ -269,6 +291,50 @@ pub fn enroll(auth: &Auth, name: &str, role: Role, fingerprint: &str) -> (Authen
         .sign_in(fingerprint, "test", sign_in, &CancellationToken::new())
         .unwrap();
     (passkey, identity)
+}
+
+/// Puts the person of [`Authenticator::known`] `name` on `auth` with `role`, signing in the
+/// device with certificate `fingerprint` as them: the same person, by the same passkey, on every
+/// daemon that enrolls them so, as an app introduces you to a new machine.
+pub fn enroll_known(
+    auth: &Auth,
+    name: &str,
+    role: Role,
+    fingerprint: &str,
+) -> (Authenticator, Identity) {
+    let passkey = Authenticator::known(name);
+    let join = Join::open(auth, role);
+    let (challenge, _) = auth.sign_in_challenge().unwrap();
+    let person = NewPerson {
+        name: name.to_owned(),
+        passkey: PersonPasskey::Existing {
+            person_id: PersonId::new(known_person(name).to_string()),
+            key: PasskeyKey {
+                credential_id: URL_SAFE_NO_PAD.encode(&passkey.credential_id),
+                public_key: URL_SAFE_NO_PAD.encode(passkey.cose_key()),
+            },
+            assertion: passkey.assert(&challenge),
+        },
+    };
+    let sign_in = match join.claim {
+        true => SignIn::ClaimOwnership {
+            code: join.code,
+            person,
+        },
+        false => SignIn::AcceptInvite {
+            invite: join.code,
+            person,
+        },
+    };
+    let identity = auth
+        .sign_in(fingerprint, "test", sign_in, &CancellationToken::new())
+        .unwrap();
+    (passkey, identity)
+}
+
+/// The person id of [`Authenticator::known`] `name`: the first half of the name's SHA-256.
+fn known_person(name: &str) -> Uuid {
+    Uuid::from_slice(&digest(&SHA256, name.as_bytes()).as_ref()[..16]).unwrap()
 }
 
 fn client_data(kind: &str, challenge: &str) -> Vec<u8> {
