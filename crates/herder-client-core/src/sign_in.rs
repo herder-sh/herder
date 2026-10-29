@@ -52,6 +52,7 @@ pub(crate) async fn start(
         resume: Vec::new(),
         pairing_code: None,
         sign_in: true,
+        passkey: false,
     };
     let (ws, opened, _) = supervisor::open(&saved.addresses, &saved.fingerprint, &device, hello)
         .await

@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use herder_client_core::{Client, Error, Machine, NewAccount, TerminalEvent, TerminalStream};
 use herder_protocol::{AccountId, ErrorCode, HostId, Role, SessionId, TerminalId, TerminalPurpose};
-use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::crossterm::style::Print;
+use ratatui::crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::{cursor, execute};
 use tokio::sync::mpsc;
 
@@ -28,6 +29,17 @@ const ENCODED_PREFIX: [&[u8]; 2] = [b"\x1b[93;5u", b"\x1b[27;5;93~"];
 
 /// How long opening or attaching may wait for the machine before giving up.
 const ATTACH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long opening or attaching a shell may wait in all, for the person's phone to approve it
+/// too: the machine's two minutes, and some.
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(130);
+
+/// How long a command that needs a passkey waits before the TUI says the phone may be asking.
+pub const HINT_AFTER: Duration = Duration::from_secs(1);
+
+/// What the TUI says while a person's phone may be asked to approve what it sends.
+pub const PHONE_HINT: &str =
+    "herder: waiting for the machine; if your phone asks you to approve this, approve it there";
 
 /// Undoes what a full-screen program may have left set: the alternate screen, mouse
 /// reporting, bracketed paste, extended keys (modifyOtherKeys and kitty flags), a hidden
@@ -238,18 +250,14 @@ pub async fn attach(
     );
     let stream = match target {
         Target::New(session_id) => {
-            tokio::time::timeout(
-                ATTACH_TIMEOUT,
+            approved(
                 client.open_terminal(host_id.clone(), session_id, cols, rows),
+                rows,
             )
             .await
         }
         Target::Existing(terminal_id) => {
-            tokio::time::timeout(
-                ATTACH_TIMEOUT,
-                client.attach_terminal(host_id.clone(), terminal_id),
-            )
-            .await
+            approved(client.attach_terminal(host_id.clone(), terminal_id), rows).await
         }
         Target::Login(account) => {
             tokio::time::timeout(
@@ -275,8 +283,14 @@ pub async fn attach(
     };
     let stream = match stream {
         Ok(Ok(stream)) => stream,
-        Ok(Err(err)) => return Ended::Failed(failure(&err)),
-        Err(_) => return Ended::Failed("the machine did not answer in time".to_owned()),
+        failed => {
+            // Drawn over the TUI's frame while it waited for the phone.
+            let _ = terminal.clear();
+            return Ended::Failed(match failed {
+                Ok(Err(err)) => failure(&err),
+                _ => "the machine did not answer in time".to_owned(),
+            });
+        }
     };
     stream.resize(cols, rows);
 
@@ -310,6 +324,28 @@ pub async fn attach(
         Ok(()) => ended,
         Err(err) => Ended::Failed(format!("cannot restore the screen: {err}")),
     }
+}
+
+/// Waits for `answer` to opening or attaching a shell, which a person's phone may have to
+/// approve: past [`HINT_AFTER`] the bottom line says so, and it waits up to
+/// [`APPROVAL_TIMEOUT`].
+async fn approved<T>(
+    answer: impl std::future::Future<Output = T>,
+    rows: u16,
+) -> Result<T, tokio::time::error::Elapsed> {
+    tokio::pin!(answer);
+    tokio::select! {
+        answered = &mut answer => return Ok(answered),
+        () = tokio::time::sleep(HINT_AFTER) => {}
+    }
+    let mut stdout = std::io::stdout();
+    let _ = execute!(
+        stdout,
+        cursor::MoveTo(0, rows.saturating_sub(1)),
+        Clear(ClearType::CurrentLine),
+        Print(PHONE_HINT),
+    );
+    tokio::time::timeout(APPROVAL_TIMEOUT - HINT_AFTER, answer).await
 }
 
 /// The end of a terminal's output: where herder's own last line about a login is.

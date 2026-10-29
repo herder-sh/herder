@@ -370,6 +370,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             resume: Vec::new(),
             pairing_code: Some(link.code.clone()),
             sign_in: false,
+            passkey: false,
         }))
         .await;
     let ServerMessage::Hello(hello) = client.recv().await else {

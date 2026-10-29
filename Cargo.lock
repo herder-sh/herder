@@ -1930,6 +1930,7 @@ name = "herder-ffi"
 version = "0.16.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "herder-adapters",
  "herder-client-core",
  "herder-daemon",

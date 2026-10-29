@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 14;
+pub const CLIENT_API_VERSION: u32 = 15;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -43,6 +43,7 @@ pub struct Machine {
     pub skills: Option<SkillsStatus>,
     pub session_skills: HashMap<SessionId, Vec<SessionSkill>>,
     pub update: Option<UpdateStage>,
+    pub approvals: Vec<ApprovalRequest>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -95,6 +96,14 @@ pub struct Client {}
 
 impl Client {
     pub fn open(config_dir: String, client: String) -> Result<Self, Error> {}
+}
+
+impl Client {
+    pub fn open_with_passkey(
+        config_dir: String,
+        client: String,
+        authenticator: Arc<dyn Authenticator>,
+    ) -> Result<Self, Error> {}
 }
 
 impl Client {
@@ -259,6 +268,22 @@ impl Client {
         host_id: HostId,
         terminal_id: TerminalId,
     ) -> Result<TerminalStream, Error> {}
+}
+
+impl Client {
+    pub async fn approve_action(
+        &self,
+        host_id: HostId,
+        request_id: String,
+    ) -> Result<(), Error> {}
+}
+
+impl Client {
+    pub async fn refuse_action(
+        &self,
+        host_id: HostId,
+        request_id: String,
+    ) -> Result<(), Error> {}
 }
 
 // opaque: private fields

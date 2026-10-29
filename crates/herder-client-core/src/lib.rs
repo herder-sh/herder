@@ -115,6 +115,19 @@
 //! once if connected, dropped otherwise, except that the latest size is re-sent on re-attach.
 //! Dropping the stream detaches. Terminals are owner-only; for a member both calls fail with
 //! [`Error::Rejected`] carrying `forbidden`.
+//!
+//! # Passkeys
+//!
+//! On a machine where this device acts as a person, opening or attaching a terminal and every
+//! change to secrets need a fresh passkey assertion. A client opened with an
+//! [`Authenticator`] ([`Client::open_with_passkey`]), as the apps are with Face ID, sends such
+//! a command without one first: the daemon runs it when it needs none, such as a re-attach of
+//! a terminal this device had, and otherwise refuses it with `assertion_required`, and the
+//! client asks for a challenge, has the authenticator sign it and sends the command again.
+//! Its machines list what the person's devices without a passkey ask to approve
+//! ([`Machine::approvals`]; [`Client::approve_action`], [`Client::refuse_action`]). A client
+//! without one, such as the TUI, has the daemon ask those devices instead: the command is
+//! answered once one of them approves it, or refused once refused or expired.
 
 #![warn(missing_docs)]
 
@@ -132,16 +145,19 @@ mod supervisor;
 mod terminal;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use futures_util::future::join_all;
 use herder_protocol::{
-    Account, AccountId, AwsProfile, ClientHello, Command, CommandBody, CommandId, CommandResult,
-    ErrorInfo, Event, FailoverSettings, FleetHost, HostId, HostResources, Item, PROTOCOL_VERSION,
-    Project, Provider, Role, SessionHead, SessionId, SessionSkill, SessionUsage, SkillsStatus,
-    Terminal, TerminalId, Timestamp, UpdateStage, VaultStatus,
+    Account, AccountId, ApprovalRequest, AwsProfile, ClientHello, Command, CommandBody, CommandId,
+    CommandResult, ErrorCode, ErrorInfo, Event, FailoverSettings, FleetHost, HostId, HostResources,
+    Item, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, Project, Provider, Role,
+    SessionHead, SessionId, SessionSkill, SessionUsage, SkillsStatus, Terminal, TerminalId,
+    Timestamp, UpdateStage, VaultStatus,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -161,7 +177,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 14;
+pub const CLIENT_API_VERSION: u32 = 15;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -278,6 +294,22 @@ pub struct Machine {
     /// Where an owner's `update_daemon` stands, as last sent; `None` until one starts, and
     /// while not connected, so after the restart it ends with.
     pub update: Option<UpdateStage>,
+    /// What this person's devices without a passkey, such as a terminal signed in with
+    /// `herder login`, ask to do on the machine, oldest first: approve one with
+    /// [`Client::approve_action`], or refuse it. Empty while not connected, and for a client
+    /// opened without an [`Authenticator`], which the daemon sends none.
+    pub approvals: Vec<ApprovalRequest>,
+}
+
+/// What [`Authenticator::assert`] returns.
+pub type Assertion = Pin<Box<dyn Future<Output = Result<PasskeyAssertion, Error>> + Send>>;
+
+/// Signs passkey challenges for the person this client acts as: the platform's passkey API,
+/// asking the user for Face ID; see the crate docs, Passkeys.
+pub trait Authenticator: Send + Sync {
+    /// Signs `challenge`, which the machine `host_id` minted, asking the user. Fails, and the
+    /// command with it, when the user cancels.
+    fn assert(&self, host_id: HostId, challenge: PasskeyChallenge) -> Assertion;
 }
 
 /// What pairing with one machine of a link came to; see [`Client::pair`].
@@ -382,6 +414,8 @@ pub struct Client {
 struct Inner {
     config_dir: PathBuf,
     client: String,
+    /// Signs passkey assertions; `None` for a client without a passkey, such as the TUI.
+    authenticator: Option<Arc<dyn Authenticator>>,
     machines: Arc<Mutex<Vec<Arc<Supervisor>>>>,
     library: Arc<skills::Library>,
     changed: Arc<watch::Sender<u64>>,
@@ -402,6 +436,26 @@ impl Client {
     /// runtime, which runs the supervisors. Other clients may share the config dir; see the
     /// crate docs, Machines.
     pub fn open(config_dir: String, client: String) -> Result<Self, Error> {
+        Self::open_with(config_dir, client, None)
+    }
+
+    /// Opens the profile as [`Client::open`] does, for a client that signs passkey
+    /// assertions with `authenticator`, as the apps do with Face ID. A command that needs a
+    /// fresh assertion and that the daemon refuses with `assertion_required` is sent again
+    /// with one; see the crate docs, Passkeys.
+    pub fn open_with_passkey(
+        config_dir: String,
+        client: String,
+        authenticator: Arc<dyn Authenticator>,
+    ) -> Result<Self, Error> {
+        Self::open_with(config_dir, client, Some(authenticator))
+    }
+
+    fn open_with(
+        config_dir: String,
+        client: String,
+        authenticator: Option<Arc<dyn Authenticator>>,
+    ) -> Result<Self, Error> {
         if tokio::runtime::Handle::try_current().is_err() {
             return Err(Error::Local {
                 message: "the client needs a tokio runtime".to_owned(),
@@ -418,6 +472,7 @@ impl Client {
                     saved,
                     config_dir.clone(),
                     client.clone(),
+                    authenticator.is_some(),
                     Arc::clone(&changed),
                     stop.child_token(),
                 )
@@ -434,6 +489,7 @@ impl Client {
         let inner = Arc::new(Inner {
             config_dir,
             client,
+            authenticator,
             machines,
             library,
             changed,
@@ -480,6 +536,7 @@ impl Client {
             resume: Vec::new(),
             pairing_code: Some(uri.code),
             sign_in: false,
+            passkey: false,
         };
         let (ws, hello, _) =
             supervisor::connect(&saved.addresses, &saved.fingerprint, &device, hello)
@@ -725,21 +782,28 @@ impl Client {
         command: CommandBody,
     ) -> Result<CommandResult, Error> {
         let machine = self.machine(&host_id)?;
-        let command = Command {
-            id: new_command_id(),
-            body: command,
-        };
-        let body = command.body.clone();
+        let body = command.clone();
         if let CommandBody::SetSkillsRepo { url } = &body {
             let connection = machine.connections();
             self.inner
                 .library
                 .setting(&host_id, connection, url.clone());
         }
-        let result = machine
-            .send(command)
-            .await?
-            .map_err(|info| Error::Rejected { info })?;
+        let result = self
+            .signed(&machine, command, |body| {
+                let machine = Arc::clone(&machine);
+                async move {
+                    let command = Command {
+                        id: new_command_id(),
+                        body,
+                    };
+                    machine
+                        .send(command)
+                        .await?
+                        .map_err(|info| Error::Rejected { info })
+                }
+            })
+            .await?;
         match body {
             CommandBody::SetSkillsRepo { url } => {
                 self.inner
@@ -793,14 +857,18 @@ impl Client {
         cols: u16,
         rows: u16,
     ) -> Result<TerminalStream, Error> {
-        self.machine(&host_id)?
-            .open_terminal(CommandBody::OpenTerminal {
-                session_id,
-                cols,
-                rows,
-                assertion: None,
-            })
-            .await
+        let machine = self.machine(&host_id)?;
+        let body = CommandBody::OpenTerminal {
+            session_id,
+            cols,
+            rows,
+            assertion: None,
+        };
+        self.signed(&machine, body, |body| {
+            let machine = Arc::clone(&machine);
+            async move { machine.open_terminal(body).await }
+        })
+        .await
     }
 
     /// Adds an account to a machine: runs its provider's own login in a login terminal of
@@ -924,7 +992,82 @@ impl Client {
         host_id: HostId,
         terminal_id: TerminalId,
     ) -> Result<TerminalStream, Error> {
-        self.machine(&host_id)?.attach_terminal(terminal_id).await
+        let machine = self.machine(&host_id)?;
+        let body = CommandBody::AttachTerminal {
+            terminal_id,
+            assertion: None,
+        };
+        self.signed(&machine, body, |body| {
+            let machine = Arc::clone(&machine);
+            async move {
+                let CommandBody::AttachTerminal {
+                    terminal_id,
+                    assertion,
+                } = body
+                else {
+                    return Err(Error::Local {
+                        message: "signing changed an attach into another command".to_owned(),
+                    });
+                };
+                machine.attach_terminal(terminal_id, assertion).await
+            }
+        })
+        .await
+    }
+
+    /// Approves `request_id`, one of a machine's [`Machine::approvals`], with an assertion the
+    /// [`Authenticator`] signs: the device that asked does what it asked, once.
+    pub async fn approve_action(&self, host_id: HostId, request_id: String) -> Result<(), Error> {
+        let machine = self.machine(&host_id)?;
+        let Some(authenticator) = self.inner.authenticator.clone() else {
+            return Err(Error::Local {
+                message: "this client has no passkey to approve with".to_owned(),
+            });
+        };
+        let challenge = challenge(&machine).await?;
+        let assertion = authenticator.assert(host_id, challenge).await?;
+        let body = CommandBody::ApproveAction {
+            request_id,
+            assertion: Box::new(assertion),
+        };
+        once(&machine, body).await.map(drop)
+    }
+
+    /// Refuses `request_id`, one of a machine's [`Machine::approvals`].
+    pub async fn refuse_action(&self, host_id: HostId, request_id: String) -> Result<(), Error> {
+        let machine = self.machine(&host_id)?;
+        once(&machine, CommandBody::RefuseAction { request_id })
+            .await
+            .map(drop)
+    }
+
+    /// Runs `send` with `body`, and once more with a fresh assertion the [`Authenticator`]
+    /// signs when the daemon refuses it with `assertion_required`.
+    async fn signed<T, Sent>(
+        &self,
+        machine: &Arc<Supervisor>,
+        body: CommandBody,
+        send: impl Fn(CommandBody) -> Sent,
+    ) -> Result<T, Error>
+    where
+        Sent: Future<Output = Result<T, Error>>,
+    {
+        let first = send(body.clone()).await;
+        let (Err(Error::Rejected { info }), Some(authenticator)) =
+            (&first, &self.inner.authenticator)
+        else {
+            return first;
+        };
+        if info.code != ErrorCode::AssertionRequired {
+            return first;
+        }
+        let challenge = challenge(machine).await?;
+        let assertion = authenticator
+            .assert(machine.saved.host_id.clone(), challenge)
+            .await?;
+        let mut body = body;
+        body.sign(assertion);
+        send(body).await
     }
 
     fn machine(&self, host_id: &HostId) -> Result<Arc<Supervisor>, Error> {
@@ -989,6 +1132,7 @@ impl Inner {
                 saved,
                 self.config_dir.clone(),
                 self.client.clone(),
+                self.authenticator.is_some(),
                 Arc::clone(&self.changed),
                 self.stop.child_token(),
             ) {
@@ -1109,6 +1253,28 @@ pub(crate) fn unsaved(
         device_key: device.to_pem().to_owned(),
     };
     Ok((saved, device))
+}
+
+/// Sends `body` to `machine` once and returns the daemon's answer.
+async fn once(machine: &Supervisor, body: CommandBody) -> Result<CommandResult, Error> {
+    let command = Command {
+        id: new_command_id(),
+        body,
+    };
+    machine
+        .send(command)
+        .await?
+        .map_err(|info| Error::Rejected { info })
+}
+
+/// A fresh passkey challenge from `machine`.
+async fn challenge(machine: &Supervisor) -> Result<PasskeyChallenge, Error> {
+    match once(machine, CommandBody::PasskeyChallenge).await? {
+        CommandResult::PasskeyChallenge { challenge, .. } => Ok(challenge),
+        other => Err(Error::Local {
+            message: format!("the daemon answered a passkey challenge with {other:?}"),
+        }),
+    }
 }
 
 pub(crate) fn new_command_id() -> CommandId {

@@ -56,6 +56,54 @@ pub struct ClientHello {
     /// device the daemon knows gets `hello` as usual.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sign_in: bool,
+    /// Set by a client that signs passkey assertions when asked, as the apps do with Face ID:
+    /// a command that needs one and has none is refused with `assertion_required`. Without
+    /// it, as from a terminal, the daemon asks the person's other devices to approve it with
+    /// an `approval_request`, and answers the command once they do.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub passkey: bool,
+}
+
+impl CommandBody {
+    /// Whether a person runs this only with a fresh assertion: opening or attaching a
+    /// terminal, revoking a device, and every change to secrets; and the assertion it carries.
+    /// The people commands carry theirs in a field of their own.
+    pub fn fresh_assertion(&self) -> Option<Option<&PasskeyAssertion>> {
+        match self {
+            Self::OpenTerminal { assertion, .. }
+            | Self::AttachTerminal { assertion, .. }
+            | Self::RevokeDevice { assertion, .. }
+            | Self::CreateSecretSet { assertion, .. }
+            | Self::DeleteSecretSet { assertion, .. }
+            | Self::PutSecret { assertion, .. }
+            | Self::DeleteSecret { assertion, .. }
+            | Self::GrantSecretSet { assertion, .. }
+            | Self::RevokeSecretSet { assertion, .. }
+            | Self::ConfirmSecretStored { assertion, .. } => Some(assertion.as_deref()),
+            _ => None,
+        }
+    }
+
+    /// Carries `signed` as the assertion [`CommandBody::fresh_assertion`] looks for; `false`
+    /// for a command that takes none.
+    pub fn sign(&mut self, signed: PasskeyAssertion) -> bool {
+        match self {
+            Self::OpenTerminal { assertion, .. }
+            | Self::AttachTerminal { assertion, .. }
+            | Self::RevokeDevice { assertion, .. }
+            | Self::CreateSecretSet { assertion, .. }
+            | Self::DeleteSecretSet { assertion, .. }
+            | Self::PutSecret { assertion, .. }
+            | Self::DeleteSecret { assertion, .. }
+            | Self::GrantSecretSet { assertion, .. }
+            | Self::RevokeSecretSet { assertion, .. }
+            | Self::ConfirmSecretStored { assertion, .. } => {
+                *assertion = Some(Box::new(signed));
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 /// A position in a session's journal.
@@ -744,6 +792,21 @@ pub enum CommandBody {
         decision: LeftoverDecision,
         /// An assertion over a fresh `passkey_challenge`.
         assertion: Box<PasskeyAssertion>,
+    },
+    /// Approve an `approval_request`: the device that asked does what it asked, once. The
+    /// caller must be the person it acts for, with an assertion. Answered with `applied`.
+    /// Refused with `not_found` once the request is closed.
+    ApproveAction {
+        /// The request.
+        request_id: String,
+        /// An assertion over a fresh `passkey_challenge`.
+        assertion: Box<PasskeyAssertion>,
+    },
+    /// Refuse an `approval_request`; the device that asked is told so. Answered with
+    /// `applied`. Refused with `not_found` once the request is closed.
+    RefuseAction {
+        /// The request.
+        request_id: String,
     },
     /// Approve the waiting `start_login` whose code the caller's app shows, signing that
     /// device in as the caller; any person, with an assertion. Answered with `login_approved`.

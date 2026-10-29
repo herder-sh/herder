@@ -655,6 +655,10 @@
             "null"
           ]
         },
+        "passkey": {
+          "description": "Set by a client that signs passkey assertions when asked, as the apps do with Face ID:\na command that needs one and has none is refused with `assertion_required`. Without\nit, as from a terminal, the daemon asks the person's other devices to approve it with\nan `approval_request`, and answers the command once they do.",
+          "type": "boolean"
+        },
         "protocol_version": {
           "description": "Must equal the daemon's [`crate::PROTOCOL_VERSION`].",
           "type": "integer",
@@ -2270,6 +2274,47 @@
             "user_id",
             "decision",
             "assertion"
+          ]
+        },
+        {
+          "description": "Approve an `approval_request`: the device that asked does what it asked, once. The\ncaller must be the person it acts for, with an assertion. Answered with `applied`.\nRefused with `not_found` once the request is closed.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "An assertion over a fresh `passkey_challenge`.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "request_id": {
+              "description": "The request.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "approve_action"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "assertion"
+          ]
+        },
+        {
+          "description": "Refuse an `approval_request`; the device that asked is told so. Answered with\n`applied`. Refused with `not_found` once the request is closed.",
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "description": "The request.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "refuse_action"
+            }
+          },
+          "required": [
+            "type",
+            "request_id"
           ]
         },
         {

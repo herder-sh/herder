@@ -1329,6 +1329,8 @@
                   "revoke_person",
                   "claim_users",
                   "decide_leftover",
+                  "approve_action",
+                  "refuse_action",
                   "approve_login",
                   "pair_vault_host",
                   "revoke_vault_host",

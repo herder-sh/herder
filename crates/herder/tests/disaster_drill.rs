@@ -443,6 +443,7 @@ impl Client {
                 resume: Vec::new(),
                 pairing_code,
                 sign_in: false,
+                passkey: false,
             }))
             .await;
         let hello = client.recv().await;

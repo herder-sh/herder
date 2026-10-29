@@ -4,6 +4,7 @@
 //! authentication, server hello, list messages, then subscriptions and commands. A subscription replays the session's journal after the
 //! client's cursor, then streams live events from the [`Hub`] without gaps or duplicates.
 
+mod approvals;
 mod commands;
 mod conn;
 #[cfg(test)]
@@ -46,6 +47,7 @@ use crate::session::SessionManager;
 use crate::settings::Settings;
 use crate::terminal::{LoginHooks, OnExit, Terminals};
 use crate::vault::Link;
+use approvals::{APPROVAL_TTL, Approvals, Waiting};
 use commands::Commands;
 
 /// Who a connection acts as.
@@ -182,6 +184,8 @@ struct Shared<B> {
     providers: OnceLock<Arc<Providers>>,
     /// The host's AWS CLI, which answers the AWS sign-in commands, once set.
     aws: OnceLock<Aws>,
+    /// What a person's devices approve for each other, and the terminals each device had.
+    approvals: Approvals,
 }
 
 impl<B: Backend> Shared<B> {
@@ -194,14 +198,12 @@ impl<B: Backend> Shared<B> {
         outbox: &Arc<Outbox>,
         command_id: &CommandId,
         command: CommandBody,
+        approved: bool,
     ) -> Result<CommandResult, ErrorInfo> {
-        // A connection opened before its claim acts as the person all the same.
-        if let Some(assertion) = fresh_assertion(&command)
-            && self.auth.person_of(&identity.user_id).is_some()
-        {
+        if !approved && let Some(assertion) = self.unsigned(identity, &command) {
             let Some(assertion) = assertion else {
                 return Err(ErrorInfo {
-                    code: ErrorCode::Forbidden,
+                    code: ErrorCode::AssertionRequired,
                     message: "this needs a fresh assertion by your passkey (Face ID)".to_owned(),
                 });
             };
@@ -217,6 +219,7 @@ impl<B: Backend> Shared<B> {
             } => {
                 let cwd = self.backend.worktree(&session_id).await?;
                 let terminal_id = terminals.open(session_id, &cwd, cols, rows, outbox)?;
+                self.approvals.attached(&identity.device_id, &terminal_id);
                 return Ok(CommandResult::TerminalOpened { terminal_id });
             }
             CommandBody::AddAccount {
@@ -278,7 +281,20 @@ impl<B: Backend> Shared<B> {
                 return Ok(CommandResult::TerminalOpened { terminal_id });
             }
             CommandBody::AttachTerminal { terminal_id, .. } => {
-                terminals.attach(&terminal_id, outbox)?
+                terminals.attach(&terminal_id, outbox)?;
+                self.approvals.attached(&identity.device_id, &terminal_id);
+            }
+            CommandBody::ApproveAction {
+                request_id,
+                assertion,
+            } => {
+                self.assert(identity, &assertion)?;
+                let user_id = self.auth.resolve(&identity.user_id);
+                self.approvals.settle(&user_id, &request_id, true)?;
+            }
+            CommandBody::RefuseAction { request_id } => {
+                let user_id = self.auth.resolve(&identity.user_id);
+                self.approvals.settle(&user_id, &request_id, false)?;
             }
             CommandBody::DetachTerminal { terminal_id } => {
                 terminals.detach(&terminal_id, outbox)?
@@ -384,6 +400,46 @@ impl<B: Backend> Shared<B> {
             }
         }
         Ok(())
+    }
+
+    /// The assertion `command` carries, when `identity` is a person and runs it only with a
+    /// fresh one; `None` when it needs none, such as a re-attach of a terminal this device had.
+    /// A connection opened before its claim acts as the person all the same.
+    fn unsigned<'a>(
+        &self,
+        identity: &Identity,
+        command: &'a CommandBody,
+    ) -> Option<Option<&'a PasskeyAssertion>> {
+        let assertion = command.fresh_assertion()?;
+        self.auth.person_of(&identity.user_id)?;
+        if let CommandBody::AttachTerminal { terminal_id, .. } = command
+            && self.approvals.had(&identity.device_id, terminal_id)
+        {
+            return None;
+        }
+        Some(assertion)
+    }
+
+    /// For a connection that signs no assertions (`signs` unset), as a terminal's: has the
+    /// person's other devices approve `command` when it needs a fresh assertion and carries
+    /// none. A connection that signs them is told to send one instead.
+    fn approval(
+        &self,
+        identity: &Identity,
+        client: &str,
+        signs: bool,
+        command: &CommandBody,
+    ) -> Result<Option<Waiting>, ErrorInfo> {
+        if signs {
+            return Ok(None);
+        }
+        let Some(None) = self.unsigned(identity, command) else {
+            return Ok(None);
+        };
+        let user_id = self.auth.resolve(&identity.user_id);
+        self.approvals
+            .request(&user_id, describe(command), client)
+            .map(Some)
     }
 
     /// Refuses unless `assertion`, over a fresh challenge, is by `identity`'s person.
@@ -654,22 +710,26 @@ impl<B: Backend> Shared<B> {
     }
 }
 
-/// The assertion `command` carries when it is one a person runs only with a fresh one:
-/// opening or attaching a terminal, revoking a device, and every change to secrets. The people
-/// commands carry theirs in a field of their own.
-fn fresh_assertion(command: &CommandBody) -> Option<Option<&PasskeyAssertion>> {
+/// What `command` does, as a person's devices are asked to approve it.
+fn describe(command: &CommandBody) -> String {
     match command {
-        CommandBody::OpenTerminal { assertion, .. }
-        | CommandBody::AttachTerminal { assertion, .. }
-        | CommandBody::RevokeDevice { assertion, .. }
-        | CommandBody::CreateSecretSet { assertion, .. }
-        | CommandBody::DeleteSecretSet { assertion, .. }
-        | CommandBody::PutSecret { assertion, .. }
-        | CommandBody::DeleteSecret { assertion, .. }
-        | CommandBody::GrantSecretSet { assertion, .. }
-        | CommandBody::RevokeSecretSet { assertion, .. }
-        | CommandBody::ConfirmSecretStored { assertion, .. } => Some(assertion.as_deref()),
-        _ => None,
+        CommandBody::OpenTerminal { .. } => "Open a terminal".to_owned(),
+        CommandBody::AttachTerminal { .. } => "Attach to a terminal".to_owned(),
+        CommandBody::RevokeDevice { .. } => "Revoke a device".to_owned(),
+        CommandBody::CreateSecretSet { set, .. } => format!("Create the secret set {set}"),
+        CommandBody::DeleteSecretSet { set, .. } => format!("Delete the secret set {set}"),
+        CommandBody::PutSecret { set, name, .. } => format!("Store the secret {name} in {set}"),
+        CommandBody::DeleteSecret { set, name, .. } => {
+            format!("Delete the secret {name} from {set}")
+        }
+        CommandBody::GrantSecretSet { set, .. } => format!("Let a host use the secret set {set}"),
+        CommandBody::RevokeSecretSet { set, .. } => {
+            format!("Stop a host using the secret set {set}")
+        }
+        CommandBody::ConfirmSecretStored { set, .. } => {
+            format!("Store an agent's secret in {set}")
+        }
+        _ => "Change something".to_owned(),
     }
 }
 
@@ -789,6 +849,8 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::ApproveLogin { .. }
                     | CommandBody::ClaimUsers { .. }
                     | CommandBody::DecideLeftover { .. }
+                    | CommandBody::ApproveAction { .. }
+                    | CommandBody::RefuseAction { .. }
                     | CommandBody::PairVaultHost { .. }
                     | CommandBody::InstallVault
                     | CommandBody::LinkLocalVault
@@ -828,7 +890,7 @@ impl<B: Backend> Control for AgentControl<B> {
                 });
             }
             let (user_id, role) = shared.sender(user_id, &session_id).await?;
-            if fresh_assertion(&command).is_some() && shared.auth.person_of(&user_id).is_some() {
+            if command.fresh_assertion().is_some() && shared.auth.person_of(&user_id).is_some() {
                 return Err(ErrorInfo {
                     code: ErrorCode::Forbidden,
                     message: "this needs the Face ID of the person the agent acts for; ask them \
@@ -871,6 +933,7 @@ impl<B: Backend> Server<B> {
                 bots: OnceLock::new(),
                 providers: OnceLock::new(),
                 aws: OnceLock::new(),
+                approvals: Approvals::new(APPROVAL_TTL),
             }),
         }
     }

@@ -47,6 +47,38 @@
       ]
     },
     {
+      "description": "A device of the person this connection acts for, one that holds no passkey such as a\nterminal signed in with `herder login`, asks to do something that needs one: approve it\nwith `approve_action` and an assertion, or refuse it with `refuse_action`. Sent to the\nperson's connections that said `passkey` in their hello, and again, after hello, to one\nthat connects while the request is open.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "approval_request"
+        }
+      },
+      "$ref": "#/$defs/ApprovalRequest",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "An `approval_request` was approved, refused or expired, on this or another device.",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "description": "The request.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "approval_closed"
+        }
+      },
+      "required": [
+        "type",
+        "request_id"
+      ]
+    },
+    {
       "description": "Answers `start_login`: the code the device shows, as a `herder://login` link and as\ntext, for an app of the person to approve with `approve_login`. `hello` follows once it\ndoes, or an error once the request expires.",
       "type": "object",
       "properties": {
@@ -745,6 +777,35 @@
           "type": "string",
           "const": "expired"
         }
+      ]
+    },
+    "ApprovalRequest": {
+      "description": "What a device without a passkey asks its person to approve; see `approval_request`.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "What the device asks to do, e.g. `Open a terminal`.",
+          "type": "string"
+        },
+        "client": {
+          "description": "The device asking, by its client, e.g. `herder-tui/0.17.0`.",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "When the request expires, refused.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "request_id": {
+          "description": "The request.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "action",
+        "client",
+        "expires_at"
       ]
     },
     "Attachment": {
@@ -2216,6 +2277,11 @@
           "description": "The daemon failed.",
           "type": "string",
           "const": "internal"
+        },
+        {
+          "description": "The caller is a person and this needs a fresh assertion by their passkey: ask for a\n`passkey_challenge` and send the command again with one.",
+          "type": "string",
+          "const": "assertion_required"
         }
       ]
     },
