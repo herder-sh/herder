@@ -317,3 +317,47 @@ fn a_host_only_device_makes_a_machine_without_replicating_here() {
     assert_eq!(claimed.hosts, ["draugelis"]);
     assert!(claimed.leftovers.is_empty());
 }
+
+#[test]
+fn herder_claim_opens_the_owner_window_on_a_daemon_with_an_owner() {
+    let v = vault();
+    // `herder service install` offers the window only while there is no owner.
+    assert!(v.auth.open_claim().is_err());
+    let (_, creation) = v.auth.sign_in_challenge().unwrap();
+    assert!(
+        creation.is_none(),
+        "no window, nothing to create a passkey from"
+    );
+
+    let (code, _) = v.auth.open_recovery().unwrap();
+    assert_eq!(code.len(), "XXX-XXX".len());
+    let (_, creation) = v.auth.sign_in_challenge().unwrap();
+    assert!(creation.is_some(), "the window takes a new owner");
+
+    // A wrong code is refused before any passkey is looked at.
+    let refused = v
+        .auth
+        .sign_in(
+            "fp-new-phone",
+            "herder-ios/0.1.0",
+            herder_protocol::SignIn::ClaimOwnership {
+                code: "000-000".into(),
+                person: herder_protocol::NewPerson {
+                    name: "Tomas".into(),
+                    passkey: herder_protocol::PersonPasskey::Register {
+                        registration: serde_json::from_value(serde_json::json!({
+                            "id": "AA",
+                            "rawId": "AA",
+                            "response": {"clientDataJSON": "AA", "attestationObject": "AA"},
+                            "type": "public-key",
+                        }))
+                        .unwrap(),
+                    },
+                },
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::Forbidden);
+    assert!(refused.message.contains("herder claim"), "{refused:?}");
+}
