@@ -130,6 +130,10 @@ struct FleetView: View {
                 } else {
                     draft = selection
                 }
+            } openMachine: { hostId in
+                openMachine(hostId)
+            } present: { next in
+                self.sheet = next
             }
         }
         #if os(iOS)
@@ -232,9 +236,23 @@ struct FleetView: View {
             resolveLink()
         case .pair(let link):
             sheet = .pair(.machine, link: link)
+        case .approve(let request):
+            sheet = .approve(request)
         case nil:
             fleet.toast = Toast(text: "herder cannot open that link", failed: true)
         }
+    }
+
+    /// Shows a machine's page: over the section on the Mac and iPad, on the Fleet tab on iPhone.
+    private func openMachine(_ hostId: HostId) {
+        #if os(iOS)
+        if sizeClass == .compact {
+            tab = .machines
+            machinesPath = [.page(.machine(hostId))]
+            return
+        }
+        #endif
+        pages.open(.machine(hostId))
     }
 
     /// Opens the linked session once its machine lists it, or says why it cannot.
