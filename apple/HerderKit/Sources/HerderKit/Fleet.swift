@@ -702,13 +702,14 @@ public enum Profile {
     case failed(String)
 
     /// Opens the profile in `directory`, creating it if needed. The done sessions are kept in
-    /// `doneFile`, by default in the profile's cache.
+    /// `doneFile`, by default in the profile's cache. Your terminal and secret commands are
+    /// signed with this device's passkey, behind Face ID.
     @MainActor
     public static func open(at directory: URL, client name: String, doneFile: URL? = nil) -> Profile {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             return .opened(Fleet(
-                client: try Client.open(configDir: directory.path, client: name),
+                client: try Client.openWithPasskey(configDir: directory.path, client: name, authenticator: FaceID()),
                 doneFile: doneFile ?? directory.appendingPathComponent("cache/done.json")))
         } catch {
             return .failed(describe(error))

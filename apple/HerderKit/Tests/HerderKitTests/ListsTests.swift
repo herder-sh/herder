@@ -5,14 +5,14 @@ import Testing
 
 func machine(
     _ hostId: HostId, name: String, sessions: [SessionId], projects: [Project] = [], hosts: [FleetHost] = [],
-    accounts: [Account] = [], providers: [ProviderStatus] = [], role: Role? = .owner,
+    accounts: [Account] = [], providers: [ProviderStatus] = [], role: Role? = .owner, personId: PersonId? = nil,
     connection: ConnectionState = .connected
 ) -> Machine {
     Machine(
         hostId: hostId, name: name, addresses: [], fingerprint: "", connection: connection,
         quality: ConnectionQuality(connectedSince: nil, reconnects: 0, lastRttMs: nil, averageRttMs: nil, minRttMs: nil,
                                    maxRttMs: nil, missedPongs: 0),
-        role: role,
+        role: role, personId: personId,
         sessions: sessions.map {
             SessionHead(sessionId: $0, hostId: nil, headSeq: 0, status: .idle, parent: nil, parentHost: nil, task: nil,
                         title: nil, projectId: nil, chat: false, accountId: "main", childrenNeedYou: 0, queue: [],
