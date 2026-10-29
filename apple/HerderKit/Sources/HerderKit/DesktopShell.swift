@@ -72,6 +72,7 @@ struct DesktopShell: View {
         case .skills: "Skills"
         case .providers: "Providers"
         case .machines: "Fleet"
+        case .people: "People"
         case .integrations: "Integrations"
         case .project(let id): lists.projects.first { $0.id == id }?.name ?? "Project"
         case .bots(let id): lists.bots.first { $0.id == id }.map(fleet.botName) ?? "Bots"
@@ -170,6 +171,14 @@ struct DesktopShell: View {
                 }
                 PaneButton(title: "Add to Fleet", symbol: "plus", prominent: true) { sheet = .pair(.machine) }
                     .accessibilityIdentifier("add-to-fleet")
+            }
+        case .people:
+            Pane(fleet: fleet, title: "People", switcher: switcher) {
+                PeoplePage(fleet: fleet, sheet: $sheet)
+            } actions: {
+                PaneButton(title: "Invite", symbol: "plus") {
+                    if let host = PeoplePage.inviteHost(fleet.machines, shown: nil) { sheet = .invite(host) }
+                }
             }
         case .integrations:
             Pane(fleet: fleet, title: "Integrations", status: fleet.bots.status, switcher: switcher) {
@@ -491,6 +500,7 @@ struct Sidebar: View {
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
             SidebarRow(title: "Fleet", symbol: "server.rack", selected: item == .machines) { select(.machines) }
+            SidebarRow(title: "People", symbol: "person.2.circle", selected: item == .people) { select(.people) }
             SidebarRow(title: "Integrations", symbol: Switcher.integrationsSymbol, selected: item == .integrations) {
                 select(.integrations)
             }
@@ -720,6 +730,7 @@ private struct SidebarRail: View {
             rail("person.2", "Providers", .providers)
             rail("book.closed", "Skills", .skills)
             rail("server.rack", "Fleet", .machines)
+            rail("person.2.circle", "People", .people)
             rail(Switcher.integrationsSymbol, "Integrations", .integrations)
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             ScrollView {
