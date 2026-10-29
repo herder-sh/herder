@@ -205,16 +205,15 @@ struct ApproveSheet: View {
         self.fleet = fleet
         self.open = open
         self.linkVault = linkVault
-        _approval = State(initialValue: Approval(
-            request, authenticator: PlatformAuthenticator(),
-            challenge: { try await fleet.passkeyChallenge(for: request) },
-            send: { try await fleet.approve(request, assertion: $0) }))
+        _approval = State(initialValue: Approval(request, authenticator: PlatformAuthenticator()) {
+            try await fleet.approve(request, with: $0)
+        })
     }
 
     var body: some View {
         ApprovalSheet(approval: approval,
                       vaults: fleet.machines.filter { !$0.hosts.isEmpty }.map(\.name),
-                      open: { if let machine = fleet.machine(fingerprint: approval.request.fingerprint) { open(machine.hostId) } },
+                      open: { if let machine = approval.machine { open(machine) } },
                       linkVault: linkVault)
     }
 }

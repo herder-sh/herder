@@ -15,7 +15,7 @@ import Testing
     private let now = Timestamp.date("2026-10-29T12:00:00Z")!
 
     @Test func drawsApprovingAMachine() async throws {
-        let approval = Approval(ApprovalTests.machine, authenticator: FakeAuthenticator(), challenge: { ApprovalTests.challenge }) { _ in }
+        let approval = Approval(ApprovalTests.machine, authenticator: FakeAuthenticator()) { _ in nil }
         let sheet = { (biometry: String) in
             ApprovalSheet(approval: approval, teammates: ["Sam", "Kim"], vaults: ["herder-vault-0", "draugelis vault"],
                           biometry: biometry)
@@ -29,8 +29,8 @@ import Testing
 
     @Test func drawsApprovingATerminal() async throws {
         let request = ApprovalRequest(kind: .login, name: "trash-can-01", code: "K7Q4PD",
-                                      fingerprint: ApprovalTests.fingerprint, hosts: ["10.0.4.21:7447"], version: "0.17.0")
-        let approval = Approval(request, authenticator: FakeAuthenticator(), challenge: { ApprovalTests.challenge }) { _ in }
+                                      fingerprint: ApprovalTests.fingerprint, hosts: ["10.0.4.21:7447"])
+        let approval = Approval(request, authenticator: FakeAuthenticator()) { _ in nil }
         try await shoot(phone(ApprovalSheet(approval: approval, biometry: "Face ID")), width: Self.phone.width, layer: .canvas,
                         named: "identity-login-iphone.png")
         try await shoot(ApprovalSheet(approval: approval, biometry: "Touch ID"), width: Self.mac, named: "identity-login-mac.png")
