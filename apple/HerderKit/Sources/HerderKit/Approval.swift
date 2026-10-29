@@ -169,6 +169,14 @@ extension Fleet {
         }
     }
 
+    /// Signs this device in to the machine at `hosts` with `authenticator`'s passkey, as the
+    /// person the machine knows by it, and saves the machine; its host id returned.
+    func signIn(hosts: [String], fingerprint: String, with authenticator: Authenticator) async throws -> HostId {
+        let pending = try await client.signIn(hosts: hosts, fingerprint: fingerprint)
+        let assertion = try await authenticator.sign(pending.challenge())
+        return try await pending.finish(signIn: .passkey(assertion: assertion)).hostId
+    }
+
     /// You, as a new machine's owner: with the passkey your machines know, else with one made now.
     private func owner(_ pending: PendingSignIn, authenticator: Authenticator) async throws -> NewPerson {
         let people = FleetPeople(fleet: self)

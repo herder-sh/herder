@@ -33,7 +33,7 @@ struct SharingTests {
         #expect(Timestamp.date(shared.expiresAt).map { $0 > .now } == true)
         let link = pairingLinkToString(link: shared.link)
         // What the Mac shows, the phone finds: in the QR code and in pasted text.
-        #expect(pairingLink(in: link) == link)
+        #expect(fleetLink(in: link) == link)
 
         guard case .opened(let phone) = Profile.open(at: temporaryProfile(), client: "test") else {
             Issue.record("cannot open a second profile")

@@ -405,7 +405,7 @@ struct EmptyFleet: View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
                 Text("No machines yet").font(.headline).foregroundStyle(Theme.text)
-                Text("Run `herder pair` on a machine, then add it here with the link it prints.")
+                Text("Run `herder claim` on a machine, then add it here with the link it prints.")
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondary)
                 ActionButton(title: "Add to Fleet", style: .primary) { add() }

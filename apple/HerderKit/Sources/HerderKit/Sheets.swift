@@ -40,7 +40,8 @@ extension AppSheet {
     func view(fleet: Fleet, drafted: @escaping (Draft) -> Void, openMachine: @escaping (HostId) -> Void,
               present: @escaping (AppSheet) -> Void) -> some View {
         switch self {
-        case .pair(let kind, let vault, let link): AddMachineSheet(fleet: fleet, kind: kind, vault: vault, text: link)
+        case .pair(let kind, let vault, let link):
+            AddMachineSheet(fleet: fleet, kind: kind, vault: vault, text: link) { present(.approve($0)) }
         case .newSession: ProjectPicker(fleet: fleet, newProject: false, picked: drafted)
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
         case .addAccount: AddAccountSheet(fleet: fleet)
