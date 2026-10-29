@@ -354,6 +354,15 @@ fn client_fixtures() -> Vec<ClientMessage> {
             set: "prod".into(),
             name: "STRIPE_KEY".into(),
         }),
+        command(CommandBody::GetSecretToStore {
+            session_id: SessionId::new("01J9SESSION"),
+            approval_id: ApprovalId::new("secret-01J9"),
+        }),
+        command(CommandBody::ConfirmSecretStored {
+            session_id: SessionId::new("01J9SESSION"),
+            approval_id: ApprovalId::new("secret-01J9"),
+            set: "personal".into(),
+        }),
         command(CommandBody::GrantSecretSet {
             set: "prod".into(),
             host_id: HostId::new("01J9HOST"),
@@ -1001,6 +1010,12 @@ fn server_fixtures() -> Vec<ServerMessage> {
         },
         ServerMessage::CommandAccepted {
             command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::SecretToStore {
+                value: SecretValue::new("-----BEGIN PRIVATE KEY-----\nMIGT\n").unwrap(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
             result: CommandResult::HostPairing {
                 code: "ABCDE-FGHJK".into(),
                 expires_at: "2026-10-03T12:10:00Z".parse().unwrap(),
@@ -1225,6 +1240,29 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 summary: "Run cargo build".into(),
                 routed_to: Route::User,
                 reason: None,
+                secret: None,
+            },
+        ),
+        event(
+            7,
+            None,
+            EventBody::ApprovalRequested {
+                approval_id: ApprovalId::new("secret-01J9"),
+                turn_id: turn_id(),
+                tool_call_id: ItemId::new("01J9STORE"),
+                summary: "Store ~/Downloads/AuthKey_X.p8 (257 B) as ASC_PRIVATE_KEY in personal"
+                    .into(),
+                routed_to: Route::User,
+                reason: None,
+                secret: Some(SecretStoreRequest {
+                    path: "~/Downloads/AuthKey_X.p8".into(),
+                    bytes: 257,
+                    fingerprint: "2bb80d53".into(),
+                    set: "personal".into(),
+                    name: "ASC_PRIVATE_KEY".into(),
+                    description: "App Store Connect API key".into(),
+                    delete_file_after: true,
+                }),
             },
         ),
         event(
@@ -2029,6 +2067,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 summary: "Run cargo test".into(),
                 routed_to: Route::Primary,
                 reason: None,
+                secret: None,
             },
         ),
         event(
@@ -4030,7 +4069,7 @@ fn prompts_and_published_artifacts_name_their_attachments() {
 }
 
 #[test]
-fn secret_values_go_out_only_in_put_secret_and_fetches() {
+fn secret_values_go_out_only_in_put_secret_fetches_and_stores() {
     let value = SecretValue::new("sk_test_123").unwrap();
     assert_eq!(value.expose(), "sk_test_123");
     // Logging a message that carries a value shows none of it.
@@ -4056,7 +4095,8 @@ fn secret_values_go_out_only_in_put_secret_and_fetches() {
     }
     assert!(SecretValue::new("x".repeat(MAX_SECRET_VALUE_BYTES)).is_some());
     assert!(SecretValue::new("x".repeat(MAX_SECRET_VALUE_BYTES + 1)).is_none());
-    // No server message carries a value: the only value in any fixture is the fetch's.
+    // No server message carries a vault's value: the only one in any fixture is the fetch's,
+    // and `secret_to_store` carries a host's file to an owner, not a value from the vault.
     for message in server_fixtures() {
         assert!(
             !serde_json::to_string(&message)

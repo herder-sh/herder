@@ -23,7 +23,7 @@ struct BotSessionsTests {
         host.sessions[4].chat = true
         var scripts = ["01A", "01B", "01C", "01D", "01E"].map { Script($0, host: "h") }
         let approval = EventBody.approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "Deploy",
-                                                   routedTo: .user, reason: nil)
+                                                   routedTo: .user, reason: nil, secret: nil)
         let events: [[EventBody]] = [[created()], [created()], [created(parent: "01B")], [created(), approval], [created()]]
         var sessions: [SessionKey: SessionModel] = [:]
         for index in scripts.indices { sessions[scripts[index].key] = scripts[index].model(events[index]) }

@@ -251,6 +251,7 @@ mod merge;
 pub mod publish;
 mod routing;
 mod setup;
+mod store_secret;
 mod tasks;
 pub mod titles;
 
@@ -827,6 +828,18 @@ impl SessionManager {
                     decision,
                 },
             ),
+            CommandBody::GetSecretToStore {
+                session_id,
+                approval_id,
+            } => (session_id, Request::GetSecretToStore { approval_id }),
+            CommandBody::ConfirmSecretStored {
+                session_id,
+                approval_id,
+                set,
+            } => (
+                session_id,
+                Request::ConfirmSecretStored { approval_id, set },
+            ),
             CommandBody::AnswerQuestion {
                 session_id,
                 question_id,
@@ -966,7 +979,9 @@ impl SessionManager {
             | CommandBody::ListSecretAudit { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,
-                    "this daemon is not a vault; manage secrets on the vault",
+                    "this machine is not a vault: secrets live on the vault it is linked to; \
+                     manage them on that vault's Secrets tab in the herder app, or have an \
+                     agent store a file's contents with store_secret",
                 ));
             }
             // Every user sees every session, children included, so owners and members get
@@ -2356,8 +2371,8 @@ struct CreateRequest {
     origin: Option<SessionOrigin>,
 }
 
-/// Whether `command` only reads: it changes nothing, so its answer, which may be large, is
-/// never remembered and a resend is answered afresh.
+/// Whether `command` only reads: it changes nothing, so its answer, which may be large or
+/// carry a secret's value, is never remembered and a resend is answered afresh.
 pub fn changes_nothing(command: &CommandBody) -> bool {
     matches!(
         command,
@@ -2371,6 +2386,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
             | CommandBody::GetBotStatus
             | CommandBody::GetBotMemory { .. }
             | CommandBody::ListUsers
+            | CommandBody::GetSecretToStore { .. }
     )
 }
 

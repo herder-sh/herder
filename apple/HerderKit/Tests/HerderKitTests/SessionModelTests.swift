@@ -72,12 +72,26 @@ struct SessionModelTests {
         var script = Script()
         var model = script.model([
             created(), .sessionStatusChanged(status: .running, retryAt: nil), .turnStarted(turnId: "t1"),
-            .approvalRequested(approvalId: "a1", turnId: "t1", toolCallId: "i1", summary: "Bash: ls", routedTo: .user, reason: nil),
+            .approvalRequested(approvalId: "a1", turnId: "t1", toolCallId: "i1", summary: "Bash: ls", routedTo: .user, reason: nil, secret: nil),
         ])
         #expect(model.state == .needsYou)
         #expect(model.activity == "Bash: ls")
         model.apply(script.event(.approvalResolved(approvalId: "a1", decision: .allow, answeredBy: .user)))
         #expect(model.state == .running)
+    }
+
+    @Test func aStoreSecretApprovalCarriesWhatToStoreToItsCard() {
+        let secret = SecretStoreRequest(
+            path: "~/Downloads/AuthKey_X.p8", bytes: 257, fingerprint: "2bb80d53", set: "personal",
+            name: "ASC_PRIVATE_KEY", description: "", deleteFileAfter: false)
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            .approvalRequested(
+                approvalId: "secret-1", turnId: "t1", toolCallId: "i1", summary: "Store", routedTo: .user,
+                reason: nil, secret: secret),
+        ])
+        #expect(model.forUser.first?.secret == secret)
     }
 
     @Test func aRequestForThePrimaryNeedsTheUserOnlyOnceEscalated() {

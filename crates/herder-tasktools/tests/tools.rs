@@ -49,6 +49,7 @@ fn tools_list_is_the_mcp_shape() {
             "overview",
             "command",
             "secrets",
+            "store_secret",
             "remember",
             "forget"
         ]
@@ -289,6 +290,22 @@ fn calls_parse_validate_and_round_trip() {
                 id: FactId::new("01J9FACT"),
             }),
         ),
+        (
+            json!({
+                "set": "personal",
+                "name": "ASC_PRIVATE_KEY",
+                "description": "App Store Connect API key",
+                "from_file": "~/Downloads/AuthKey_X.p8",
+                "delete_file_after": true,
+            }),
+            ToolCall::StoreSecret(StoreSecretInput {
+                set: "personal".into(),
+                name: "ASC_PRIVATE_KEY".into(),
+                description: "App Store Connect API key".into(),
+                from_file: "~/Downloads/AuthKey_X.p8".into(),
+                delete_file_after: true,
+            }),
+        ),
     ];
     for (arguments, expected) in cases {
         let tool = expected.tool();
@@ -306,11 +323,26 @@ fn calls_parse_validate_and_round_trip() {
             ToolCall::Overview(input) => serde_json::to_value(input),
             ToolCall::Command(input) => serde_json::to_value(input),
             ToolCall::Secrets(input) => serde_json::to_value(input),
+            ToolCall::StoreSecret(input) => serde_json::to_value(input),
             ToolCall::Remember(input) => serde_json::to_value(input),
             ToolCall::Forget(input) => serde_json::to_value(input),
         };
         assert_eq!(back.unwrap(), arguments);
     }
+}
+
+#[test]
+fn store_secret_never_takes_a_value() {
+    let typed = json!({
+        "set": "personal",
+        "name": "API_KEY",
+        "description": "",
+        "value": "sk-typed-in-chat",
+    });
+    let error = ToolCall::parse(Tool::StoreSecret, Some(typed)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArguments);
+    assert!(error.message.contains("Add secret"), "{}", error.message);
+    assert!(!error.message.contains("sk-typed-in-chat"));
 }
 
 #[test]

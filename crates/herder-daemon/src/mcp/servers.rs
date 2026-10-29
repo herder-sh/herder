@@ -320,7 +320,9 @@ mod tests {
         Box::pin(async {
             Err(SecretError {
                 code: SecretErrorCode::NoVault,
-                message: "this host is not linked to a vault, so it has no secrets".into(),
+                message: "this host is not linked to a vault with Secrets on, so it has no secrets; an owner \
+                          links it to one in the herder app, on the machine's page under Secrets"
+                    .into(),
                 secret: None,
                 candidates: Vec::new(),
             })

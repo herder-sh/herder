@@ -616,6 +616,24 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::ClearBotMemory { .. }
                     | CommandBody::UpdateDaemon { .. }
             );
+            // An agent never sees a secret's value: not one it would put, nor one an agent's
+            // `store_secret` read.
+            let secret = matches!(
+                command,
+                CommandBody::PutSecret { .. }
+                    | CommandBody::GetSecretToStore { .. }
+                    | CommandBody::ConfirmSecretStored { .. }
+            );
+            if secret {
+                return Err(ErrorInfo {
+                    code: ErrorCode::Forbidden,
+                    message: "an agent never handles a secret's value: store a file's contents \
+                              with store_secret, which an owner allows in a herder app, or ask \
+                              the user to add the secret on the vault's Secrets tab in the app \
+                              (Add secret)"
+                        .to_owned(),
+                });
+            }
             if connection || pairing {
                 return Err(ErrorInfo {
                     code: ErrorCode::Forbidden,

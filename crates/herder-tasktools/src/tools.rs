@@ -503,6 +503,40 @@ pub struct SecretEntry {
     pub description: String,
 }
 
+/// Arguments of `store_secret`. There is no value: the daemon reads it from `from_file`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoreSecretInput {
+    /// The set to store it in, such as `personal`; the owner who allows it may pick another.
+    pub set: String,
+    /// Its name, the environment variable commands get it as: uppercase letters, digits and
+    /// underscores, not starting with a digit, such as `ASC_PRIVATE_KEY`.
+    pub name: String,
+    /// What it is for, on one line of at most 200 characters; agents read it to pick a secret.
+    pub description: String,
+    /// The file on this machine holding the value, as it is: absolute, `~/...`, or relative to
+    /// your working directory. Text of at most 64 KiB; newlines are kept.
+    pub from_file: String,
+    /// Whether to delete the file once the vault has stored the value.
+    #[serde(default)]
+    pub delete_file_after: bool,
+}
+
+/// Result of `store_secret`: what was stored, never the value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StoreSecretOutput {
+    /// The set it was stored in, which the owner may have picked over the one asked for.
+    pub set: String,
+    /// Its name.
+    pub name: String,
+    /// The value's size in bytes.
+    pub bytes: u64,
+    /// The first 8 hex digits of the value's SHA-256.
+    pub fingerprint: String,
+    /// Whether the file was deleted.
+    pub file_deleted: bool,
+}
+
 /// Arguments of `command`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

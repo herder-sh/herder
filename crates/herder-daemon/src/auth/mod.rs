@@ -641,8 +641,8 @@ impl Auth {
 /// logging them in again and signing the host in to AWS, bringing down containers, browsing folders, changing projects,
 /// reading or changing the daemon's settings, restarting it, backing up to a vault, forking
 /// sessions onto the host, changing the skill library or which of its skills are enabled,
-/// changing users' roles, revoking devices and pairing one as anyone but the caller are for
-/// owners only.
+/// changing users' roles, revoking devices and pairing one as anyone but the caller, managing
+/// secrets and storing an agent's are for owners only.
 pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
@@ -774,7 +774,19 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             | CommandBody::ListSecretAudit { .. }
     );
     if secrets && role != Role::Owner {
-        return Err(forbidden("managing secrets is for the vault's owners only"));
+        return Err(forbidden(
+            "managing secrets is for the vault's owners only; ask one of them to do it",
+        ));
+    }
+    let store = matches!(
+        command,
+        CommandBody::GetSecretToStore { .. } | CommandBody::ConfirmSecretStored { .. }
+    );
+    if store && role != Role::Owner {
+        return Err(forbidden(
+            "storing an agent's secret is for the owners of this machine and its vault; ask \
+             one of them to allow it",
+        ));
     }
     Ok(())
 }

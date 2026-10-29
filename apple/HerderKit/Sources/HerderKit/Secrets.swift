@@ -9,6 +9,23 @@ struct SecretInput: Equatable, CustomStringConvertible, CustomDebugStringConvert
 
     var isEmpty: Bool { text.isEmpty }
     var description: String { "‹hidden›" }
+
+    init() {}
+
+    /// The contents of the file at `url` as they are, newlines and all, as a PEM key needs
+    /// them: text of at most 64 KiB, which a vault keeps.
+    init(contentsOf url: URL) throws {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let data = try Data(contentsOf: url)
+        guard data.count <= 64 * 1024 else {
+            throw HerderError.Local(detail: "\(url.lastPathComponent) is larger than 64 KiB, the most a secret holds.")
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw HerderError.Local(detail: "\(url.lastPathComponent) is not text, so it cannot be a secret.")
+        }
+        self.text = text
+    }
     var debugDescription: String { "‹hidden›" }
     var customMirror: Mirror { Mirror(self, children: []) }
 }
@@ -140,6 +157,9 @@ final class SecretEditor {
     var name: String
     var description: String
     var value = SecretInput()
+    /// The file the value was read from, which the form shows in place of the value; `nil`
+    /// for a typed one.
+    private(set) var file: String?
     private(set) var error: String?
     private(set) var sending = false
 
@@ -159,6 +179,23 @@ final class SecretEditor {
         replacing = true
         name = secret.name
         description = secret.description
+    }
+
+    /// Takes the value from the file at `url`, chosen with Add from file.
+    func read(_ url: URL) {
+        do {
+            value = try SecretInput(contentsOf: url)
+            file = url.lastPathComponent
+            error = nil
+        } catch {
+            self.error = describe(error)
+        }
+    }
+
+    /// Forgets a value read from a file, to type one or choose another.
+    func clearFile() {
+        value = SecretInput()
+        file = nil
     }
 
     /// What is wrong with the form, or `nil` when it can be sent.
@@ -182,13 +219,13 @@ final class SecretEditor {
     func save() async -> Bool {
         if let problem {
             error = problem
-            if !value.isEmpty && problem.hasPrefix("The value") { value = SecretInput() }
+            if !value.isEmpty && problem.hasPrefix("The value") { clearFile() }
             return false
         }
         let command = CommandBody.putSecret(
             set: set, name: name.trimmingCharacters(in: .whitespaces),
             description: description.trimmingCharacters(in: .whitespacesAndNewlines), value: value.text)
-        value = SecretInput()
+        clearFile()
         error = nil
         sending = true
         defer { sending = false }

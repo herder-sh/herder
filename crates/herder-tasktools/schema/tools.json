@@ -1331,6 +1331,8 @@
                   "grant_secret_set",
                   "revoke_secret_set",
                   "list_secrets",
+                  "get_secret_to_store",
+                  "confirm_secret_stored",
                   "list_secret_audit",
                   "set_vault_host_access",
                   "set_skills_repo",
@@ -1429,6 +1431,77 @@
         "required": [
           "secrets",
           "run"
+        ]
+      }
+    },
+    {
+      "name": "store_secret",
+      "description": "Store a file's contents as a secret on this machine's vault without ever seeing them: when the user asks to keep a key, token or password file as a secret, e.g. \"store ~/Downloads/AuthKey_X.p8 as ASC_PRIVATE_KEY in personal\". herder reads `from_file` on this machine itself and asks the user to approve; an owner of the vault allows it in a herder app, which may pick another set, and the call returns once they answered. Never read, print or copy the file yourself. There is no way to pass a value: when the user typed a secret in the chat, do not write it to a file; ask them to add it in the app, on the vault's Secrets tab (Add secret). With `delete_file_after`, the file is deleted once the vault stored the value. Returns the set, name, size and a short fingerprint, never the value. Fails with `unavailable` when this machine is not linked to a vault with Secrets on, and `not_allowed` when the user denies it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "delete_file_after": {
+            "description": "Whether to delete the file once the vault has stored the value.",
+            "type": "boolean",
+            "default": false
+          },
+          "description": {
+            "description": "What it is for, on one line of at most 200 characters; agents read it to pick a secret.",
+            "type": "string"
+          },
+          "from_file": {
+            "description": "The file on this machine holding the value, as it is: absolute, `~/...`, or relative to\nyour working directory. Text of at most 64 KiB; newlines are kept.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Its name, the environment variable commands get it as: uppercase letters, digits and\nunderscores, not starting with a digit, such as `ASC_PRIVATE_KEY`.",
+            "type": "string"
+          },
+          "set": {
+            "description": "The set to store it in, such as `personal`; the owner who allows it may pick another.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "set",
+          "name",
+          "description",
+          "from_file"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "bytes": {
+            "description": "The value's size in bytes.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "file_deleted": {
+            "description": "Whether the file was deleted.",
+            "type": "boolean"
+          },
+          "fingerprint": {
+            "description": "The first 8 hex digits of the value's SHA-256.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Its name.",
+            "type": "string"
+          },
+          "set": {
+            "description": "The set it was stored in, which the owner may have picked over the one asked for.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "set",
+          "name",
+          "bytes",
+          "fingerprint",
+          "file_deleted"
         ]
       }
     },

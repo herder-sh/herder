@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, ApprovalId, Attachment, HostId, ItemId, PermissionMode, Provider, QuestionId, Seq,
-    SessionId, ThreadLink, Timestamp, TurnId, TurnUsage, UserId,
+    AccountId, ApprovalId, Attachment, HostId, ItemId, PermissionMode, Provider, QuestionId,
+    SecretStoreRequest, Seq, SessionId, ThreadLink, Timestamp, TurnId, TurnUsage, UserId,
 };
 
 /// One journal record: `seq` orders it within its session, `by` names the user who caused it.
@@ -136,6 +136,11 @@ pub enum EventBody {
         /// Why a child's request went straight to the user; absent when it follows the default route.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<EscalationReason>,
+        /// For an agent's `store_secret`, what to store; always routed to the user. Only an
+        /// owner allows it, from an app: `get_secret_to_store`, then `put_secret` on the
+        /// host's vault, then `confirm_secret_stored`. `answer_approval` may only deny it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<SecretStoreRequest>,
     },
     /// A request routed to the primary session now waits for the user.
     ApprovalEscalated {

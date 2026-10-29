@@ -229,6 +229,33 @@ public final class Fleet {
             about: key)
     }
 
+    /// Allows `request`, an agent's `store_secret` of `secret`, storing it in `set`: a set the
+    /// vault lacks is created first.
+    func storeSecret(_ request: PendingRequest, _ secret: SecretStoreRequest, in set: String) async {
+        let key = request.session.key
+        do {
+            let vault = try await ownedVault(of: key.hostId)
+            guard case .secrets(let sets, _) = try await client.send(hostId: vault.hostId, command: .listSecrets) else {
+                throw HerderError.Local(detail: "the vault did not list its secrets")
+            }
+            if !sets.contains(where: { $0.name == set }) {
+                _ = try await client.send(hostId: vault.hostId, command: .createSecretSet(set: set))
+            }
+            guard case .secretToStore(let value) = try await client.send(
+                hostId: key.hostId, command: .getSecretToStore(sessionId: key.sessionId, approvalId: request.requestId))
+            else { throw HerderError.Local(detail: "the machine did not hand over the value") }
+            _ = try await client.send(
+                hostId: vault.hostId,
+                command: .putSecret(set: set, name: secret.name, description: secret.description, value: value))
+            _ = try await client.send(
+                hostId: key.hostId,
+                command: .confirmSecretStored(sessionId: key.sessionId, approvalId: request.requestId, set: set))
+            refusals[key] = nil
+        } catch {
+            refusals[key] = describe(error)
+        }
+    }
+
     func answer(_ request: PendingRequest, with answer: Answer) async {
         let key = request.session.key
         await send(

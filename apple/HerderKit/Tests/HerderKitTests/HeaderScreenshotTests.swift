@@ -74,7 +74,7 @@ import Testing
                     number: 470, url: "https://github.com/acme/herder/pull/470", title: "Release", headBranch: "release-0.13.0",
                     state: .open, ci: .passing, review: .none, mergeable: .clean))))
                 events.append(script.event(.approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i",
-                                                              summary: "Run cargo test?", routedTo: .user, reason: nil)))
+                                                              summary: "Run cargo test?", routedTo: .user, reason: nil, secret: nil)))
             }
             fleet.applyForTesting(SessionUpdate(events: events, streaming: []), to: script.key)
         }

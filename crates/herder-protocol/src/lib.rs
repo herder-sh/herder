@@ -56,8 +56,8 @@ pub use resources::{Constraint, Container, ContainerState, HostResources, Pressu
 pub use secrets::{
     FetchedSecret, HostSecretsState, MAX_SECRET_AUDIT_ENTRIES, MAX_SECRET_DESCRIPTION_CHARS,
     MAX_SECRET_NAME_BYTES, MAX_SECRET_VALUE_BYTES, SecretAccess, SecretError, SecretErrorCode,
-    SecretInfo, SecretRef, SecretSet, SecretValue, is_valid_secret_name, is_valid_secret_purpose,
-    is_valid_secret_set_name,
+    SecretInfo, SecretRef, SecretSet, SecretStoreRequest, SecretValue, is_valid_secret_name,
+    is_valid_secret_purpose, is_valid_secret_set_name,
 };
 pub use server::{
     Account, AwsDeviceCode, AwsProfile, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo,

@@ -31,7 +31,7 @@ struct InspectorTests {
             tool("Bash"), item(.toolResult(callId: "x", output: "ok", isError: false)),
             item(.assistantMessage(text: "Looking")),
             tool("Edit"), tool("Bash"),
-            .approvalRequested(approvalId: "a", turnId: "t1", toolCallId: "c", summary: "Bash: rm", routedTo: .user, reason: nil),
+            .approvalRequested(approvalId: "a", turnId: "t1", toolCallId: "c", summary: "Bash: rm", routedTo: .user, reason: nil, secret: nil),
             .approvalResolved(approvalId: "a", decision: .deny, answeredBy: .user),
             tool("Bash"),
             .prLinked(pr: pr(.open)),
@@ -102,9 +102,9 @@ struct InspectorTests {
         var script = Script()
         let model = script.model([
             created(), .turnStarted(turnId: "t1"),
-            .approvalRequested(approvalId: "a", turnId: "t1", toolCallId: "c", summary: "x", routedTo: .user, reason: nil),
+            .approvalRequested(approvalId: "a", turnId: "t1", toolCallId: "c", summary: "x", routedTo: .user, reason: nil, secret: nil),
             .approvalResolved(approvalId: "a", decision: .expired, answeredBy: .user),
-            .approvalRequested(approvalId: "b", turnId: "t1", toolCallId: "c", summary: "y", routedTo: .user, reason: nil),
+            .approvalRequested(approvalId: "b", turnId: "t1", toolCallId: "c", summary: "y", routedTo: .user, reason: nil, secret: nil),
             .approvalResolved(approvalId: "b", decision: .deny, answeredBy: .user),
         ])
         #expect((model.stats.approvals, model.stats.allowed, model.stats.denied, model.stats.expired) == (2, 0, 1, 1))
