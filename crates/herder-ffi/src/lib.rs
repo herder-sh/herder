@@ -12,7 +12,8 @@
 //!   clash with Swift's `Error` or Kotlin's `Throwable.message`.
 //! - [`parse_pairing_uri`] and [`pairing_uri_to_string`], `PairingUri`'s `FromStr` and
 //!   `Display`, and [`parse_pairing_link`] and [`pairing_link_to_string`], `PairingLink`'s,
-//!   which UniFFI cannot export as trait impls on a record.
+//!   which UniFFI cannot export as trait impls on a record; likewise [`parse_login_uri`],
+//!   [`login_uri_to_string`], [`parse_own_uri`] and [`own_uri_to_string`].
 //! - [`image_media_types`], [`max_image_bytes`], [`max_file_bytes`], [`max_file_name_bytes`]
 //!   and [`max_prompt_attachment_bytes`], the protocol's limits on a prompt's images and files,
 //!   which UniFFI cannot export as constants.
@@ -24,11 +25,12 @@ use std::sync::Arc;
 
 use herder_client_core as client_core;
 use herder_client_core::{
-    Machine, NewAccount, PairResult, PairingLink, PairingUri, SessionUpdate, SharedLink,
-    TerminalEvent,
+    LoginUri, Machine, NewAccount, OwnUri, PairResult, PairingLink, PairingUri, SessionUpdate,
+    SharedLink, TerminalEvent,
 };
 use herder_protocol::{
-    AccountId, AwsProfile, CommandBody, CommandResult, ErrorInfo, HostId, SessionId, TerminalId,
+    AccountId, AwsProfile, CommandBody, CommandResult, ErrorInfo, HostId, PasskeyChallenge,
+    PasskeyCreation, SessionId, SignIn, TerminalId,
 };
 use tokio::runtime::{Handle, Runtime};
 use tokio_util::task::AbortOnDropHandle;
@@ -188,6 +190,30 @@ pub fn pairing_link_to_string(link: PairingLink) -> String {
     link.to_string()
 }
 
+/// Parses a `herder://login` link, which `herder login` shows for an app to approve.
+#[uniffi::export]
+pub fn parse_login_uri(link: String) -> Result<LoginUri, HerderError> {
+    Ok(link.parse::<LoginUri>()?)
+}
+
+/// Formats a login link as `herder://login?…`.
+#[uniffi::export]
+pub fn login_uri_to_string(uri: LoginUri) -> String {
+    uri.to_string()
+}
+
+/// Parses a `herder://own` link, which a fresh machine shows for its first owner.
+#[uniffi::export]
+pub fn parse_own_uri(link: String) -> Result<OwnUri, HerderError> {
+    Ok(link.parse::<OwnUri>()?)
+}
+
+/// Formats a claim link as `herder://own?…`.
+#[uniffi::export]
+pub fn own_uri_to_string(uri: OwnUri) -> String {
+    uri.to_string()
+}
+
 /// Runs `call` on the client's runtime and waits for it; `None` once the runtime is gone.
 /// Dropping the returned future aborts the call.
 async fn on<T: Send + 'static>(
@@ -284,6 +310,24 @@ impl Client {
     pub async fn share(&self) -> Result<SharedLink, HerderError> {
         let client = self.inner.clone();
         call(&self.handle, async move { client.share().await }).await
+    }
+
+    /// Connects to the machine at `hosts` with certificate `fingerprint` under a new device
+    /// key, to sign in as a person; finish with [`PendingSignIn::finish`].
+    pub async fn sign_in(
+        &self,
+        hosts: Vec<String>,
+        fingerprint: String,
+    ) -> Result<Arc<PendingSignIn>, HerderError> {
+        let client = self.inner.clone();
+        let inner = call(&self.handle, async move {
+            client.sign_in(hosts, fingerprint).await
+        })
+        .await?;
+        Ok(Arc::new(PendingSignIn {
+            inner: Arc::new(inner),
+            handle: self.handle.clone(),
+        }))
     }
 
     /// Shows a machine as `name` on this device.
@@ -518,6 +562,32 @@ impl Changes {
         on(&self.handle, async move { changes.next().await })
             .await
             .unwrap_or(false)
+    }
+}
+
+/// A machine that asked this device to sign in; releasing it closes the connection.
+#[derive(uniffi::Object)]
+pub struct PendingSignIn {
+    inner: Arc<client_core::PendingSignIn>,
+    handle: Handle,
+}
+
+#[uniffi::export]
+impl PendingSignIn {
+    /// What an existing passkey signs.
+    pub fn challenge(&self) -> PasskeyChallenge {
+        self.inner.challenge()
+    }
+
+    /// What a new passkey is created from, to claim the machine or accept an invite with one.
+    pub fn registration(&self) -> Option<PasskeyCreation> {
+        self.inner.registration()
+    }
+
+    /// Signs in with `sign_in` and saves the machine once it accepts.
+    pub async fn finish(&self, sign_in: SignIn) -> Result<Machine, HerderError> {
+        let inner = Arc::clone(&self.inner);
+        call(&self.handle, async move { inner.finish(sign_in).await }).await
     }
 }
 

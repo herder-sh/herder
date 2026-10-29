@@ -7,6 +7,10 @@
 //! prints it, is a link of one group:
 //!
 //! `herder://pair?host=<addr>&fp=<sha256 hex>&code=<code>&host=<addr>&host=<addr>&fp=…&code=…`
+//!
+//! Signing in as a person takes links of one machine in the same form: `herder://login`, which
+//! `herder login` shows for an app to approve, and `herder://own`, which a fresh daemon shows
+//! for its first owner to claim it.
 
 use std::fmt;
 use std::str::FromStr;
@@ -34,10 +38,34 @@ pub struct PairingLink {
     pub machines: Vec<PairingUri>,
 }
 
+/// The `herder://login` link `herder login` shows: the machine a terminal waits on, and the
+/// code an app of the person approves it with (`approve_login`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoginUri {
+    /// Addresses the daemon may be reached at, as `host:port`; try them in order.
+    pub hosts: Vec<String>,
+    /// SHA-256 of the daemon's certificate, lowercase hex.
+    pub fingerprint: String,
+    /// The login request's code, `XXX-XXX`.
+    pub code: String,
+}
+
+/// The `herder://own` link a fresh daemon shows: the machine waiting for its first owner, and
+/// the code that claims it (`claim_ownership`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnUri {
+    /// Addresses the daemon may be reached at, as `host:port`; try them in order.
+    pub hosts: Vec<String>,
+    /// SHA-256 of the daemon's certificate, lowercase hex.
+    pub fingerprint: String,
+    /// The claim code, as the daemon's terminal shows it.
+    pub code: String,
+}
+
 /// Formats the link, `herder://pair?…`.
 impl fmt::Display for PairingUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        format(std::slice::from_ref(self), f)
+        format(PAIR, std::slice::from_ref(self), f)
     }
 }
 
@@ -47,20 +75,90 @@ impl FromStr for PairingUri {
     /// Parses a link of one machine; fails with [`Error::InvalidLink`], also for a link of
     /// several.
     fn from_str(text: &str) -> Result<Self, Error> {
-        let mut machines = parse(text)?;
-        match machines.len() {
-            1 => Ok(machines.remove(0)),
-            count => Err(invalid(&format!(
-                "the pairing link names {count} machines, not one"
-            ))),
-        }
+        one(PAIR, text)
+    }
+}
+
+/// Formats the link, `herder://login?…`.
+impl fmt::Display for LoginUri {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let uri = PairingUri {
+            hosts: self.hosts.clone(),
+            fingerprint: self.fingerprint.clone(),
+            code: self.code.clone(),
+        };
+        format(LOGIN, std::slice::from_ref(&uri), f)
+    }
+}
+
+impl FromStr for LoginUri {
+    type Err = Error;
+
+    /// Parses a `herder://login` link; fails with [`Error::InvalidLink`].
+    fn from_str(text: &str) -> Result<Self, Error> {
+        let PairingUri {
+            hosts,
+            fingerprint,
+            code,
+        } = one(LOGIN, text)?;
+        Ok(Self {
+            hosts,
+            fingerprint,
+            code,
+        })
+    }
+}
+
+/// Formats the link, `herder://own?…`.
+impl fmt::Display for OwnUri {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let uri = PairingUri {
+            hosts: self.hosts.clone(),
+            fingerprint: self.fingerprint.clone(),
+            code: self.code.clone(),
+        };
+        format(OWN, std::slice::from_ref(&uri), f)
+    }
+}
+
+impl FromStr for OwnUri {
+    type Err = Error;
+
+    /// Parses a `herder://own` link; fails with [`Error::InvalidLink`].
+    fn from_str(text: &str) -> Result<Self, Error> {
+        let PairingUri {
+            hosts,
+            fingerprint,
+            code,
+        } = one(OWN, text)?;
+        Ok(Self {
+            hosts,
+            fingerprint,
+            code,
+        })
+    }
+}
+
+/// The kinds of link, as their host part.
+const PAIR: &str = "pair";
+const LOGIN: &str = "login";
+const OWN: &str = "own";
+
+/// The one machine of a `herder://<kind>` link.
+fn one(kind: &str, text: &str) -> Result<PairingUri, Error> {
+    let mut machines = parse(kind, text)?;
+    match machines.len() {
+        1 => Ok(machines.remove(0)),
+        count => Err(invalid(&format!(
+            "the {kind} link names {count} machines, not one"
+        ))),
     }
 }
 
 /// Formats the link, `herder://pair?…`.
 impl fmt::Display for PairingLink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        format(&self.machines, f)
+        format(PAIR, &self.machines, f)
     }
 }
 
@@ -70,14 +168,15 @@ impl FromStr for PairingLink {
     /// Parses a link of one or more machines; fails with [`Error::InvalidLink`].
     fn from_str(text: &str) -> Result<Self, Error> {
         Ok(Self {
-            machines: parse(text)?,
+            machines: parse(PAIR, text)?,
         })
     }
 }
 
-fn format(machines: &[PairingUri], f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let mut url = String::from("herder://pair?");
-    let mut query = url::form_urlencoded::Serializer::for_suffix(&mut url, 14);
+fn format(kind: &str, machines: &[PairingUri], f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let mut url = format!("herder://{kind}?");
+    let start = url.len();
+    let mut query = url::form_urlencoded::Serializer::for_suffix(&mut url, start);
     for machine in machines {
         for host in &machine.hosts {
             query.append_pair("host", host);
@@ -104,12 +203,10 @@ impl Group {
 
     fn finish(self) -> Result<PairingUri, Error> {
         let (Some(fingerprint), Some(code)) = (self.fingerprint, self.code) else {
-            return Err(invalid(
-                "the pairing link lacks the fingerprint or the code",
-            ));
+            return Err(invalid("the link lacks the fingerprint or the code"));
         };
         if self.hosts.is_empty() {
-            return Err(invalid("the pairing link names no daemon address"));
+            return Err(invalid("the link names no daemon address"));
         }
         Ok(PairingUri {
             hosts: self.hosts,
@@ -119,10 +216,10 @@ impl Group {
     }
 }
 
-fn parse(text: &str) -> Result<Vec<PairingUri>, Error> {
-    let url = Url::parse(text).map_err(|err| invalid(&format!("not a pairing link: {err}")))?;
-    if url.scheme() != "herder" || url.host_str() != Some("pair") {
-        return Err(invalid("not a herder://pair link"));
+fn parse(kind: &str, text: &str) -> Result<Vec<PairingUri>, Error> {
+    let url = Url::parse(text).map_err(|err| invalid(&format!("not a {kind} link: {err}")))?;
+    if url.scheme() != "herder" || url.host_str() != Some(kind) {
+        return Err(invalid(&format!("not a herder://{kind} link")));
     }
     let mut machines = Vec::new();
     let mut group = Group::default();
@@ -143,9 +240,7 @@ fn parse(text: &str) -> Result<Vec<PairingUri>, Error> {
             _ => group.code.replace(value).is_some(),
         };
         if repeated {
-            return Err(invalid(&format!(
-                "the pairing link names a machine's {key} twice"
-            )));
+            return Err(invalid(&format!("the link names a machine's {key} twice")));
         }
     }
     machines.push(group.finish()?);
@@ -241,5 +336,33 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn login_and_own_links_round_trip_and_are_not_pairing_links() {
+        let login = LoginUri {
+            hosts: vec!["10.0.4.17:7447".into(), "[fd00::1]:7447".into()],
+            fingerprint: "ab".repeat(32),
+            code: "K7Q-4PD".into(),
+        };
+        let text = login.to_string();
+        assert!(
+            text.starts_with("herder://login?host=10.0.4.17%3A7447&host="),
+            "{text}"
+        );
+        assert_eq!(text.parse::<LoginUri>().unwrap(), login);
+        assert!(text.parse::<PairingUri>().is_err());
+        assert!(text.parse::<OwnUri>().is_err());
+
+        let own = OwnUri {
+            hosts: vec!["10.0.4.17:7447".into()],
+            fingerprint: "cd".repeat(32),
+            code: "K7Q-4PD".into(),
+        };
+        let text = own.to_string();
+        assert!(text.starts_with("herder://own?host="), "{text}");
+        assert_eq!(text.parse::<OwnUri>().unwrap(), own);
+        assert!(text.parse::<LoginUri>().is_err());
+        assert!("herder://login?host=a&fp=b".parse::<LoginUri>().is_err());
     }
 }

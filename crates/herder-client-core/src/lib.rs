@@ -126,6 +126,7 @@ mod fork;
 mod offline;
 mod pairing;
 mod profile;
+mod sign_in;
 mod skills;
 mod supervisor;
 mod terminal;
@@ -151,8 +152,9 @@ pub use catalog::{
     CatalogEntry, CatalogModel, ProviderHint, ProviderHintKind, catalog_entry, next_account_id,
     provider_catalog, provider_hints,
 };
-pub use pairing::{PairingLink, PairingUri};
+pub use pairing::{LoginUri, OwnUri, PairingLink, PairingUri};
 use profile::SavedMachine;
+pub use sign_in::PendingSignIn;
 use supervisor::{Subscription, Supervisor};
 pub use terminal::{TerminalEvent, TerminalStream};
 
@@ -470,21 +472,8 @@ impl Client {
     /// or its addresses and why it did not pair.
     async fn prove(&self, uri: PairingUri) -> Result<SavedMachine, (Vec<String>, String)> {
         let addresses = uri.hosts.clone();
-        let normalized = uri
-            .hosts
-            .iter()
-            .map(|host| address::normalize(host))
-            .collect::<Result<Vec<_>, _>>()
+        let (mut saved, device) = unsaved(&uri.hosts, &uri.fingerprint)
             .map_err(|message| (addresses.clone(), message))?;
-        let device =
-            DeviceKey::generate().map_err(|err| (addresses.clone(), format!("{err:#}")))?;
-        let mut saved = SavedMachine {
-            host_id: HostId::new(""),
-            name: String::new(),
-            addresses: address::default_order(normalized),
-            fingerprint: uri.fingerprint.to_ascii_lowercase(),
-            device_key: device.to_pem().to_owned(),
-        };
         let hello = ClientHello {
             protocol_version: PROTOCOL_VERSION,
             client: self.inner.client.clone(),
@@ -503,9 +492,35 @@ impl Client {
         Ok(saved)
     }
 
+    /// Connects to the machine at `hosts` with certificate `fingerprint` under a new device
+    /// key, to sign in as a person: the machine answers with what the person's passkey signs.
+    /// Finish with [`PendingSignIn::finish`]. Fails with `Unreachable` when no address
+    /// answers, and `Rejected` when the machine refuses to let devices sign in.
+    pub async fn sign_in(
+        &self,
+        hosts: Vec<String>,
+        fingerprint: String,
+    ) -> Result<PendingSignIn, Error> {
+        sign_in::start(self, &hosts, &fingerprint).await
+    }
+
+    /// Signs this device in to the machine at `hosts` with certificate `fingerprint` without
+    /// a passkey, as `herder login` does: the machine gives a code, passed to `shown` with
+    /// when it expires, and once an app of a person approves it (`approve_login`) this device
+    /// is that person's and the machine is saved. Fails with `Rejected` when the request
+    /// expires or the machine refuses it.
+    pub async fn log_in(
+        &self,
+        hosts: Vec<String>,
+        fingerprint: String,
+        shown: impl FnOnce(&str, Timestamp) + Send,
+    ) -> Result<Machine, Error> {
+        sign_in::log_in(self, &hosts, &fingerprint, shown).await
+    }
+
     /// Saves a freshly paired machine, replacing it if paired before, and starts its
     /// supervisor.
-    fn add(&self, mut saved: SavedMachine) -> Result<Machine, (Vec<String>, String)> {
+    pub(crate) fn add(&self, mut saved: SavedMachine) -> Result<Machine, (Vec<String>, String)> {
         let addresses = saved.addresses.clone();
         let host_id = saved.host_id.clone();
         self.update(|all| {
@@ -1074,6 +1089,27 @@ impl Changes {
 const SHARE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A fresh command id.
+/// A machine at `hosts` with certificate `fingerprint` to pair or sign in with, under a new
+/// device key; its host id and name come from its hello.
+pub(crate) fn unsaved(
+    hosts: &[String],
+    fingerprint: &str,
+) -> Result<(SavedMachine, DeviceKey), String> {
+    let normalized = hosts
+        .iter()
+        .map(|host| address::normalize(host))
+        .collect::<Result<Vec<_>, _>>()?;
+    let device = DeviceKey::generate().map_err(|err| format!("{err:#}"))?;
+    let saved = SavedMachine {
+        host_id: HostId::new(""),
+        name: String::new(),
+        addresses: address::default_order(normalized),
+        fingerprint: fingerprint.to_ascii_lowercase(),
+        device_key: device.to_pem().to_owned(),
+    };
+    Ok((saved, device))
+}
+
 pub(crate) fn new_command_id() -> CommandId {
     CommandId::new(ulid::Ulid::generate().to_string())
 }
