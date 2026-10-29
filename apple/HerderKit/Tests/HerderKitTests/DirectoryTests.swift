@@ -61,8 +61,8 @@ struct FleetPeopleTests {
         ],
     ]
 
-    let machines = [machine("devbox", name: "devbox", sessions: []),
-                    machine("laptop", name: "laptop", sessions: [], role: .member)]
+    let machines = [machine("devbox", name: "devbox", sessions: [], personId: "p-tomas"),
+                    machine("laptop", name: "laptop", sessions: [], role: .member, personId: "p-tomas")]
 
     private func model() -> (FleetPeople, () -> [CommandBody]) {
         var sent: [CommandBody] = []
@@ -95,8 +95,13 @@ struct FleetPeopleTests {
         try await sign(PasskeyChallenge(rpId: "herder.sh", challenge: "c-\(host)", expiresAt: ""))
     }
 
-    @Test func youAreThePersonThisAppSignsInAsWithTheMachinesRole() {
-        #expect(FleetPeople.me(Self.people, machines: machines) == "p-tomas")
+    @Test func youAreThePersonTheMachinesSayThisDeviceActsFor() {
+        #expect(FleetPeople.me(machines) == "p-tomas")
+        // Sam's Mac is online on devbox as this app's client too; only the machine knows who is who.
+        let sam = [machine("devbox", name: "devbox", sessions: [], role: .member, personId: "p-sam"),
+                   machine("old", name: "old", sessions: [], personId: nil)]
+        #expect(FleetPeople.me(sam) == "p-sam")
+        #expect(FleetPeople.me([machine("old", name: "old", sessions: [])]) == nil)
     }
 
     @Test func theDirectoryHasOnePersonPerPersonIdAndAColumnPerMachine() async throws {

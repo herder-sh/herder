@@ -173,7 +173,7 @@ extension Fleet {
     private func owner(_ pending: PendingSignIn, authenticator: Authenticator) async throws -> NewPerson {
         let people = FleetPeople(fleet: self)
         await people.reload(machines)
-        let me = FleetPeople.me(people.people, machines: machines)
+        let me = FleetPeople.me(machines)
         if let known = Self.keyed(me, in: people.people) {
             let assertion = try await authenticator.sign(pending.challenge())
             guard let key = known.passkeys.first(where: { $0.credentialId == assertion.id }) else {

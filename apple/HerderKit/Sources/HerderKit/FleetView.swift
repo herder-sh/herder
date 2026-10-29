@@ -64,6 +64,9 @@ struct FleetView: View {
     @State private var linkProblem: SessionLinkTarget?
     /// Your herder passkey, which signs every change to people and every approval.
     @State private var authenticator = PlatformAuthenticator()
+    /// The request of a device without a passkey on show, and those put off by closing the sheet.
+    @State private var actionRequest: ActionRequest?
+    @State private var putOff: Set<ActionRequest.ID> = []
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -77,6 +80,19 @@ struct FleetView: View {
             .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
             #endif
             .onChange(of: fleet.machines) { resolveLink() }
+            // A TUI's terminal or secret request comes up as soon as its machine has it, and
+            // goes once the machine closes it.
+            .onChange(of: fleet.actionRequests, initial: true) { _, requests in
+                if let shown = actionRequest, requests.contains(where: { $0.id == shown.id }) { return }
+                actionRequest = requests.first { !putOff.contains($0.id) }
+            }
+            // Closing the sheet puts the request off; the machine still expires it.
+            .sheet(item: Binding(get: { actionRequest }, set: { request in
+                if request == nil, let shown = actionRequest { putOff.insert(shown.id) }
+                actionRequest = request
+            })) { request in
+                ActionRequestPresenter(fleet: fleet, request: request)
+            }
             // As a link does: the new session shows once its machine lists it.
             .onChange(of: fleet.revealed) {
                 guard let key = fleet.revealed else { return }

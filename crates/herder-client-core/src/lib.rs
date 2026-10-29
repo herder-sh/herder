@@ -155,7 +155,7 @@ use futures_util::future::join_all;
 use herder_protocol::{
     Account, AccountId, ApprovalRequest, AwsProfile, ClientHello, Command, CommandBody, CommandId,
     CommandResult, ErrorCode, ErrorInfo, Event, FailoverSettings, FleetHost, HostId, HostResources,
-    Item, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, Project, Provider, Role,
+    Item, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, PersonId, Project, Provider, Role,
     SessionHead, SessionId, SessionSkill, SessionUsage, SkillsStatus, Terminal, TerminalId,
     Timestamp, UpdateStage, VaultStatus,
 };
@@ -177,7 +177,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 15;
+pub const CLIENT_API_VERSION: u32 = 16;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -258,6 +258,9 @@ pub struct Machine {
     pub quality: ConnectionQuality,
     /// This device's user's role, from the latest hello; `None` until the first connection.
     pub role: Option<Role>,
+    /// The person this device acts for there, from the latest hello; `None` until the first
+    /// connection.
+    pub person_id: Option<PersonId>,
     /// The daemon's herder version, from the latest hello; `None` until the first connection,
     /// and from daemons too old to update from a client (before `UpdateDaemon`).
     pub herder_version: Option<String>,
