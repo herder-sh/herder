@@ -104,7 +104,7 @@ struct MachinePage: View {
                     SecretsSection(fleet: fleet, machine: machine, sheet: $sheet).detailSection("Secrets")
                 }
                 if machine.connection == .connected {
-                    PeopleSection(fleet: fleet, machine: machine).id(machine.hostId).detailSection("People")
+                    PeopleLink(hostId: machine.hostId).detailSection("People")
                 }
                 connection(machine).detailSection("Connection")
                 if let error {

@@ -4,7 +4,7 @@
 #[path = "../examples/fake_daemon/demo.rs"]
 mod demo;
 
-use herder_protocol::{AccountId, EventBody, ItemBody, SessionStatus};
+use herder_protocol::{AccountId, EventBody, ItemBody, Role, SessionStatus};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_demo_sets_up_every_scene() -> anyhow::Result<()> {
@@ -116,6 +116,42 @@ async fn the_demo_sets_up_every_scene() -> anyhow::Result<()> {
     );
     let bots = scenes.iter().filter(|scene| scene.origin.is_some()).count();
     assert_eq!(bots, 4);
+
+    // The People page's team: the user owns devbox with Sam and Kim as members, and is a
+    // member on laptop, which Pat and Kim own.
+    let team = |host: &str| {
+        let mut users: Vec<(String, Role)> = demo
+            .users(host)
+            .expect("the machine's users")
+            .into_iter()
+            .map(|user| (user.name, user.role))
+            .collect();
+        users.sort_by(|a, b| a.0.cmp(&b.0));
+        users
+    };
+    let named = |users: &[(&str, Role)]| {
+        users
+            .iter()
+            .map(|(name, role)| ((*name).to_owned(), *role))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        team("devbox"),
+        named(&[
+            ("kim", Role::Member),
+            ("sam", Role::Member),
+            ("tomas", Role::Owner)
+        ])
+    );
+    assert_eq!(
+        team("laptop"),
+        named(&[
+            ("kim", Role::Owner),
+            ("pat", Role::Owner),
+            ("sam", Role::Member),
+            ("tomas", Role::Member)
+        ])
+    );
 
     // Every machine has work on it.
     for host in ["devbox", "studio", "laptop"] {
