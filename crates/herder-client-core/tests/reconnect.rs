@@ -1028,6 +1028,11 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         .unwrap();
     wait_connection(&member, connected).await;
     assert_eq!(member.machines()[0].role, Some(Role::Member));
+    assert_eq!(
+        member.machines()[0].person_id,
+        None,
+        "a per-daemon user is no person"
+    );
     for refused in [
         member
             .attach_terminal(host.clone(), terminal_id.clone())
@@ -2063,6 +2068,11 @@ async fn an_app_claims_a_machine_and_approves_a_terminal_that_logs_in() {
     assert_eq!(claimed.host_id, HostId::new("host-1"));
     wait_connection(&app, connected).await;
     assert_eq!(app.machines()[0].role, Some(Role::Owner));
+    let person = app.machines()[0].person_id.clone();
+    assert!(
+        person.is_some(),
+        "the machine names the person the app acts for"
+    );
 
     // A terminal logs in; the app approves the code it shows with the passkey.
     let terminal = Client::open(
@@ -2109,6 +2119,11 @@ async fn an_app_claims_a_machine_and_approves_a_terminal_that_logs_in() {
     assert_eq!(machine.host_id, claimed.host_id);
     wait_connection(&terminal, connected).await;
     assert_eq!(terminal.machines()[0].role, Some(Role::Owner));
+    assert_eq!(
+        terminal.machines()[0].person_id,
+        person,
+        "the same person as the app"
+    );
 }
 
 /// The test passkey as an app's Face ID, counting its prompts; it holds the passkey once the
