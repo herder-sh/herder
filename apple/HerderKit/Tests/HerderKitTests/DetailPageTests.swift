@@ -176,7 +176,7 @@ import AppKit
 private struct SamplePage: View {
     var body: some View {
         VStack(spacing: 0) {
-            PageTrail(crumbs: ["Machines", "trash-can-01"]) { _ in }
+            PageTrail(crumbs: ["Fleet", "trash-can-01"]) { _ in }
             DetailPage(title: "trash-can-01", chip: StatusChip(text: "Connected · 38 ms", urgency: .done),
                        status: "owner · 2 running · Linux") {
                 PaneButton(title: "Open Terminal", symbol: "terminal", prominent: true) {}

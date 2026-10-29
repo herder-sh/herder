@@ -371,7 +371,7 @@ struct ProjectIconLookupTests {
 
 struct CompactTabTests {
     @Test func compactWidthReachesEverySidebarSection() {
-        #expect(CompactTab.allCases.map(\.title) == ["Board", "Chats", "Projects", "Machines"])
+        #expect(CompactTab.allCases.map(\.title) == ["Board", "Chats", "Projects", "Fleet"])
         #expect(CompactTab(.project("p")) == .projects)
         #expect(CompactTab(.chats) == .chats)
         #expect(CompactTab(.board) == .board)

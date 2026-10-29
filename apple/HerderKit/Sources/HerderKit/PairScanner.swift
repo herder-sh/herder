@@ -14,7 +14,7 @@ func pairingLink(in text: String) -> String? {
 #if os(iOS)
 import AVFoundation
 
-/// The camera, filling Add Machine's sheet in its form's place, looking for the QR code
+/// The camera, filling Add to Fleet's sheet in its form's place, looking for the QR code
 /// `herder pair` prints or another device shares; hands over the pairing link in it.
 struct PairScanner: View {
     let scanned: (String) -> Void

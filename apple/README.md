@@ -66,7 +66,7 @@ HERDER_FAKE_DAEMON=$PWD/target/debug/examples/fake_daemon swift test --package-p
 ```
 
 The iOS UI tests pair the app on a simulator with two running fake daemons, from the link a
-device paired with both shares (as **Add Machine › A device to this fleet** does), then
+device paired with both shares (as **Add to Fleet › A device to this fleet** does), then
 open the session waiting on an approval on the first from its card on Home:
 
 ```sh
@@ -81,10 +81,10 @@ A pairing code works once, so start new fake daemons for each run, and erase the
 simulator (`xcrun simctl uninstall booted sh.herder.Herder`) so it starts with no machines.
 
 To try the app against it, run `cargo run -p herder-ffi --example fake_daemon` and paste the
-link it prints into **Add Machine**. For a real machine, run `herder pair` on it: on iOS, scan
+link it prints into **Add to Fleet**. For a real machine, run `herder pair` on it: on iOS, scan
 the QR code it prints with **Scan QR Code**; on the Mac, paste the link (or all of its output).
-To add a device to every machine another one already has, open **Machines › Pair Another
-Device** on that one (the Mac app) and scan or paste the link it shows.
+To add a device to every machine another one already has, open **Fleet › Add to Fleet ›
+A device to this fleet** on that one and scan or paste the link it shows.
 
 The `apple` workflow runs the tests and builds both apps on every change to `apple/` or to what
 it builds on.

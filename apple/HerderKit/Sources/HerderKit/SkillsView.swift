@@ -106,7 +106,7 @@ struct SkillsPage: View {
 
     @ViewBuilder private func libraryTab(_ library: SkillLibrary) -> some View {
         if library.checkouts.isEmpty {
-            EmptySkills(title: "No machine yet", text: "Skills live on your machines; add one under Machines.")
+            EmptySkills(title: "No machine yet", text: "Skills live on your machines; add one under Fleet.")
         } else {
             if library.skills.isEmpty {
                 EmptySkills(title: "No skills yet",

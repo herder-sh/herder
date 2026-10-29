@@ -8,7 +8,7 @@ import AppKit
 
 /// The sheets the app presents: short create flows only. Objects open as pages (`Page`).
 enum AppSheet: Identifiable, Hashable {
-    /// Add Machine, on what it adds: a vault already chosen, for one a machine backs up to, or
+    /// Add to Fleet, on what it adds: a vault already chosen, for one a machine backs up to, or
     /// a `herder://pair` link the app was opened with already filled in.
     case pair(PairKind, UnpairedVault? = nil, link: String = "")
     /// A new session: pick its project first.

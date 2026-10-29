@@ -130,7 +130,7 @@ final class ScreenshotTests: XCTestCase {
         }
 
         // The fleet.
-        if section("Machines") {
+        if section("Fleet") {
             settle()
             #if os(macOS)
             shoot("mac-machines")
@@ -143,18 +143,18 @@ final class ScreenshotTests: XCTestCase {
             #else
             shoot("ios-machines")
             #endif
-            // Add Machine's third choice: a link that pairs another device of yours.
-            let add = app.buttons["Add Machine"].firstMatch
-            if wait(add, "Add Machine") {
+            // Add to Fleet's third choice: a link that pairs another device of yours.
+            let add = app.buttons["add-to-fleet"].firstMatch
+            if wait(add, "Add to Fleet") {
                 press(add)
                 let device = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'A device to this fleet'")).firstMatch
-                if wait(device, "Add Machine's device choice") {
+                if wait(device, "Add to Fleet's device choice") {
                     press(device)
                     settle()
                     shoot(platform("add-device"))
                 }
                 let done = app.buttons["Done"].firstMatch
-                if wait(done, "Add Machine's Done") { press(done) }
+                if wait(done, "Add to Fleet's Done") { press(done) }
             }
         }
         #if os(macOS)
@@ -390,8 +390,8 @@ final class ScreenshotTests: XCTestCase {
         #if os(macOS)
         guard section("Integrations") else { return }
         #else
-        // On the iPhone, Integrations is a link at the top of Machines, not a tab.
-        guard section("Machines") else { return }
+        // On the iPhone, Integrations is a link at the top of Fleet, not a tab.
+        guard section("Fleet") else { return }
         let link = app.descendants(matching: .any)["integrations-link"].firstMatch
         guard wait(link, "Integrations link") else { return }
         press(link)
@@ -442,8 +442,8 @@ final class ScreenshotTests: XCTestCase {
         #if os(macOS)
         guard section("Skills") else { return }
         #else
-        // On the iPhone, Skills is a link at the top of Machines, not a tab.
-        guard section("Machines") else { return }
+        // On the iPhone, Skills is a link at the top of Fleet, not a tab.
+        guard section("Fleet") else { return }
         let link = app.descendants(matching: .any)["skills-link"].firstMatch
         guard wait(link, "Skills link") else { return }
         press(link)
@@ -461,8 +461,8 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot("mac-providers")
         #else
-        // On the iPhone, Providers is a link at the top of Machines, not a tab.
-        guard section("Machines") else { return }
+        // On the iPhone, Providers is a link at the top of Fleet, not a tab.
+        guard section("Fleet") else { return }
         let link = app.descendants(matching: .any)["providers-link"].firstMatch
         guard wait(link, "Providers link") else { return }
         press(link)
@@ -785,7 +785,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func pair(_ link: String) throws {
-        let add = app.buttons["Add Machine"].firstMatch
+        let add = app.buttons["add-to-fleet"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 15), app.debugDescription)
         press(add)
         let field = app.descendants(matching: .any)["pairing-link"].firstMatch

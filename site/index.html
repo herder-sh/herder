@@ -113,7 +113,7 @@
      "name": "Can herder run agents on several machines?",
      "acceptedAnswer": {
       "@type": "Answer",
-      "text": "Yes. Run the herder daemon on each machine, pair them with herder pair, and the apps and the terminal UI show the tasks of every machine on one Board, with each machine's load, accounts and provider CLIs on the Machines page."
+      "text": "Yes. Run the herder daemon on each machine, pair them with herder pair, and the apps and the terminal UI show the tasks of every machine on one Board, with each machine's load, accounts and provider CLIs on the Fleet page."
      }
     },
     {
@@ -276,7 +276,7 @@
         <p class="how"><span>how</span> one daemon per machine, paired with <code>herder pair</code>. Providers updates every agent CLI on every machine at once.</p>
       </div>
       <figure class="shot">
-        <img src="img/mac-machines-1440.webp" srcset="img/mac-machines-720.webp 720w, img/mac-machines-1440.webp 1440w" sizes="(min-width: 1160px) 640px, (min-width: 861px) 56vw, 94vw" width="1440" height="900" loading="lazy" decoding="async" alt="The herder Mac app's Machines page: three machines with their load, running sessions, CLI updates and accounts, and the vault they back up to">
+        <img src="img/mac-machines-1440.webp" srcset="img/mac-machines-720.webp 720w, img/mac-machines-1440.webp 1440w" sizes="(min-width: 1160px) 640px, (min-width: 861px) 56vw, 94vw" width="1440" height="900" loading="lazy" decoding="async" alt="The herder Mac app's Fleet page: three machines with their load, running sessions, CLI updates and accounts, and the vault they back up to">
       </figure>
     </section>
 
@@ -388,7 +388,7 @@ herder service install</code></pre>
       <li>
         <span class="tag">02 · pair</span>
         <pre><code>herder pair</code></pre>
-        <p>Prints a link and a QR code. Scan it with the iPhone app, paste it into the Mac app's Add Machine, or run <code>herder connect &lt;link&gt;</code> on another computer.</p>
+        <p>Prints a link and a QR code. Scan it with the iPhone app, paste it into the Mac app's Add to Fleet, or run <code>herder connect &lt;link&gt;</code> on another computer.</p>
       </li>
       <li>
         <span class="tag">03 · add an account</span>
@@ -424,7 +424,7 @@ herder service install</code></pre>
       </details>
       <details>
         <summary>Can herder run agents on several machines?</summary>
-        <p>Yes. Run the herder daemon on each machine, pair them with <code>herder pair</code>, and the apps and the terminal UI show the tasks of every machine on one Board, with each machine's load, accounts and provider CLIs on the Machines page.</p>
+        <p>Yes. Run the herder daemon on each machine, pair them with <code>herder pair</code>, and the apps and the terminal UI show the tasks of every machine on one Board, with each machine's load, accounts and provider CLIs on the Fleet page.</p>
       </details>
       <details>
         <summary>What does the herder vault do?</summary>

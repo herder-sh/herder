@@ -7,7 +7,7 @@
 herder has three parts, all built on one shared Rust client core:
 
 - `herder daemon` runs on each Linux machine or Mac and hosts agent sessions. It runs the unmodified Claude Code, Codex, Cursor or OpenCode CLI, each account under its own config dir, and keeps every session in an append-only journal.
-- The herder Mac and iPhone apps are native apps. The Board lists every open task on every paired machine, with its agents folded under it; a session shows its transcript, questions and approvals. Providers, Machines, Skills, Integrations and Activity cover accounts, CLI versions, MCP servers, vaults, bots and every install, update and login. The Mac app is a download from GitHub; the iPhone app is in TestFlight and not on the App Store yet.
+- The herder Mac and iPhone apps are native apps. The Board lists every open task on every paired machine, with its agents folded under it; a session shows its transcript, questions and approvals. Providers, Fleet, Skills, Integrations and Activity cover accounts, CLI versions, MCP servers, vaults, bots and every install, update and login. The Mac app is a download from GitHub; the iPhone app is in TestFlight and not on the App Store yet.
 - Bare `herder` opens the terminal UI. It works over SSH or mosh, including from a phone: below 65 columns it shows one pane at a time, and every view works with the arrow keys, Tab and Enter.
 
 herder is pre-1.0 and changes quickly.
@@ -29,13 +29,13 @@ The Mac app is a zip on the latest GitHub release (https://github.com/herder-sh/
 ## Get started
 
 1. Install herder and run `herder service install`. `herder doctor` checks the machine and says how to fix what is not ready.
-2. Run `herder pair` to print a pairing link and QR code. Scan it with the iPhone app, paste the link into the Mac app's Add Machine, or run `herder connect <link>` on another computer.
+2. Run `herder pair` to print a pairing link and QR code. Scan it with the iPhone app, paste the link into the Mac app's Add to Fleet, or run `herder connect <link>` on another computer.
 3. Add an account: Add Account in the app, or `n` in the terminal UI. The vendor's own login runs in a terminal on the machine; herder only shows you that terminal.
 
 ## Features
 
 - Failover across accounts: when a session hits a usage limit, herder moves it to another account of the same provider that has room left. It only switches after a limit is hit, never pre-emptively. With no account left and a known reset time, the session waits for the reset and retries by itself.
-- A fleet of machines: run a daemon on every machine, pair once, and see every task in one Board. Machines shows each machine's load, running sessions, accounts and provider CLIs. `herder fork` continues a session's history on another host.
+- A fleet of machines: run a daemon on every machine, pair once, and see every task in one Board. Fleet shows each machine's load, running sessions, accounts and provider CLIs. `herder fork` continues a session's history on another host.
 - Vaults that run anywhere: a herder vault backs up every session journal its hosts replicate to it, holds secrets, and can take over a session from another machine. Run it on any machine with one click in the app or `herder vault install`, on another box, or on Kubernetes. A host paired with a host code can only replicate its own sessions and reads nothing else on the vault.
 - Mac, iPhone and terminal: the native apps or the terminal UI over SSH. Allow or deny tool calls and answer agent questions from wherever you are.
 - Multi-agent tasks: an agent can spawn child sessions, prompt them, wait for them, answer their questions or escalate to you. The daemon serves these task tools to every agent over MCP, and the Board folds the children under their task.
@@ -85,7 +85,7 @@ No. herder never reads, stores, copies or relays provider login tokens. You log 
 
 ### Can herder run agents on several machines?
 
-Yes. Run the herder daemon on each machine, pair them with `herder pair`, and the apps and the terminal UI show the tasks of every machine on one Board, with each machine's load, accounts and provider CLIs on the Machines page.
+Yes. Run the herder daemon on each machine, pair them with `herder pair`, and the apps and the terminal UI show the tasks of every machine on one Board, with each machine's load, accounts and provider CLIs on the Fleet page.
 
 ### What does the herder vault do?
 

@@ -36,7 +36,7 @@ stops, apart from the daemon's `herder service`. Everything the vault keeps is i
 - its data: TLS identity, paired devices and hosts, `db/vault.db`.
 
 Once the vault is up, `install` prints a pairing code and the vault's addresses: add it in the
-app with Add Machine. It logs to `~/Library/Logs/herder/vault.log` on macOS, and to
+app with Add to Fleet. It logs to `~/Library/Logs/herder/vault.log` on macOS, and to
 `journalctl --user -u herder-vault.service` on Linux.
 
 Run `herder pair --config ~/.local/share/herder-vault/vault.toml` for another pairing code, and

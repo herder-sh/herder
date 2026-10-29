@@ -8,7 +8,7 @@ final class PairingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        let add = app.buttons["Add Machine"].firstMatch
+        let add = app.buttons["add-to-fleet"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 30), "the app did not open on an empty Board")
         let field = app.openPairing(add)
         field.tap()

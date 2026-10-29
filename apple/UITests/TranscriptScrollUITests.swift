@@ -14,7 +14,7 @@ final class TranscriptScrollUITests: XCTestCase {
         app.launchEnvironment["HERDER_PROFILE"] = "transcript-scroll-\(UUID().uuidString)"
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["Board"].waitForExistence(timeout: 30))
-        app.buttons["Add Machine"].firstMatch.tap()
+        app.buttons["add-to-fleet"].firstMatch.tap()
         let field = app.descendants(matching: .any)["pairing-link"].firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()

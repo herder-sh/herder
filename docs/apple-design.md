@@ -20,7 +20,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 ## 1. Decisions at a glance
 
 1. **One information architecture everywhere.** Board, Projects, Usage, Skills,
-   Machines (with a vault inside), a session, and settings sheets. The Mac, the iPad and the iPhone show the
+   Fleet (machines, with a vault inside), a session, and settings sheets. The Mac, the iPad and the iPhone show the
    same sections with the same names; only the navigation chrome changes (§3).
 2. **Three layouts, chosen by width, not by device.** `FleetView` picks the layout from the
    horizontal size class; `ListAndSession` picks list-beside-session from the pane's width.
@@ -55,8 +55,8 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 | **Projects** | every project with its sessions, children under parents | sidebar *projects* tree | `ProjectsView` (iPhone), `ProjectSessions` (Mac/iPad) |
 | **Usage** | tokens and API-equivalent dollars over a period, per account and model | — | `UsageView` |
 | **Skills** | the skill library on every machine, and a session's project skills | — | `SkillsView` |
-| **Machines** | each paired machine as a table row: connection, load, CLIs, accounts, backup; then the vaults | fleet + accounts | `MachinesView` |
-| Vault (inside Machines) | a vault's hosts, how current each is, and its secrets | fleet, host grouping | `VaultPage` |
+| **Fleet** | each paired machine as a table row: connection, load, CLIs, accounts, backup; then the vaults | fleet + accounts | `MachinesView` |
+| Vault (inside Fleet) | a vault's hosts, how current each is, and its secrets | fleet, host grouping | `VaultPage` |
 | **Session** | one session: transcript, request, composer | session pane, chat tab | `SessionView` |
 | Terminal | owner-only shells in the session's worktree | term tab | `TerminalPane` |
 | Inspector | the session's events and stats | details panel | `SessionInspector` |
@@ -83,7 +83,7 @@ the project header's gear).
 | | Mac window / iPad regular | narrow regular (< 820 pt content) | iPhone / compact |
 |---|---|---|---|
 | frame | `DesktopShell` | `DesktopShell` | `FleetView.tabs` |
-| navigation | sidebar: rail (76 pt) or full (228 pt) | same | tab bar: Board · Projects · Usage · Machines |
+| navigation | sidebar: rail (76 pt) or full (228 pt) | same | tab bar: Board · Projects · Usage · Fleet |
 | section switch | sidebar rows; the pane title's menu (`Switcher`) | same | tabs |
 | list | 380 pt pane beside the session (`ListAndSession`) | full width until a session opens | full screen, `NavigationStack` |
 | session | fills the rest | replaces the list, with **Back** | pushed; tab bar hidden |
@@ -98,7 +98,7 @@ Rules:
   size class is compact and `DesktopShell` otherwise, so an iPad in slide-over gets the iPhone
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
-- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats), then **Workspace**, the setup (Providers, Skills, Machines; a vault lives inside Machines), then the
+- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats), then **Workspace**, the setup (Providers, Skills, Fleet; a vault lives inside Fleet), then the
   projects, then one footer line for the machines (`MachinesFooter`). It starts collapsed to
   the rail (`sidebarCollapsed`), which leaves the width to the session and lists the same
   things in the same order; ⇧⌘\ toggles it. The window's traffic lights sit in its top bar
@@ -115,7 +115,7 @@ Rules:
   The sessions no project holds yet stay last.
 - **The machines footer** is a dot per machine coloured by its connection (`ConnectionMark`)
   and a summary ("4 machines · 1 offline"). Clicking it opens a popover with each machine's
-  status, each row opening its page, and a link to Machines. On the rail it is the dots alone.
+  status, each row opening its page, and a link to Fleet. On the rail it is the dots alone.
 - **The list pane** is 380 pt (`ListAndSession`). ⌘\ hides it to give the session the whole
   width (`listHidden`); with no session open it always shows.
 - **The pane header** (`Pane`) is a `PageHeader` (§8.4): the title (a menu of sections and
@@ -123,7 +123,7 @@ Rules:
   narrow pane to "1 needs you · 238 tasks", never cut), the pane's actions on the right as
   header controls (§8.4), then a search field where the pane lists sessions.
 - **The tab bar** on compact width has the same sections as the sidebar: Board (badged with the
-  request count), Projects, Usage, Machines. Skills and a vault show inside Machines. Each tab is its own `NavigationStack` (`boardPath`,
+  request count), Projects, Usage, Fleet. Skills and a vault show inside Fleet. Each tab is its own `NavigationStack` (`boardPath`,
   `projectsPath`), so switching tabs keeps each tab's place.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
@@ -166,9 +166,9 @@ The apps have no Pull Requests section (unlike the TUI's prs view), and nothing 
 across sessions. A session shows its PRs as text: the chip in its header (§5.1) and the badges
 on its row.
 
-### 4.4 Machines and vault (`MachinesView`, `VaultPage`)
+### 4.4 Fleet and vault (`MachinesView`, `VaultPage`)
 
-Machines is a `SortableTable` of the machines that run sessions (`MachineRow`), with the columns
+Fleet is a `SortableTable` of the machines that run sessions (`MachineRow`), with the columns
 you act on: machine (its role, and "this Mac" when its address is loopback or this Mac's host
 name), status and the latest ping's round trip, running sessions, load (CPU as a `UsageBar`,
 memory on hover), CLIs ("current", or "N updates" from `ProviderVersions`), accounts (with an "N
@@ -180,7 +180,7 @@ Under the table, the **Vault** section has a `VaultRow` per paired vault: its ho
 size, and the host furthest behind ("work-mbp 6 h behind", or "✓ caught up"); it opens the
 vault's page. A vault that connected machines back up to (`get_vault_link`, asked of the
 machines this device owns) but this device is not paired with gets an `UnpairedVaultRow`: who
-backs up to it, and Add Machine to pair with it. Vault has no sidebar section of its own.
+backs up to it, and Add to Fleet to pair with it. Vault has no sidebar section of its own.
 
 The vault's page (`VaultPage`) reads "Connected · backing up 2 hosts · last batch 3 min. ago".
 Its owners get two tabs: **Overview** and **Secrets** (the sets, their grants and secrets, and the
@@ -217,9 +217,9 @@ filter, all machines added up by default (`UsageReport`, from each connected mac
 ("≈" and "partly estimated" when herder priced some of it), tokens, cache savings (the share of
 input read from the prompt cache), input, output, cache read and write. Then one card per
 account, costliest first: provider, tokens and dollars for the period, and what is left of its
-plan's session and weekly windows with their reset (`UsageBar`, the windows Machines shows).
+plan's session and weekly windows with their reset (`UsageBar`, the windows Fleet shows).
 Last, a by-model table of turns, tokens and dollars. It fills the width on the Mac, like
-Machines; on iPhone it is the Usage tab. Screenshots are still to come, in `docs/screenshots/p11-4`.
+Fleet; on iPhone it is the Usage tab. Screenshots are still to come, in `docs/screenshots/p11-4`.
 
 ### 4.6 Skills (`SkillsView`)
 
@@ -252,7 +252,7 @@ the app cannot read a skill's files); **Import** opens `SkillImportSheet`: a fol
 device, every file in it but the hidden ones, named after it (`SkillFolder`), or a git URL and a
 folder in it. Both are `AppSheet`s; a refused change shows as a toast. Members see everything and
 change nothing: the actions and menus are hidden, the switches disabled, and a line says why. It
-fills the width on the Mac; on iPhone it opens from the top of Machines. Screenshots:
+fills the width on the Mac; on iPhone it opens from the top of Fleet. Screenshots:
 `mac-skills.png`, `ios-skills.png` (`apple/ScreenshotTests`, against the demo fleet's library).
 
 ### 4.7 List rules (every session list)
@@ -486,7 +486,7 @@ Screenshots: `mac-session.png`, `mac-session-approval.png`, `mac-session-running
 | Permission mode, ⋯ | menu | menu | SwiftUI `Menu` |
 | New Session | sheet | sheet, full width | `ProjectPicker` |
 | Machine, account, project settings, vault, sub-agent | page in the main area (§8.5) | pushed | `DetailPage`, `Page` |
-| Add Machine, Add Account, Add Secret, New Skill, Import Skill, Add MCP Server, Fork | sheet, 560 pt (`SheetScaffold`) | system sheet, full width | `SheetScaffold` |
+| Add to Fleet, Add Account, Add Secret, New Skill, Import Skill, Add MCP Server, Fork | sheet, 560 pt (`SheetScaffold`) | system sheet, full width | `SheetScaffold` |
 | Draft session | session pane | full screen | `DraftSessionView` |
 | Activity (installs, logins, sign-ins) | popover (560 pt) from the header chip | sheet from the toolbar | `ActivityPanel` |
 | Toasts (archived, undo) | bottom, centred capsule | same | `ToastView` |
@@ -502,7 +502,7 @@ Rules:
   right (§8.8).
 - **Sheets never open sheets.** A sheet is a short create flow or a confirmation. What it leads
   to replaces it (Set Up on Other Machines hands its login to Add Account in its place; the
-  QR scanner takes Add Machine's place), or is a page. `NoNestedSheetsTests` fails on any view
+  QR scanner takes Add to Fleet's place), or is a page. `NoNestedSheetsTests` fails on any view
   that draws a `SheetScaffold` and presents a sheet or a full-screen cover.
 
 Screenshots: `mac-session-inspector.png`, `ios-session-inspector.png` (today's side pane on a
@@ -656,7 +656,7 @@ Xcode preview in its file.
 Objects get pages, actions get sheets. A machine, an account, a project's settings, a vault and
 a provider's sub-agent are a `Page`. On the Mac and iPad a page opens over its section in the
 main area (`PageStack` in `DesktopShell`), under a breadcrumb of the section and each page on
-the way ("Machines › trash-can-01"), each crumb a way back to it and ⌘[ one step back
+the way ("Fleet › trash-can-01"), each crumb a way back to it and ⌘[ one step back
 (`PageTrail`); choosing a section in the sidebar, even the one shown, closes its pages. On iPhone
 the same page is pushed on the tab's `NavigationStack` (`NavRoute.page`). Views open and close
 pages through the environment's `pages` (`PageNavigator`), so they need not know which.
@@ -752,7 +752,7 @@ A create sheet is one sheet deep and short: its fields, each a label and a contr
 under it (an example goes in the placeholder), at most one line of hint beside the footer's one
 primary button (`SheetScaffold(hint:)`), and no terminal. What it starts runs in Activity, and
 the sheet closes. Add Account, Add Secret, New Skill, Import Skill, Add MCP Server, Import MCP
-Servers and Add Machine follow it.
+Servers and Add to Fleet follow it.
 
 **Add Account** (`AddAccountSheet`, `AddAccountForm`) adds one login on several machines at
 once: the provider as tiles, a checklist of the machines (`AccountTarget`; every one it can be
@@ -781,7 +781,7 @@ iPhone layout fixes land in P7.21.
 |---|---|---|
 | Board | `mac-home.png`, `mac-sidebar-expanded.png` | `ios-home.png` |
 | Project / Projects | `mac-project.png` | `ios-projects.png` |
-| Machines, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
+| Fleet, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
 | Session (idle, approval, running) | `mac-session.png`, `mac-session-approval.png`, `mac-session-running.png` | `ios-session.png`, `ios-session-keyboard.png`, `ios-session-approval.png`, `ios-session-running.png` |
 | Session menu | — | `ios-session-menu.png` |
 | Inspector | `mac-session-inspector.png` | `ios-session-inspector.png` |
