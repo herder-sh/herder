@@ -293,7 +293,7 @@ struct McpMachineSettings: View {
             }
             if let lists {
                 McpMachineServers(fleet: fleet, lists: lists, machine: machine, sheet: $sheet)
-                    .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+                    .background(.card, in: .rect(cornerRadius: Theme.corner))
                     .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
             }
         }
@@ -702,7 +702,7 @@ struct McpPairsEditor: View {
                     .foregroundStyle(Theme.secondary)
                     .padding(12)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+                    .background(.card, in: .rect(cornerRadius: Theme.corner))
                     .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
                     .contentShape(.rect)
             }

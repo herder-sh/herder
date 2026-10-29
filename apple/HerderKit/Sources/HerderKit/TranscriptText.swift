@@ -65,7 +65,7 @@ private struct CopiedBadge: View {
     var body: some View {
         Label("Copied", systemImage: "checkmark")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(Theme.surface)
+            .foregroundStyle(Theme.canvas)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(Theme.text, in: .capsule)

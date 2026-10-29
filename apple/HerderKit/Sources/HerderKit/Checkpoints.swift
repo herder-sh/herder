@@ -113,7 +113,7 @@ private struct CheckpointCard: View {
         }
         .padding(14)
         .frame(width: 340, alignment: .leading)
-        .background(Theme.surface, in: .rect(cornerRadius: 14))
+        .background(Theme.sheet, in: .rect(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.stroke))
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
     }

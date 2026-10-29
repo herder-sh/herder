@@ -174,7 +174,7 @@ struct ActivityList: View {
             .frame(maxHeight: 560)
         }
         .fixedSize(horizontal: false, vertical: true)
-        .background(Theme.surface)
+        .layer(.sheet)
     }
 
     private var groups: some View {
@@ -318,7 +318,7 @@ struct ActivityDetail: View {
             }
         }
         .padding(14)
-        .background(Theme.surface)
+        .layer(.sheet)
     }
 
     @ViewBuilder private func actions(_ progress: JobProgress) -> some View {
@@ -531,6 +531,6 @@ struct ActivitySheet: View {
     var body: some View {
         ActivityPanel(fleet: fleet) { dismiss() }
             .frame(maxHeight: .infinity, alignment: .top)
-            .background(Theme.surface)
+            .layer(.sheet)
     }
 }

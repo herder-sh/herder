@@ -104,7 +104,7 @@ struct ComposerBox<Footer: View>: View {
                 .padding(.horizontal, 10)
                 .padding(.bottom, 10)
             }
-            .background(Theme.surface, in: .rect(cornerRadius: 22))
+            .background(.card, in: .rect(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(
                 tint.map { $0.opacity(isFocused ? 0.7 : 0.4) } ?? (isFocused ? Theme.secondary.opacity(0.5) : Theme.stroke)))
             .contentShape(.rect)
@@ -130,7 +130,7 @@ struct ComposerBox<Footer: View>: View {
                 .padding(.horizontal, compact ? 12 : 16)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.surface.opacity(0.6),
+                .background(Theme.card.opacity(0.6),
                             in: UnevenRoundedRectangle(bottomLeadingRadius: 14, bottomTrailingRadius: 14))
                 .padding(.horizontal, compact ? 12 : 18)
         }

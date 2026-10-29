@@ -44,13 +44,13 @@ struct SheetScaffold<Content: View, Footer: View>: View {
             }
             .padding(16)
         }
-        .background(Theme.surface)
+        .layer(.sheet)
         #if os(macOS)
         .frame(width: 560, height: height)
         #else
         // The sheet's own glass would show the screen behind it under the footer, by the home
         // indicator.
-        .presentationBackground(Theme.surface)
+        .presentationBackground(Theme.sheet)
         #endif
         .preferredColorScheme(.dark)
     }
@@ -115,7 +115,7 @@ struct InputBox: View {
             #endif
             .padding(12)
             .frame(minHeight: 44)
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }

@@ -205,7 +205,7 @@ struct ProjectPicker: View {
         #else
         .frame(maxHeight: .infinity, alignment: .top)
         #endif
-        .background(Theme.surface)
+        .layer(.sheet)
         .preferredColorScheme(.dark)
         .onAppear {
             hostId = machines.first?.hostId ?? ""
@@ -802,7 +802,7 @@ struct FolderBrowser: View {
                 }
             }
         }
-        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
         .task { await load(picked.isEmpty ? "~" : picked) }
         // Typing browses: a path ending in "/" opens that folder; otherwise its folder is

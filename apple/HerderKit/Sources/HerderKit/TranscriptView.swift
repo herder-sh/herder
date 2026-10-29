@@ -564,7 +564,7 @@ private struct CodeBlock: View {
             MarkdownText.codeText(code, language: language)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
         .task(id: copied) {
             guard copied else { return }
@@ -585,7 +585,7 @@ private struct ToolGroup: View {
                 ToolRow(call: call)
             }
         }
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }

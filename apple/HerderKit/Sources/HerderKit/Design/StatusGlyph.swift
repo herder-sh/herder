@@ -17,7 +17,7 @@ struct StatusGlyph: View {
                 Circle().fill(Theme.running).frame(width: size, height: size)
             case .needsYou:
                 Circle().fill(Theme.accent).frame(width: size + 4, height: size + 4)
-                    .overlay(Text("!").font(.system(size: size, weight: .black)).foregroundStyle(Theme.background))
+                    .overlay(Text("!").font(.system(size: size, weight: .black)).foregroundStyle(.ground))
             case .waiting:
                 Circle().strokeBorder(Theme.waiting, style: StrokeStyle(lineWidth: 2, dash: [2, 2]))
                     .frame(width: size + 2, height: size + 2)
@@ -29,7 +29,7 @@ struct StatusGlyph: View {
             case .error:
                 Circle().fill(Theme.failure).frame(width: size + 2, height: size + 2)
                     .overlay(Image(systemName: "xmark").font(.system(size: size * 0.6, weight: .heavy))
-                        .foregroundStyle(Theme.background))
+                        .foregroundStyle(.ground))
             case .archived:
                 Image(systemName: "archivebox").font(.system(size: size)).foregroundStyle(Theme.tertiary)
             case .moved:

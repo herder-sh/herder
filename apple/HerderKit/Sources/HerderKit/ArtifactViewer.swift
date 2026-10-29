@@ -65,7 +65,7 @@ struct ArtifactViewer: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.background)
+            .background(.ground)
             .navigationTitle(artifact?.title ?? "Artifact")
             .navigationSubtitle(artifact?.summary ?? "")
             #if os(iOS)

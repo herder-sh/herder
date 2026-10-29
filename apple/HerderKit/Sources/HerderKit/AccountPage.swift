@@ -182,7 +182,7 @@ struct AccountPage: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(minWidth: 240, maxWidth: .infinity, alignment: .leading)
-        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
         .accessibilityElement(children: .combine)
     }
@@ -227,7 +227,7 @@ struct AccountPage: View {
                 table(login, rows: rows).frame(minWidth: 600, maxWidth: .infinity, alignment: .leading)
                 list(login, rows: rows)
             }
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
             if let error { Text(error).font(.footnote).foregroundStyle(Theme.failure) }
         }
@@ -361,7 +361,7 @@ struct AccountPage: View {
                     .onSubmit { saveLabel(rows) }
                     .padding(.horizontal, 10)
                     .frame(maxWidth: 240, minHeight: 32)
-                    .background(Theme.surface, in: .rect(cornerRadius: 7))
+                    .background(.card, in: .rect(cornerRadius: 7))
                     .accessibilityIdentifier("account-label")
             }
             RowDivider()

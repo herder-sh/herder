@@ -115,12 +115,12 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
         let font = "-apple-system, BlinkMacSystemFont, system-ui, sans-serif"
         let variables: [String: String] = [
             "fontFamily": font, "fontSize": "13px",
-            "background": hex(Theme.surface),
+            "background": hex(Theme.card),
             "primaryColor": hex(Theme.raised), "primaryTextColor": hex(Theme.text),
-            "primaryBorderColor": "#3A3A3A", "secondaryColor": "#202020", "tertiaryColor": hex(Theme.surface),
+            "primaryBorderColor": "#3A3A3A", "secondaryColor": "#202020", "tertiaryColor": hex(Theme.card),
             "mainBkg": hex(Theme.raised), "nodeBorder": "#3A3A3A", "textColor": hex(Theme.secondary),
-            "lineColor": hex(Theme.tertiary), "clusterBkg": hex(Theme.surface), "clusterBorder": "#2E2E2E",
-            "edgeLabelBackground": hex(Theme.surface), "titleColor": hex(Theme.text),
+            "lineColor": hex(Theme.tertiary), "clusterBkg": hex(Theme.card), "clusterBorder": "#2E2E2E",
+            "edgeLabelBackground": hex(Theme.card), "titleColor": hex(Theme.text),
             "actorBkg": hex(Theme.raised), "actorBorder": "#3A3A3A", "actorTextColor": hex(Theme.text),
             "actorLineColor": "#3A3A3A", "signalColor": hex(Theme.secondary), "signalTextColor": hex(Theme.secondary),
             "labelBoxBkgColor": hex(Theme.raised), "labelBoxBorderColor": "#3A3A3A", "labelTextColor": hex(Theme.text),
@@ -205,7 +205,7 @@ struct MermaidBlock: View {
             .padding(.leading, 12).padding(.trailing, 6).padding(.top, 6)
             content
         }
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
         .task(id: source) { outcome = await MermaidRenderer.shared.render(source) }
         .task(id: copied) {
@@ -281,7 +281,7 @@ private struct MermaidExpanded: View {
             Rectangle().fill(Theme.stroke).frame(height: 1)
             MermaidWebView(svg: svg, interactive: true)
         }
-        .background(Theme.surface)
+        .layer(.sheet)
         #if os(macOS)
         .frame(minWidth: 640, idealWidth: 960, minHeight: 440, idealHeight: 680)
         #endif

@@ -179,7 +179,7 @@ struct VaultPage: View {
             .font(.footnote)
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .background(.card, in: .rect(cornerRadius: Theme.corner))
         }
     }
 
@@ -290,7 +290,7 @@ private struct SecretRow: View {
                 .accessibilityIdentifier("secret-delete-\(secret.set)-\(secret.name)")
         }
         .padding(10)
-        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("secret-\(secret.set)-\(secret.name)")
     }
@@ -326,7 +326,7 @@ private struct SecretEditorSheet: View {
                     #endif
                     .padding(12)
                     .frame(minHeight: 44)
-                    .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+                    .background(.card, in: .rect(cornerRadius: Theme.corner))
                     .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
                     .accessibilityIdentifier("secret-value")
             }

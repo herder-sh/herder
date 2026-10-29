@@ -222,7 +222,7 @@ private struct SamplePage: View {
                 }
             }
         }
-        .background(Theme.background)
+        .background(Theme.canvas)
     }
 }
 #endif

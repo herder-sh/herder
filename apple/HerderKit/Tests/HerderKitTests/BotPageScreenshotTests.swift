@@ -32,7 +32,7 @@ import Testing
             PageTrail(crumbs: ["Integrations", "trash-can"]) { _ in }
             BotPage(fleet: fleet, bots: bots, botId: "trash-can")
         }
-        .background(Theme.background)
+        .background(Theme.canvas)
         try await snap(view, size: CGSize(width: width, height: 1000), named: name)
     }
 

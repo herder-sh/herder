@@ -301,7 +301,7 @@ struct BoardView: View {
         .modifier(TaskListNavigation(fleet: fleet, rows: rows, selection: selection) {
             $0.toggleArchived(fleet: fleet, undoManager: undoManager)
         })
-        .background(Theme.background)
+        .background(.ground)
         .refreshable { fleet.wake() }
         .navigationTitle("Board")
     }
@@ -821,7 +821,7 @@ private struct ArchiveCircle: View {
             Circle().fill(archived ? Theme.secondary : .clear)
             Circle().strokeBorder(Theme.secondary, lineWidth: 1.5)
             Image(systemName: "checkmark").font(.system(size: 8, weight: .bold))
-                .foregroundStyle(archived ? Theme.background : Theme.secondary)
+                .foregroundStyle(archived ? Theme.canvas : Theme.secondary)
         }
         .frame(width: 16, height: 16)
     }

@@ -412,7 +412,7 @@ struct ProjectsView: View {
         List {
             ForEach(shown) { project in
                 NavigationLink(value: NavRoute.project(project.id)) { header(project) }
-                    .listRowBackground(Theme.surface)
+                    .listRowBackground(Theme.card)
                 if searching {
                     ForEach(project.sessions) { row($0) }
                 }
@@ -429,7 +429,7 @@ struct ProjectsView: View {
         }
         .alwaysSearchable(text: $query, prompt: "Projects and sessions")
         .scrollContentBackground(.hidden)
-        .background(Theme.background)
+        .background(.ground)
         .refreshable { fleet.wake() }
         .navigationTitle("Projects")
     }
@@ -472,7 +472,7 @@ struct ProjectsView: View {
         NavigationLink(value: NavRoute.session(session.key)) {
             SessionRow(session: session, showsProject: false)
         }
-        .listRowBackground(Theme.surface)
+        .listRowBackground(Theme.card)
         .padding(.leading, 24)
     }
 }
@@ -494,7 +494,7 @@ struct ProjectView: View {
             }
         }
         .alwaysSearchable(text: $query, prompt: "Sessions")
-        .background(Theme.background)
+        .background(.ground)
         .refreshable { fleet.wake() }
         .navigationTitle(project?.name ?? "Project")
         .toolbar {
@@ -545,7 +545,7 @@ struct ChatsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .alwaysSearchable(text: $query, prompt: shown == .mine ? "Chats" : "Bot conversations")
-        .background(Theme.background)
+        .background(.ground)
         .refreshable { fleet.wake() }
         .navigationTitle("Chats")
     }

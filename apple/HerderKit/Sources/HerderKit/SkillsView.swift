@@ -35,7 +35,7 @@ struct SkillsView: View {
             SkillsPage(fleet: fleet, sheet: $sheet, session: session)
                 .pageColumn()
         }
-        .background(Theme.background)
+        .background(.ground)
         .navigationTitle("Skills")
         .toolbar {
             #if os(iOS)

@@ -67,7 +67,7 @@ private struct AddMachinePreview: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Theme.surface)
+            .layer(.sheet)
         }
     }
 

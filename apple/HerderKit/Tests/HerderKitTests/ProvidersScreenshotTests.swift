@@ -39,7 +39,7 @@ private struct ProvidersPreview: View {
                 .pageColumn()
         }
         .frame(width: width)
-        .background(Theme.background)
+        .background(Theme.canvas)
     }
 }
 #endif

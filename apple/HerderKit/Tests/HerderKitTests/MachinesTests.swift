@@ -201,7 +201,7 @@ import SwiftUI
     }
 
     private func shoot(_ view: some View, named name: String, height: CGFloat) async throws {
-        let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark).background(Theme.background))
+        let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark).background(Theme.canvas))
         host.appearance = NSAppearance(named: .darkAqua)
         host.frame = NSRect(x: 0, y: 0, width: 1100, height: height)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)

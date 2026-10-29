@@ -37,7 +37,7 @@ import Testing
             PageTrail(crumbs: crumbs) { _ in }
             page
         }
-        .background(Theme.background)
+        .background(Theme.canvas)
         .environment(\.colorScheme, .dark)
         let host = NSHostingView(rootView: view)
         host.appearance = NSAppearance(named: .darkAqua)

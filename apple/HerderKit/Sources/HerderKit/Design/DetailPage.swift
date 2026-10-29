@@ -55,7 +55,7 @@ struct DetailPage<Leading: View, Actions: View, Content: View>: View {
             if next != current { current = next }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Theme.background)
+        .background(.ground)
         #if os(iOS)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -209,7 +209,7 @@ struct NeedsAttention<Content: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeading(title: "Needs attention", tint: Theme.accent)
             VStack(spacing: 0) { content }
-                .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+                .background(.card, in: .rect(cornerRadius: Theme.corner))
                 .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.accent.opacity(0.45)))
         }
         .detailSection("Needs attention")
@@ -266,7 +266,7 @@ struct AboutSection<Content: View>: View {
                 VStack(alignment: .leading, spacing: 10) { content }
                     .padding(Theme.cellPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+                    .background(.card, in: .rect(cornerRadius: Theme.corner))
                     .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
             }
         }
@@ -282,7 +282,7 @@ struct DangerZone<Content: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeading(title: "Danger zone", tint: Theme.danger)
             VStack(spacing: 0) { content }
-                .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+                .background(.card, in: .rect(cornerRadius: Theme.corner))
                 .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.danger.opacity(0.4)))
         }
         .detailSection("Danger zone")

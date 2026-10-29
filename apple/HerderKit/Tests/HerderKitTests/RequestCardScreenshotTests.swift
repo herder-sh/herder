@@ -31,7 +31,7 @@ import Testing
         let card = RequestCard(request: request, fleet: fleet, answersInComposer: true)
             .frame(width: 460)
             .padding(20)
-            .background(Theme.background)
+            .background(Theme.canvas)
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: card)
         renderer.scale = 2

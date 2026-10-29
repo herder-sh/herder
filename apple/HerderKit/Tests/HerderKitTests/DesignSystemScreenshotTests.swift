@@ -110,7 +110,7 @@ private struct Gallery: View {
             .padding(.bottom, 24)
         }
         .frame(width: 760)
-        .background(Theme.background)
+        .background(Theme.canvas)
     }
 }
 #endif

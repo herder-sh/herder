@@ -228,7 +228,7 @@ struct BotPage: View {
         return parts.joined(separator: " · ")
     }
 
-    private func newThreadsSheet(_ bot: Bot, machine: Machine?) -> some View {
+    func newThreadsSheet(_ bot: Bot, machine: Machine?) -> some View {
         let accounts = machine?.accounts ?? []
         let providers = Array(Set(accounts.map(\.provider))).sorted()
         let provider = bot.defaults.provider

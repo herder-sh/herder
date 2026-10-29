@@ -67,7 +67,7 @@ struct BotKnowledgeForm: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
-                    .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+                    .background(.card, in: .rect(cornerRadius: Theme.corner))
             }
         }
         memory

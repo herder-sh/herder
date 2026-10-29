@@ -38,7 +38,7 @@ struct RequestCard: View {
             }
         }
         .padding(14)
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.accent, lineWidth: 1.5))
         // The next question of a batch starts with nothing ticked.
         .onChange(of: request.requestId) { picks = Picks() }
@@ -321,7 +321,7 @@ private struct ChoiceButton: View {
                     .font(.caption.weight(.bold).monospacedDigit())
                     .foregroundStyle(Theme.secondary)
                     .frame(width: 20, height: 20)
-                    .background(Theme.background, in: .rect(cornerRadius: 5))
+                    .background(.ground, in: .rect(cornerRadius: 5))
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {

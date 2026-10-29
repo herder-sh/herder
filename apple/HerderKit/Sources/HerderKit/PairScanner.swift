@@ -44,7 +44,7 @@ struct PairScanner: View {
                     .foregroundStyle(camera.error == nil ? Theme.text : Theme.failure)
                     .padding(14)
                     .frame(maxWidth: .infinity)
-                    .background(Theme.surface.opacity(0.9), in: .rect(cornerRadius: Theme.corner))
+                    .background(Theme.sheet.opacity(0.9), in: .rect(cornerRadius: Theme.corner))
                     .padding(20)
             }
         }

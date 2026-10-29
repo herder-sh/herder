@@ -33,7 +33,7 @@ struct DesktopShell: View {
                         .frame(width: 228)
                 }
             }
-            .background(Theme.surface)
+            .layer(.pane)
             Rectangle().fill(Theme.stroke).frame(width: 1)
             Group {
                 if let page = pages.top {
@@ -49,7 +49,7 @@ struct DesktopShell: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .environment(\.pages, PageNavigator(open: { pages.open($0) }, close: { pages.close() }))
-        .background(Theme.background)
+        .background(Theme.canvas)
         #if os(macOS)
         .ignoresSafeArea(.container, edges: .top)
         #endif
@@ -252,7 +252,7 @@ private struct ListAndSession<List: View>: View {
             if geometry.size.width >= 820 {
                 HStack(spacing: 0) {
                     if !listHidden || (session == nil && draft == nil) {
-                        list.frame(width: 380).environment(\.pageMargin, Theme.paneMargin)
+                        list.frame(width: 380).layer(.pane).environment(\.pageMargin, Theme.paneMargin)
                             .environment(\.openNextTask, openNext)
                         Rectangle().fill(Theme.stroke).frame(width: 1)
                     }
@@ -348,7 +348,7 @@ struct Pane<Content: View, Actions: View>: View {
                 .font(.subheadline)
                 .padding(.horizontal, 12)
                 .frame(height: 34)
-                .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+                .background(.card, in: .rect(cornerRadius: Theme.corner))
                 .padding(.horizontal, margin)
                 .padding(.bottom, 8)
             }
@@ -766,7 +766,7 @@ private struct SidebarRail: View {
                 .overlay(alignment: .bottomTrailing) {
                     if working > 0 {
                         StatusGlyph(state: .running, size: 6, pulses: false)
-                            .background(Theme.surface, in: .circle)
+                            .background(.ground, in: .circle)
                             .offset(x: 2, y: 2)
                     }
                 }
@@ -826,7 +826,7 @@ private struct SidebarRow: View {
                         if needsYou > 0 {
                             Text("\(needsYou)")
                                 .font(.caption.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(Theme.background)
+                                .foregroundStyle(.ground)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 2)
                                 .background(Urgency.needsYou.color, in: .capsule)

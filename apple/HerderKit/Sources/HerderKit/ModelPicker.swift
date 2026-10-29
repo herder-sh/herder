@@ -218,7 +218,7 @@ struct ModelMenu: View {
             }
         }
         .frame(width: 340)
-        .background(Theme.surface)
+        .layer(.sheet)
         .focusable(!showsField)
         .focusEffectDisabled()
         .focused($focus, equals: .list)
@@ -566,7 +566,7 @@ struct FooterMenu: View {
             }
             .padding(6)
             .frame(width: 300)
-            .background(Theme.surface)
+            .layer(.sheet)
             .presentationCompactAdaptation(.popover)
         }
     }

@@ -134,7 +134,7 @@ struct DraftCard: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface.opacity(open ? 1 : 0.5), in: .rect(cornerRadius: Theme.corner))
+        .background(Theme.card.opacity(open ? 1 : 0.5), in: .rect(cornerRadius: Theme.corner))
         .overlay {
             RoundedRectangle(cornerRadius: Theme.corner)
                 .strokeBorder(open ? Theme.secondary : Theme.stroke, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))

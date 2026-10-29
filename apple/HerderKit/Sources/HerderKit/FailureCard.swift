@@ -232,7 +232,7 @@ struct FailureCardView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
-                    .background(Theme.background, in: .rect(cornerRadius: 8))
+                    .background(.ground, in: .rect(cornerRadius: 8))
             }
             if let refusal = fleet.refusals[key] {
                 Text(refusal).font(.footnote).foregroundStyle(Theme.failure)
@@ -240,7 +240,7 @@ struct FailureCardView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(tint.opacity(0.7), lineWidth: 1.5))
         .accessibilityIdentifier("failure-card")
     }
