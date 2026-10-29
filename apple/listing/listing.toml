@@ -1,0 +1,125 @@
+# The iPhone app's App Store listing, which apple/scripts/app-store-listing.py uploads: the
+# copy (en-US), the categories, the age rating, the App Review notes, and the screenshots that
+# apple/scripts/listing-screenshots.py frames with their captions.
+
+app = "6819734090"
+platform = "IOS"
+primary_category = "DEVELOPER_TOOLS"
+secondary_category = "PRODUCTIVITY"
+
+[en-US]
+name = "herder – agent harness"
+subtitle = "Keep coding agents working"
+promotional_text = """
+Answer your coding agents from your iPhone: allow a command, answer a question or start the \
+next task, on every machine you own. Sign in with a passkey, no codes."""
+keywords = "ai,coding,llm,developer,remote,ssh,terminal,mcp,cli,fleet,failover,slack,telegram,vault,passkey"
+support_url = "https://herder.sh"
+marketing_url = "https://herder.sh"
+privacy_policy_url = "https://herder.sh/privacy"
+description = """
+herder keeps every coding agent working, on every machine you own. It runs Claude Code, Codex, Cursor and OpenCode across your machines and accounts, moves the work on when an account hits its limit, and puts every task in your pocket.
+
+ANSWER FROM ANYWHERE
+When an agent asks a question or wants to run a command, it waits for you on your iPhone. Allow, deny or answer, and it carries on. Follow any task as it runs, and start the next one from wherever you are.
+
+ONE BOARD FOR EVERY TASK
+The Board shows every task on every machine, the ones that need you first. A task's agent can start sub-agents, prompt them and wait for them; they fold under its row, a tap away.
+
+NEVER BLOCKED BY A USAGE LIMIT
+Add every account you have. When a session hits a limit, herder moves it to the next account of that provider with room left, and the agent carries on where it stopped. Providers shows how much of each account's session and weekly windows is left, and when they reset. herder switches only after a limit is hit, never ahead of time.
+
+ONE FLEET, EVERY MACHINE
+Fleet shows your Mac, your Linux boxes and your servers in one place: what each one runs, its load, its accounts and its agent CLIs. Start each task on the machine that suits it.
+
+SIGN IN WITH A PASSKEY
+No passwords and no pairing codes. You sign in with a passkey behind Face ID. Put herder on a new machine and approve it from your iPhone; a terminal that signs in waits for your approval the same way.
+
+PEOPLE AND ROLES
+Invite someone as a member or an owner. Members drive sessions, while terminals, logins and settings stay with owners. People shows everyone across your fleet with their devices, and you can change a role or revoke a device at any time.
+
+BOTS IN SLACK AND TELEGRAM
+Mention the bot in a Slack thread and it reads the thread, runs the work on your machines and posts what it makes back into it. Every bot conversation is in the app too.
+
+THE VAULT AND YOUR SECRETS
+A vault keeps every session of every machine, so history survives a dead laptop and another machine can take a task over. It holds your secrets too: a program an agent runs fetches them, and the agent never sees one.
+
+A TERMINAL WHEN YOU NEED ONE
+Owners can open a shell in any session's worktree, right on the phone. Face ID signs every terminal and secret command.
+
+YOUR LOGINS STAY YOURS
+herder never reads, stores or relays your provider login tokens. It drives each vendor's own unmodified CLI, and you log in with the vendor's own tool, on the machine that runs it.
+
+FREE AND OPEN SOURCE
+herder is free and open source under Apache-2.0. The app connects to the herder daemons you run on your own Linux machines and Macs; install one with a single command from herder.sh.
+
+herder is an independent project, not affiliated with Anthropic, OpenAI, Cursor or OpenCode."""
+
+# In order: the ScreenshotTests shot each frame shows, and its caption.
+[[screenshots]]
+shot = "ios-home"
+caption = "See what needs you, on every machine"
+
+[[screenshots]]
+shot = "ios-approval"
+caption = "Allow or deny from anywhere"
+
+[[screenshots]]
+shot = "ios-task-agents"
+caption = "Agents that run agents"
+
+[[screenshots]]
+shot = "ios-machines"
+caption = "Your whole fleet in one place"
+
+[[screenshots]]
+shot = "ios-providers"
+caption = "Never blocked by a usage limit"
+
+[[screenshots]]
+shot = "ios-bots"
+caption = "Your team asks in Slack"
+
+[[screenshots]]
+shot = "ios-terminal"
+caption = "A shell when you need one"
+
+[age_rating]
+# No objectionable content of any kind, no ads, chat between people, public user content,
+# gambling or loot boxes. Artifacts and links agents publish open in the app's browser, so the
+# app does give unrestricted web access.
+alcoholTobaccoOrDrugUseOrReferences = "NONE"
+contests = "NONE"
+gamblingSimulated = "NONE"
+gunsOrOtherWeapons = "NONE"
+horrorOrFearThemes = "NONE"
+matureOrSuggestiveThemes = "NONE"
+medicalOrTreatmentInformation = "NONE"
+profanityOrCrudeHumor = "NONE"
+sexualContentGraphicAndNudity = "NONE"
+sexualContentOrNudity = "NONE"
+violenceCartoonOrFantasy = "NONE"
+violenceRealistic = "NONE"
+violenceRealisticProlongedGraphicOrSadistic = "NONE"
+advertising = false
+ageAssurance = false
+gambling = false
+healthOrWellnessTopics = false
+lootBox = false
+messagingAndChat = false
+parentalControls = false
+socialMedia = false
+userGeneratedContent = false
+unrestrictedWebAccess = true
+
+[review]
+# The contact is left for the owner to fill in.
+notes = """
+herder is a client for herder daemons that people run on their own Linux machines and Macs, where they drive coding agents (Claude Code, Codex, Cursor, OpenCode). Without a daemon of your own, use the demo mode:
+
+1. Open the app. On the first screen, tap Try the Demo.
+2. The app connects to a built-in demo fleet of three machines with sample tasks. Nothing leaves the device and no account or sign-in is needed.
+3. The Board lists the tasks; open "Upgrade date-fns to v4" to see an agent waiting for approval, and answer it with Allow or Deny.
+4. Fleet shows the machines; its Providers, People, Integrations and Skills pages are below the machine list.
+
+Signing in to a real daemon uses a passkey behind Face ID, created when you claim a machine you installed herder on (herder.sh). herder never reads or stores the coding agents' own login tokens."""
