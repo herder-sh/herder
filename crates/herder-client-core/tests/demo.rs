@@ -22,6 +22,7 @@ fn demo() -> Demo {
         quality: ConnectionQuality::default(),
         role: Some(Role::Owner),
         person_id: None,
+        user_id: None,
         herder_version: Some("0.6.0".into()),
         sessions: Vec::new(),
         hosts: Vec::new(),
