@@ -17,7 +17,7 @@ xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcode
   -scheme herder-macOS -configuration Release -destination "generic/platform=macOS" \
   -derivedDataPath "$derived" COMPILER_INDEX_STORE_ENABLE=NO \
   MARKETING_VERSION="$version" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
-  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CODE_SIGN_ENTITLEMENTS="$entitlements"
+  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO HERDER_MAC_ENTITLEMENTS="$entitlements"
 
 app="$derived/Build/Products/Release/herder.app"
 codesign --verify --strict --deep "$app"
