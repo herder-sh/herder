@@ -258,7 +258,7 @@ struct SkillsFleetTests {
         let (fleet, following) = try await follow(pairing: [a, b])
         defer { following.cancel() }
         // Sync state: both machines end up on one repository at one commit, pulled.
-        #expect(await eventually(within: 30) { inSync(fleet, skills: Self.demo) })
+        #expect(await eventually { inSync(fleet, skills: Self.demo) })
         let synced = SkillLibrary(fleet.machines)
         #expect(synced.checkouts.count == 2)
         #expect(synced.checkouts.allSatisfy { $0.lastPull != nil })
@@ -267,13 +267,13 @@ struct SkillsFleetTests {
         // Add: written through one machine, pulled on the other.
         var document = SkillDocument(name: "triage", description: "Sort new issues by area.", body: "Label each issue.")
         try await fleet.putSkill(document.name, files: document.files)
-        #expect(await eventually(within: 30) { inSync(fleet, skills: ["release-notes", "review-pr", "triage"]) })
+        #expect(await eventually { inSync(fleet, skills: ["release-notes", "review-pr", "triage"]) })
         #expect(SkillLibrary(fleet.machines).checkouts.first?.head != synced.checkouts.first?.head)
 
         // Edit: the new description reaches both.
         document.description = "Sort new issues by area and urgency."
         try await fleet.putSkill(document.name, files: document.files)
-        #expect(await eventually(within: 30) {
+        #expect(await eventually {
             let skill = SkillLibrary(fleet.machines).skills.first { $0.name == "triage" }
             return inSync(fleet, skills: ["release-notes", "review-pr", "triage"])
                 && skill?.description == "Sort new issues by area and urgency."
@@ -281,11 +281,11 @@ struct SkillsFleetTests {
 
         // Delete.
         try await fleet.deleteSkill("triage")
-        #expect(await eventually(within: 30) { inSync(fleet, skills: Self.demo) })
+        #expect(await eventually { inSync(fleet, skills: Self.demo) })
 
         // Import from another repository, named after its folder.
         try await fleet.importSkill(gitURL: a.skillSource, path: "changelog")
-        #expect(await eventually(within: 30) { inSync(fleet, skills: ["changelog", "release-notes", "review-pr"]) })
+        #expect(await eventually { inSync(fleet, skills: ["changelog", "release-notes", "review-pr"]) })
         #expect(SkillLibrary(fleet.machines).skills.first?.description == "Keep CHANGELOG.md up to date.")
 
         // A pull answers on every machine.
@@ -298,7 +298,7 @@ struct SkillsFleetTests {
         let b = try FakeDaemon(name: "skills-off")
         let (fleet, following) = try await follow(pairing: [a, b])
         defer { following.cancel() }
-        #expect(await eventually(within: 30) { inSync(fleet, skills: Self.demo) })
+        #expect(await eventually { inSync(fleet, skills: Self.demo) })
 
         try await fleet.setSkillEnabled("review-pr", false, on: "skills-off")
         #expect(await eventually {
@@ -329,7 +329,7 @@ struct SkillsFleetTests {
         _ = try await fleet.createSession(
             on: "skills-project", repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "demo-model",
             mode: .ask, prompt: "Say hello.")
-        #expect(await eventually(within: 20) { !ProjectSkills.all(fleet.machines).isEmpty })
+        #expect(await eventually { !ProjectSkills.all(fleet.machines).isEmpty })
         let skills = ProjectSkills.all(fleet.machines).first?.skills ?? []
         #expect(skills == [SessionSkill(name: "deploy", description: "Deploy the app to staging.", source: .project,
                                         path: ".claude/skills/deploy")])
