@@ -249,4 +249,10 @@ struct SettingsPatternTests {
         #expect(DetailReading.current(["People", "New threads"], in: sections) == "New threads")
         #expect(DetailReading.current(["People", "New threads", "Channels", "About"], in: sections) == "About")
     }
+
+    @Test @MainActor func aNavigatorRemadeForTheSamePlaceIsTheSame() {
+        // Remade with new closures, as each time the view that sets it draws again.
+        #expect(PageNavigator(scope: "desktop", open: { _ in }) == PageNavigator(scope: "desktop", open: { _ in }))
+        #expect(PageNavigator(scope: "tab.board") != PageNavigator(scope: "tab.chats"))
+    }
 }

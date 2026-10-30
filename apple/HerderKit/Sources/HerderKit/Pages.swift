@@ -66,9 +66,15 @@ extension Page {
 
 /// Opens a page over the one shown, and closes the one on top; `DesktopShell` and the iPhone's
 /// tabs each set it for their own navigation.
-struct PageNavigator {
+///
+/// Two are equal when they navigate the same `scope`: one remade there opens and closes the same
+/// pages as the last, and its closures, never equal, would draw every view that reads it again.
+struct PageNavigator: Equatable {
+    var scope = ""
     var open: @MainActor (Page) -> Void = { _ in }
     var close: @MainActor () -> Void = {}
+
+    static func == (a: Self, b: Self) -> Bool { a.scope == b.scope }
 }
 
 extension EnvironmentValues {
