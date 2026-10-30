@@ -19,7 +19,8 @@
 # The Mac tests drive the copy with the mouse: leave it alone while they run. Needs what
 # build-ffi.sh builds, XcodeGen, and Xcode with its Metal toolchain. The first run asks to let
 # Xcode's test runner control the computer (Accessibility). `PERF_MAC_SETTINGS` passes build
-# settings to the Mac tests' build, as CI's ad-hoc signature.
+# settings to the Mac tests' build, as CI's ad-hoc signature. `PERF_ONLY` names the screens to
+# measure, e.g. `PERF_ONLY="Providers MachineSettings"`; every screen by default.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -45,6 +46,9 @@ busy() {
   passkey=$(sed -n 2p "$log")
 }
 
+only=()
+for screen in ${PERF_ONLY:-}; do only+=("-only-testing:herder-\$target/ScrollPerfTests/test$screen"); done
+
 results=()
 for platform in "${platforms[@]}"; do
   result=$out/$platform.xcresult
@@ -59,6 +63,7 @@ for platform in "${platforms[@]}"; do
     TEST_RUNNER_HERDER_PASSKEY=$passkey \
       xcodebuild test-without-building -project apple/herder.xcodeproj -scheme herder-macOS-Perf \
       -destination "platform=macOS" -derivedDataPath "$out/DerivedData" -resultBundlePath "$result" \
+      ${only[@]+"${only[@]/\$target/macOS-Perf}"} \
       > "$out/mac-test.log" 2>&1 || true
     ;;
   iphone)
@@ -83,7 +88,7 @@ for platform in "${platforms[@]}"; do
     TEST_RUNNER_HERDER_PASSKEY=$passkey \
       xcodebuild test-without-building -project apple/herder.xcodeproj -scheme herder-iOS-Perf \
       -configuration Release -destination "id=$device" -derivedDataPath "$out/DerivedData-iphone" \
-      -resultBundlePath "$result" > "$out/iphone-test.log" 2>&1 || true
+      -resultBundlePath "$result" ${only[@]+"${only[@]/\$target/iOS-Perf}"} > "$out/iphone-test.log" 2>&1 || true
     ;;
   *)
     echo "unknown platform $platform: mac or iphone" >&2
