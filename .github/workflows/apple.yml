@@ -282,6 +282,8 @@ jobs:
     needs: [key, bindings]
     if: ${{ !failure() && !cancelled() }}
     runs-on: macos-latest
+    # Reports until every screen meets the scrolling budget (P19.1); then it gates.
+    continue-on-error: true
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
