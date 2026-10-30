@@ -129,7 +129,9 @@ targets:
       base:
         # HerderFFI.xcframework has arm64 slices only.
         ARCHS: arm64
-        CODE_SIGN_ENTITLEMENTS: App/herder.entitlements
+        # HERDER_MAC_ENTITLEMENTS swaps in apple/scripts/adhoc-entitlements.sh's copy for an
+        # ad-hoc signature, on this target only.
+        CODE_SIGN_ENTITLEMENTS: $(HERDER_MAC_ENTITLEMENTS:default=App/herder.entitlements)
         ENABLE_HARDENED_RUNTIME: YES
         # The `herder` URL scheme; iOS's launch screen in it means nothing on the Mac.
         INFOPLIST_FILE: App/Info.plist

@@ -97,7 +97,7 @@ jobs:
           xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
             -scheme herder-macOS-Screenshots -destination "platform=macOS,arch=arm64" \
             COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_ENTITLEMENTS="$(apple/scripts/adhoc-entitlements.sh)"
+            HERDER_MAC_ENTITLEMENTS="$(apple/scripts/adhoc-entitlements.sh)"
       - name: Screenshot the iOS app
         timeout-minutes: 20
         run: |
