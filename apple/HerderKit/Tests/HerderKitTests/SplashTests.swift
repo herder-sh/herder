@@ -46,6 +46,20 @@ struct SplashTests {
         #expect(fleet.ready)
     }
 
+    /// The first sessions listed show at once; later machine changes wait for the lists'
+    /// throttle, so a burst of them does not rebuild the lists under a scroll.
+    @Test func onlyTheFirstSessionsListedSkipTheThrottle() async throws {
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("the profile did not open")
+            return
+        }
+        fleet.update([machine("host-a", name: "a", sessions: ["01A"], connection: .connecting)])
+        #expect(fleet.lists.board().count == 1)
+        fleet.update([machine("host-a", name: "a", sessions: ["01A", "01B"], connection: .connecting)])
+        #expect(fleet.lists.board().count == 1)
+        #expect(await eventually { fleet.lists.board().count == 2 })
+    }
+
     /// On a launch, the Board lists what the offline cache holds while its machine is down.
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
     func theOfflineCacheShowsBeforeAnyMachineConnects() async throws {
