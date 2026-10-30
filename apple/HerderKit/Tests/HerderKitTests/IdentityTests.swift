@@ -203,7 +203,62 @@ struct ClaimTests {
         }
         let fleet = [owned("box"), owned("claimed", personId: "p"), owned("shared", role: .member),
                      owned("away", connection: .connecting), machine("new", name: "new", sessions: [])]
-        #expect(ClaimPlan.unclaimed(fleet) == [ClaimPlan.Machine(hostId: "box", name: "box", userId: "u-box")])
+        #expect(ClaimPlan.unclaimed(fleet) == [ClaimPlan.Machine(hostId: "box", name: "box", userId: "u-box", version: nil)])
+    }
+
+    @Test func vaultsAreNamedApartFromTheirMachines() {
+        func owned(_ id: HostId, _ name: String, vault: Bool = false) -> Machine {
+            var machine = machine(id, name: name, sessions: [],
+                                  hosts: vault ? [FleetHost(hostId: "box", hostName: "box", online: true, lastSeen: "")] : [])
+            machine.userId = "u-\(id)"
+            return machine
+        }
+        let fleet = [owned("draugelis", "draugelis"), owned("draugelis-vault", "draugelis", vault: true),
+                     owned("vault-0", "herder-vault-0", vault: true)]
+        let names = ClaimPlan.unclaimed(fleet).map(\.name)
+        #expect(names == ["draugelis", "draugelis’s vault", "herder-vault-0"])
+        #expect(Set(names).count == names.count, "no two rows share a name")
+    }
+
+    @Test func oldMachinesOfferUpdateAndTheRestAreClaimedWithoutErrors() async {
+        var plan = Self.plan
+        plan.machines[1].version = "0.16.0"
+        plan.machines[2].version = nil
+        #expect(plan.headline == "Create your herder passkey, then claim 1 machine")
+        var updated: [HostId] = []
+        let machines = Machines()
+        let claim = Claim(plan, authenticator: FakeAuthenticator(), send: machines.send) { updated.append($0) }
+        #expect(claim.rows == ["box": .ready, "lab": .outdated(updating: false), "vault": .outdated(updating: false)])
+        #expect(ClaimSheet.line(claim.machines[1], claim.rows["lab"]!) == "Needs herder 0.17 · runs 0.16.0")
+        #expect(claim.claimable)
+
+        await claim.claim()
+        #expect(machines.claims.map { $0.split(separator: " ")[0] } == ["box"], "only the ready machine is asked")
+        #expect(claim.rows == ["box": .claimed, "lab": .outdated(updating: false), "vault": .outdated(updating: false)])
+        #expect(!claim.claimable, "with none ready, the primary button is Update all")
+
+        claim.updateAll()
+        #expect(updated == ["lab", "vault"])
+        #expect(claim.rows["lab"] == .outdated(updating: true))
+        claim.updateAll()
+        #expect(updated == ["lab", "vault"], "a machine updating is not asked again")
+
+        var lab = machine("lab", name: "lab", sessions: [])
+        lab.herderVersion = "0.17.0"
+        claim.refresh([lab])
+        #expect(claim.rows["lab"] == .ready)
+        #expect(claim.claimable)
+        await claim.claim()
+        #expect(claim.rows == ["box": .claimed, "lab": .claimed, "vault": .outdated(updating: true)])
+    }
+
+    @Test func theClaimIsOfferedUntilEveryMachineYouOwnIsClaimed() {
+        var box = machine("box", name: "box", sessions: [])
+        box.userId = "u-box"
+        box.herderVersion = "0.16.0"
+        #expect(!ClaimPlan.unclaimed([box]).isEmpty, "an old machine still offers the claim, to update it")
+        box.personId = "p-me"
+        #expect(ClaimPlan.unclaimed([box]).isEmpty, "nothing is left to claim, so People and Fleet hide it")
     }
 
     @Test func claimingMakesThePasskeyOnceAndEachMachineTakesTheOthersUsers() async {
@@ -263,8 +318,9 @@ struct ClaimTests {
         machines.refusing = ["lab"]
         let claim = Claim(Self.plan, authenticator: FakeAuthenticator(), send: machines.send)
         await claim.claim()
-        #expect(claim.rows == ["box": .claimed, "lab": .failed, "vault": .claimed])
-        #expect(claim.error == "lab: not an owner")
+        #expect(claim.rows == ["box": .claimed, "lab": .failed("not an owner"), "vault": .claimed])
+        #expect(ClaimSheet.line(claim.machines[1], claim.rows["lab"]!) == "not an owner", "the reason sits under its row")
+        #expect(ClaimSheet.line(claim.machines[0], claim.rows["box"]!) == "your user (owner) → you")
         #expect(!claim.claimed)
     }
 
@@ -274,7 +330,6 @@ struct ClaimTests {
         let claim = Claim(Self.plan, authenticator: authenticator, send: Machines().send)
         await claim.claim()
         #expect(claim.rows.values.allSatisfy { $0 == .ready })
-        #expect(claim.error == nil)
         #expect(!claim.working)
     }
 }
