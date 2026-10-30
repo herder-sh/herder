@@ -6,7 +6,7 @@ final class WaitingTaskUITests: XCTestCase {
     @MainActor
     func testTheTaskWaitingOnYouOpensFromItsBoardRow() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
 
         let task = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Waiting for you, '")).firstMatch

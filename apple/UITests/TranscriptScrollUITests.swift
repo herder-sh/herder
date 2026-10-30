@@ -12,7 +12,7 @@ final class TranscriptScrollUITests: XCTestCase {
         }
         let app = XCUIApplication()
         app.launchEnvironment["HERDER_PROFILE"] = "transcript-scroll-\(UUID().uuidString)"
-        app.launch()
+        app.launchForTests()
         XCTAssertTrue(app.tabBars.buttons["Board"].waitForExistence(timeout: 30))
         app.buttons["add-to-fleet"].firstMatch.tap()
         let field = app.descendants(matching: .any)["pairing-link"].firstMatch

@@ -6,7 +6,7 @@ final class PairingUITests: XCTestCase {
     func testPairingWithASharedLinkPairsEveryMachine() throws {
         let link = try XCUIApplication.pairLink()
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
 
         let add = app.buttons["add-to-fleet"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 30), "the app did not open on an empty Board")
