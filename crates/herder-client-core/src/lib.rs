@@ -134,6 +134,7 @@ mod address;
 pub mod auth;
 mod cache;
 mod catalog;
+mod demo;
 mod fork;
 mod link;
 mod offline;
@@ -157,6 +158,7 @@ use herder_protocol::{
     SessionId, SessionSkill, SessionUsage, SkillsStatus, Terminal, TerminalId, Timestamp,
     UpdateStage, UserId, VaultStatus,
 };
+use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -166,6 +168,7 @@ pub use catalog::{
     CatalogEntry, CatalogModel, ProviderHint, ProviderHintKind, catalog_entry, next_account_id,
     provider_catalog, provider_hints,
 };
+pub use demo::{Demo, DemoAnswer, DemoMachine};
 pub use link::{FleetLink, FleetMachine, LoginUri, OwnUri};
 use profile::SavedMachine;
 pub use sign_in::PendingSignIn;
@@ -227,10 +230,13 @@ pub enum Error {
     /// The client or the machine's supervisor stopped.
     #[error("the client is closed")]
     Closed,
+    /// The client shows a demo ([`Client::open_demo`]), which has no daemon: nothing is sent.
+    #[error("this is a demo; nothing is sent")]
+    Demo,
 }
 
 /// A paired machine and what its daemon last said.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Machine {
     /// The daemon's host id.
     pub host_id: HostId,
@@ -311,7 +317,7 @@ pub trait Authenticator: Send + Sync {
 }
 
 /// Where a machine's connection stands.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionState {
     /// Trying to connect.
     Connecting,
@@ -326,7 +332,7 @@ pub enum ConnectionState {
 
 /// How a machine's connection performs: round trips of the pings the client sends as soon as
 /// a connection is up and every 15 s after, and how stable the connection is.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionQuality {
     /// When the current connection was established; `None` while not connected.
     pub connected_since: Option<Timestamp>,
@@ -375,6 +381,8 @@ struct Inner {
     library: Arc<skills::Library>,
     changed: Arc<watch::Sender<u64>>,
     stop: CancellationToken,
+    /// Whether this is a demo ([`Client::open_demo`]): no profile, nothing sent.
+    demo: bool,
 }
 
 impl Drop for Inner {
@@ -449,12 +457,40 @@ impl Client {
             library,
             changed,
             stop,
+            demo: false,
         });
         tokio::spawn(follow_profile(
             Arc::downgrade(&inner),
             inner.stop.child_token(),
         ));
         Ok(Self { inner })
+    }
+
+    /// Opens `demo`, a recorded fleet, with no profile and no connection, as the apps do for
+    /// people without a daemon: its machines show as connected, with what was recorded, and
+    /// its sessions stream their recorded events. A command gets the answer recorded for it;
+    /// any other, and anything that would reach a daemon or change the profile, fails with
+    /// [`Error::Demo`].
+    pub fn open_demo(demo: Demo) -> Self {
+        let changed = Arc::new(watch::Sender::new(0));
+        let stop = CancellationToken::new();
+        let machines = demo
+            .machines
+            .into_iter()
+            .map(|machine| Supervisor::demo(machine, Arc::clone(&changed), stop.child_token()))
+            .collect();
+        Self {
+            inner: Arc::new(Inner {
+                config_dir: PathBuf::new(),
+                client: String::new(),
+                authenticator: None,
+                machines: Arc::new(Mutex::new(machines)),
+                library: Arc::default(),
+                changed,
+                stop,
+                demo: true,
+            }),
+        }
     }
 
     /// Every paired machine, in pairing order.
@@ -471,6 +507,7 @@ impl Client {
         hosts: Vec<String>,
         fingerprint: String,
     ) -> Result<PendingSignIn, Error> {
+        self.live()?;
         sign_in::start(self, &hosts, &fingerprint).await
     }
 
@@ -485,6 +522,7 @@ impl Client {
         fingerprint: String,
         shown: impl FnOnce(&str, Timestamp) + Send,
     ) -> Result<Machine, Error> {
+        self.live()?;
         sign_in::log_in(self, &hosts, &fingerprint, shown).await
     }
 
@@ -512,8 +550,12 @@ impl Client {
     /// The link that shares this device's machines with another device of the person's: each
     /// machine's addresses and fingerprint, which that device signs in to with its passkey
     /// ([`Client::sign_in`]). It carries no code, so it grants nothing by itself. `None` while
-    /// no machine is saved.
+    /// no machine is saved, and in a demo.
     pub fn share(&self) -> Option<FleetLink> {
+        // A demo's machines are nowhere another device could reach.
+        if self.inner.demo {
+            return None;
+        }
         let machines: Vec<FleetMachine> = self
             .lock()
             .iter()
@@ -639,6 +681,9 @@ impl Client {
         command: CommandBody,
     ) -> Result<CommandResult, Error> {
         let machine = self.machine(&host_id)?;
+        if self.inner.demo {
+            return machine.demo_answer(&command);
+        }
         let body = command.clone();
         if let CommandBody::SetSkillsRepo { url } = &body {
             let connection = machine.connections();
@@ -928,6 +973,14 @@ impl Client {
         send(body).await
     }
 
+    /// Fails with [`Error::Demo`] in a demo.
+    fn live(&self) -> Result<(), Error> {
+        if self.inner.demo {
+            return Err(Error::Demo);
+        }
+        Ok(())
+    }
+
     fn machine(&self, host_id: &HostId) -> Result<Arc<Supervisor>, Error> {
         find(&self.lock(), host_id)
     }
@@ -937,6 +990,7 @@ impl Client {
         &self,
         change: impl FnOnce(&mut Vec<SavedMachine>) -> Result<(), Error>,
     ) -> Result<(), Error> {
+        self.live()?;
         let mut machines = self.lock();
         let (saved, ()) = profile::update(&self.inner.config_dir, change)?;
         self.inner.reconcile(&mut machines, saved);

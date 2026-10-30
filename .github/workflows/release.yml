@@ -119,6 +119,8 @@ jobs:
           brew install xcodegen
       - name: Build the bindings and the xcframework
         run: apple/scripts/build-ffi.sh
+      - name: Record the demo fleet
+        run: apple/scripts/record-demo.sh
       - name: Build, ad-hoc sign and zip the app
         run: apple/scripts/build-mac-release.sh
       - uses: actions/upload-artifact@v7
@@ -144,6 +146,8 @@ jobs:
           brew install xcodegen
       - name: Build the bindings and the xcframework
         run: apple/scripts/build-ffi.sh aarch64-apple-ios
+      - name: Record the demo fleet
+        run: apple/scripts/record-demo.sh
       - name: Archive and upload the iOS app
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

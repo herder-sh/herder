@@ -149,6 +149,7 @@ everything stops once the last clone is dropped.
 | ------ | ---- |
 | `open(config_dir: String, client: String) -> Result<Client, Error>` | Opens the profile in `config_dir`, starts from its offline cache, and starts connecting to every saved machine. `client` names the client in daemon logs. |
 | `open_with_passkey(config_dir: String, client: String, authenticator: Arc<dyn Authenticator>) -> Result<Client, Error>` | `open` for a client that signs passkey assertions, as the apps do with Face ID. See [Passkeys](#passkeys). |
+| `open_demo(demo: Demo) -> Client` | Opens a recorded fleet with no profile and no connection; see [Demo](#demo). |
 | `machines() -> Vec<Machine>` | Every paired machine, in pairing order. |
 | `changes() -> Changes` | Notifications that `machines()` changed. |
 | `share() -> Option<FleetLink>` | The `herder://fleet` link of every saved machine, connected or not, for another device of the person to sign in to each with its passkey. It carries no code. `None` while no machine is saved. See [Fleet links](#fleet-links). |
@@ -223,6 +224,11 @@ everything stops once the last clone is dropped.
   first owner, its claim code (case and separators do not matter) and its name to show;
   `FromStr` (skipping parameters it does not know) and `Display` (`herder://own?…`, as
   `herder service install` and `herder claim` print it).
+- `Demo` — `machines: Vec<DemoMachine>`; serde, as the apps bundle it. See [Demo](#demo).
+- `DemoMachine` — `machine: Machine` (as `machines()` listed it), `logs: Vec<Vec<Event>>`
+  (each session's events, in seq order from its first), `answers: Vec<DemoAnswer>`.
+- `DemoAnswer` — `command: CommandBody`, `result: CommandResult`: a command that only reads
+  and the daemon's answer.
 
 ### Enums
 
@@ -231,7 +237,9 @@ everything stops once the last clone is dropped.
 - `Error` — `InvalidLink { message }`, `UnknownMachine { host_id }`,
   `Rejected { info: ErrorInfo }` (the daemon refused; `info.code` says why, e.g. `forbidden`,
   `read_only`), `Unreachable { message }` (no address answered a `reconnect`), `Local {
-  message }`, `Closed`.
+  message }`, `Closed`, `Demo` (a demo client sends nothing).
+
+`Machine`, `ConnectionState` and `ConnectionQuality` are serde, for `Demo`.
 
 ### `auth` (Rust-only)
 
@@ -331,6 +339,21 @@ herder://login?host=10.0.4.17%3A7447&fp=<hex>&code=K7Q-4PD
 herder://own?host=10.0.4.17%3A7447&fp=<hex>&code=K7Q-4PD&name=new-server
 ```
 
+## Demo
+
+App Review, and anyone without a daemon, can try the apps on a demo fleet. The fleet is
+`fake_daemon --demo` (herder-ffi's examples), recorded by `fake_daemon --record-demo`: a client
+paired with all of it, each machine as `machines()` lists it, every session's events, and the
+answers to the commands the apps send to read (`list_people`, `list_bots`, `get_settings`,
+...). The apps bundle that JSON and open it with `open_demo`.
+
+- Machines show as `Connected`, with what was recorded; nothing connects, retries or saves.
+- `subscribe_session` streams the recorded events in one first update.
+- `send` returns the recorded answer to an equal command; any other command, and
+  `open_terminal`, `attach_terminal`, `reconnect`, `sign_in`, `log_in`, `rename`,
+  `set_addresses` and `forget`, fail with `Error::Demo`, which the apps show as "This is a
+  demo; nothing is sent". `synced` returns at once, and `share` gives `None`.
+
 ## Passkeys
 
 On a machine where the device acts as a person, opening or attaching a terminal and every
@@ -355,6 +378,14 @@ change to secrets need a fresh passkey assertion.
 | Rust | Does |
 | ---- | ---- |
 | `trait Authenticator: Send + Sync { fn assert(&self, host_id: HostId, challenge: PasskeyChallenge) -> Assertion }` | Signs `challenge`, asking the user; `Assertion` is a boxed `Send` future of `Result<PasskeyAssertion, Error>`. |
+
+## Changes in version 18
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Client::open_demo`, `Demo`, `DemoMachine`, `DemoAnswer` | App Review has no daemon: the apps open a recorded demo fleet instead of an empty Fleet. |
+| — | `Error::Demo` | What a demo answers to anything it would have to send. A new variant breaks exhaustive matches. |
+| — | `Machine`, `ConnectionState`, `ConnectionQuality` derive `Serialize`, `Deserialize` | A `Demo` holds machines as listed. |
 
 ## Changes in version 17
 

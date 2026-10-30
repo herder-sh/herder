@@ -48,6 +48,7 @@ use tracing::{debug, warn};
 
 use crate::auth::{DeviceKey, client_config};
 use crate::cache::SessionLog;
+use crate::demo::{self, DemoAnswer, DemoMachine};
 use crate::offline::{self, Cached};
 use crate::profile::SavedMachine;
 use crate::terminal::{TerminalEvent, TerminalStream};
@@ -138,6 +139,9 @@ pub(crate) struct Supervisor {
     saving: Mutex<()>,
     /// Whether the offline cache was read into the state; it is, before the first connect.
     loaded: watch::Sender<bool>,
+    /// For a machine of a demo, what the daemon answered to the commands recorded; such a
+    /// supervisor has no task and sends nothing.
+    demo: Option<Vec<DemoAnswer>>,
 }
 
 #[derive(Default)]
@@ -341,9 +345,86 @@ impl Supervisor {
             passkey,
             saving: Mutex::new(()),
             loaded: watch::Sender::new(false),
+            demo: None,
         });
         tokio::spawn(run(Arc::clone(&supervisor), device, queue));
         Ok(supervisor)
+    }
+
+    /// A supervisor for `recorded`, a machine of a demo: it holds what was recorded, shows as
+    /// connected, and never connects.
+    pub(crate) fn demo(
+        recorded: DemoMachine,
+        changed: Arc<watch::Sender<u64>>,
+        stop: CancellationToken,
+    ) -> Arc<Self> {
+        let DemoMachine {
+            machine,
+            logs,
+            answers,
+        } = recorded;
+        let logs = logs
+            .into_iter()
+            .filter_map(|events| {
+                let session_id = events.first()?.session_id.clone();
+                let log = Log {
+                    log: SessionLog::from_events(events),
+                    changed: watch::Sender::new(0),
+                };
+                Some((session_id, log))
+            })
+            .collect();
+        let state = State {
+            addresses: machine.addresses.clone(),
+            address: machine.address,
+            connection: Some(ConnectionState::Connected),
+            role: machine.role,
+            person_id: machine.person_id,
+            herder_version: machine.herder_version,
+            sessions: machine.sessions,
+            hosts: machine.hosts,
+            projects: machine.projects,
+            accounts: machine.accounts,
+            failover: machine.failover,
+            providers: machine.providers,
+            terminals: machine.terminals,
+            resources: machine.resources,
+            session_usage: machine.session_usage,
+            vault: machine.vault,
+            skills: machine.skills,
+            session_skills: machine.session_skills,
+            update: machine.update,
+            approvals: machine.approvals,
+            logs,
+            ..State::default()
+        };
+        // Nothing reads the ops of a demo machine.
+        let (ops, _) = mpsc::unbounded_channel();
+        Arc::new(Self {
+            saved: SavedMachine {
+                host_id: machine.host_id,
+                name: machine.name,
+                addresses: machine.addresses,
+                fingerprint: machine.fingerprint,
+                device_key: String::new(),
+            },
+            state: Mutex::new(state),
+            changed,
+            ops,
+            stop,
+            config_dir: PathBuf::new(),
+            client: String::new(),
+            passkey: false,
+            saving: Mutex::new(()),
+            loaded: watch::Sender::new(true),
+            demo: Some(answers),
+        })
+    }
+
+    /// What a demo machine answers to `command`: what was recorded for it, else
+    /// [`Error::Demo`]; a machine that is no demo's sends nothing either.
+    pub(crate) fn demo_answer(&self, command: &CommandBody) -> Result<CommandResult, Error> {
+        demo::answer(self.demo.as_deref().unwrap_or_default(), command)
     }
 
     /// Reads the offline cache on the blocking pool: it can hold many complete transcripts.
@@ -452,6 +533,9 @@ impl Supervisor {
     /// Drops the connection, if up, and races the addresses again at once: the address the
     /// new connection uses, or [`Error::Unreachable`] when none answered.
     pub(crate) async fn reconnect(&self) -> Result<String, Error> {
+        if self.demo.is_some() {
+            return Err(Error::Demo);
+        }
         let (reply, done) = oneshot::channel();
         self.ops
             .send(Op::Reconnect(reply))
@@ -528,6 +612,9 @@ impl Supervisor {
     /// this client sent before the call: the lists that follow its hello and the replay of
     /// every subscription made before.
     pub(crate) async fn synced(&self) -> Result<(), Error> {
+        if self.demo.is_some() {
+            return Ok(());
+        }
         let (reply, done) = oneshot::channel();
         self.ops.send(Op::Sync(reply)).map_err(|_| Error::Closed)?;
         tokio::select! {
@@ -539,6 +626,9 @@ impl Supervisor {
     /// Sends `command` once a connection is up, resending it with the same id after each
     /// reconnect until the daemon answers.
     pub(crate) async fn send(&self, command: Command) -> Result<Answer, Error> {
+        if self.demo.is_some() {
+            return self.demo_answer(&command.body).map(Ok);
+        }
         let (reply, answer) = oneshot::channel();
         self.ops
             .send(Op::Command(command, reply))
@@ -556,6 +646,9 @@ impl Supervisor {
         self: &Arc<Self>,
         body: CommandBody,
     ) -> Result<TerminalStream, Error> {
+        if self.demo.is_some() {
+            return Err(Error::Demo);
+        }
         let (events, receiver) = mpsc::unbounded_channel();
         let (reply, answer) = oneshot::channel();
         let command = Command {
@@ -588,6 +681,9 @@ impl Supervisor {
         terminal_id: TerminalId,
         assertion: Option<Box<PasskeyAssertion>>,
     ) -> Result<TerminalStream, Error> {
+        if self.demo.is_some() {
+            return Err(Error::Demo);
+        }
         let (events, receiver) = mpsc::unbounded_channel();
         let (ready, answer) = oneshot::channel();
         {

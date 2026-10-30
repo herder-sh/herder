@@ -10,6 +10,7 @@ extension HerderError {
         case .UnknownMachine(let hostId): "No paired machine \(hostId)."
         case .Rejected(let info): needsNewerHerder ? Self.newerHerder : info.message
         case .Closed: "herder stopped."
+        case .Demo: "This is a demo; nothing is sent."
         }
     }
 
