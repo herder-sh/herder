@@ -1015,6 +1015,14 @@ fn finished(turns: usize) -> impl Fn(&[EventBody]) -> bool {
     }
 }
 
+/// A listener for one of the demo's machines: on `127.0.0.1`, or on the address in
+/// `FAKE_DAEMON_ADDRESS`, for a device other than this computer to reach, as the iPhone
+/// `apple/scripts/perf.sh` measures on.
+async fn listen() -> Result<TcpListener> {
+    let address = std::env::var("FAKE_DAEMON_ADDRESS").unwrap_or_else(|_| "127.0.0.1".into());
+    Ok(TcpListener::bind((address.as_str(), 0)).await?)
+}
+
 /// The demo's vault, which [`BACKS_UP`] backs up to.
 struct DemoVault {
     /// Who is on it: the user, its owner.
@@ -1031,7 +1039,7 @@ impl DemoVault {
         let tls = Tls::load_or_create(&dir.join("tls"), VAULT)?;
         let auth = Arc::new(Auth::open(dir)?);
         let store = VaultStore::open(dir.join("vault.db"))?;
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let listener = listen().await?;
         let address = listener.local_addr()?.to_string();
         let fingerprint = tls.fingerprint().to_owned();
         authenticator::enroll_known(&auth, USER, Role::Owner, "demo-vault-owner");
@@ -1277,7 +1285,7 @@ impl Daemon {
             },
             None,
         )?);
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let listener = listen().await?;
         let role = if name == MEMBER_ON {
             Role::Member
         } else {

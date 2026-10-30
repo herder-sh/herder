@@ -232,3 +232,49 @@ jobs:
           name: herder-app-macos-arm64
           path: dist/*
           if-no-files-found: error
+
+  # The scroll gate: the Mac app's scroll measurements (apple/scripts/perf.sh) on the demo fleet
+  # under load, which fail when a screen hitches past the budget. A hosted runner has no GPU and
+  # renders slower than a Mac on a desk, hence the tolerance; the table is in the job summary.
+  perf:
+    name: perf
+    needs: [key, bindings]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            crates/herder-ffi/swift/build
+            target/debug/examples/fake_daemon
+          key: ${{ needs.key.outputs.key }}
+          fail-on-cache-miss: true
+      - name: Install the Metal toolchain (SwiftTerm's renderer needs it)
+        run: xcodebuild -downloadComponent MetalToolchain
+      - name: Measure scrolling on the macOS app
+        timeout-minutes: 40
+        env:
+          HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
+          PERF_TOLERANCE: "3"
+        run: |
+          brew install xcodegen
+          export PERF_MAC_SETTINGS="CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO"
+          status=0
+          apple/scripts/perf.sh mac || status=$?
+          cat target/perf/perf.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Print the failing tests
+        if: failure()
+        run: |
+          bundle=target/perf/mac.xcresult
+          [ -d "$bundle" ] || exit 0
+          xcrun xcresulttool get test-results summary --path "$bundle" |
+            jq -r '.testFailures[]? | "\(.testIdentifierString): \(.failureText)"'
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: perf-xcresult
+          path: target/perf/mac.xcresult
+          if-no-files-found: ignore

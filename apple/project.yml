@@ -36,6 +36,9 @@ targets:
     settings:
       base:
         TARGETED_DEVICE_FAMILY: "1,2"
+        # HERDER_IOS_BUNDLE_ID gives `scripts/perf.sh`'s build an id of its own, so measuring on
+        # a phone leaves the installed app alone.
+        PRODUCT_BUNDLE_IDENTIFIER: $(HERDER_IOS_BUNDLE_ID:default=sh.herder.Herder)
         # HerderFFI.xcframework has arm64 slices only.
         EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
         # The `herder` URL scheme, and the launch screen: the splash's background, so the splash
@@ -103,6 +106,36 @@ targets:
         ARCHS: arm64
     scheme:
       testTargets: [herder-macOS-Screenshots]
+  # The scroll measurements `scripts/perf.sh` runs: on the iPhone against the app, built for
+  # Release; on the Mac against the Release copy it builds, so that one depends on no target.
+  herder-iOS-Perf:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [PerfTests]
+    dependencies:
+      - target: herder-iOS
+    settings:
+      base:
+        PRODUCT_NAME: herder-iOS-Perf
+        PRODUCT_MODULE_NAME: HerderPerf
+        PRODUCT_BUNDLE_IDENTIFIER: sh.herder.Herder.PerfTests
+        GENERATE_INFOPLIST_FILE: YES
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+    scheme:
+      testTargets: [herder-iOS-Perf]
+  herder-macOS-Perf:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [PerfTests]
+    settings:
+      base:
+        PRODUCT_NAME: herder-macOS-Perf
+        PRODUCT_MODULE_NAME: HerderPerf
+        PRODUCT_BUNDLE_IDENTIFIER: sh.herder.Herder.PerfTests
+        GENERATE_INFOPLIST_FILE: YES
+        ARCHS: arm64
+    scheme:
+      testTargets: [herder-macOS-Perf]
   # Drives the copy of the Mac app `scripts/profile-mac.sh` builds, so it depends on no target.
   herder-macOS-Profile:
     type: bundle.ui-testing
