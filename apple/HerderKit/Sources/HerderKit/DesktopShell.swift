@@ -48,7 +48,7 @@ struct DesktopShell: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .environment(\.pages, PageNavigator(open: { pages.open($0) }, close: { pages.close() }))
+        .environment(\.pages, PageNavigator(scope: "desktop", open: { pages.open($0) }, close: { pages.close() }))
         .background(Theme.canvas)
         #if os(macOS)
         .ignoresSafeArea(.container, edges: .top)

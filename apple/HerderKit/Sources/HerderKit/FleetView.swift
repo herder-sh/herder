@@ -62,8 +62,12 @@ struct FleetView: View {
     @State private var linked: SessionKey?
     /// Why a link's session did not open, for the alert that says so.
     @State private var linkProblem: SessionLinkTarget?
-    /// Your herder passkey, which signs every change to people and every approval.
-    @State private var authenticator = passkeyAuthenticator()
+    /// Signs with your herder passkey, every change to people and every approval: made once, so
+    /// the views that read it do not draw again whenever this view does.
+    @State private var signPasskey: PasskeySigner = {
+        let authenticator = passkeyAuthenticator()
+        return { try await authenticator.sign($0) }
+    }()
     /// The request of a device without a passkey on show, and those put off by closing the sheet.
     @State private var actionRequest: ActionRequest?
     @State private var putOff: Set<ActionRequest.ID> = []
@@ -75,7 +79,7 @@ struct FleetView: View {
 
     var body: some View {
         screens
-            .environment(\.signPasskey) { try await authenticator.sign($0) }
+            .environment(\.signPasskey, signPasskey)
             .onOpenURL(perform: open)
             #if os(macOS)
             // A link opens in the one window rather than a new one.
@@ -334,7 +338,8 @@ struct FleetView: View {
                     .modifier(BoardBadge(fleet: fleet, shown: tab == .board))
                     .tag(tab)
                     // A page pushes onto the tab it opens from.
-                    .environment(\.pages, PageNavigator(open: { path(tab).wrappedValue.append(.page($0)) },
+                    .environment(\.pages, PageNavigator(scope: "tab.\(tab)",
+                                                         open: { path(tab).wrappedValue.append(.page($0)) },
                                                          close: { _ = path(tab).wrappedValue.popLast() }))
             }
         }
