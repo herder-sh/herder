@@ -7,7 +7,7 @@ final class TaskRowUITests: XCTestCase {
     @MainActor
     func testTappingATaskRowOpensItsSessionAndSwipingArchivesIt() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
 
         // The Board: the session waiting on an approval.

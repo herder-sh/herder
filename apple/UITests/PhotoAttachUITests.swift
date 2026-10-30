@@ -7,7 +7,7 @@ final class PhotoAttachUITests: XCTestCase {
     @MainActor
     func testAPhotoPickedFromTheLibraryGoesWithThePrompt() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
 
         app.openWaitingTask()

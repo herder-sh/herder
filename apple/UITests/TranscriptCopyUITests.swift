@@ -8,7 +8,7 @@ final class TranscriptCopyUITests: XCTestCase {
     @MainActor
     func testLongPressingAMessageSelectsTextInIt() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
 
         app.openWaitingTask()
