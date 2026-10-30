@@ -81,13 +81,10 @@ struct RequestCard: View {
                 }
                 reasonLines
             case .approval(let summary):
-                Text(summary)
-                    .font(Theme.mono)
-                    .foregroundStyle(Theme.text)
+                TranscriptText(summary, style: .footnote, monospaced: true)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.raised, in: .rect(cornerRadius: 8))
-                    .textSelection(.enabled)
                 reasonLines
             case .question(let text, let labels, let multiSelect):
                 let question = QuestionText(text, choices: labels)

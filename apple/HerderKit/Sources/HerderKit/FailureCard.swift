@@ -227,9 +227,7 @@ struct FailureCardView: View {
                 ForEach(Array(card.actions.enumerated()), id: \.offset) { _, action in button(action) }
             }
             if details {
-                Text(failure.error.message)
-                    .font(Theme.monoSmall).foregroundStyle(Theme.secondary)
-                    .textSelection(.enabled)
+                TranscriptText(failure.error.message, style: .caption, monospaced: true, color: Theme.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
                     .background(.ground, in: .rect(cornerRadius: 8))

@@ -233,9 +233,7 @@ struct MermaidBlock: View {
         case .failed(let message):
             VStack(alignment: .leading, spacing: 0) {
                 // Mono, so the caret under Mermaid's parse error lines up.
-                Text("Unable to render diagram: \(message)")
-                    .font(Theme.monoSmall).foregroundStyle(Theme.failure)
-                    .textSelection(.enabled)
+                TranscriptText("Unable to render diagram: \(message)", style: .caption, monospaced: true, color: Theme.failure)
                     .padding(.horizontal, 12).padding(.top, 8)
                 MarkdownText.codeText(source, language: "mermaid")
             }

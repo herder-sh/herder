@@ -195,6 +195,47 @@ jobs:
           xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS
           -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO
 
+  # The Mac UI tests (apple/MacUITests) on the demo fleet: selecting and copying transcript text
+  # with the mouse, which no log shows going wrong.
+  mac-ui:
+    name: mac-ui
+    needs: [key, bindings]
+    # Also when the bindings job is skipped on a cache hit.
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            crates/herder-ffi/swift/build
+            target/debug/examples/fake_daemon
+          key: ${{ needs.key.outputs.key }}
+          fail-on-cache-miss: true
+      - name: Install the Metal toolchain (SwiftTerm's renderer needs it)
+        run: xcodebuild -downloadComponent MetalToolchain
+      - name: Test the macOS app against the demo fleet
+        timeout-minutes: 30
+        env:
+          HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
+        run: |
+          brew install xcodegen
+          apple/scripts/test-mac-ui.sh -quiet
+      - name: Print the failing UI tests' assertions
+        if: failure()
+        run: |
+          bundle=target/mac-ui-tests/tests.xcresult
+          [ -d "$bundle" ] || exit 0
+          xcrun xcresulttool get test-results summary --path "$bundle" |
+            jq -r '.testFailures[]? | "\(.testIdentifierString): \(.failureText)"'
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: mac-ui-tests-xcresult
+          path: target/mac-ui-tests/tests.xcresult
+          if-no-files-found: ignore
+
   macos:
     name: macos
     needs: [key, bindings]

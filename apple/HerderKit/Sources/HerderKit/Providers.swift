@@ -1045,7 +1045,7 @@ struct FailureOutput: View {
 
     var body: some View {
         ScrollView {
-            Text(text).font(Theme.monoSmall).foregroundStyle(Theme.secondary).textSelection(.enabled)
+            TranscriptText(text, style: .caption, monospaced: true, color: Theme.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
         }

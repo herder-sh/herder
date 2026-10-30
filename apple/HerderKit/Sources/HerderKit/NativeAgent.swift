@@ -396,11 +396,7 @@ private struct AgentTask: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(text)
-                .font(.callout)
-                .foregroundStyle(Theme.text)
-                .textSelection(.enabled)
-                .lineLimit(long && !expanded ? 6 : nil)
+            TranscriptText(text, style: .callout, lineLimit: long && !expanded ? 6 : nil)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if long {
                 Button { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } } label: {

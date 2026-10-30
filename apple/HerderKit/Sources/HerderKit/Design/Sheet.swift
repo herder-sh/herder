@@ -158,10 +158,7 @@ struct DetailRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label).foregroundStyle(Theme.secondary).frame(width: 120, alignment: .leading)
-            Text(value.isEmpty ? "—" : value)
-                .font(mono ? Theme.mono : .subheadline)
-                .foregroundStyle(Theme.text)
-                .textSelection(.enabled)
+            TranscriptText(value.isEmpty ? "—" : value, style: mono ? .footnote : .subheadline, monospaced: mono)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.subheadline)

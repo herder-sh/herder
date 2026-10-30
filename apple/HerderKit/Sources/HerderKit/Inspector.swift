@@ -68,11 +68,7 @@ struct SessionInspector: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(Theme.tertiary)
                         .frame(width: 52, alignment: .leading)
-                    Text(entry.text)
-                        .font(.caption)
-                        .foregroundStyle(Theme.text)
-                        .lineLimit(3)
-                        .textSelection(.enabled)
+                    TranscriptText(entry.text, style: .caption, lineLimit: 3)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 12)

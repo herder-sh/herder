@@ -10,22 +10,42 @@ extension EnvironmentValues {
     @Entry var messageText: String?
 }
 
-/// Transcript text to select any part of and copy, in a text view, with the hanging indents and
-/// paragraph spacing of `MarkdownText`'s prose; its menu also copies the whole message, and a
+/// Text to select any part of and copy, in a text view: the transcript's, with the hanging
+/// indents and paragraph spacing of `MarkdownText`'s prose, and any other text worth copying; its menu also copies the whole message, and a
 /// click or tap on inline code copies just that span. On a Mac,
 /// SwiftUI's selectable text hands its selection to Copy only on its next update, so a ⌘C right
 /// after selecting copied nothing; on a phone, SwiftUI's text only copies all of itself.
 struct TranscriptText: View {
     let string: AttributedString
     var style: Font.TextStyle = .body
+    var weight: PlatformFont.Weight = .regular
     var monospaced = false
+    var italic = false
     var lineSpacing: CGFloat = 0
     var color: Color = Theme.text
     var alignment: NSTextAlignment = .natural
+    /// The most lines it shows, the last cut short; all of them if `nil`.
+    var lineLimit: Int?
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.displayScale) private var scale
 
     var body: some View {
-        SelectableTextView(text: Self.attributed(string, style: style, monospaced: monospaced,
-                                                 lineSpacing: lineSpacing, color: PlatformColor(color), alignment: alignment))
+        let text = Self.attributed(string, style: style, weight: weight, monospaced: monospaced, italic: italic,
+                                   lineSpacing: lineSpacing, color: PlatformColor(color), alignment: alignment,
+                                   dark: scheme == .dark, scale: scale)
+        let font = text.length > 0 ? text.attribute(.font, at: 0, effectiveRange: nil) as? PlatformFont : nil
+        SelectableTextView(text: text, lineLimit: lineLimit)
+            // On the line of the text beside it, as a `Text` would be.
+            .alignmentGuide(.firstTextBaseline) { _ in font?.ascender ?? 0 }
+    }
+}
+
+extension TranscriptText {
+    /// Plain `text`, to select and copy.
+    init(_ text: String, style: Font.TextStyle = .body, weight: PlatformFont.Weight = .regular, monospaced: Bool = false,
+         italic: Bool = false, color: Color = Theme.text, lineLimit: Int? = nil) {
+        self.init(string: AttributedString(text), style: style, weight: weight, monospaced: monospaced, italic: italic,
+                  color: color, lineLimit: lineLimit)
     }
 }
 
@@ -47,7 +67,21 @@ enum CodeCopy {
     }
 }
 
+extension NSAttributedString.Key {
+    /// What a character copies as in place of itself: a picture chip, its marker.
+    static let copiedAs = NSAttributedString.Key("herder.copiedAs")
+}
+
 extension NSAttributedString {
+    /// The text `range` copies as: its characters, a chip as what it stands for.
+    func copied(_ range: NSRange) -> String {
+        var text = ""
+        enumerateAttribute(.copiedAs, in: range) { value, range, _ in
+            text += value as? String ?? attributedSubstring(from: range).string
+        }
+        return text
+    }
+
     /// The code span at `index` and the code it copies.
     func codeSpan(at index: Int) -> (range: NSRange, code: String)? {
         guard index >= 0, index < length else { return nil }
@@ -90,18 +124,25 @@ extension TranscriptText {
 
     /// `string` in the text views' attributes: its SwiftUI colours, the fonts and paragraphs
     /// `MarkdownText` gives its prose, and Markdown's bold, italic, code and strikethrough.
-    /// Links keep the text's colour, underlined in a quieter one.
-    static func attributed(_ string: AttributedString, style: Font.TextStyle, monospaced: Bool,
-                           lineSpacing: CGFloat, color: PlatformColor, alignment: NSTextAlignment = .natural) -> NSAttributedString {
+    /// Links keep the text's colour, underlined in a quieter one. A picture's marker becomes its
+    /// chip, drawn for the `dark` or light look at `scale`, that copies as the marker.
+    static func attributed(_ string: AttributedString, style: Font.TextStyle, weight: PlatformFont.Weight = .regular,
+                           monospaced: Bool, italic: Bool = false, lineSpacing: CGFloat, color: PlatformColor,
+                           alignment: NSTextAlignment = .natural, dark: Bool = false, scale: CGFloat = 2) -> NSAttributedString {
         let base = PlatformFont.preferredFont(forTextStyle: style.platform)
-        let text = monospaced ? PlatformFont.monospacedSystemFont(ofSize: base.pointSize, weight: .regular) : base
+        let text = (monospaced ? PlatformFont.monospacedSystemFont(ofSize: base.pointSize, weight: weight)
+                    : weight == .regular ? base : PlatformFont.systemFont(ofSize: base.pointSize, weight: weight))
+            .adding(italic: italic)
         // One indent column fits a list marker up to "99.".
         let column = (base.pointSize * 1.6).rounded()
         var paragraphs: [MarkdownText.Paragraph: NSParagraphStyle] = [:]
         let spans = codeSpans(string)
         var span = spans.startIndex
         let result = NSMutableAttributedString()
+        // The picture of the run before, if any: find's marks may split a marker into several runs.
+        var previous: MessagePicture?
         for run in string.runs {
+            defer { previous = run[PictureChip.self] }
             var font = switch run[MarkdownText.Role.self] {
             case .heading: PlatformFont.preferredFont(forTextStyle: .headline)
             case .label: PlatformFont.systemFont(ofSize: PlatformFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .semibold)
@@ -127,6 +168,15 @@ extension TranscriptText {
                 paragraphs[layout] = paragraph
                 return paragraph
             }()
+            if let picture = run[PictureChip.self] {
+                guard picture != previous else { continue }
+                let chip = NSMutableAttributedString(attachment: PictureChip.attachment(picture, dark: dark, scale: scale, font: font))
+                chip.addAttributes([.font: font, .paragraphStyle: paragraph, .copiedAs: picture.marker],
+                                   range: NSRange(location: 0, length: chip.length))
+                if let url = PictureChip.url(picture) { chip.addAttribute(.link, value: url, range: NSRange(location: 0, length: chip.length)) }
+                result.append(chip)
+                continue
+            }
             var attributes: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: run.swiftUI.foregroundColor.map(PlatformColor.init) ?? color,
@@ -208,12 +258,18 @@ private extension Font.TextStyle {
     }
 }
 
-/// The size of `text` laid out in `proposal`'s width.
-@MainActor private func fit(_ text: NSAttributedString, in proposal: ProposedViewSize) -> CGSize {
+/// The size of `text` laid out in `proposal`'s width, in at most `lineLimit` lines.
+@MainActor private func fit(_ text: NSAttributedString, in proposal: ProposedViewSize, lineLimit: Int?) -> CGSize {
     let width = proposal.width.map { $0.isFinite ? $0 : .greatestFiniteMagnitude } ?? .greatestFiniteMagnitude
     let fit = text.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
                                 options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
-    return CGSize(width: min(width, ceil(fit.width)), height: ceil(fit.height))
+    var height = ceil(fit.height)
+    if let lineLimit, text.length > 0, let font = text.attribute(.font, at: 0, effectiveRange: nil) as? PlatformFont {
+        let spacing = (text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.lineSpacing ?? 0
+        let line = font.ascender - font.descender + font.leading
+        height = min(height, ceil(CGFloat(lineLimit) * line + CGFloat(lineLimit - 1) * spacing))
+    }
+    return CGSize(width: min(width, ceil(fit.width)), height: height)
 }
 
 #if os(iOS)
@@ -221,11 +277,12 @@ private extension Font.TextStyle {
 /// environment's `openURL`.
 private struct SelectableTextView: UIViewRepresentable {
     let text: NSAttributedString
+    let lineLimit: Int?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView(usingTextLayoutManager: true)
+        let view = ChipTextView(usingTextLayoutManager: true)
         view.isEditable = false
         view.isScrollEnabled = false
         view.backgroundColor = .clear
@@ -239,6 +296,8 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
+        view.textContainer.maximumNumberOfLines = lineLimit ?? 0
+        view.textContainer.lineBreakMode = lineLimit == nil ? .byWordWrapping : .byTruncatingTail
         context.coordinator.openURL = context.environment.openURL
         context.coordinator.message = context.environment.messageText
         // Setting the same text again would drop a selection, as a streaming message redraws.
@@ -249,7 +308,7 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
-        fit(text, in: proposal)
+        fit(text, in: proposal, lineLimit: lineLimit)
     }
 
     @MainActor final class Coordinator: NSObject, UITextViewDelegate {
@@ -272,7 +331,13 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem,
                       defaultAction: UIAction) -> UIAction? {
-            guard case .link(let url) = textItem.content else { return defaultAction }
+            // A picture chip is an attachment under a link.
+            let link: URL? = switch textItem.content {
+            case .link(let url): url
+            case .textAttachment: textView.attributedText.attribute(.link, at: textItem.range.location, effectiveRange: nil) as? URL
+            default: nil
+            }
+            guard let url = link else { return defaultAction }
             if let code = CodeCopy.code(url) {
                 return UIAction { [weak textView] _ in
                     Clipboard.string = code
@@ -289,6 +354,21 @@ private struct SelectableTextView: UIViewRepresentable {
             if case .link(let url) = textItem.content, CodeCopy.code(url) != nil { return nil }
             return UITextItem.MenuConfiguration(preview: .default, menu: defaultMenu)
         }
+    }
+}
+
+/// A text view whose edit menu selects all of the message, as a read-only text view's does not,
+/// and whose picture chips copy as their markers.
+private final class ChipTextView: UITextView {
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(selectAll(_:)) { return selectedRange.length < attributedText.length }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func copy(_ sender: Any?) {
+        let range = selectedRange
+        guard range.length > 0, attributedText.containsAttachments(in: range) else { return super.copy(sender) }
+        Clipboard.string = attributedText.copied(range)
     }
 }
 
@@ -317,6 +397,7 @@ private extension UITextView {
 /// environment's `openURL`, with the pointing hand over them.
 private struct SelectableTextView: NSViewRepresentable {
     let text: NSAttributedString
+    let lineLimit: Int?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -340,6 +421,8 @@ private struct SelectableTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: NSTextView, context: Context) {
+        view.textContainer?.maximumNumberOfLines = lineLimit ?? 0
+        view.textContainer?.lineBreakMode = lineLimit == nil ? .byWordWrapping : .byTruncatingTail
         context.coordinator.openURL = context.environment.openURL
         context.coordinator.message = context.environment.messageText
         // Setting the same text again would drop a selection, as a streaming message redraws.
@@ -350,7 +433,7 @@ private struct SelectableTextView: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextView, context: Context) -> CGSize? {
-        fit(text, in: proposal)
+        fit(text, in: proposal, lineLimit: lineLimit)
     }
 
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
@@ -388,7 +471,8 @@ private struct SelectableTextView: NSViewRepresentable {
 
 /// A text view that lights up the code span under the pointer, as a hint that a click copies it,
 /// and whose drag selects the letter it starts on. NSTextView anchors a drag at the gap nearest
-/// the press, so one pressed on the right half of a letter left that letter out.
+/// the press, so one pressed on the right half of a letter left that letter out. Its picture
+/// chips copy as their markers.
 private final class CodeCopyTextView: NSTextView {
     private var hovered: NSRange?
     /// The character a plain press landed on, while its drag selects.
@@ -416,6 +500,13 @@ private final class CodeCopyTextView: NSTextView {
         pressed = plain ? character(at: convert(event.locationInWindow, from: nil)) : nil
         defer { pressed = nil }
         super.mouseDown(with: event)
+    }
+
+    override func copy(_ sender: Any?) {
+        let range = selectedRange()
+        guard let textStorage, selectedRanges.count == 1, range.length > 0,
+              textStorage.containsAttachments(in: range) else { return super.copy(sender) }
+        Clipboard.string = textStorage.copied(range)
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {

@@ -286,7 +286,7 @@ private struct CommandBox: View {
 
     var body: some View {
         HStack {
-            Text(command).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
+            TranscriptText(command, style: .footnote, monospaced: true)
             Spacer()
             CopyButton(text: command)
         }

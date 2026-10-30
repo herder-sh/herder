@@ -43,6 +43,28 @@ struct TranscriptTextTests {
         #expect(board.string(forType: .string) == "The change")
     }
 
+    /// The owner's case: a prompt with a picture in it is one text, which a drag selects across,
+    /// copied as the message reads, marker and all. Its words were texts of their own, and a
+    /// drag selected one of them.
+    @Test func aPromptWithAPictureIsOneTextThatCopiesWhole() throws {
+        let picture = MessagePicture(number: 1, mediaType: "image/png", size: 837, data: nil, attachmentId: nil)
+        let text = "[Image #1] we are not merging smoking room to non-smoking room"
+        let host = NSHostingView(rootView: MessageText(text: text, pictures: [picture]) { _ in })
+        host.frame = CGRect(x: 0, y: 0, width: 300, height: 100)
+        host.layoutSubtreeIfNeeded()
+        let views = Self.all(NSTextView.self, in: host)
+        #expect(views.count == 1, "the message is one text view")
+        let view = try #require(views.first)
+        view.selectAll(nil)
+        let saved = NSPasteboard.general.string(forType: .string)
+        defer {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
+        view.copy(nil)
+        #expect(NSPasteboard.general.string(forType: .string) == text)
+    }
+
     /// A click on inline code copies exactly its text, and shows "Copied" over it.
     @Test func clickingInlineCodeCopiesIt() throws {
         let host = NSHostingView(rootView: MarkdownText(text: "Set `https://example.com/callback` as the redirect URL."))
@@ -85,6 +107,10 @@ struct TranscriptTextTests {
         let frame = table.convert(table.bounds, to: host)
         #expect(frame.minX >= 0, "the table starts at its first column, \(frame)")
         #expect(frame.maxX <= 500, "\(frame)")
+    }
+
+    private static func all<View: NSView>(_ type: View.Type, in view: NSView) -> [View] {
+        (view as? View).map { [$0] } ?? view.subviews.flatMap { all(type, in: $0) }
     }
 
     private static func first<View: NSView>(_ type: View.Type, in view: NSView) -> View? {

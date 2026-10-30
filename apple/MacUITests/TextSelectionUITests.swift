@@ -9,7 +9,7 @@ import XCTest
 final class TextSelectionUITests: XCTestCase {
     /// The demo session with a prompt and a reply of several paragraphs.
     private static let session = "Fix the flaky checkout e2e test"
-    private static let prompt = "The checkout e2e test fails about one CI run in five. Find out why."
+    private static let prompt = "Carry on here: fix it and run the checkout suite in WebKit until it passes 20 times in a row."
     private static let reply = "Reproduced on this Mac: WebKit failed 4 runs out of 20"
     /// A finished demo session, to send a prompt to.
     private static let idle = "Tidy the README badges"
@@ -36,23 +36,15 @@ final class TextSelectionUITests: XCTestCase {
     /// The owner's case: a prompt with a picture in it drew each word as a text of its own, so a
     /// drag across it selected one word.
     func testDraggingAcrossAPromptWithAPictureCopiesAllOfIt() throws {
-        open(Self.idle)
-        let composer = app.descendants(matching: .any)["composer"].firstMatch
-        XCTAssertTrue(composer.waitForExistence(timeout: 15))
-        composer.click()
-        let picture = NSImage(size: NSSize(width: 64, height: 48), flipped: false) { rect in
-            NSColor.systemTeal.setFill()
-            rect.fill()
-            return true
-        }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([picture])
-        app.typeKey("v", modifierFlags: .command)
-        composer.typeText(" " + Self.owners)
-        app.typeKey(.return, modifierFlags: [])
-
-        let prompt = message(containing: Self.owners)
+        let prompt = sendOwnersPromptWithAPicture()
         drag(across: prompt)
+        XCTAssertEqual(copied(), "[Image #1] " + Self.owners)
+    }
+
+    func testSelectAllInAPromptWithAPictureCopiesAllOfIt() throws {
+        let prompt = sendOwnersPromptWithAPicture()
+        prompt.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.7)).click()
+        app.typeKey("a", modifierFlags: .command)
         XCTAssertEqual(copied(), "[Image #1] " + Self.owners)
     }
 
@@ -96,6 +88,26 @@ final class TextSelectionUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["transcript"].waitForExistence(timeout: 15))
     }
 
+    /// Pastes a picture into a finished session's composer, types the owner's prompt after it
+    /// and sends it; returns the prompt's text.
+    private func sendOwnersPromptWithAPicture() -> XCUIElement {
+        open(Self.idle)
+        let composer = app.descendants(matching: .any)["composer"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 15))
+        composer.click()
+        let picture = NSImage(size: NSSize(width: 64, height: 48), flipped: false) { rect in
+            NSColor.systemTeal.setFill()
+            rect.fill()
+            return true
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([picture])
+        app.typeKey("v", modifierFlags: .command)
+        composer.typeText(Self.owners)
+        app.typeKey(.return, modifierFlags: [])
+        return message(containing: Self.owners)
+    }
+
     private func message(_ text: String) -> XCUIElement {
         let element = app.textViews.matching(NSPredicate(format: "value == %@", text)).firstMatch
         XCTAssertTrue(element.waitForExistence(timeout: 15), "no message reads \(text)")
@@ -119,13 +131,14 @@ final class TextSelectionUITests: XCTestCase {
     private func drag(across element: XCUIElement) {
         let start = element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 1, dy: 6))
         let end = element.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -1, dy: -4))
-        start.press(forDuration: 0.2, thenDragTo: end)
+        start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
     }
 
     private func tripleClick(_ element: XCUIElement) {
         let point = element.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.3))
-        point.click()
+        // Three clicks inside the double-click interval count as one triple click.
         point.doubleClick()
+        point.click()
     }
 
     /// ⌘C, then what is on the pasteboard.
