@@ -1,6 +1,7 @@
 import Foundation
 import Herder
 @testable import HerderKit
+import SwiftUI
 import Testing
 
 private func pr(
@@ -418,5 +419,27 @@ struct BoardTests {
         #expect(TaskState(agent: .running) == .working)
         #expect(TaskState(agent: .ok) == .idle)
         #expect(TaskState(agent: .failed) == .idle)
+    }
+
+    @Test @MainActor func aRowDrawsAgainOnlyWhenItsTaskOrTheOpenTaskChanges() throws {
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        let tree = task("01A", "Lead", hoursAgo: 1)
+        var open: SessionKey?
+        let selection = Binding(get: { open }, set: { open = $0 })
+        func row(_ tree: TaskTree, context: String = "app") -> TaskListRow {
+            TaskListRow(tree: tree, fleet: fleet, selection: selection, context: context) {}
+        }
+        let shown = row(tree)
+        // Its list drawn again, with a new closure: the row stays.
+        #expect(row(tree) == shown)
+        #expect(row(task("01A", "Lead, renamed", hoursAgo: 1)) != shown)
+        #expect(row(tree, context: "web") != shown)
+        // Opening it highlights it.
+        let before = row(tree)
+        open = tree.id
+        #expect(row(tree) != before)
     }
 }

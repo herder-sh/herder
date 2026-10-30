@@ -310,6 +310,7 @@ struct BoardView: View {
         TaskListRow(tree: tree, fleet: fleet, selection: selection, context: tree.project) {
             tree.toggleArchived(fleet: fleet, undoManager: undoManager)
         }
+        .equatable()
         .onAppear { Launch.mark(.content) }
     }
 
@@ -571,10 +572,23 @@ struct TaskListRow: View {
     /// branch.
     let context: String
     let toggle: () -> Void
+    /// The open task as the row was made, which its highlight follows: the binding's value is
+    /// the same for the row before and after a change, so it cannot tell them apart.
+    private let opened: SessionKey?
     @AppStorage(UnfoldedTasks.key) private var unfolded = ""
     @Environment(\.taskListCursor) private var cursor
     @Environment(\.pages) private var pages
     @Environment(\.sessionPath) private var path
+
+    init(tree: TaskTree, fleet: Fleet, selection: Binding<SessionKey?>?, context: String,
+         toggle: @escaping () -> Void) {
+        self.tree = tree
+        self.fleet = fleet
+        self.selection = selection
+        self.context = context
+        self.toggle = toggle
+        opened = selection?.wrappedValue
+    }
 
     var body: some View {
         let archived = tree.lead.state == .archived
@@ -582,7 +596,7 @@ struct TaskListRow: View {
         let open = tree.agentCount > 0 && UnfoldedTasks(unfolded).contains(tree.id)
         TaskRow(tree: tree, fleet: fleet, selection: selection, context: context, current: current,
                 unfolded: open, unfold: unfold, toggle: toggle)
-            .taskListRow(highlighted: current || selection?.wrappedValue == tree.id)
+            .taskListRow(highlighted: current || opened == tree.id)
             #if os(iOS)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 Button(archived ? "Unarchive" : "Archive", systemImage: archived ? "tray.and.arrow.up" : "archivebox",
@@ -614,7 +628,7 @@ struct TaskListRow: View {
                                  label: "Open sub-session: \(child.title), \(child.state.label)")
                         .opacity(child.state == .archived ? 0.6 : 1)
                 }
-                .taskListRow(highlighted: selection?.wrappedValue == child.key)
+                .taskListRow(highlighted: opened == child.key)
             }
         }
     }
@@ -623,6 +637,17 @@ struct TaskListRow: View {
         var tasks = UnfoldedTasks(unfolded)
         tasks.toggle(tree.id)
         withAnimation(.snappy) { unfolded = tasks.stored }
+    }
+}
+
+/// A row draws again only when its task, its line or the open task changes: its list draws
+/// again whenever any task in it changes, as a running one does several times a second, and
+/// its closure, always new, would draw every row with it.
+extension TaskListRow: Equatable {
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        MainActor.assumeIsolated {
+            a.tree == b.tree && a.context == b.context && a.fleet === b.fleet && a.opened == b.opened
+        }
     }
 }
 
