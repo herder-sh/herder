@@ -117,6 +117,21 @@ targets:
         ARCHS: arm64
     scheme:
       testTargets: [herder-macOS-Profile]
+  # The Mac UI tests, which drive the copy of the Mac app `scripts/test-mac-ui.sh` builds, so
+  # they depend on no target and leave the installed app running.
+  herder-macOS-UITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [MacUITests]
+    settings:
+      base:
+        PRODUCT_NAME: herder-macOS-UITests
+        PRODUCT_MODULE_NAME: HerderMacUITests
+        PRODUCT_BUNDLE_IDENTIFIER: sh.herder.Herder.MacUITests
+        GENERATE_INFOPLIST_FILE: YES
+        ARCHS: arm64
+    scheme:
+      testTargets: [herder-macOS-UITests]
   herder-macOS:
     type: application
     platform: macOS
