@@ -210,8 +210,8 @@ final class Claim {
 
     /// Claims each machine not yours yet: the passkey is made on the first when no machine knows
     /// one, then one assertion over every other machine's challenge claims them all, so Face ID
-    /// is asked once for the rest. Closing the Face ID prompt stops, leaving the rest ready; a
-    /// machine that refuses is marked and the others go on.
+    /// is asked once for the rest. A Face ID prompt closed or timed out stops, failing the
+    /// machines it was for; a machine that refuses is marked and the others go on.
     func claim() async {
         working = true
         error = nil
@@ -225,7 +225,11 @@ final class Claim {
             }
             try await claimSigned(Array(left))
         } catch {
-            for machine in machines where rows[machine.id] == .claiming { rows[machine.id] = .ready }
+            // The system reports a prompt that timed out as closed, so neither is silent.
+            let unsigned = machines.filter { rows[$0.id] == .claiming }
+            for machine in unsigned { rows[machine.id] = .failed }
+            failures.append("\(unsigned.map(\.name).joined(separator: ", ")): the passkey prompt was closed or timed "
+                            + "out before it signed; claim again.")
         }
         if !failures.isEmpty { self.error = failures.joined(separator: "\n") }
     }
@@ -254,7 +258,7 @@ final class Claim {
     }
 
     /// Runs `body` for `machine`, marking it claimed; a refusal marks it failed and says why,
-    /// and closing Face ID is thrown.
+    /// and a closed or timed-out Face ID prompt is thrown.
     private func attempt(_ machine: ClaimPlan.Machine, _ body: () async throws -> Void) async throws {
         do {
             try await body()

@@ -304,13 +304,20 @@ struct ClaimTests {
         #expect(!claim.claimed)
     }
 
-    @Test func closingFaceIDLeavesEveryMachineReady() async {
+    @Test func aFaceIDPromptClosedOrTimedOutFailsItsMachinesAndSaysSo() async {
         let authenticator = FakeAuthenticator()
         authenticator.failure = ASAuthorizationError(.canceled)
         let claim = Claim(Self.plan, authenticator: authenticator, send: Machines().send)
         await claim.claim()
-        #expect(claim.rows.values.allSatisfy { $0 == .ready })
-        #expect(claim.error == nil)
+        #expect(claim.rows.values.allSatisfy { $0 == .failed })
+        #expect(claim.error == "box, lab, herder-vault-0: the passkey prompt was closed or timed out before it signed; "
+                + "claim again.")
         #expect(!claim.working)
+
+        // Claiming again goes on from there.
+        authenticator.failure = nil
+        await claim.claim()
+        #expect(claim.claimed)
+        #expect(claim.error == nil)
     }
 }

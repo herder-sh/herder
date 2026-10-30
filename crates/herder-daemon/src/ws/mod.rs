@@ -349,7 +349,7 @@ impl<B: Backend> Shared<B> {
                     warn!(user_id = %identity.user_id, "claim refused: {}", err.message);
                     err
                 };
-                let proven = self.auth.verify_new_person(&person).map_err(refused)?;
+                let proven = self.auth.verify_claimer(&person).map_err(refused)?;
                 let person_id = proven.person_id.clone();
                 let claimed = self
                     .claim(&identity.user_id, proven, &also)
