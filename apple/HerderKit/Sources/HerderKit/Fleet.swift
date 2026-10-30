@@ -133,8 +133,29 @@ public final class Fleet {
         guard listsRefresh == nil else { return }
         listsRefresh = Task {
             try? await Task.sleep(for: .milliseconds(100))
+            await Self.scrollEnded()
             guard !Task.isCancelled else { return }
             refreshLists()
+        }
+    }
+
+    /// The main run loop's mode while the user drags or flings a scroll view.
+    #if os(iOS)
+    static let scrollMode = RunLoop.Mode.tracking
+    #else
+    static let scrollMode = RunLoop.Mode.eventTracking
+    #endif
+
+    /// Whether the user is dragging or flinging a scroll view.
+    static var scrolling: Bool { RunLoop.main.currentMode == scrollMode }
+
+    /// Returns once no scroll is in progress: at once unless one is. The fleet's changes wait
+    /// for it, so a list scrolls without the views around it drawing again on every event a
+    /// session streams; they apply, the latest at once, as the scroll ends.
+    static func scrollEnded() async {
+        guard scrolling else { return }
+        await withCheckedContinuation { continuation in
+            RunLoop.main.perform(inModes: [.default]) { continuation.resume() }
         }
     }
 
@@ -193,6 +214,7 @@ public final class Fleet {
         defer { network.cancel() }
         update(client.machines())
         while await changes.next() {
+            await Self.scrollEnded()
             update(client.machines())
         }
     }
@@ -242,6 +264,7 @@ public final class Fleet {
         track(key)
         // Releasing the subscription when this returns unsubscribes.
         while let update = await subscription.next(), !Task.isCancelled {
+            await Self.scrollEnded()
             // Only what `observe` needs: holding the whole session would copy its transcript
             // on every update.
             guard let before = session(key).map({ (status: $0.status, loaded: $0.loaded) }) else { break }
