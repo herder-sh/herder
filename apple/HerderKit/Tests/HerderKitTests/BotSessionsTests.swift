@@ -1,6 +1,8 @@
 import Foundation
 import Herder
 @testable import HerderKit
+import Observation
+import Synchronization
 import Testing
 
 struct BotSessionsTests {
@@ -51,6 +53,19 @@ struct BotSessionsTests {
         let lists = Self.lists()
         #expect(lists.botsWaiting == 1)
         #expect(lists.bots.map(\.waiting) == [1, 0])
+    }
+
+    @Test @MainActor func botsCountIsNotRedrawnByAProjectMovingOn() {
+        let lists = Self.lists()
+        let shown = ShownLists()
+        shown.show(lists)
+        #expect(shown.botsWaiting == 1)
+        let read = Mutex(false)
+        withObservationTracking { _ = shown.botsWaiting } onChange: { read.withLock { $0 = true } }
+        var moved = lists
+        moved.projects[0].live.removeAll()
+        shown.show(moved)
+        #expect(!read.withLock { $0 })
     }
 
     @Test func aRowSaysWhoWroteAndWhere() {

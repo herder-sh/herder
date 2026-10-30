@@ -35,6 +35,12 @@ extension Lists {
     var botsWaiting: Int { bots.map(\.waiting).reduce(0, +) }
 }
 
+extension ShownLists {
+    /// As the lists say, read from the bots alone: through every list, Chats and the sidebar
+    /// would draw again with each round a running session plays.
+    var botsWaiting: Int { bots.map(\.waiting).reduce(0, +) }
+}
+
 /// The bots' conversations a search finds, a section a bot, the latest first: each task's title,
 /// who wrote and where, and where it stands. The archived ones last, folded away until asked
 /// for. Archiving the open task opens the next.
