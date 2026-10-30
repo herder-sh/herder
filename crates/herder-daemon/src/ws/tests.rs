@@ -1952,6 +1952,10 @@ async fn agents_run_commands_as_their_user_within_its_role() {
             decision: LeftoverDecision::ItsMe,
             assertion: Box::new(stale_assertion()),
         },
+        CommandBody::MergePerson {
+            from: PersonId::new("p1"),
+            assertion: Box::new(stale_assertion()),
+        },
         CommandBody::PairVaultHost {
             host_name: "devbox".into(),
         },
@@ -2749,6 +2753,103 @@ async fn an_invited_member_connects_a_role_change_applies_and_a_revoke_disconnec
     assert!(sam.try_recv().await.is_none(), "the revoke closed it");
     let again = daemon.client_on(&laptop, None).await;
     assert_eq!(refused(again).await.code, ErrorCode::Forbidden);
+}
+
+/// Signs a new device in to `daemon` through an invite to `role` that `owner`, holding
+/// `passkey`, mints, as the new person `name` with the recorded passkey `name`.
+async fn invited(
+    daemon: &Daemon,
+    owner: &mut Client,
+    passkey: &Authenticator,
+    role: Role,
+    name: &str,
+) -> (Client, ServerHello, DeviceKey) {
+    let invite = CommandBody::Invite {
+        role,
+        assertion: fresh(owner, passkey).await,
+    };
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::Invite { invite, .. },
+        ..
+    } = owner.command(&format!("invite-{name}"), invite).await
+    else {
+        panic!("expected an invite");
+    };
+    let device = DeviceKey::generate().unwrap();
+    let mut client = daemon.client_on(&device, None).await;
+    let hello = client
+        .sign_in(|_, registration| {
+            let (_, registration) =
+                Authenticator::register(name, &registration.expect("an invite registers"));
+            SignIn::AcceptInvite {
+                invite: invite.clone(),
+                person: NewPerson {
+                    name: name.to_owned(),
+                    passkey: PersonPasskey::Register { registration },
+                },
+            }
+        })
+        .await;
+    (client, hello, device)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn its_me_folds_a_duplicate_person_in_with_its_passkey() {
+    let daemon = Daemon::start_fresh().await;
+    let (mut mac, tomas, passkey) = owned_by_tomas(&daemon).await;
+    // The iPhone registered a passkey of its own, and became a second owner; Sam is a member.
+    let (mut phone, duplicate, iphone) =
+        invited(&daemon, &mut mac, &passkey, Role::Owner, "carol").await;
+    let (mut sam, _, _) = invited(&daemon, &mut mac, &passkey, Role::Member, "sam").await;
+    let from = duplicate.person_id.clone().unwrap();
+    let duplicate_key = Authenticator::of(&daemon.auth, "carol").unwrap();
+    let merge = |assertion| CommandBody::MergePerson {
+        from: from.clone(),
+        assertion,
+    };
+    let rejected = |message| match message {
+        ServerMessage::CommandRejected { error, .. } => error.code,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+
+    // A member merges nobody; an owner needs the duplicate's passkey, not their own.
+    let by_sam = merge(fresh(&mut sam, &duplicate_key).await);
+    assert_eq!(
+        rejected(sam.command("m1", by_sam).await),
+        ErrorCode::Forbidden
+    );
+    let own = merge(fresh(&mut mac, &passkey).await);
+    assert_eq!(rejected(mac.command("m2", own).await), ErrorCode::Forbidden);
+
+    let folded = merge(fresh(&mut mac, &duplicate_key).await);
+    assert!(matches!(
+        mac.command("m3", folded).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+    assert!(phone.try_recv().await.is_none(), "the merge closed it");
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::People { people },
+        ..
+    } = mac.command("m4", CommandBody::ListPeople).await
+    else {
+        panic!("expected the people");
+    };
+    let names: Vec<_> = people.iter().map(|person| person.name.as_str()).collect();
+    assert_eq!(names, ["Tomas", "sam"]);
+    assert_eq!(people[0].devices.len(), 2);
+    // The iPhone comes back as Tomas, the owner.
+    let back = daemon
+        .client_on(&iphone, None)
+        .await
+        .hello(Vec::new())
+        .await;
+    assert_eq!(
+        (back.person_id, back.role),
+        (tomas.person_id.clone(), Role::Owner)
+    );
 }
 
 /// A fresh daemon claimed by Tomas from his Mac: its connection, and his passkey.

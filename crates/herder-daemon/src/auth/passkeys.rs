@@ -9,8 +9,8 @@
 //! assertion or registration names its challenge in its client data, which is how it finds its
 //! ceremony. Challenges live in memory only, so a restart voids them.
 //!
-//! A claim may sign several daemons' challenges at once ([`Passkeys::verify_batch`]): what lets
-//! one Face ID claim every machine. The signed challenge is then the daemons' challenges, each
+//! A claim, or a merge of a duplicate person, may sign several daemons' challenges at once
+//! ([`Passkeys::verify_batch`]): what lets one Face ID claim, or merge on, every machine. The signed challenge is then the daemons' challenges, each
 //! [`CHALLENGE_LEN`] bytes, one after the other. A daemon accepts it only when its own challenge
 //! is among them, unexpired and unused, and uses it up; every other check is the same. Any other
 //! assertion signs exactly one challenge of this daemon's.
@@ -268,7 +268,7 @@ impl Passkeys {
     }
 
     /// [`Passkeys::verify`], for an assertion that may sign a batch of daemons' challenges,
-    /// this daemon's among them: a claim of every machine at once.
+    /// this daemon's among them: a claim, or a merge, on every machine at once.
     pub fn verify_batch(
         &self,
         assertion: &PasskeyAssertion,

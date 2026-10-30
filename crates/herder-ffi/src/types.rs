@@ -744,6 +744,10 @@ pub enum CommandBody {
         decision: LeftoverDecision,
         assertion: Box<PasskeyAssertion>,
     },
+    MergePerson {
+        from: PersonId,
+        assertion: Box<PasskeyAssertion>,
+    },
     ApproveAction {
         request_id: String,
         assertion: Box<PasskeyAssertion>,

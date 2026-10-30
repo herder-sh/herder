@@ -13,17 +13,22 @@
 //! with the vault's hosts. Any other user is left for the owner to decide on
 //! ([`Auth::leftovers`]): the person themselves ([`Auth::claim_leftover`]), or someone to
 //! remove ([`Auth::remove_user`]).
+//!
+//! A person who became two, as a second device registering its own passkey makes them, folds
+//! the duplicate into themselves ([`Auth::merge_person`]) with the duplicate's passkey: the
+//! duplicate's id moves as a claimed user's does.
 
 use super::passkeys::Key;
 use herder_protocol::{
-    DeviceId, ErrorInfo, PersonId, Role, ServerMessage, Timestamp, UserId, UserInfo,
+    DeviceId, ErrorInfo, PasskeyAssertion, PersonId, Role, ServerMessage, Timestamp, UserId,
+    UserInfo,
 };
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::{
-    Auth, DeviceRole, Person, ProvenPerson, State, Users, conflict, devices_of, disconnect,
-    forbidden, not_found, saving,
+    Auth, DeviceRole, Person, ProvenPerson, State, Users, bad_request, conflict, devices_of,
+    disconnect, forbidden, not_found, saving,
 };
 
 /// A user id a claim moved: history attributed to it reads as `person`'s.
@@ -182,6 +187,52 @@ impl Auth {
         self.save(&users).map_err(saving)?;
         state.users = users;
         info!(%user_id, "user removed");
+        Ok(())
+    }
+
+    /// Folds the person `from` into the person `into`, once `assertion`, over this daemon's
+    /// fresh challenge or a batch with it, proves `into`'s owner holds `from`'s passkey: `from`'s
+    /// devices join `into`'s, history attributed to them reads as `into`'s, and `from` is
+    /// removed with their passkeys, closing their connections.
+    pub fn merge_person(
+        &self,
+        from: &PersonId,
+        into: &PersonId,
+        assertion: &PasskeyAssertion,
+    ) -> Result<(), ErrorInfo> {
+        if from == into {
+            return Err(bad_request("you cannot merge yourself into yourself"));
+        }
+        let mut state = self.lock();
+        let Some(duplicate) = state.users.person(from).cloned() else {
+            return Err(not_found(&format!("no person {from} on this daemon")));
+        };
+        if state.users.person(into).is_none() {
+            return Err(forbidden("you are no longer on this daemon"));
+        }
+        // Only `from`'s passkeys may sign: nobody absorbs a person whose passkey they lack.
+        self.passkeys.verify_batch(assertion, |id| {
+            if id == from {
+                duplicate.passkeys.clone()
+            } else {
+                Vec::new()
+            }
+        })?;
+        let mut users = state.users.clone();
+        users.people.retain(|person| &person.person_id != from);
+        // `into` is the owner who asked, so the daemon keeps an owner.
+        let old = duplicate.user_id();
+        // Their connections act as `from`; they connect again as `into`.
+        disconnect(&mut state, &old);
+        retarget(
+            &mut users,
+            &old,
+            &UserId::new(into.as_str()),
+            Timestamp::now(),
+        );
+        self.save(&users).map_err(saving)?;
+        state.users = users;
+        info!(%from, %into, "person merged");
         Ok(())
     }
 

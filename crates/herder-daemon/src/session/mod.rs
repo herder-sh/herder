@@ -916,6 +916,7 @@ impl SessionManager {
             | CommandBody::RevokePerson { .. }
             | CommandBody::ClaimUsers { .. }
             | CommandBody::DecideLeftover { .. }
+            | CommandBody::MergePerson { .. }
             | CommandBody::ApproveAction { .. }
             | CommandBody::RefuseAction { .. }
             | CommandBody::ApproveLogin { .. } => {
