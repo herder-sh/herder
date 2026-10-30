@@ -1,8 +1,10 @@
 import Herder
 import SwiftUI
 
-/// What shows while the app opens: herder.sh's pixel wordmark, etched in row by row in its
-/// colour bands, over the app's background, until the machines have answered.
+/// What shows while the app opens with nothing to show yet: the launch screen's background,
+/// then herder.sh's pixel wordmark etched in row by row in its colour bands, until the Board has
+/// sessions, from the offline cache or a machine, or the machines have answered. A launch with
+/// a cached Board never waits on a machine, nor on the wordmark.
 struct Splash: View {
     let fleet: Fleet
     @State private var rows = 0
@@ -29,27 +31,38 @@ struct Splash: View {
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .transition(.opacity)
-            .task { await run() }
+            .task { await etch() }
+            .task {
+                // A moment at most: one asleep machine must not hold an empty Board.
+                try? await Task.sleep(for: .seconds(1.5))
+                hide()
+            }
+            .onChange(of: fleet.ready, initial: true) { _, ready in
+                if ready { hide() }
+            }
         }
     }
 
-    private func run() async {
-        let start = ContinuousClock.now
+    private func etch() async {
+        // Not before a moment has passed: a launch with a cached Board is over by then, and the
+        // splash goes before any of the wordmark shows.
+        try? await Task.sleep(for: .milliseconds(300))
         if reduceMotion {
             rows = Wordmark.rows
-        } else {
-            // As the site's wordmark: 14 steps over 0.9 s.
-            for row in 1...Wordmark.rows {
-                try? await Task.sleep(for: .milliseconds(65))
-                rows = row
-            }
+            return
         }
-        // Stay until a machine answers, or all have failed to, a moment at most: the cached
-        // sessions are already there underneath, and one asleep machine must not hold them.
-        while !fleet.opened, ContinuousClock.now - start < .seconds(1.5) {
-            try? await Task.sleep(for: .milliseconds(100))
+        // As the site's wordmark: 14 steps over 0.9 s.
+        for row in 1...Wordmark.rows {
+            try? await Task.sleep(for: .milliseconds(65))
+            guard !Task.isCancelled else { return }
+            rows = row
         }
-        withAnimation(.easeOut(duration: 0.35)) { shown = false }
+    }
+
+    private func hide() {
+        guard shown else { return }
+        withAnimation(.easeOut(duration: 0.2)) { shown = false }
+        Launch.mark(.shown)
     }
 }
 
@@ -59,6 +72,9 @@ extension Fleet {
         machines.contains { $0.connection == .connected }
             || !machines.contains { if case .connecting = $0.connection { true } else { false } }
     }
+
+    /// Whether there is something to show: the Board lists a task, or the machines have answered.
+    var ready: Bool { opened || !lists.board().isEmpty }
 }
 
 /// herder.sh's wordmark: 10-point pixel rows, coloured in the site's five Tokyo Night bands.
