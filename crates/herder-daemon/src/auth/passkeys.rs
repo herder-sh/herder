@@ -8,6 +8,10 @@
 //! Every challenge is minted here, works once and expires after [`PASSKEY_CHALLENGE_SECS`]; an
 //! assertion or registration names its challenge in its client data, which is how it finds its
 //! ceremony. Challenges live in memory only, so a restart voids them.
+//!
+//! An assertion may sign several daemons' challenges at once, one after the other: what lets one
+//! Face ID claim every machine. Each daemon finds its own challenge among them, and it stays the
+//! fresh, single-use nonce that binds the signature to this daemon.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -44,6 +48,9 @@ const BACKUP_ELIGIBLE: u8 = 0x08;
 
 /// Backed up, in the authenticator data's flags.
 const BACKED_UP: u8 = 0x10;
+
+/// The length of a challenge webauthn-rs mints.
+const CHALLENGE_LEN: usize = 32;
 
 /// Offset of the flags in the authenticator data, after the RP id hash.
 const FLAGS_AT: usize = 32;
@@ -256,8 +263,8 @@ impl Passkeys {
         keys: impl FnOnce(&PersonId) -> Vec<Key>,
     ) -> Result<Asserted, ErrorInfo> {
         let credential: PublicKeyCredential = convert(assertion)?;
-        let challenge = challenge_of(&credential.response.client_data_json)?;
-        let state = take(&self.assertions, &challenge)?;
+        let signed = challenge_of(&credential.response.client_data_json)?;
+        let state = self.take_signed(&signed)?;
         let (uuid, _) = self
             .webauthn
             .identify_discoverable_authentication(&credential)
@@ -288,6 +295,28 @@ impl Passkeys {
                 forbidden("the passkey's signature does not verify")
             })?;
         Ok(Asserted { person_id, result })
+    }
+
+    /// The ceremony of this daemon's challenge within `signed`, used up, as the ceremony of all
+    /// of `signed`: the challenges an assertion signed, of this daemon and of others.
+    fn take_signed(&self, signed: &str) -> Result<DiscoverableAuthentication, ErrorInfo> {
+        let bytes = URL_SAFE_NO_PAD
+            .decode(signed)
+            .map_err(|_| bad_request("the passkey's challenge is not base64url"))?;
+        if bytes.len() <= CHALLENGE_LEN || bytes.len() % CHALLENGE_LEN != 0 {
+            return take(&self.assertions, signed);
+        }
+        let ours = bytes
+            .chunks(CHALLENGE_LEN)
+            .map(|chunk| URL_SAFE_NO_PAD.encode(chunk))
+            .find(|challenge| lock(&self.assertions).contains_key(challenge))
+            .unwrap_or_default();
+        let state = take(&self.assertions, &ours)?;
+        // webauthn-rs checks the client data's challenge against its state's, which is ours
+        // alone; the state is the same ceremony over all that was signed.
+        let mut value = serde_json::to_value(state).map_err(internal)?;
+        value["ast"]["challenge"] = signed.into();
+        serde_json::from_value(value).map_err(internal)
     }
 
     /// Verifies `registration` from one of this daemon's unexpired creation challenges, using
@@ -371,7 +400,7 @@ fn internal(err: impl std::fmt::Display) -> ErrorInfo {
 mod tests {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use herder_protocol::PasskeyKey;
+    use herder_protocol::{PasskeyKey, PersonId};
     use serde_cbor_2::Value;
 
     use super::{Key, Passkeys};
@@ -391,6 +420,36 @@ mod tests {
         // The wire carries exactly that, and reads back as the same key.
         let wire = key.wire();
         assert_eq!(Key::from_wire(&wire).unwrap(), Key { counter: 0, ..key });
+    }
+
+    #[test]
+    fn one_assertion_over_several_daemons_challenges_verifies_once_on_each() {
+        let (here, there, elsewhere) = (
+            Passkeys::new().unwrap(),
+            Passkeys::new().unwrap(),
+            Passkeys::new().unwrap(),
+        );
+        let (passkey, registration) = Authenticator::register("tomas", &here.creation().unwrap());
+        let (person_id, key) = here.register(&registration).unwrap();
+        let keys = |id: &PersonId| {
+            assert_eq!(id, &person_id);
+            vec![key.clone()]
+        };
+        let decode = |passkeys: &Passkeys| {
+            URL_SAFE_NO_PAD
+                .decode(passkeys.challenge().unwrap().challenge)
+                .unwrap()
+        };
+        let signed = URL_SAFE_NO_PAD.encode([decode(&here), decode(&there)].concat());
+        let assertion = passkey.assert_raw(&signed, "https://herder.sh");
+
+        assert_eq!(here.verify(&assertion, keys).unwrap().person_id, person_id);
+        assert_eq!(there.verify(&assertion, keys).unwrap().person_id, person_id);
+        // Each daemon's challenge works once, and a daemon whose challenge is not among them
+        // refuses it.
+        assert!(here.verify(&assertion, keys).is_err());
+        decode(&elsewhere);
+        assert!(elsewhere.verify(&assertion, keys).is_err());
     }
 
     #[test]

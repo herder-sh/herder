@@ -184,25 +184,36 @@ extension Fleet {
         let people = FleetPeople(fleet: self)
         await people.reload(machines)
         let me = FleetPeople.me(machines)
-        if let known = Self.keyed(me, in: people.people) {
+        let known = Self.yours(me, in: people.people)
+        if !known.isEmpty {
             let assertion = try await authenticator.sign(pending.challenge())
-            guard let key = known.passkeys.first(where: { $0.credentialId == assertion.id }) else {
-                throw HerderError.Local(detail: "that passkey is not the one your machines know")
-            }
-            return NewPerson(name: known.name, passkey: .existing(personId: known.personId, key: key, assertion: assertion))
+            guard let person = known.first(where: { $0.passkeys.contains { $0.credentialId == assertion.id } }),
+                  let key = person.passkeys.first(where: { $0.credentialId == assertion.id })
+            else { throw HerderError.Local(detail: "that passkey is not the one your machines know") }
+            return NewPerson(name: person.name, passkey: .existing(personId: person.personId, key: key, assertion: assertion))
         }
         guard let creation = pending.registration(),
               let userId = Data(base64URL: creation.userHandle), let challenge = Data(base64URL: creation.challenge)
         else { throw HerderError.Local(detail: "the machine did not offer to make a passkey") }
-        let name = Self.ownerName(people.people.values.joined().first { $0.personId == me }?.name, fullName: NSFullUserName())
+        let name = Self.ownerName(people.people.values.joined().first { $0.personId == me }?.name,
+                                  fullName: Self.deviceUserName)
         let registration = try await authenticator.register(name: name, userId: userId, challenge: challenge)
         return NewPerson(name: name, passkey: .register(registration: registration))
     }
 
     /// Your name for a new passkey: as your machines know you, else the device's user's, else
-    /// "Owner", as iOS has no user name and a machine takes no empty one.
+    /// "Owner", as a machine takes no empty name.
     nonisolated static func ownerName(_ known: String?, fullName: String) -> String {
         known ?? (fullName.isEmpty ? "Owner" : fullName)
+    }
+
+    /// The device's user's full name; empty on iOS, whose user is always "Mobile User".
+    nonisolated static var deviceUserName: String {
+        #if os(macOS)
+        NSFullUserName()
+        #else
+        ""
+        #endif
     }
 
     /// You as a machine lists you with your passkeys, when one does.

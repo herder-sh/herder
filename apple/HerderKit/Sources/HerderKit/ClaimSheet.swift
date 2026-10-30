@@ -18,7 +18,12 @@ struct ClaimSheet: View {
         let client = fleet.client
         self.init(claim: Claim(plan, authenticator: passkeyAuthenticator(),
                                send: { try await client.send(hostId: $0, command: $1) },
-                               update: { fleet.updateHerder(on: $0, when: .idle) }),
+                               update: { fleet.updateHerder(on: $0, when: .idle) },
+                               reconnect: { hostId in
+                                   // Its hello then names you; one that does not answer reconnects later.
+                                   _ = try? await client.reconnect(hostId: hostId)
+                                   fleet.update(client.machines())
+                               }),
                   fleet: fleet)
     }
 
@@ -30,6 +35,16 @@ struct ClaimSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     banner
+                    if claim.plan.known.isEmpty && claim.plan.name.isEmpty {
+                        heading("Your name")
+                        SettingsGroup {
+                            TextField("What your passkey is saved under", text: $claim.name)
+                                .textFieldStyle(.plain)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .accessibilityIdentifier("claimName")
+                        }
+                    }
                     heading("Becomes yours")
                     SettingsGroup {
                         ForEach(Array(claim.machines.enumerated()), id: \.element.id) { index, machine in
@@ -55,11 +70,11 @@ struct ClaimSheet: View {
                 Spacer()
                 SettingsButton(title: claim.done ? "Done" : "Later", style: .quiet) { dismiss() }
                 if claim.claimable {
-                    SettingsButton(title: claim.plan.known == nil ? "Create passkey and claim" : "Claim with passkey",
+                    SettingsButton(title: claim.plan.known.isEmpty ? "Create passkey and claim" : "Claim with passkey",
                                    style: .primary) {
                         Task { await claim.claim() }
                     }
-                    .disabled(claim.working)
+                    .disabled(claim.working || claim.name.trimmingCharacters(in: .whitespaces).isEmpty)
                     .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("claim")
                 } else if !claim.outdated.isEmpty {

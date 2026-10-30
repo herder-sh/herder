@@ -264,10 +264,13 @@ struct ClaimTests {
     @Test func claimingMakesThePasskeyOnceAndEachMachineTakesTheOthersUsers() async {
         let authenticator = FakeAuthenticator()
         let machines = Machines()
-        let claim = Claim(Self.plan, authenticator: authenticator, send: machines.send)
+        var refreshed: [HostId] = []
+        let claim = Claim(Self.plan, authenticator: authenticator, send: machines.send) { refreshed.append($0) }
         await claim.claim()
         #expect(authenticator.registered == ["Tomas"])
-        #expect(authenticator.signed.count == 2, "one assertion for each machine after the first")
+        // One Face ID for every machine after the first: their challenges, one after the other.
+        #expect(authenticator.signed == [Data([9, 9, 9, 9])])
+        #expect(refreshed == ["box", "lab", "vault"], "each machine's hello then names you")
         #expect(machines.claims == ["box new also u-lab,u-vault", "lab p-box also u-box,u-vault",
                                     "vault p-box also u-box,u-lab"])
         #expect(claim.claimed)
@@ -280,15 +283,48 @@ struct ClaimTests {
 
     @Test func aPasskeyYourMachinesKnowIsReusedNotMadeAnew() async {
         var plan = Self.plan
-        plan.known = PersonInfo(personId: "p-me", name: "Tomas", role: .owner, passkeys: [Self.key], devices: [])
+        plan.known = [PersonInfo(personId: "p-me", name: "Tomas", role: .owner, passkeys: [Self.key], devices: [])]
         #expect(plan.headline == "Claim 3 machines with your herder passkey")
         let authenticator = FakeAuthenticator()
         let machines = Machines()
         let claim = Claim(plan, authenticator: authenticator, send: machines.send)
         await claim.claim()
         #expect(authenticator.registered.isEmpty)
+        #expect(authenticator.signed.count == 1, "Face ID once for all three")
         #expect(machines.claims.map { $0.split(separator: " ")[1] } == ["p-me", "p-me", "p-me"])
         #expect(claim.claimed)
+    }
+
+    @Test func anotherDevicesPersonIsReusedByThePasskeyThatSigns() {
+        let sam = PersonInfo(personId: "p-sam", name: "Sam", role: .owner, passkeys: [PasskeyKey(credentialId: "Ag", publicKey: "pk")],
+                             devices: [])
+        let tomas = PersonInfo(personId: "p-me", name: "Tomas", role: .owner, passkeys: [Self.key], devices: [])
+        let member = PersonInfo(personId: "p-kim", name: "Kim", role: .member, passkeys: [Self.key], devices: [])
+        let people: [HostId: [PersonInfo]] = ["box": [tomas, member], "lab": [sam, tomas]]
+        // No machine says this device is anyone yet: every owner with a passkey may be you.
+        #expect(Fleet.yours(nil, in: people).map(\.personId) == ["p-me", "p-sam"])
+        #expect(Fleet.yours("p-sam", in: people).map(\.personId) == ["p-sam"])
+    }
+
+    @Test func theOwnerWhosePasskeySignsIsYou() async {
+        var plan = Self.plan
+        plan.known = [PersonInfo(personId: "p-sam", name: "Sam", role: .owner,
+                                 passkeys: [PasskeyKey(credentialId: "Ag", publicKey: "pk")], devices: []),
+                      PersonInfo(personId: "p-me", name: "Tomas", role: .owner, passkeys: [Self.key], devices: [])]
+        let machines = Machines()
+        let claim = Claim(plan, authenticator: FakeAuthenticator(), send: machines.send)
+        await claim.claim()
+        #expect(machines.claims.map { $0.split(separator: " ")[1] } == ["p-me", "p-me", "p-me"])
+        #expect(claim.claimed)
+    }
+
+    @Test func aNameNobodyKnowsIsAskedForNotMobileUser() {
+        #if os(iOS)
+        #expect(Fleet.deviceUserName.isEmpty)
+        #endif
+        let claim = Claim(ClaimPlan(machines: Self.plan.machines, name: ""), authenticator: FakeAuthenticator(),
+                          send: Machines().send)
+        #expect(claim.name.isEmpty, "the sheet asks for it")
     }
 
     @Test func decisionsGoToTheLeftoversMachineAndSomeoneElseStays() async {

@@ -82,8 +82,10 @@ uuid = { version = "1", features = ["v7"] }
 # 0.6 verifies with RustCrypto; 0.5 needs OpenSSL, which no herder build links. The daemon
 # keeps passkeys as WebAuthn's portable credential id and COSE key, and rebuilds webauthn-rs's
 # credential from them to verify: that needs its credential internals, the CBOR codec its COSE
-# parser takes, and the proto crate's policy types, all at the versions webauthn-rs uses.
-webauthn-rs = { version = "0.6.1-dev", features = ["conditional-ui", "danger-credential-internals"] }
+# parser takes, and the proto crate's policy types, all at the versions webauthn-rs uses. One
+# assertion signs several daemons' challenges, so a daemon rebuilds its ceremony's state over all
+# of them, which takes the state's serialisation.
+webauthn-rs = { version = "0.6.1-dev", features = ["conditional-ui", "danger-allow-state-serialisation", "danger-credential-internals"] }
 webauthn-rs-proto = "=0.6.1-dev"
 
 # Line tables keep backtraces readable; full debug info would double each worktree's
