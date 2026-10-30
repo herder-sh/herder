@@ -2040,6 +2040,11 @@ async fn an_app_claims_a_machine_and_approves_a_terminal_that_logs_in() {
         person.is_some(),
         "the machine names the person the app acts for"
     );
+    assert_eq!(
+        app.machines()[0].user_id.as_ref().map(|user| user.as_str()),
+        person.as_ref().map(|person| person.as_str()),
+        "a person's user id is theirs"
+    );
 
     // A terminal logs in; the app approves the code it shows with the passkey.
     let terminal = Client::open(

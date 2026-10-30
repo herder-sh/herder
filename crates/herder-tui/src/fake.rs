@@ -42,6 +42,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         quality: Default::default(),
         role: Some(Role::Owner),
         herder_version: Some("0.14.0".to_owned()),
+        user_id: None,
         person_id: None,
         sessions: sessions.iter().map(|id| head(id, None)).collect(),
         hosts: Vec::new(),
