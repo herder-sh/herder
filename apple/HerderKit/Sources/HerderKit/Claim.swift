@@ -26,8 +26,9 @@ struct ClaimPlan: Hashable {
         var ready: Bool { version.map { !ProviderVersions.version(ClaimPlan.needs, isNewerThan: $0) } ?? false }
     }
 
-    /// The first herder that takes a claim.
-    nonisolated static let needs = "0.17.0"
+    /// The first herder that takes a claim: 0.17.1 verifies one assertion over every machine's
+    /// challenge, which a 0.17.0 daemon refuses as an unknown challenge.
+    nonisolated static let needs = "0.17.1"
 
     /// A user on a machine that might be you, or someone else.
     struct Question: Hashable, Identifiable {

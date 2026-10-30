@@ -229,7 +229,7 @@ struct ClaimTests {
         let machines = Machines()
         let claim = Claim(plan, authenticator: FakeAuthenticator(), send: machines.send) { updated.append($0) }
         #expect(claim.rows == ["box": .ready, "lab": .outdated(updating: false), "vault": .outdated(updating: false)])
-        #expect(ClaimSheet.line(claim.machines[1], claim.rows["lab"]!) == "Needs herder 0.17 · runs 0.16.0")
+        #expect(ClaimSheet.line(claim.machines[1], claim.rows["lab"]!) == "Needs herder 0.17.1 · runs 0.16.0")
         #expect(claim.claimable)
 
         await claim.claim()
@@ -245,6 +245,9 @@ struct ClaimTests {
 
         var lab = machine("lab", name: "lab", sessions: [])
         lab.herderVersion = "0.17.0"
+        claim.refresh([lab])
+        #expect(claim.rows["lab"] == .outdated(updating: true), "0.17.0 refuses a claim's batched challenge")
+        lab.herderVersion = "0.17.1"
         claim.refresh([lab])
         #expect(claim.rows["lab"] == .ready)
         #expect(claim.claimable)
