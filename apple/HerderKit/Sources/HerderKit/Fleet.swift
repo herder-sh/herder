@@ -1,3 +1,6 @@
+#if os(macOS)
+import AppKit
+#endif
 import CoreGraphics
 import Foundation
 import Herder
@@ -139,12 +142,9 @@ public final class Fleet {
         }
     }
 
-    /// The main run loop's mode while the user drags or flings a scroll view.
     #if os(iOS)
+    /// The main run loop's mode while the user drags or flings a scroll view.
     static let scrollMode = RunLoop.Mode.tracking
-    #else
-    static let scrollMode = RunLoop.Mode.eventTracking
-    #endif
 
     /// Whether the user is dragging or flinging a scroll view.
     static var scrolling: Bool { RunLoop.main.currentMode == scrollMode }
@@ -158,6 +158,28 @@ public final class Fleet {
             RunLoop.main.perform(inModes: [.default]) { continuation.resume() }
         }
     }
+    #else
+    /// When the last scroll-wheel event arrived: a mouse wheel's, a trackpad's or its momentum's.
+    /// A Mac scroll leaves the run loop in its default mode, so its events tell it instead.
+    static var lastScroll = Date.distantPast
+    /// How long after its last event a scroll counts as over.
+    static let scrollSettles: TimeInterval = 0.15
+    private static let scrollMonitor: Any? = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+        MainActor.assumeIsolated { lastScroll = .now }
+        return event
+    }
+
+    /// Whether the user is scrolling, or was a moment ago.
+    static var scrolling: Bool { Date.now.timeIntervalSince(lastScroll) < scrollSettles }
+
+    /// Returns once no scroll is in progress: at once unless one is. The fleet's changes wait
+    /// for it, so a list scrolls without the views around it drawing again on every event a
+    /// session streams; they apply, the latest at once, as the scroll ends.
+    static func scrollEnded() async {
+        _ = scrollMonitor
+        while scrolling { try? await Task.sleep(for: .milliseconds(50)) }
+    }
+    #endif
 
     private func refreshLists() {
         listsRefresh?.cancel()
@@ -208,6 +230,9 @@ public final class Fleet {
     /// Follows the client's changes until it stops; runs for as long as the fleet is shown.
     public func follow() async {
         await joinFakeFleet()
+        #if os(macOS)
+        _ = Self.scrollMonitor
+        #endif
         // Subscribe before reading, so a change between `init` and now is not missed.
         let changes = client.changes()
         let network = Task { await self.wakeOnNetworkChanges() }
