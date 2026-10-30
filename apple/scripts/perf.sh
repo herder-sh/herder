@@ -34,11 +34,11 @@ if [ -z "$daemon" ]; then
   daemon=target/debug/examples/fake_daemon
 fi
 
-# Starts `fake_daemon --busy` on `address`, which runs until this script exits, and sets `link`
-# and `passkey` to what it prints.
+# Starts `fake_daemon --busy` on `address`, which runs until its stdin closes: when this script
+# exits, or the next platform's starts. Sets `link` and `passkey` to what it prints.
 busy() {
   local log=$out/fake_daemon-$1.out
-  exec {fd}> >(FAKE_DAEMON_ADDRESS=$1 "$daemon" --busy > "$log")
+  exec 3> >(FAKE_DAEMON_ADDRESS=$1 "$daemon" --busy > "$log")
   for _ in $(seq 300); do [ "$(wc -l < "$log")" -ge 2 ] && break; sleep 1; done
   [ "$(wc -l < "$log")" -ge 2 ] || { echo "the fake daemons did not start" >&2; exit 1; }
   link=$(head -1 "$log")
