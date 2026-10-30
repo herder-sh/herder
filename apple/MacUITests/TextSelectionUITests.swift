@@ -2,7 +2,8 @@ import AppKit
 import XCTest
 
 /// Selecting transcript text on the Mac copies what was selected, whole: a drag across a prompt
-/// bubble, a drag down a reply of several paragraphs, a triple click, ⌘A. Drives the copy of the
+/// bubble, a drag down a reply of several paragraphs, ⌘A. (A triple click, which XCUITest cannot
+/// make on a Mac, is `TranscriptTextTests.aTripleClickSelectsAWholePrompt`.) Drives the copy of the
 /// app at `HERDER_APP` on the demo fleet (`fake_daemon --demo`) through `HERDER_PAIR_LINK` and
 /// `HERDER_PASSKEY`; `scripts/test-mac-ui.sh` builds both and passes them on.
 @MainActor
@@ -48,6 +49,13 @@ final class TextSelectionUITests: XCTestCase {
         XCTAssertEqual(copied(), "[Image #1] " + Self.owners)
     }
 
+    /// A click on the chip, rather than a drag from it, still shows the picture.
+    func testClickingAPictureChipShowsThePicture() throws {
+        let prompt = sendOwnersPromptWithAPicture()
+        prompt.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 24, dy: 8)).click()
+        XCTAssertTrue(app.popovers.staticTexts["image.jpg"].waitForExistence(timeout: 5), "the picture did not open")
+    }
+
     func testDraggingAcrossAPromptCopiesAllOfIt() throws {
         open(Self.session)
         let prompt = message(Self.prompt)
@@ -61,13 +69,6 @@ final class TextSelectionUITests: XCTestCase {
         let text = try XCTUnwrap(reply.value as? String)
         drag(across: reply)
         XCTAssertEqual(copied(), text)
-    }
-
-    func testTripleClickCopiesTheParagraph() throws {
-        open(Self.session)
-        let prompt = message(Self.prompt)
-        tripleClick(prompt)
-        XCTAssertEqual(copied(), Self.prompt)
     }
 
     func testSelectAllCopiesTheWholeMessage() throws {
@@ -84,8 +85,13 @@ final class TextSelectionUITests: XCTestCase {
     private func open(_ session: String) {
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", \(session),")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 30), "\(session) is not on the Board")
-        row.click()
-        XCTAssertTrue(app.descendants(matching: .any)["transcript"].waitForExistence(timeout: 15))
+        let transcript = app.descendants(matching: .any)["transcript"].firstMatch
+        // A click while the Board still settles can be lost; the transcript says it opened.
+        for _ in 0..<3 where !transcript.exists {
+            row.click()
+            _ = transcript.waitForExistence(timeout: 5)
+        }
+        XCTAssertTrue(transcript.waitForExistence(timeout: 15))
     }
 
     /// Pastes a picture into a finished session's composer, types the owner's prompt after it
@@ -132,13 +138,6 @@ final class TextSelectionUITests: XCTestCase {
         let start = element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 1, dy: 6))
         let end = element.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -1, dy: -4))
         start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
-    }
-
-    private func tripleClick(_ element: XCUIElement) {
-        let point = element.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.3))
-        // Three clicks inside the double-click interval count as one triple click.
-        point.doubleClick()
-        point.click()
     }
 
     /// ⌘C, then what is on the pasteboard.

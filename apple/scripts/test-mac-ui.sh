@@ -41,7 +41,7 @@ cp -R "$derived/Build/Products/Debug/herder.app" "$app"
 codesign --force --deep --sign - --entitlements "$entitlements" "$app"
 
 # The daemons run until their stdin closes: when this script exits.
-exec 3> >("$daemon" --demo > "$out/fake_daemon.out")
+exec 3> >(env -u GIT_CONFIG_COUNT -u HERDER_SESSION_ID "$daemon" --demo > "$out/fake_daemon.out")
 for _ in $(seq 180); do [ "$(wc -l < "$out/fake_daemon.out")" -ge 2 ] && break; sleep 1; done
 [ "$(wc -l < "$out/fake_daemon.out")" -ge 2 ] || { echo "the fake daemons did not start" >&2; exit 1; }
 

@@ -65,6 +65,18 @@ struct TranscriptTextTests {
         #expect(NSPasteboard.general.string(forType: .string) == text)
     }
 
+    /// A triple click selects the paragraph, which in a prompt is all of it. XCUITest cannot
+    /// click three times in a row on a Mac, so this asks the text view what a triple click takes.
+    @Test func aTripleClickSelectsAWholePrompt() throws {
+        let text = "Carry on here: fix it and run the checkout suite in WebKit until it passes 20 times in a row."
+        let host = NSHostingView(rootView: TranscriptText(string: AttributedString(text)))
+        host.frame = CGRect(x: 0, y: 0, width: 300, height: 200)
+        host.layoutSubtreeIfNeeded()
+        let view = try #require(Self.first(NSTextView.self, in: host))
+        let range = view.selectionRange(forProposedRange: NSRange(location: 40, length: 0), granularity: .selectByParagraph)
+        #expect((view.string as NSString).substring(with: range) == text)
+    }
+
     /// A click on inline code copies exactly its text, and shows "Copied" over it.
     @Test func clickingInlineCodeCopiesIt() throws {
         let host = NSHostingView(rootView: MarkdownText(text: "Set `https://example.com/callback` as the redirect URL."))

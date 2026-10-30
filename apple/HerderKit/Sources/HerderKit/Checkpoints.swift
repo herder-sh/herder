@@ -57,7 +57,9 @@ struct CheckpointRail: View {
     @State private var hovered: Int?
 
     private static let step: CGFloat = 10
-    private static let width: CGFloat = 22
+    /// Within the transcript's narrowest margin: wider, it lay over the start of the text, and
+    /// a drag selecting from there hovered the rail instead.
+    private static let width: CGFloat = SessionColumn.transcriptMargin - 2
 
     var body: some View {
         GeometryReader { geometry in
@@ -75,7 +77,7 @@ struct CheckpointRail: View {
                         .frame(width: Self.width, height: step, alignment: .leading)
                 }
             }
-            .padding(.leading, 6)
+            .padding(.leading, 2)
             .contentShape(.rect)
             .onContinuousHover { phase in
                 switch phase {
@@ -96,7 +98,7 @@ struct CheckpointRail: View {
             .accessibilityLabel("Your messages")
             .accessibilityIdentifier("checkpoints")
         }
-        .frame(width: Self.width + 6)
+        .frame(width: Self.width + 2)
     }
 }
 

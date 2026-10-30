@@ -70,6 +70,9 @@ enum CodeCopy {
 extension NSAttributedString.Key {
     /// What a character copies as in place of itself: a picture chip, its marker.
     static let copiedAs = NSAttributedString.Key("herder.copiedAs")
+    /// What a click on a picture chip opens. On a Mac not a link: a drag from a link selects
+    /// only the link, and a drag across a prompt starts on its chip.
+    static let chipLink = NSAttributedString.Key("herder.chipLink")
 }
 
 extension NSAttributedString {
@@ -173,7 +176,13 @@ extension TranscriptText {
                 let chip = NSMutableAttributedString(attachment: PictureChip.attachment(picture, dark: dark, scale: scale, font: font))
                 chip.addAttributes([.font: font, .paragraphStyle: paragraph, .copiedAs: picture.marker],
                                    range: NSRange(location: 0, length: chip.length))
-                if let url = PictureChip.url(picture) { chip.addAttribute(.link, value: url, range: NSRange(location: 0, length: chip.length)) }
+                if let url = PictureChip.url(picture) {
+                    #if os(iOS)
+                    chip.addAttribute(.link, value: url, range: NSRange(location: 0, length: chip.length))
+                    #else
+                    chip.addAttribute(.chipLink, value: url, range: NSRange(location: 0, length: chip.length))
+                    #endif
+                }
                 result.append(chip)
                 continue
             }
@@ -499,6 +508,15 @@ private final class CodeCopyTextView: NSTextView {
         let plain = event.clickCount == 1 && event.modifierFlags.isDisjoint(with: [.shift, .command, .option])
         pressed = plain ? character(at: convert(event.locationInWindow, from: nil)) : nil
         defer { pressed = nil }
+        // A press on a picture chip opens it if it lets go there, and selects if it drags on.
+        if let pressed, let url = textStorage?.attribute(.chipLink, at: pressed, effectiveRange: nil) as? URL,
+           let next = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
+            if next.type == .leftMouseUp {
+                _ = delegate?.textView?(self, clickedOnLink: url, at: pressed)
+                return
+            }
+            window?.postEvent(next, atStart: true)
+        }
         super.mouseDown(with: event)
     }
 

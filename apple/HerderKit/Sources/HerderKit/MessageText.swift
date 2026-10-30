@@ -133,7 +133,9 @@ enum PictureChip: AttributedStringKey {
         if let image = renderer.cgImage {
             let size = CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
             #if os(macOS)
-            attachment.image = NSImage(cgImage: image, size: size)
+            let picture = NSImage(cgImage: image, size: size)
+            attachment.image = picture
+            attachment.attachmentCell = Cell(image: picture, baseline: ((font.capHeight - size.height) / 2).rounded())
             #else
             attachment.image = UIImage(cgImage: image, scale: scale, orientation: .up)
             #endif
@@ -144,6 +146,27 @@ enum PictureChip: AttributedStringKey {
         attachments[key] = attachment
         return attachment
     }
+
+    #if os(macOS)
+    /// A chip as the Mac's text view draws it: centred on the line, and plain text to the mouse,
+    /// so a drag from it selects rather than dragging the picture out.
+    private final class Cell: NSTextAttachmentCell {
+        private let baseline: CGFloat
+
+        init(image: NSImage, baseline: CGFloat) {
+            self.baseline = baseline
+            super.init(imageCell: image)
+        }
+
+        required init(coder: NSCoder) {
+            baseline = 0
+            super.init(coder: coder)
+        }
+
+        override func cellBaselineOffset() -> NSPoint { NSPoint(x: 0, y: baseline) }
+        override func wantsToTrackMouse() -> Bool { false }
+    }
+    #endif
 
     private struct Label: View {
         let picture: MessagePicture

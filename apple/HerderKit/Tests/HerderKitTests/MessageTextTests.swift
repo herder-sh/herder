@@ -24,7 +24,13 @@ struct MessageTextTests {
         #expect(text.containsAttachments(in: NSRange(location: 0, length: text.length)))
         #expect(text.copied(NSRange(location: 0, length: text.length)) == "see [Image #1] here")
         #expect(text.copied(NSRange(location: 4, length: 3)) == "[Image #1] h")
+        #if os(macOS)
+        // Not a link on a Mac, where a drag from a link selects only the link.
+        #expect(text.attribute(.link, at: 4, effectiveRange: nil) == nil)
+        #expect(text.attribute(.chipLink, at: 4, effectiveRange: nil) as? URL == PictureChip.url(picture))
+        #else
         #expect(text.attribute(.link, at: 4, effectiveRange: nil) as? URL == PictureChip.url(picture))
+        #endif
         #expect(PictureChip.url(picture).flatMap(PictureChip.number) == 1)
     }
 
