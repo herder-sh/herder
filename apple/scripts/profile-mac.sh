@@ -3,9 +3,9 @@
 #
 #   apple/scripts/profile-mac.sh [session|board|switch] [seconds]
 #
-# Builds the app for release as a copy with its own bundle id (the installed app keeps running
-# and keeps its pairings), starts `fake_daemon --busy`, drives the copy to the scene with the
-# herder-macOS-Profile UI test (`session`: a long transcript whose turn keeps streaming, the
+# Builds the app for release as a copy with its own bundle id (mac-release-copy.sh: the
+# installed app keeps running and keeps its pairings), starts `fake_daemon --busy`, drives the
+# copy to the scene with the herder-macOS-Profile UI test (`session`: a long transcript whose turn keeps streaming, the
 # default; `board`: the fleet with running agents; `switch`: back and forth between that session
 # and a finished one), records it with Instruments' SwiftUI template
 # for `seconds` (10 by default) and summarises the trace with trace-summary.py. Keeps the trace in
@@ -26,18 +26,7 @@ trace=$out/$scene-$(date +%Y%m%d-%H%M%S).trace
 mkdir -p "$out"
 
 cargo build -q -p herder-ffi --example fake_daemon
-xcodegen generate --quiet --spec apple/project.yml
-xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
-  -scheme herder-macOS -configuration Release -destination "platform=macOS" \
-  -derivedDataPath "$derived" COMPILER_INDEX_STORE_ENABLE=NO
-xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
-  -scheme herder-macOS-Profile -destination "platform=macOS" -derivedDataPath "$derived" \
-  COMPILER_INDEX_STORE_ENABLE=NO
-
-rm -rf "$app"
-cp -R "$derived/Build/Products/Release/herder.app" "$app"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier sh.herder.Herder.Profile" "$app/Contents/Info.plist"
-codesign --force --deep --sign - --entitlements apple/App/herder.entitlements "$app"
+apple/scripts/mac-release-copy.sh profile herder-macOS-Profile
 
 # The daemons run until their stdin closes: when this script exits.
 exec 3> >(target/debug/examples/fake_daemon --busy > "$out/fake_daemon.out")
