@@ -112,3 +112,24 @@ Instruments.
 Read the main thread's busy time first: hitches count every late frame on the machine, so
 other apps loading the window server inflate them. Keep away from the keyboard and mouse
 until the recording starts, as the test drives them.
+
+## Scrolling smoothness
+
+Each long screen has to scroll with a hitch time ratio under 5 ms/s, Apple's "good":
+
+```sh
+apple/scripts/perf.sh                 # this Mac
+apple/scripts/perf.sh mac iphone      # and the iPhone whose UDID is in HERDER_PERF_DEVICE
+```
+
+The `herder-macOS-Perf` and `herder-iOS-Perf` UI tests (apple/PerfTests) open each screen on
+`fake_daemon --busy` and fling it to its end and back five times while XCTest measures the
+scroll's hitches. The script builds both apps for Release, runs the tests, writes the table to
+`target/perf/perf.md` and fails when a screen is over the budget. The iPhone build is
+`sh.herder.Herder.Perf`, beside the installed app; signing it needs the App Store Connect key
+(`herder secret run apple-herder/ASC_KEY_ID apple-herder/ASC_ISSUER_ID
+apple-herder/ASC_PRIVATE_KEY -- apple/scripts/perf.sh iphone`). The `apple` workflow's `perf`
+job runs the Mac's on every change, with a tolerance for the runner.
+
+Measure on a quiet machine: other apps' load, and other UI tests taking the screen, show up as
+hitches.
