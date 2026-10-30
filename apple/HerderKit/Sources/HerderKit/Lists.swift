@@ -464,3 +464,62 @@ extension SessionSummary {
             || prs.contains { String($0.number) == number || $0.title.lowercased().contains(query) }
     }
 }
+
+/// What the lists show now, observed list by list: a view that reads the machines redraws when
+/// they change, not when a session's summary does, as a running turn's does with every round.
+/// Read `all` for several at once; anything else of `Lists` reads through it.
+@MainActor @Observable @dynamicMemberLookup
+final class ShownLists {
+    private(set) var requests: [PendingRequest] = []
+    private(set) var projects: [ProjectGroup] = []
+    private(set) var chats: [SessionSummary] = []
+    private(set) var archivedChats: [SessionSummary] = []
+    private(set) var bots: [BotGroup] = []
+    private(set) var waiting: Set<SessionKey> = []
+    private(set) var machines: [MachineSummary] = []
+    private(set) var children: [SessionKey: [SessionKey]] = [:]
+    private(set) var usedModels: [HostId: [Provider: [String]]] = [:]
+
+    /// Every list; a view that reads it redraws when any of them changes.
+    var all: Lists {
+        var lists = Lists()
+        lists.requests = requests
+        lists.projects = projects
+        lists.chats = chats
+        lists.archivedChats = archivedChats
+        lists.bots = bots
+        lists.waiting = waiting
+        lists.machines = machines
+        lists.children = children
+        lists.usedModels = usedModels
+        return lists
+    }
+
+    subscript<T>(dynamicMember path: KeyPath<Lists, T>) -> T { all[keyPath: path] }
+
+    func board(matching query: String = "") -> [TaskTree] { all.board(matching: query) }
+
+    func archivedToday(matching query: String = "", now: Date = .now, calendar: Calendar = .current) -> [TaskTree] {
+        all.archivedToday(matching: query, now: now, calendar: calendar)
+    }
+
+    func bots(_ filter: String?) -> [BotGroup] { bots.filter { filter == nil || $0.id == filter } }
+
+    func project(for item: SidebarItem) -> String? {
+        guard case .project(let id) = item else { return nil }
+        return projects.first { $0.id == id }?.projectId
+    }
+
+    /// Takes `lists`, setting only the lists that changed.
+    func show(_ lists: Lists) {
+        if lists.requests != requests { requests = lists.requests }
+        if lists.projects != projects { projects = lists.projects }
+        if lists.chats != chats { chats = lists.chats }
+        if lists.archivedChats != archivedChats { archivedChats = lists.archivedChats }
+        if lists.bots != bots { bots = lists.bots }
+        if lists.waiting != waiting { waiting = lists.waiting }
+        if lists.machines != machines { machines = lists.machines }
+        if lists.children != children { children = lists.children }
+        if lists.usedModels != usedModels { usedModels = lists.usedModels }
+    }
+}

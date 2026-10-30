@@ -233,7 +233,7 @@ struct DesktopShell: View {
 
     /// How many tasks are open and how many of them work, then the machines while one is not
     /// connected.
-    private func boardStatus(_ lists: Lists) -> String {
+    private func boardStatus(_ lists: ShownLists) -> String {
         let tasks = lists.board()
         let working = tasks.filter { $0.state == .working }.count
         let line = "\(tasks.count) open · \(working) working"

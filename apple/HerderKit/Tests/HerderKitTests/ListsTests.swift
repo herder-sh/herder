@@ -369,7 +369,7 @@ struct FleetListsTests {
     /// Whether `change` makes the fleet publish new lists.
     private func publishes(_ fleet: Fleet, _ change: () -> Void) -> Bool {
         let published = Published()
-        withObservationTracking { _ = fleet.lists } onChange: { published.value = true }
+        withObservationTracking { _ = fleet.lists.all } onChange: { published.value = true }
         change()
         return published.value
     }
@@ -385,6 +385,27 @@ struct FleetListsTests {
         #expect(publishes(fleet) { fleet.setMachinesForTesting(machines) })
         #expect(!publishes(fleet) { fleet.setMachinesForTesting(machines) })
         #expect(fleet.lists.projects.flatMap(\.sessions).map(\.key.sessionId) == ["01A"])
+    }
+
+    /// A session moving on changes the projects' list, not the machines': a view that shows
+    /// the machines does not redraw for it.
+    @Test func aSessionMovingOnRedrawsOnlyTheListsItIsIn() throws {
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("the profile did not open")
+            return
+        }
+        let machines = [machine("host-a", name: "a", sessions: ["01A"])]
+        fleet.setMachinesForTesting(machines)
+        let (projects, others) = (Published(), Published())
+        withObservationTracking { _ = fleet.lists.projects } onChange: { projects.value = true }
+        withObservationTracking { _ = fleet.lists.machines; _ = fleet.lists.requests } onChange: { others.value = true }
+        var script = Script("01A")
+        fleet.applyForTesting(SessionUpdate(events: [script.event(created(task: "Tidy the README"))], streaming: []),
+                              to: script.key)
+        // The same machines again rebuild the lists at once, the session's change with them.
+        fleet.setMachinesForTesting(machines)
+        #expect(projects.value)
+        #expect(!others.value)
     }
 
     /// `devbox` runs `01A` and `01B`; the vault replicates both, and `01C` of a host not paired here.

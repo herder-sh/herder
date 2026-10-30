@@ -74,9 +74,9 @@ public final class Fleet {
     private(set) var roundTrips: [HostId: [RoundTrip]] = [:]
     /// The sessions that finished a turn since this device last opened them.
     private(set) var done: DoneSessions { didSet { listsChanged() } }
-    /// What the lists show now. Replaced only when it differs, so the views that show it
-    /// redraw when a list changes, not on every token a session streams.
-    private(set) var lists = Lists()
+    /// What the lists show now. Each list is replaced only when it differs, so a view that shows
+    /// one redraws when that list changes, not on every token a session streams.
+    let lists = ShownLists()
     /// The machines' latest usage summaries, per period; see `refreshUsage`.
     var usageCache = UsageCache()
     /// Where each machine last said it backs up, so its page shows that at once; see
@@ -141,8 +141,7 @@ public final class Fleet {
     private func refreshLists() {
         listsRefresh?.cancel()
         listsRefresh = nil
-        let lists = Lists(machines: current, sessions: sessions, done: done.keys, archiving: archiving)
-        if lists != self.lists { self.lists = lists }
+        lists.show(Lists(machines: current, sessions: sessions, done: done.keys, archiving: archiving))
     }
 
     /// One session's state. A view that reads it redraws when that session changes only, not
