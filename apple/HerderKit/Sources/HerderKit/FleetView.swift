@@ -81,10 +81,10 @@ struct FleetView: View {
             // A link opens in the one window rather than a new one.
             .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
             #endif
-            .onChange(of: fleet.machines) { resolveLink() }
+            .onChange(observing: { fleet.machines }) { _, _ in resolveLink() }
             // A TUI's terminal or secret request comes up as soon as its machine has it, and
             // goes once the machine closes it.
-            .onChange(of: fleet.actionRequests, initial: true) { _, requests in
+            .onChange(observing: { fleet.actionRequests }, initial: true) { _, requests in
                 if let shown = actionRequest, requests.contains(where: { $0.id == shown.id }) { return }
                 actionRequest = requests.first { !putOff.contains($0.id) }
             }
@@ -103,7 +103,7 @@ struct FleetView: View {
             }
             // Claim your machines comes up once a launch, when the machines you own that connect
             // within a moment of each other still know you by a per-daemon user.
-            .task(id: ClaimPlan.unclaimed(fleet.machines).map(\.hostId)) {
+            .task(observing: { ClaimPlan.unclaimed(fleet.machines).map(\.hostId) }) {
                 guard !claimOffered, fleet.hasUnclaimed else { return }
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled, !claimOffered, sheet == nil, let plan = await fleet.claimPlan() else { return }
@@ -218,11 +218,11 @@ struct FleetView: View {
             for key in fleet.archived(since: before) { close(key) }
         }
         // A removed project's pane has nothing left to show.
-        .onChange(of: fleet.lists.projects.map(\.id)) { _, ids in
+        .onChange(observing: { fleet.lists.projects.map(\.id) }) { _, ids in
             if case .project(let id) = item, !ids.contains(id) { item = .board }
         }
         // Nor a bot whose conversations are all gone.
-        .onChange(of: fleet.lists.bots.map(\.id)) { _, ids in
+        .onChange(observing: { fleet.lists.bots.map(\.id) }) { _, ids in
             if case .bots(let id?) = item, !ids.contains(id) { item = .bots(nil) }
         }
         // A draft belongs to the Board or its own project, a chat to Chats;
@@ -331,7 +331,7 @@ struct FleetView: View {
             ForEach(CompactTab.allCases, id: \.self) { tab in
                 self.tab(tab)
                     .tabItem { Label(tab.title, systemImage: tab.symbol) }
-                    .badge(tab == .board ? fleet.lists.requests.count : 0)
+                    .modifier(BoardBadge(fleet: fleet, shown: tab == .board))
                     .tag(tab)
                     // A page pushes onto the tab it opens from.
                     .environment(\.pages, PageNavigator(open: { path(tab).wrappedValue.append(.page($0)) },
@@ -353,7 +353,7 @@ struct FleetView: View {
         switch tab {
         case .projects:
             NavigationStack(path: $projectsPath) {
-                ProjectsView(fleet: fleet, draft: $draft, projects: fleet.lists.projects)
+                ProjectsTab(fleet: fleet, draft: $draft)
                     .toolbar {
                         ActivityToolbarButton(fleet: fleet) { sheet = .activity }
                         Button("Add Project", systemImage: "plus") { sheet = .newProject }
@@ -367,9 +367,7 @@ struct FleetView: View {
                     .toolbar {
                         ActivityToolbarButton(fleet: fleet) { sheet = .activity }
                         BoardSortMenu(BoardSort.sessions, key: BoardSort.sessionsKey)
-                        let started = Draft.chat(fleet: fleet)
-                        Button("New Chat", systemImage: "plus") { draft = started }
-                            .disabled(started == nil)
+                        NewChatButton(fleet: fleet, draft: $draft)
                     }
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
@@ -634,5 +632,74 @@ extension View {
         #else
         searchable(text: text, prompt: prompt)
         #endif
+    }
+}
+
+#if os(iOS)
+/// The Projects tab's list, which follows the projects on its own: read in the tab view, every
+/// change to the lists would draw the whole app again.
+private struct ProjectsTab: View {
+    let fleet: Fleet
+    @Binding var draft: Draft?
+
+    var body: some View {
+        ProjectsView(fleet: fleet, draft: $draft, projects: fleet.lists.projects)
+    }
+}
+
+/// Chats' New Chat, on a connected machine.
+private struct NewChatButton: View {
+    let fleet: Fleet
+    @Binding var draft: Draft?
+
+    var body: some View {
+        let started = Draft.chat(fleet: fleet)
+        Button("New Chat", systemImage: "plus") { draft = started }
+            .disabled(started == nil)
+    }
+}
+
+/// The Board tab's badge: how many requests wait for you.
+private struct BoardBadge: ViewModifier {
+    let fleet: Fleet
+    let shown: Bool
+
+    func body(content: Content) -> some View {
+        content.badge(shown ? fleet.lists.requests.count : 0)
+    }
+}
+#endif
+
+extension View {
+    /// `onChange(of:)` on what `value` reads, which only this modifier follows: a view whose body
+    /// read it would be drawn again on every change to the fleet, and all it holds with it.
+    func onChange<Value: Equatable>(observing value: @escaping @MainActor () -> Value, initial: Bool = false,
+                                    _ action: @escaping (Value, Value) -> Void) -> some View {
+        modifier(ObservedChange(value: value, initial: initial, action: action))
+    }
+
+    /// `task(id:)` on what `id` reads, followed as `onChange(observing:)` follows its value.
+    func task<ID: Equatable>(observing id: @escaping @MainActor () -> ID,
+                             _ action: @escaping @MainActor @Sendable () async -> Void) -> some View {
+        modifier(ObservedTask(id: id, action: action))
+    }
+}
+
+private struct ObservedChange<Value: Equatable>: ViewModifier {
+    let value: @MainActor () -> Value
+    let initial: Bool
+    let action: (Value, Value) -> Void
+
+    func body(content: Content) -> some View {
+        content.onChange(of: value(), initial: initial, action)
+    }
+}
+
+private struct ObservedTask<ID: Equatable>: ViewModifier {
+    let id: @MainActor () -> ID
+    let action: @MainActor @Sendable () async -> Void
+
+    func body(content: Content) -> some View {
+        content.task(id: id(), action)
     }
 }
