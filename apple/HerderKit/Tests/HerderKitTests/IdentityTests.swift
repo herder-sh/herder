@@ -265,7 +265,8 @@ struct ClaimTests {
         let authenticator = FakeAuthenticator()
         let machines = Machines()
         var refreshed: [HostId] = []
-        let claim = Claim(Self.plan, authenticator: authenticator, send: machines.send) { refreshed.append($0) }
+        let claim = Claim(Self.plan, authenticator: authenticator, send: machines.send,
+                          reconnect: { refreshed.append($0) })
         await claim.claim()
         #expect(authenticator.registered == ["Tomas"])
         // One Face ID for every machine after the first: their challenges, one after the other.
@@ -360,12 +361,19 @@ struct ClaimTests {
         #expect(!claim.claimed)
     }
 
-    @Test func closingFaceIDLeavesEveryMachineReady() async {
+    @Test func aFaceIDPromptClosedOrTimedOutFailsItsMachinesAndSaysSo() async {
         let authenticator = FakeAuthenticator()
         authenticator.failure = ASAuthorizationError(.canceled)
         let claim = Claim(Self.plan, authenticator: authenticator, send: Machines().send)
         await claim.claim()
-        #expect(claim.rows.values.allSatisfy { $0 == .ready })
+        #expect(claim.rows.values.allSatisfy {
+            $0 == .failed("the passkey prompt was closed or timed out before it signed; claim again")
+        })
         #expect(!claim.working)
+
+        // Claiming again goes on from there.
+        authenticator.failure = nil
+        await claim.claim()
+        #expect(claim.claimed)
     }
 }

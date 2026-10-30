@@ -9,9 +9,11 @@
 //! assertion or registration names its challenge in its client data, which is how it finds its
 //! ceremony. Challenges live in memory only, so a restart voids them.
 //!
-//! An assertion may sign several daemons' challenges at once, one after the other: what lets one
-//! Face ID claim every machine. Each daemon finds its own challenge among them, and it stays the
-//! fresh, single-use nonce that binds the signature to this daemon.
+//! A claim may sign several daemons' challenges at once ([`Passkeys::verify_batch`]): what lets
+//! one Face ID claim every machine. The signed challenge is then the daemons' challenges, each
+//! [`CHALLENGE_LEN`] bytes, one after the other. A daemon accepts it only when its own challenge
+//! is among them, unexpired and unused, and uses it up; every other check is the same. Any other
+//! assertion signs exactly one challenge of this daemon's.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -49,7 +51,7 @@ const BACKUP_ELIGIBLE: u8 = 0x08;
 /// Backed up, in the authenticator data's flags.
 const BACKED_UP: u8 = 0x10;
 
-/// The length of a challenge webauthn-rs mints.
+/// The length of a challenge webauthn-rs mints, and of each in a batch.
 const CHALLENGE_LEN: usize = 32;
 
 /// Offset of the flags in the authenticator data, after the RP id hash.
@@ -262,9 +264,31 @@ impl Passkeys {
         assertion: &PasskeyAssertion,
         keys: impl FnOnce(&PersonId) -> Vec<Key>,
     ) -> Result<Asserted, ErrorInfo> {
+        self.verify_signed(assertion, keys, false)
+    }
+
+    /// [`Passkeys::verify`], for an assertion that may sign a batch of daemons' challenges,
+    /// this daemon's among them: a claim of every machine at once.
+    pub fn verify_batch(
+        &self,
+        assertion: &PasskeyAssertion,
+        keys: impl FnOnce(&PersonId) -> Vec<Key>,
+    ) -> Result<Asserted, ErrorInfo> {
+        self.verify_signed(assertion, keys, true)
+    }
+
+    fn verify_signed(
+        &self,
+        assertion: &PasskeyAssertion,
+        keys: impl FnOnce(&PersonId) -> Vec<Key>,
+        batch: bool,
+    ) -> Result<Asserted, ErrorInfo> {
         let credential: PublicKeyCredential = convert(assertion)?;
         let signed = challenge_of(&credential.response.client_data_json)?;
-        let state = self.take_signed(&signed)?;
+        let state = match batch {
+            true => self.take_batch(&signed)?,
+            false => take(&self.assertions, &signed)?,
+        };
         let (uuid, _) = self
             .webauthn
             .identify_discoverable_authentication(&credential)
@@ -299,12 +323,17 @@ impl Passkeys {
 
     /// The ceremony of this daemon's challenge within `signed`, used up, as the ceremony of all
     /// of `signed`: the challenges an assertion signed, of this daemon and of others.
-    fn take_signed(&self, signed: &str) -> Result<DiscoverableAuthentication, ErrorInfo> {
+    fn take_batch(&self, signed: &str) -> Result<DiscoverableAuthentication, ErrorInfo> {
         let bytes = URL_SAFE_NO_PAD
             .decode(signed)
             .map_err(|_| bad_request("the passkey's challenge is not base64url"))?;
-        if bytes.len() <= CHALLENGE_LEN || bytes.len() % CHALLENGE_LEN != 0 {
+        if bytes.len() == CHALLENGE_LEN {
             return take(&self.assertions, signed);
+        }
+        if bytes.is_empty() || bytes.len() % CHALLENGE_LEN != 0 {
+            return Err(bad_request(
+                "the passkey's challenge is no batch of challenges",
+            ));
         }
         let ours = bytes
             .chunks(CHALLENGE_LEN)
@@ -443,13 +472,36 @@ mod tests {
         let signed = URL_SAFE_NO_PAD.encode([decode(&here), decode(&there)].concat());
         let assertion = passkey.assert_raw(&signed, "https://herder.sh");
 
-        assert_eq!(here.verify(&assertion, keys).unwrap().person_id, person_id);
-        assert_eq!(there.verify(&assertion, keys).unwrap().person_id, person_id);
+        // Only a claim takes a batch.
+        assert!(here.verify(&assertion, keys).is_err());
+        let signed = URL_SAFE_NO_PAD.encode([decode(&here), decode(&there)].concat());
+        let assertion = passkey.assert_raw(&signed, "https://herder.sh");
+        assert_eq!(
+            here.verify_batch(&assertion, keys).unwrap().person_id,
+            person_id
+        );
+        assert_eq!(
+            there.verify_batch(&assertion, keys).unwrap().person_id,
+            person_id
+        );
         // Each daemon's challenge works once, and a daemon whose challenge is not among them
         // refuses it.
-        assert!(here.verify(&assertion, keys).is_err());
+        assert!(here.verify_batch(&assertion, keys).is_err());
+        assert!(there.verify_batch(&assertion, keys).is_err());
         decode(&elsewhere);
-        assert!(elsewhere.verify(&assertion, keys).is_err());
+        assert!(elsewhere.verify_batch(&assertion, keys).is_err());
+
+        // A signature over another batch than the client data names is refused.
+        let signed = URL_SAFE_NO_PAD.encode([decode(&here), decode(&there)].concat());
+        let mut forged = passkey.assert_raw(&signed, "https://herder.sh");
+        forged.response.signature = passkey
+            .assert_raw(
+                &URL_SAFE_NO_PAD.encode(decode(&elsewhere)),
+                "https://herder.sh",
+            )
+            .response
+            .signature;
+        assert!(here.verify_batch(&forged, keys).is_err());
     }
 
     #[test]
