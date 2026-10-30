@@ -59,7 +59,7 @@ struct SkillsPage: View {
     var body: some View {
         let library = SkillLibrary(fleet.machines)
         let accounts = AccountSkillList.all(fleet.machines)
-        let projects = ProjectSkills.all(fleet.machines)
+        let projects = ProjectSkills.all(fleet.liveMachines)
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
                 tabButton(.library, "Library", count: library.skills.count)
@@ -244,7 +244,7 @@ struct SkillsPage: View {
     /// The project skills of one project: the open session's, or one picked.
     @ViewBuilder private func projectTab(_ projects: [ProjectSkills]) -> some View {
         let open = session.flatMap { key in
-            fleet.machines.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }?.projectId
+            fleet.liveMachines.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }?.projectId
         }
         if let shown = projects.first(where: { $0.projectId == projectId }) ?? projects.first(where: { $0.projectId == open })
             ?? projects.first {

@@ -48,7 +48,7 @@ struct VaultPage: View {
     }
 
     var body: some View {
-        let machine = fleet.machines.first { $0.hostId == vault }
+        let machine = fleet.liveMachines.first { $0.hostId == vault }
         let stats = machine.flatMap { VaultStats(machine: $0, sessions: fleet.sessions) }
         let owned = stats?.owned == true
         // The status sentence leads with the connection, so no chip repeats it.

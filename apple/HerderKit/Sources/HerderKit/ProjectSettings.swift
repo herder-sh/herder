@@ -19,7 +19,7 @@ struct ProjectSettingsPage: View {
         let group = fleet.lists.projects.first { $0.id == projectId }
         let machines = fleet.machines.filter { $0.projects.contains { $0.projectId == projectId } }
         let machine = machines.first { $0.hostId == hostId } ?? machines.first
-        let reach = ProjectReach(projectId: projectId, machines: fleet.machines)
+        let reach = ProjectReach(projectId: projectId, machines: fleet.liveMachines)
         DetailPage(title: group?.name ?? "Project", status: status(machines, shown: machine)) {
             ProjectIcon(projectId: group?.projectId, name: group?.name, image: fleet.projectIcon(group?.projectId),
                         size: 34)
@@ -126,7 +126,7 @@ struct ProjectSettingsPage: View {
     /// The skills the project checks in, and the way to the Skills screen, where the library's
     /// skills and MCP servers are turned on per machine.
     private var skillsLink: some View {
-        let count = ProjectSkills.all(fleet.machines).first { $0.projectId == projectId }?.skills.count ?? 0
+        let count = ProjectSkills.all(fleet.liveMachines).first { $0.projectId == projectId }?.skills.count ?? 0
         return SettingsList(title: "MCP servers & skills") {
             Button { pages.open(.skills) } label: {
                 SettingRow(label: count == 1 ? "1 checked-in skill" : "\(count) checked-in skills",

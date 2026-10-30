@@ -252,7 +252,7 @@ extension Fleet {
     /// Through a vault, the session `key` runs on the host the vault lists it under.
     func machineName(_ id: HostId?, of key: SessionKey) -> String {
         guard var id else { return "?" }
-        if id == key.hostId, let runsOn = machines.first(where: { $0.hostId == id })?
+        if id == key.hostId, let runsOn = liveMachines.first(where: { $0.hostId == id })?
             .sessions.first(where: { $0.sessionId == key.sessionId })?.hostId {
             id = runsOn
         }

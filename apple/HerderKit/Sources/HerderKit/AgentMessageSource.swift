@@ -11,7 +11,7 @@ struct AgentMessageSource: View {
     private var source: SessionKey { SessionKey(hostId: hostId, sessionId: message.senderSessionId) }
 
     private var senderAvailable: Bool {
-        fleet.machines.first { $0.hostId == hostId }?.sessions.contains {
+        fleet.liveMachines.first { $0.hostId == hostId }?.sessions.contains {
             $0.sessionId == message.senderSessionId
         } == true
     }

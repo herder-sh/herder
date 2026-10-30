@@ -16,8 +16,10 @@ struct DetailPage<Leading: View, Actions: View, Content: View>: View {
     @ViewBuilder var actions: Actions
     @ViewBuilder var content: Content
     @State private var sections: [String] = []
-    /// The section at the top of the scrolled page, raised in the index.
-    @State private var current: String?
+    /// The sections scrolled up to the reading line, of which the last is the one being read,
+    /// raised in the index; the index's own jump picks it at once.
+    @State private var reached: Set<String> = []
+    @State private var picked: String?
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -29,8 +31,8 @@ struct DetailPage<Leading: View, Actions: View, Content: View>: View {
         ScrollViewReader { proxy in
             HStack(alignment: .top, spacing: 0) {
                 if showsIndex {
-                    SectionIndex(sections: sections, current: current ?? sections.first) { section in
-                        current = section
+                    SectionIndex(sections: sections, current: picked ?? DetailReading.current(reached, in: sections)) { section in
+                        picked = section
                         withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(section, anchor: .top) }
                     }
                     .frame(width: 188)
@@ -46,13 +48,13 @@ struct DetailPage<Leading: View, Actions: View, Content: View>: View {
                     .padding(.bottom, 32)
                     .frame(maxWidth: .infinity)
                 }
-                .coordinateSpace(.named(DetailSectionTops.space))
+                .coordinateSpace(.named(DetailReading.space))
             }
         }
         .onPreferenceChange(DetailSections.self) { sections = $0 }
-        .onPreferenceChange(DetailSectionTops.self) { tops in
-            let next = DetailSectionTops.current(tops, in: sections)
-            if next != current { current = next }
+        .environment(\.detailSectionReached) { section, isReached in
+            picked = nil
+            if isReached { reached.insert(section) } else { reached.remove(section) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.ground)
@@ -121,21 +123,23 @@ struct DetailSections: PreferenceKey {
     }
 }
 
-/// Where each section of a `DetailPage` starts, from the top of its scrolled area.
-struct DetailSectionTops: PreferenceKey {
-    static let defaultValue: [String: CGFloat] = [:]
+/// Which section of a `DetailPage` is being read. Each section says only when its top crosses
+/// the reading line: a position sent up on every frame of a scroll would update the page each
+/// frame, and the page lays out every section again.
+enum DetailReading {
     static let space = "detail-page"
     /// How far under the scrolled area's top a section still counts as the one being read.
     static let reading: CGFloat = 80
 
-    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
-        value.merge(nextValue()) { $1 }
-    }
-
     /// The last of `sections` whose top has scrolled up to the reading line, else the first.
-    static func current(_ tops: [String: CGFloat], in sections: [String]) -> String? {
-        sections.last { (tops[$0] ?? .infinity) <= reading } ?? sections.first
+    static func current(_ reached: Set<String>, in sections: [String]) -> String? {
+        sections.last { reached.contains($0) } ?? sections.first
     }
+}
+
+extension EnvironmentValues {
+    /// Tells the `DetailPage` that a section's top has crossed its reading line, up or down.
+    @Entry var detailSectionReached: (String, Bool) -> Void = { _, _ in }
 }
 
 extension View {
@@ -143,10 +147,20 @@ extension View {
     func detailSection(_ title: String) -> some View {
         id(title)
             .preference(key: DetailSections.self, value: [title])
-            .background(GeometryReader { geometry in
-                Color.clear.preference(key: DetailSectionTops.self,
-                                       value: [title: geometry.frame(in: .named(DetailSectionTops.space)).minY])
-            })
+            .modifier(DetailSectionTop(title: title))
+    }
+}
+
+private struct DetailSectionTop: ViewModifier {
+    let title: String
+    @Environment(\.detailSectionReached) private var reached
+
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: Bool.self) { proxy in
+            proxy.frame(in: .named(DetailReading.space)).minY <= DetailReading.reading
+        } action: { isReached in
+            reached(title, isReached)
+        }
     }
 }
 

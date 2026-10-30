@@ -10,7 +10,26 @@ import Observation
 @Observable
 public final class Fleet {
     public let client: Client
-    public private(set) var machines: [Machine] { didSet { listsChanged() } }
+    /// The machines. A view that reads them redraws when a machine's own state changes, such as
+    /// an account, a setting or its connection, not when a session it lists moves on, as a
+    /// running turn's does several times a second: read `liveMachines` for the sessions' heads.
+    /// Both return the machines as they are now.
+    public var machines: [Machine] {
+        _ = ownChanges
+        return current
+    }
+    /// The machines, for a view that shows the sessions they list: it redraws when either
+    /// changes.
+    var liveMachines: [Machine] {
+        _ = ownChanges
+        _ = headChanges
+        return current
+    }
+    @ObservationIgnored private var current: [Machine]
+    /// Bumped when the machines' own state changes, and when their sessions' heads change; see
+    /// `machines`.
+    private var ownChanges = 0
+    private var headChanges = 0
     /// Each followed session's state in a box of its own; the dictionary itself changes only as
     /// sessions come and go. See `session(_:)` and `sessions`.
     private var boxes: [SessionKey: SessionBox] = [:]
@@ -55,9 +74,9 @@ public final class Fleet {
     private(set) var roundTrips: [HostId: [RoundTrip]] = [:]
     /// The sessions that finished a turn since this device last opened them.
     private(set) var done: DoneSessions { didSet { listsChanged() } }
-    /// What the lists show now. Replaced only when it differs, so the views that show it
-    /// redraw when a list changes, not on every token a session streams.
-    private(set) var lists = Lists()
+    /// What the lists show now. Each list is replaced only when it differs, so a view that shows
+    /// one redraws when that list changes, not on every token a session streams.
+    let lists = ShownLists()
     /// The machines' latest usage summaries, per period; see `refreshUsage`.
     var usageCache = UsageCache()
     /// Where each machine last said it backs up, so its page shows that at once; see
@@ -71,15 +90,31 @@ public final class Fleet {
     /// `doneFile` keeps the done sessions across launches; `nil` keeps them in memory.
     public init(client: Client, doneFile: URL? = nil) {
         self.client = client
-        machines = client.machines()
+        current = client.machines()
         done = DoneSessions(file: doneFile)
         refreshLists()
     }
 
     /// Replaces the machines without a client change, for tests.
     func setMachinesForTesting(_ machines: [Machine]) {
-        self.machines = machines
+        set(machines)
         refreshLists()
+    }
+
+    /// Takes the machines the client lists, telling the views that read them only what changed.
+    private func set(_ machines: [Machine]) {
+        guard machines != current else { return }
+        let headless = { (machines: [Machine]) in machines.map { machine in
+            var own = machine
+            own.sessions = []
+            return own
+        } }
+        let ownChanged = headless(machines) != headless(current)
+        let headsChanged = machines.map(\.sessions) != current.map(\.sessions)
+        current = machines
+        if ownChanged { ownChanges += 1 }
+        if headsChanged { headChanges += 1 }
+        listsChanged()
     }
 
     /// Folds an update into a session as its subscription would, for tests.
@@ -106,8 +141,7 @@ public final class Fleet {
     private func refreshLists() {
         listsRefresh?.cancel()
         listsRefresh = nil
-        let lists = Lists(machines: machines, sessions: sessions, done: done.keys, archiving: archiving)
-        if lists != self.lists { self.lists = lists }
+        lists.show(Lists(machines: current, sessions: sessions, done: done.keys, archiving: archiving))
     }
 
     /// One session's state. A view that reads it redraws when that session changes only, not
@@ -164,8 +198,8 @@ public final class Fleet {
     }
 
     func update(_ machines: [Machine]) {
-        let listedNone = self.machines.allSatisfy(\.sessions.isEmpty)
-        self.machines = machines
+        let listedNone = current.allSatisfy(\.sessions.isEmpty)
+        set(machines)
         // While nothing was listed, as on a launch, at once: the first sessions are the offline
         // cache's, which the Board shows in place of the splash. From then on, throttled, so a
         // burst of machine changes does not rebuild the lists under a scroll.
@@ -360,7 +394,7 @@ public final class Fleet {
 
     /// The prompts waiting in a session's queue on its machine, in the order they will run.
     func queue(of key: SessionKey) -> [QueuedPrompt] {
-        machines.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }?.queue ?? []
+        liveMachines.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }?.queue ?? []
     }
 
     /// Drops a queued prompt without running it.
