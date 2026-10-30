@@ -29,7 +29,7 @@ struct SessionView: View {
     /// The folded blocks shown open, by id; outside the rows, so a row drawn again keeps them.
     @State private var expanded: Set<String> = []
     /// Each artifact's page height as last measured, kept for the same reason.
-    @State private var pageHeights: [AttachmentId: CGFloat] = [:]
+    @State private var pageHeights: [UInt64: CGFloat] = [:]
 
     var body: some View {
         let model = fleet.session(key)
@@ -60,9 +60,6 @@ struct SessionView: View {
             ScrollView {
                 // Lazy, with each block under its own id: a long session draws only the rows in
                 // view, and rows added or grown above the reader do not move what they read.
-                // Its jumps (the rail, Find, the New pill) go unanimated: an animated one lands by
-                // estimated heights, and with a row resizing as it lands, on rows the stack never
-                // draws, blank until the reader scrolls.
                 LazyVStack(alignment: .leading, spacing: 16) {
                     if model?.loaded != true && blocks.isEmpty {
                         ProgressView().tint(Theme.secondary).frame(maxWidth: .infinity).padding(40)
@@ -90,11 +87,12 @@ struct SessionView: View {
             .modifier(FollowsEnd(blocks: blocks, top: top))
             .id(key)
             .environment(\.transcriptScroll) { id, anchor in proxy.scrollTo(id, anchor: anchor) }
+            .onAppear { RecordHook.jump = { id in top.jump(proxy, to: id, anchor: .top) } }
             .onChange(of: find.current) {
                 guard let id = find.current else { return }
                 // A match in a turn's folded work, or in earlier reports, opens it.
                 if let block = blocks.first(where: { $0.id == id }) { expanded.formUnion(find.opens(block)) }
-                proxy.scrollTo(id, anchor: .center)
+                top.jump(proxy, to: id, anchor: .center)
             }
             .overlay(alignment: .topTrailing) {
                 if find.shown {
@@ -105,7 +103,7 @@ struct SessionView: View {
                 let checkpoints = Checkpoints(blocks)
                 // Hover is how the rail reads; a phone has none, and no margin to spare.
                 if !compact && checkpoints.items.count > 1 {
-                    CheckpointRail(checkpoints: checkpoints, top: top) { id in proxy.scrollTo(id, anchor: .top) }
+                    CheckpointRail(checkpoints: checkpoints, top: top) { id in top.jump(proxy, to: id, anchor: .top) }
                 }
             }
             }
@@ -452,7 +450,7 @@ private struct FollowsEnd: ViewModifier {
             // Anchored at the bottom, growth anywhere pushes what is read up; unanchored, the
             // view keeps its offset, and a lazy stack keeps the rows in view where they are.
             .defaultScrollAnchor(atEnd ? .bottom : nil, for: .sizeChanges)
-            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { top.id = $0.first }
+            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { top.shown = $0 }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.visibleRect.maxY >= geometry.contentSize.height + geometry.contentInsets.bottom - 40
             } action: { _, end in
@@ -465,7 +463,12 @@ private struct FollowsEnd: ViewModifier {
             .overlay(alignment: .bottom) {
                 if unseen {
                     Button {
-                        position.scrollTo(edge: .bottom)
+                        // Smoothly only from the last block's screen: see `TranscriptTop.jump`.
+                        if let last = blocks.last?.id, top.shown.contains(last) {
+                            withAnimation { position.scrollTo(edge: .bottom) }
+                        } else {
+                            position.scrollTo(edge: .bottom)
+                        }
                     } label: {
                         Label("New", systemImage: "arrow.down")
                             .font(.footnote.weight(.semibold))
@@ -1003,3 +1006,5 @@ enum InspectorPresentation: Equatable {
         self = compact ? .sheet : .pane
     }
 }
+
+@MainActor enum RecordHook { static var jump: (String) -> Void = { _ in } }

@@ -36,41 +36,108 @@ func longSession(_ script: inout Script, turns: Int = 100, rounds: Int = 7) -> [
     return events
 }
 
-/// A long-running lead session as the owner's "Wrapping incident management with policy
-/// compliance" is: `turns` turns of prose and tool calls, 19 children spawned and reporting, and
-/// an HTML mockup published every fourth turn, the page in `pages` under its attachment id.
-func leadSession(_ script: inout Script, turns: Int = 40, page: Data, pages: inout [AttachmentId: Data]) -> [Event] {
-    func item(_ id: String, _ turn: String, _ body: ItemBody) -> Event {
-        script.event(.itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: id, turnId: turn, body: body)))
+/// The owner's "Wrapping incident management with policy compliance" in shape, not words: its
+/// journal's 787 events in order, as letters (`u` a prompt, `|` a turn started, `c` and `r` a
+/// tool call and its result, `m` a reply, `k` reasoning, `s` a child spawned, `p` a child's
+/// report, `.` and `!` a turn completed or failed; capitals for a sub-agent's), with each reply's,
+/// result's and report's size. 101 blocks, from short notes to 11,000 characters of Markdown.
+func leadSession(_ script: inout Script) -> [Event] {
+    let order = [
+        "u|crm.u|crcrm.u|m.u|crcrmcrcrmcrmcrcrcrm.u|crCRCRCRCRCRKCRCRm.KCRCRCRCRCRCRKCRKCRKM|m.u|crcrm.u|m.u|",
+        "m.u|m.u|m.u|crcrmcrcrcrmcrmcrcrmcrcrcrcrcrcrcrcrcrcrcrcrm.u|crmcrcrkcsrmcsrcprcrmcrcrmcrcprcprkcsrcs",
+        "rcsrcsrcsrcsrcsrcsrcsrmcprcrmcprcrcrcrmcprcrcrkcprcrcrcpprcrmcrcrpcrcrcrkcrcrcrcrkcrcrcrmcprcrcrcrcr",
+        "kcrcrcrcrmcprcrcrcrcrkcsrcrcrcprkcsrcsrpcsrcrpmcrcprmcrKCRCRCRKCcrRKCRKCCRCRRcrKCRKKCRKCRCCRm.RKKCCR",
+        "KCRCRCRKCRKCRCRKKCRCRKKCRCRKCRKCRKCRKCRKCRCRKCRKCRKCRCRCRKCRKCRKCRCRKCRKCKRCRKCRKCRRCRCRKCRCRKCRKCRK",
+        "CKRCRKCRKCRKCRKCRKCKRCRKCRKCRKCRKKCCRRKCRKKCRCKRCRKCRKCRKKCKRCRKCCRRCKRCRKCRKKMC|RmKCRKCRKCRcMsrrKCR",
+        "cKCsrRm.KCRKM|mccsrrcprcrmcprcprcprcrmcprcrcrcrcrcrkcrcrcrm.u|crm.u|crmcrcrcrm.u|crcrkcsrcrc!pu|mcrm",
+        "crkcrcprm.u|csrkcrcrcrcrmcprmcrcsrcsrcsrmcrcrcrmcrcrkcprcrmcprcrcrmcprcrcrmcrcrcrcrcrm.",
+    ].joined()
+    let replies = [
+        3998, 4577, 4263, 99, 146, 196, 4868, 4686, 7825, 1340, 6332, 4808, 3521, 1985, 5636, 152,
+        145, 91, 57, 2480, 191, 167, 142, 179, 117, 117, 97, 158, 193, 126, 168, 183,
+        995, 11695, 281, 10854, 324, 10229, 311, 111, 78, 3656, 2922, 187, 1202, 75, 135, 3098,
+        68, 104, 148, 163, 67, 106, 135, 2664,
+    ]
+    let outputs = [
+        1207, 106, 28983, 0, 1329, 8921, 49192, 9492, 2037, 4189, 2729, 1086, 1630, 4146, 3657, 8762,
+        3572, 6777, 3853, 2796, 2164, 2267, 1617, 2310, 3612, 2700, 753, 0, 3926, 0, 8405, 0,
+        231, 231, 8788, 3819, 2253, 3606, 4931, 4349, 3664, 4787, 3720, 3954, 3353, 3621, 4440, 134,
+        31, 0, 4022, 18170, 65, 65, 18, 5617, 18, 891, 33, 5986, 1353, 65, 65, 65,
+        65, 65, 65, 65, 65, 65, 4219, 451, 5374, 310, 3015, 217, 7914, 181, 770, 4635,
+        207, 615, 281, 176, 5736, 228, 2597, 340, 1216, 5204, 2207, 1904, 344, 6023, 2485, 396,
+        5983, 2911, 889, 637, 795, 725, 120, 120, 348, 5511, 250, 3340, 409, 361, 65, 18,
+        18, 7214, 65, 65, 65, 2046, 1787, 1377, 1086, 11149, 19649, 7674, 1086, 14061, 19278, 23778,
+        22663, 10975, 1086, 4282, 7879, 19944, 10918, 14872, 18329, 11075, 13967, 11351, 27473, 5526, 16701, 9505,
+        1287, 9882, 10719, 11088, 3253, 1517, 17848, 133, 7735, 8304, 3359, 1440, 2513, 4857, 1381, 10423,
+        6304, 5362, 3190, 1583, 2731, 1133, 3722, 951, 4034, 997, 4645, 5039, 4053, 12419, 715, 7761,
+        265, 19203, 11835, 2420, 7308, 2691, 16613, 4205, 2312, 409, 1364, 1167, 3348, 1340, 332, 2274,
+        2867, 4548, 415, 4997, 663, 1763, 1495, 1653, 2288, 2086, 3217, 892, 65, 10854, 291, 65,
+        3091, 2529, 65, 18, 5387, 225, 292, 274, 6208, 214, 5807, 244, 3677, 387, 1095, 969,
+        2234, 336, 279, 1178, 453, 477, 479, 169, 0, 215, 65, 18, 179, 3809, 34, 5550,
+        65, 18, 18, 18, 86, 5400, 277, 65, 65, 65, 71, 77, 125, 479, 49, 3401,
+        202, 4471, 720, 291, 4251, 409, 737, 1913, 1324, 405, 459, 64,
+    ]
+    let reports = [
+        5443, 5794, 1222, 4035, 5192, 7730, 4452, 5555, 5031, 5843, 5805, 5334, 7021, 1903, 1650, 1241,
+        5236, 170, 152, 6049, 5616, 52, 5359, 5195, 3244, 4301, 4076,
+    ]
+    /// Markdown of `size` characters: headings, paragraphs, a list and a code block.
+    func prose(_ size: Int) -> String {
+        let parts = [
+            "## Incident policy\n\n",
+            "The wrapper checks each incident against the policy before it pages anyone. ",
+            "- `src/incidents/policy.rs` maps severities to the rules that apply\n",
+            "```rust\nlet rule = policy.rule_for(incident.severity)?;\n```\n\n",
+            "Escalation keeps the audit trail the compliance review asks for.\n\n",
+        ]
+        var text = ""
+        var index = 0
+        while text.count < size {
+            text += parts[index % parts.count]
+            index += 1
+        }
+        return String(text.prefix(size))
     }
     var events = [script.event(created())]
-    for turn in 0..<turns {
-        let id = "t\(turn)"
-        events.append(script.event(.turnStarted(turnId: id)))
-        events.append(item("u", id, .userMessage(text: "Step \(turn): wrap incident management with policy compliance.",
-                                                 attachments: [])))
-        for round in 0..<4 {
-            let words = 20 + (turn * 7 + round * 13) % 60
-            events.append(item("m\(round)", id, .assistantMessage(
-                text: String(repeating: "The policy check wraps the incident flow. ", count: words))))
-            events.append(item("c\(round)", id, .toolCall(name: "Bash", input: #"{"command":"cargo test"}"#)))
-            events.append(item("r\(round)", id, .toolResult(callId: "c\(round)", output: "ok", isError: false)))
+    var (turn, count, reply, output, report) = ("t0", 0, 0, 0, 0)
+    var calls: [Bool: [String]] = [false: [], true: []]
+    var children: [String] = []
+    func item(_ body: ItemBody, sub: Bool) -> Event {
+        count += 1
+        return script.event(.itemAdded(item: Item(agentMessage: nil, parentCallId: sub ? "agent" : nil, id: "i\(count)",
+                                                  turnId: turn, body: body)))
+    }
+    for letter in order {
+        let sub = letter.isUppercase
+        switch letter.lowercased() {
+        case "|":
+            turn = "t\(events.count)"
+            events.append(script.event(.turnStarted(turnId: turn)))
+        case "u": events.append(item(.userMessage(text: prose(150), attachments: []), sub: false))
+        case "c":
+            let event = item(.toolCall(name: "Bash", input: #"{"command":"cargo test -p incidents"}"#), sub: sub)
+            calls[sub, default: []].append("i\(count)")
+            events.append(event)
+        case "r":
+            let call = calls[sub]?.isEmpty == false ? calls[sub, default: []].removeFirst() : "none"
+            events.append(item(.toolResult(callId: call, output: prose(outputs[output]), isError: false), sub: sub))
+            output += 1
+        case "m":
+            events.append(item(.assistantMessage(text: prose(replies[reply])), sub: sub))
+            reply += 1
+        case "k": events.append(item(.reasoning(text: "Checking the policy."), sub: sub))
+        case "s":
+            children.append("01C\(children.count)")
+            events.append(script.event(.childSpawned(childSessionId: children[children.count - 1], hostId: nil,
+                                                     task: "Audit policy \(children.count) of the incident flow")))
+        case "p":
+            events.append(script.event(.childReported(childSessionId: children[report % max(children.count, 1)],
+                                                      turnId: "c\(report)", summary: prose(reports[report]))))
+            report += 1
+        case ".": events.append(script.event(.turnCompleted(turnId: turn, usage: nil)))
+        default:
+            events.append(script.event(.turnFailed(turnId: turn, error: TurnError(class: .fatal, message: "The agent exited."))))
         }
-        if turn < 38, turn % 2 == 0 {
-            events.append(script.event(.childSpawned(childSessionId: "01C\(turn)", hostId: nil,
-                                                     task: "Audit policy \(turn) of the incident flow")))
-        } else if turn < 38 {
-            events.append(script.event(.childReported(childSessionId: "01C\(turn - 1)", turnId: "c1", summary: "## Policy \(turn)\n\n"
-                + String(repeating: "- Checked a compliance rule and wrapped it.\n", count: 12))))
-        }
-        if turn % 4 == 3 {
-            let attachment = Attachment(attachmentId: "01PAGE\(turn)", mediaType: "application/octet-stream",
-                                        size: UInt64(page.count), name: "mockup-\(turn).html")
-            events.append(script.event(.artifactPublished(title: "Mockup \(turn)", attachment: attachment,
-                                                          url: "https://krowk.com/a/mockup-\(turn)", expiresAt: nil)))
-            pages[attachment.attachmentId] = page
-        }
-        events.append(script.event(.turnCompleted(turnId: id, usage: nil)))
     }
     return events
 }
@@ -133,13 +200,11 @@ final class TranscriptScrollTests {
         #expect(abs(scroll.top - (top - 3000)) < 1)
     }
 
-    /// The owner's session went blank on the Mac: rows resizing as they appear (a page's card
-    /// measured after it loads) under a jump left the lazy stack over rows it never drew.
+    /// The owner's session went blank on the Mac: an animated jump through it, by heights the
+    /// lazy stack estimated, ended where it had drawn no rows.
     @Test func aLongSessionKeepsItsRowsOnScreenWhereverItIsScrolled() throws {
-        var pages: [AttachmentId: Data] = [:]
-        let events = leadSession(&script, page: try Self.mockup(), pages: &pages)
-        fleet.applyForTesting(SessionUpdate(events: events, streaming: []), to: script.key)
-        for (id, page) in pages { fleet.setAttachmentForTesting(id, page) }
+        fleet.applyForTesting(SessionUpdate(events: leadSession(&script), streaming: []), to: script.key)
+        #expect(fleet.transcript(script.key).count > 90)
         let scroll = try open()
         #expect(drawn(scroll))
         // To the top a wheel at a time, and back.
@@ -177,7 +242,7 @@ final class TranscriptScrollTests {
         fleet.setAttachmentForTesting("01PAGE", try Self.mockup())
         let artifact = try #require(fleet.artifacts(of: script.key).first)
         let card = ArtifactBlock(artifact: artifact, fleet: fleet, key: script.key)
-            .environment(\.pageHeights, .constant(["01PAGE": 300]))
+            .environment(\.pageHeights, .constant([artifact.id: 300]))
             .frame(width: 600)
         let plain = ArtifactBlock(artifact: artifact, fleet: fleet, key: script.key).frame(width: 600)
         let kept = NSHostingView(rootView: card).fittingSize.height
@@ -364,5 +429,14 @@ struct FoldSpotTests {
         #expect(FoldSpot.anchor(of: CGRect(x: 0, y: 900, width: 80, height: 20), in: viewport).y == 1)
         #expect(FoldSpot.anchor(of: CGRect(x: 0, y: -2000, width: 80, height: 20), in: viewport).y == 0)
         #expect(FoldSpot.anchor(of: .zero, in: .zero) == .bottom)
+    }
+}
+
+struct TranscriptJumpTests {
+    /// Further, a smooth scroll lands by estimated heights and can end on rows never drawn.
+    @Test func onlyAJumpToABlockInViewIsSmooth() {
+        #expect(TranscriptTop.smooth(to: "b", shown: ["a", "b", "c"]))
+        #expect(!TranscriptTop.smooth(to: "z", shown: ["a", "b", "c"]))
+        #expect(!TranscriptTop.smooth(to: "a", shown: []))
     }
 }

@@ -41,11 +41,27 @@ struct Checkpoints: Equatable {
     }
 }
 
-/// The block at the top of the transcript, observed apart from the session view so only the
-/// rail redraws as it scrolls.
+/// The blocks in view, observed apart from the session view so only the rail redraws as it
+/// scrolls.
 @Observable
 final class TranscriptTop {
-    var id: String?
+    /// In view, top first.
+    var shown: [String] = []
+    var id: String? { shown.first }
+
+    /// Scrolls to `id`, smoothly only to a block in view. A smooth scroll further lands by the
+    /// heights a lazy stack estimates for the rows it has not drawn, and can end on none of
+    /// them: the transcript blank until the reader scrolls.
+    @MainActor
+    func jump(_ proxy: ScrollViewProxy, to id: String, anchor: UnitPoint) {
+        if Self.smooth(to: id, shown: shown) {
+            withAnimation { proxy.scrollTo(id, anchor: anchor) }
+        } else {
+            proxy.scrollTo(id, anchor: anchor)
+        }
+    }
+
+    static func smooth(to id: String, shown: [String]) -> Bool { shown.contains(id) }
 }
 
 /// A tick per user message down the transcript's leading edge, the one in view marked: hover

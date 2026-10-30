@@ -263,7 +263,9 @@ struct ArtifactBlock: View {
                     .padding(8)
             case .page:
                 // A picture of the page, not a page to use: swipes scroll the thread, a click opens it.
-                let id = artifact.attachment.attachmentId
+                // By card, not width: a card drawn again lays out before it knows its width, and
+                // its page measures again as the width changes.
+                let id = artifact.id
                 SandboxedWebView(html: String(decoding: data, as: UTF8.self), thumbnail: true, measured: { height in
                     measured = height
                     if heights.wrappedValue[id] != height { heights.wrappedValue[id] = height }
