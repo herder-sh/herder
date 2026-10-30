@@ -28,6 +28,8 @@ struct SessionView: View {
     @State private var find = TranscriptFind()
     /// The folded blocks shown open, by id; outside the rows, so a row drawn again keeps them.
     @State private var expanded: Set<String> = []
+    /// Each artifact's page height as last measured, kept for the same reason.
+    @State private var pageHeights: [AttachmentId: CGFloat] = [:]
 
     var body: some View {
         let model = fleet.session(key)
@@ -58,6 +60,9 @@ struct SessionView: View {
             ScrollView {
                 // Lazy, with each block under its own id: a long session draws only the rows in
                 // view, and rows added or grown above the reader do not move what they read.
+                // Its jumps (the rail, Find, the New pill) go unanimated: an animated one lands by
+                // estimated heights, and with a row resizing as it lands, on rows the stack never
+                // draws, blank until the reader scrolls.
                 LazyVStack(alignment: .leading, spacing: 16) {
                     if model?.loaded != true && blocks.isEmpty {
                         ProgressView().tint(Theme.secondary).frame(maxWidth: .infinity).padding(40)
@@ -89,7 +94,7 @@ struct SessionView: View {
                 guard let id = find.current else { return }
                 // A match in a turn's folded work, or in earlier reports, opens it.
                 if let block = blocks.first(where: { $0.id == id }) { expanded.formUnion(find.opens(block)) }
-                withAnimation { proxy.scrollTo(id, anchor: .center) }
+                proxy.scrollTo(id, anchor: .center)
             }
             .overlay(alignment: .topTrailing) {
                 if find.shown {
@@ -100,9 +105,7 @@ struct SessionView: View {
                 let checkpoints = Checkpoints(blocks)
                 // Hover is how the rail reads; a phone has none, and no margin to spare.
                 if !compact && checkpoints.items.count > 1 {
-                    CheckpointRail(checkpoints: checkpoints, top: top) { id in
-                        withAnimation { proxy.scrollTo(id, anchor: .top) }
-                    }
+                    CheckpointRail(checkpoints: checkpoints, top: top) { id in proxy.scrollTo(id, anchor: .top) }
                 }
             }
             }
@@ -114,6 +117,7 @@ struct SessionView: View {
         }
         .environment(\.prLinks, PRLinks(linkablePRs))
         .environment(\.transcriptExpanded, $expanded)
+        .environment(\.pageHeights, $pageHeights)
         .background(.ground)
         .overlay(alignment: .trailing) { EmptyView() }
         .safeAreaInset(edge: .trailing, spacing: 0) {
@@ -128,6 +132,7 @@ struct SessionView: View {
             showsTerminal = false
             find = TranscriptFind()
             expanded = []
+            pageHeights = [:]
             showsPRs = false
             fleet.unwatch(old)
             fleet.watch(key)
@@ -460,7 +465,7 @@ private struct FollowsEnd: ViewModifier {
             .overlay(alignment: .bottom) {
                 if unseen {
                     Button {
-                        withAnimation { position.scrollTo(edge: .bottom) }
+                        position.scrollTo(edge: .bottom)
                     } label: {
                         Label("New", systemImage: "arrow.down")
                             .font(.footnote.weight(.semibold))

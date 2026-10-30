@@ -201,7 +201,10 @@ struct ArtifactBlock: View {
     let artifact: Artifact
     let fleet: Fleet
     let key: SessionKey
-    @State private var height: CGFloat = 0
+    /// The page's height as measured: kept by the transcript, so a card drawn again has it at
+    /// once; its own, where nothing keeps it.
+    @Environment(\.pageHeights) private var heights
+    @State private var measured: CGFloat?
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
     #else
@@ -260,10 +263,14 @@ struct ArtifactBlock: View {
                     .padding(8)
             case .page:
                 // A picture of the page, not a page to use: swipes scroll the thread, a click opens it.
-                SandboxedWebView(html: String(decoding: data, as: UTF8.self), thumbnail: true, measured: { height = $0 })
-                    .frame(height: height > 0 ? min(height, Self.cap) : 160)
-                    .allowsHitTesting(false)
-                    .opening(open)
+                let id = artifact.attachment.attachmentId
+                SandboxedWebView(html: String(decoding: data, as: UTF8.self), thumbnail: true, measured: { height in
+                    measured = height
+                    if heights.wrappedValue[id] != height { heights.wrappedValue[id] = height }
+                })
+                .frame(height: (heights.wrappedValue[id] ?? measured).map { min($0, Self.cap) } ?? 160)
+                .allowsHitTesting(false)
+                .opening(open)
             case .pdf:
                 PDFThumbnail(data: data)
                     .frame(maxWidth: .infinity)

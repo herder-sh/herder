@@ -5,6 +5,9 @@ extension EnvironmentValues {
     /// The ids of the folded blocks a transcript shows open: a turn's work, a run of tool calls.
     /// Kept by the transcript's view, so a row scrolled out and back stays as it was.
     @Entry var transcriptExpanded: Binding<Set<String>> = .constant([])
+    /// The heights artifact cards' pages measured, by attachment, kept by the transcript's view:
+    /// a card drawn again has its height at once, not a placeholder's that grows as it lands.
+    @Entry var pageHeights: Binding<[AttachmentId: CGFloat]> = .constant([:])
     /// Scrolls the transcript to put a block's anchor point at the same point of the view.
     @Entry var transcriptScroll: @MainActor (String, UnitPoint) -> Void = { _, _ in }
 }
