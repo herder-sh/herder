@@ -88,6 +88,7 @@ struct BotSessions: View {
         TaskListRow(tree: tree, fleet: fleet, selection: selection, context: tree.lead.origin?.line ?? "") {
             tree.toggleArchived(fleet: fleet, undoManager: undoManager)
         }
+        .equatable()
     }
 
     /// "Archived · N", which shows or hides the archived tasks.

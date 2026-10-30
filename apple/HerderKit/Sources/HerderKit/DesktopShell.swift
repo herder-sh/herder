@@ -938,6 +938,7 @@ struct ProjectSessions: View {
                     context: Self.context(tree.lead, machines: machines)) {
             tree.toggleArchived(fleet: fleet, undoManager: undoManager)
         }
+        .equatable()
     }
 
     /// "Archived · N", which shows or hides the archived tasks.
