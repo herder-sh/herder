@@ -48,6 +48,25 @@ import Testing
         try await shoot(sheet, width: width.points, named: "identity-claim-\(width.name).png")
     }
 
+    /// Two of the mockup's machines on herder 0.16: they offer Update, and one that refused says why.
+    @Test(arguments: [("mac", 640.0), ("iphone", 390.0)])
+    func drawsClaimWithOldMachines(width: (name: String, points: Double)) async throws {
+        var plan = ClaimPlan.demo
+        plan.machines[1].version = "0.16.0"
+        plan.machines[2].version = "0.16.0"
+        let claim = Claim(plan, authenticator: FakeAuthenticator()) { hostId, command in
+            if hostId == "draugelis-vault", case .claimUsers = command {
+                throw HerderError.Local(detail: "the vault is read-only while it restores")
+            }
+            return try await ClaimTests.Machines().send(hostId, command)
+        }
+        await claim.claim()
+        claim.update("draugelis")
+        let sheet = ClaimSheet(claim: claim)
+            .frame(width: width.points, height: width.name == "iphone" ? Self.phone.height : nil)
+        try await shoot(sheet, width: width.points, named: "identity-claim-old-\(width.name).png")
+    }
+
     /// The Mac's approval sheet.
     private static let mac = 400.0
 

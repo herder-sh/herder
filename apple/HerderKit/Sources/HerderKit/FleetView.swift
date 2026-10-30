@@ -104,7 +104,7 @@ struct FleetView: View {
             // Claim your machines comes up once a launch, when the machines you own that connect
             // within a moment of each other still know you by a per-daemon user.
             .task(id: ClaimPlan.unclaimed(fleet.machines).map(\.hostId)) {
-                guard !claimOffered, !ClaimPlan.unclaimed(fleet.machines).isEmpty else { return }
+                guard !claimOffered, fleet.hasUnclaimed else { return }
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled, !claimOffered, sheet == nil, let plan = await fleet.claimPlan() else { return }
                 claimOffered = true

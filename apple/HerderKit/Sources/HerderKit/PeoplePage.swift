@@ -188,7 +188,8 @@ struct PeoplePage: View {
                                    run { try await people.setRole(role, of: person, on: hosts, machines: machines, sign: sign) }
                                },
                                revoke: { device in run { try await people.signOut(device, machines: machines, sign: sign) } },
-                               invite: invite)
+                               invite: invite,
+                               claim: fleet.hasUnclaimed ? { fleet.offerClaim(in: $sheet) } : nil)
                 } else if people.failures.isEmpty {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 120)
                 } else {

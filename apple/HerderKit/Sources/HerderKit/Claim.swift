@@ -1,6 +1,7 @@
 import Foundation
 import Herder
 import Observation
+import SwiftUI
 
 /// The one-time move to one identity: on each machine you own, your old user (or users) become
 /// your passkey. Machines that show up as users move to the vault's Machines list, and users
@@ -18,7 +19,15 @@ struct ClaimPlan: Hashable {
         var users: [String] = []
         /// The users there that are machines, which move to the vault's Machines list.
         var machineRows: [String] = []
+        /// The herder it runs; nil when too old to say.
+        var version: String? = ClaimPlan.needs
+
+        /// It runs a herder that takes the claim.
+        var ready: Bool { version.map { !ProviderVersions.version(ClaimPlan.needs, isNewerThan: $0) } ?? false }
     }
+
+    /// The first herder that takes a claim.
+    nonisolated static let needs = "0.17.0"
 
     /// A user on a machine that might be you, or someone else.
     struct Question: Hashable, Identifiable {
@@ -89,16 +98,25 @@ extension ClaimPlan.Question {
 }
 
 extension ClaimPlan {
-    /// "Create your herder passkey, then claim 5 machines".
+    /// "Create your herder passkey, then claim 5 machines", counting those ready.
     var headline: String {
-        let count = machines.count == 1 ? "1 machine" : "\(machines.count) machines"
+        let ready = machines.filter(\.ready).count
+        guard ready > 0 else { return "Update herder on your machines, then claim them" }
+        let count = ready == 1 ? "1 machine" : "\(ready) machines"
         return known == nil ? "Create your herder passkey, then claim \(count)" : "Claim \(count) with your herder passkey"
     }
 
     /// "Stored in iCloud Keychain; Face ID once for all five."
     var detail: String {
-        let all = machines.count == 1 ? "it" : machines.count == 2 ? "both" : "all \(Self.word(machines.count))"
+        let ready = machines.filter(\.ready).count
+        guard ready > 0 else { return "Claiming needs herder \(Self.short(Self.needs)) or newer." }
+        let all = ready == 1 ? "it" : ready == 2 ? "both" : "all \(Self.word(ready))"
         return "Stored in \(keychain); \(biometry) once for \(all)."
+    }
+
+    /// "0.17" for "0.17.0".
+    nonisolated static func short(_ version: String) -> String {
+        version.hasSuffix(".0") ? String(version.dropLast(2)) : version
     }
 
     nonisolated static func word(_ number: Int) -> String {
@@ -107,13 +125,16 @@ extension ClaimPlan {
     }
 
     /// The machines you own that still know you by a per-daemon user: connected, owner, and no
-    /// person in their hello.
+    /// person in their hello. A vault is named apart from the machine it runs on.
     nonisolated static func unclaimed(_ machines: [Herder.Machine]) -> [Machine] {
         machines.compactMap { machine in
             guard machine.role == .owner, machine.personId == nil, machine.connection == .connected,
                   let userId = machine.userId
             else { return nil }
-            return Machine(hostId: machine.hostId, name: machine.name, userId: userId)
+            let vault = !machine.hosts.isEmpty || machine.vault != nil
+            let name = vault && !machine.name.lowercased().contains("vault")
+                ? UnpairedVault.name(machine: machine.name) : machine.name
+            return Machine(hostId: machine.hostId, name: name, userId: userId, version: machine.herderVersion)
         }
     }
 
@@ -134,6 +155,14 @@ extension ClaimPlan {
 }
 
 extension Fleet {
+    /// Some machine you own is not claimed yet, so People and Fleet offer Claim your machines.
+    var hasUnclaimed: Bool { !ClaimPlan.unclaimed(machines).isEmpty }
+
+    /// Opens Claim your machines in `sheet`, when a machine is left to claim.
+    func offerClaim(in sheet: Binding<AppSheet?>) {
+        Task { if let plan = await claimPlan() { sheet.wrappedValue = .claim(plan) } }
+    }
+
     /// Claim your machines, for the machines you own that are not claimed yet; nil when none is.
     func claimPlan() async -> ClaimPlan? {
         let machines = ClaimPlan.unclaimed(self.machines)
@@ -153,10 +182,18 @@ extension Fleet {
 @MainActor @Observable
 final class Claim {
     enum Row: Equatable {
-        case ready, claiming, claimed, failed
+        /// Its herder is too old to take the claim; `updating` once asked to update.
+        case outdated(updating: Bool)
+        case ready, claiming, claimed
+        /// Why it refused.
+        case failed(String)
+
+        var failed: Bool { if case .failed = self { true } else { false } }
     }
 
     typealias Send = @MainActor (HostId, CommandBody) async throws -> CommandResult
+    /// Updates a machine's herder, when idle, through Activity.
+    typealias Update = @MainActor (HostId) -> Void
 
     let plan: ClaimPlan
     /// The machines, with the machine rows each moved once claimed.
@@ -166,20 +203,23 @@ final class Claim {
     var answers: [String: ClaimPlan.Answer]
     private(set) var rows: [HostId: Row]
     private(set) var working = false
-    private(set) var error: String?
+    /// Why a user's decision failed, by question.
+    private(set) var refusals: [String: String] = [:]
     /// You, once a machine knows your passkey: the person and its public keys.
     private var me: (id: PersonId, keys: [PasskeyKey])?
     private let authenticator: Authenticator
     private let send: Send
+    private let updateHerder: Update
 
-    init(_ plan: ClaimPlan, authenticator: Authenticator, send: @escaping Send) {
+    init(_ plan: ClaimPlan, authenticator: Authenticator, send: @escaping Send, update: @escaping Update = { _ in }) {
         self.plan = plan
         self.authenticator = authenticator
         self.send = send
+        self.updateHerder = update
         machines = plan.machines
         questions = plan.questions
         answers = Dictionary(uniqueKeysWithValues: plan.questions.map { ($0.id, .me) })
-        rows = Dictionary(uniqueKeysWithValues: plan.machines.map { ($0.id, .ready) })
+        rows = Dictionary(uniqueKeysWithValues: plan.machines.map { ($0.id, $0.ready ? .ready : .outdated(updating: false)) })
         me = plan.known.map { ($0.personId, $0.passkeys) }
     }
 
@@ -187,15 +227,17 @@ final class Claim {
     var claimed: Bool { rows.values.allSatisfy { $0 == .claimed } }
     /// Every machine is yours, and nobody waits for a decision.
     var done: Bool { claimed && questions.isEmpty }
+    /// Some machine not yours yet takes the claim.
+    var claimable: Bool { rows.values.contains { $0 == .ready || $0 == .claiming || $0.failed } }
+    /// The machines whose herder is too old, not asked to update yet.
+    var outdated: [ClaimPlan.Machine] { machines.filter { rows[$0.id] == .outdated(updating: false) } }
 
-    /// Claims each machine not yours yet. Closing the Face ID prompt stops, leaving the rest
-    /// ready; a machine that refuses is marked and the others go on.
+    /// Claims each machine not yours yet whose herder takes it. Closing the Face ID prompt
+    /// stops, leaving the rest ready; a machine that refuses is marked and the others go on.
     func claim() async {
         working = true
-        error = nil
         defer { working = false }
-        var failures: [String] = []
-        for machine in machines where rows[machine.id] != .claimed {
+        for machine in machines where machine.ready && rows[machine.id] != .claimed {
             rows[machine.id] = .claiming
             do {
                 try await claim(machine)
@@ -205,20 +247,41 @@ final class Claim {
                     rows[machine.id] = .ready
                     break
                 }
-                rows[machine.id] = .failed
-                failures.append("\(machine.name): \(describe(error))")
+                rows[machine.id] = .failed(describe(error))
             }
         }
-        if !failures.isEmpty { error = failures.joined(separator: "\n") }
+    }
+
+    /// Updates `hostId`'s herder when idle; its row is ready once it is back on a newer one.
+    func update(_ hostId: HostId) {
+        guard rows[hostId] == .outdated(updating: false) else { return }
+        rows[hostId] = .outdated(updating: true)
+        updateHerder(hostId)
+    }
+
+    /// Updates every machine whose herder is too old.
+    func updateAll() {
+        for machine in outdated { update(machine.id) }
+    }
+
+    /// Takes the versions the machines run now: a machine back on a herder that takes the
+    /// claim becomes ready.
+    func refresh(_ fleet: [Herder.Machine]) {
+        for index in machines.indices {
+            guard let listed = fleet.first(where: { $0.hostId == machines[index].hostId }),
+                  listed.herderVersion != machines[index].version
+            else { continue }
+            machines[index].version = listed.herderVersion
+            if case .outdated = rows[machines[index].id], machines[index].ready { rows[machines[index].id] = .ready }
+        }
     }
 
     /// Settles each user waiting for a decision, as answered: "It's me" and "Remove" ask their
     /// machine with the passkey; someone else stays as they are.
     func decide() async {
         working = true
-        error = nil
+        refusals = [:]
         defer { working = false }
-        var failures: [String] = []
         for question in questions {
             do {
                 if let decision = (answers[question.id] ?? .me).decision {
@@ -229,10 +292,9 @@ final class Claim {
                 questions.removeAll { $0.id == question.id }
             } catch {
                 if isCancelled(error) { break }
-                failures.append("“\(question.user)” on \(question.machine): \(describe(error))")
+                refusals[question.id] = describe(error)
             }
         }
-        if !failures.isEmpty { error = failures.joined(separator: "\n") }
     }
 
     private func claim(_ machine: ClaimPlan.Machine) async throws {

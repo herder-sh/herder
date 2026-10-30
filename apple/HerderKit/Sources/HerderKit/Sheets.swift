@@ -30,7 +30,8 @@ enum AppSheet: Identifiable, Hashable {
     case invite(HostId)
     /// Approving a new machine's `herder://own` link or a terminal's `herder://login` one.
     case approve(ApprovalRequest)
-    /// Claim your machines: offered once on launch while a machine you own is not claimed.
+    /// Claim your machines: offered once on launch, and from People and Fleet, while a machine
+    /// you own is not claimed.
     case claim(ClaimPlan)
 
     var id: Self { self }

@@ -15,6 +15,8 @@ struct PeopleView: View {
     let setRole: (Directory.Person, Role?, HostId?) -> Void
     let revoke: (Directory.Device) -> Void
     let invite: () -> Void
+    /// Opens Claim your machines, while a machine you own is not claimed yet.
+    var claim: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -23,6 +25,11 @@ struct PeopleView: View {
                 ForEach(directory.devices) { device in
                     RowDivider()
                     deviceRow(device)
+                }
+                if let claim {
+                    RowDivider()
+                    AddRow(title: "Claim your machines…", action: claim)
+                        .accessibilityIdentifier("people-claim")
                 }
             }
             section("Teammates") {

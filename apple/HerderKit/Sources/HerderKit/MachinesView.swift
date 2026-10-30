@@ -119,6 +119,9 @@ struct MachinesView: View {
                         integrationsLink
                     }
                 }
+                if fleet.hasUnclaimed {
+                    ClaimBanner { fleet.offerClaim(in: $sheet) }
+                }
                 let rows = MachineRow.rows(fleet.machines, summaries: fleet.lists.machines)
                 let vaults = fleet.vaults.map(VaultLine.paired) + unpaired.map(VaultLine.unpaired)
                 if rows.isEmpty && vaults.isEmpty {
