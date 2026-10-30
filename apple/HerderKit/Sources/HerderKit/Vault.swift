@@ -183,6 +183,13 @@ struct UnpairedVault: Hashable, Identifiable {
     /// A vault's name after the machine it runs on: "draugelis’s vault".
     nonisolated static func name(machine: String) -> String { "\(machine)’s vault" }
 
+    /// What `machine` is called among the others: a vault apart from the machine it runs on,
+    /// "draugelis’s vault", unless its name says vault already.
+    nonisolated static func name(of machine: Herder.Machine) -> String {
+        let vault = !machine.hosts.isEmpty || machine.vault != nil
+        return vault && !machine.name.lowercased().contains("vault") ? name(machine: machine.name) : machine.name
+    }
+
     /// The vaults `links` name, each machine's by its name, without those whose fingerprint
     /// is in `paired`.
     static func from(_ links: [(host: String, vault: LinkedVault)], paired: Set<String>) -> [UnpairedVault] {

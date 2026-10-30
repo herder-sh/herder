@@ -64,12 +64,13 @@ final class FleetPeople {
         }
     }
 
-    /// The directory of `machines`, or nil before any of them listed its people.
+    /// The directory of `machines`, or nil before any of them listed its people. A vault's
+    /// column is named apart from its machine's.
     func directory(_ machines: [Machine], localNames: Set<String> = MachineRow.localNames) -> Directory? {
         guard !people.isEmpty else { return nil }
         let local = MachineRow.thisMac(machines.filter { $0.hosts.isEmpty && $0.vault == nil }, names: localNames)
         let columns = machines.filter { people[$0.hostId] != nil }.map { machine in
-            Directory.Column(id: machine.hostId, name: machine.hostId == local ? "this Mac" : machine.name,
+            Directory.Column(id: machine.hostId, name: machine.hostId == local ? "this Mac" : UnpairedVault.name(of: machine),
                              vault: !machine.hosts.isEmpty || machine.vault != nil)
         }
         return .merging(people, columns: columns, me: Self.me(machines),

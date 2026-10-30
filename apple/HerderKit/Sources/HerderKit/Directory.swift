@@ -97,7 +97,7 @@ struct Directory: Equatable {
         }
         let owned = columns.filter { person.roles[$0.id] == .owner }
         let member = hosts.filter { person.roles[$0.id] == .member }
-        // A vault named after its machine says so already ("draugelis vault").
+        // A vault named after its machine says so already ("draugelis’s vault").
         let named = owned.filter { vault in !vault.vault || !owned.contains { !$0.vault && vault.name.hasPrefix($0.name) } }
         if owned.isEmpty && member.isEmpty { return "No machines yet" }
         if owned.isEmpty { return "Member on \(Self.list(member.map(\.name)))" }
@@ -189,7 +189,7 @@ extension Directory {
         let trash = Column(id: "trash", name: "trash-can-01")
         let draugelis = Column(id: "draugelis", name: "draugelis")
         let vault = Column(id: "vault-0", name: "herder-vault-0", vault: true)
-        let draugelisVault = Column(id: "draugelis-vault", name: "draugelis vault", vault: true)
+        let draugelisVault = Column(id: "draugelis-vault", name: "draugelis’s vault", vault: true)
         let columns = [mac, trash, draugelis, vault, draugelisVault]
         return Directory(
             columns: columns,

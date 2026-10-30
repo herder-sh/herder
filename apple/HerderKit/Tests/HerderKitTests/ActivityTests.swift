@@ -240,7 +240,7 @@ struct ActivityTests {
         #expect(keys.map { fleet.activity.phase($0) } == [.running, .queued, .running, .queued])
         #expect(keys.map { fleet.progress($0).group } == [.running, .queued, .running, .queued])
         // The fake daemons install nothing and say so, so each ends failed and the next starts.
-        #expect(await eventually(within: 30) { keys.allSatisfy { fleet.activity.phase($0) == .ended } })
+        #expect(await eventually { keys.allSatisfy { fleet.activity.phase($0) == .ended } })
         #expect(keys.allSatisfy { fleet.progress($0).failed })
         // Retry runs one again; Clear finished then leaves only it.
         fleet.retry(keys[0])

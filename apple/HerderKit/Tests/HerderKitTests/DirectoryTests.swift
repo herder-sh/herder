@@ -118,6 +118,22 @@ struct FleetPeopleTests {
         #expect(directory.only("devbox").teammates.map(\.name) == ["Sam"])
     }
 
+    @Test func vaultColumnsAreNamedApartFromTheirMachines() async throws {
+        let box = [FleetHost(hostId: "trash", hostName: "trash-can-01", online: true, lastSeen: "")]
+        var mac = machine("mac", name: "tomas-mbp", sessions: [], personId: "p-tomas")
+        mac.address = "127.0.0.1:7447"
+        let fleet = [mac,
+                     machine("trash", name: "trash-can-01", sessions: [], personId: "p-tomas"),
+                     machine("draugelis", name: "draugelis", sessions: [], personId: "p-tomas"),
+                     machine("vault-0", name: "herder-vault-0", sessions: [], hosts: box, personId: "p-tomas"),
+                     machine("draugelis-vault", name: "draugelis", sessions: [], hosts: box, personId: "p-tomas")]
+        let people = FleetPeople { _, _ in .people(people: [person("p-tomas", "Tomas", .owner)]) }
+        await people.reload(fleet)
+        let names = try #require(people.directory(fleet, localNames: ["127.0.0.1"])).columns.map(\.name)
+        #expect(names == ["this Mac", "trash-can-01", "draugelis", "herder-vault-0", "draugelis’s vault"])
+        #expect(Set(names).count == 5, "no two columns share a name")
+    }
+
     @Test func aRoleChangeCarriesEachMachinesOwnChallengeAndIntroducesNewcomers() async throws {
         let (people, sent) = model()
         await people.reload(machines)

@@ -82,9 +82,11 @@ func temporaryProfile() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent("herder-apple-\(UUID().uuidString)")
 }
 
-/// Waits until `condition` holds, checking every 50 ms for up to `seconds`.
+/// Waits until `condition` holds, checking every 50 ms for up to `seconds`. Every test shares
+/// the main actor, and CI's parallel run keeps it busy for many seconds at a time, so the wait
+/// is long; a condition that holds still returns at once.
 @MainActor
-func eventually(within seconds: Double = 10, _ condition: () -> Bool) async -> Bool {
+func eventually(within seconds: Double = 30, _ condition: () -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + .seconds(seconds)
     while ContinuousClock.now < deadline {
         if condition() { return true }
