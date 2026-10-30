@@ -52,6 +52,9 @@ struct DesktopShell: View {
         .background(Theme.canvas)
         #if os(macOS)
         .ignoresSafeArea(.container, edges: .top)
+        // As AppKit's own lists do: a page that fits the window stays put rather than stretch
+        // under a swipe, each frame of which redraws the whole pane.
+        .scrollBounceBehavior(.basedOnSize)
         #endif
     }
 
