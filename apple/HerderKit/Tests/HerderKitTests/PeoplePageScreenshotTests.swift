@@ -20,7 +20,7 @@ import Testing
                 PaneButton(title: "Invite", symbol: "plus") {}
             }
             PeopleView(directory: directory, grid: width.name == "mac", now: now,
-                       setRole: { _, _, _ in }, revoke: { _ in }, invite: {})
+                       setRole: { _, _, _ in }, revoke: { _ in }, itsMe: { _ in }, invite: {})
                 .padding(.horizontal, Theme.margin)
                 .padding(.vertical, 8)
         }

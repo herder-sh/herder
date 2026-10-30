@@ -465,6 +465,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::ApproveLogin { .. }
         | CommandBody::ClaimUsers { .. }
         | CommandBody::DecideLeftover { .. }
+        | CommandBody::MergePerson { .. }
         | CommandBody::ApproveAction { .. }
         | CommandBody::RefuseAction { .. }
         | CommandBody::SetAccountSettings { .. }

@@ -379,6 +379,15 @@ impl<B: Backend> Shared<B> {
                     LeftoverDecision::Remove => self.auth.remove_user(&user_id)?,
                 }
             }
+            CommandBody::MergePerson { from, assertion } => {
+                let Some(person_id) = self.auth.person_of(&identity.user_id) else {
+                    return Err(ErrorInfo {
+                        code: ErrorCode::Forbidden,
+                        message: "claim this daemon with your passkey first".to_owned(),
+                    });
+                };
+                self.auth.merge_person(&from, &person_id, &assertion)?;
+            }
             CommandBody::RevokeDevice { device_id, .. } => self.revoke_device(&device_id)?,
             command => return self.run(&identity.user_id, command_id, command).await,
         }
@@ -807,6 +816,7 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::ApproveLogin { .. }
                     | CommandBody::ClaimUsers { .. }
                     | CommandBody::DecideLeftover { .. }
+                    | CommandBody::MergePerson { .. }
                     | CommandBody::ApproveAction { .. }
                     | CommandBody::RefuseAction { .. }
                     | CommandBody::PairVaultHost { .. }

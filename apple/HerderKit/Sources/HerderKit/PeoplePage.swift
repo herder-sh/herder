@@ -105,6 +105,50 @@ final class FleetPeople {
         await reload(machines)
     }
 
+    /// Folds `person`, a duplicate of you, `me`, into you on every machine that lists you both
+    /// with you as owner: their devices become yours, and they are gone. One Face ID with their
+    /// passkey signs every such machine's challenge, one after the other, proving it is you.
+    func itsMe(_ person: Directory.Person, me: PersonId, machines: [Machine], sign: PasskeySigner) async throws {
+        let hosts = machines.map(\.hostId).filter { hostId in
+            let listed = people[hostId] ?? []
+            return listed.contains { $0.personId == person.id }
+                && listed.contains { $0.personId == me && $0.role == .owner }
+        }
+        guard !hosts.isEmpty else {
+            throw HerderError.Local(detail: "You own no machine that knows \(person.name).")
+        }
+        var challenges: [PasskeyChallenge] = []
+        for hostId in hosts {
+            guard case .passkeyChallenge(let challenge, _) = try await send(hostId, .passkeyChallenge) else {
+                throw HerderError.Local(detail: "the machine did not send a challenge")
+            }
+            challenges.append(challenge)
+        }
+        var batch = Data()
+        for challenge in challenges {
+            guard let bytes = Data(base64URL: challenge.challenge) else {
+                throw HerderError.Local(detail: "the machine sent a challenge that is not base64url")
+            }
+            batch += bytes
+        }
+        let assertion = try await sign(PasskeyChallenge(rpId: challenges[0].rpId, challenge: batch.base64URLEncodedString(),
+                                                        expiresAt: challenges.map(\.expiresAt).min() ?? ""))
+        let theirs = people.values.flatMap(\.self).filter { $0.personId == person.id }.flatMap(\.passkeys)
+        guard theirs.contains(where: { $0.credentialId == assertion.id }) else {
+            throw HerderError.Local(detail: "That passkey is not \(person.name)'s; sign with the one they were made with.")
+        }
+        var failures: [String] = []
+        for hostId in hosts {
+            do {
+                _ = try await send(hostId, .mergePerson(from: person.id, assertion: assertion))
+            } catch {
+                failures.append(describe(error))
+            }
+        }
+        await reload(machines)
+        if !failures.isEmpty { throw HerderError.Local(detail: failures.joined(separator: "\n")) }
+    }
+
     /// Signs `device` out of every machine it paired with.
     func signOut(_ device: Directory.Device, machines: [Machine], sign: PasskeySigner) async throws {
         for (hostId, devices) in device.paired {
@@ -188,6 +232,9 @@ struct PeoplePage: View {
                                    run { try await people.setRole(role, of: person, on: hosts, machines: machines, sign: sign) }
                                },
                                revoke: { device in run { try await people.signOut(device, machines: machines, sign: sign) } },
+                               itsMe: { person in
+                                   run { try await people.itsMe(person, me: directory.me.id, machines: machines, sign: sign) }
+                               },
                                invite: invite,
                                claim: fleet.hasUnclaimed ? { fleet.offerClaim(in: $sheet) } : nil)
                 } else if people.failures.isEmpty {

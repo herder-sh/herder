@@ -1325,6 +1325,7 @@
                   "revoke_person",
                   "claim_users",
                   "decide_leftover",
+                  "merge_person",
                   "approve_action",
                   "refuse_action",
                   "approve_login",
