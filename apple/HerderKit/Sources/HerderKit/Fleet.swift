@@ -164,10 +164,12 @@ public final class Fleet {
     }
 
     func update(_ machines: [Machine]) {
+        let listedNone = self.machines.allSatisfy(\.sessions.isEmpty)
         self.machines = machines
-        // At once, not with the events' throttle: the machines change seldom, and the first
-        // change on a launch is the offline cache, which the Board shows in place of the splash.
-        refreshLists()
+        // While nothing was listed, as on a launch, at once: the first sessions are the offline
+        // cache's, which the Board shows in place of the splash. From then on, throttled, so a
+        // burst of machine changes does not rebuild the lists under a scroll.
+        if listedNone { refreshLists() }
         settleUpdates()
         fetchProjectIcons(machines)
         for machine in machines {
