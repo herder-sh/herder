@@ -1234,6 +1234,7 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             | CommandBody::RevokePerson { .. }
             | CommandBody::ClaimUsers { .. }
             | CommandBody::DecideLeftover { .. }
+            | CommandBody::MergePerson { .. }
     );
     if people && role != Role::Owner {
         return Err(forbidden(

@@ -2197,6 +2197,29 @@
           ]
         },
         {
+          "description": "Fold the person `from`, a duplicate of the caller, into the caller: their devices join\nthe caller's, history attributed to them reads as the caller's, and they are removed.\nOwners only, as a person. The assertion is by `from`'s passkey, proving the caller holds\nit; it may sign a batch of daemons' challenges, as a claim's does, so one Face ID folds\nthem on every machine. Answered with `applied`. Refused with `not_found` for a person\nnot on this daemon, `bad_request` for the caller themselves, and `forbidden` for an\nassertion by any other passkey.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "An assertion by `from`'s passkey over a fresh `passkey_challenge`.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "from": {
+              "description": "The duplicate.",
+              "$ref": "#/$defs/PersonId"
+            },
+            "type": {
+              "type": "string",
+              "const": "merge_person"
+            }
+          },
+          "required": [
+            "type",
+            "from",
+            "assertion"
+          ]
+        },
+        {
           "description": "Approve an `approval_request`: the device that asked does what it asked, once. The\ncaller must be the person it acts for, with an assertion. Answered with `applied`.\nRefused with `not_found` once the request is closed.",
           "type": "object",
           "properties": {

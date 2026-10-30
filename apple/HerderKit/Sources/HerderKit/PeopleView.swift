@@ -14,6 +14,8 @@ struct PeopleView: View {
     /// their access away.
     let setRole: (Directory.Person, Role?, HostId?) -> Void
     let revoke: (Directory.Device) -> Void
+    /// Folds a teammate who is really you into you, signed with their passkey.
+    let itsMe: (Directory.Person) -> Void
     let invite: () -> Void
     /// Opens Claim your machines, while a machine you own is not claimed yet.
     var claim: (() -> Void)?
@@ -90,6 +92,7 @@ struct PeopleView: View {
                     Button("Owner of every machine") { setRole(person, .owner, nil) }
                     Button("Member of every machine") { setRole(person, .member, nil) }
                     Divider()
+                    Button("It's me") { itsMe(person) }
                     Button("Remove from the fleet", role: .destructive) { setRole(person, nil, nil) }
                 } label: {
                     RoleBox(title: role.title, menu: true)

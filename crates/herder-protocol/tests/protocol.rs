@@ -442,6 +442,10 @@ fn client_fixtures() -> Vec<ClientMessage> {
             decision: LeftoverDecision::Remove,
             assertion: Box::new(assertion()),
         }),
+        command(CommandBody::MergePerson {
+            from: person_id(),
+            assertion: Box::new(assertion()),
+        }),
         command(CommandBody::ApproveAction {
             request_id: "01J9REQUEST".into(),
             assertion: Box::new(assertion()),

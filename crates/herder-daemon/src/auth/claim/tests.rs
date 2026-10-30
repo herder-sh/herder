@@ -321,3 +321,126 @@ fn herder_claim_opens_the_owner_window_on_a_daemon_with_an_owner() {
     assert_eq!(refused.code, ErrorCode::Forbidden);
     assert!(refused.message.contains("herder claim"), "{refused:?}");
 }
+
+#[test]
+fn a_person_folds_their_duplicate_in_with_its_passkey_on_every_machine() {
+    use super::super::authenticator::enroll_known;
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    // Tomas on two machines; on both, his iPhone registered a passkey of its own and became a
+    // second owner, `carol`. Sam is a teammate.
+    let machines: Vec<_> = (0..2)
+        .map(|_| {
+            let tmp = tempfile::tempdir().unwrap();
+            let auth = Auth::open(tmp.path()).unwrap();
+            let (_, tomas) = enroll_known(&auth, "tomas", Role::Owner, "fp-mac");
+            enroll_known(&auth, "carol", Role::Owner, "fp-phone");
+            enroll_known(&auth, "sam", Role::Member, "fp-sam");
+            (tmp, auth, tomas)
+        })
+        .collect();
+    let (_, auth, tomas) = &machines[0];
+    let into = tomas.person_id.clone().unwrap();
+    let id = |name: &str| {
+        let people = auth.people();
+        people
+            .into_iter()
+            .find(|person| person.name == name)
+            .unwrap()
+            .person_id
+    };
+    let (carol, sam) = (id("carol"), id("sam"));
+    let (tomas_key, carol_key, sam_key) = (
+        super::super::authenticator::Authenticator::known("tomas"),
+        super::super::authenticator::Authenticator::known("carol"),
+        super::super::authenticator::Authenticator::known("sam"),
+    );
+    let fresh = |passkey: &super::super::authenticator::Authenticator| {
+        passkey.assert(&auth.challenge().unwrap())
+    };
+
+    // Nobody absorbs a person whose passkey they lack: not with their own, nor another's.
+    for (from, passkey) in [(&sam, &tomas_key), (&sam, &carol_key), (&carol, &sam_key)] {
+        let refused = auth.merge_person(from, &into, &fresh(passkey)).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Forbidden, "{}", refused.message);
+    }
+    assert_eq!(
+        auth.merge_person(&into, &into, &fresh(&tomas_key))
+            .unwrap_err()
+            .code,
+        ErrorCode::BadRequest
+    );
+    let nobody = PersonId::new(uuid::Uuid::now_v7().to_string());
+    assert_eq!(
+        auth.merge_person(&nobody, &into, &fresh(&carol_key))
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    // An assertion used once is not used again.
+    let used = fresh(&carol_key);
+    auth.verify_assertion(&carol, &used).unwrap();
+    assert_eq!(
+        auth.merge_person(&carol, &into, &used).unwrap_err().code,
+        ErrorCode::Forbidden
+    );
+    assert_eq!(auth.people().len(), 3);
+
+    // One Face ID with the duplicate's passkey, over both machines' challenges, folds it on
+    // both.
+    let phone = CancellationToken::new();
+    auth.authenticate("fp-phone", None, "test", DeviceRole::Client, &phone)
+        .unwrap();
+    let challenge = |auth: &Auth| {
+        URL_SAFE_NO_PAD
+            .decode(auth.challenge().unwrap().challenge)
+            .unwrap()
+    };
+    let signed = URL_SAFE_NO_PAD.encode(
+        machines
+            .iter()
+            .map(|(_, auth, _)| challenge(auth))
+            .collect::<Vec<_>>()
+            .concat(),
+    );
+    let assertion = carol_key.assert_raw(&signed, "https://herder.sh");
+    for (tmp, auth, tomas) in &machines {
+        auth.merge_person(&carol, &into, &assertion).unwrap();
+        let people = auth.people();
+        let names: Vec<_> = people.iter().map(|person| person.name.as_str()).collect();
+        assert_eq!(names, ["tomas", "sam"]);
+        assert_eq!(people[0].role, Role::Owner);
+        assert_eq!(people[0].devices.len(), 2);
+        // The phone acts as Tomas from now on, and history by the duplicate reads as his.
+        let phone = auth
+            .authenticate(
+                "fp-phone",
+                None,
+                "test",
+                DeviceRole::Client,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        assert_eq!(phone.user_id, tomas.user_id);
+        assert_eq!(phone.person_id.as_ref(), Some(&into));
+        assert_eq!(auth.resolve(&UserId::new(carol.as_str())), tomas.user_id);
+        // The duplicate's passkey signs nothing in any more.
+        let gone = herder_protocol::SignIn::Passkey {
+            assertion: carol_key.assert(&auth.challenge().unwrap()),
+        };
+        assert!(
+            auth.sign_in("fp-new", "test", gone, &CancellationToken::new())
+                .is_err()
+        );
+        // So it stays after a restart.
+        let reopened = Auth::open(tmp.path()).unwrap();
+        assert_eq!(reopened.people().len(), 2);
+        assert_eq!(
+            reopened.resolve(&UserId::new(carol.as_str())),
+            tomas.user_id
+        );
+    }
+    // The phone's open connection carried the duplicate; it connects again.
+    assert!(phone.is_cancelled());
+}

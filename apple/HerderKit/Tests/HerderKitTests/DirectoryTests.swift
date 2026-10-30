@@ -155,6 +155,64 @@ struct FleetPeopleTests {
         #expect(invite.expiresAt == Timestamp.date("2026-10-29T12:10:00Z"))
     }
 
+    @Test func itsMeFoldsADuplicateWithOneAssertionByItsPasskeyOnEveryMachineYouOwn() async throws {
+        // "Mobile User", the iPhone's own passkey, is a second owner of devbox and of vault.
+        let duplicate = person("p-mobile", "Mobile User", .owner)
+        let listed: [HostId: [PersonInfo]] = [
+            "devbox": Self.people["devbox"]! + [duplicate],
+            "laptop": Self.people["laptop"]!,
+            "vault": [person("p-tomas", "Tomas", .owner), duplicate],
+        ]
+        let fleet = machines + [machine("vault", name: "vault", sessions: [], personId: "p-tomas")]
+        var sent: [(HostId, CommandBody)] = []
+        let people = FleetPeople { hostId, command in
+            switch command {
+            case .listPeople: return .people(people: listed[hostId] ?? [])
+            case .passkeyChallenge:
+                let challenge = Data(hostId.utf8).base64URLEncodedString()
+                return .passkeyChallenge(challenge: PasskeyChallenge(rpId: "herder.sh", challenge: challenge,
+                                                                     expiresAt: "2026-10-29T12:01:00Z"),
+                                         registration: nil)
+            default:
+                sent.append((hostId, command))
+                return .applied
+            }
+        }
+        await people.reload(fleet)
+        let directory = try #require(people.directory(fleet, localNames: []))
+        let mobile = try #require(directory.teammates.first { $0.id == "p-mobile" })
+        var signed: [String] = []
+        let byTheirs: PasskeySigner = { challenge in
+            signed.append(challenge.challenge)
+            return PasskeyAssertion(id: "cred-p-mobile", rawId: "cred-p-mobile", response: AssertionResponse(
+                clientDataJson: challenge.challenge, authenticatorData: "", signature: "", userHandle: nil),
+                kind: "public-key")
+        }
+
+        // Your own passkey proves nothing about them: nothing is sent.
+        await #expect(throws: HerderError.self) {
+            try await people.itsMe(mobile, me: directory.me.id, machines: fleet, sign: sign)
+        }
+        #expect(sent.isEmpty)
+
+        try await people.itsMe(mobile, me: directory.me.id, machines: fleet, sign: byTheirs)
+        // One Face ID over devbox's and vault's challenges, one after the other.
+        #expect(signed.last == Data("devboxvault".utf8).base64URLEncodedString())
+        #expect(sent.map(\.0) == ["devbox", "vault"])
+        #expect(sent.allSatisfy {
+            if case .mergePerson(let from, let assertion) = $0.1 {
+                from == "p-mobile" && assertion.id == "cred-p-mobile"
+            } else {
+                false
+            }
+        })
+        // Pat owns only laptop, which does not know Sam.
+        let sam = directory.teammates[0]
+        await #expect(throws: HerderError.self) {
+            try await people.itsMe(sam, me: "p-pat", machines: fleet, sign: byTheirs)
+        }
+    }
+
     @Test func withoutAPasskeyNothingIsSent() async throws {
         let (people, sent) = model()
         await people.reload(machines)

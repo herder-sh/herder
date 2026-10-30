@@ -761,6 +761,19 @@ pub enum CommandBody {
         /// An assertion over a fresh `passkey_challenge`.
         assertion: Box<PasskeyAssertion>,
     },
+    /// Fold the person `from`, a duplicate of the caller, into the caller: their devices join
+    /// the caller's, history attributed to them reads as the caller's, and they are removed.
+    /// Owners only, as a person. The assertion is by `from`'s passkey, proving the caller holds
+    /// it; it may sign a batch of daemons' challenges, as a claim's does, so one Face ID folds
+    /// them on every machine. Answered with `applied`. Refused with `not_found` for a person
+    /// not on this daemon, `bad_request` for the caller themselves, and `forbidden` for an
+    /// assertion by any other passkey.
+    MergePerson {
+        /// The duplicate.
+        from: PersonId,
+        /// An assertion by `from`'s passkey over a fresh `passkey_challenge`.
+        assertion: Box<PasskeyAssertion>,
+    },
     /// Approve an `approval_request`: the device that asked does what it asked, once. The
     /// caller must be the person it acts for, with an assertion. Answered with `applied`.
     /// Refused with `not_found` once the request is closed.
