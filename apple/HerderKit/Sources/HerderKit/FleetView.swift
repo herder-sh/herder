@@ -180,6 +180,7 @@ struct FleetView: View {
             }
         }
         #endif
+        .onAppear { Launch.mark(.frame) }
         .task { await fleet.follow() }
         .overlay(alignment: .bottom) { ToastView(fleet: fleet) }
         .alert(fleet.archiveRefusal.map { "Couldn’t archive “\($0.title)”" } ?? "",

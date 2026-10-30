@@ -310,6 +310,7 @@ struct BoardView: View {
         TaskListRow(tree: tree, fleet: fleet, selection: selection, context: tree.project) {
             tree.toggleArchived(fleet: fleet, undoManager: undoManager)
         }
+        .onAppear { Launch.mark(.content) }
     }
 
     /// "Archived today", with the button that shows or hides those tasks.

@@ -165,6 +165,9 @@ public final class Fleet {
 
     func update(_ machines: [Machine]) {
         self.machines = machines
+        // At once, not with the events' throttle: the machines change seldom, and the first
+        // change on a launch is the offline cache, which the Board shows in place of the splash.
+        refreshLists()
         settleUpdates()
         fetchProjectIcons(machines)
         for machine in machines {
@@ -727,10 +730,12 @@ public enum Profile {
             directory = home.appendingPathComponent(".config/herder", isDirectory: true)
         }
         #endif
-        return open(
+        let profile = open(
             at: directory,
             client: "herder-\(platform)/\(version ?? "dev")",
             doneFile: app.appendingPathComponent("cache/done.json"))
+        Launch.mark(.profile)
+        return profile
     }
 
     #if os(macOS)
