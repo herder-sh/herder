@@ -7,7 +7,7 @@ final class SkillMentionUITests: XCTestCase {
     @MainActor
     func testDollarOpensThePickerAndTheChosenSkillIsSentAsItsName() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         if app.buttons["add-to-fleet"].firstMatch.waitForExistence(timeout: 2) {
             let link = try XCTUnwrap(
                 ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
@@ -53,7 +53,7 @@ final class SkillMentionUITests: XCTestCase {
     @MainActor
     func testTabChoosesTheFirstSkill() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
 
         app.openWaitingTask()

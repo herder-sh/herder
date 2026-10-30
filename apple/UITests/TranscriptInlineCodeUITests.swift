@@ -8,7 +8,7 @@ final class TranscriptInlineCodeUITests: XCTestCase {
     @MainActor
     func testTappingInlineCodeCopiesIt() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
 
         app.tabBars.buttons["Chats"].tap()

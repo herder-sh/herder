@@ -7,7 +7,7 @@ final class SessionKeyboardUITests: XCTestCase {
     @MainActor
     func testSessionOpensWithoutTheKeyboardAndDraggingTheTranscriptDismissesIt() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
 
         app.openWaitingTask()

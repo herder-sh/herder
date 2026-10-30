@@ -9,7 +9,7 @@ final class SecretsUITests: XCTestCase {
     func testAddingASetAndASecretAndGrantingIt() throws {
         let link = try XCTUnwrap(ProcessInfo.processInfo.environment["HERDER_VAULT_LINK"], "needs HERDER_VAULT_LINK")
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
 
         app.tabBars.buttons["Fleet"].tap()

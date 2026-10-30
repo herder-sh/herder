@@ -800,6 +800,14 @@ final class ScreenshotTests: XCTestCase {
         let done = app.buttons["Done"].firstMatch
         XCTAssertTrue(done.waitForExistence(timeout: 30), app.debugDescription)
         press(done)
+        // The demo fleet knows the app by an owner user of each machine's, so once its machines
+        // connect the app offers to claim them, once: shoot that, then put it off.
+        if wait(app.staticTexts["Claim your machines"].firstMatch, "claim offer", timeout: 30) {
+            settle()
+            shoot(platform("claim"), screen: true)
+            press(app.buttons["Later"].firstMatch)
+            settle()
+        }
     }
 
     /// Opens the session titled `title` from the Board, scrolling its row into view.
