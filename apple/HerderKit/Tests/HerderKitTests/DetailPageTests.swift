@@ -244,10 +244,9 @@ struct SettingsPatternTests {
 
     @Test func theIndexRaisesTheSectionBeingRead() {
         let sections = ["People", "New threads", "Channels", "About"]
-        #expect(DetailSectionTops.current([:], in: sections) == "People")
-        #expect(DetailSectionTops.current(["People": 200, "New threads": 500], in: sections) == "People")
-        #expect(DetailSectionTops.current(["People": -300, "New threads": 40, "Channels": 300], in: sections) == "New threads")
-        #expect(DetailSectionTops.current(["People": -900, "New threads": -500, "Channels": -100, "About": 20],
-                                          in: sections) == "About")
+        #expect(DetailReading.current([], in: sections) == "People")
+        #expect(DetailReading.current(["People"], in: sections) == "People")
+        #expect(DetailReading.current(["People", "New threads"], in: sections) == "New threads")
+        #expect(DetailReading.current(["People", "New threads", "Channels", "About"], in: sections) == "About")
     }
 }
