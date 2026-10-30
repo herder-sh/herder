@@ -410,7 +410,7 @@ struct ChipDetail: View {
                 Picture(data: image.data, height: 360)
             } else if let paste = chip.paste {
                 ScrollView {
-                    Text(paste).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
+                    TranscriptText(paste, style: .footnote, monospaced: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(width: 560, height: 360)

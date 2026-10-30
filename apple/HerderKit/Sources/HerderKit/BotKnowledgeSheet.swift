@@ -61,10 +61,8 @@ struct BotKnowledgeForm: View {
                     }
                 }
             } else {
-                Text(knowledge.saved.isEmpty ? "No instructions." : knowledge.saved)
-                    .font(.subheadline)
-                    .foregroundStyle(knowledge.saved.isEmpty ? Theme.tertiary : Theme.text)
-                    .textSelection(.enabled)
+                TranscriptText(knowledge.saved.isEmpty ? "No instructions." : knowledge.saved, style: .subheadline,
+                               color: knowledge.saved.isEmpty ? Theme.tertiary : Theme.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
                     .background(.card, in: .rect(cornerRadius: Theme.corner))
@@ -129,9 +127,7 @@ struct BotKnowledgeForm: View {
         } else {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(fact.text).font(.subheadline).foregroundStyle(Theme.text)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                    TranscriptText(fact.text, style: .subheadline)
                     HStack(spacing: 6) {
                         Text(BotKnowledge.learned(fact)).font(.caption).foregroundStyle(Theme.tertiary)
                         if let url = fact.thread?.url.flatMap(URL.init) {

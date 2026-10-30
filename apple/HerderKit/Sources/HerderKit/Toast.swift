@@ -101,14 +101,12 @@ private struct ToastDetails: View {
             Rectangle().fill(Theme.stroke).frame(height: 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(toast.text).font(.body.weight(.semibold)).foregroundStyle(Theme.text)
+                    TranscriptText(toast.text, weight: .semibold)
                     if let detail = toast.detail {
-                        Text(chainLines(detail)).font(.callout).foregroundStyle(Theme.secondary)
+                        TranscriptText(chainLines(detail), style: .callout, color: Theme.secondary)
                     }
                 }
-                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
                 .padding(16)
             }
         }

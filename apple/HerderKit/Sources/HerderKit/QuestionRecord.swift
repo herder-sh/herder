@@ -30,10 +30,7 @@ struct QuestionRecord: View {
                 }
             }
             if case .text(let typed)? = question.answer {
-                Text(typed)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.text)
-                    .textSelection(.enabled)
+                TranscriptText(typed, style: .subheadline)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)

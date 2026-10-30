@@ -302,10 +302,7 @@ struct ActivityDetail: View {
                 Spacer(minLength: 8)
                 JobBadge(progress: progress)
             }
-            Text(text.detail).font(.subheadline)
-                .foregroundStyle(progress.failed ? Theme.failure : Theme.secondary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            TranscriptText(text.detail, style: .subheadline, color: progress.failed ? Theme.failure : Theme.secondary)
             ForEach(text.warnings) { WarningCard(warning: $0) }
             actions(progress)
             if let connection = fleet.activity[key]?.connection, progress.group != .queued {
@@ -325,7 +322,7 @@ struct ActivityDetail: View {
         switch (key.kind, progress) {
         case (_, .approve(let device)):
             HStack(spacing: 10) {
-                Text(device.userCode).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
+                TranscriptText(device.userCode, style: .footnote, monospaced: true)
                 PillButton(title: "Approve in the browser", prominent: true) {
                     if let url = URL(string: device.verificationUrl) { openURL(url) }
                 }
@@ -370,7 +367,7 @@ struct WarningCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if let fix = warning.fix {
                     HStack(spacing: 6) {
-                        Text(fix).font(Theme.monoSmall).foregroundStyle(Theme.text).textSelection(.enabled)
+                        TranscriptText(fix, style: .caption, monospaced: true)
                         CopyButton(text: fix)
                     }
                     Text("Run it on the machine to fix this.").font(.caption2).foregroundStyle(Theme.tertiary)

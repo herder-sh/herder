@@ -52,15 +52,6 @@ struct TranscriptBlockView: View {
                 Group {
                     if inline {
                         MessageText(text: text, pictures: pictures) { await fleet.fetchAttachment($0, of: key) }
-                            .font(.body)
-                            .foregroundStyle(Theme.onBubble)
-                            #if os(iOS)
-                            // Its words and chips are views of their own, which select none of
-                            // the others; a short bubble's menu copies them all.
-                            .contextMenu { Button("Copy", systemImage: "doc.on.doc") { Clipboard.string = text } }
-                            #else
-                            .textSelection(.enabled)
-                            #endif
                     } else {
                         TranscriptText(string: MarkdownText.inline(text, ground: Theme.onBubbleCode, prs: prLinks, find: find),
                                        color: Theme.onBubble)
@@ -88,10 +79,8 @@ struct TranscriptBlockView: View {
         case .reasoning(_, let text, let streaming):
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "brain").foregroundStyle(Theme.tertiary)
-                Text(MarkdownText.decorated(AttributedString(text + (streaming ? " ▍" : "")), prs: prLinks, find: find))
-                    .italic().foregroundStyle(Theme.secondary).tint(Theme.link)
-                    .lineLimit(streaming ? nil : 3)
-                    .textSelection(.enabled)
+                TranscriptText(string: MarkdownText.decorated(AttributedString(text + (streaming ? " ▍" : "")), prs: prLinks, find: find),
+                               style: .footnote, italic: true, color: Theme.secondary, lineLimit: streaming ? nil : 3)
             }
             .font(.footnote)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -232,14 +221,27 @@ struct NoticeLine: View {
     var body: some View {
         HStack(spacing: 8) {
             Rectangle().fill(Theme.stroke).frame(height: 1)
-            Text(expanded ? notice.detail ?? notice.text : notice.text)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(notice.tone == .error ? Theme.failure : notice.tone == .attention ? Theme.accent : Theme.tertiary)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-                .layoutPriority(1)
-                .help(notice.detail ?? "")
-                .onTapGesture { if notice.detail != nil { expanded.toggle() } }
+            // Its text selects; its chevron, not a click on the text, shows the rest.
+            HStack(spacing: 4) {
+                TranscriptText(string: AttributedString(expanded ? notice.detail ?? notice.text : notice.text),
+                               style: .caption, weight: .medium,
+                               color: notice.tone == .error ? Theme.failure : notice.tone == .attention ? Theme.accent : Theme.tertiary,
+                               alignment: .center)
+                    .help(notice.detail ?? "")
+                if notice.detail != nil {
+                    Button { expanded.toggle() } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .foregroundStyle(Theme.tertiary)
+                            .frame(width: 16, height: 16)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(expanded ? "Show less" : "Show more")
+                }
+            }
+            .layoutPriority(1)
             Rectangle().fill(Theme.stroke).frame(height: 1)
         }
     }

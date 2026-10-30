@@ -22,4 +22,34 @@ final class TranscriptCopyUITests: XCTestCase {
         app.menuItems["Copy Message"].tap()
         XCTAssertTrue(app.menuItems["Copy"].waitForNonExistence(timeout: 5))
     }
+
+    /// A long press and Select All select the whole message, which Copy copies: pasted into the
+    /// composer, it reads as the message does.
+    @MainActor
+    func testSelectingAllOfAMessageCopiesItWhole() throws {
+        let app = XCUIApplication()
+        try app.launchOnFakeFleet()
+
+        app.openWaitingTask()
+        let message = app.message("Run the tests.")
+        XCTAssertTrue(message.waitForExistence(timeout: 10))
+
+        message.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).press(forDuration: 1)
+        let selectAll = app.menuItems["Select All"]
+        XCTAssertTrue(selectAll.waitForExistence(timeout: 5), "the edit menu cannot select the whole message")
+        selectAll.tap()
+        let copy = app.menuItems["Copy"]
+        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        copy.tap()
+
+        let composer = app.descendants(matching: .any)["composer"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        composer.press(forDuration: 1)
+        let paste = app.menuItems["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 5), "nothing was copied")
+        paste.tap()
+        XCTAssertEqual(composer.value as? String, "Run the tests.")
+        // Cleared, so no draft is left for the next test.
+        composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Run the tests.".count))
+    }
 }

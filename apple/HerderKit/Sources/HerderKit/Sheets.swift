@@ -329,9 +329,8 @@ struct ProjectPicker: View {
                 if input.changingLocation {
                     InputBox(placeholder: "~/Projects/project", text: $input.into, mono: true)
                 } else {
-                    Text(input.into.isEmpty ? "Enter a repository to choose its folder" : input.into)
-                        .font(Theme.monoSmall).foregroundStyle(Theme.secondary)
-                        .textSelection(.enabled)
+                    TranscriptText(input.into.isEmpty ? "Enter a repository to choose its folder" : input.into,
+                                   style: .caption, monospaced: true, color: Theme.secondary)
                 }
             }
         } else {
@@ -479,7 +478,7 @@ struct AddressRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
                 Text("\(index + 1)").monospacedDigit().foregroundStyle(Theme.tertiary)
-                Text(address).font(Theme.monoSmall).foregroundStyle(Theme.text).textSelection(.enabled)
+                TranscriptText(address, style: .caption, monospaced: true)
                 statusView
                 Spacer()
                 Button("Move Up", systemImage: "chevron.up") { move(index - 1) }

@@ -278,7 +278,7 @@ struct VaultChoices: View {
 struct VaultInstallCommand: View {
     var body: some View {
         HStack(spacing: 8) {
-            Text(VaultChoices.installCommand).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
+            TranscriptText(VaultChoices.installCommand, style: .footnote, monospaced: true)
             Spacer(minLength: 0)
             IconButton(symbol: "doc.on.doc", help: "Copy") { Clipboard.string = VaultChoices.installCommand }
         }
