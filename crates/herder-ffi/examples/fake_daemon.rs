@@ -47,7 +47,8 @@ async fn main() -> Result<()> {
         }
         Some("--own") => {
             let daemon = support::FakeDaemon::unowned("new-server").await?;
-            println!("{}", daemon.own_link.clone().context("an unowned daemon has an own link")?);
+            let link = daemon.own_link.clone().context("no own link")?;
+            println!("{link}");
             tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
             return daemon.stop().await;
         }

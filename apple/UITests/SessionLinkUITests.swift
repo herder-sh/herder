@@ -9,7 +9,7 @@ final class SessionLinkUITests: XCTestCase {
         let session = try XCTUnwrap(ProcessInfo.processInfo.environment["HERDER_WAITING_SESSION"],
                                     "needs HERDER_WAITING_SESSION")
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
 
         app.open(try XCTUnwrap(URL(string: "herder://session?host=fake-host-1&session=\(session)")))
@@ -22,7 +22,7 @@ final class SessionLinkUITests: XCTestCase {
     @MainActor
     func testALinkToAnUnpairedMachineOffersAddMachine() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
 
         app.open(try XCTUnwrap(URL(string: "herder://session?host=elsewhere&session=01JABC")))

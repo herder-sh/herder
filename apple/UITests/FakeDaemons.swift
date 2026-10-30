@@ -1,6 +1,15 @@
 import XCTest
 
 extension XCUIApplication {
+    /// Launches the app as the tests need it: without the once-a-launch Claim your machines
+    /// offer, which would come up over whatever a test opens, as the fake daemons pair the app as
+    /// an owner of their own.
+    @MainActor
+    func launchForTests() {
+        launchEnvironment["HERDER_NO_CLAIM_OFFER"] = "1"
+        launch()
+    }
+
     /// A transcript message's text, a text view to select in, found by what it says.
     func message(_ text: String) -> XCUIElement {
         textViews.matching(NSPredicate(format: "value == %@", text)).firstMatch

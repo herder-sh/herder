@@ -6,7 +6,7 @@ final class SessionSearchUITests: XCTestCase {
     @MainActor
     func testSearchingTheBoardFiltersItsSessions() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForTests()
         try app.pairUnlessPaired()
         app.tabBars.buttons["Board"].tap()
 
