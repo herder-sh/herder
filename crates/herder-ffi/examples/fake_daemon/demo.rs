@@ -472,6 +472,8 @@ pub struct Demo {
     pub link: String,
     /// The user's passkey, as `Authenticator::export` gives it, to sign in with.
     pub passkey: String,
+    /// The device that set the demo up, signed in to every machine as the user.
+    pub client: Client,
     daemons: Vec<Daemon>,
     vault: DemoVault,
     _tmp: TempDir,
@@ -524,6 +526,7 @@ impl Demo {
         Ok(Self {
             link: shared.to_string(),
             passkey: Authenticator::known(USER).export(),
+            client,
             daemons,
             vault,
             _tmp: tmp,

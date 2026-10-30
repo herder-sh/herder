@@ -17,9 +17,13 @@
 //! and its owner's passkey.
 //! `fake_daemon --own` runs `fake-own`, which waits for a new owner as after `herder claim`, and
 //! prints only the `herder://own` link that claim prints.
+//! `fake_daemon --record-demo PATH` records the demo fleet for the apps' demo into `PATH`
+//! ([`record`]) and exits.
 
 #[path = "fake_daemon/demo.rs"]
 mod demo;
+#[path = "fake_daemon/record.rs"]
+mod record;
 #[path = "../tests/support/mod.rs"]
 mod support;
 #[path = "fake_daemon/vault.rs"]
@@ -41,6 +45,12 @@ async fn main() -> Result<()> {
             println!("{}\n{}", demo.link, demo.passkey);
             tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
             return demo.stop().await;
+        }
+        Some("--record-demo") => {
+            let out = std::env::args()
+                .nth(2)
+                .context("--record-demo needs a path")?;
+            return record::record(std::path::Path::new(&out)).await;
         }
         Some("--vault") => {
             let vault = vault::Vault::start().await?;

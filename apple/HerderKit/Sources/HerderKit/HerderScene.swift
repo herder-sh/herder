@@ -4,6 +4,8 @@ import SwiftUI
 /// The app's scene: opens the profile once and ties the client to the app's lifecycle.
 public struct HerderScene: Scene {
     @State private var profile = Profile.openDefault()
+    /// The demo, while it is open in place of the profile's fleet.
+    @State private var demo: Fleet?
     @Environment(\.scenePhase) private var scenePhase
 
     public init() {}
@@ -12,10 +14,26 @@ public struct HerderScene: Scene {
         WindowGroup {
             switch profile {
             case .opened(let fleet):
-                FleetView(fleet: fleet)
-                    .overlay { Splash(fleet: fleet) }
-                    // Dark only for now; light mode comes later.
-                    .preferredColorScheme(.dark)
+                Group {
+                    if let demo {
+                        FleetView(fleet: demo)
+                            .safeAreaInset(edge: .top, spacing: 0) {
+                                DemoBanner { self.demo = nil }
+                            }
+                    } else {
+                        FleetView(fleet: fleet)
+                            .overlay { Splash(fleet: fleet) }
+                            .environment(\.exploreDemo) {
+                                do {
+                                    demo = try Fleet.demo()
+                                } catch {
+                                    fleet.toast = Toast(text: describe(error))
+                                }
+                            }
+                    }
+                }
+                // Dark only for now; light mode comes later.
+                .preferredColorScheme(.dark)
             case .failed(let message):
                 ContentUnavailableView(
                     "Cannot open the profile", systemImage: "exclamationmark.triangle",

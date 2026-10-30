@@ -25,8 +25,9 @@ let package = Package(
                 // Draws SVG project icons, which UIImage cannot read.
                 .product(name: "SwiftDraw", package: "SwiftDraw"),
             ],
-            // Mermaid 11.17.2 (MIT, LICENSE alongside) renders diagrams offline.
-            resources: [.copy("Resources/Mermaid")],
+            // Mermaid 11.17.2 (MIT, LICENSE alongside) renders diagrams offline;
+            // demo.json is the demo fleet the empty state offers, from scripts/record-demo.sh.
+            resources: [.copy("Resources/Mermaid"), .copy("Resources/demo.json")],
             // VideoPlayer's view subclasses AVKit's player view, but the SwiftUI overlay it lives
             // in does not pull AVKit in: unlinked, the app aborts the moment a video artifact shows.
             linkerSettings: [.linkedFramework("AVKit")]),
