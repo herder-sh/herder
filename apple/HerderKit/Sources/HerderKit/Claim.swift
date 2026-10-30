@@ -134,10 +134,8 @@ extension ClaimPlan {
             guard machine.role == .owner, machine.personId == nil, machine.connection == .connected,
                   let userId = machine.userId
             else { return nil }
-            let vault = !machine.hosts.isEmpty || machine.vault != nil
-            let name = vault && !machine.name.lowercased().contains("vault")
-                ? UnpairedVault.name(machine: machine.name) : machine.name
-            return Machine(hostId: machine.hostId, name: name, userId: userId, version: machine.herderVersion)
+            return Machine(hostId: machine.hostId, name: UnpairedVault.name(of: machine), userId: userId,
+                           version: machine.herderVersion)
         }
     }
 
