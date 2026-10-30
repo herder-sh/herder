@@ -215,7 +215,7 @@ extension Fleet {
 
     /// The paired vaults' statistics.
     var vaults: [VaultStats] {
-        machines.compactMap { VaultStats(machine: $0, sessions: sessions) }
+        liveMachines.compactMap { VaultStats(machine: $0, sessions: sessions) }
     }
 
     /// The vaults the connected machines back up to that this device is not paired with. Only

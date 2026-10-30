@@ -171,7 +171,11 @@ struct MachinePage: View {
     /// The accounts signed out here, to sign in again, and the CLIs to update; for the owner,
     /// as only they may.
     @ViewBuilder private func attention(_ machine: Machine) -> some View {
-        let attention = MachineAttention(machine: machine, versions: ProviderVersions(machines: fleet.machines))
+        // The sessions waiting on a signed-out account count from the live heads, read only then,
+        // so the page does not redraw on every turn the machine runs.
+        let signedOut = machine.accounts.contains { $0.needsLogin != nil }
+        let heads = signedOut ? fleet.liveMachines.first { $0.hostId == hostId } ?? machine : machine
+        let attention = MachineAttention(machine: heads, versions: ProviderVersions(machines: fleet.machines))
         let canFix = machine.role == .owner && machine.connection == .connected
         if !attention.isEmpty {
             NeedsAttention {

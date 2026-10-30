@@ -515,7 +515,7 @@ struct ChildBanner: View {
     @Environment(\.sessionPath) private var path
 
     private var listed: Bool {
-        fleet.machines.first { $0.hostId == parent.hostId }?.sessions.contains { $0.sessionId == parent.sessionId } == true
+        fleet.liveMachines.first { $0.hostId == parent.hostId }?.sessions.contains { $0.sessionId == parent.sessionId } == true
     }
 
     var body: some View {
