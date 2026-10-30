@@ -778,6 +778,16 @@ impl Auth {
     /// Verifies the passkey `person` holds, by its registration or by an assertion over a
     /// fresh challenge, without adding them to this daemon.
     pub fn verify_new_person(&self, person: &NewPerson) -> Result<ProvenPerson, ErrorInfo> {
+        self.prove(person, false)
+    }
+
+    /// [`Auth::verify_new_person`] for a claim, whose assertion may sign a batch of daemons'
+    /// challenges, this daemon's among them: one Face ID claims every machine.
+    pub fn verify_claimer(&self, person: &NewPerson) -> Result<ProvenPerson, ErrorInfo> {
+        self.prove(person, true)
+    }
+
+    fn prove(&self, person: &NewPerson, batch: bool) -> Result<ProvenPerson, ErrorInfo> {
         let name = user_name(&person.name)
             .map_err(|err| bad_request(&err.to_string()))?
             .to_owned();
@@ -789,13 +799,17 @@ impl Auth {
                 assertion,
             } => {
                 let mut passkey = Key::from_wire(key)?;
-                let asserted = self.passkeys.verify(assertion, |id| {
+                let keys = |id: &PersonId| {
                     if id == person_id {
                         vec![passkey.clone()]
                     } else {
                         Vec::new()
                     }
-                })?;
+                };
+                let asserted = match batch {
+                    true => self.passkeys.verify_batch(assertion, keys)?,
+                    false => self.passkeys.verify(assertion, keys)?,
+                };
                 passkey.note(&asserted.result);
                 (asserted.person_id, passkey)
             }

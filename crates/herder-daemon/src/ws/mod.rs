@@ -344,9 +344,17 @@ impl<B: Backend> Shared<B> {
                 return Ok(CommandResult::LoginApproved { device_id, client });
             }
             CommandBody::ClaimUsers { person, also } => {
-                let proven = self.auth.verify_new_person(&person)?;
+                // A refused claim is logged: the app is where its owner reads why.
+                let refused = |err: ErrorInfo| {
+                    warn!(user_id = %identity.user_id, "claim refused: {}", err.message);
+                    err
+                };
+                let proven = self.auth.verify_claimer(&person).map_err(refused)?;
                 let person_id = proven.person_id.clone();
-                let claimed = self.claim(&identity.user_id, proven, &also).await?;
+                let claimed = self
+                    .claim(&identity.user_id, proven, &also)
+                    .await
+                    .map_err(refused)?;
                 return Ok(CommandResult::Claimed {
                     person_id,
                     hosts: claimed.hosts,

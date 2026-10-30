@@ -63,10 +63,12 @@ struct ClaimPlan: Hashable {
 
     var machines: [Machine]
     var questions: [Question] = []
-    /// What the passkey is saved under: your name.
+    /// What the passkey is saved under: your name; empty when nothing knows it, so the sheet asks.
     var name = "Owner"
-    /// You with your passkey, when a machine knows it already: it is reused, not made anew.
-    var known: PersonInfo?
+    /// Who your passkey may be, when a machine knows people with one: it is reused, not made anew.
+    /// The person a machine says this device is, else every owner with a passkey, as iCloud
+    /// Keychain gives one device's passkey to your others.
+    var known: [PersonInfo] = []
     /// Where the passkey will be kept.
     var keychain = "iCloud Keychain"
     /// What unlocks it: "Face ID".
@@ -103,7 +105,7 @@ extension ClaimPlan {
         let ready = machines.filter(\.ready).count
         guard ready > 0 else { return "Update herder on your machines, then claim them" }
         let count = ready == 1 ? "1 machine" : "\(ready) machines"
-        return known == nil ? "Create your herder passkey, then claim \(count)" : "Claim \(count) with your herder passkey"
+        return known.isEmpty ? "Create your herder passkey, then claim \(count)" : "Claim \(count) with your herder passkey"
     }
 
     /// "Stored in iCloud Keychain; Face ID once for all five."
@@ -169,10 +171,19 @@ extension Fleet {
         guard !machines.isEmpty else { return nil }
         let people = FleetPeople(fleet: self)
         await people.reload(self.machines)
-        let me = FleetPeople.me(self.machines)
-        let known = Self.keyed(me, in: people.people)
-        return ClaimPlan(machines: machines, name: Self.ownerName(known?.name, fullName: NSFullUserName()),
+        let known = Self.yours(FleetPeople.me(self.machines), in: people.people)
+        return ClaimPlan(machines: machines, name: known.count == 1 ? known[0].name : Self.deviceUserName,
                          known: known, biometry: Biometry.name)
+    }
+
+    /// Who your passkey may be: the person the machines say you are, else every owner with a
+    /// passkey, once each.
+    nonisolated static func yours(_ me: PersonId?, in people: [HostId: [PersonInfo]]) -> [PersonInfo] {
+        if let known = keyed(me, in: people) { return [known] }
+        var seen: Set<PersonId> = []
+        return people.keys.sorted().flatMap { people[$0] ?? [] }.filter {
+            $0.role == .owner && !$0.passkeys.isEmpty && seen.insert($0.personId).inserted
+        }
     }
 }
 
@@ -194,6 +205,8 @@ final class Claim {
     typealias Send = @MainActor (HostId, CommandBody) async throws -> CommandResult
     /// Updates a machine's herder, when idle, through Activity.
     typealias Update = @MainActor (HostId) -> Void
+    /// Reconnects to a machine once claimed, so its hello names the person.
+    typealias Reconnect = @MainActor (HostId) async -> Void
 
     let plan: ClaimPlan
     /// The machines, with the machine rows each moved once claimed.
@@ -205,22 +218,28 @@ final class Claim {
     private(set) var working = false
     /// Why a user's decision failed, by question.
     private(set) var refusals: [String: String] = [:]
-    /// You, once a machine knows your passkey: the person and its public keys.
-    private var me: (id: PersonId, keys: [PasskeyKey])?
+    /// What a new passkey is saved under, which the sheet asks for when nothing knows it.
+    var name: String
+    /// You, once a machine knows your passkey: the person with its public keys.
+    private var me: PersonInfo?
     private let authenticator: Authenticator
     private let send: Send
     private let updateHerder: Update
+    private let reconnect: Reconnect
 
-    init(_ plan: ClaimPlan, authenticator: Authenticator, send: @escaping Send, update: @escaping Update = { _ in }) {
+    init(_ plan: ClaimPlan, authenticator: Authenticator, send: @escaping Send, update: @escaping Update = { _ in },
+         reconnect: @escaping Reconnect = { _ in }) {
         self.plan = plan
         self.authenticator = authenticator
         self.send = send
         self.updateHerder = update
+        self.reconnect = reconnect
+        name = plan.name
         machines = plan.machines
         questions = plan.questions
         answers = Dictionary(uniqueKeysWithValues: plan.questions.map { ($0.id, .me) })
         rows = Dictionary(uniqueKeysWithValues: plan.machines.map { ($0.id, $0.ready ? .ready : .outdated(updating: false)) })
-        me = plan.known.map { ($0.personId, $0.passkeys) }
+        me = plan.known.count == 1 ? plan.known[0] : nil
     }
 
     /// Every machine is yours.
@@ -232,22 +251,25 @@ final class Claim {
     /// The machines whose herder is too old, not asked to update yet.
     var outdated: [ClaimPlan.Machine] { machines.filter { rows[$0.id] == .outdated(updating: false) } }
 
-    /// Claims each machine not yours yet whose herder takes it. Closing the Face ID prompt
-    /// stops, leaving the rest ready; a machine that refuses is marked and the others go on.
+    /// Claims each machine not yours yet whose herder takes it: the passkey is made on the
+    /// first when no machine knows one, then one assertion over every other machine's challenge
+    /// claims them all, so Face ID is asked once for the rest. A Face ID prompt closed or timed
+    /// out stops, failing the machines it was for; a machine that refuses is marked and the
+    /// others go on.
     func claim() async {
         working = true
         defer { working = false }
-        for machine in machines where machine.ready && rows[machine.id] != .claimed {
-            rows[machine.id] = .claiming
-            do {
-                try await claim(machine)
-                rows[machine.id] = .claimed
-            } catch {
-                if isCancelled(error) {
-                    rows[machine.id] = .ready
-                    break
-                }
-                rows[machine.id] = .failed(describe(error))
+        var left = machines.filter { $0.ready && rows[$0.id] != .claimed }[...]
+        for machine in left { rows[machine.id] = .claiming }
+        do {
+            while me == nil, plan.known.isEmpty, let machine = left.popFirst() {
+                try await attempt(machine) { try await self.register(machine) }
+            }
+            try await claimSigned(Array(left))
+        } catch {
+            // The system reports a prompt that timed out as closed, so neither is silent.
+            for machine in machines where rows[machine.id] == .claiming {
+                rows[machine.id] = .failed("the passkey prompt was closed or timed out before it signed; claim again")
             }
         }
     }
@@ -297,24 +319,67 @@ final class Claim {
         }
     }
 
-    private func claim(_ machine: ClaimPlan.Machine) async throws {
-        let (challenge, creation) = try await challenge(machine.hostId)
-        let person: NewPerson
-        var registered: PasskeyRegistration?
-        if let me {
-            let assertion = try await authenticator.sign(challenge)
-            guard let key = me.keys.first(where: { $0.credentialId == assertion.id }) else {
-                throw HerderError.Local(detail: "that passkey is not the one your machines know")
-            }
-            person = NewPerson(name: plan.name, passkey: .existing(personId: me.id, key: key, assertion: assertion))
-        } else {
-            guard let creation, let userId = Data(base64URL: creation.userHandle),
-                  let bytes = Data(base64URL: creation.challenge)
-            else { throw HerderError.Local(detail: "the machine did not offer to make a passkey") }
-            let registration = try await authenticator.register(name: plan.name, userId: userId, challenge: bytes)
-            registered = registration
-            person = NewPerson(name: plan.name, passkey: .register(registration: registration))
+    /// Runs `body` for `machine`, marking it claimed; a refusal marks it failed with why, and a
+    /// closed or timed-out Face ID prompt is thrown.
+    private func attempt(_ machine: ClaimPlan.Machine, _ body: () async throws -> Void) async throws {
+        do {
+            try await body()
+            rows[machine.id] = .claimed
+        } catch {
+            if isCancelled(error) { throw error }
+            rows[machine.id] = .failed(describe(error))
         }
+    }
+
+    /// Makes your passkey from `machine`'s challenge, and claims it with it.
+    private func register(_ machine: ClaimPlan.Machine) async throws {
+        guard case (_, let creation?) = try await challenge(machine.hostId),
+              let userId = Data(base64URL: creation.userHandle), let bytes = Data(base64URL: creation.challenge)
+        else { throw HerderError.Local(detail: "the machine did not offer to make a passkey") }
+        let name = name.trimmingCharacters(in: .whitespaces)
+        let registration = try await authenticator.register(name: name, userId: userId, challenge: bytes)
+        let personId = try await take(machine, NewPerson(name: name, passkey: .register(registration: registration)))
+        // The machine lists the new passkey's public key, which the others take it by.
+        guard case .people(let people) = try await send(machine.hostId, .listPeople),
+              let person = people.first(where: { $0.personId == personId }),
+              person.passkeys.contains(where: { $0.credentialId == registration.id })
+        else { throw HerderError.Local(detail: "the machine did not list your new passkey") }
+        me = person
+    }
+
+    /// Claims `machines` with one assertion over all their challenges, one after the other,
+    /// each machine finding its own among them.
+    private func claimSigned(_ machines: [ClaimPlan.Machine]) async throws {
+        var challenges: [(machine: ClaimPlan.Machine, bytes: Data)] = []
+        for machine in machines {
+            do {
+                guard let bytes = Data(base64URL: try await challenge(machine.hostId).0.challenge) else {
+                    throw HerderError.Local(detail: "the machine sent a challenge that is not base64url")
+                }
+                challenges.append((machine, bytes))
+            } catch {
+                rows[machine.id] = .failed(describe(error))
+            }
+        }
+        guard !challenges.isEmpty else { return }
+        let assertion = try await authenticator.assert(challenge: challenges.map(\.bytes).reduce(Data(), +))
+        let candidates = me.map { [$0] } ?? plan.known
+        guard let person = candidates.first(where: { $0.passkeys.contains { $0.credentialId == assertion.id } }),
+              let key = person.passkeys.first(where: { $0.credentialId == assertion.id })
+        else {
+            for (machine, _) in challenges { rows[machine.id] = .failed("that passkey is not the one your machines know") }
+            return
+        }
+        me = person
+        let passkey = PersonPasskey.existing(personId: person.personId, key: key, assertion: assertion)
+        for (machine, _) in challenges {
+            try await attempt(machine) { _ = try await self.take(machine, NewPerson(name: person.name, passkey: passkey)) }
+        }
+    }
+
+    /// Has `machine` take `person` with your users on the others, then reconnects to it so its
+    /// hello names you; returns the person.
+    private func take(_ machine: ClaimPlan.Machine, _ person: NewPerson) async throws -> PersonId {
         let also = machines.filter { $0.id != machine.id }.map(\.userId)
         guard case .claimed(let personId, let hosts, let leftovers) =
             try await send(machine.hostId, .claimUsers(person: person, also: also))
@@ -325,14 +390,8 @@ final class Claim {
             questions.append(question)
             answers[question.id] = .me
         }
-        if let registered {
-            // The machine lists the new passkey's public key, which the others take it by.
-            guard case .people(let people) = try await send(machine.hostId, .listPeople),
-                  let keys = people.first(where: { $0.personId == personId })?.passkeys,
-                  keys.contains(where: { $0.credentialId == registered.id })
-            else { throw HerderError.Local(detail: "the machine did not list your new passkey") }
-            me = (personId, keys)
-        }
+        await reconnect(machine.hostId)
+        return personId
     }
 
     private func challenge(_ hostId: HostId) async throws -> (PasskeyChallenge, PasskeyCreation?) {
