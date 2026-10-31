@@ -136,7 +136,7 @@ public final class Fleet {
         guard listsRefresh == nil else { return }
         listsRefresh = Task {
             try? await Task.sleep(for: .milliseconds(100))
-            await Self.scrollEnded()
+            await scrollEnded()
             guard !Task.isCancelled else { return }
             refreshLists()
         }
@@ -171,15 +171,19 @@ public final class Fleet {
     /// `scrollHold`: at once unless one is. The fleet's changes wait for it, so a list scrolls
     /// without the views around it drawing again on every event a session streams; the latest
     /// applies as the scroll ends. What needs the user does not wait: see `receive(_:for:)`.
-    static func scrollEnded() async {
+    func scrollEnded() async {
         #if os(macOS)
-        _ = scrollMonitor
+        _ = Self.scrollMonitor
         #endif
-        let until = ContinuousClock.now + scrollHold
-        while scrolling, ContinuousClock.now < until {
+        let until = ContinuousClock.now + Self.scrollHold
+        while isScrolling(), ContinuousClock.now < until {
             try? await Task.sleep(for: .milliseconds(25))
         }
     }
+
+    /// Whether a scroll is in progress, for this fleet's `scrollEnded`: the app's, unless a test
+    /// stands in a scroll of its own, which then holds back this fleet's changes alone.
+    var isScrolling: @MainActor () -> Bool = { Fleet.scrolling }
 
     private func refreshLists() {
         listsRefresh?.cancel()
@@ -246,7 +250,7 @@ public final class Fleet {
                 refreshLists()
                 continue
             }
-            await Self.scrollEnded()
+            await scrollEnded()
             update(client.machines())
         }
     }
@@ -312,7 +316,7 @@ public final class Fleet {
     /// user; false once the session is no longer followed.
     func receive(_ update: SessionUpdate, for key: SessionKey) async -> Bool {
         let urgent = update.needsUser
-        if !urgent { await Self.scrollEnded() }
+        if !urgent { await scrollEnded() }
         // Only what `observe` needs: holding the whole session would copy its transcript on
         // every update.
         guard let before = session(key).map({ (status: $0.status, loaded: $0.loaded) }) else { return false }
