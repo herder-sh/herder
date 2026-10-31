@@ -148,16 +148,6 @@ public final class Fleet {
 
     /// Whether the user is dragging or flinging a scroll view.
     static var scrolling: Bool { RunLoop.main.currentMode == scrollMode }
-
-    /// Returns once no scroll is in progress: at once unless one is. The fleet's changes wait
-    /// for it, so a list scrolls without the views around it drawing again on every event a
-    /// session streams; they apply, the latest at once, as the scroll ends.
-    static func scrollEnded() async {
-        guard scrolling else { return }
-        await withCheckedContinuation { continuation in
-            RunLoop.main.perform(inModes: [.default]) { continuation.resume() }
-        }
-    }
     #else
     /// When the last scroll-wheel event arrived: a mouse wheel's, a trackpad's or its momentum's.
     /// A Mac scroll leaves the run loop in its default mode, so its events tell it instead.
@@ -171,15 +161,25 @@ public final class Fleet {
 
     /// Whether the user is scrolling, or was a moment ago.
     static var scrolling: Bool { Date.now.timeIntervalSince(lastScroll) < scrollSettles }
-
-    /// Returns once no scroll is in progress: at once unless one is. The fleet's changes wait
-    /// for it, so a list scrolls without the views around it drawing again on every event a
-    /// session streams; they apply, the latest at once, as the scroll ends.
-    static func scrollEnded() async {
-        _ = scrollMonitor
-        while scrolling { try? await Task.sleep(for: .milliseconds(50)) }
-    }
     #endif
+
+    /// The longest a scroll holds the fleet's changes back: under a long drag or a slow fling
+    /// they still arrive, a batch at a time.
+    static let scrollHold = Duration.milliseconds(500)
+
+    /// Returns once no scroll is in progress, or once one has held the changes back for
+    /// `scrollHold`: at once unless one is. The fleet's changes wait for it, so a list scrolls
+    /// without the views around it drawing again on every event a session streams; the latest
+    /// applies as the scroll ends. What needs the user does not wait: see `receive(_:for:)`.
+    static func scrollEnded() async {
+        #if os(macOS)
+        _ = scrollMonitor
+        #endif
+        let until = ContinuousClock.now + scrollHold
+        while scrolling, ContinuousClock.now < until {
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+    }
 
     private func refreshLists() {
         listsRefresh?.cancel()
@@ -239,9 +239,24 @@ public final class Fleet {
         defer { network.cancel() }
         update(client.machines())
         while await changes.next() {
+            // A machine connecting or going away shows at once, scroll or not.
+            let machines = client.machines()
+            if reconnects(machines) {
+                update(machines)
+                refreshLists()
+                continue
+            }
             await Self.scrollEnded()
             update(client.machines())
         }
+    }
+
+    /// Whether `machines` connect or disconnect one of the machines shown.
+    private func reconnects(_ machines: [Machine]) -> Bool {
+        let connections = { (machines: [Machine]) in
+            Dictionary(machines.map { ($0.hostId, $0.connection) }) { first, _ in first }
+        }
+        return connections(machines) != connections(current)
     }
 
     func update(_ machines: [Machine]) {
@@ -289,13 +304,23 @@ public final class Fleet {
         track(key)
         // Releasing the subscription when this returns unsubscribes.
         while let update = await subscription.next(), !Task.isCancelled {
-            await Self.scrollEnded()
-            // Only what `observe` needs: holding the whole session would copy its transcript
-            // on every update.
-            guard let before = session(key).map({ (status: $0.status, loaded: $0.loaded) }) else { break }
-            change(key) { $0.apply(update) }
-            observe(key, before: before.status, wasLoaded: before.loaded)
+            guard await receive(update, for: key) else { break }
         }
+    }
+
+    /// Folds `update` into `key`'s state once no scroll holds it back, at once when it needs the
+    /// user; false once the session is no longer followed.
+    func receive(_ update: SessionUpdate, for key: SessionKey) async -> Bool {
+        let urgent = update.needsUser
+        if !urgent { await Self.scrollEnded() }
+        // Only what `observe` needs: holding the whole session would copy its transcript on
+        // every update.
+        guard let before = session(key).map({ (status: $0.status, loaded: $0.loaded) }) else { return false }
+        change(key) { $0.apply(update) }
+        observe(key, before: before.status, wasLoaded: before.loaded)
+        // The request lists show it at once too.
+        if urgent { refreshLists() }
+        return true
     }
 
     /// Notes what an update did to `key`'s status, from its status and load before it.
@@ -883,4 +908,17 @@ struct Toast: Identifiable, Equatable {
 struct ConnectionChange: Hashable {
     let at: Date
     let state: ConnectionState
+}
+
+extension SessionUpdate {
+    /// Whether it asks the user something or reports a failed turn: it shows at once, even
+    /// while a scroll holds the fleet's other changes back.
+    var needsUser: Bool {
+        events.contains { event in
+            switch event.body {
+            case .approvalRequested, .approvalEscalated, .questionAsked, .questionEscalated, .turnFailed: true
+            default: false
+            }
+        }
+    }
 }
