@@ -33,22 +33,20 @@ struct ScrollDeferralTests {
         return (fleet, script)
     }
 
-    /// A scroll that never ends, as a wheel that keeps turning, until `stop`.
-    private func endlessScroll() { Fleet.lastScroll = .distantFuture }
+    /// A scroll that never ends, as a wheel that keeps turning, for `fleet` alone.
+    private func endlessScroll(_ fleet: Fleet) { fleet.isScrolling = { true } }
 
-    private func stop() { Fleet.lastScroll = .distantPast }
-
-    @Test func nothingWaitsWithoutAScroll() async {
-        Fleet.lastScroll = .distantPast
+    @Test func nothingWaitsWithoutAScroll() async throws {
+        let (fleet, _) = try fleet()
+        fleet.isScrolling = { false }
         let started = ContinuousClock.now
-        await Fleet.scrollEnded()
+        await fleet.scrollEnded()
         #expect(ContinuousClock.now - started < .milliseconds(50))
     }
 
     @Test func aChangeDuringAnEndlessScrollAppliesWithinTheHold() async throws {
         var (fleet, script) = try fleet()
-        endlessScroll()
-        defer { stop() }
+        endlessScroll(fleet)
         let renamed = SessionUpdate(events: [script.event(.titleChanged(title: "Renamed", source: .user))], streaming: [])
         let started = ContinuousClock.now
         #expect(await fleet.receive(renamed, for: script.key))
@@ -60,8 +58,7 @@ struct ScrollDeferralTests {
 
     @Test func anApprovalDuringAScrollAppliesAtOnce() async throws {
         var (fleet, script) = try fleet()
-        endlessScroll()
-        defer { stop() }
+        endlessScroll(fleet)
         let asked = SessionUpdate(events: [script.event(.approvalRequested(
             approvalId: "a", turnId: "t", toolCallId: "i", summary: "rm -rf build", routedTo: .user, reason: nil,
             secret: nil))], streaming: [])
