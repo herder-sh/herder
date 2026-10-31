@@ -44,15 +44,17 @@ struct ScrollDeferralTests {
         #expect(ContinuousClock.now - started < .milliseconds(50))
     }
 
-    @Test func aChangeDuringAnEndlessScrollAppliesWithinTheHold() async throws {
+    /// That it applies at all shows the hold ends: an endless wait runs into the time limit. No
+    /// bound on the wait itself, which on a busy CI runner measures how long the main actor
+    /// waited for its turn (8-12 s seen), not the hold.
+    @Test(.timeLimit(.minutes(1)))
+    func aChangeDuringAnEndlessScrollAppliesWithinTheHold() async throws {
         var (fleet, script) = try fleet()
         endlessScroll(fleet)
         let renamed = SessionUpdate(events: [script.event(.titleChanged(title: "Renamed", source: .user))], streaming: [])
         let started = ContinuousClock.now
         #expect(await fleet.receive(renamed, for: script.key))
-        let waited = ContinuousClock.now - started
-        #expect(waited >= .milliseconds(450))
-        #expect(waited < .seconds(5))
+        #expect(ContinuousClock.now - started >= .milliseconds(450))
         #expect(fleet.session(script.key)?.title == "Renamed")
     }
 
