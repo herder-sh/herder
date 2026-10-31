@@ -138,7 +138,9 @@ struct BackupSection: View {
     /// vault reports how far it got; one not paired here, nothing.
     @ViewBuilder private func linked(_ vault: LinkedVault) -> some View {
         let paired = fleet.pairedVault(vault)
-        let replication = paired?.vault?.hosts.first { $0.hostId == machine.hostId }
+        // How far it got moves with every event the vault takes in: `liveMachines`.
+        let replication = fleet.liveMachines.first { $0.hostId == paired?.hostId }?.vault?.hosts
+            .first { $0.hostId == machine.hostId }
         let name = paired?.name ?? "a vault not paired with this device"
         SettingRow(label: vault.backup ? "Backs up to \(name)" : "Not backed up",
                    hint: vault.backup ? Fleet.freshness(replication, now: .now) : "Linked to \(name) for secrets only") {
