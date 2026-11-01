@@ -15,8 +15,9 @@ public final class Fleet {
     public let client: Client
     /// The machines. A view that reads them redraws when a machine's own state changes, such as
     /// an account, a setting or its connection, not when a session it lists moves on, as a
-    /// running turn's does several times a second: read `liveMachines` for the sessions' heads.
-    /// Both return the machines as they are now.
+    /// running turn's does several times a second, nor what a vault counts of the sessions it
+    /// keeps, which moves with them: read `liveMachines` for those. Both return the machines as
+    /// they are now.
     public var machines: [Machine] {
         _ = ownChanges
         return current
@@ -29,8 +30,8 @@ public final class Fleet {
         return current
     }
     @ObservationIgnored private var current: [Machine]
-    /// Bumped when the machines' own state changes, and when their sessions' heads change; see
-    /// `machines`.
+    /// Bumped when the machines' own state changes, and when only what moves with their
+    /// sessions does; see `machines`.
     private var ownChanges = 0
     private var headChanges = 0
     /// Each followed session's state in a box of its own; the dictionary itself changes only as
@@ -107,17 +108,30 @@ public final class Fleet {
     /// Takes the machines the client lists, telling the views that read them only what changed.
     private func set(_ machines: [Machine]) {
         guard machines != current else { return }
-        let headless = { (machines: [Machine]) in machines.map { machine in
-            var own = machine
-            own.sessions = []
-            return own
-        } }
-        let ownChanged = headless(machines) != headless(current)
-        let headsChanged = machines.map(\.sessions) != current.map(\.sessions)
+        let ownChanged = machines.map(Self.own) != current.map(Self.own)
         current = machines
-        if ownChanged { ownChanges += 1 }
-        if headsChanged { headChanges += 1 }
+        // `liveMachines` reads both.
+        if ownChanged { ownChanges += 1 } else { headChanges += 1 }
         listsChanged()
+    }
+
+    /// A machine without what moves as its sessions do: their heads, and a vault's counts of
+    /// what it keeps of each host's, which change with every event the vault takes in.
+    private static func own(_ machine: Machine) -> Machine {
+        var own = machine
+        own.sessions = []
+        own.hosts = machine.hosts.map { host in
+            var host = host
+            host.lastSeen = ""
+            host.usage = nil
+            return host
+        }
+        own.vault = machine.vault.map { vault in
+            VaultStatus(sessions: 0, events: 0, storageBytes: 0, hosts: vault.hosts.map { replication in
+                HostReplication(hostId: replication.hostId, sessions: 0, events: 0, lastEventAt: nil, lagMs: nil)
+            })
+        }
+        return own
     }
 
     /// Folds an update into a session as its subscription would, for tests.
