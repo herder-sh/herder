@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 use herder_adapters::Adapter;
 use herder_adapters::acp::{AcpAdapter, AgentProfile};
-use herder_adapters::claude::{ClaudeAdapter, Cli};
+use herder_adapters::claude::{self, ClaudeAdapter, Cli};
 use herder_adapters::codex::CodexAdapter;
 use herder_protocol::{Account, AccountId, Provider, Timestamp};
 
-use crate::session::{Accounts, Adapters, TitleCli, TitleClis};
+use crate::session::{AccountConfig, Accounts, Adapters, TitleCli, TitleClis};
 use crate::usage::{Known, Probe, Probes};
 
 /// Every provider herder can run sessions on.
@@ -158,6 +158,22 @@ pub fn title_clis(binaries: &HashMap<Provider, PathBuf>, clis: &Clis) -> TitleCl
     titles
 }
 
+/// Points `account`'s CLI at its endpoint in `env`, the environment it runs with, when it is
+/// an endpoint account: its base URL and client key, and none of the inherited credentials
+/// that would be sent instead. A login account's `env` is left as it is.
+pub(crate) fn endpoint_env(account: &AccountConfig, env: &mut BTreeMap<String, String>) {
+    let Some(endpoint) = &account.endpoint else {
+        return;
+    };
+    // The config only lets Claude accounts have an endpoint.
+    for var in claude::ENDPOINT_ENV_DROP {
+        env.remove(var);
+    }
+    for (var, value) in claude::endpoint_env(&endpoint.url, endpoint.key.expose()) {
+        env.insert(var.to_owned(), value);
+    }
+}
+
 /// `accounts` as clients see them, ordered by id, each with the email and windows `usage`
 /// holds for it, none until its provider reports them, and since when it needs logging in
 /// again, as `needs_login` says.
@@ -180,7 +196,10 @@ pub(crate) fn list(
             usage: usage.windows.get(id).cloned().unwrap_or_default(),
             fallback: account.fallback,
             needs_login: needs_login.get(id).copied(),
-            endpoint: None,
+            endpoint: account
+                .endpoint
+                .as_ref()
+                .map(|endpoint| endpoint.url.clone()),
         })
         .collect()
 }
@@ -203,6 +222,7 @@ mod tests {
             label: "Label".into(),
             config_dir: config_dir.map(Path::to_owned),
             fallback: false,
+            endpoint: None,
         }
     }
 
@@ -215,15 +235,21 @@ mod tests {
     }
 
     /// Starts `provider`'s registered adapter for `account` and returns the environment the
-    /// CLI saw.
+    /// CLI saw, launched as a session launches it: the daemon's environment, here `OUT`, `PATH`
+    /// and an `ANTHROPIC_API_KEY`, with the account's endpoint variables.
     async fn cli_env(adapters: &Adapters, account: &AccountConfig, dir: &Path) -> Vec<String> {
         let out = dir.join(format!("{}.env", account.provider.as_str()));
+        let mut env = BTreeMap::from([
+            ("OUT".to_owned(), out.to_str().unwrap().to_owned()),
+            ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+        ]);
+        if account.provider == Provider::Claude {
+            env.insert("ANTHROPIC_API_KEY".to_owned(), "inherited".to_owned());
+        }
+        endpoint_env(account, &mut env);
         let request = StartRequest {
             config_dir: account.config_dir.clone(),
-            env: BTreeMap::from([
-                ("OUT".to_owned(), out.to_str().unwrap().to_owned()),
-                ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
-            ]),
+            env,
             cwd: dir.to_owned(),
             model: None,
             permission_mode: PermissionMode::Ask,
@@ -268,7 +294,11 @@ mod tests {
         let out = |provider: &str| format!("OUT={}/{provider}.env", dir.path().display());
         assert_eq!(
             cli_env(&adapters, &claude, dir.path()).await,
-            [out("claude"), "PATH=/usr/bin:/bin".into()]
+            [
+                "ANTHROPIC_API_KEY=inherited".into(),
+                out("claude"),
+                "PATH=/usr/bin:/bin".into()
+            ]
         );
         assert_eq!(
             cli_env(&adapters, &codex, dir.path()).await,
@@ -277,6 +307,32 @@ mod tests {
                 out("codex"),
                 "PATH=/usr/bin:/bin".into()
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_account_runs_claude_against_its_endpoint_with_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = env_dumper(dir.path());
+        let config_dir = dir.path().join(".claude-fleet");
+        let fleet = AccountConfig {
+            endpoint: Some(crate::session::Endpoint {
+                url: "http://127.0.0.1:8317".into(),
+                key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+            }),
+            ..account(Provider::Claude, Some(&config_dir))
+        };
+        let adapters = adapters(&HashMap::from([(Provider::Claude, cli)]), &Clis::new());
+        assert_eq!(
+            cli_env(&adapters, &fleet, dir.path()).await,
+            [
+                "ANTHROPIC_AUTH_TOKEN=cpa-client-key".to_owned(),
+                "ANTHROPIC_BASE_URL=http://127.0.0.1:8317".to_owned(),
+                format!("CLAUDE_CONFIG_DIR={}", config_dir.display()),
+                format!("OUT={}/claude.env", dir.path().display()),
+                "PATH=/usr/bin:/bin".to_owned(),
+            ],
+            "the endpoint's key replaces an inherited API key"
         );
     }
 

@@ -17,7 +17,7 @@ use herder_daemon::resources::{
 };
 use herder_daemon::session::titles::INSTRUCTION;
 use herder_daemon::session::{
-    AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, KEEP_ARCHIVED_WORKTREE,
+    AccountConfig, Accounts, Adapters, Endpoint, EventSink, FailoverConfig, KEEP_ARCHIVED_WORKTREE,
     SessionManager, Setup, TitleCli, TitleClis, TitlesConfig,
 };
 use herder_daemon::settings::Settings;
@@ -207,6 +207,7 @@ impl Daemon {
                 label: "Account 1".into(),
                 config_dir: Some(dir.join("account")),
                 fallback: false,
+                endpoint: None,
             },
         );
         let setup = Setup {
@@ -1552,6 +1553,7 @@ async fn create_by_project_or_repo_runs_on_the_projects_default_account_else_an_
             label: "Account 2".into(),
             config_dir: Some(dir.path().join("account-2")),
             fallback: true,
+            endpoint: None,
         },
     ));
 
@@ -1997,6 +1999,7 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
                 label: "Main".into(),
                 config_dir: None,
                 fallback: false,
+                endpoint: None,
             },
         ),
         (
@@ -2006,6 +2009,7 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
                 label: "Work".into(),
                 config_dir: Some(codex_home.clone()),
                 fallback: false,
+                endpoint: None,
             },
         ),
     ]);
@@ -2584,6 +2588,7 @@ impl Switching {
                     label: id.to_string(),
                     config_dir: Some(dir.join(id)),
                     fallback: false,
+                    endpoint: None,
                 };
                 (AccountId::new(*id), config)
             })
@@ -3460,6 +3465,55 @@ async fn idle_accounts_are_probed_at_once_and_again_on_refresh() {
 }
 
 #[tokio::test]
+async fn an_endpoint_account_is_never_probed_for_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let fleet = AccountConfig {
+        provider: fake(),
+        label: "Fleet".into(),
+        config_dir: Some(dir.path().join("fleet")),
+        fallback: false,
+        endpoint: Some(Endpoint {
+            url: "http://127.0.0.1:8317".into(),
+            key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+        }),
+    };
+    assert!(daemon.manager.add_account(AccountId::new("fleet"), fleet));
+    daemon.next_accounts().await;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let probe: Arc<dyn Probe> = Arc::new(Counting {
+        requests: requests.clone(),
+    });
+    daemon
+        .manager
+        .track_usage(usage::Config {
+            probes: Probes::from([(fake(), probe)]),
+            dir: dir.path().join("usage"),
+            interval: Duration::from_secs(3600),
+            fresh: Duration::ZERO,
+        })
+        .unwrap();
+    daemon.next_accounts().await;
+    // A second round runs only once the first, fleet's turn included, is over.
+    daemon.manager.refresh_usage();
+    let accounts = daemon.next_accounts().await;
+    let dirs: Vec<_> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.config_dir.clone())
+        .collect();
+    let account = Some(dir.path().join("account"));
+    assert_eq!(dirs, [account.clone(), account]);
+    let fleet = accounts
+        .iter()
+        .find(|account| account.account_id == AccountId::new("fleet"))
+        .unwrap();
+    assert!(fleet.usage.is_empty(), "its usage stays unknown");
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn an_account_logged_in_again_is_probed_at_once_however_lately_it_was_read() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
@@ -3992,6 +4046,193 @@ async fn a_limit_on_one_account_rotates_the_turn_to_another_of_its_provider() {
             "assistant: Splitting the lexer out."
         ]
     );
+    daemon.shutdown.cancel();
+}
+
+impl Switching {
+    /// Adds endpoint account `id` of Claude, at a CLIProxyAPI on this machine, with its own
+    /// config dir.
+    fn add_endpoint_account(&self, dir: &Path, id: &str) {
+        let account = AccountConfig {
+            provider: Provider::Claude,
+            label: id.to_owned(),
+            config_dir: Some(dir.join(id)),
+            fallback: false,
+            endpoint: Some(Endpoint {
+                url: "http://127.0.0.1:8317".into(),
+                key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+            }),
+        };
+        assert!(self.manager.add_account(AccountId::new(id), account));
+    }
+}
+
+#[tokio::test]
+async fn an_unreachable_endpoint_account_fails_over_to_a_login_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_unreachable.jsonl", "failover_retry.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[("claude-login", Provider::Claude)],
+        Vec::new(),
+    )
+    .await;
+    daemon.add_endpoint_account(dir.path(), "fleet");
+    let session = daemon.create("fleet").await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::Idle).await;
+    assert_eq!(
+        from_first_turn(&journal),
+        [
+            "-: status Running",
+            "alice: user turn-1 Refactor the parser.",
+            "-: turn_started turn-1",
+            "-: turn_failed turn-1 Unreachable",
+            "-: account_switched claude-login",
+            "alice: user turn-2 Refactor the parser.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 Refactored the parser.",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+        ]
+    );
+    let starts = claude.starts();
+    let [on_fleet, on_login] = starts.as_slice() else {
+        panic!("expected two starts, got {starts:?}");
+    };
+    // The endpoint account runs its CLI against the endpoint, in herder's own config dir.
+    assert_eq!(on_fleet.config_dir, Some(dir.path().join("fleet")));
+    assert_eq!(
+        on_fleet.env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+        Some("http://127.0.0.1:8317")
+    );
+    assert_eq!(
+        on_fleet.env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+        Some("cpa-client-key")
+    );
+    assert!(!on_fleet.env.contains_key("ANTHROPIC_API_KEY"));
+    // The login account gets neither, as the daemon's own environment has them.
+    assert_eq!(on_login.config_dir, Some(dir.path().join("claude-login")));
+    assert_eq!(
+        on_login.env.get("ANTHROPIC_BASE_URL"),
+        std::env::var("ANTHROPIC_BASE_URL").ok().as_ref()
+    );
+    assert_eq!(
+        on_login.env.get("ANTHROPIC_AUTH_TOKEN"),
+        std::env::var("ANTHROPIC_AUTH_TOKEN").ok().as_ref()
+    );
+    // The endpoint account is passed over for a while: a new session goes to the login one.
+    let accounts = daemon.manager.accounts();
+    let fleet = accounts
+        .iter()
+        .find(|account| account.account_id == AccountId::new("fleet"))
+        .unwrap();
+    assert_eq!(fleet.needs_login, None, "an endpoint account has no login");
+    assert_eq!(fleet.endpoint.as_deref(), Some("http://127.0.0.1:8317"));
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn an_unreachable_endpoint_account_with_no_other_waits_and_retries_on_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_unreachable.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[("codex", Provider::Codex)],
+        Vec::new(),
+    )
+    .await;
+    daemon.add_endpoint_account(dir.path(), "fleet");
+    let session = daemon.create("fleet").await;
+    let before = Timestamp::now();
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let EventBody::SessionStatusChanged { retry_at, .. } = daemon
+        .until(|body| {
+            matches!(
+                body,
+                EventBody::SessionStatusChanged {
+                    status: SessionStatus::WaitingForCapacity,
+                    ..
+                }
+            )
+        })
+        .await
+    else {
+        unreachable!();
+    };
+    let retry_at = retry_at.expect("it retries once the endpoint may be reached again");
+    let pass_over =
+        SignedDuration::try_from(herder_daemon::session::failover::UNREACHABLE).unwrap();
+    assert!(retry_at >= before + pass_over, "{retry_at}");
+    assert!(retry_at <= Timestamp::now() + pass_over, "{retry_at}");
+    assert_eq!(claude.starts().len(), 1);
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_refused_key_on_an_endpoint_account_needs_you_not_a_login() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["endpoint_bad_key.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[("claude-login", Provider::Claude)],
+        Vec::new(),
+    )
+    .await;
+    daemon.add_endpoint_account(dir.path(), "fleet");
+    let session = daemon.create("fleet").await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::NeedsYou).await;
+    let error = journal
+        .iter()
+        .find_map(|event| match &event.body {
+            EventBody::TurnFailed { error, .. } => Some(error.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(error.class, ErrorClass::Auth);
+    assert!(
+        error.message.starts_with(
+            "http://127.0.0.1:8317 refused the client key of account fleet; change the key in \
+             the account's settings. API Error: 401"
+        ),
+        "{}",
+        error.message
+    );
+    assert!(!error.message.contains("cpa-client-key"));
+    let accounts = daemon.manager.accounts();
+    assert!(accounts.iter().all(|account| account.needs_login.is_none()));
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_pinned_session_on_an_unreachable_endpoint_account_needs_you() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_unreachable.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[("claude-login", Provider::Claude)],
+        Vec::new(),
+    )
+    .await;
+    daemon.add_endpoint_account(dir.path(), "fleet");
+    let session = daemon.create_pinned("fleet", Some(true)).await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::NeedsYou).await;
+    let lines = from_first_turn(&journal);
+    assert_eq!(
+        lines[lines.len() - 2..],
+        ["-: turn_failed turn-1 Unreachable", "-: status NeedsYou"]
+    );
+    assert_eq!(claude.starts().len(), 1);
     daemon.shutdown.cancel();
 }
 
@@ -5867,6 +6108,7 @@ async fn successful_switches_cancel_limit_waits_and_invalid_switches_keep_them()
                         label: "Another".into(),
                         config_dir: None,
                         fallback: false,
+                        endpoint: None,
                     }
                 ));
                 switch_account(&session, "another")

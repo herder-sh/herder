@@ -211,6 +211,10 @@ pub(crate) async fn poll(
             probed.remove(&account_id);
         }
         for (account_id, account) in &accounts() {
+            // An endpoint account has no login whose usage a probe could read.
+            if account.endpoint.is_some() {
+                continue;
+            }
             let Some(probe) = config.probes.get(&account.provider) else {
                 continue;
             };

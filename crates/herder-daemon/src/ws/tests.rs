@@ -1142,7 +1142,9 @@ async fn compose_down_is_for_owners_only() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn endpoint_accounts_are_refused_until_the_daemon_runs_them() {
+async fn endpoint_account_commands_go_to_the_accounts_never_echoing_the_key() {
+    // This daemon has no accounts to change (`Logins::default`): the commands reach them, not
+    // the session backend, and are refused without the key; login.rs covers their effect.
     let daemon = Daemon::start().await;
     let mut owner = daemon.client().await;
     owner.hello(Vec::new()).await;

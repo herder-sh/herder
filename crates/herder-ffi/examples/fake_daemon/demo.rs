@@ -1141,6 +1141,7 @@ impl Daemon {
                     label: (*label).into(),
                     config_dir: Some(dir.join("accounts").join(account)),
                     fallback: false,
+                    endpoint: None,
                 },
             );
         }

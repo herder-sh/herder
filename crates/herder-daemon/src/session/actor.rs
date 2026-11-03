@@ -2366,6 +2366,7 @@ impl Actor {
                 transcript::config_dir(&session.provider, account.config_dir.as_deref(), &env);
             skills.launch(&session.provider, config_dir.as_deref())
         });
+        crate::accounts::endpoint_env(account, &mut env);
         Ok(StartRequest {
             config_dir: account.config_dir.clone(),
             env,
@@ -2429,13 +2430,32 @@ impl Actor {
                     .await;
             }
             AdapterEvent::TurnFailed { turn_id, error } => {
-                if error.class == ErrorClass::LimitReached {
+                if matches!(
+                    error.class,
+                    ErrorClass::LimitReached | ErrorClass::Unreachable
+                ) {
                     return self.limit_reached(turn_id, error).await;
                 }
-                // The account needs logging in again: what is sent meanwhile waits for it.
+                let endpoint = self
+                    .inner
+                    .account(&self.session.account_id)
+                    .and_then(|account| account.endpoint);
                 let mut settled = match error.class {
-                    ErrorClass::Auth => SessionStatus::NeedsLogin,
+                    // The account needs logging in again: what is sent meanwhile waits for it.
+                    ErrorClass::Auth if endpoint.is_none() => SessionStatus::NeedsLogin,
                     _ => SessionStatus::NeedsYou,
+                };
+                // An endpoint account has no login: its endpoint refused its client key.
+                let error = match (&endpoint, error.class) {
+                    (Some(endpoint), ErrorClass::Auth) => TurnError {
+                        class: ErrorClass::Auth,
+                        message: format!(
+                            "{} refused the client key of account {}; change the key in the \
+                             account's settings. {}",
+                            endpoint.url, self.session.account_id, error.message
+                        ),
+                    },
+                    _ => error,
                 };
                 let error = match self.out_of_memory(&error).await {
                     Some(oom) => {
@@ -2740,19 +2760,35 @@ impl Actor {
         }
     }
 
+    /// The turn failed because its account hit its limit or could not reach its endpoint:
+    /// the account is passed over for a while, and the prompt moves to the best other account
+    /// of the provider and is retried there, once. With none, it is retried on this one once it
+    /// may be chosen again, if herder knows when; for an unreachable endpoint, unless pinned.
     async fn limit_reached(&mut self, turn_id: TurnId, error: TurnError) {
         let failing = self.session.account_id.clone();
-        self.inner.limit_hit(&failing);
+        let pinned = self.pinned().await;
+        let again = match error.class {
+            // A pinned session stays on its account, and an endpoint that is down may stay
+            // down: it waits for its owner instead of retrying on it.
+            ErrorClass::Unreachable => {
+                let until = self.inner.unreachable(&failing);
+                (!pinned).then_some(until)
+            }
+            _ => {
+                self.inner.limit_hit(&failing);
+                self.inner.limit_reset(&failing)
+            }
+        };
         let prompt = self.prompt.take();
         let target = match prompt {
-            Some(ref prompt) if !prompt.retry && !self.pinned().await => self
+            Some(ref prompt) if !prompt.retry && !pinned => self
                 .inner
                 .available_account(&self.session.provider, Some(&failing)),
             _ => None,
         };
         if target.is_none()
             && let Some(prompt) = prompt.clone()
-            && let Some(at) = self.inner.limit_reset(&failing)
+            && let Some(at) = again
         {
             self.void_requests().await;
             self.log(EventBody::TurnFailed {

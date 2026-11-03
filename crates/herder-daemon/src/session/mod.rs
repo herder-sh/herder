@@ -267,9 +267,9 @@ use herder_protocol::{
     Account, AccountId, Attachment, AttachmentId, Bot, BotFact, BotId, Bytes, CommandBody,
     CommandId, CommandResult, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, FactId, FollowUp,
     HostId, Image, Item, ItemId, JournalRecord, MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS,
-    PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project, ProjectId, Provider, Seq, SessionHead,
-    SessionId, SessionOrigin, SessionStatus, SessionSummary, ThreadLink, Timestamp, TitleSource,
-    TurnId, UsageWindow, UserId, clean_title,
+    PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project, ProjectId, Provider, SecretValue, Seq,
+    SessionHead, SessionId, SessionOrigin, SessionStatus, SessionSummary, ThreadLink, Timestamp,
+    TitleSource, TurnId, UsageWindow, UserId, clean_title,
 };
 use herder_store::{Session, Store};
 use jiff::SignedDuration;
@@ -324,7 +324,8 @@ pub trait EventSink: Send + Sync + 'static {
     fn accounts_changed(&self, accounts: &[Account]);
 }
 
-/// A provider account on this host: a login the provider's CLI keeps in a config dir.
+/// A provider account on this host: a login the provider's CLI keeps in a config dir, or an
+/// endpoint the CLI is pointed at instead.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountConfig {
     /// Provider the account belongs to; picks the adapter.
@@ -332,10 +333,23 @@ pub struct AccountConfig {
     /// Display label chosen by the owner.
     pub label: String,
     /// The account's config dir, handed to the adapter; `None` is the CLI's default location.
+    /// An endpoint account always has one, herder's own, holding no login.
     pub config_dir: Option<PathBuf>,
     /// Whether picking an account for the provider passes it over while any of its other
     /// accounts is available ([`failover`]); naming it still runs on it.
     pub fallback: bool,
+    /// The API server the CLI runs against instead of a login; `None` for a login account.
+    pub endpoint: Option<Endpoint>,
+}
+
+/// An API server an endpoint account's CLI is pointed at, such as a CLIProxyAPI or a local
+/// model server, which holds the provider credentials outside herder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Endpoint {
+    /// Its base URL, `http` or `https`.
+    pub url: String,
+    /// Its client key; never a provider login token, never sent to clients or logged.
+    pub key: SecretValue,
 }
 
 /// Every account sessions may run on, by id.
@@ -524,7 +538,13 @@ impl Inner {
     pub(super) fn turn_ended_on(&self, account_id: &AccountId, end: &EventBody) {
         match end {
             EventBody::TurnCompleted { .. } => self.worked(account_id),
-            EventBody::TurnFailed { error, .. } if error.class == ErrorClass::Auth => {
+            // An endpoint account has no login to need: its endpoint refused its key.
+            EventBody::TurnFailed { error, .. }
+                if error.class == ErrorClass::Auth
+                    && self
+                        .account(account_id)
+                        .is_some_and(|account| account.endpoint.is_none()) =>
+            {
                 if self.limits.logged_out(account_id, Timestamp::now()) {
                     self.publish_accounts(&self.usage.all());
                 }
@@ -532,8 +552,17 @@ impl Inner {
             EventBody::TurnFailed { error, .. } if error.class == ErrorClass::LimitReached => {
                 self.limit_hit(account_id);
             }
+            EventBody::TurnFailed { error, .. } if error.class == ErrorClass::Unreachable => {
+                self.unreachable(account_id);
+            }
             _ => {}
         }
+    }
+
+    /// Notes that `account_id` could not reach its endpoint just now; failover passes it over
+    /// until the returned time ([`failover::UNREACHABLE`]).
+    pub(super) fn unreachable(&self, account_id: &AccountId) -> Timestamp {
+        self.limits.unreachable(account_id, Timestamp::now())
     }
 
     /// Latest future reset among exhausted windows; unknown reset times need user action.

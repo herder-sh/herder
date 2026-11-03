@@ -76,6 +76,7 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken, 
             label: "Account 1".into(),
             config_dir: Some(dir.join("account")),
             fallback: false,
+            endpoint: None,
         },
     );
     let sessions_changed = Arc::new(tokio::sync::Notify::new());

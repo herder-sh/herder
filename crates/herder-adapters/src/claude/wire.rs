@@ -70,6 +70,9 @@ pub(super) struct Assistant {
     /// Set when the line is the CLI's report of an API error, such as `rate_limit`.
     #[serde(default)]
     pub error: Option<String>,
+    /// The CLI's finer reason for that error, when it has one, such as `connection_failed`.
+    #[serde(default)]
+    pub api_error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,6 +190,9 @@ pub(super) struct ResultMessage {
     pub result: Option<String>,
     #[serde(default)]
     pub api_error_status: Option<u16>,
+    /// The CLI's finer reason for an API error, such as `connection_failed`.
+    #[serde(default)]
+    pub api_error: Option<String>,
     #[serde(default)]
     pub errors: Vec<String>,
     /// The turn's tokens, on the main thread's model.

@@ -36,6 +36,11 @@
 //! account's config dir, when it has one, in the session's worktree. The adapter never looks inside that dir:
 //! the CLI's own login is the only credential involved.
 //!
+//! An endpoint account's CLI holds no login: the daemon adds [`endpoint_env`] to the request's
+//! environment, `ANTHROPIC_BASE_URL` at the API server and `ANTHROPIC_AUTH_TOKEN` its client
+//! key, which the CLI sends as a bearer token, and leaves out an inherited
+//! `ANTHROPIC_API_KEY`, which the CLI would send instead.
+//!
 //! # Qoder CLI
 //!
 //! [`Cli::Qoder`] runs Qoder CLI, which speaks the same stream-json and control protocol but
@@ -174,6 +179,10 @@
 //! A turn whose `result` is an error is classified by the API error on the last `assistant`
 //! line (its `error` field), else by the result's HTTP status:
 //!
+//! - Whatever the error, a reason (`api_error`) of `connection_failed` is
+//!   [`ErrorClass::Unreachable`]: the CLI could not reach the API at all, as when an endpoint
+//!   account's `ANTHROPIC_BASE_URL` refuses connections or does not resolve. The CLI gives up
+//!   on it only after its own retries, about three minutes.
 //! - `rate_limit` (429) is [`ErrorClass::LimitReached`] when the account's limit is spent: a
 //!   `rate_limit_event` with status `rejected` came in the turn, or the text is not the
 //!   CLI's "Server is temporarily limiting requests (not your usage limit)", which is
@@ -381,6 +390,19 @@ pub async fn read_usage(transport: Transport) -> Result<AccountUsage, TurnError>
     usage::read(transport).await
 }
 
+/// The variables that point `claude` at the API server `url` with client key `key`, instead of
+/// its login.
+pub fn endpoint_env(url: &str, key: &str) -> [(&'static str, String); 2] {
+    [
+        ("ANTHROPIC_BASE_URL", url.to_owned()),
+        ("ANTHROPIC_AUTH_TOKEN", key.to_owned()),
+    ]
+}
+
+/// The inherited variables an endpoint account's `claude` must not see: they would send
+/// another credential in place of the endpoint's key.
+pub const ENDPOINT_ENV_DROP: [&str; 1] = ["ANTHROPIC_API_KEY"];
+
 /// Runs a session over `transport`, which must carry a `claude` started by [`command`], or a
 /// recording of one from [`Transport::replay`].
 pub fn start(transport: Transport, request: StartRequest) -> StartFuture {
@@ -539,6 +561,8 @@ fn mode_from_flag(mode: &str) -> Option<PermissionMode> {
 struct Failure {
     /// `error` of the last API-error `assistant` line, such as `rate_limit`.
     api_error: Option<String>,
+    /// The CLI's finer reason for the error (`api_error`), such as `connection_failed`.
+    reason: Option<String>,
     /// Text of that line, the CLI's own description of the error.
     text: Option<String>,
     /// The result's `api_error_status`.
@@ -551,6 +575,10 @@ struct Failure {
 
 /// The CLI's text for a 429 that is server throttling, not the account's limit.
 const THROTTLED: &str = "not your usage limit";
+
+/// The CLI's reason for an API error when it could not reach the API at all: a refused
+/// connection, a name that does not resolve, a connection that timed out.
+const UNREACHABLE: &str = "connection_failed";
 
 /// Classifies a failed turn; see the module docs.
 fn classify(failure: Failure) -> TurnError {
@@ -566,6 +594,7 @@ fn classify(failure: Failure) -> TurnError {
         .or(failure.detail.filter(|text| !text.is_empty()))
         .unwrap_or_else(|| "claude turn failed".into());
     let class = match kind {
+        _ if failure.reason.as_deref() == Some(UNREACHABLE) => ErrorClass::Unreachable,
         Some("rate_limit") if failure.limit_rejected || !message.contains(THROTTLED) => {
             ErrorClass::LimitReached
         }
@@ -668,6 +697,25 @@ mod tests {
         for (failure, class) in cases {
             assert_eq!(classify(failure.clone()).class, class, "{failure:?}");
         }
+    }
+
+    #[test]
+    fn an_api_that_cannot_be_reached_is_unreachable_whatever_the_error() {
+        let refused = Failure {
+            reason: Some("connection_failed".into()),
+            ..failure(
+                Some("server_error"),
+                "API Error: Connection refused — a firewall or proxy may be blocking it \
+                 (ECONNREFUSED)",
+                None,
+            )
+        };
+        assert_eq!(classify(refused).class, ErrorClass::Unreachable);
+        let other = Failure {
+            reason: Some("stream_idle_timeout".into()),
+            ..failure(Some("server_error"), "x", None)
+        };
+        assert_eq!(classify(other).class, ErrorClass::Transient);
     }
 
     #[test]

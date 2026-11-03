@@ -217,6 +217,7 @@ async fn start(
             label: "Account 1".into(),
             config_dir: Some(dir.join("account")),
             fallback: false,
+            endpoint: None,
         },
     );
     let turns = Arc::clone(turns);

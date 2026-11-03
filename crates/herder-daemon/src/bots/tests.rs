@@ -987,6 +987,7 @@ mod running {
                     label: "Account 1".into(),
                     config_dir: Some(dir.join("account")),
                     fallback: false,
+                    endpoint: None,
                 },
             );
         }

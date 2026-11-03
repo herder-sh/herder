@@ -264,6 +264,7 @@ impl Daemon {
                 label: "Account 1".into(),
                 config_dir: None,
                 fallback: false,
+                endpoint: None,
             },
         );
         let setup = Setup {

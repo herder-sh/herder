@@ -572,6 +572,7 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
                     label: "Main".into(),
                     config_dir: None,
                     fallback: false,
+                    endpoint: None,
                 },
             )]),
             sink: Arc::clone(&hub) as Arc<dyn EventSink>,

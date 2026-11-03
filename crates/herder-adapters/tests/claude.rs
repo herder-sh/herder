@@ -682,6 +682,34 @@ async fn a_spent_limit_fails_the_turn_with_limit_reached() {
     shutdown(session).await;
 }
 
+#[tokio::test]
+async fn an_api_that_cannot_be_reached_fails_the_turn_as_unreachable() {
+    // Recorded as an endpoint account whose endpoint refuses connections, on a newer CLI than
+    // the other recordings: the API error's reason was added after [`claude::CLAUDE_VERSION`].
+    let recording = fixture("unreachable");
+    let header = recording.header.clone().unwrap();
+    assert_eq!(header.cli_version.as_deref(), Some("2.1.317"));
+    let mut session = start_with(recording, request(Vec::new())).await;
+    session
+        .commands
+        .send(prompt("Reply with the word ok."))
+        .unwrap();
+    let events = until(&mut session, is_turn_end).await;
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::TurnFailed {
+            turn_id: turn(),
+            error: TurnError {
+                class: ErrorClass::Unreachable,
+                message: "API Error: Connection refused — a firewall or proxy may be blocking \
+                          it (ECONNREFUSED)"
+                    .into(),
+            },
+        })
+    );
+    shutdown(session).await;
+}
+
 // ---- Inline fixtures ----
 
 const INITIALIZE: &str = r#"{"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-1\",\"request\":{\"subtype\":\"initialize\"}}"}

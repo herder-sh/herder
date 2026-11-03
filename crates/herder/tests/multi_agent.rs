@@ -455,6 +455,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             label: "Work".into(),
             config_dir: None,
             fallback: false,
+            endpoint: None,
         },
     )]);
     let shutdown = CancellationToken::new();

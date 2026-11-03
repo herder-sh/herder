@@ -678,6 +678,7 @@ async fn daemon(
             label: "Account 1".into(),
             config_dir: Some(root.join("account")),
             fallback: false,
+            endpoint: None,
         },
     );
     let turns = Arc::clone(turns);

@@ -25,6 +25,20 @@
 //! fallback = false              # true: picked only when no other account of its provider is
 //!                               # available; naming it still uses it
 //!
+//! [[accounts]]
+//! id = "fleet"                     # an endpoint account: no login, the CLI runs against
+//! provider = "claude"              # an API server, such as a CLIProxyAPI or a local model
+//! endpoint = "http://127.0.0.1:8317" # server; its http or https base URL
+//! key = "cpa-client-key"           # that server's client key, never a provider login token
+//! ```
+//!
+//! An endpoint account names no `config_dir`: herder runs its CLI in `~/.{provider}-{id}`,
+//! which holds no login, only the CLI's own state, so its sessions' transcripts carry over to
+//! other accounts like any other. Only Claude accounts can have an endpoint; the CLI gets
+//! `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` ([`herder_adapters::claude::endpoint_env`]).
+//! The key stays in this file: clients never see it.
+//!
+//! ```toml
 //! [providers.claude]
 //! binary = "/opt/claude/bin/claude" # the CLI to run; looked up on `PATH` by default
 //! ```
@@ -247,14 +261,15 @@ use herder_adapters::claude::Cli;
 use herder_protocol::{
     AccountId, BackupSettings, Bot, BotId, BotKind, DaemonSettings, FollowUpSettings, LogSettings,
     McpServerSettings, McpTransport, PermissionMode, ProjectDiscovery, ProjectId, Provider,
-    ProviderBinary, ResourceSettings, SecretRef, TitleSettings, is_valid_mcp_server_name,
+    ProviderBinary, ResourceSettings, SecretRef, SecretValue, TitleSettings,
+    is_valid_mcp_server_name,
 };
 use serde::Deserialize;
 
 use crate::accounts;
 use crate::projects::{ProjectEntry, ProjectsConfig};
 use crate::resources::ResourcesConfig;
-use crate::session::{AccountConfig, Accounts, FailoverConfig, TitlesConfig};
+use crate::session::{AccountConfig, Accounts, Endpoint, FailoverConfig, TitlesConfig};
 
 /// Port the daemon listens on unless configured otherwise.
 pub const DEFAULT_PORT: u16 = 7447;
@@ -572,6 +587,8 @@ struct AccountFile {
     config_dir: Option<PathBuf>,
     #[serde(default)]
     fallback: bool,
+    endpoint: Option<String>,
+    key: Option<String>,
 }
 
 /// One `[[mcp_servers]]` entry as written: `command` for a stdio server, `url` for one over
@@ -1173,7 +1190,7 @@ pub fn append_account(path: &Path, account_id: &AccountId, account: &AccountConf
     append_account_with_env(path, account_id, account, |key| std::env::var_os(key))
 }
 
-fn append_account_with_env(
+pub(crate) fn append_account_with_env(
     path: &Path,
     account_id: &AccountId,
     account: &AccountConfig,
@@ -1189,11 +1206,20 @@ fn append_account_with_env(
         quote(account.provider.as_str()),
         quote(&account.label),
     );
-    if let Some(dir) = &account.config_dir {
-        let dir = dir
-            .to_str()
-            .with_context(|| format!("config dir {} is not UTF-8", dir.display()))?;
-        entry.push_str(&format!("config_dir = {}\n", quote(dir)));
+    match &account.endpoint {
+        Some(endpoint) => entry.push_str(&format!(
+            "endpoint = {}\nkey = {}\n",
+            quote(&endpoint.url),
+            quote(endpoint.key.expose())
+        )),
+        None => {
+            if let Some(dir) = &account.config_dir {
+                let dir = dir
+                    .to_str()
+                    .with_context(|| format!("config dir {} is not UTF-8", dir.display()))?;
+                entry.push_str(&format!("config_dir = {}\n", quote(dir)));
+            }
+        }
     }
     let mut text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -1221,18 +1247,49 @@ fn append_account_with_env(
         .with_context(|| format!("writing config file {}", path.display()))
 }
 
+/// What [`set_account_settings`] changes of an account.
+pub(crate) struct AccountSettings<'a> {
+    /// The new label.
+    pub label: &'a str,
+    /// A login account's config dir; `None` is the CLI's default one. Must be `None` for an
+    /// endpoint account, whose config dir is herder's.
+    pub config_dir: Option<&'a str>,
+    /// Whether it becomes fallback-only; `None` keeps it.
+    pub fallback: Option<bool>,
+    /// An endpoint account's new base URL; `None` keeps it.
+    pub endpoint: Option<&'a str>,
+    /// An endpoint account's new client key; `None` keeps it.
+    pub key: Option<&'a SecretValue>,
+}
+
 /// Update an account without reading its login files, validating the complete account list
-/// before replacing the daemon config. `fallback` changes whether it is fallback-only; `None`
-/// keeps it. The caller serializes this with other account writes.
+/// before replacing the daemon config. An endpoint or key on a login account, or a config dir
+/// on an endpoint account, is refused. The caller serializes this with other account writes.
 pub(crate) fn set_account_settings(
     path: &Path,
     account_id: &AccountId,
     previous: &AccountConfig,
-    label: &str,
-    config_dir: Option<&str>,
-    fallback: Option<bool>,
+    settings: &AccountSettings<'_>,
     may_change_directory: bool,
 ) -> Result<AccountConfig> {
+    let AccountSettings {
+        label,
+        config_dir,
+        fallback,
+        endpoint,
+        key,
+    } = *settings;
+    if previous.endpoint.is_some() {
+        ensure!(
+            config_dir.is_none(),
+            "an endpoint account's config dir is herder's own; it takes none"
+        );
+    } else {
+        ensure!(
+            endpoint.is_none() && key.is_none(),
+            "a login account has no endpoint or key"
+        );
+    }
     let _write = CONFIG_WRITE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1253,13 +1310,21 @@ pub(crate) fn set_account_settings(
         "account provider changed on disk; restart the daemon first"
     );
     table.insert("label", toml_edit::value(label.trim()));
-    match config_dir {
-        Some(dir) => {
-            table.insert("config_dir", toml_edit::value(dir));
+    if previous.endpoint.is_none() {
+        match config_dir {
+            Some(dir) => {
+                table.insert("config_dir", toml_edit::value(dir));
+            }
+            None => {
+                table.remove("config_dir");
+            }
         }
-        None => {
-            table.remove("config_dir");
-        }
+    }
+    if let Some(endpoint) = endpoint {
+        table.insert("endpoint", toml_edit::value(endpoint));
+    }
+    if let Some(key) = key {
+        table.insert("key", toml_edit::value(key.expose()));
     }
     match fallback {
         Some(true) => {
@@ -2061,11 +2126,34 @@ fn resolve_accounts(
         );
         ensure!(valid_id(&id), "account id {id:?} {ID_RULE}");
         let provider = supported(entry.provider).with_context(|| format!("account {id}"))?;
-        let config_dir = entry
-            .config_dir
-            .map(|dir| resolve_path(&dir, env))
-            .transpose()
-            .with_context(|| format!("account {id}: config_dir"))?;
+        let endpoint = match (entry.endpoint, entry.key) {
+            (Some(url), Some(key)) => {
+                ensure!(
+                    provider == Provider::Claude,
+                    "account {id}: only claude accounts can have an endpoint"
+                );
+                ensure!(
+                    entry.config_dir.is_none(),
+                    "account {id}: an endpoint account's config dir is herder's own; \
+                     omit config_dir"
+                );
+                check_endpoint(&url).with_context(|| format!("account {id}: endpoint"))?;
+                let key = SecretValue::new(key)
+                    .with_context(|| format!("account {id}: key must not be empty"))?;
+                Some(Endpoint { url, key })
+            }
+            (None, None) => None,
+            (Some(_), None) => bail!("account {id}: an endpoint needs its client key"),
+            (None, Some(_)) => bail!("account {id}: a key needs its endpoint"),
+        };
+        let config_dir = match &endpoint {
+            Some(_) => Some(endpoint_dir(&provider, &AccountId::new(&id), env)?),
+            None => entry
+                .config_dir
+                .map(|dir| resolve_path(&dir, env))
+                .transpose()
+                .with_context(|| format!("account {id}: config_dir"))?,
+        };
         if let Some(dir) = &config_dir {
             ensure!(
                 !dir.exists() || dir.is_dir(),
@@ -2095,10 +2183,34 @@ fn resolve_accounts(
             label: entry.label.unwrap_or_else(|| id.clone()),
             config_dir,
             fallback: entry.fallback,
+            endpoint,
         };
         accounts.insert(AccountId::new(id), account);
     }
     Ok(accounts)
+}
+
+/// Whether `url` can be an endpoint: an `http` or `https` URL with a host.
+pub(crate) fn check_endpoint(url: &str) -> Result<()> {
+    let parsed = url::Url::parse(url).with_context(|| format!("{url:?} is not a URL"))?;
+    ensure!(
+        matches!(parsed.scheme(), "http" | "https") && parsed.host().is_some(),
+        "{url:?} is not an http or https URL"
+    );
+    Ok(())
+}
+
+/// The config dir herder runs endpoint account `account_id`'s CLI in, where a login account of
+/// the same id would be added by default.
+pub(crate) fn endpoint_dir(
+    provider: &Provider,
+    account_id: &AccountId,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<PathBuf> {
+    resolve_path(
+        Path::new(&format!("~/.{}-{account_id}", provider.as_str())),
+        env,
+    )
 }
 
 // All daemon config mutations share this lock, including project edits and login completion.
@@ -2776,6 +2888,7 @@ mod tests {
                         label: "Main".into(),
                         config_dir: None,
                         fallback: false,
+                        endpoint: None,
                     }
                 ),
                 (
@@ -2785,6 +2898,7 @@ mod tests {
                         label: "claude-work".into(),
                         config_dir: Some(home.path().join(".claude-work")),
                         fallback: false,
+                        endpoint: None,
                     }
                 ),
                 (
@@ -2794,6 +2908,7 @@ mod tests {
                         label: "codex".into(),
                         config_dir: Some(PathBuf::from("/srv/codex")),
                         fallback: false,
+                        endpoint: None,
                     }
                 ),
             ])
@@ -3444,12 +3559,27 @@ mod tests {
         assert_eq!(read_projects(&path).unwrap(), projects);
     }
 
+    fn settings<'a>(
+        label: &'a str,
+        config_dir: Option<&'a str>,
+        fallback: Option<bool>,
+    ) -> AccountSettings<'a> {
+        AccountSettings {
+            label,
+            config_dir,
+            fallback,
+            endpoint: None,
+            key: None,
+        }
+    }
+
     fn added(provider: Provider, dir: &Path) -> AccountConfig {
         AccountConfig {
             provider,
             label: "Work \"2\"".into(),
             config_dir: Some(dir.to_owned()),
             fallback: false,
+            endpoint: None,
         }
     }
 
@@ -3535,9 +3665,16 @@ mod tests {
             label: "Old".into(),
             config_dir: None,
             fallback: false,
+            endpoint: None,
         };
-        let renamed =
-            set_account_settings(&path, &id, &previous, " Work ", None, None, false).unwrap();
+        let renamed = set_account_settings(
+            &path,
+            &id,
+            &previous,
+            &settings(" Work ", None, None),
+            false,
+        )
+        .unwrap();
         assert_eq!(renamed.label, "Work");
         assert!(
             std::fs::read_to_string(&path)
@@ -3561,23 +3698,197 @@ mod tests {
                     &path,
                     &AccountId::new(id),
                     &renamed,
-                    label,
-                    directory,
-                    Some(true),
+                    &settings(label, directory, Some(true)),
                     allowed
                 )
                 .is_err()
             );
             assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
         }
-        let updated =
-            set_account_settings(&path, &id, &renamed, "Work", Some(new), None, true).unwrap();
+        let updated = set_account_settings(
+            &path,
+            &id,
+            &renamed,
+            &settings("Work", Some(new), None),
+            true,
+        )
+        .unwrap();
         assert_eq!(updated.config_dir, Some(new_dir));
         let loaded: ConfigFile = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             resolve_accounts(loaded.accounts, &|key| std::env::var_os(key)).unwrap()[&id],
             updated
         );
+    }
+
+    fn fleet(url: &str) -> Endpoint {
+        Endpoint {
+            url: url.into(),
+            key: SecretValue::new("cpa-client-key").unwrap(),
+        }
+    }
+
+    #[test]
+    fn an_endpoint_account_round_trips_with_a_config_dir_of_its_own() {
+        let home = tempfile::tempdir().unwrap();
+        let vars = [("HOME", home.path().to_str().unwrap())];
+        let env = || env(&vars);
+        let path = home.path().join("daemon.toml");
+        let account = AccountConfig {
+            provider: Provider::Claude,
+            label: "Fleet".into(),
+            config_dir: Some(home.path().join(".claude-fleet")),
+            fallback: false,
+            endpoint: Some(fleet("http://127.0.0.1:8317")),
+        };
+        append_account_with_env(&path, &AccountId::new("fleet"), &account, env()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("endpoint = \"http://127.0.0.1:8317\"\nkey = \"cpa-client-key\"\n"),
+            "{text}"
+        );
+        assert!(!text.contains("config_dir"), "{text}");
+        let config = Config::load_with_env(Some(&path), env()).unwrap();
+        assert_eq!(config.accounts[&AccountId::new("fleet")], account);
+        assert!(
+            !format!("{:?}", config.accounts).contains("cpa-client-key"),
+            "the key never shows in a log"
+        );
+    }
+
+    #[test]
+    fn an_endpoint_account_needs_a_url_a_key_claude_and_no_config_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let vars = [("HOME", home.path().to_str().unwrap())];
+        let entry = |extra: &str| format!("[[accounts]]\nid = \"fleet\"\n{extra}\n");
+        let cases = [
+            (
+                "provider = \"claude\"\nendpoint = \"ftp://cpa\"\nkey = \"k\"",
+                "not an http or https URL",
+            ),
+            (
+                "provider = \"claude\"\nendpoint = \"not a url\"\nkey = \"k\"",
+                "is not a URL",
+            ),
+            (
+                "provider = \"claude\"\nendpoint = \"http://cpa\"",
+                "needs its client key",
+            ),
+            (
+                "provider = \"claude\"\nendpoint = \"http://cpa\"\nkey = \"\"",
+                "key must not be empty",
+            ),
+            ("provider = \"claude\"\nkey = \"k\"", "needs its endpoint"),
+            (
+                "provider = \"codex\"\nendpoint = \"http://cpa\"\nkey = \"k\"",
+                "only claude accounts",
+            ),
+            (
+                "provider = \"claude\"\nendpoint = \"http://cpa\"\nkey = \"k\"\n\
+                 config_dir = \"/srv/fleet\"",
+                "omit config_dir",
+            ),
+        ];
+        for (extra, expected) in cases {
+            let path = write(home.path(), &entry(extra));
+            let err = Config::load_with_env(Some(&path), env(&vars)).unwrap_err();
+            assert!(format!("{err:#}").contains(expected), "{extra}: {err:#}");
+        }
+        // Its dir is where a login account of its id would be added, so the two conflict.
+        let path = write(
+            home.path(),
+            &format!(
+                "{}{}",
+                entry("provider = \"claude\"\nendpoint = \"http://cpa\"\nkey = \"k\""),
+                "[[accounts]]\nid = \"login\"\nprovider = \"claude\"\nconfig_dir = \"~/.claude-fleet\"\n"
+            ),
+        );
+        let err = Config::load_with_env(Some(&path), env(&vars)).unwrap_err();
+        assert!(format!("{err:#}").contains("already uses"), "{err:#}");
+    }
+
+    #[test]
+    fn an_endpoint_accounts_endpoint_and_key_change_and_a_login_accounts_cannot() {
+        // The daemon's own environment, as set_account_settings resolves with it.
+        let home = tempfile::tempdir().unwrap();
+        let path = write(
+            home.path(),
+            "[[accounts]]\nid = \"fleet\"\nprovider = \"claude\"\nendpoint = \"http://a:1\"\n\
+             key = \"old\"\n\n[[accounts]]\nid = \"main\"\nprovider = \"claude\"\n",
+        );
+        let load = |id: &str| {
+            Config::load_with_env(Some(&path), |key| std::env::var_os(key))
+                .unwrap()
+                .accounts[&AccountId::new(id)]
+                .clone()
+        };
+        let (fleet_id, main_id) = (AccountId::new("fleet"), AccountId::new("main"));
+        let previous = load("fleet");
+        let key = SecretValue::new("new-key").unwrap();
+        let change = AccountSettings {
+            endpoint: Some("https://cpa.example:8317"),
+            key: Some(&key),
+            ..settings("Fleet", None, None)
+        };
+        let updated = set_account_settings(&path, &fleet_id, &previous, &change, false).unwrap();
+        assert_eq!(
+            updated.endpoint,
+            Some(Endpoint {
+                url: "https://cpa.example:8317".into(),
+                key: key.clone()
+            })
+        );
+        assert_eq!(updated.config_dir, previous.config_dir);
+        assert_eq!(load("fleet"), updated);
+        // Absent keeps them.
+        let renamed = set_account_settings(
+            &path,
+            &fleet_id,
+            &updated,
+            &settings("Renamed", None, None),
+            false,
+        )
+        .unwrap();
+        assert_eq!(renamed.endpoint, updated.endpoint);
+
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let refused = [
+            (
+                &fleet_id,
+                settings("Fleet", Some("/srv/fleet"), None),
+                "herder's own",
+            ),
+            (
+                &main_id,
+                AccountSettings {
+                    endpoint: Some("http://b:1"),
+                    ..settings("Main", None, None)
+                },
+                "no endpoint",
+            ),
+            (
+                &main_id,
+                AccountSettings {
+                    key: Some(&key),
+                    ..settings("Main", None, None)
+                },
+                "no endpoint",
+            ),
+            (
+                &fleet_id,
+                AccountSettings {
+                    endpoint: Some("ftp://b"),
+                    ..settings("Fleet", None, None)
+                },
+                "http or https",
+            ),
+        ];
+        for (id, change, expected) in refused {
+            let previous = load(id.as_str());
+            let err = set_account_settings(&path, id, &previous, &change, true).unwrap_err();
+            assert!(format!("{err:#}").contains(expected), "{err:#}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        }
     }
 
     #[test]
@@ -3593,8 +3904,14 @@ mod tests {
         };
         let rotating = load();
         assert!(!rotating.fallback, "an account rotates by default");
-        let fallback =
-            set_account_settings(&path, &id, &rotating, "Work", None, Some(true), false).unwrap();
+        let fallback = set_account_settings(
+            &path,
+            &id,
+            &rotating,
+            &settings("Work", None, Some(true)),
+            false,
+        )
+        .unwrap();
         assert!(fallback.fallback);
         assert_eq!(load(), fallback);
         assert!(
@@ -3603,11 +3920,23 @@ mod tests {
                 .contains("fallback = true")
         );
         // Leaving it out keeps it.
-        let renamed =
-            set_account_settings(&path, &id, &fallback, "Renamed", None, None, false).unwrap();
+        let renamed = set_account_settings(
+            &path,
+            &id,
+            &fallback,
+            &settings("Renamed", None, None),
+            false,
+        )
+        .unwrap();
         assert!(renamed.fallback);
-        let back = set_account_settings(&path, &id, &renamed, "Renamed", None, Some(false), false)
-            .unwrap();
+        let back = set_account_settings(
+            &path,
+            &id,
+            &renamed,
+            &settings("Renamed", None, Some(false)),
+            false,
+        )
+        .unwrap();
         assert!(!back.fallback);
         assert!(!std::fs::read_to_string(&path).unwrap().contains("fallback"));
         assert_eq!(load(), back);
