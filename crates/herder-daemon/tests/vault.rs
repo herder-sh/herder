@@ -2158,6 +2158,9 @@ async fn an_owner_lists_the_logins_in_the_vaults_cliproxyapi() {
         other => panic!("expected a refusal: {other:?}"),
     };
     assert_eq!(refused.code, ErrorCode::Unsupported);
-    assert!(refused.message.contains("runs no CLIProxyAPI"), "{refused:?}");
+    assert!(
+        refused.message.contains("runs no CLIProxyAPI"),
+        "{refused:?}"
+    );
     bare.runtime.kill().await;
 }

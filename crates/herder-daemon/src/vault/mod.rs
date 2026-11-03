@@ -178,9 +178,7 @@ impl Server {
             "a vault with a CLIProxyAPI keeps its hosts' client keys as secrets: set \
              {SECRETS_KEY_ENV} (see deploy/README.md)"
         );
-        self.shared
-            .fleet
-            .use_cliproxyapi(keys.management().clone());
+        self.shared.fleet.use_cliproxyapi(keys.management().clone());
         self.shared
             .cliproxyapi
             .set(Arc::new(keys))

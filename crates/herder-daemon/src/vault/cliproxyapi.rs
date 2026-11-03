@@ -194,7 +194,11 @@ impl Management {
         let bearer = format!("Bearer {}", self.key.expose());
         let response = match method {
             "GET" => self.agent.get(&url).header("Authorization", &bearer).call(),
-            "DELETE" => self.agent.delete(&url).header("Authorization", &bearer).call(),
+            "DELETE" => self
+                .agent
+                .delete(&url)
+                .header("Authorization", &bearer)
+                .call(),
             "POST" => self
                 .agent
                 .post(&url)
@@ -343,7 +347,11 @@ fn complete(
             "paste the whole address the browser ended on, starting with http://localhost".into(),
         )
     })?;
-    let has = |key: &str| address.query_pairs().any(|(k, v)| k == key && !v.is_empty());
+    let has = |key: &str| {
+        address
+            .query_pairs()
+            .any(|(k, v)| k == key && !v.is_empty())
+    };
     if !has("code") && !has("error") {
         return Err(failed(
             ErrorCode::BadRequest,
@@ -885,7 +893,10 @@ mod tests {
         else {
             panic!("the login did not start");
         };
-        assert_eq!(url, format!("https://claude.example/oauth?state={login_id}"));
+        assert_eq!(
+            url,
+            format!("https://claude.example/oauth?state={login_id}")
+        );
 
         // An address with no code is the wrong one, and the login keeps waiting.
         let wrong = run(
@@ -909,8 +920,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(garbage.code, ErrorCode::BadRequest);
 
-        let redirect_url =
-            format!("http://localhost:54545/callback?code=good&state={login_id}");
+        let redirect_url = format!("http://localhost:54545/callback?code=good&state={login_id}");
         let logins = listed(
             run(
                 &proxy,
@@ -945,7 +955,11 @@ mod tests {
         assert_eq!(again.code, ErrorCode::NotFound);
 
         let name = logins[0].name.clone();
-        let removed = run(&proxy, CommandBody::RemoveProviderLogin { name: name.clone() }).await;
+        let removed = run(
+            &proxy,
+            CommandBody::RemoveProviderLogin { name: name.clone() },
+        )
+        .await;
         assert!(matches!(removed, Ok(CommandResult::Applied)), "{removed:?}");
         assert!(proxy.credentials.lock().unwrap().is_empty());
         let gone = run(&proxy, CommandBody::RemoveProviderLogin { name })
@@ -983,7 +997,10 @@ mod tests {
         let cancel = || CommandBody::CancelProviderLogin {
             login_id: login_id.clone(),
         };
-        assert!(matches!(run(&proxy, cancel()).await, Ok(CommandResult::Applied)));
+        assert!(matches!(
+            run(&proxy, cancel()).await,
+            Ok(CommandResult::Applied)
+        ));
         assert!(!proxy.logins.lock().unwrap().contains_key(&login_id));
         let twice = run(&proxy, cancel()).await.unwrap_err();
         assert_eq!(twice.code, ErrorCode::NotFound);
@@ -991,7 +1008,9 @@ mod tests {
             &proxy,
             CommandBody::CompleteProviderLogin {
                 login_id: login_id.clone(),
-                redirect_url: format!("http://localhost:1455/auth/callback?code=good&state={login_id}"),
+                redirect_url: format!(
+                    "http://localhost:1455/auth/callback?code=good&state={login_id}"
+                ),
             },
         )
         .await
