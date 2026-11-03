@@ -191,7 +191,7 @@ struct AccountPage: View {
             : login.fallbackOn.count == login.on.count ? "fallback"
             : "fallback on \(login.fallbackOn.map(\.name).joined(separator: ", "))"
         let parts: [String?] = [ModelCatalog.providerName(login.provider), login.email == nil ? nil : login.account.label,
-                                login.endpoint == nil ? nil : "endpoint", on, rotation]
+                                login.endpoint == nil ? nil : login.keyFromVault ? "vault logins" : "endpoint", on, rotation]
         return parts.compactMap(\.self).joined(separator: " · ")
     }
 
