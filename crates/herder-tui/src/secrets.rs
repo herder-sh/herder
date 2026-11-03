@@ -183,7 +183,7 @@ pub enum Field {
 
 /// A value being typed: its `Debug` never shows it, so the app's state can be logged.
 #[derive(Clone, Default, PartialEq, Eq)]
-pub struct Masked(String);
+pub struct Masked(pub(crate) String);
 
 impl Masked {
     /// How many characters are typed, all a screen may know of it.

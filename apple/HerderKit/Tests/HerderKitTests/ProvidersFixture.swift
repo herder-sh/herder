@@ -22,6 +22,10 @@ enum ProvidersFixture {
         }
         let work = account("work", "claude", email: "work@example.com", session: 82, week: 36)
         let codex = account("pro", "codex", email: "dev@example.com", session: 9, week: 23)
+        // An endpoint account: no email or limits, one login per endpoint across machines.
+        var proxy = account("claude-proxy", "claude", email: nil)
+        proxy.label = "Proxy"
+        proxy.endpoint = "http://127.0.0.1:8317"
         let machines = [
             machine("a", name: "work-mbp", sessions: [], accounts: [work, codex, account("cursor", "cursor", email: nil)],
                     providers: [cli("claude", "2.1.310", latest: "2.1.310"), cli("codex", "0.50.0", latest: "0.51.2"),
@@ -30,7 +34,7 @@ enum ProvidersFixture {
                 work, codex, account("ops", "claude", email: "ops@example.com", signedOut: now.addingTimeInterval(-14 * 60)),
             ], providers: [cli("claude", "2.1.303", latest: "2.1.310"), cli("codex", "0.50.0", latest: "0.51.2"),
                            cli("grok", nil), cli("opencode", nil)]),
-            machine("c", name: "draugelis", sessions: [], accounts: [],
+            machine("c", name: "draugelis", sessions: [], accounts: [proxy],
                     providers: [cli("claude", "2.1.310"), cli("codex", "0.51.2"), cli("grok", nil, canInstall: false),
                                 cli("opencode", "1.4.0")]),
         ]

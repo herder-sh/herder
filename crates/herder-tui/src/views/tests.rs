@@ -945,6 +945,8 @@ fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
     press(&mut app, KeyCode::Char('m'));
     press(&mut app, KeyCode::Char('n'));
     press(&mut app, KeyCode::Right);
+    // Past how the account runs, to the id.
+    press(&mut app, KeyCode::Tab);
     press(&mut app, KeyCode::Tab);
     app.update(Msg::Key(KeyEvent::new(
         KeyCode::Char('u'),
@@ -1365,6 +1367,56 @@ fn the_add_account_dialog_over_the_accounts_screen() {
     press(&mut app, KeyCode::Char('A'));
     press(&mut app, KeyCode::Char('n'));
     insta::assert_snapshot!(render(&mut app, 45, 40).backend());
+}
+
+#[test]
+fn the_add_account_dialog_takes_an_endpoint_and_masks_its_key() {
+    let mut app = with_accounts();
+    press(&mut app, KeyCode::Char('A'));
+    press(&mut app, KeyCode::Char('n'));
+    // Claude can run against an endpoint: pick it, then fill the id, url and key.
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Tab);
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('u'),
+        KeyModifiers::CONTROL,
+    )));
+    typed(&mut app, "claude-proxy");
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Tab);
+    typed(&mut app, "http://127.0.0.1:8317");
+    press(&mut app, KeyCode::Tab);
+    typed(&mut app, "sk-proxy-1");
+    let screen = render(&mut app, 90, 30).backend().to_string();
+    assert!(!screen.contains("sk-proxy"), "{screen}");
+    assert!(screen.contains(&"•".repeat(10)), "{screen}");
+    assert!(!screen.contains("config dir"), "{screen}");
+    insta::assert_snapshot!(render(&mut app, 90, 30).backend());
+}
+
+#[test]
+fn the_accounts_screen_shows_an_endpoint_account_s_endpoint_instead_of_usage() {
+    let mut app = fake::tree();
+    let mut machines = app.machines.clone();
+    let mut proxy = fake::endpoint_account("claude-proxy", "Proxy", "http://127.0.0.1:8317");
+    // Usage a login would report never shows for an endpoint account.
+    proxy.usage = vec![herder_protocol::UsageWindow {
+        window: "five_hour".into(),
+        used_percent: 42.0,
+        resets_at: None,
+    }];
+    machines[0].accounts = vec![proxy];
+    app.update(Msg::Machines(machines));
+    press(&mut app, KeyCode::Char('A'));
+    let screen = render(&mut app, 90, 16).backend().to_string();
+    assert!(
+        screen.contains("endpoint  http://127.0.0.1:8317"),
+        "{screen}"
+    );
+    assert!(!screen.contains("Session"), "{screen}");
+    assert!(!screen.contains("l log in again"), "{screen}");
+    insta::assert_snapshot!(render(&mut app, 90, 16).backend());
 }
 
 #[test]

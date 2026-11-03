@@ -472,6 +472,14 @@ pub fn account(id: &str, label: &str) -> herder_protocol::Account {
     }
 }
 
+/// An endpoint account of Claude's on `endpoint`: no login, so no email or usage.
+pub fn endpoint_account(id: &str, label: &str, endpoint: &str) -> herder_protocol::Account {
+    herder_protocol::Account {
+        endpoint: Some(endpoint.to_owned()),
+        ..account(id, label)
+    }
+}
+
 /// Presses each character of `text`.
 pub fn type_text(app: &mut App, text: &str) {
     for c in text.chars() {

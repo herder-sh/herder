@@ -99,7 +99,7 @@ struct ProvidersTests {
         let targets = AccountTarget.all(machines, provider: "claude")
         #expect(targets == [
             .init(hostId: "a", name: "laptop", problem: nil),
-            .init(hostId: "b", name: "server", problem: "Member — can’t add accounts"),
+            .init(hostId: "b", name: "server", problem: "Member — can’t add accounts", owner: false),
             .init(hostId: "c", name: "mini", problem: "Not connected"),
         ])
         // A machine without the provider's CLI offers to install it, where herder can.
@@ -123,7 +123,7 @@ struct ProvidersOverviewTests {
         // Claude on trash-can-01 can update; Codex on both is updating or queued already.
         #expect(overview.updatable.map(\.machine) == ["trash-can-01"])
         #expect(overview.versions.updatable.count == 3)
-        #expect(overview.status == "4 accounts · 1 needs sign-in · 1 update")
+        #expect(overview.status == "5 accounts · 1 needs sign-in · 1 update")
     }
 
     @Test func aSignedOutAccountAndAFailedInstallNeedYou() throws {

@@ -48,6 +48,72 @@ struct AccountSettingsTests {
         #expect(draft.account(taken: ["codex-sam"]).accountId == "codex-work")
     }
 
+    @Test func anEndpointDraftNeedsAnHttpUrlAndAKey() {
+        var draft = AccountDraft(provider: "claude", label: "Proxy")
+        draft.endpoint = true
+        #expect(draft.usesEndpoint)
+        // Empty, it is not complete, though nothing is wrong yet.
+        #expect(draft.problem == nil && !draft.complete)
+        draft.url = "ftp://box.lan"
+        #expect(draft.problem == "Use an http:// or https:// URL.")
+        draft.url = "http://"
+        #expect(draft.problem != nil)
+        draft.url = " http://127.0.0.1:8317 "
+        #expect(draft.problem == nil && !draft.complete)
+        draft.key = "  "
+        #expect(!draft.complete)
+        draft.key = "sk-proxy"
+        #expect(draft.complete)
+        // A config dir typed for a login does not count: an endpoint account takes none.
+        draft.configDir = "relative"
+        #expect(draft.complete)
+        #expect(AccountDraft.validEndpoint("https://proxy.example.com/v1"))
+        #expect(!AccountDraft.validEndpoint("127.0.0.1:8317"))
+    }
+
+    @Test func onlyClaudeAndCodexRunAgainstAnEndpoint() {
+        #expect(AccountDraft.supportsEndpoint("claude") && AccountDraft.supportsEndpoint("codex"))
+        #expect(!AccountDraft.supportsEndpoint("cursor") && !AccountDraft.supportsEndpoint("opencode"))
+        var draft = AccountDraft(provider: "cursor")
+        draft.endpoint = true
+        draft.configDir = "relative"
+        // Cursor logs in, whatever the draft held for another provider.
+        #expect(!draft.usesEndpoint)
+        #expect(draft.problem != nil)
+        #expect(draft.endpointCommand(taken: []) == nil)
+    }
+
+    @Test func anEndpointDraftAsksEachMachineForTheAccountUnderTheIdFreeThere() throws {
+        var draft = AccountDraft(provider: "codex", label: "Proxy")
+        draft.endpoint = true
+        draft.url = " https://proxy.lan/v1 "
+        #expect(draft.endpointCommand(taken: []) == nil)
+        draft.key = " sk-1 "
+        let command = try #require(draft.endpointCommand(taken: ["codex-proxy"]))
+        guard case .addEndpointAccount(let id, let provider, let label, let endpoint, let key) = command else {
+            Issue.record("expected addEndpointAccount, got \(command)")
+            return
+        }
+        #expect(id == "codex-proxy-2" && provider == "codex" && label == "Proxy")
+        #expect(endpoint == "https://proxy.lan/v1" && key == "sk-1")
+        // Without a label, the provider names it, as a login's.
+        draft.label = ""
+        guard case .addEndpointAccount(let id, _, let label, _, _) = try #require(draft.endpointCommand(taken: [])) else {
+            Issue.record("expected addEndpointAccount")
+            return
+        }
+        #expect(id == "codex" && label == "Codex")
+    }
+
+    @Test func aMemberSeesNoKeyField() {
+        let machines = [machine("a", name: "team-box", sessions: [], role: .member)]
+        let targets = AccountTarget.all(machines, provider: "claude")
+        #expect(targets.map(\.owner) == [false])
+        #expect(AccountTarget.all([machine("b", name: "mine", sessions: [])], provider: "claude").map(\.owner) == [true])
+        #expect(AddAccountSheet.title(2, endpoint: true) == "Add on 2 machines")
+        #expect(AddAccountSheet.title(1) == "Log in on 1 machine")
+    }
+
     @Test func aKnownEmailNamesTheSuggestion() {
         #expect(AccountDraft.nextId(provider: "claude", taken: ["claude"], name: "Sam.Lee@example.com") == "claude-sam.lee")
         #expect(AccountDraft.nextId(provider: "codex", taken: ["codex-sam"], name: "sam@example.com") == "codex-sam-2")
@@ -85,6 +151,33 @@ struct AccountSettingsTests {
         #expect(await eventually { added(first.hostId) != nil && added(second.hostId) != nil })
         #expect(added(first.hostId)?.label == "Work" && added(second.hostId)?.label == "Work")
         #expect(await eventually { keys.allSatisfy { fleet.progress($0) == .added } })
+    }
+
+    @MainActor
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func anEndpointAccountIsSentToEachMachineWhichSaysWhyItRefusedIt() async throws {
+        let one = try FakeDaemon(name: "one")
+        let two = try FakeDaemon(name: "two")
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open profile")
+            return
+        }
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        let first = try await fleet.signIn(to: one)
+        let second = try await fleet.signIn(to: two)
+        try await fleet.client.synced(hostId: first.hostId)
+        try await fleet.client.synced(hostId: second.hostId)
+        var draft = AccountDraft(provider: "claude", label: "Proxy")
+        draft.endpoint = true
+        draft.url = "http://127.0.0.1:8317"
+        draft.key = "sk-proxy"
+        // No terminal, no job in Activity: the command goes straight to each machine, and each
+        // answers for itself. The fake daemon runs no endpoint accounts, and says so.
+        let failures = await fleet.addEndpointAccount(draft, on: [first.hostId, second.hostId])
+        #expect(Set(failures.keys) == [first.hostId, second.hostId])
+        #expect(failures.values.allSatisfy { !$0.isEmpty && !$0.contains("sk-proxy") })
+        #expect(fleet.activity.keys.isEmpty)
     }
 
     @Test func progressReadsTheTerminalAndTheAccountList() {

@@ -134,6 +134,9 @@ impl App {
                     screen.adding = None;
                     return vec![Effect::AttachTerminal { host_id, target }];
                 }
+                Outcome::AddEndpoint(command) => {
+                    return vec![accounts::send(adding.host_id.clone(), command)];
+                }
             }
             return Vec::new();
         }
@@ -163,6 +166,12 @@ impl App {
                     self.notice = Some("select an account to log in again".to_owned());
                     return Vec::new();
                 };
+                if find(&self.machines, &host_id, &account_id)
+                    .is_some_and(|account| account.endpoint.is_some())
+                {
+                    self.notice = Some("an endpoint account has no login".to_owned());
+                    return Vec::new();
+                }
                 match terminal::refusal(&self.machines, &host_id) {
                     Some(refusal) => self.notice = Some(format!("logging in again: {refusal}")),
                     None => {
@@ -178,13 +187,15 @@ impl App {
         Vec::new()
     }
 
-    /// Whether the accounts screen is open on an account, which can be logged in again.
+    /// Whether the accounts screen is open on a login account, which can be logged in again.
     pub(crate) fn on_account(&self) -> bool {
         self.account_screen.as_ref().is_some_and(|screen| {
             let rows = rows(&self.machines);
-            screen
-                .selected(&rows)
-                .is_some_and(|at| matches!(rows[at], Pick::Account(..)))
+            screen.selected(&rows).is_some_and(|at| match &rows[at] {
+                Pick::Account(host_id, account_id) => find(&self.machines, host_id, account_id)
+                    .is_some_and(|account| account.endpoint.is_none()),
+                Pick::Machine(_) => false,
+            })
         })
     }
 
@@ -334,6 +345,129 @@ mod tests {
         // The screen stays, to show the account once its login succeeds.
         assert_eq!(adding(&app), None);
         assert!(app.account_screen.is_some());
+    }
+
+    fn adding(app: &App) -> Option<AddAccount> {
+        app.account_screen.as_ref().unwrap().adding.clone()
+    }
+
+    #[test]
+    fn the_endpoint_form_sends_the_account_and_closes_once_the_machine_takes_it() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('n'));
+        // Claude can use an endpoint: the kind follows the provider.
+        assert_eq!(adding(&app).unwrap().fields()[1], accounts::Field::Kind);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(
+            adding(&app).unwrap().fields(),
+            [
+                accounts::Field::Provider,
+                accounts::Field::Kind,
+                accounts::Field::Id,
+                accounts::Field::Label,
+                accounts::Field::Url,
+                accounts::Field::Key,
+            ]
+        );
+        // Without a URL, nothing is sent and the URL is focused.
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        let form = adding(&app).unwrap();
+        assert_eq!(form.focus, accounts::Field::Url);
+        assert_eq!(
+            form.error.as_deref(),
+            Some("enter the endpoint's http:// or https:// URL")
+        );
+        fake::type_text(&mut app, "ftp://box");
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        app.update(Msg::Key(KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        )));
+        fake::type_text(&mut app, "https://proxy.lan/v1");
+        // Without a key, the key is focused.
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        let form = adding(&app).unwrap();
+        assert_eq!(form.focus, accounts::Field::Key);
+        assert_eq!(form.error.as_deref(), Some("enter the endpoint's key"));
+        fake::type_text(&mut app, "sk-1");
+        // The key never shows in the app's state.
+        assert!(!format!("{app:?}").contains("sk-1"));
+
+        let sent = press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            sent,
+            [Effect::Send {
+                host_id: HostId::new("h1"),
+                command: herder_protocol::CommandBody::AddEndpointAccount {
+                    account_id: AccountId::new("claude"),
+                    provider: Provider::Claude,
+                    label: None,
+                    endpoint: "https://proxy.lan/v1".into(),
+                    key: herder_protocol::SecretValue::new("sk-1").unwrap(),
+                },
+                origin: crate::compose::Origin::AddAccount(HostId::new("h1")),
+            }]
+        );
+        // One at a time.
+        assert!(adding(&app).unwrap().sending);
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+
+        // A refusal shows in the form, which may try again.
+        app.update(Msg::Sent {
+            origin: crate::compose::Origin::AddAccount(HostId::new("h1")),
+            result: Err("account claude already exists".into()),
+        });
+        let form = adding(&app).unwrap();
+        assert!(!form.sending);
+        assert_eq!(form.error.as_deref(), Some("account claude already exists"));
+        assert_eq!(press(&mut app, KeyCode::Enter).len(), 1);
+
+        // Taken: the form closes, and the screen shows the account once listed.
+        app.update(Msg::Sent {
+            origin: crate::compose::Origin::AddAccount(HostId::new("h1")),
+            result: Ok(herder_protocol::CommandResult::Applied),
+        });
+        assert_eq!(adding(&app), None);
+        assert!(app.account_screen.is_some());
+    }
+
+    #[test]
+    fn providers_without_endpoints_only_log_in() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Right);
+        assert!(adding(&app).unwrap().endpoint);
+        // Cursor has no endpoint: the form goes back to a login, without the choice.
+        press(&mut app, KeyCode::BackTab);
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Right);
+        let form = adding(&app).unwrap();
+        assert_eq!(form.provider(), &Provider::Cursor);
+        assert!(!form.endpoint);
+        assert!(!form.fields().contains(&accounts::Field::Kind));
+    }
+
+    #[test]
+    fn an_endpoint_account_has_no_login_to_run_again() {
+        let mut app = App::default();
+        let mut h1 = machine("h1", "box", &[]);
+        h1.accounts = vec![fake::endpoint_account(
+            "claude-proxy",
+            "Proxy",
+            "http://127.0.0.1:8317",
+        )];
+        app.update(Msg::Machines(vec![h1]));
+        press(&mut app, KeyCode::Char('A'));
+        assert!(!app.on_account());
+        assert_eq!(press(&mut app, KeyCode::Char('l')), []);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("an endpoint account has no login")
+        );
     }
 
     #[test]
