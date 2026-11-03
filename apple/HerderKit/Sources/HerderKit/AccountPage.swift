@@ -454,9 +454,8 @@ struct AccountPage: View {
                            saved: saves["Key"]) {
                     HStack(spacing: 8) {
                         if login.keyFromVault && !typingKey {
-                            Text("Key from the vault").foregroundStyle(Theme.secondary)
-                                .accessibilityIdentifier("account-key-vault")
                             PillButton(title: "Use own key") { typingKey = true }
+                                .accessibilityIdentifier("account-key-vault")
                         } else {
                             SecureField(login.keyFromVault ? "Type a key" : "Unchanged", text: $key)
                                 .textFieldStyle(.plain)
@@ -495,7 +494,7 @@ struct AccountPage: View {
     }
 
     static func keyHint(fromVault: Bool, typing: Bool) -> String {
-        if fromVault && !typing { return "Each machine’s own, fetched from its vault" }
+        if fromVault && !typing { return "Key from the vault, each machine’s own" }
         return fromVault ? "Kept on each machine in place of the vault’s" : "Never shown; type a new one to replace it"
     }
 

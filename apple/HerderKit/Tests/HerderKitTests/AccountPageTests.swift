@@ -67,7 +67,7 @@ struct AccountPageTests {
         let held = try #require(logins.first { $0.endpoint == "http://127.0.0.1:8317" })
         #expect(onVault.keyFromVault && !held.keyFromVault)
         #expect(ProviderAccounts.Login.endpointNote(fromVault: true).contains("a key from the vault"))
-        #expect(AccountPage.keyHint(fromVault: true, typing: false) == "Each machine’s own, fetched from its vault")
+        #expect(AccountPage.keyHint(fromVault: true, typing: false) == "Key from the vault, each machine’s own")
         #expect(AccountPage.keyHint(fromVault: false, typing: false) == "Never shown; type a new one to replace it")
         // Set up elsewhere, it is on that machine's vault's logins too.
         #expect(onVault.draft(taken: []).usesVault)
