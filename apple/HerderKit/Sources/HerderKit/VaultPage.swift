@@ -4,20 +4,24 @@ import SwiftUI
 /// A vault's page: how current its copy of each host is, with their sessions, and who is on it; for its owners a Secrets tab: each set with the hosts it is granted to and
 /// the secrets in it, and the latest fetches. Owners create and delete sets, add, replace and
 /// delete secrets, and grant a set to the vault's hosts or revoke it. A value is typed into a
-/// secure field and never shown again.
+/// secure field and never shown again. A Logins tab lists the provider logins in the
+/// CLIProxyAPI next to the vault, and adds and removes them.
 struct VaultPage: View {
     let fleet: Fleet
     let vault: HostId
     @Environment(\.pages) private var pages
     @State private var tab = Tab.overview
     @State private var secrets: VaultSecrets
+    @State private var logins: VaultLogins
+    @State private var adding: LoginAdder?
+    @State private var removing: ProviderLogin?
     @State private var newSet = ""
     @State private var editor: SecretEditor?
     @State private var deleting: Deleting?
     @State private var error: String?
 
     enum Tab: Hashable {
-        case overview, secrets
+        case overview, secrets, logins
     }
 
     /// A set or a secret, asked about before it is deleted.
@@ -45,6 +49,16 @@ struct VaultPage: View {
         self.vault = vault
         _tab = State(initialValue: tab)
         _secrets = State(initialValue: VaultSecrets(fleet: fleet, vault: vault))
+        _logins = State(initialValue: VaultLogins(fleet: fleet, vault: vault))
+    }
+
+    /// The page with `secrets` and `logins` in place of the vault's, for previews and tests.
+    init(fleet: Fleet, vault: HostId, tab: Tab, secrets: VaultSecrets, logins: VaultLogins) {
+        self.fleet = fleet
+        self.vault = vault
+        _tab = State(initialValue: tab)
+        _secrets = State(initialValue: secrets)
+        _logins = State(initialValue: logins)
     }
 
     var body: some View {
@@ -55,6 +69,8 @@ struct VaultPage: View {
         DetailPage(title: machine?.name ?? "Vault", status: stats?.status ?? "") {
             if tab == .secrets {
                 IconButton(symbol: "arrow.clockwise", help: "Reload") { Task { await secrets.reload() } }
+            } else if tab == .logins {
+                IconButton(symbol: "arrow.clockwise", help: "Reload") { Task { await logins.reload() } }
             }
             IconButton(symbol: "gearshape", help: "Machine Settings") { pages.open(.machine(vault)) }
         } content: {
@@ -62,13 +78,21 @@ struct VaultPage: View {
                 Picker("View", selection: $tab) {
                     Text("Overview").tag(Tab.overview)
                     Text("Secrets").tag(Tab.secrets)
+                    Text("Logins").tag(Tab.logins)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
                 .accessibilityIdentifier("vault-tabs")
             }
-            if owned && tab == .secrets {
+            if owned && tab == .logins {
+                ProviderLoginsSection(logins: logins, add: { adding = LoginAdder(logins: logins) },
+                                      remove: { removing = $0 })
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(Theme.failure)
+                        .accessibilityIdentifier("provider-logins-change-error")
+                }
+            } else if owned && tab == .secrets {
                 VStack(alignment: .leading, spacing: 18) { sets(machine) }
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(Theme.failure)
@@ -82,7 +106,25 @@ struct VaultPage: View {
                 }
             }
         }
-        .task(id: tab) { if tab == .secrets { await secrets.reload() } }
+        .task(id: tab) {
+            switch tab {
+            case .secrets: await secrets.reload()
+            case .logins: await logins.reload()
+            case .overview: break
+            }
+        }
+        .sheet(item: Binding(get: { adding.map(AdderItem.init) }, set: { if $0 == nil { adding = nil } })) { item in
+            AddProviderLoginSheet(adder: item.adder)
+        }
+        .confirmationDialog("Remove \(removing?.label ?? removing?.name ?? "")?", isPresented: Binding(
+            get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
+            Button("Remove", role: .destructive) {
+                guard let removing else { return }
+                Task { await run { try await logins.remove(removing) } }
+            }
+        } message: {
+            Text("The vault's CLIProxyAPI drops the login and its tokens. Sessions on it move to its other logins.")
+        }
         .sheet(item: Binding(get: { editor.map(EditorItem.init) }, set: { if $0 == nil { editor = nil } })) { item in
             SecretEditorSheet(editor: item.editor)
         }
@@ -191,6 +233,12 @@ struct VaultPage: View {
         error = nil
         do { try await action() } catch { self.error = describe(error) }
     }
+}
+
+/// The login being added, as a sheet item.
+private struct AdderItem: Identifiable {
+    let adder: LoginAdder
+    var id: ObjectIdentifier { ObjectIdentifier(adder) }
 }
 
 /// The editor as a sheet item: one per editor opened.

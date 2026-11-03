@@ -1920,6 +1920,8 @@ fn fake_cliproxyapi() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
             } else if head.starts_with(&format!("PUT {path} ")) {
                 *held.lock().unwrap() = serde_json::from_slice(&body).unwrap();
                 r#"{"status":"ok"}"#.to_owned()
+            } else if head.starts_with("GET /v8/management/credentials ") {
+                r#"{"files":[{"name":"claude-ada@example.com.json","provider":"claude","email":"ada@example.com","status":"active"}]}"#.to_owned()
             } else {
                 serde_json::to_string(&*held.lock().unwrap()).unwrap()
             };
@@ -2097,4 +2099,68 @@ async fn a_paired_host_runs_on_the_vaults_cliproxyapi_with_the_key_it_minted_unt
     assert_eq!(held.len(), 1, "{held:?}");
     assert_ne!(held[0], minted);
     vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_owner_lists_the_logins_in_the_vaults_cliproxyapi() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (url, _keys) = fake_cliproxyapi();
+    let management = herder_daemon::vault::cliproxyapi::Management::new(
+        &url,
+        SecretValue::new("management-secret").unwrap(),
+    );
+    let vault = Vault::start_with(
+        &tmp.path().join("vault"),
+        0,
+        LIVENESS_TIMEOUT,
+        Some(SECRETS_KEY),
+        Some(ClientKeys::new(management).unwrap()),
+    )
+    .await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    vault.join(&client).await;
+    let listed = client
+        .send(HostId::new("vault"), CommandBody::ListProviderLogins)
+        .await;
+    let Ok(CommandResult::ProviderLogins { logins }) = listed else {
+        panic!("expected the proxy's logins: {listed:?}");
+    };
+    assert_eq!(
+        logins,
+        vec![herder_protocol::ProviderLogin {
+            name: "claude-ada@example.com.json".into(),
+            provider: Provider::Claude,
+            label: Some("ada@example.com".into()),
+            state: herder_protocol::ProviderLoginState::Active,
+            until: None,
+            message: None,
+        }]
+    );
+    vault.runtime.kill().await;
+
+    // A vault with no CLIProxyAPI says so.
+    let bare = Vault::start(&tmp.path().join("bare"), 0).await;
+    let client = Client::open(
+        tmp.path().join("client2").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    bare.join(&client).await;
+    let refused = match client
+        .send(HostId::new("vault"), CommandBody::ListProviderLogins)
+        .await
+    {
+        Err(Error::Rejected { info }) => info,
+        other => panic!("expected a refusal: {other:?}"),
+    };
+    assert_eq!(refused.code, ErrorCode::Unsupported);
+    assert!(
+        refused.message.contains("runs no CLIProxyAPI"),
+        "{refused:?}"
+    );
+    bare.runtime.kill().await;
 }
