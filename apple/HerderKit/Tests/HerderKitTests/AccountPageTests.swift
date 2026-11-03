@@ -30,7 +30,59 @@ private func machines(now: Date = now) -> [Machine] {
     ]
 }
 
+private func endpointAccount(_ id: AccountId, on url: String, provider: Provider = "claude") -> Account {
+    Account(accountId: id, provider: provider, label: "Proxy", configDir: "~/.herder/accounts/\(id)", email: nil,
+            usage: [], endpoint: url)
+}
+
 struct AccountPageTests {
+    @Test func endpointAccountsAreOneLoginPerEndpointAcrossMachines() throws {
+        let fleet = [
+            machine("a", name: "work-mbp", sessions: [],
+                    accounts: [endpointAccount("claude-proxy", on: "http://127.0.0.1:8317"),
+                               endpointAccount("claude-vault", on: "https://vault.lan:8317")]),
+            machine("b", name: "trash-can-01", sessions: [],
+                    accounts: [endpointAccount("claude", on: "http://127.0.0.1:8317")]),
+        ]
+        let logins = try #require(ProviderAccounts(machines: fleet, now: now).groups.first?.logins)
+        #expect(logins.map(\.id).sorted() == ["claude/endpoint:http://127.0.0.1:8317",
+                                                "claude/endpoint:https://vault.lan:8317"])
+        let local = try #require(logins.first { $0.endpoint == "http://127.0.0.1:8317" })
+        #expect(local.on.map(\.name) == ["work-mbp", "trash-can-01"])
+        #expect(local.title == "Proxy" && local.email == nil)
+        // Set up elsewhere, it keeps the endpoint, and needs the key typed again.
+        let draft = try #require(logins.first { $0.endpoint == "https://vault.lan:8317" }).draft(taken: [])
+        #expect(draft.usesEndpoint && draft.url == "https://vault.lan:8317" && draft.key.isEmpty)
+        #expect(draft.configDir.isEmpty)
+    }
+
+    @Test func anEndpointAccountsEditKeepsItsDirectoryAndSendsOnlyAReplacedKey() {
+        let account = endpointAccount("claude-proxy", on: "http://127.0.0.1:8317")
+        // A label or rotation change sends no endpoint, key or config dir: absent keeps them.
+        guard case .setAccountSettings(let id, let label, let dir, let fallback, let endpoint, let key)
+            = account.settings(label: "Renamed", configDir: account.configDir, fallback: true) else {
+            Issue.record("expected setAccountSettings")
+            return
+        }
+        #expect(id == "claude-proxy" && label == "Renamed" && fallback == true)
+        #expect(dir == nil && endpoint == nil && key == nil)
+        guard case .setAccountSettings(_, _, let dir, _, let endpoint, let key)
+            = account.settings(label: "Proxy", configDir: nil, fallback: nil, endpoint: "https://vault.lan", key: "sk-2") else {
+            Issue.record("expected setAccountSettings")
+            return
+        }
+        #expect(dir == nil && endpoint == "https://vault.lan" && key == "sk-2")
+        // A login account never sends an endpoint or a key; its config dir goes as given.
+        let login = Account(accountId: "main", provider: "claude", label: "work", configDir: "~/.claude-work",
+                            email: "work@example.com", usage: [])
+        guard case .setAccountSettings(_, _, let dir, _, let endpoint, let key)
+            = login.settings(label: "work", configDir: "~/.claude-work", fallback: nil, endpoint: "http://x", key: "k") else {
+            Issue.record("expected setAccountSettings")
+            return
+        }
+        #expect(dir == "~/.claude-work" && endpoint == nil && key == nil)
+    }
+
     @Test func eachMachineSaysHowTheLoginStandsThere() throws {
         let login = try #require(ProviderAccounts(machines: machines(), now: now).groups.first?.logins.first)
         var script = Script("01A", host: "a")

@@ -8,7 +8,11 @@
 //! ▶  claude-main  claude · fallback                                     3 sessions
 //!      Session         ███████░░░░░░░░░░░░░  38%   resets in 2h 13m
 //!      Weekly          ██░░░░░░░░░░░░░░░░░░  12%   resets in 5d 3h
+//!    claude-proxy  claude
+//!      endpoint  http://127.0.0.1:8317
 //! ```
+//!
+//! An endpoint account shows its endpoint instead: it has no login, so no usage of its own.
 
 use herder_client_core::{Machine, provider_hints};
 use herder_protocol::{Account, HostId, SessionStatus, Timestamp, UsageWindow};
@@ -240,11 +244,20 @@ fn account_row(
         n => format!("{n} sessions"),
     };
     let mut body = Vec::new();
-    if account.usage.is_empty() {
+    if let Some(endpoint) = &account.endpoint {
+        // An endpoint account has no login, so no usage windows: the server behind it
+        // holds the provider's limits.
+        body.push(Line::from(vec![
+            Span::styled("  endpoint  ", ui.muted()),
+            Span::styled(endpoint.clone(), ui.text()),
+        ]));
+    } else if account.usage.is_empty() {
         body.push(Line::styled("  no usage reported yet", ui.muted()));
     }
-    for window in &account.usage {
-        body.extend(window_lines(ui, window, columns, width, now));
+    if account.endpoint.is_none() {
+        for window in &account.usage {
+            body.extend(window_lines(ui, window, columns, width, now));
+        }
     }
     Row::item(Line::from(left))
         .right(Span::styled(right, ui.muted()))

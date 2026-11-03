@@ -102,9 +102,17 @@ struct InputBox: View {
     @Binding var text: String
     var mono = false
     var lines: ClosedRange<Int> = 1...1
+    /// Typed hidden, as a key or password is.
+    var secure = false
 
     var body: some View {
-        TextField(placeholder, text: $text, axis: lines.upperBound > 1 ? .vertical : .horizontal)
+        Group {
+            if secure {
+                SecureField(placeholder, text: $text)
+            } else {
+                TextField(placeholder, text: $text, axis: lines.upperBound > 1 ? .vertical : .horizontal)
+            }
+        }
             .textFieldStyle(.plain)
             .font(mono ? Theme.mono : .body)
             .foregroundStyle(Theme.text)

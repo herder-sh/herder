@@ -337,6 +337,12 @@ enum SaveState: Equatable {
 
     subscript(row: String) -> SaveState? { rows[row] }
 
+    /// Shows `message` as `row`'s error, for a change refused before it was sent.
+    func fail(_ row: String, _ message: String) {
+        generations[row] = (generations[row] ?? 0) + 1
+        rows[row] = .failed(message)
+    }
+
     /// Runs `work`, the change to `row`, and shows how it went.
     func save(_ row: String, _ work: () async throws -> Void) async {
         let generation = (generations[row] ?? 0) + 1

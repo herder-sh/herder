@@ -1,8 +1,8 @@
 import Herder
 import SwiftUI
 
-/// An account to add, as the form has it: one login for every machine it is added on. Each
-/// machine gets the first id free there, named after the label.
+/// An account to add, as the form has it: one login, or one endpoint, for every machine it is
+/// added on. Each machine gets the first id free there, named after the label.
 struct AccountDraft {
     /// The id to keep wherever it is free, as a login set up from another machine has; empty
     /// names it after the label.
@@ -10,6 +10,34 @@ struct AccountDraft {
     var provider: Provider = "claude"
     var label = ""
     var configDir = ""
+    /// It runs against an API server, `url` with `key`, rather than a login; only for a provider
+    /// that can (see `supportsEndpoint`).
+    var endpoint = false
+    var url = ""
+    /// The endpoint's client key; sent once, and never shown again.
+    var key = ""
+
+    /// The providers whose CLI herder can point at an endpoint.
+    static func supportsEndpoint(_ provider: Provider) -> Bool {
+        provider == "claude" || provider == "codex"
+    }
+
+    /// Whether the draft adds an endpoint account: chosen, for a provider that can.
+    var usesEndpoint: Bool { endpoint && Self.supportsEndpoint(provider) }
+
+    /// An `http` or `https` URL with a host, as the daemon takes for an endpoint.
+    static func validEndpoint(_ text: String) -> Bool {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return false }
+        return url.host?.isEmpty == false
+    }
+
+    /// Whether every field it needs is filled in and valid.
+    var complete: Bool {
+        guard problem == nil else { return false }
+        guard usesEndpoint else { return true }
+        return Self.validEndpoint(url) && clean(key) != nil
+    }
 
     /// The first id not in `taken`: the provider's name, or with a name for the login (an email,
     /// whose local part counts, or a label), the provider and that name (`claude-sam`); then
@@ -54,7 +82,20 @@ struct AccountDraft {
                           configDir: clean(configDir))
     }
 
+    /// What a machine whose ids are `taken` is asked to add, as an endpoint account; `nil`
+    /// unless the draft is a complete one.
+    func endpointCommand(taken: [String]) -> CommandBody? {
+        guard usesEndpoint, complete, let url = clean(url), let key = clean(key) else { return nil }
+        let account = account(taken: taken)
+        return .addEndpointAccount(accountId: account.accountId, provider: provider, label: account.label,
+                                   endpoint: url, key: key)
+    }
+
     var problem: String? {
+        if usesEndpoint {
+            if let url = clean(url), !Self.validEndpoint(url) { return "Use an http:// or https:// URL." }
+            return nil
+        }
         if let path = clean(configDir), !Self.validPath(path) {
             return "Use an absolute path or a path starting with ~/."
         }
@@ -82,6 +123,32 @@ extension Fleet {
             return addAccount(draft.account(taken: taken), on: hostId)
         }
     }
+
+    /// Adds `draft`'s endpoint account on each of `hostIds` at once, under the id free there;
+    /// no terminal, as it has no login. Returns why each machine that refused it did.
+    func addEndpointAccount(_ draft: AccountDraft, on hostIds: [HostId]) async -> [HostId: String] {
+        let commands = hostIds.compactMap { hostId -> (HostId, CommandBody)? in
+            let taken = AccountDraft.taken(on: machines.first { $0.hostId == hostId },
+                                           pending: activity.pendingIds(on: hostId))
+            return draft.endpointCommand(taken: taken).map { (hostId, $0) }
+        }
+        let client = client
+        return await withTaskGroup(of: (HostId, String?).self) { group in
+            for (hostId, command) in commands {
+                group.addTask {
+                    do {
+                        _ = try await client.send(hostId: hostId, command: command)
+                        return (hostId, nil)
+                    } catch {
+                        return (hostId, describe(error))
+                    }
+                }
+            }
+            var failures: [HostId: String] = [:]
+            for await (hostId, failure) in group { failures[hostId] = failure }
+            return failures
+        }
+    }
 }
 
 /// A machine an account can be added on, or why it cannot be from this device.
@@ -92,6 +159,8 @@ struct AccountTarget: Equatable, Identifiable {
     let problem: String?
     /// Whether the provider's CLI is missing there and herder can install it.
     var installable = false
+    /// Whether this device owns the machine: only an owner adds accounts, or sees a key field.
+    var owner = true
 
     var id: HostId { hostId }
 
@@ -113,13 +182,16 @@ struct AccountTarget: Equatable, Identifiable {
                 nil
             }
             return AccountTarget(hostId: machine.hostId, name: machine.name, problem: problem,
-                                 installable: reachable && missing && status?.canInstall == true)
+                                 installable: reachable && missing && status?.canInstall == true,
+                                 owner: machine.role == .owner)
         }
     }
 }
 
-/// Adds an account on several machines at once: the provider, the machines to log in on and
-/// the label. Each machine's login runs in Activity, so the sheet closes once they start.
+/// Adds an account on several machines at once: the provider, how it runs, the machines and
+/// the label. Each machine's login runs in Activity, so the sheet closes once they start; an
+/// endpoint account is sent to each machine, and the sheet closes once every one took it, or
+/// says why a machine refused it.
 struct AddAccountSheet: View {
     let fleet: Fleet
     /// The machine ticked to start with; without one, every machine it can be added on.
@@ -132,6 +204,9 @@ struct AddAccountSheet: View {
     @State private var ticked: Set<HostId> = []
     @State private var started = false
     @State private var showsConfigDir = false
+    @State private var sending = false
+    /// Why each machine refused the endpoint account last sent.
+    @State private var failures: [HostId: String] = [:]
     @Environment(\.dismiss) private var dismiss
 
     private var targets: [AccountTarget] { AccountTarget.all(fleet.machines, provider: draft.provider) }
@@ -139,21 +214,19 @@ struct AddAccountSheet: View {
     private var chosen: [HostId] { targets.filter { $0.problem == nil && ticked.contains($0.hostId) }.map(\.hostId) }
 
     var body: some View {
-        SheetScaffold(title: "Add Account", height: 540, hint: "Logins run in Activity; this sheet closes.") {
+        SheetScaffold(title: "Add Account", height: 600, hint: Self.hint(endpoint: draft.usesEndpoint)) {
             AddAccountForm(draft: $draft, ticked: $ticked, showsConfigDir: $showsConfigDir, targets: targets,
                            installing: { fleet.activity.phase(JobKey(hostId: $0, kind: .install(draft.provider))) != .ended },
-                           install: { fleet.install(draft.provider, on: $0) })
+                           install: { fleet.install(draft.provider, on: $0) }, failures: failures)
         } footer: {
             Spacer()
-            ActionButton(title: Self.title(chosen.count), style: .primary) {
-                guard !chosen.isEmpty, draft.problem == nil else { return }
-                fleet.addAccount(draft, on: chosen)
-                dismiss()
-            }
+            ActionButton(title: sending ? "Adding…" : Self.title(chosen.count, endpoint: draft.usesEndpoint),
+                         style: .primary) { add() }
             .frame(width: 220)
-            .disabled(chosen.isEmpty || draft.problem != nil)
+            .disabled(chosen.isEmpty || !draft.complete || sending)
             .keyboardShortcut(.defaultAction)
         }
+        .onChange(of: draft.provider) { failures = [:] }
         .onAppear {
             guard !started else { return }
             started = true
@@ -162,8 +235,32 @@ struct AddAccountSheet: View {
         }
     }
 
-    static func title(_ machines: Int) -> String {
-        machines == 1 ? "Log in on 1 machine" : "Log in on \(machines) machines"
+    private func add() {
+        guard !chosen.isEmpty, draft.complete, !sending else { return }
+        guard draft.usesEndpoint else {
+            fleet.addAccount(draft, on: chosen)
+            dismiss()
+            return
+        }
+        let hostIds = chosen
+        sending = true
+        Task {
+            failures = await fleet.addEndpointAccount(draft, on: hostIds)
+            sending = false
+            // The machines that took it are done; those that refused stay ticked to try again.
+            ticked = ticked.filter { failures[$0] != nil || !hostIds.contains($0) }
+            if failures.isEmpty { dismiss() }
+        }
+    }
+
+    static func title(_ machines: Int, endpoint: Bool = false) -> String {
+        let verb = endpoint ? "Add" : "Log in"
+        return machines == 1 ? "\(verb) on 1 machine" : "\(verb) on \(machines) machines"
+    }
+
+    static func hint(endpoint: Bool) -> String {
+        endpoint ? "herder never shows the key again."
+            : "Logins run in Activity; this sheet closes."
     }
 }
 
@@ -175,6 +272,8 @@ struct AddAccountForm: View {
     let targets: [AccountTarget]
     let installing: (HostId) -> Bool
     let install: (HostId) -> Void
+    /// Why each machine refused the endpoint account last sent.
+    var failures: [HostId: String] = [:]
 
     static let providers: [Provider] = ["claude", "codex", "cursor", "opencode"]
 
@@ -186,7 +285,17 @@ struct AddAccountForm: View {
                 }
             }
         }
-        Field(label: "Log in on") {
+        // An endpoint's key is the owner's to enter: a member sees no key field.
+        if AccountDraft.supportsEndpoint(draft.provider) && targets.contains(where: \.owner) {
+            Field(label: "Sign-in") {
+                ChoiceChips(options: [
+                    (value: false, label: "Log in", detail: "The provider’s own login"),
+                    (value: true, label: "Use an endpoint", detail: "An API server and its key"),
+                ], selection: $draft.endpoint)
+                .accessibilityIdentifier("account-kind")
+            }
+        }
+        Field(label: draft.usesEndpoint ? "Add on" : "Log in on") {
             VStack(spacing: 0) {
                 if targets.isEmpty {
                     Text("Pair a machine first.").font(.subheadline).foregroundStyle(Theme.secondary)
@@ -204,11 +313,25 @@ struct AddAccountForm: View {
             InputBox(placeholder: ModelCatalog.providerName(draft.provider), text: $draft.label)
                 .accessibilityIdentifier("account-label")
         }
-        DisclosureGroup(isExpanded: $showsConfigDir) {
-            InputBox(placeholder: "Chosen by herder, such as ~/.\(draft.provider)-work", text: $draft.configDir, mono: true)
-                .padding(.top, 8)
-        } label: {
-            SectionHeading(title: "Config directory")
+        if draft.usesEndpoint && targets.contains(where: \.owner) {
+            Field(label: "Endpoint URL") {
+                InputBox(placeholder: "http://127.0.0.1:8317", text: $draft.url, mono: true)
+                    .accessibilityIdentifier("account-endpoint")
+            }
+            Field(label: "Key") {
+                InputBox(placeholder: "The server’s client key", text: $draft.key, mono: true, secure: true)
+                    .accessibilityIdentifier("account-key")
+            }
+            Text("A CLIProxyAPI on this machine or the vault, or a local model server. The server holds the provider’s credentials; herder keeps only its key.")
+                .font(.footnote).foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            DisclosureGroup(isExpanded: $showsConfigDir) {
+                InputBox(placeholder: "Chosen by herder, such as ~/.\(draft.provider)-work", text: $draft.configDir, mono: true)
+                    .padding(.top, 8)
+            } label: {
+                SectionHeading(title: "Config directory")
+            }
         }
         if let problem = draft.problem {
             Label(problem, systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(Theme.failure)
@@ -227,6 +350,9 @@ struct AddAccountForm: View {
                     Text(target.name).foregroundStyle(target.problem == nil ? Theme.text : Theme.tertiary)
                     if let problem = target.problem {
                         Text(problem).font(.caption).foregroundStyle(Theme.tertiary)
+                    } else if let failure = failures[target.hostId] {
+                        Text(failure).font(.caption).foregroundStyle(Theme.failure)
+                            .lineLimit(2).truncationMode(.tail)
                     }
                     Spacer(minLength: 8)
                 }

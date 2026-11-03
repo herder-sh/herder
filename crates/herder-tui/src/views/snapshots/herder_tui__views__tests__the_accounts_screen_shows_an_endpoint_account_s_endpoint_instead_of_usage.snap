@@ -1,0 +1,20 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: "render(&mut app, 90, 16).backend()"
+---
+" herder        inbox 0 « │ accounts                              rotates on a limit only  "
+"                         │                                                                "
+" machines     by machine │   ● box                                                        "
+"  ◉ box                1 │ ▶   Proxy  claude · claude-proxy                               "
+"▶   ├ ◉ app · api        │       endpoint  http://127.0.0.1:8317                          "
+"    │ ├ ● write the tes… │                                                                "
+"    │ └ ✗ document it    │  A session whose account hits a limit rotates to the account   "
+" ─────────────────────── │  of the same provider with the most room left, on the same     "
+" attention      priority │  model, unless sessions are pinned. A fallback account is      "
+"  ◉ api · app · box      │  used only once every other one of its provider is at its      "
+"  ✗ document it · app    │  limit or logged out. Pinning is set in the machine's daemon   "
+"  ● write the tests      │  config ([failover] pin).                                      "
+" ─────────────────────── │                                                                "
+" + new            ≡ menu │                                                                "
+"─────────────────────────┴─────────────────────────────────────────────────────────────── "
+" j/k move  n add account  r reconnect  esc back  ? help                            ● box  "
