@@ -434,6 +434,9 @@ fn failed(code: ErrorCode, message: String) -> ErrorInfo {
 /// Keeps one client key per host on the vault and in its CLIProxyAPI.
 pub struct ClientKeys {
     management: Management,
+    /// Where hosts reach the proxy, told to each host that holds a key; `None` when the
+    /// vault's config does not say.
+    endpoint: Option<String>,
     /// The one key the proxy holds when no host has one, so it never serves anyone without a
     /// key; random, and never handed out.
     placeholder: String,
@@ -443,14 +446,20 @@ pub struct ClientKeys {
 }
 
 impl ClientKeys {
-    /// Keys kept in the proxy `management` answers for.
-    pub fn new(management: Management) -> Result<Self> {
+    /// Keys kept in the proxy `management` answers for, which hosts reach at `endpoint`.
+    pub fn new(management: Management, endpoint: Option<String>) -> Result<Self> {
         Ok(Self {
             management,
+            endpoint,
             placeholder: mint()?.expose().to_owned(),
             wake: Notify::new(),
             syncing: tokio::sync::Mutex::new(()),
         })
+    }
+
+    /// Where hosts reach the proxy, if the vault's config says.
+    pub fn endpoint(&self) -> Option<&str> {
+        self.endpoint.as_deref()
     }
 
     /// The proxy's management API.
@@ -747,7 +756,7 @@ mod tests {
 
         fn client_keys(&self) -> ClientKeys {
             let secret = SecretValue::new(SECRET).unwrap();
-            ClientKeys::new(Management::new(&self.url, secret)).unwrap()
+            ClientKeys::new(Management::new(&self.url, secret), None).unwrap()
         }
     }
 
@@ -849,10 +858,10 @@ mod tests {
     #[tokio::test]
     async fn a_proxy_that_refuses_the_management_secret_is_an_error() {
         let proxy = FakeProxy::start();
-        let wrong = ClientKeys::new(Management::new(
-            &proxy.url,
-            SecretValue::new("wrong").unwrap(),
-        ))
+        let wrong = ClientKeys::new(
+            Management::new(&proxy.url, SecretValue::new("wrong").unwrap()),
+            None,
+        )
         .unwrap();
         let (_dir, store, key) = vault();
         let err = wrong.sync(&store, &key).await.unwrap_err();

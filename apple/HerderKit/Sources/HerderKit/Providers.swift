@@ -42,6 +42,16 @@ struct ProviderAccounts: Equatable {
         /// The API server it runs against, for an endpoint account; `nil` for a login.
         var endpoint: String? { account.endpoint }
 
+        /// Whether an endpoint account's key is fetched from the machine's vault, rather than held.
+        var keyFromVault: Bool { account.keySecret != nil }
+
+        /// What an endpoint account runs on, under its URL.
+        static func endpointNote(fromVault: Bool) -> String {
+            fromVault
+                ? "Runs against this API server with a key from the vault; no login. Its limits are the server’s."
+                : "Runs against this API server with its client key; no login. Its limits are the server’s."
+        }
+
         /// What it is shown as: its email, or its label without one.
         var title: String { email ?? account.label }
 
@@ -80,13 +90,14 @@ struct ProviderAccounts: Equatable {
         /// the same id unless taken, label, and config dir when it is in the home dir, which
         /// names the same place there.
         /// An endpoint account's draft has its URL, and needs its key typed again: no machine
-        /// sends one back.
+        /// sends one back. One on the vault's logins is on the vault's logins there too.
         func draft(taken: [String]) -> AccountDraft {
             AccountDraft(id: taken.contains(account.accountId)
                              ? AccountDraft.nextId(provider: provider, taken: taken, name: email) : account.accountId,
                          provider: provider, label: account.label,
                          configDir: endpoint == nil ? account.configDir.flatMap { $0.hasPrefix("~/") ? $0 : nil } ?? "" : "",
-                         endpoint: endpoint != nil, url: endpoint ?? "")
+                         kind: endpoint == nil ? .login : account.keySecret == AccountDraft.vaultKeySecret ? .vault : .endpoint,
+                         url: endpoint ?? "")
         }
     }
 
@@ -616,7 +627,7 @@ struct ProvidersPage: View {
                 Text(login.account.label).foregroundStyle(Theme.tertiary).lineLimit(1)
             }
             if let endpoint = login.endpoint {
-                Badge(text: "Endpoint")
+                Badge(text: login.keyFromVault ? "Vault" : "Endpoint")
                 if label {
                     Text(endpoint).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
                         .lineLimit(1).truncationMode(.middle)

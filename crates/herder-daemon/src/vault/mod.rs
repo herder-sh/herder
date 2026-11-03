@@ -288,9 +288,11 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     );
     if let Some(url) = &config.cliproxyapi {
         let management = cliproxyapi::Management::from_env(url)?;
-        server.use_cliproxyapi(ClientKeys::new(management)?)?;
+        let endpoint = config.cliproxyapi_endpoint.clone();
+        server.use_cliproxyapi(ClientKeys::new(management, endpoint)?)?;
         info!(
             cliproxyapi = url,
+            endpoint = config.cliproxyapi_endpoint.as_deref().unwrap_or("not set"),
             "hosts get client keys for this CLIProxyAPI"
         );
     }
@@ -365,6 +367,7 @@ mod tests {
             vault: None,
             retention: Default::default(),
             cliproxyapi: None,
+            cliproxyapi_endpoint: None,
             mcp_servers: Vec::new(),
             bots: Vec::new(),
             self_update: None,

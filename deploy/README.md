@@ -262,7 +262,11 @@ client key, which no one types:
    the proxy's `access.api-keys` through the proxy's management API, and keeps it as the
    secret `CLIPROXYAPI_KEY` in a set of its own, `cliproxyapi-<host id>`, granted to that
    host for its own use. Its sessions never get it through `herder secret run`.
-2. On the host, an endpoint account names that secret, not the key:
+2. On the host, an endpoint account names that secret, not the key. With
+   `cliproxyapi_endpoint` in the vault's `[vault]` table, the address hosts reach the proxy at,
+   the vault tells each host holding a key where the proxy is, and **Add Account** in the apps
+   and the TUI offers **Use the vault's logins** for Claude and Codex there, which adds this
+   account with nothing typed. By hand, in the host's `daemon.toml`:
 
    ```toml
    [[accounts]]

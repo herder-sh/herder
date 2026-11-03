@@ -56,6 +56,38 @@ struct AccountPageTests {
         #expect(draft.configDir.isEmpty)
     }
 
+    @MainActor @Test func anAccountOnTheVaultsLoginsShowsItsKeyComesFromTheVault() throws {
+        var vault = endpointAccount("claude-vault", on: "https://cpa.lan:8317")
+        vault.keySecret = AccountDraft.vaultKeySecret
+        let fleet = [machine("a", name: "work-mbp", sessions: [], accounts: [vault]),
+                     machine("b", name: "trash-can-01", sessions: [],
+                             accounts: [endpointAccount("claude-proxy", on: "http://127.0.0.1:8317")])]
+        let logins = try #require(ProviderAccounts(machines: fleet, now: now).groups.first?.logins)
+        let onVault = try #require(logins.first { $0.endpoint == "https://cpa.lan:8317" })
+        let held = try #require(logins.first { $0.endpoint == "http://127.0.0.1:8317" })
+        #expect(onVault.keyFromVault && !held.keyFromVault)
+        #expect(ProviderAccounts.Login.endpointNote(fromVault: true).contains("a key from the vault"))
+        #expect(AccountPage.keyHint(fromVault: true, typing: false) == "Key from the vault, each machine’s own")
+        #expect(AccountPage.keyHint(fromVault: false, typing: false) == "Never shown; type a new one to replace it")
+        // Set up elsewhere, it is on that machine's vault's logins too.
+        #expect(onVault.draft(taken: []).usesVault)
+        // An owner switches it to a held key, or back to the vault's.
+        guard case .setAccountSettings(_, _, _, _, let endpoint, let key, let keySecret)
+            = vault.settings(label: vault.label, configDir: nil, fallback: nil, key: "sk-own") else {
+            Issue.record("expected setAccountSettings")
+            return
+        }
+        #expect(endpoint == nil && key == "sk-own" && keySecret == nil)
+        let account = endpointAccount("claude-proxy", on: "https://cpa.lan:8317")
+        guard case .setAccountSettings(_, _, _, _, _, let key, let keySecret)
+            = account.settings(label: account.label, configDir: nil, fallback: nil,
+                               keySecret: AccountDraft.vaultKeySecret) else {
+            Issue.record("expected setAccountSettings")
+            return
+        }
+        #expect(key == nil && keySecret == "CLIPROXYAPI_KEY")
+    }
+
     @Test func anEndpointAccountsEditKeepsItsDirectoryAndSendsOnlyAReplacedKey() {
         let account = endpointAccount("claude-proxy", on: "http://127.0.0.1:8317")
         // A label or rotation change sends no endpoint, key or config dir: absent keeps them.

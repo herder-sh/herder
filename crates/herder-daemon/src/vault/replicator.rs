@@ -259,6 +259,7 @@ impl Replicator {
             };
             return match serde_json::from_str(&text)? {
                 VaultMessage::Hello(hello) if hello.replication_version == REPLICATION_VERSION => {
+                    self.secrets.set_cliproxyapi(hello.cliproxyapi);
                     Ok((ws, hello.acked))
                 }
                 VaultMessage::Hello(hello) => Err(anyhow!(

@@ -1,13 +1,15 @@
 //! The add-account dialog, opened from the machines panel: pick a provider and an id, then
 //! either the provider's own login runs on the machine in a terminal attached here, or, for a
-//! provider that can run against an API server, the account points at an endpoint and its key.
+//! provider that can run against an API server, the account points at an endpoint and its key,
+//! or, on a machine whose vault runs a CLIProxyAPI, at the vault's logins with the key the vault
+//! keeps for the machine.
 //!
 //! herder only relays the login terminal. A login account is added once the login exits
 //! successfully; an endpoint account once the machine takes it. Either then shows in the
 //! machine's account list. The accounts screen opens the same dialog.
 
 use herder_client_core::{Machine, NewAccount, next_account_id};
-use herder_protocol::{AccountId, CommandBody, HostId, Provider, SecretValue};
+use herder_protocol::{AccountId, CommandBody, CommandResult, HostId, Provider, SecretValue};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{App, Effect};
@@ -36,8 +38,11 @@ pub struct AddAccount {
     pub label: String,
     /// Its config dir on the machine; the daemon's default when empty.
     pub config_dir: String,
-    /// It runs against an API server rather than a login.
-    pub endpoint: bool,
+    /// How it signs in.
+    pub kind: Kind,
+    /// Where the machine reaches its vault's CLIProxyAPI, as it says once asked; `None` until
+    /// then, and when its vault runs none.
+    pub vault: Option<String>,
     /// The API server's base URL, for an endpoint account.
     pub url: String,
     /// The API server's client key, for an endpoint account; typed masked, never shown.
@@ -50,13 +55,41 @@ pub struct AddAccount {
     pub sending: bool,
 }
 
+/// How an account signs in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Kind {
+    /// The provider's own login, in a terminal.
+    #[default]
+    Login,
+    /// An API server, with a typed key.
+    Endpoint,
+    /// The logins in the CLIProxyAPI next to the machine's vault, with the key the vault keeps
+    /// for the machine: nothing to type.
+    Vault,
+}
+
+impl Kind {
+    /// How the dialog names it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Login => "log in",
+            Self::Endpoint => "endpoint",
+            Self::Vault => "the vault's logins",
+        }
+    }
+}
+
+/// The secret on a machine's vault holding its CLIProxyAPI client key.
+pub const VAULT_KEY_SECRET: &str = "CLIPROXYAPI_KEY";
+
 /// A field of the add-account form, in tab order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Field {
     /// The provider, picked with the arrow keys.
     #[default]
     Provider,
-    /// How the account runs: a login, or an endpoint; picked with the arrow keys.
+    /// How the account runs: a login, an endpoint, or the vault's logins; picked with the
+    /// arrow keys.
     Kind,
     /// The id.
     Id,
@@ -95,7 +128,8 @@ impl AddAccount {
             id: next_account_id(&PROVIDERS[provider], taken),
             label: String::new(),
             config_dir: String::new(),
-            endpoint: false,
+            kind: Kind::Login,
+            vault: None,
             url: String::new(),
             key: Masked::default(),
             focus: Field::default(),
@@ -105,19 +139,49 @@ impl AddAccount {
     }
 
     /// The form's fields, in tab order: the kind only for a provider that can use an
-    /// endpoint, then the config dir for a login, or the URL and key for an endpoint.
+    /// endpoint, then the config dir for a login, the URL and key for an endpoint, and
+    /// nothing more on the vault's logins.
     pub fn fields(&self) -> Vec<Field> {
         let mut fields = vec![Field::Provider];
         if supports_endpoint(self.provider()) {
             fields.push(Field::Kind);
         }
         fields.extend([Field::Id, Field::Label]);
-        if self.endpoint {
-            fields.extend([Field::Url, Field::Key]);
-        } else {
-            fields.push(Field::ConfigDir);
+        match self.kind {
+            Kind::Login => fields.push(Field::ConfigDir),
+            Kind::Endpoint => fields.extend([Field::Url, Field::Key]),
+            Kind::Vault => {}
         }
         fields
+    }
+
+    /// The ways the account can sign in: the vault's logins only where the machine reaches
+    /// them.
+    pub fn kinds(&self) -> Vec<Kind> {
+        let mut kinds = vec![Kind::Login];
+        if supports_endpoint(self.provider()) {
+            kinds.push(Kind::Endpoint);
+            if self.vault.is_some() {
+                kinds.push(Kind::Vault);
+            }
+        }
+        kinds
+    }
+
+    /// Picks the next or previous way to sign in.
+    fn cycle_kind(&mut self, forward: bool) {
+        let kinds = self.kinds();
+        let len = kinds.len();
+        let at = kinds
+            .iter()
+            .position(|kind| *kind == self.kind)
+            .unwrap_or(0);
+        self.kind = kinds[if forward { at + 1 } else { at + len - 1 } % len];
+    }
+
+    /// Whether the machine sends it as an endpoint account, rather than running a login.
+    pub fn sends_endpoint(&self) -> bool {
+        self.kind != Kind::Login
     }
 
     fn step(&mut self, forward: bool) {
@@ -153,7 +217,7 @@ impl AddAccount {
             self.id = self.provider().as_str().to_owned();
         }
         if !supports_endpoint(self.provider()) {
-            self.endpoint = false;
+            self.kind = Kind::Login;
         }
     }
 
@@ -183,13 +247,29 @@ impl AddAccount {
         let account_id = AccountId::new(id);
         let optional = |text: &str| Some(text.trim().to_owned()).filter(|text| !text.is_empty());
         let label = optional(&self.label);
-        if !self.endpoint {
-            return Some(Outcome::Login(NewAccount {
-                account_id,
-                provider: self.provider().clone(),
-                label,
-                config_dir: optional(&self.config_dir),
-            }));
+        match (self.kind, &self.vault) {
+            (Kind::Login, _) => {
+                return Some(Outcome::Login(NewAccount {
+                    account_id,
+                    provider: self.provider().clone(),
+                    label,
+                    config_dir: optional(&self.config_dir),
+                }));
+            }
+            (Kind::Vault, Some(vault)) => {
+                return Some(Outcome::AddEndpoint(CommandBody::AddEndpointAccount {
+                    account_id,
+                    provider: self.provider().clone(),
+                    label,
+                    endpoint: vault.clone(),
+                    key: None,
+                    key_secret: VAULT_KEY_SECRET.parse().ok(),
+                }));
+            }
+            (Kind::Vault, None) => {
+                return refuse(self, "this machine's vault has no logins", Field::Kind);
+            }
+            (Kind::Endpoint, _) => {}
         }
         let url = self.url.trim();
         if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -263,9 +343,9 @@ impl AddAccount {
                 self.cycle(input == Input::Right);
             }
             Input::Left | Input::Right if self.focus == Field::Kind => {
-                self.endpoint = !self.endpoint;
+                self.cycle_kind(input == Input::Right);
             }
-            Input::Char(' ') if self.focus == Field::Kind => self.endpoint = !self.endpoint,
+            Input::Char(' ') if self.focus == Field::Kind => self.cycle_kind(true),
             Input::Char(c) => match self.field() {
                 Some(field) => field.push(c),
                 None if c == ' ' => self.cycle(true),
@@ -296,7 +376,42 @@ pub(crate) fn send(host_id: HostId, command: CommandBody) -> Effect {
     }
 }
 
+/// Asks `host_id` where it backs up, for whether it reaches its vault's logins.
+pub(crate) fn ask_vault(host_id: HostId) -> Effect {
+    Effect::Send {
+        host_id: host_id.clone(),
+        command: CommandBody::GetVaultLink,
+        origin: Origin::AccountVault(host_id),
+    }
+}
+
 impl App {
+    /// The machine's answer to where it backs up: the open dialog for it offers the vault's
+    /// logins where its vault runs a CLIProxyAPI and it fetches secrets from it.
+    pub(crate) fn account_vault(
+        &mut self,
+        host_id: &HostId,
+        result: Result<CommandResult, String>,
+    ) {
+        let vault = match result {
+            Ok(CommandResult::VaultLink {
+                vault: Some(linked),
+                ..
+            }) if linked.secrets => linked.cliproxyapi,
+            _ => None,
+        };
+        let screen = self
+            .account_screen
+            .as_mut()
+            .map(|screen| &mut screen.adding);
+        let panel = self.machine_panel.as_mut().map(|panel| &mut panel.account);
+        for form in [screen, panel].into_iter().flatten().flatten() {
+            if form.host_id == *host_id {
+                form.vault.clone_from(&vault);
+            }
+        }
+    }
+
     /// The answer to an endpoint account the dialog sent: the dialog closes once the machine
     /// took it, and the account shows in its list; a refusal shows in the dialog.
     pub(crate) fn account_added(&mut self, result: Result<(), String>) {

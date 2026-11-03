@@ -607,7 +607,16 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
             .collect()
     };
     let provider = account.provider();
-    let mut top = if account.endpoint {
+    let mut top = if account.kind == accounts::Kind::Vault {
+        wrapped(
+            &format!(
+                "Runs {} on {machine} on the provider logins in the CLIProxyAPI next to its \
+                 vault, with the key the vault keeps for {machine}. Nothing to type.",
+                provider.as_str()
+            ),
+            ui.muted(),
+        )
+    } else if account.kind == accounts::Kind::Endpoint {
         wrapped(
             &format!(
                 "Runs {} on {machine} against an API server, such as a CLIProxyAPI or a local \
@@ -624,7 +633,12 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
     };
     top.push(Line::default());
     let mut bottom = vec![Line::default()];
-    if account.endpoint {
+    if account.kind == accounts::Kind::Vault {
+        bottom.extend(wrapped(
+            &format!("{machine} fetches its key from the vault when a session starts."),
+            ui.muted(),
+        ));
+    } else if account.kind == accounts::Kind::Endpoint {
         bottom.extend(wrapped(
             &format!("The key is kept on {machine} and never shown again."),
             ui.muted(),
@@ -650,7 +664,14 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
     let fields = account.fields();
     let height = u16::try_from(top.len() + fields.len() + bottom.len()).unwrap_or(u16::MAX);
     let hints = [
-        Hint::new("enter", if account.endpoint { "add" } else { "log in" }),
+        Hint::new(
+            "enter",
+            if account.sends_endpoint() {
+                "add"
+            } else {
+                "log in"
+            },
+        ),
         Hint::new("tab", "field"),
         Hint::new("←/→", "choose"),
         Hint::new("esc", "cancel"),
@@ -708,12 +729,7 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
                 continue;
             }
             accounts::Field::Kind => {
-                let kind = if account.endpoint {
-                    "endpoint"
-                } else {
-                    "log in"
-                };
-                Choice::new(ui, "how", Span::styled(kind, ui.text()))
+                Choice::new(ui, "how", Span::styled(account.kind.name(), ui.text()))
                     .focused(focused)
                     .render(at, buf, label);
                 continue;
