@@ -27,13 +27,29 @@ import UIKit
     #endif
 
     @Test func drawsTheChoiceBetweenALoginAndAnEndpoint() async throws {
-        try await shoot(AddEndpointPreview(endpoint: false), width: Self.width, height: 640,
+        try await shoot(AddEndpointPreview(kind: .login), width: Self.width, height: 640,
                         named: "add-account-choice-\(Self.device).png")
     }
 
     @Test func drawsTheEndpointForm() async throws {
-        try await shoot(AddEndpointPreview(endpoint: true), width: Self.width, height: Self.device == "mac" ? 780 : 1040,
+        try await shoot(AddEndpointPreview(kind: .endpoint), width: Self.width, height: Self.device == "mac" ? 780 : 1040,
                         named: "add-account-endpoint-\(Self.device).png")
+    }
+
+    @Test func drawsTheVaultsLogins() async throws {
+        try await shoot(AddEndpointPreview(kind: .vault), width: Self.width, height: Self.device == "mac" ? 700 : 900,
+                        named: "add-account-vault-\(Self.device).png")
+    }
+
+    @Test func drawsAnAccountOnTheVaultsLogins() async throws {
+        let fleet = try sampleFleet(vault: true)
+        let page = VStack(spacing: 0) {
+            PageTrail(crumbs: ["Providers", "Claude vault"]) { _ in }
+            AccountPage(fleet: fleet, loginId: ProviderAccounts.endpointKey(provider: "claude",
+                                                                              endpoint: "https://cpa.lan:8317"))
+        }
+        try await shoot(page, width: Self.pageWidth, height: Self.pageWidth > 500 ? 1250 : 1000,
+                        named: "account-vault-\(Self.device).png")
     }
 
     @Test func drawsAnEndpointAccountsPage() async throws {
@@ -87,15 +103,19 @@ import UIKit
         }
     }
 
-    /// Two machines with the Claude endpoint account on the local CLIProxyAPI, and a member's
-    /// machine that lacks it.
-    private func sampleFleet() throws -> Fleet {
+    /// Two machines with the Claude endpoint account on the local CLIProxyAPI, or with `vault`
+    /// on the vault's logins, and a member's machine that lacks it.
+    private func sampleFleet(vault: Bool = false) throws -> Fleet {
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
             throw CancellationError()
         }
         func proxy(_ id: AccountId) -> Account {
-            Account(accountId: id, provider: "claude", label: "Proxy", configDir: "~/.herder/accounts/\(id)",
-                    email: nil, usage: [], endpoint: "http://127.0.0.1:8317")
+            vault
+                ? Account(accountId: "claude-vault", provider: "claude", label: "Claude vault",
+                          configDir: "~/.herder/accounts/claude-vault", email: nil, usage: [],
+                          endpoint: "https://cpa.lan:8317", keySecret: AccountDraft.vaultKeySecret)
+                : Account(accountId: id, provider: "claude", label: "Proxy", configDir: "~/.herder/accounts/\(id)",
+                          email: nil, usage: [], endpoint: "http://127.0.0.1:8317")
         }
         let cli = ProviderStatus(provider: "claude", installed: true, version: "2.1.310 (Claude Code)",
                                  latestVersion: nil, binary: nil, canInstall: true, canUpdate: true)
@@ -112,16 +132,17 @@ import UIKit
 /// The Add Account sheet, with Claude picked, two machines ticked and a member's machine
 /// disabled; on an endpoint, its URL and key typed.
 private struct AddEndpointPreview: View {
-    let endpoint: Bool
+    let kind: AccountDraft.Kind
     @State private var draft = AccountDraft(provider: "claude", label: "Proxy")
     @State private var ticked: Set<HostId> = ["work-mbp", "trash-can-01"]
     @State private var showsConfigDir = false
+    private var endpoint: Bool { kind == .endpoint }
 
-    init(endpoint: Bool) {
-        self.endpoint = endpoint
-        var draft = AccountDraft(provider: "claude", label: endpoint ? "Proxy" : "work")
-        draft.endpoint = endpoint
-        if endpoint {
+    init(kind: AccountDraft.Kind) {
+        self.kind = kind
+        var draft = AccountDraft(provider: "claude", label: kind == .endpoint ? "Proxy" : kind == .vault ? "" : "work")
+        draft.kind = kind
+        if kind == .endpoint {
             draft.url = "http://127.0.0.1:8317"
             draft.key = "sk-proxy-0123456789"
         }
@@ -129,16 +150,17 @@ private struct AddEndpointPreview: View {
     }
 
     var body: some View {
-        SheetScaffold(title: "Add Account", height: endpoint ? 1040 : 640, hint: AddAccountSheet.hint(endpoint: endpoint)) {
+        SheetScaffold(title: "Add Account", height: endpoint ? 1040 : 640, hint: AddAccountSheet.hint(draft)) {
             AddAccountForm(draft: $draft, ticked: $ticked, showsConfigDir: $showsConfigDir, targets: [
-                AccountTarget(hostId: "work-mbp", name: "work-mbp", problem: nil),
-                AccountTarget(hostId: "trash-can-01", name: "trash-can-01", problem: nil),
+                AccountTarget(hostId: "work-mbp", name: "work-mbp", problem: nil, vault: "https://cpa.lan:8317"),
+                AccountTarget(hostId: "trash-can-01", name: "trash-can-01", problem: nil, vault: "https://cpa.lan:8317"),
+                AccountTarget(hostId: "studio", name: "studio", problem: kind == .vault ? "No vault logins" : nil),
                 AccountTarget(hostId: "draugelis", name: "draugelis", problem: "Member — can’t add accounts", owner: false),
             ], installing: { _ in false }, install: { _ in },
                failures: endpoint ? ["trash-can-01": "endpoint accounts are not supported by this daemon"] : [:])
         } footer: {
             Spacer()
-            ActionButton(title: AddAccountSheet.title(ticked.count, endpoint: endpoint), style: .primary) {}
+            ActionButton(title: AddAccountSheet.title(ticked.count, endpoint: kind != .login), style: .primary) {}
                 .frame(width: 220)
         }
     }

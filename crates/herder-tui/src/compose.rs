@@ -94,6 +94,8 @@ pub enum Origin {
     Fork(HostId),
     /// The add-account dialog's endpoint account, added to this host.
     AddAccount(HostId),
+    /// The add-account dialog's question to this host of where it backs up.
+    AccountVault(HostId),
 }
 
 /// The composer and overlays, and what the daemon last said about each session.
@@ -541,6 +543,7 @@ impl App {
             }
             Origin::Backup(sent) => return self.backup_sent(sent, result),
             Origin::AddAccount(_) => self.account_added(result.map(|_| ())),
+            Origin::AccountVault(host_id) => self.account_vault(&host_id, result),
             Origin::Secrets(sent) => return self.secrets_sent(sent, result),
             Origin::Fork(host_id) => {
                 let forked = result.and_then(|result| match result {

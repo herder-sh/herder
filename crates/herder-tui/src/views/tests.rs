@@ -1398,6 +1398,53 @@ fn the_add_account_dialog_takes_an_endpoint_and_masks_its_key() {
 }
 
 #[test]
+fn the_add_account_dialog_offers_the_vaults_logins_with_nothing_to_type() {
+    let mut app = with_accounts();
+    press(&mut app, KeyCode::Char('A'));
+    press(&mut app, KeyCode::Char('n'));
+    let form = app
+        .account_screen
+        .as_mut()
+        .unwrap()
+        .adding
+        .as_mut()
+        .unwrap();
+    form.vault = Some("https://cpa.lan:8317".into());
+    // Login, endpoint, the vault's logins.
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Right);
+    let screen = render(&mut app, 90, 30).backend().to_string();
+    assert!(screen.contains("the vault's logins"), "{screen}");
+    assert!(screen.contains("Nothing to type"), "{screen}");
+    assert!(
+        !screen.contains("url") && !screen.contains("key  "),
+        "{screen}"
+    );
+    assert!(!screen.contains("config dir"), "{screen}");
+    insta::assert_snapshot!(render(&mut app, 90, 30).backend());
+}
+
+#[test]
+fn the_accounts_screen_says_an_account_s_key_comes_from_the_vault() {
+    let mut app = fake::tree();
+    let mut machines = app.machines.clone();
+    let mut vault = fake::endpoint_account("claude-vault", "Vault", "https://cpa.lan:8317");
+    vault.key_secret = Some("CLIPROXYAPI_KEY".parse().unwrap());
+    let proxy = fake::endpoint_account("claude-proxy", "Proxy", "http://127.0.0.1:8317");
+    machines[0].accounts = vec![vault, proxy];
+    app.update(Msg::Machines(machines));
+    press(&mut app, KeyCode::Char('A'));
+    let screen = render(&mut app, 90, 20).backend().to_string();
+    assert!(
+        screen.contains("endpoint  https://cpa.lan:8317"),
+        "{screen}"
+    );
+    assert_eq!(screen.matches("key from the vault").count(), 1, "{screen}");
+    insta::assert_snapshot!(render(&mut app, 90, 20).backend());
+}
+
+#[test]
 fn the_accounts_screen_shows_an_endpoint_account_s_endpoint_instead_of_usage() {
     let mut app = fake::tree();
     let mut machines = app.machines.clone();

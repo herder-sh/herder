@@ -46,14 +46,14 @@ struct AccountMachine: Equatable, Identifiable {
 extension Account {
     /// The command that sets this account's `label` and `fallback` (nil keeps it). A login
     /// account takes `configDir`, nil for the provider's default; an endpoint account never
-    /// takes one, as the daemon refuses it there, and takes `endpoint` and `key` instead, each
-    /// nil to keep it. The key is sent only when replaced, and never read back.
+    /// takes one, as the daemon refuses it there, and takes `endpoint` and `key` or `keySecret`
+    /// instead, each nil to keep it. The key is sent only when replaced, and never read back.
     func settings(label: String, configDir: String?, fallback: Bool?, endpoint: String? = nil,
-                  key: String? = nil) -> CommandBody {
+                  key: String? = nil, keySecret: SecretRef? = nil) -> CommandBody {
         let isEndpoint = self.endpoint != nil
         return .setAccountSettings(accountId: accountId, label: label, configDir: isEndpoint ? nil : configDir,
                                    fallback: fallback, endpoint: isEndpoint ? endpoint : nil,
-                                   key: isEndpoint ? key : nil)
+                                   key: isEndpoint ? key : nil, keySecret: isEndpoint ? keySecret : nil)
     }
 }
 
@@ -91,6 +91,8 @@ struct AccountPage: View {
     @State private var movedTo: String?
     @State private var endpoint = ""
     @State private var key = ""
+    /// Whether the owner chose to type a key in place of the vault's.
+    @State private var typingKey = false
     @FocusState private var editingEndpoint: Bool
     @State private var setup: ProvidersView.Setup?
     @State private var label = ""
@@ -120,7 +122,7 @@ struct AccountPage: View {
             }
         } content: {
             if let login, let url = login.endpoint {
-                endpointSection(url).detailSection("Endpoint")
+                endpointSection(url, fromVault: login.keyFromVault).detailSection("Endpoint")
                 usage(login).detailSection(period.title)
                 machines(login, rows: rows).detailSection("Machines")
                 settings(login, rows: rows).detailSection("Settings")
@@ -148,6 +150,10 @@ struct AccountPage: View {
             }
         }
         .task { await fleet.refreshUsage(over: period) }
+        .task(id: login?.endpoint) {
+            // Whether each machine reaches the vault's logins at this endpoint, to offer its key.
+            if login?.endpoint != nil { await fleet.refreshVaultLogins(on: editable(rows).map(\.0)) }
+        }
         .onAppear { reset() }
         .onChange(of: loginId) { movedTo = nil; reset() }
         .onChange(of: editingEndpoint) { if !editingEndpoint { saveEndpoint(rows) } }
@@ -174,6 +180,7 @@ struct AccountPage: View {
         fallback = !login.fallbackOn.isEmpty && login.fallbackOn.count == login.on.count
         endpoint = login.endpoint ?? ""
         key = ""
+        typingKey = false
     }
 
     /// "Claude · work · on 2 machines · primary": accounts with the same provider and email
@@ -191,11 +198,11 @@ struct AccountPage: View {
     // MARK: Endpoint
 
     /// Where an endpoint account runs, in place of limits: the server behind it holds them.
-    private func endpointSection(_ url: String) -> some View {
+    private func endpointSection(_ url: String, fromVault: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(url).font(Theme.mono).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
                 .textSelection(.enabled)
-            Text("Runs against this API server with its client key; no login. Its limits are the server’s.")
+            Text(ProviderAccounts.Login.endpointNote(fromVault: fromVault))
                 .font(.caption).foregroundStyle(Theme.tertiary)
         }
         .padding(.horizontal, 14)
@@ -443,16 +450,30 @@ struct AccountPage: View {
                         .accessibilityIdentifier("account-endpoint")
                 }
                 RowDivider()
-                SettingRow(label: "Key", hint: "Never shown; type a new one to replace it", saved: saves["Key"]) {
-                    SecureField("Unchanged", text: $key)
-                        .textFieldStyle(.plain)
-                        .foregroundStyle(Theme.text)
-                        .multilineTextAlignment(.trailing)
-                        .onSubmit { saveKey(rows) }
-                        .padding(.horizontal, 10)
-                        .frame(maxWidth: 240, minHeight: 32)
-                        .background(.card, in: .rect(cornerRadius: 7))
-                        .accessibilityIdentifier("account-key")
+                SettingRow(label: "Key", hint: Self.keyHint(fromVault: login.keyFromVault, typing: typingKey),
+                           saved: saves["Key"]) {
+                    HStack(spacing: 8) {
+                        if login.keyFromVault && !typingKey {
+                            Text("Key from the vault").foregroundStyle(Theme.secondary)
+                                .accessibilityIdentifier("account-key-vault")
+                            PillButton(title: "Use own key") { typingKey = true }
+                        } else {
+                            SecureField(login.keyFromVault ? "Type a key" : "Unchanged", text: $key)
+                                .textFieldStyle(.plain)
+                                .foregroundStyle(Theme.text)
+                                .multilineTextAlignment(.trailing)
+                                .onSubmit { saveKey(rows) }
+                                .padding(.horizontal, 10)
+                                .frame(maxWidth: 240, minHeight: 32)
+                                .background(.card, in: .rect(cornerRadius: 7))
+                                .accessibilityIdentifier("account-key")
+                            if login.keyFromVault {
+                                PillButton(title: "Cancel") { typingKey = false; key = "" }
+                            } else if canUseVaultKey(login, rows: rows) {
+                                PillButton(title: "Use the vault’s") { useVaultKey(rows) }
+                            }
+                        }
+                    }
                 }
             }
             RowDivider()
@@ -471,6 +492,18 @@ struct AccountPage: View {
         }
         .font(.subheadline)
         .disabled(!canManage)
+    }
+
+    static func keyHint(fromVault: Bool, typing: Bool) -> String {
+        if fromVault && !typing { return "Each machine’s own, fetched from its vault" }
+        return fromVault ? "Kept on each machine in place of the vault’s" : "Never shown; type a new one to replace it"
+    }
+
+    /// Whether every machine the owner can change reaches its vault's logins at the login's
+    /// endpoint, so the vault's key works there.
+    private func canUseVaultKey(_ login: ProviderAccounts.Login, rows: [AccountMachine]) -> Bool {
+        let editable = editable(rows)
+        return !editable.isEmpty && editable.allSatisfy { fleet.vaultLogins(on: $0.0) == login.endpoint }
     }
 
     private func rotationHint(_ login: ProviderAccounts.Login) -> String {
@@ -553,11 +586,28 @@ struct AccountPage: View {
         guard !typed.isEmpty, !changed.isEmpty else { return }
         // Not kept once sent: the field goes back to "Unchanged".
         key = ""
+        typingKey = false
         Task {
             await saves.save("Key") {
                 for (hostId, account) in changed {
                     _ = try await fleet.client.send(hostId: hostId, command: account.settings(
                         label: account.label, configDir: nil, fallback: nil, key: typed))
+                }
+            }
+        }
+    }
+
+    /// Has the login's accounts fetch each machine's key from its vault, in place of the key
+    /// they hold.
+    private func useVaultKey(_ rows: [AccountMachine]) {
+        let changed = editable(rows).filter { $0.1.endpoint != nil && $0.1.keySecret == nil }
+        guard !changed.isEmpty else { return }
+        key = ""
+        Task {
+            await saves.save("Key") {
+                for (hostId, account) in changed {
+                    _ = try await fleet.client.send(hostId: hostId, command: account.settings(
+                        label: account.label, configDir: nil, fallback: nil, keySecret: AccountDraft.vaultKeySecret))
                 }
             }
         }

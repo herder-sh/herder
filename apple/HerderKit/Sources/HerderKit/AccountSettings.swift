@@ -1,18 +1,31 @@
 import Herder
 import SwiftUI
 
-/// An account to add, as the form has it: one login, or one endpoint, for every machine it is
-/// added on. Each machine gets the first id free there, named after the label.
+/// An account to add, as the form has it: one login, one endpoint, or the vault's logins, for
+/// every machine it is added on. Each machine gets the first id free there, named after the label.
 struct AccountDraft {
+    /// How the account signs in.
+    enum Kind: Hashable {
+        /// The provider's own login, in a terminal.
+        case login
+        /// An API server, `url` with `key`.
+        case endpoint
+        /// The provider logins in the CLIProxyAPI next to the machine's vault, with the client
+        /// key the vault keeps for that machine: nothing to type.
+        case vault
+    }
+
+    /// The secret on a machine's vault holding its CLIProxyAPI client key.
+    static let vaultKeySecret: SecretRef = "CLIPROXYAPI_KEY"
+
     /// The id to keep wherever it is free, as a login set up from another machine has; empty
     /// names it after the label.
     var id = ""
     var provider: Provider = "claude"
     var label = ""
     var configDir = ""
-    /// It runs against an API server, `url` with `key`, rather than a login; only for a provider
-    /// that can (see `supportsEndpoint`).
-    var endpoint = false
+    /// How it signs in; other than a login only for a provider that can (see `supportsEndpoint`).
+    var kind = Kind.login
     var url = ""
     /// The endpoint's client key; sent once, and never shown again.
     var key = ""
@@ -22,8 +35,16 @@ struct AccountDraft {
         provider == "claude" || provider == "codex"
     }
 
-    /// Whether the draft adds an endpoint account: chosen, for a provider that can.
-    var usesEndpoint: Bool { endpoint && Self.supportsEndpoint(provider) }
+    /// Whether the draft adds an endpoint account with a URL and key: chosen, for a provider
+    /// that can.
+    var usesEndpoint: Bool { kind == .endpoint && Self.supportsEndpoint(provider) }
+
+    /// Whether the draft adds an account on each machine's vault logins: chosen, for a
+    /// provider that can.
+    var usesVault: Bool { kind == .vault && Self.supportsEndpoint(provider) }
+
+    /// Whether it is sent to each machine as an endpoint account, rather than logged in to.
+    var sendsEndpoint: Bool { usesEndpoint || usesVault }
 
     /// An `http` or `https` URL with a host, as the daemon takes for an endpoint.
     static func validEndpoint(_ text: String) -> Bool {
@@ -76,22 +97,31 @@ struct AccountDraft {
     func account(taken: [String]) -> NewAccount {
         let kept = id.trimmingCharacters(in: .whitespacesAndNewlines)
         let id = !kept.isEmpty && !taken.contains(kept)
-            ? kept : Self.nextId(provider: provider, taken: taken, name: clean(label))
+            ? kept : Self.nextId(provider: provider, taken: taken, name: clean(label) ?? (usesVault ? "vault" : nil))
         return NewAccount(accountId: id, provider: provider,
                           label: clean(label) ?? Self.suggestedLabel(id: id, provider: provider),
                           configDir: clean(configDir))
     }
 
-    /// What a machine whose ids are `taken` is asked to add, as an endpoint account; `nil`
-    /// unless the draft is a complete one.
-    func endpointCommand(taken: [String]) -> CommandBody? {
-        guard usesEndpoint, complete, let url = clean(url), let key = clean(key) else { return nil }
+    /// What a machine whose ids are `taken` is asked to add, as an endpoint account; on the
+    /// vault's logins, at `vault`, where the machine reaches its vault's CLIProxyAPI. `nil`
+    /// unless the draft is a complete one, and for the vault's logins on a machine without them.
+    func endpointCommand(taken: [String], vault: String? = nil) -> CommandBody? {
+        guard complete else { return nil }
+        if usesVault {
+            guard let vault else { return nil }
+            let account = account(taken: taken)
+            return .addEndpointAccount(accountId: account.accountId, provider: provider, label: account.label,
+                                       endpoint: vault, key: nil, keySecret: Self.vaultKeySecret)
+        }
+        guard usesEndpoint, let url = clean(url), let key = clean(key) else { return nil }
         let account = account(taken: taken)
         return .addEndpointAccount(accountId: account.accountId, provider: provider, label: account.label,
                                    endpoint: url, key: key)
     }
 
     var problem: String? {
+        if usesVault { return nil }
         if usesEndpoint {
             if let url = clean(url), !Self.validEndpoint(url) { return "Use an http:// or https:// URL." }
             return nil
@@ -124,13 +154,31 @@ extension Fleet {
         }
     }
 
+    /// Where `hostId` reaches its vault's CLIProxyAPI, as it last said; `nil` unless it is
+    /// linked to a vault that runs one and holds its key.
+    func vaultLogins(on hostId: HostId) -> String? {
+        guard case .linked(let link) = backupLinks[hostId] else { return nil }
+        return link.cliproxyapi
+    }
+
+    /// Asks each of `hostIds` where it backs up, at once, for `vaultLogins(on:)`; a machine
+    /// that does not answer keeps what it said before.
+    func refreshVaultLogins(on hostIds: [HostId]) async {
+        await withTaskGroup(of: Void.self) { group in
+            for hostId in hostIds {
+                group.addTask { _ = try? await self.backupLink(of: hostId) }
+            }
+        }
+    }
+
     /// Adds `draft`'s endpoint account on each of `hostIds` at once, under the id free there;
-    /// no terminal, as it has no login. Returns why each machine that refused it did.
+    /// no terminal, as it has no login. On the vault's logins, each machine's is its own
+    /// vault's. Returns why each machine that refused it did.
     func addEndpointAccount(_ draft: AccountDraft, on hostIds: [HostId]) async -> [HostId: String] {
         let commands = hostIds.compactMap { hostId -> (HostId, CommandBody)? in
             let taken = AccountDraft.taken(on: machines.first { $0.hostId == hostId },
                                            pending: activity.pendingIds(on: hostId))
-            return draft.endpointCommand(taken: taken).map { (hostId, $0) }
+            return draft.endpointCommand(taken: taken, vault: vaultLogins(on: hostId)).map { (hostId, $0) }
         }
         let client = client
         return await withTaskGroup(of: (HostId, String?).self) { group in
@@ -161,21 +209,29 @@ struct AccountTarget: Equatable, Identifiable {
     var installable = false
     /// Whether this device owns the machine: only an owner adds accounts, or sees a key field.
     var owner = true
+    /// Where the machine reaches its vault's CLIProxyAPI, for an account on the vault's logins;
+    /// `nil` when its vault runs none, or it is linked to none.
+    var vault: String?
 
     var id: HostId { hostId }
 
     /// The machines that run sessions: a vault runs none, and a machine never connected has
     /// not said whether this device owns it. Adding an account is the owner's, on a connected
-    /// machine with `provider`'s CLI.
-    static func all(_ machines: [Machine], provider: Provider) -> [AccountTarget] {
+    /// machine with `provider`'s CLI. On the vault's logins (`usesVault`), only where `vaults`
+    /// says the machine reaches them.
+    static func all(_ machines: [Machine], provider: Provider, vaults: [HostId: String] = [:],
+                    usesVault: Bool = false) -> [AccountTarget] {
         machines.filter { $0.hosts.isEmpty && $0.role != nil }.map { machine in
             let status = machine.providers.first { $0.provider == provider }
             let reachable = machine.role == .owner && machine.connection == .connected
             let missing = status?.installed == false
+            let vault = vaults[machine.hostId]
             let problem: String? = if machine.role != .owner {
                 "Member — can’t add accounts"
             } else if machine.connection != .connected {
                 "Not connected"
+            } else if usesVault && vault == nil {
+                "No vault logins"
             } else if missing {
                 "\(ModelCatalog.providerName(provider)) isn’t installed"
             } else {
@@ -183,7 +239,7 @@ struct AccountTarget: Equatable, Identifiable {
             }
             return AccountTarget(hostId: machine.hostId, name: machine.name, problem: problem,
                                  installable: reachable && missing && status?.canInstall == true,
-                                 owner: machine.role == .owner)
+                                 owner: machine.role == .owner, vault: vault)
         }
     }
 }
@@ -209,24 +265,33 @@ struct AddAccountSheet: View {
     @State private var failures: [HostId: String] = [:]
     @Environment(\.dismiss) private var dismiss
 
-    private var targets: [AccountTarget] { AccountTarget.all(fleet.machines, provider: draft.provider) }
+    private var targets: [AccountTarget] {
+        let vaults = fleet.machines.reduce(into: [HostId: String]()) { $0[$1.hostId] = fleet.vaultLogins(on: $1.hostId) }
+        return AccountTarget.all(fleet.machines, provider: draft.provider, vaults: vaults, usesVault: draft.usesVault)
+    }
     /// The ticked machines it can be added on now, in the list's order.
     private var chosen: [HostId] { targets.filter { $0.problem == nil && ticked.contains($0.hostId) }.map(\.hostId) }
 
     var body: some View {
-        SheetScaffold(title: "Add Account", height: 600, hint: Self.hint(endpoint: draft.usesEndpoint)) {
+        SheetScaffold(title: "Add Account", height: 600, hint: Self.hint(draft)) {
             AddAccountForm(draft: $draft, ticked: $ticked, showsConfigDir: $showsConfigDir, targets: targets,
                            installing: { fleet.activity.phase(JobKey(hostId: $0, kind: .install(draft.provider))) != .ended },
                            install: { fleet.install(draft.provider, on: $0) }, failures: failures)
         } footer: {
             Spacer()
-            ActionButton(title: sending ? "Adding…" : Self.title(chosen.count, endpoint: draft.usesEndpoint),
+            ActionButton(title: sending ? "Adding…" : Self.title(chosen.count, endpoint: draft.sendsEndpoint),
                          style: .primary) { add() }
             .frame(width: 220)
             .disabled(chosen.isEmpty || !draft.complete || sending)
             .keyboardShortcut(.defaultAction)
         }
         .onChange(of: draft.provider) { failures = [:] }
+        // Machines that have the vault's logins stay ticked as it is chosen; those without go.
+        .onChange(of: draft.kind) { failures = [:] }
+        .task {
+            let owned = fleet.machines.filter { $0.hosts.isEmpty && $0.role == .owner && $0.connection == .connected }
+            await fleet.refreshVaultLogins(on: owned.map(\.hostId))
+        }
         .onAppear {
             guard !started else { return }
             started = true
@@ -237,7 +302,7 @@ struct AddAccountSheet: View {
 
     private func add() {
         guard !chosen.isEmpty, draft.complete, !sending else { return }
-        guard draft.usesEndpoint else {
+        guard draft.sendsEndpoint else {
             fleet.addAccount(draft, on: chosen)
             dismiss()
             return
@@ -258,8 +323,9 @@ struct AddAccountSheet: View {
         return machines == 1 ? "\(verb) on 1 machine" : "\(verb) on \(machines) machines"
     }
 
-    static func hint(endpoint: Bool) -> String {
-        endpoint ? "herder never shows the key again."
+    static func hint(_ draft: AccountDraft) -> String {
+        if draft.usesVault { return "Each machine uses its own key from the vault." }
+        return draft.usesEndpoint ? "herder never shows the key again."
             : "Logins run in Activity; this sheet closes."
     }
 }
@@ -288,14 +354,12 @@ struct AddAccountForm: View {
         // An endpoint's key is the owner's to enter: a member sees no key field.
         if AccountDraft.supportsEndpoint(draft.provider) && targets.contains(where: \.owner) {
             Field(label: "Sign-in") {
-                ChoiceChips(options: [
-                    (value: false, label: "Log in", detail: "The provider’s own login"),
-                    (value: true, label: "Use an endpoint", detail: "An API server and its key"),
-                ], selection: $draft.endpoint)
+                ChoiceChips(options: Self.kinds(vault: targets.contains { $0.owner && $0.vault != nil }),
+                            selection: $draft.kind)
                 .accessibilityIdentifier("account-kind")
             }
         }
-        Field(label: draft.usesEndpoint ? "Add on" : "Log in on") {
+        Field(label: draft.sendsEndpoint ? "Add on" : "Log in on") {
             VStack(spacing: 0) {
                 if targets.isEmpty {
                     Text("Pair a machine first.").font(.subheadline).foregroundStyle(Theme.secondary)
@@ -313,7 +377,11 @@ struct AddAccountForm: View {
             InputBox(placeholder: ModelCatalog.providerName(draft.provider), text: $draft.label)
                 .accessibilityIdentifier("account-label")
         }
-        if draft.usesEndpoint && targets.contains(where: \.owner) {
+        if draft.usesVault {
+            Text("Runs on the provider logins in the CLIProxyAPI next to each machine’s vault. The vault keeps a key for each machine; nothing to type.")
+                .font(.footnote).foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if draft.usesEndpoint && targets.contains(where: \.owner) {
             Field(label: "Endpoint URL") {
                 InputBox(placeholder: "http://127.0.0.1:8317", text: $draft.url, mono: true)
                     .accessibilityIdentifier("account-endpoint")
@@ -336,6 +404,16 @@ struct AddAccountForm: View {
         if let problem = draft.problem {
             Label(problem, systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(Theme.failure)
         }
+    }
+
+    /// The ways to sign in: the vault's logins only when a machine reaches them.
+    static func kinds(vault: Bool) -> [(value: AccountDraft.Kind, label: String, detail: String)] {
+        var kinds: [(value: AccountDraft.Kind, label: String, detail: String)] = [
+            (value: .login, label: "Log in", detail: "The provider’s own login"),
+            (value: .endpoint, label: "Use an endpoint", detail: "An API server and its key"),
+        ]
+        if vault { kinds.append((value: .vault, label: "Use the vault’s logins", detail: "Its CLIProxyAPI, no key to type")) }
+        return kinds
     }
 
     private func machineRow(_ target: AccountTarget) -> some View {
