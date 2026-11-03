@@ -1164,6 +1164,7 @@ mod tests {
                 }],
                 fallback: false,
                 needs_login: None,
+                endpoint: None,
             }]
         };
         let failover = FailoverSettings { pin: true };

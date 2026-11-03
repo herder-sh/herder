@@ -107,6 +107,17 @@ struct FailureCardTests {
         #expect(card.actions == [.retry, .details])
     }
 
+    @Test func anUnreachableEndpointSaysSoAndOffersRetry() throws {
+        var script = Script()
+        let error = TurnError(class: .unreachable, message: "connection refused · http://127.0.0.1:8317")
+        let model = script.model([created()] + failedTurn("t1", "go", error))
+        let card = FailureCard(try #require(model.standingFailure), context(.needsYou))
+        #expect(card.kind == .problem)
+        #expect(card.title.hasSuffix("endpoint could not be reached"))
+        #expect(card.actions.first == .retry)
+        #expect(TurnFailure.summary(error) == "the account's endpoint could not be reached")
+    }
+
     @Test func theSameFailureRepeatedIsOneCardWithItsCountAfterTheLastAttempt() {
         var script = Script()
         let model = script.model([created()] + failedTurn("t1", "provide some mockups", signedOut)

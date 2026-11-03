@@ -449,6 +449,26 @@ pub enum CommandBody {
         /// Height in rows.
         rows: u16,
     },
+    /// Add an endpoint account: the provider's CLI runs against `endpoint`, an API server
+    /// such as a CLIProxyAPI or a local model server, with `key` as its client key, instead
+    /// of a login; owners only. herder gives it a config dir of its own, needing no login.
+    /// Answered with `applied` and `accounts`. Refused with `bad_request` for a taken id, an
+    /// endpoint that is not an `http` or `https` URL, and `unsupported` for a
+    /// provider herder cannot point at an endpoint.
+    AddEndpointAccount {
+        /// Id of the new account; unique on this daemon.
+        account_id: AccountId,
+        /// Provider whose CLI runs on the account.
+        provider: Provider,
+        /// Display label; the id when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        /// API base URL the CLI is pointed at.
+        endpoint: String,
+        /// The endpoint's client key; never a provider login token. Kept in the daemon's
+        /// config and never sent back to clients.
+        key: SecretValue,
+    },
     /// Install or update a provider's CLI on this host, in a terminal this connection is
     /// attached to; owners only. The command is the vendor's documented installer or updater.
     /// Refused with `forbidden` for members, `unsupported` when this OS has no recipe, and
@@ -494,10 +514,12 @@ pub enum CommandBody {
         /// Height in rows.
         rows: u16,
     },
-    /// Update an existing account's label, config directory and role in rotation; owners
-    /// only. The id and provider stay fixed. Directory changes require all sessions on this
-    /// daemon archived. Omit config_dir to use the provider's default login. Answered with
-    /// applied and accounts.
+    /// Update an existing account's label, config directory, endpoint and role in rotation;
+    /// owners only. The id, provider and kind (login or endpoint) stay fixed. Directory
+    /// changes require all sessions on this daemon archived. Omit config_dir to use the
+    /// provider's default login. Answered with applied and accounts. Refused with
+    /// `bad_request` for an endpoint or key on a login account, or a config dir on an endpoint
+    /// account.
     SetAccountSettings {
         /// Account to configure.
         account_id: AccountId,
@@ -509,6 +531,12 @@ pub enum CommandBody {
         /// Whether the account becomes fallback-only (see `Account.fallback`); absent keeps it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fallback: Option<bool>,
+        /// New API base URL of an endpoint account; absent keeps it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+        /// New client key of an endpoint account; absent keeps it. Never sent back to clients.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<SecretValue>,
     },
     /// Change how many turns the host runs at once, live; owners only. Raising it starts
     /// waiting turns at once; lowering it stops no running turn, only new ones from starting.

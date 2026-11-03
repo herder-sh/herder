@@ -68,6 +68,7 @@ impl Backend for TestBackend {
             usage: Vec::new(),
             fallback: false,
             needs_login: None,
+            endpoint: None,
         }]
     }
 
@@ -1138,6 +1139,45 @@ async fn compose_down_is_for_owners_only() {
     };
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn endpoint_accounts_are_refused_until_the_daemon_runs_them() {
+    let daemon = Daemon::start().await;
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    let key = || herder_protocol::SecretValue::new("cpa_client_key").unwrap();
+    let commands = [
+        CommandBody::AddEndpointAccount {
+            account_id: AccountId::new("fleet"),
+            provider: Provider::Claude,
+            label: None,
+            endpoint: "http://127.0.0.1:8317".into(),
+            key: key(),
+        },
+        CommandBody::SetAccountSettings {
+            account_id: AccountId::new("fleet"),
+            label: "Fleet".into(),
+            config_dir: None,
+            fallback: None,
+            endpoint: Some("http://127.0.0.1:8318".into()),
+            key: None,
+        },
+        CommandBody::SetAccountSettings {
+            account_id: AccountId::new("fleet"),
+            label: "Fleet".into(),
+            config_dir: None,
+            fallback: None,
+            endpoint: None,
+            key: Some(key()),
+        },
+    ];
+    for (n, command) in commands.into_iter().enumerate() {
+        let error = rejected(&mut owner, &format!("c{n}"), command).await;
+        assert_eq!(error.code, ErrorCode::Unsupported, "{}", error.message);
+        assert!(!error.message.contains("cpa_client_key"));
+    }
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

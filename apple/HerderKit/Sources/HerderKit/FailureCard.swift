@@ -114,6 +114,11 @@ struct FailureCard: Equatable {
                 message = reset.map { "It \($0)." } ?? "It resets later; the provider did not say when."
                 actions = [failure.prompt == nil ? nil : .retry, other, .details].compactMap { $0 }
             }
+        case .unreachable:
+            kind = .problem
+            title = "The \(name) account’s endpoint could not be reached"
+            message = "Check that the server it points at is running and reachable from \(context.machine), or continue on another account."
+            actions = [failure.prompt == nil ? nil : .retry, other, .details].compactMap { $0 }
         case .transient, .fatal:
             kind = .problem
             title = failure.error.class == .transient ? "The turn failed, for now" : "The turn failed"

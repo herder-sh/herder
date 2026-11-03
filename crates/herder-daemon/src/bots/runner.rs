@@ -1340,6 +1340,13 @@ impl Runner {
                 ),
                 true,
             ),
+            ErrorClass::Unreachable => (
+                format!(
+                    "The account {account} could not reach its endpoint. {}",
+                    first_sentence(&error.message)
+                ),
+                true,
+            ),
             ErrorClass::Transient | ErrorClass::Fatal => {
                 (first_sentence(&error.message).to_owned(), true)
             }

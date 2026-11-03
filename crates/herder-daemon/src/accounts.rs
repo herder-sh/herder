@@ -180,6 +180,7 @@ pub(crate) fn list(
             usage: usage.windows.get(id).cloned().unwrap_or_default(),
             fallback: account.fallback,
             needs_login: needs_login.get(id).copied(),
+            endpoint: None,
         })
         .collect()
 }
@@ -365,6 +366,7 @@ mod tests {
                     usage: vec![window],
                     fallback: false,
                     needs_login: None,
+                    endpoint: None,
                 },
                 Account {
                     config_dir: None,
@@ -375,6 +377,7 @@ mod tests {
                     usage: Vec::new(),
                     fallback: false,
                     needs_login: Some(since),
+                    endpoint: None,
                 }
             ]
         );

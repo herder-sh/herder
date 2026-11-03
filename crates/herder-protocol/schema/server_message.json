@@ -562,6 +562,13 @@
             "null"
           ]
         },
+        "endpoint": {
+          "description": "API base URL the provider's CLI is pointed at instead of a login, such as a\nCLIProxyAPI or a local model server; absent for an account that logs in. The server\nbehind it holds the provider credentials; herder holds only that server's client key,\nwhich it never sends to clients.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "fallback": {
           "description": "Whether the account is fallback-only: sessions started by provider, failover and\ntitles pick it only while every other account of its provider is unavailable. Naming\nit, or a project defaulting to it, still runs on it.",
           "type": "boolean",
@@ -2198,9 +2205,14 @@
       "description": "Kind of turn failure.",
       "oneOf": [
         {
-          "description": "The account hit a usage limit; the only class that may trigger failover.",
+          "description": "The account hit a usage limit; failover may move the session to another account.",
           "type": "string",
           "const": "limit_reached"
+        },
+        {
+          "description": "The account's endpoint could not be reached; failover may move the session to\nanother account, as for `limit_reached`.",
+          "type": "string",
+          "const": "unreachable"
         },
         {
           "description": "The account's provider login is missing or expired.",

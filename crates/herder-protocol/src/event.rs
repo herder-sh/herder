@@ -380,8 +380,11 @@ pub struct TurnError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorClass {
-    /// The account hit a usage limit; the only class that may trigger failover.
+    /// The account hit a usage limit; failover may move the session to another account.
     LimitReached,
+    /// The account's endpoint could not be reached; failover may move the session to
+    /// another account, as for `limit_reached`.
+    Unreachable,
     /// The account's provider login is missing or expired.
     Auth,
     /// A temporary failure; retrying may succeed.
