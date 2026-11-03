@@ -21,13 +21,14 @@ use herder_protocol::{
     McpTransport, Mergeable, NewPerson, PasskeyAssertion, PasskeyChallenge, PasskeyCreation,
     PasskeyKey, PasskeyRegistration, PermissionMode, PersonCard, PersonId, PersonInfo,
     PersonPasskey, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId,
-    Provider, ProviderBinary, ProviderReload, ProviderStatus, PullRequest, QuestionId,
-    QueuedPrompt, RegistrationResponse, Relay, ResourceSettings, ReviewStatus, Role, Route,
-    SecretAccess, SecretInfo, SecretRef, SecretSet, SecretStoreRequest, SecretValue, SessionHead,
-    SessionId, SessionOrigin, SessionSkill, SessionStatus, SessionUsage, SignIn, SkillFile,
-    SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink,
-    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen,
-    UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
+    Provider, ProviderBinary, ProviderLogin, ProviderLoginState, ProviderReload, ProviderStatus,
+    PullRequest, QuestionId, QueuedPrompt, RegistrationResponse, Relay, ResourceSettings,
+    ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef, SecretSet, SecretStoreRequest,
+    SecretValue, SessionHead, SessionId, SessionOrigin, SessionSkill, SessionStatus, SessionUsage,
+    SignIn, SkillFile, SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId,
+    TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource, TurnError, TurnId,
+    TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId,
+    UserInfo, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -812,6 +813,20 @@ pub enum CommandBody {
     ListSecretAudit {
         before: Option<u64>,
     },
+    ListProviderLogins,
+    StartProviderLogin {
+        provider: Provider,
+    },
+    CompleteProviderLogin {
+        login_id: String,
+        redirect_url: String,
+    },
+    CancelProviderLogin {
+        login_id: String,
+    },
+    RemoveProviderLogin {
+        name: String,
+    },
     SetSkillsRepo {
         url: String,
     },
@@ -1048,6 +1063,13 @@ pub enum CommandResult {
     },
     SecretAudit {
         entries: Vec<SecretAccess>,
+    },
+    ProviderLogins {
+        logins: Vec<ProviderLogin>,
+    },
+    ProviderLoginStarted {
+        login_id: String,
+        url: String,
     },
     SecretToStore {
         value: SecretValue,
@@ -1304,6 +1326,28 @@ pub struct UserDevice {
     pub last_seen: Option<Timestamp>,
     pub online: bool,
     pub host_only: bool,
+}
+
+#[uniffi::remote(Record)]
+pub struct ProviderLogin {
+    pub name: String,
+    pub provider: Provider,
+    #[uniffi(default)]
+    pub label: Option<String>,
+    pub state: ProviderLoginState,
+    #[uniffi(default)]
+    pub until: Option<Timestamp>,
+    #[uniffi(default)]
+    pub message: Option<String>,
+}
+
+#[uniffi::remote(Enum)]
+pub enum ProviderLoginState {
+    Active,
+    CoolingDown,
+    NeedsSignIn,
+    Error,
+    Disabled,
 }
 
 #[uniffi::remote(Record)]

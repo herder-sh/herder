@@ -774,6 +774,19 @@ pub enum CommandResult {
         /// Its memory.
         memory: crate::BotMemory,
     },
+    /// The provider logins a vault's CLIProxyAPI holds, answering `list_provider_logins` and
+    /// `complete_provider_login`.
+    ProviderLogins {
+        /// Every login, ordered by provider, then label.
+        logins: Vec<crate::ProviderLogin>,
+    },
+    /// A provider login a vault's CLIProxyAPI started, answering `start_provider_login`.
+    ProviderLoginStarted {
+        /// The login, for `complete_provider_login` and `cancel_provider_login`.
+        login_id: String,
+        /// Where the owner signs in, in a browser.
+        url: String,
+    },
     /// The latest fetches of secrets by hosts, answering `list_secret_audit`.
     SecretAudit {
         /// The fetches, newest first; fewer than [`crate::MAX_SECRET_AUDIT_ENTRIES`] when no

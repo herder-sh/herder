@@ -1076,6 +1076,18 @@ impl SessionManager {
                     "this daemon is not a vault; pair hosts on the vault",
                 ));
             }
+            CommandBody::ListProviderLogins
+            | CommandBody::StartProviderLogin { .. }
+            | CommandBody::CompleteProviderLogin { .. }
+            | CommandBody::CancelProviderLogin { .. }
+            | CommandBody::RemoveProviderLogin { .. } => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this machine is not a vault: provider logins live in the CLIProxyAPI next \
+                     to the vault it is linked to; manage them on that vault's page in the \
+                     herder app",
+                ));
+            }
             CommandBody::CreateSecretSet { .. }
             | CommandBody::DeleteSecretSet { .. }
             | CommandBody::PutSecret { .. }

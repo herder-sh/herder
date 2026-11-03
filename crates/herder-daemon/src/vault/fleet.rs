@@ -384,6 +384,16 @@ impl Backend for Fleet {
             | CommandBody::ListSecretAudit { .. } => {
                 return secrets::command(&self.store, self.secrets_key.as_ref(), command).await;
             }
+            CommandBody::ListProviderLogins
+            | CommandBody::StartProviderLogin { .. }
+            | CommandBody::CompleteProviderLogin { .. }
+            | CommandBody::CancelProviderLogin { .. }
+            | CommandBody::RemoveProviderLogin { .. } => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this vault cannot manage its CLIProxyAPI's logins yet".into(),
+                ));
+            }
             _ => {}
         }
         match target(&command) {
@@ -456,6 +466,11 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::RevokeSecretSet { .. }
         | CommandBody::ListSecrets
         | CommandBody::ListSecretAudit { .. }
+        | CommandBody::ListProviderLogins
+        | CommandBody::StartProviderLogin { .. }
+        | CommandBody::CompleteProviderLogin { .. }
+        | CommandBody::CancelProviderLogin { .. }
+        | CommandBody::RemoveProviderLogin { .. }
         | CommandBody::RevokeDevice { .. }
         | CommandBody::PasskeyChallenge
         | CommandBody::ListPeople

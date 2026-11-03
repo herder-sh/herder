@@ -2715,6 +2715,96 @@
           ]
         },
         {
+          "description": "On a vault, list the provider logins its CLIProxyAPI holds, without their tokens;\nowners only. Answered with `provider_logins`. It changes nothing, so a resend is\nanswered afresh. Refused with `unsupported` on a daemon that is not a vault, or a vault\nthat runs no CLIProxyAPI.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "list_provider_logins"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "On a vault, have its CLIProxyAPI start signing in to `provider`; owners only. Answered\nwith `provider_login_started`, the URL to sign in at; the login waits five minutes for\n`complete_provider_login`. Refused with `bad_request` for a provider the proxy cannot\nsign in to here (it can Claude and Codex), and `unsupported` as `list_provider_logins`\nis.",
+          "type": "object",
+          "properties": {
+            "provider": {
+              "description": "The provider.",
+              "$ref": "#/$defs/Provider"
+            },
+            "type": {
+              "type": "string",
+              "const": "start_provider_login"
+            }
+          },
+          "required": [
+            "type",
+            "provider"
+          ]
+        },
+        {
+          "description": "On a vault, finish a login `start_provider_login` started, with the address the\nbrowser was sent to once the owner signed in; owners only. The proxy trades the code in\nit for the login, which it keeps. Answered with `provider_logins` once the proxy holds\nthe login. Refused with `bad_request` for an address with no code, `not_found` for a\nlogin that is not waiting (cancelled, timed out, or finished), `conflict` when the\nprovider refused it, with its reason, and `unsupported` as `list_provider_logins` is.",
+          "type": "object",
+          "properties": {
+            "login_id": {
+              "description": "The login, as `provider_login_started` named it.",
+              "type": "string"
+            },
+            "redirect_url": {
+              "description": "The address the browser was sent to, with the code and state in its query.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "complete_provider_login"
+            }
+          },
+          "required": [
+            "type",
+            "login_id",
+            "redirect_url"
+          ]
+        },
+        {
+          "description": "On a vault, stop a login `start_provider_login` started; owners only. Answered with\n`applied`. Refused with `not_found` for a login that is not waiting, and `unsupported`\nas `list_provider_logins` is.",
+          "type": "object",
+          "properties": {
+            "login_id": {
+              "description": "The login, as `provider_login_started` named it.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "cancel_provider_login"
+            }
+          },
+          "required": [
+            "type",
+            "login_id"
+          ]
+        },
+        {
+          "description": "On a vault, have its CLIProxyAPI drop a provider login and its tokens; owners only.\nAnswered with `applied`. Refused with `not_found` for a login it does not hold, and\n`unsupported` as `list_provider_logins` is.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The login, by its `name`.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_provider_login"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ]
+        },
+        {
           "description": "Use the git repository at `url` as the skill library: the daemon replaces its checkout\nwith a clone of it; owners only. The skills of a library that was the machine's own and\nthat the repository lacks are added to it, committed and pushed. Answered with\n`applied`; `skills_status` follows.",
           "type": "object",
           "properties": {

@@ -976,6 +976,46 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before: Option<u64>,
     },
+    /// On a vault, list the provider logins its CLIProxyAPI holds, without their tokens;
+    /// owners only. Answered with `provider_logins`. It changes nothing, so a resend is
+    /// answered afresh. Refused with `unsupported` on a daemon that is not a vault, or a vault
+    /// that runs no CLIProxyAPI.
+    ListProviderLogins,
+    /// On a vault, have its CLIProxyAPI start signing in to `provider`; owners only. Answered
+    /// with `provider_login_started`, the URL to sign in at; the login waits five minutes for
+    /// `complete_provider_login`. Refused with `bad_request` for a provider the proxy cannot
+    /// sign in to here (it can Claude and Codex), and `unsupported` as `list_provider_logins`
+    /// is.
+    StartProviderLogin {
+        /// The provider.
+        provider: crate::Provider,
+    },
+    /// On a vault, finish a login `start_provider_login` started, with the address the
+    /// browser was sent to once the owner signed in; owners only. The proxy trades the code in
+    /// it for the login, which it keeps. Answered with `provider_logins` once the proxy holds
+    /// the login. Refused with `bad_request` for an address with no code, `not_found` for a
+    /// login that is not waiting (cancelled, timed out, or finished), `conflict` when the
+    /// provider refused it, with its reason, and `unsupported` as `list_provider_logins` is.
+    CompleteProviderLogin {
+        /// The login, as `provider_login_started` named it.
+        login_id: String,
+        /// The address the browser was sent to, with the code and state in its query.
+        redirect_url: String,
+    },
+    /// On a vault, stop a login `start_provider_login` started; owners only. Answered with
+    /// `applied`. Refused with `not_found` for a login that is not waiting, and `unsupported`
+    /// as `list_provider_logins` is.
+    CancelProviderLogin {
+        /// The login, as `provider_login_started` named it.
+        login_id: String,
+    },
+    /// On a vault, have its CLIProxyAPI drop a provider login and its tokens; owners only.
+    /// Answered with `applied`. Refused with `not_found` for a login it does not hold, and
+    /// `unsupported` as `list_provider_logins` is.
+    RemoveProviderLogin {
+        /// The login, by its `name`.
+        name: String,
+    },
     /// Use the git repository at `url` as the skill library: the daemon replaces its checkout
     /// with a clone of it; owners only. The skills of a library that was the machine's own and
     /// that the repository lacks are added to it, committed and pushed. Answered with

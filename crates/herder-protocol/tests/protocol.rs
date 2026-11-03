@@ -544,6 +544,22 @@ fn client_fixtures() -> Vec<ClientMessage> {
             bot_id: BotId::new("trash-can"),
         }),
         command(CommandBody::ListSecretAudit { before: None }),
+        command(CommandBody::ListProviderLogins),
+        command(CommandBody::StartProviderLogin {
+            provider: Provider::Claude,
+        }),
+        command(CommandBody::CompleteProviderLogin {
+            login_id: "2c3aa71dfa309d66262b1a34202481ea".into(),
+            redirect_url:
+                "http://localhost:54545/callback?code=abc&state=2c3aa71dfa309d66262b1a34202481ea"
+                    .into(),
+        }),
+        command(CommandBody::CancelProviderLogin {
+            login_id: "2c3aa71dfa309d66262b1a34202481ea".into(),
+        }),
+        command(CommandBody::RemoveProviderLogin {
+            name: "claude-ada@example.com.json".into(),
+        }),
         command(CommandBody::ListSecretAudit { before: Some(41) }),
         command(CommandBody::ArchiveSession {
             session_id: session_id(),
@@ -1352,6 +1368,61 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     }),
                 })
                 .collect(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::ProviderLogins {
+                logins: vec![
+                    ProviderLogin {
+                        name: "claude-ada@example.com.json".into(),
+                        provider: Provider::Claude,
+                        label: Some("ada@example.com".into()),
+                        state: ProviderLoginState::Active,
+                        until: None,
+                        message: None,
+                    },
+                    ProviderLogin {
+                        name: "codex-ada@example.com-plus.json".into(),
+                        provider: Provider::Codex,
+                        label: Some("ada@example.com".into()),
+                        state: ProviderLoginState::CoolingDown,
+                        until: Some(at()),
+                        message: Some("quota exhausted".into()),
+                    },
+                    ProviderLogin {
+                        name: "claude-old.json".into(),
+                        provider: Provider::Claude,
+                        label: None,
+                        state: ProviderLoginState::NeedsSignIn,
+                        until: None,
+                        message: Some("unauthorized (refresh token invalid)".into()),
+                    },
+                    ProviderLogin {
+                        name: "codex-broken.json".into(),
+                        provider: Provider::Codex,
+                        label: None,
+                        state: ProviderLoginState::Error,
+                        until: None,
+                        message: None,
+                    },
+                    ProviderLogin {
+                        name: "codex-off.json".into(),
+                        provider: Provider::Codex,
+                        label: None,
+                        state: ProviderLoginState::Disabled,
+                        until: None,
+                        message: None,
+                    },
+                ],
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::ProviderLoginStarted {
+                login_id: "2c3aa71dfa309d66262b1a34202481ea".into(),
+                url: "https://claude.ai/oauth/authorize?state=2c3aa71dfa309d66262b1a34202481ea"
+                    .into(),
             },
         },
         ServerMessage::CommandAccepted {
@@ -3162,6 +3233,26 @@ fn bots_and_thread_links_have_their_wire_form() {
     assert_eq!(kind, BotKind::Unknown);
     let state: BotState = serde_json::from_value(json!("rate_limited")).unwrap();
     assert_eq!(state, BotState::Unknown);
+}
+
+#[test]
+fn provider_logins_have_their_wire_form() {
+    assert_eq!(
+        serde_json::to_value(CommandBody::StartProviderLogin {
+            provider: Provider::Codex,
+        })
+        .unwrap(),
+        json!({ "type": "start_provider_login", "provider": "codex" })
+    );
+    let login: ProviderLogin = serde_json::from_value(json!({
+        "name": "claude-ada@example.com.json",
+        "provider": "claude",
+        "state": "cooling_down",
+    }))
+    .unwrap();
+    assert_eq!(login.label, None);
+    assert_eq!(login.until, None);
+    assert_eq!(login.state, ProviderLoginState::CoolingDown);
 }
 
 #[test]

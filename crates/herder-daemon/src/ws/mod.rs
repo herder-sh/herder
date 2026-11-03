@@ -835,6 +835,10 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::InstallProvider { .. }
                     | CommandBody::ListAwsProfiles
                     | CommandBody::AwsSsoLogin { .. }
+                    | CommandBody::StartProviderLogin { .. }
+                    | CommandBody::CompleteProviderLogin { .. }
+                    | CommandBody::CancelProviderLogin { .. }
+                    | CommandBody::RemoveProviderLogin { .. }
             );
             // A bot's allowlist grants people access, as a pairing code does, and a bot's
             // memory is its owners', which its own sessions keep with `remember` and `forget`
