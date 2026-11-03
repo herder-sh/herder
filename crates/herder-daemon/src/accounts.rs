@@ -16,7 +16,7 @@ use herder_adapters::claude::{self, ClaudeAdapter, Cli};
 use herder_adapters::codex::{self, CodexAdapter};
 use herder_protocol::{Account, AccountId, Provider, Timestamp};
 
-use crate::session::{AccountConfig, Accounts, Adapters, TitleCli, TitleClis};
+use crate::session::{AccountConfig, Accounts, Adapters, EndpointKey, TitleCli, TitleClis};
 use crate::usage::{Known, Probe, Probes};
 
 /// Every provider herder can run sessions on.
@@ -160,12 +160,16 @@ pub fn title_clis(binaries: &HashMap<Provider, PathBuf>, clis: &Clis) -> TitleCl
 
 /// Points `account`'s CLI at its endpoint in `env`, the environment it runs with, when it is
 /// an endpoint account: its base URL and client key, and none of the inherited credentials
-/// that would be sent instead. A login account's `env` is left as it is.
+/// that would be sent instead. A login account's `env` is left as it is, and so is that of an
+/// account whose key is still a vault secret: see [`crate::session`]'s `ready_to_start`.
 pub(crate) fn endpoint_env(account: &AccountConfig, env: &mut BTreeMap<String, String>) {
     let Some(endpoint) = &account.endpoint else {
         return;
     };
-    let (url, key) = (&endpoint.url, endpoint.key.expose());
+    let EndpointKey::Held(key) = &endpoint.key else {
+        return;
+    };
+    let (url, key) = (&endpoint.url, key.expose());
     // The config lets only these providers' accounts have an endpoint.
     let vars = match account.provider {
         Provider::Claude => {
@@ -208,7 +212,13 @@ pub(crate) fn list(
                 .endpoint
                 .as_ref()
                 .map(|endpoint| endpoint.url.clone()),
-            key_secret: None,
+            key_secret: account
+                .endpoint
+                .as_ref()
+                .and_then(|endpoint| match &endpoint.key {
+                    EndpointKey::Secret(secret) => Some(secret.clone()),
+                    EndpointKey::Held(_) => None,
+                }),
         })
         .collect()
 }
@@ -327,7 +337,9 @@ mod tests {
         let fleet = AccountConfig {
             endpoint: Some(crate::session::Endpoint {
                 url: "http://127.0.0.1:8317".into(),
-                key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+                key: crate::session::EndpointKey::Held(
+                    herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+                ),
             }),
             ..account(Provider::Claude, Some(&config_dir))
         };
@@ -361,7 +373,9 @@ mod tests {
         let fleet = AccountConfig {
             endpoint: Some(crate::session::Endpoint {
                 url: "http://127.0.0.1:8317".into(),
-                key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+                key: crate::session::EndpointKey::Held(
+                    herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+                ),
             }),
             ..login.clone()
         };

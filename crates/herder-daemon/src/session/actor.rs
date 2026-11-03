@@ -1920,6 +1920,13 @@ impl Actor {
                             turn_id: turn_id.clone(),
                         })
                         .await;
+                        // The account's key could not be had from an unreachable vault: the
+                        // prompt fails over as for an endpoint that cannot be reached.
+                        if error.class == ErrorClass::Unreachable {
+                            self.turn = Some(turn_id.clone());
+                            self.prompt = Some(original);
+                            return Box::pin(self.limit_reached(turn_id, error)).await;
+                        }
                         let summary = failed(&error);
                         self.log(EventBody::TurnFailed {
                             turn_id: turn_id.clone(),
@@ -2143,6 +2150,10 @@ impl Actor {
             .inner
             .account(&session.account_id)
             .ok_or_else(|| fatal(format!("account {} is not configured", session.account_id)))?;
+        let account = self
+            .inner
+            .ready_to_start(&session.account_id, account)
+            .await?;
         let adapter = self.inner.adapters.get(&session.provider).ok_or_else(|| {
             fatal(format!(
                 "no adapter runs {} sessions",

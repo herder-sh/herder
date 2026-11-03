@@ -125,6 +125,12 @@ impl Admin {
             blocking(&shared.store, move |store| store.forget(&host_id)).await?
         };
         info!(host_id = %host.host_id, sessions, "host forgotten");
+        // Its CLIProxyAPI key goes now; should the proxy not answer, the next sync drops it.
+        if let (Some(keys), Some(key)) = (shared.cliproxyapi.get(), &shared.secrets_key)
+            && let Err(err) = keys.sync(&shared.store, key).await
+        {
+            warn!(host_id = %host.host_id, "cannot drop the host's CLIProxyAPI key yet: {err:#}");
+        }
         shared.fleet.refresh().await;
         shared.fleet.refresh_hosts().await;
         Ok(Forgot {

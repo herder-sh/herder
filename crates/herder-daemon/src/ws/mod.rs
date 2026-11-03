@@ -44,7 +44,7 @@ use crate::listen;
 use crate::login::{Login, Logins, NewAccount};
 use crate::mcp::{Control, ControlFuture, Overview};
 use crate::providers::Providers;
-use crate::session::{Endpoint, SessionManager};
+use crate::session::{Endpoint, EndpointKey, SessionManager};
 use crate::settings::Settings;
 use crate::terminal::{LoginHooks, OnExit, Terminals};
 use crate::vault::Link;
@@ -515,29 +515,25 @@ impl<B: Backend> Shared<B> {
     ) -> Result<CommandResult, ErrorInfo> {
         match command {
             CommandBody::AddEndpointAccount {
-                key_secret: Some(_),
-                ..
-            }
-            | CommandBody::SetAccountSettings {
-                key_secret: Some(_),
-                ..
-            } => Err(ErrorInfo {
-                code: ErrorCode::Unsupported,
-                message: "this daemon cannot fetch an endpoint's key from its vault yet".to_owned(),
-            }),
-            CommandBody::AddEndpointAccount { key: None, .. } => Err(ErrorInfo {
-                code: ErrorCode::BadRequest,
-                message: "an endpoint account needs its client key, or the secret holding it"
-                    .to_owned(),
-            }),
-            CommandBody::AddEndpointAccount {
                 account_id,
                 provider,
                 label,
                 endpoint,
-                key: Some(key),
-                key_secret: None,
+                key,
+                key_secret,
             } => {
+                let key = match (key, key_secret) {
+                    (Some(key), None) => EndpointKey::Held(key),
+                    (None, Some(secret)) => EndpointKey::Secret(secret),
+                    _ => {
+                        return Err(ErrorInfo {
+                            code: ErrorCode::BadRequest,
+                            message: "an endpoint account needs its client key or the vault \
+                                      secret holding it, not both"
+                                .to_owned(),
+                        });
+                    }
+                };
                 let endpoint = Endpoint { url: endpoint, key };
                 self.logins
                     .add_endpoint(&account_id, &provider, label.as_deref(), endpoint)?;
@@ -550,7 +546,7 @@ impl<B: Backend> Shared<B> {
                 fallback,
                 endpoint,
                 key,
-                key_secret: None,
+                key_secret,
             } => {
                 let settings = AccountSettings {
                     label: &label,
@@ -558,6 +554,7 @@ impl<B: Backend> Shared<B> {
                     fallback,
                     endpoint: endpoint.as_deref(),
                     key: key.as_ref(),
+                    key_secret: key_secret.as_ref(),
                 };
                 self.logins.set_settings(&account_id, &settings).await?;
                 Ok(CommandResult::Applied)

@@ -33,6 +33,7 @@
 //! sessions or for its own use, and keeps them in memory only ([`HostSecrets`]).
 
 mod client;
+pub mod cliproxyapi;
 mod conn;
 mod fleet;
 mod host_secrets;
@@ -43,7 +44,7 @@ mod retention;
 mod secrets;
 mod store;
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -52,6 +53,7 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+pub use cliproxyapi::ClientKeys;
 pub use host_secrets::{CACHE_TTL as SECRETS_CACHE_TTL, Held, HeldSecrets, HostSecrets};
 pub use link::{Link, Setup as LinkSetup};
 pub use replicator::{Replicator, WakeOnEvent};
@@ -96,6 +98,8 @@ struct Shared {
     superseded: tokio::sync::broadcast::Sender<HostId>,
     /// Encrypts secrets' values; without it the vault keeps no secrets.
     secrets_key: Option<Arc<SecretsKey>>,
+    /// The CLIProxyAPI hosts get client keys for, when the vault has one and keeps secrets.
+    cliproxyapi: OnceLock<Arc<ClientKeys>>,
 }
 
 impl Shared {
@@ -156,6 +160,7 @@ impl Server {
                 retention,
                 superseded: tokio::sync::broadcast::channel(16).0,
                 secrets_key,
+                cliproxyapi: OnceLock::new(),
             }),
         }
     }
@@ -163,6 +168,20 @@ impl Server {
     /// Answers clients' settings commands with `settings`; once per server.
     pub fn manage_settings(&self, settings: Arc<crate::settings::Settings>) -> Result<()> {
         self.shared.clients.manage_settings(settings)
+    }
+
+    /// Keeps a client key per host in the CLIProxyAPI `keys` manages, from [`Self::run`]
+    /// on; once per server. Refused without a secrets key, as the keys are secrets.
+    pub fn use_cliproxyapi(&self, keys: ClientKeys) -> Result<()> {
+        anyhow::ensure!(
+            self.shared.secrets_key.is_some(),
+            "a vault with a CLIProxyAPI keeps its hosts' client keys as secrets: set \
+             {SECRETS_KEY_ENV} (see deploy/README.md)"
+        );
+        self.shared
+            .cliproxyapi
+            .set(Arc::new(keys))
+            .map_err(|_| anyhow::anyhow!("the vault uses one CLIProxyAPI"))
     }
 
     /// The store, for reading what hosts replicated.
@@ -190,6 +209,14 @@ impl Server {
             Arc::clone(&self.shared),
             shutdown.child_token(),
         ));
+        if let (Some(keys), Some(key)) = (self.shared.cliproxyapi.get(), &self.shared.secrets_key) {
+            tokio::spawn(Arc::clone(keys).run(
+                Arc::clone(&self.shared.store),
+                Arc::clone(key),
+                cliproxyapi::SYNC_EVERY,
+                shutdown.child_token(),
+            ));
+        }
         tokio::spawn({
             let fleet = self.shared.fleet.clone();
             let shutdown = shutdown.clone();
@@ -258,6 +285,14 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         config.retention,
         secrets_key,
     );
+    if let Some(url) = &config.cliproxyapi {
+        let management = cliproxyapi::Management::from_env(url)?;
+        server.use_cliproxyapi(ClientKeys::new(management)?)?;
+        info!(
+            cliproxyapi = url,
+            "hosts get client keys for this CLIProxyAPI"
+        );
+    }
     server.manage_settings(Arc::new(crate::settings::Settings::new(
         config,
         None,
@@ -328,6 +363,7 @@ mod tests {
             mode: crate::config::Mode::Vault,
             vault: None,
             retention: Default::default(),
+            cliproxyapi: None,
             mcp_servers: Vec::new(),
             bots: Vec::new(),
             self_update: None,

@@ -3,9 +3,10 @@
 //!
 //! Requests go over the replication connection ([`super::Replicator`]), which attaches itself
 //! here while it is open. Fetched values are kept in memory only, never on disk. A session's
-//! are kept per session and secret as the session named it, for [`CACHE_TTL`]. Each fetch from
-//! the vault is audited there, so a value served from this cache was audited for that session
-//! when fetched.
+//! are kept per session and secret as the session named it, for [`CACHE_TTL`]; so are those
+//! the host fetches once for its own use ([`HostSecrets::fetch_for_host`]), per purpose. Each
+//! fetch from the vault is audited there, so a value served from this cache was audited for
+//! that session, or purpose, when fetched.
 //!
 //! What the host uses itself it holds ([`HostSecrets::hold`]): fetched for a purpose from the
 //! sets granted to it for host use, audited under that purpose, fetched again every
@@ -59,7 +60,7 @@ struct State {
     connection: Option<(u64, mpsc::UnboundedSender<Ask>)>,
     /// Connections attached so far, to number the next.
     attached: u64,
-    cache: HashMap<(SessionId, SecretRef), Cached>,
+    cache: HashMap<(SecretUse, SecretRef), Cached>,
 }
 
 struct Cached {
@@ -273,6 +274,30 @@ impl HostSecrets {
         session_id: &SessionId,
         secrets: &[SecretRef],
     ) -> Result<Vec<FetchedSecret>, SecretError> {
+        self.fetch_cached(SecretUse::Session(session_id.clone()), secrets)
+            .await
+    }
+
+    /// The values of `secrets` for the host's own use under `purpose`, such as
+    /// `account:fleet`, from the sets granted to it for that, in the order asked: from memory
+    /// while fresh, otherwise from the vault, which records the fetch. For a value the host
+    /// needs now and then, such as an endpoint account's key when a session starts; one it
+    /// needs all along it holds ([`Self::hold`]).
+    pub async fn fetch_for_host(
+        &self,
+        purpose: &str,
+        secrets: &[SecretRef],
+    ) -> Result<Vec<FetchedSecret>, SecretError> {
+        self.fetch_cached(SecretUse::Host(purpose.to_owned()), secrets)
+            .await
+    }
+
+    /// The values of `secrets` for `used`, from memory while fresh, otherwise from the vault.
+    async fn fetch_cached(
+        &self,
+        used: SecretUse,
+        secrets: &[SecretRef],
+    ) -> Result<Vec<FetchedSecret>, SecretError> {
         {
             let mut state = self.lock();
             if !state.linked {
@@ -283,7 +308,7 @@ impl HostSecrets {
             let cached: Option<Vec<FetchedSecret>> = secrets
                 .iter()
                 .map(|secret| {
-                    let cached = state.cache.get(&(session_id.clone(), secret.clone()))?;
+                    let cached = state.cache.get(&(used.clone(), secret.clone()))?;
                     Some(FetchedSecret {
                         secret: secret.clone(),
                         set: cached.set.clone(),
@@ -295,8 +320,7 @@ impl HostSecrets {
                 return Ok(cached);
             }
         }
-        let used = SecretUse::Session(session_id.clone());
-        let fetched = self.ask_fetch(used, secrets).await?;
+        let fetched = self.ask_fetch(used.clone(), secrets).await?;
         let until = Instant::now() + self.ttl;
         let mut state = self.lock();
         // Unlinked meanwhile: nothing is kept for a vault no longer linked.
@@ -311,7 +335,7 @@ impl HostSecrets {
             };
             state
                 .cache
-                .insert((session_id.clone(), secret.secret.clone()), cached);
+                .insert((used.clone(), secret.secret.clone()), cached);
         }
         Ok(fetched)
     }

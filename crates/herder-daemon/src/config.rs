@@ -251,6 +251,20 @@
 //!
 //! [vault]
 //! archive_retention_days = 90 # archived sessions of online hosts are dropped after this
+//! cliproxyapi = "http://127.0.0.1:8317" # a CLIProxyAPI on the vault's machine; see below
+//! ```
+//!
+//! With `cliproxyapi`, the vault mints a client key for each host in that CLIProxyAPI and
+//! grants it to the host as a secret for its own use ([`crate::vault::cliproxyapi`]); it reads
+//! the proxy's management secret from `HERDER_CLIPROXYAPI_MANAGEMENT_KEY`, and needs its
+//! secrets key. A host's endpoint account names that secret instead of holding the key:
+//!
+//! ```toml
+//! [[accounts]]
+//! id = "fleet"
+//! provider = "claude"
+//! endpoint = "https://vault.example.com:8317"
+//! key_secret = "CLIPROXYAPI_KEY" # fetched from the host's vault when a session starts
 //! ```
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -272,7 +286,9 @@ use serde::Deserialize;
 use crate::accounts;
 use crate::projects::{ProjectEntry, ProjectsConfig};
 use crate::resources::ResourcesConfig;
-use crate::session::{AccountConfig, Accounts, Endpoint, FailoverConfig, TitlesConfig};
+use crate::session::{
+    AccountConfig, Accounts, Endpoint, EndpointKey, FailoverConfig, TitlesConfig,
+};
 
 /// Port the daemon listens on unless configured otherwise.
 pub const DEFAULT_PORT: u16 = 7447;
@@ -310,6 +326,9 @@ pub struct Config {
     pub vault: Option<VaultConfig>,
     /// What a vault keeps, and for how long; read in vault mode only.
     pub retention: Retention,
+    /// Base URL of the CLIProxyAPI on a vault's machine whose client keys it keeps for its
+    /// hosts; read in vault mode only.
+    pub cliproxyapi: Option<String>,
     /// The user's MCP servers, in file order, as written.
     pub mcp_servers: Vec<McpServerSettings>,
     /// The chat bots this host holds, in file order, as written.
@@ -401,6 +420,7 @@ struct VaultFile {
     attachments: Option<bool>,
     attachments_cap: Option<u64>,
     archive_retention_days: Option<u32>,
+    cliproxyapi: Option<String>,
 }
 
 /// When the daemon prompts an idle agent on its own: the `[follow_ups]` table.
@@ -592,6 +612,7 @@ struct AccountFile {
     fallback: bool,
     endpoint: Option<String>,
     key: Option<String>,
+    key_secret: Option<String>,
 }
 
 /// One `[[mcp_servers]]` entry as written: `command` for a stdio server, `url` for one over
@@ -761,7 +782,7 @@ fn resolve(
     let accounts = resolve_accounts(file.accounts, env)?;
     let projects = resolve_projects(file.projects, file.project, &accounts, env)?;
     let titles = resolve_titles(file.titles, &accounts)?;
-    let (vault, retention) = resolve_vault(file.mode, file.vault)?;
+    let (vault, retention, cliproxyapi) = resolve_vault(file.mode, file.vault)?;
     let mcp_servers = resolve_mcp_servers(file.mcp_servers, env)?;
     validate_bots(&file.bots, &accounts)?;
     let (binaries, clis) = resolve_providers(file.providers, env)?;
@@ -781,6 +802,7 @@ fn resolve(
         mode: file.mode,
         vault,
         retention,
+        cliproxyapi,
         mcp_servers,
         bots: file.bots,
         self_update: None,
@@ -980,9 +1002,12 @@ pub(crate) fn mcp_command(
 
 /// Validates the `[vault]` table: a host's says where it replicates to, a vault's what it
 /// keeps.
-fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<(Option<VaultConfig>, Retention)> {
+fn resolve_vault(
+    mode: Mode,
+    table: Option<VaultFile>,
+) -> Result<(Option<VaultConfig>, Retention, Option<String>)> {
     let Some(table) = table else {
-        return Ok((None, Retention::default()));
+        return Ok((None, Retention::default(), None));
     };
     if mode == Mode::Vault {
         ensure!(
@@ -994,18 +1019,21 @@ fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<(Option<VaultCo
                 && table.attachments.is_none()
                 && table.attachments_cap.is_none(),
             "a vault does not replicate to another vault; its [vault] table takes \
-             archive_retention_days only"
+             archive_retention_days and cliproxyapi only"
         );
         let mut retention = Retention::default();
         if let Some(days) = table.archive_retention_days {
             ensure!(days > 0, "vault.archive_retention_days must be at least 1");
             retention.archive_days = days;
         }
-        return Ok((None, retention));
+        if let Some(url) = &table.cliproxyapi {
+            check_endpoint(url).context("vault.cliproxyapi")?;
+        }
+        return Ok((None, retention, table.cliproxyapi));
     }
     ensure!(
-        table.archive_retention_days.is_none(),
-        "vault.archive_retention_days is set on the vault, not on a host"
+        table.archive_retention_days.is_none() && table.cliproxyapi.is_none(),
+        "vault.archive_retention_days and vault.cliproxyapi are set on the vault, not on a host"
     );
     let (Some(address), Some(fingerprint)) = (table.address, table.fingerprint) else {
         bail!("the [vault] table needs the vault's address and fingerprint");
@@ -1025,7 +1053,7 @@ fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<(Option<VaultCo
             table.pairing_code,
         )
     };
-    Ok((Some(vault), Retention::default()))
+    Ok((Some(vault), Retention::default(), None))
 }
 
 /// Validates the `[titles]` table.
@@ -1210,11 +1238,15 @@ pub(crate) fn append_account_with_env(
         quote(&account.label),
     );
     match &account.endpoint {
-        Some(endpoint) => entry.push_str(&format!(
-            "endpoint = {}\nkey = {}\n",
-            quote(&endpoint.url),
-            quote(endpoint.key.expose())
-        )),
+        Some(endpoint) => {
+            entry.push_str(&format!("endpoint = {}\n", quote(&endpoint.url)));
+            entry.push_str(&match &endpoint.key {
+                EndpointKey::Held(key) => format!("key = {}\n", quote(key.expose())),
+                EndpointKey::Secret(secret) => {
+                    format!("key_secret = {}\n", quote(&secret.to_string()))
+                }
+            });
+        }
         None => {
             if let Some(dir) = &account.config_dir {
                 let dir = dir
@@ -1261,8 +1293,10 @@ pub(crate) struct AccountSettings<'a> {
     pub fallback: Option<bool>,
     /// An endpoint account's new base URL; `None` keeps it.
     pub endpoint: Option<&'a str>,
-    /// An endpoint account's new client key; `None` keeps it.
+    /// An endpoint account's new client key, in place of its key secret; `None` keeps it.
     pub key: Option<&'a SecretValue>,
+    /// An endpoint account's new key secret, in place of its key; `None` keeps it.
+    pub key_secret: Option<&'a SecretRef>,
 }
 
 /// Update an account without reading its login files, validating the complete account list
@@ -1281,7 +1315,12 @@ pub(crate) fn set_account_settings(
         fallback,
         endpoint,
         key,
+        key_secret,
     } = *settings;
+    ensure!(
+        key.is_none() || key_secret.is_none(),
+        "a key or a key secret, not both"
+    );
     if previous.endpoint.is_some() {
         ensure!(
             config_dir.is_none(),
@@ -1289,7 +1328,7 @@ pub(crate) fn set_account_settings(
         );
     } else {
         ensure!(
-            endpoint.is_none() && key.is_none(),
+            endpoint.is_none() && key.is_none() && key_secret.is_none(),
             "a login account has no endpoint or key"
         );
     }
@@ -1328,6 +1367,11 @@ pub(crate) fn set_account_settings(
     }
     if let Some(key) = key {
         table.insert("key", toml_edit::value(key.expose()));
+        table.remove("key_secret");
+    }
+    if let Some(secret) = key_secret {
+        table.insert("key_secret", toml_edit::value(secret.to_string()));
+        table.remove("key");
     }
     match fallback {
         Some(true) => {
@@ -2129,7 +2173,20 @@ fn resolve_accounts(
         );
         ensure!(valid_id(&id), "account id {id:?} {ID_RULE}");
         let provider = supported(entry.provider).with_context(|| format!("account {id}"))?;
-        let endpoint = match (entry.endpoint, entry.key) {
+        let key = match (entry.key, entry.key_secret) {
+            (Some(_), Some(_)) => bail!("account {id}: a key or a key_secret, not both"),
+            (Some(key), None) => Some(EndpointKey::Held(
+                SecretValue::new(key)
+                    .with_context(|| format!("account {id}: key must not be empty"))?,
+            )),
+            (None, Some(secret)) => {
+                Some(EndpointKey::Secret(secret.parse().map_err(
+                    |err: String| anyhow::anyhow!("account {id}: key_secret: {err}"),
+                )?))
+            }
+            (None, None) => None,
+        };
+        let endpoint = match (entry.endpoint, key) {
             (Some(url), Some(key)) => {
                 ensure!(
                     ENDPOINT_PROVIDERS.contains(&provider),
@@ -2141,8 +2198,6 @@ fn resolve_accounts(
                      omit config_dir"
                 );
                 check_endpoint(&url).with_context(|| format!("account {id}: endpoint"))?;
-                let key = SecretValue::new(key)
-                    .with_context(|| format!("account {id}: key must not be empty"))?;
                 Some(Endpoint { url, key })
             }
             (None, None) => None,
@@ -2504,6 +2559,7 @@ mod tests {
                 mode: Mode::Host,
                 vault: None,
                 retention: Retention::default(),
+                cliproxyapi: None,
                 mcp_servers: Vec::new(),
                 bots: Vec::new(),
                 self_update: None,
@@ -2692,6 +2748,18 @@ mod tests {
         assert_eq!(config.retention.archive_days, 90);
         let config = load("mode = \"vault\"\n[vault]\narchive_retention_days = 30\n".into());
         assert_eq!(config.unwrap().retention.archive_days, 30);
+        let config =
+            load("mode = \"vault\"\n[vault]\ncliproxyapi = \"http://127.0.0.1:8317\"\n".into());
+        assert_eq!(
+            config.unwrap().cliproxyapi.as_deref(),
+            Some("http://127.0.0.1:8317")
+        );
+        assert!(load("mode = \"vault\"\n[vault]\ncliproxyapi = \"cpa\"\n".into()).is_err());
+        let err = load(format!("{host}cliproxyapi = \"http://127.0.0.1:8317\"\n")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("on the vault, not on a host"),
+            "{err:#}"
+        );
         assert!(load("mode = \"vault\"\n[vault]\narchive_retention_days = 0\n".into()).is_err());
         assert!(load("mode = \"vault\"\n[vault]\nattachments = true\n".into()).is_err());
     }
@@ -3576,6 +3644,7 @@ mod tests {
             fallback,
             endpoint: None,
             key: None,
+            key_secret: None,
         }
     }
 
@@ -3730,7 +3799,7 @@ mod tests {
     fn fleet(url: &str) -> Endpoint {
         Endpoint {
             url: url.into(),
-            key: SecretValue::new("cpa-client-key").unwrap(),
+            key: EndpointKey::Held(SecretValue::new("cpa-client-key").unwrap()),
         }
     }
 
@@ -3776,6 +3845,89 @@ mod tests {
         assert_eq!(account.provider, Provider::Codex);
         assert_eq!(account.endpoint, Some(fleet("http://127.0.0.1:8317")));
         assert_eq!(account.config_dir, Some(home.path().join(".codex-fleet")));
+    }
+
+    #[test]
+    fn an_endpoint_accounts_key_can_be_a_vault_secret_and_switches_back_and_forth() {
+        let home = tempfile::tempdir().unwrap();
+        let vars = [("HOME", home.path().to_str().unwrap())];
+        let path = write(
+            home.path(),
+            "[[accounts]]\nid = \"vault\"\nprovider = \"claude\"\n\
+             endpoint = \"https://vault.example.com:8317\"\nkey_secret = \"CLIPROXYAPI_KEY\"\n",
+        );
+        let config = Config::load_with_env(Some(&path), env(&vars)).unwrap();
+        let account = &config.accounts[&AccountId::new("vault")];
+        let secret: SecretRef = "CLIPROXYAPI_KEY".parse().unwrap();
+        assert_eq!(
+            account.endpoint.as_ref().unwrap().key,
+            EndpointKey::Secret(secret.clone())
+        );
+        // Written back as the secret's name; the file holds no key.
+        let added = home.path().join("added.toml");
+        append_account_with_env(&added, &AccountId::new("vault"), account, env(&vars)).unwrap();
+        let text = std::fs::read_to_string(&added).unwrap();
+        assert!(
+            text.contains("key_secret = \"CLIPROXYAPI_KEY\"\n"),
+            "{text}"
+        );
+        assert!(!text.contains("\nkey = "), "{text}");
+
+        // A held key takes the secret's place, and the other way round.
+        let key = SecretValue::new("typed-key").unwrap();
+        let held = set_account_settings(
+            &path,
+            &AccountId::new("vault"),
+            account,
+            &AccountSettings {
+                key: Some(&key),
+                ..settings("Vault", None, None)
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(held.endpoint.as_ref().unwrap().key, EndpointKey::Held(key));
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("key_secret")
+        );
+        let again = set_account_settings(
+            &path,
+            &AccountId::new("vault"),
+            &held,
+            &AccountSettings {
+                key_secret: Some(&secret),
+                ..settings("Vault", None, None)
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(again.endpoint.unwrap().key, EndpointKey::Secret(secret));
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("typed-key")
+        );
+
+        for (entry, error) in [
+            (
+                "endpoint = \"http://cpa\"\nkey = \"k\"\nkey_secret = \"K\"",
+                "not both",
+            ),
+            (
+                "endpoint = \"http://cpa\"\nkey_secret = \"not a name\"",
+                "key_secret",
+            ),
+            ("key_secret = \"K\"", "needs its endpoint"),
+        ] {
+            let path = write(
+                home.path(),
+                &format!("[[accounts]]\nid = \"v\"\nprovider = \"claude\"\n{entry}\n"),
+            );
+            let err = Config::load_with_env(Some(&path), env(&vars)).unwrap_err();
+            assert!(format!("{err:#}").contains(error), "{entry}: {err:#}");
+        }
     }
 
     #[test]
@@ -3857,7 +4009,7 @@ mod tests {
             updated.endpoint,
             Some(Endpoint {
                 url: "https://cpa.example:8317".into(),
-                key: key.clone()
+                key: EndpointKey::Held(key.clone())
             })
         );
         assert_eq!(updated.config_dir, previous.config_dir);

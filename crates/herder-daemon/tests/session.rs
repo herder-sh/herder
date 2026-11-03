@@ -17,8 +17,8 @@ use herder_daemon::resources::{
 };
 use herder_daemon::session::titles::INSTRUCTION;
 use herder_daemon::session::{
-    AccountConfig, Accounts, Adapters, Endpoint, EventSink, FailoverConfig, KEEP_ARCHIVED_WORKTREE,
-    SessionManager, Setup, TitleCli, TitleClis, TitlesConfig,
+    AccountConfig, Accounts, Adapters, Endpoint, EndpointKey, EventSink, FailoverConfig,
+    KEEP_ARCHIVED_WORKTREE, SessionManager, Setup, TitleCli, TitleClis, TitlesConfig,
 };
 use herder_daemon::settings::Settings;
 use herder_daemon::skills::{Skills, SkillsSink};
@@ -3475,7 +3475,7 @@ async fn an_endpoint_account_is_never_probed_for_usage() {
         fallback: false,
         endpoint: Some(Endpoint {
             url: "http://127.0.0.1:8317".into(),
-            key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+            key: EndpointKey::Held(herder_protocol::SecretValue::new("cpa-client-key").unwrap()),
         }),
     };
     assert!(daemon.manager.add_account(AccountId::new("fleet"), fleet));
@@ -4066,7 +4066,9 @@ impl Switching {
             fallback: false,
             endpoint: Some(Endpoint {
                 url: "http://127.0.0.1:8317".into(),
-                key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+                key: EndpointKey::Held(
+                    herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+                ),
             }),
         };
         assert!(self.manager.add_account(AccountId::new(id), account));
@@ -4137,6 +4139,67 @@ async fn an_unreachable_endpoint_account_fails_over_to_a_login_account() {
         .unwrap();
     assert_eq!(fleet.needs_login, None, "an endpoint account has no login");
     assert_eq!(fleet.endpoint.as_deref(), Some("http://127.0.0.1:8317"));
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn an_endpoint_key_the_vault_cannot_be_reached_for_fails_over_to_a_login_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_retry.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[("claude-login", Provider::Claude)],
+        Vec::new(),
+    )
+    .await;
+    // Linked to a vault that is not connected, with no key in memory.
+    let secrets = Arc::new(herder_daemon::vault::HostSecrets::default());
+    secrets.set_linked(true);
+    daemon.manager.use_secrets(secrets).unwrap();
+    let account = AccountConfig {
+        provider: Provider::Claude,
+        label: "Vault".into(),
+        config_dir: Some(dir.path().join("vault")),
+        fallback: false,
+        endpoint: Some(Endpoint {
+            url: "https://vault.example.com:8317".into(),
+            key: EndpointKey::Secret("CLIPROXYAPI_KEY".parse().unwrap()),
+        }),
+    };
+    assert!(daemon.manager.add_account(AccountId::new("vault"), account));
+    let session = daemon.create("vault").await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::Idle).await;
+    assert_eq!(
+        from_first_turn(&journal),
+        [
+            "-: status Running",
+            "alice: user turn-1 Refactor the parser.",
+            "-: turn_started turn-1",
+            "-: turn_failed turn-1 Unreachable",
+            "-: account_switched claude-login",
+            "alice: user turn-2 Refactor the parser.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 Refactored the parser.",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+        ]
+    );
+    // The vault account's CLI never started: it had no key to start with.
+    let starts = claude.starts();
+    let [on_login] = starts.as_slice() else {
+        panic!("expected one start, got {starts:?}");
+    };
+    assert_eq!(on_login.config_dir, Some(dir.path().join("claude-login")));
+    let accounts = daemon.manager.accounts();
+    let vault = accounts
+        .iter()
+        .find(|account| account.account_id == AccountId::new("vault"))
+        .unwrap();
+    // Clients see which secret the key is, never a value.
+    assert_eq!(vault.key_secret, Some("CLIPROXYAPI_KEY".parse().unwrap()));
     daemon.shutdown.cancel();
 }
 

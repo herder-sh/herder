@@ -6,9 +6,10 @@ it as a service on any machine with `herder vault install`, or on Kubernetes wit
 manifests here:
 
 - `Containerfile`: a minimal image, one static musl `herder` binary on `scratch`.
-- `vault.yaml`: a ConfigMap with the vault's `daemon.toml`, a Service, and a one-replica
-  StatefulSet whose data dir (TLS identity, paired hosts, `db/vault.db`) lives on a
-  10 GiB PersistentVolumeClaim.
+- `vault.yaml`: ConfigMaps with the vault's `daemon.toml` and its CLIProxyAPI's config, a
+  Service, and a one-replica StatefulSet whose data dir (TLS identity, paired hosts,
+  `db/vault.db`) and CLIProxyAPI logins live on a 10 GiB PersistentVolumeClaim. See
+  [Provider logins](#provider-logins).
 
 ## On a machine
 
@@ -72,8 +73,17 @@ podman push registry.example.com/herder:dev
 
 ### Deploy
 
+`vault.yaml` reads three Secrets, which you create first: the secrets key
+([Secrets](#secrets)), and the CLIProxyAPI's management secret and certificate
+([Provider logins](#provider-logins)):
+
 ```sh
 kubectl create namespace herder
+kubectl create secret generic -n herder herder-vault-secrets \
+  --from-literal=key="$(openssl rand -base64 32)"
+kubectl create secret generic -n herder herder-cliproxyapi \
+  --from-literal=management-secret="$(openssl rand -hex 32)"
+kubectl create secret tls -n herder herder-cliproxyapi-tls --cert=cpa.crt --key=cpa.key
 kubectl apply -n herder -f deploy/vault.yaml
 kubectl rollout status -n herder statefulset/herder-vault
 kubectl get -n herder service herder-vault   # the address hosts connect to
@@ -182,3 +192,94 @@ kubectl rollout restart -n herder statefulset/herder-vault
 Back the key up with the volume: the values stored under it cannot be read without it, and a
 vault started with another key hands none of them out. It is not a `daemon.toml` key, so no
 client can read or change it.
+
+## Provider logins
+
+One pool of provider logins for the whole fleet runs next to the vault: a
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (MIT), the `cliproxyapi`
+container in the vault's pod, `eceasy/cli-proxy-api` pinned to a release. It holds Claude and
+Codex logins, and hosts run sessions through it with endpoint accounts, each with its own
+client key, which no one types:
+
+1. When a host first backs up to the vault, the vault mints a random key for it, adds it to
+   the proxy's `access.api-keys` through the proxy's management API, and keeps it as the
+   secret `CLIPROXYAPI_KEY` in a set of its own, `cliproxyapi-<host id>`, granted to that
+   host for its own use. Its sessions never get it through `herder secret run`.
+2. On the host, an endpoint account names that secret, not the key:
+
+   ```toml
+   [[accounts]]
+   id = "fleet"
+   provider = "claude"          # or codex
+   endpoint = "https://cpa.example.com:8317"
+   key_secret = "CLIPROXYAPI_KEY"
+   ```
+
+   The host fetches the key from the vault when a session starts on the account, and keeps
+   it in memory for five minutes. With the vault out of reach and no key in memory, the
+   session cannot start there: it fails as unreachable, and failover moves it to the host's
+   other accounts, such as its own logins or a CLIProxyAPI of its own.
+3. Forgetting the host (`herder vault forget-host`) drops its set and takes its key out of
+   the proxy at once: it has no access any more.
+
+The vault owns the proxy's client keys: every 30 seconds it puts back the hosts' keys if the
+proxy's list differs, so a key added by hand goes, and a restarted proxy gets them back. With
+no host, the list holds one random key nobody has, as a proxy with no client key serves
+anyone. A vault whose `[vault]` table has no `cliproxyapi` does none of this.
+
+The proxy's settings, in the `herder-cliproxyapi` ConfigMap:
+
+- `routing.strategy: fill-first`: it stays on one login until that hits its limit, and only
+  then moves to the next, as herder's own failover is reactive only.
+- `routing.session-affinity: true` with `session-affinity-rebind-on: quota`: a session stays
+  on its login, and moves on a limit or a refused login only, never on a passing error.
+- `management.allow-remote: false`: only the pod itself manages the proxy, with the
+  management secret from the `herder-cliproxyapi` Secret. The proxy hashes it on start. Never
+  give the proxy `MANAGEMENT_PASSWORD` instead: the proxy takes that one from any address,
+  whatever `allow-remote` says.
+- `oauth.auth-dir` is on the vault's volume, so logins survive restarts.
+
+An init container copies the ConfigMap's config onto the volume at each start, with the
+management secret and a random first client key filled in, as the proxy writes its config
+back. Settings changed through the proxy's management API last until the next restart.
+
+### TLS
+
+Hosts reach the proxy at the Service's port 8317, and the proxy serves TLS itself, with a
+certificate from the `herder-cliproxyapi-tls` Secret. That is the simplest correct option:
+the Claude and Codex CLIs check the server against the CAs they trust and cannot pin a
+certificate, so the vault's own self-signed certificate, which hosts pin, cannot serve them,
+and a TLS proxy in front would be one more piece to run. Get the certificate from a CA the
+hosts trust, for the name hosts use, such as with cert-manager into that Secret, and put
+that name in place of `cpa.example.com` in `vault.yaml`: in `daemon.toml`, where the vault
+reaches the proxy's management API, and in `hostAliases`, which points the name at the pod
+itself, so the certificate checks out there too and the proxy sees a request from localhost.
+
+### The most sensitive thing herder has
+
+The proxy keeps every provider login as an OAuth file in plain text in
+`/data/cliproxyapi/auth` on the vault's volume. Anyone who can read that volume, or exec into
+the pod, holds the fleet's logins: restrict who can `exec` into, attach to, or snapshot the
+vault's pod and PersistentVolumeClaim, encrypt the volume at rest, and treat its backups as
+you would the logins themselves.
+
+### Log the proxy in
+
+Until the proxy holds a login, sessions on it fail. Log it in from the pod, forwarding the
+provider's OAuth callback port to your machine, here Claude's (54545):
+
+```sh
+kubectl port-forward -n herder herder-vault-0 54545:54545 &
+kubectl exec -it -n herder herder-vault-0 -c cliproxyapi -- \
+  /CLIProxyAPI/CLIProxyAPI -config /data/cliproxyapi/config.yaml -claude-login -no-browser
+```
+
+Open the URL it prints. `-codex-device-login` logs in to Codex with a device code and needs no
+port. Add as many logins as you have; the proxy fills one, then the next.
+
+`herder doctor` in the vault's container says whether the proxy answers and how many logins
+it holds:
+
+```sh
+kubectl exec -n herder herder-vault-0 -c vault -- /herder doctor
+```
