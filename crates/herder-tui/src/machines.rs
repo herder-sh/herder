@@ -407,7 +407,8 @@ impl App {
                         }
                         None => {
                             panel.account =
-                                Some(AddAccount::for_provider(host_id, 0, &self.machines))
+                                Some(AddAccount::for_provider(host_id.clone(), 0, &self.machines));
+                            return vec![crate::accounts::ask_vault(host_id)];
                         }
                     }
                 }

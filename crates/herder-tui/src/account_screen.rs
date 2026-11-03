@@ -157,7 +157,9 @@ impl App {
                 match terminal::refusal(&self.machines, &host_id) {
                     Some(refusal) => self.notice = Some(format!("adding accounts: {refusal}")),
                     None => {
-                        screen.adding = Some(AddAccount::for_provider(host_id, 0, &self.machines))
+                        screen.adding =
+                            Some(AddAccount::for_provider(host_id.clone(), 0, &self.machines));
+                        return vec![crate::accounts::ask_vault(host_id)];
                     }
                 }
             }
@@ -434,6 +436,87 @@ mod tests {
         assert!(app.account_screen.is_some());
     }
 
+    /// The machine's answer to where it backs up: linked to a vault whose CLIProxyAPI it
+    /// reaches at `cliproxyapi`, fetching secrets from it or not.
+    fn linked(cliproxyapi: Option<&str>, secrets: bool) -> Msg {
+        Msg::Sent {
+            origin: crate::compose::Origin::AccountVault(HostId::new("h1")),
+            result: Ok(herder_protocol::CommandResult::VaultLink {
+                is_vault: false,
+                vault: Some(herder_protocol::LinkedVault {
+                    address: "vault.lan:7447".into(),
+                    fingerprint: "ab".repeat(32),
+                    backup: true,
+                    secrets,
+                    cliproxyapi: cliproxyapi.map(str::to_owned),
+                }),
+                volume: None,
+                local_vault: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_vaults_logins_are_offered_where_the_machine_reaches_them_and_need_nothing_typed() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('A'));
+        // Opening the form asks the machine where it backs up.
+        assert_eq!(
+            press(&mut app, KeyCode::Char('n')),
+            [Effect::Send {
+                host_id: HostId::new("h1"),
+                command: herder_protocol::CommandBody::GetVaultLink,
+                origin: crate::compose::Origin::AccountVault(HostId::new("h1")),
+            }]
+        );
+        let kinds = [accounts::Kind::Login, accounts::Kind::Endpoint];
+        assert_eq!(adding(&app).unwrap().kinds(), kinds);
+        // A vault without a CLIProxyAPI, or one the machine fetches no secrets from, offers none.
+        app.update(linked(None, true));
+        assert_eq!(adding(&app).unwrap().kinds(), kinds);
+        app.update(linked(Some("https://cpa.lan:8317"), false));
+        assert_eq!(adding(&app).unwrap().kinds(), kinds);
+        app.update(linked(Some("https://cpa.lan:8317"), true));
+        assert_eq!(
+            adding(&app).unwrap().kinds(),
+            [
+                accounts::Kind::Login,
+                accounts::Kind::Endpoint,
+                accounts::Kind::Vault
+            ]
+        );
+        // Left from a login wraps round to the vault's logins: no URL, no key, no config dir.
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Left);
+        let form = adding(&app).unwrap();
+        assert_eq!(form.kind, accounts::Kind::Vault);
+        assert_eq!(form.kind.name(), "the vault's logins");
+        assert_eq!(
+            form.fields(),
+            [
+                accounts::Field::Provider,
+                accounts::Field::Kind,
+                accounts::Field::Id,
+                accounts::Field::Label,
+            ]
+        );
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [Effect::Send {
+                host_id: HostId::new("h1"),
+                command: herder_protocol::CommandBody::AddEndpointAccount {
+                    account_id: AccountId::new("claude"),
+                    provider: Provider::Claude,
+                    label: None,
+                    endpoint: "https://cpa.lan:8317".into(),
+                    key: None,
+                    key_secret: Some("CLIPROXYAPI_KEY".parse().unwrap()),
+                },
+                origin: crate::compose::Origin::AddAccount(HostId::new("h1")),
+            }]
+        );
+    }
+
     #[test]
     fn providers_without_endpoints_only_log_in() {
         let mut app = app();
@@ -441,14 +524,14 @@ mod tests {
         press(&mut app, KeyCode::Char('n'));
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Right);
-        assert!(adding(&app).unwrap().endpoint);
+        assert_eq!(adding(&app).unwrap().kind, accounts::Kind::Endpoint);
         // Cursor has no endpoint: the form goes back to a login, without the choice.
         press(&mut app, KeyCode::BackTab);
         press(&mut app, KeyCode::Right);
         press(&mut app, KeyCode::Right);
         let form = adding(&app).unwrap();
         assert_eq!(form.provider(), &Provider::Cursor);
-        assert!(!form.endpoint);
+        assert_eq!(form.kind, accounts::Kind::Login);
         assert!(!form.fields().contains(&accounts::Field::Kind));
     }
 

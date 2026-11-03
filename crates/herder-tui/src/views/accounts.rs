@@ -251,6 +251,9 @@ fn account_row(
             Span::styled("  endpoint  ", ui.muted()),
             Span::styled(endpoint.clone(), ui.text()),
         ]));
+        if account.key_secret.is_some() {
+            body.push(Line::styled("  key from the vault", ui.muted()));
+        }
     } else if account.usage.is_empty() {
         body.push(Line::styled("  no usage reported yet", ui.muted()));
     }
