@@ -85,8 +85,10 @@ herder has: anyone who can read the vault's dir, or its backups, holds the fleet
 Keep the machine's disk encrypted, and treat backups of the dir as you would the logins.
 
 By default the proxy listens on `127.0.0.1:8317` over plain HTTP, for a host daemon on the same
-machine. [Pair that host](#pair-a-host) with the vault, then give it an endpoint account in its
-`daemon.toml`, and restart it:
+machine. The install sets both `cliproxyapi` and `cliproxyapi_endpoint` in the vault's
+`[vault]` table to the proxy's address, so the apps offer **Use the vault's logins** in Add
+Account. [Pair that host](#pair-a-host) with the vault, then add the account from the app, or
+give it an endpoint account in its `daemon.toml` and restart it:
 
 ```toml
 [[accounts]]
