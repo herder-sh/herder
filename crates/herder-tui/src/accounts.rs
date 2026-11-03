@@ -207,7 +207,8 @@ impl AddAccount {
             provider: self.provider().clone(),
             label,
             endpoint: url.to_owned(),
-            key,
+            key: Some(key),
+            key_secret: None,
         }))
     }
 }

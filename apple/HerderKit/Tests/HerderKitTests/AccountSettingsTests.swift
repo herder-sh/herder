@@ -90,7 +90,7 @@ struct AccountSettingsTests {
         #expect(draft.endpointCommand(taken: []) == nil)
         draft.key = " sk-1 "
         let command = try #require(draft.endpointCommand(taken: ["codex-proxy"]))
-        guard case .addEndpointAccount(let id, let provider, let label, let endpoint, let key) = command else {
+        guard case .addEndpointAccount(let id, let provider, let label, let endpoint, let key, _) = command else {
             Issue.record("expected addEndpointAccount, got \(command)")
             return
         }
@@ -98,7 +98,7 @@ struct AccountSettingsTests {
         #expect(endpoint == "https://proxy.lan/v1" && key == "sk-1")
         // Without a label, the provider names it, as a login's.
         draft.label = ""
-        guard case .addEndpointAccount(let id, _, let label, _, _) = try #require(draft.endpointCommand(taken: [])) else {
+        guard case .addEndpointAccount(let id, _, let label, _, _, _) = try #require(draft.endpointCommand(taken: [])) else {
             Issue.record("expected addEndpointAccount")
             return
         }

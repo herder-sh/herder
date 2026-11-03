@@ -469,6 +469,7 @@ pub fn account(id: &str, label: &str) -> herder_protocol::Account {
         fallback: false,
         needs_login: None,
         endpoint: None,
+        key_secret: None,
     }
 }
 

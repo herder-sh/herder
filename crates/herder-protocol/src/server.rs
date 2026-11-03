@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AccountId, AgentMessage, Bytes, CommandId, DaemonSettings, DeviceId, Event, FailoverTotal,
     HostId, HostResources, Item, ItemId, PasskeyChallenge, PasskeyCreation, PersonId, PersonInfo,
-    Project, ProjectId, PromptId, Provider, SecretAccess, SecretInfo, SecretSet, SecretValue, Seq,
-    SessionId, SessionStatus, SessionUsage, TerminalId, Timestamp, UsagePeriod, UsageTotal, UserId,
+    Project, ProjectId, PromptId, Provider, SecretAccess, SecretInfo, SecretRef, SecretSet,
+    SecretValue, Seq, SessionId, SessionStatus, SessionUsage, TerminalId, Timestamp, UsagePeriod,
+    UsageTotal, UserId,
 };
 
 /// What a device without a passkey asks its person to approve; see `approval_request`.
@@ -468,6 +469,10 @@ pub struct Account {
     /// which it never sends to clients.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    /// The secret on the host's vault an endpoint account's client key is fetched from, when
+    /// the host does not keep the key itself; never the value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_secret: Option<SecretRef>,
     /// Email address the provider login is signed in as, as its CLI last reported it; absent
     /// until it reports one, and for a login without one, such as an API key. Accounts with
     /// the same provider and email share one login, and so its limits.

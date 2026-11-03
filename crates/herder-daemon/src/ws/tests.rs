@@ -69,6 +69,7 @@ impl Backend for TestBackend {
             fallback: false,
             needs_login: None,
             endpoint: None,
+            key_secret: None,
         }]
     }
 
@@ -1155,7 +1156,8 @@ async fn endpoint_account_commands_go_to_the_accounts_never_echoing_the_key() {
             provider: Provider::Claude,
             label: None,
             endpoint: "http://127.0.0.1:8317".into(),
-            key: key(),
+            key: Some(key()),
+            key_secret: None,
         },
         CommandBody::SetAccountSettings {
             account_id: AccountId::new("fleet"),
@@ -1164,6 +1166,7 @@ async fn endpoint_account_commands_go_to_the_accounts_never_echoing_the_key() {
             fallback: None,
             endpoint: Some("http://127.0.0.1:8318".into()),
             key: None,
+            key_secret: None,
         },
         CommandBody::SetAccountSettings {
             account_id: AccountId::new("fleet"),
@@ -1172,6 +1175,15 @@ async fn endpoint_account_commands_go_to_the_accounts_never_echoing_the_key() {
             fallback: None,
             endpoint: None,
             key: Some(key()),
+            key_secret: None,
+        },
+        CommandBody::AddEndpointAccount {
+            account_id: AccountId::new("vault"),
+            provider: Provider::Claude,
+            label: None,
+            endpoint: "https://vault.example.com:8317".into(),
+            key: None,
+            key_secret: Some("CLIPROXYAPI_KEY".parse().unwrap()),
         },
     ];
     for (n, command) in commands.into_iter().enumerate() {

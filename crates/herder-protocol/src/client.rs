@@ -7,8 +7,8 @@ use crate::{
     AccountId, Answer, ApprovalDecision, ApprovalId, Attachment, AttachmentId, BotId, Bytes,
     CommandId, DaemonSettings, DeviceId, Event, HostId, Image, LeftoverDecision, NewPerson,
     PasskeyAssertion, PermissionMode, PersonCard, PersonId, ProjectId, PromptFile, PromptId,
-    Provider, QuestionId, Role, SecretValue, Seq, SessionId, SignIn, TerminalId, UpdateWhen,
-    UsagePeriod, UserId,
+    Provider, QuestionId, Role, SecretRef, SecretValue, Seq, SessionId, SignIn, TerminalId,
+    UpdateWhen, UsagePeriod, UserId,
 };
 
 /// A client-to-daemon message.
@@ -450,11 +450,14 @@ pub enum CommandBody {
         rows: u16,
     },
     /// Add an endpoint account: the provider's CLI runs against `endpoint`, an API server
-    /// such as a CLIProxyAPI or a local model server, with `key` as its client key, instead
-    /// of a login; owners only. herder gives it a config dir of its own, needing no login.
-    /// Answered with `applied` and `accounts`. Refused with `bad_request` for a taken id, an
-    /// endpoint that is not an `http` or `https` URL, and `unsupported` for a
-    /// provider herder cannot point at an endpoint.
+    /// such as a CLIProxyAPI or a local model server, with a client key instead of a login;
+    /// owners only. The key is `key` itself, kept on this daemon, or `key_secret`, a secret
+    /// granted to this host for its own use on its vault, such as the key the vault's
+    /// CLIProxyAPI minted for this host, fetched when a session starts on the account.
+    /// herder gives it a config dir of its own, needing no login. Answered with `applied` and
+    /// `accounts`. Refused with `bad_request` for a taken id, an endpoint that is not an
+    /// `http` or `https` URL, and neither or both of `key` and `key_secret`, and
+    /// `unsupported` for a provider herder cannot point at an endpoint.
     AddEndpointAccount {
         /// Id of the new account; unique on this daemon.
         account_id: AccountId,
@@ -467,7 +470,12 @@ pub enum CommandBody {
         endpoint: String,
         /// The endpoint's client key; never a provider login token. Kept in the daemon's
         /// config and never sent back to clients.
-        key: SecretValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<SecretValue>,
+        /// The secret on this host's vault holding the endpoint's client key, granted to this
+        /// host for its own use; in place of `key`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key_secret: Option<SecretRef>,
     },
     /// Install or update a provider's CLI on this host, in a terminal this connection is
     /// attached to; owners only. The command is the vendor's documented installer or updater.
@@ -518,8 +526,8 @@ pub enum CommandBody {
     /// owners only. The id, provider and kind (login or endpoint) stay fixed. Directory
     /// changes require all sessions on this daemon archived. Omit config_dir to use the
     /// provider's default login. Answered with applied and accounts. Refused with
-    /// `bad_request` for an endpoint or key on a login account, or a config dir on an endpoint
-    /// account.
+    /// `bad_request` for an endpoint or key on a login account, a config dir on an endpoint
+    /// account, or both `key` and `key_secret`.
     SetAccountSettings {
         /// Account to configure.
         account_id: AccountId,
@@ -534,9 +542,14 @@ pub enum CommandBody {
         /// New API base URL of an endpoint account; absent keeps it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         endpoint: Option<String>,
-        /// New client key of an endpoint account; absent keeps it. Never sent back to clients.
+        /// New client key of an endpoint account, in place of its key or key secret; absent
+        /// keeps it. Never sent back to clients.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<SecretValue>,
+        /// New secret holding an endpoint account's client key, in place of its key or key
+        /// secret; see `add_endpoint_account`. Absent keeps it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key_secret: Option<SecretRef>,
     },
     /// Change how many turns the host runs at once, live; owners only. Raising it starts
     /// waiting turns at once; lowering it stops no running turn, only new ones from starting.

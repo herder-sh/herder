@@ -515,11 +515,28 @@ impl<B: Backend> Shared<B> {
     ) -> Result<CommandResult, ErrorInfo> {
         match command {
             CommandBody::AddEndpointAccount {
+                key_secret: Some(_),
+                ..
+            }
+            | CommandBody::SetAccountSettings {
+                key_secret: Some(_),
+                ..
+            } => Err(ErrorInfo {
+                code: ErrorCode::Unsupported,
+                message: "this daemon cannot fetch an endpoint's key from its vault yet".to_owned(),
+            }),
+            CommandBody::AddEndpointAccount { key: None, .. } => Err(ErrorInfo {
+                code: ErrorCode::BadRequest,
+                message: "an endpoint account needs its client key, or the secret holding it"
+                    .to_owned(),
+            }),
+            CommandBody::AddEndpointAccount {
                 account_id,
                 provider,
                 label,
                 endpoint,
-                key,
+                key: Some(key),
+                key_secret: None,
             } => {
                 let endpoint = Endpoint { url: endpoint, key };
                 self.logins
@@ -533,6 +550,7 @@ impl<B: Backend> Shared<B> {
                 fallback,
                 endpoint,
                 key,
+                key_secret: None,
             } => {
                 let settings = AccountSettings {
                     label: &label,

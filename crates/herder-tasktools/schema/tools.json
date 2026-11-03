@@ -730,6 +730,14 @@
                   "type": "boolean",
                   "default": false
                 },
+                "key_secret": {
+                  "description": "The secret on the host's vault an endpoint account's client key is fetched from, when\nthe host does not keep the key itself; never the value.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[A-Z_][A-Z0-9_]*$"
+                },
                 "label": {
                   "description": "Display label chosen by the owner.",
                   "type": "string"

@@ -59,14 +59,14 @@ struct AccountPageTests {
     @Test func anEndpointAccountsEditKeepsItsDirectoryAndSendsOnlyAReplacedKey() {
         let account = endpointAccount("claude-proxy", on: "http://127.0.0.1:8317")
         // A label or rotation change sends no endpoint, key or config dir: absent keeps them.
-        guard case .setAccountSettings(let id, let label, let dir, let fallback, let endpoint, let key)
+        guard case .setAccountSettings(let id, let label, let dir, let fallback, let endpoint, let key, _)
             = account.settings(label: "Renamed", configDir: account.configDir, fallback: true) else {
             Issue.record("expected setAccountSettings")
             return
         }
         #expect(id == "claude-proxy" && label == "Renamed" && fallback == true)
         #expect(dir == nil && endpoint == nil && key == nil)
-        guard case .setAccountSettings(_, _, let dir, _, let endpoint, let key)
+        guard case .setAccountSettings(_, _, let dir, _, let endpoint, let key, _)
             = account.settings(label: "Proxy", configDir: nil, fallback: nil, endpoint: "https://vault.lan", key: "sk-2") else {
             Issue.record("expected setAccountSettings")
             return
@@ -75,7 +75,7 @@ struct AccountPageTests {
         // A login account never sends an endpoint or a key; its config dir goes as given.
         let login = Account(accountId: "main", provider: "claude", label: "work", configDir: "~/.claude-work",
                             email: "work@example.com", usage: [])
-        guard case .setAccountSettings(_, _, let dir, _, let endpoint, let key)
+        guard case .setAccountSettings(_, _, let dir, _, let endpoint, let key, _)
             = login.settings(label: "work", configDir: "~/.claude-work", fallback: nil, endpoint: "http://x", key: "k") else {
             Issue.record("expected setAccountSettings")
             return

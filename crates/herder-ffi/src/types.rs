@@ -838,6 +838,8 @@ pub enum CommandBody {
         fallback: Option<bool>,
         endpoint: Option<String>,
         key: Option<SecretValue>,
+        #[uniffi(default = None)]
+        key_secret: Option<SecretRef>,
     },
     SetResourceLimits {
         max_turns: u32,
@@ -863,7 +865,10 @@ pub enum CommandBody {
         provider: Provider,
         label: Option<String>,
         endpoint: String,
-        key: SecretValue,
+        #[uniffi(default = None)]
+        key: Option<SecretValue>,
+        #[uniffi(default = None)]
+        key_secret: Option<SecretRef>,
     },
     InstallProvider {
         provider: Provider,
@@ -1533,6 +1538,8 @@ pub struct Account {
     pub needs_login: Option<Timestamp>,
     #[uniffi(default)]
     pub endpoint: Option<String>,
+    #[uniffi(default)]
+    pub key_secret: Option<SecretRef>,
 }
 
 #[uniffi::remote(Record)]

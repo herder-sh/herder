@@ -405,7 +405,8 @@ mod tests {
                     provider: Provider::Claude,
                     label: None,
                     endpoint: "https://proxy.lan/v1".into(),
-                    key: herder_protocol::SecretValue::new("sk-1").unwrap(),
+                    key: Some(herder_protocol::SecretValue::new("sk-1").unwrap()),
+                    key_secret: None,
                 },
                 origin: crate::compose::Origin::AddAccount(HostId::new("h1")),
             }]
