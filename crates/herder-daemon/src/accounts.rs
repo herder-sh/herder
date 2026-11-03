@@ -208,6 +208,7 @@ pub(crate) fn list(
                 .endpoint
                 .as_ref()
                 .map(|endpoint| endpoint.url.clone()),
+            key_secret: None,
         })
         .collect()
 }
@@ -496,6 +497,7 @@ mod tests {
                     fallback: false,
                     needs_login: None,
                     endpoint: None,
+                    key_secret: None,
                 },
                 Account {
                     config_dir: None,
@@ -507,6 +509,7 @@ mod tests {
                     fallback: false,
                     needs_login: Some(since),
                     endpoint: None,
+                    key_secret: None,
                 }
             ]
         );

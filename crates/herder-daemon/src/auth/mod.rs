@@ -1681,13 +1681,15 @@ mod tests {
                 fallback: None,
                 endpoint: None,
                 key: None,
+                key_secret: None,
             },
             CommandBody::AddEndpointAccount {
                 account_id: herder_protocol::AccountId::new("fleet"),
                 provider: herder_protocol::Provider::Claude,
                 label: None,
                 endpoint: "http://127.0.0.1:8317".into(),
-                key: herder_protocol::SecretValue::new("cpa_client_key").unwrap(),
+                key: Some(herder_protocol::SecretValue::new("cpa_client_key").unwrap()),
+                key_secret: None,
             },
         ];
         for command in commands {

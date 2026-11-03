@@ -1458,7 +1458,7 @@
           ]
         },
         {
-          "description": "Add an endpoint account: the provider's CLI runs against `endpoint`, an API server\nsuch as a CLIProxyAPI or a local model server, with `key` as its client key, instead\nof a login; owners only. herder gives it a config dir of its own, needing no login.\nAnswered with `applied` and `accounts`. Refused with `bad_request` for a taken id, an\nendpoint that is not an `http` or `https` URL, and `unsupported` for a\nprovider herder cannot point at an endpoint.",
+          "description": "Add an endpoint account: the provider's CLI runs against `endpoint`, an API server\nsuch as a CLIProxyAPI or a local model server, with a client key instead of a login;\nowners only. The key is `key` itself, kept on this daemon, or `key_secret`, a secret\ngranted to this host for its own use on its vault, such as the key the vault's\nCLIProxyAPI minted for this host, fetched when a session starts on the account.\nherder gives it a config dir of its own, needing no login. Answered with `applied` and\n`accounts`. Refused with `bad_request` for a taken id, an endpoint that is not an\n`http` or `https` URL, and neither or both of `key` and `key_secret`, and\n`unsupported` for a provider herder cannot point at an endpoint.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -1471,7 +1471,25 @@
             },
             "key": {
               "description": "The endpoint's client key; never a provider login token. Kept in the daemon's\nconfig and never sent back to clients.",
-              "$ref": "#/$defs/SecretValue"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SecretValue"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "key_secret": {
+              "description": "The secret on this host's vault holding the endpoint's client key, granted to this\nhost for its own use; in place of `key`.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SecretRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "label": {
               "description": "Display label; the id when absent.",
@@ -1493,8 +1511,7 @@
             "type",
             "account_id",
             "provider",
-            "endpoint",
-            "key"
+            "endpoint"
           ]
         },
         {
@@ -1613,7 +1630,7 @@
           ]
         },
         {
-          "description": "Update an existing account's label, config directory, endpoint and role in rotation;\nowners only. The id, provider and kind (login or endpoint) stay fixed. Directory\nchanges require all sessions on this daemon archived. Omit config_dir to use the\nprovider's default login. Answered with applied and accounts. Refused with\n`bad_request` for an endpoint or key on a login account, or a config dir on an endpoint\naccount.",
+          "description": "Update an existing account's label, config directory, endpoint and role in rotation;\nowners only. The id, provider and kind (login or endpoint) stay fixed. Directory\nchanges require all sessions on this daemon archived. Omit config_dir to use the\nprovider's default login. Answered with applied and accounts. Refused with\n`bad_request` for an endpoint or key on a login account, a config dir on an endpoint\naccount, or both `key` and `key_secret`.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -1642,10 +1659,21 @@
               ]
             },
             "key": {
-              "description": "New client key of an endpoint account; absent keeps it. Never sent back to clients.",
+              "description": "New client key of an endpoint account, in place of its key or key secret; absent\nkeeps it. Never sent back to clients.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/SecretValue"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "key_secret": {
+              "description": "New secret holding an endpoint account's client key, in place of its key or key\nsecret; see `add_endpoint_account`. Absent keeps it.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SecretRef"
                 },
                 {
                   "type": "null"

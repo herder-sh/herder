@@ -633,7 +633,16 @@ fn client_fixtures() -> Vec<ClientMessage> {
             provider: Provider::Claude,
             label: Some("Fleet".into()),
             endpoint: "http://127.0.0.1:8317".into(),
-            key: SecretValue::new("cpa_client_key").unwrap(),
+            key: Some(SecretValue::new("cpa_client_key").unwrap()),
+            key_secret: None,
+        }),
+        command(CommandBody::AddEndpointAccount {
+            account_id: AccountId::new("claude-vault"),
+            provider: Provider::Claude,
+            label: None,
+            endpoint: "https://vault.example.com:8317".into(),
+            key: None,
+            key_secret: Some("CLIPROXYAPI_KEY".parse().unwrap()),
         }),
         command(CommandBody::InstallProvider {
             provider: Provider::Cursor,
@@ -658,6 +667,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             fallback: Some(true),
             endpoint: None,
             key: None,
+            key_secret: None,
         }),
         command(CommandBody::SetAccountSettings {
             account_id: AccountId::new("claude-fleet"),
@@ -666,6 +676,16 @@ fn client_fixtures() -> Vec<ClientMessage> {
             fallback: None,
             endpoint: Some("https://vault.example.com:8317".into()),
             key: Some(SecretValue::new("cpa_rotated_key").unwrap()),
+            key_secret: None,
+        }),
+        command(CommandBody::SetAccountSettings {
+            account_id: AccountId::new("claude-vault"),
+            label: "Vault".into(),
+            config_dir: None,
+            fallback: None,
+            endpoint: None,
+            key: None,
+            key_secret: Some("cliproxyapi-host/CLIPROXYAPI_KEY".parse().unwrap()),
         }),
         command(CommandBody::SetResourceLimits { max_turns: 6 }),
         command(CommandBody::GetSettings),
@@ -1883,6 +1903,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             fallback: provider == Provider::Codex,
             config_dir: None,
             endpoint: (provider == Provider::Codex).then(|| "http://127.0.0.1:8317".into()),
+            key_secret: (provider == Provider::Codex).then(|| "CLIPROXYAPI_KEY".parse().unwrap()),
             account_id: account_id(),
             label: format!("{} work", provider.as_str()),
             needs_login: (provider == Provider::Claude).then(at),
@@ -4041,7 +4062,8 @@ fn an_endpoint_key_is_never_shown_in_debug_output() {
         provider: Provider::Claude,
         label: None,
         endpoint: "http://127.0.0.1:8317".into(),
-        key: SecretValue::new("cpa_client_key").unwrap(),
+        key: Some(SecretValue::new("cpa_client_key").unwrap()),
+        key_secret: None,
     };
     assert!(!format!("{command:?}").contains("cpa_client_key"));
     let json = serde_json::to_value(&command).unwrap();
@@ -4075,6 +4097,39 @@ fn an_account_without_an_endpoint_logs_in() {
         panic!("expected set_account_settings");
     };
     assert_eq!((endpoint, key), (None, None));
+}
+
+#[test]
+fn an_endpoint_key_can_be_a_vault_secret_named_not_held() {
+    let command: CommandBody = serde_json::from_value(json!({
+        "type": "add_endpoint_account",
+        "account_id": "vault",
+        "provider": "claude",
+        "endpoint": "https://vault.example.com:8317",
+        "key_secret": "CLIPROXYAPI_KEY"
+    }))
+    .unwrap();
+    let CommandBody::AddEndpointAccount {
+        key, key_secret, ..
+    } = &command
+    else {
+        panic!("expected add_endpoint_account");
+    };
+    assert_eq!(key, &None);
+    assert_eq!(key_secret, &Some("CLIPROXYAPI_KEY".parse().unwrap()));
+    let json = serde_json::to_value(&command).unwrap();
+    assert!(json.get("key").is_none());
+    // A key secret is a secret's name, `NAME` or `set/NAME`, never a value.
+    assert!(
+        serde_json::from_value::<CommandBody>(json!({
+            "type": "add_endpoint_account",
+            "account_id": "vault",
+            "provider": "claude",
+            "endpoint": "https://vault.example.com:8317",
+            "key_secret": "sk-not a name"
+        }))
+        .is_err()
+    );
 }
 
 #[test]
