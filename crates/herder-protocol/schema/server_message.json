@@ -1992,6 +1992,50 @@
           ]
         },
         {
+          "description": "The provider logins a vault's CLIProxyAPI holds, answering `list_provider_logins` and\n`complete_provider_login`.",
+          "type": "object",
+          "properties": {
+            "logins": {
+              "description": "Every login, ordered by provider, then label.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ProviderLogin"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "provider_logins"
+            }
+          },
+          "required": [
+            "type",
+            "logins"
+          ]
+        },
+        {
+          "description": "A provider login a vault's CLIProxyAPI started, answering `start_provider_login`.",
+          "type": "object",
+          "properties": {
+            "login_id": {
+              "description": "The login, for `complete_provider_login` and `cancel_provider_login`.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "provider_login_started"
+            },
+            "url": {
+              "description": "Where the owner signs in, in a browser.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "login_id",
+            "url"
+          ]
+        },
+        {
           "description": "The latest fetches of secrets by hosts, answering `list_secret_audit`.",
           "type": "object",
           "properties": {
@@ -4270,6 +4314,81 @@
       "required": [
         "provider",
         "binary"
+      ]
+    },
+    "ProviderLogin": {
+      "description": "A provider login a vault's CLIProxyAPI holds, without its tokens.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "The account's email, or the proxy's label for it when it has none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "description": "What the proxy says about it, such as why it is cooling down or failing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The proxy's name for it, the file it is kept in; for `remove_provider_login`.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "The provider it signs in to.",
+          "$ref": "#/$defs/Provider"
+        },
+        "state": {
+          "description": "Whether the proxy can use it now.",
+          "$ref": "#/$defs/ProviderLoginState"
+        },
+        "until": {
+          "description": "When a login in `cooling_down` is tried again, as far as the proxy knows.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "name",
+        "provider",
+        "state"
+      ]
+    },
+    "ProviderLoginState": {
+      "description": "Whether a vault's CLIProxyAPI can use a provider login now.",
+      "oneOf": [
+        {
+          "description": "In use.",
+          "type": "string",
+          "const": "active"
+        },
+        {
+          "description": "Out of quota or rate-limited, until `until`.",
+          "type": "string",
+          "const": "cooling_down"
+        },
+        {
+          "description": "The provider no longer takes it: sign in again, or remove it.",
+          "type": "string",
+          "const": "needs_sign_in"
+        },
+        {
+          "description": "Failing for another reason, which `message` gives.",
+          "type": "string",
+          "const": "error"
+        },
+        {
+          "description": "Turned off on the proxy.",
+          "type": "string",
+          "const": "disabled"
+        }
       ]
     },
     "ProviderReload": {

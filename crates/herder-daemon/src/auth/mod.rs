@@ -1275,6 +1275,19 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             "managing secrets is for the vault's owners only; ask one of them to do it",
         ));
     }
+    let logins = matches!(
+        command,
+        CommandBody::ListProviderLogins
+            | CommandBody::StartProviderLogin { .. }
+            | CommandBody::CompleteProviderLogin { .. }
+            | CommandBody::CancelProviderLogin { .. }
+            | CommandBody::RemoveProviderLogin { .. }
+    );
+    if logins && role != Role::Owner {
+        return Err(forbidden(
+            "the vault's provider logins are for its owners only; ask one of them to do it",
+        ));
+    }
     let store = matches!(
         command,
         CommandBody::GetSecretToStore { .. } | CommandBody::ConfirmSecretStored { .. }
@@ -1868,6 +1881,20 @@ mod tests {
             },
             CommandBody::ListSecrets,
             CommandBody::ListSecretAudit { before: None },
+            CommandBody::ListProviderLogins,
+            CommandBody::StartProviderLogin {
+                provider: herder_protocol::Provider::Claude,
+            },
+            CommandBody::CompleteProviderLogin {
+                login_id: "state".into(),
+                redirect_url: "http://localhost:54545/callback?code=c&state=state".into(),
+            },
+            CommandBody::CancelProviderLogin {
+                login_id: "state".into(),
+            },
+            CommandBody::RemoveProviderLogin {
+                name: "claude-ada.json".into(),
+            },
         ];
         for command in &commands {
             assert!(authorize(alice.role, command).is_ok());

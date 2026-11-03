@@ -18,6 +18,7 @@ mod event;
 mod ids;
 mod people;
 mod project;
+mod provider_logins;
 pub mod replication;
 mod resources;
 mod secrets;
@@ -53,6 +54,7 @@ pub use people::{
     PersonCard, PersonInfo, PersonPasskey, RegistrationResponse, SignIn,
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
+pub use provider_logins::{ProviderLogin, ProviderLoginState};
 pub use replication::{
     AttachmentData, Batch, HostHello, HostMessage, HostSecretFetch, JournalRecord,
     MAX_BATCH_EVENTS, REPLICATION_VERSION, RawEventBody, RejectReason, ReplicationError,

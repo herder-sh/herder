@@ -1843,6 +1843,24 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::Forbidden);
     assert!(refused.message.contains("store_secret"), "{refused:?}");
+    // Nor signs a provider login in or out, though it may list them.
+    let start = CommandBody::StartProviderLogin {
+        provider: herder_protocol::Provider::Claude,
+    };
+    let refused = control
+        .command(SessionId::new("s1"), via("Ada"), start)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::Forbidden);
+    let listed = control
+        .command(
+            SessionId::new("s1"),
+            via("Ada"),
+            CommandBody::ListProviderLogins,
+        )
+        .await
+        .unwrap_err();
+    assert_ne!(listed.code, ErrorCode::Forbidden, "{listed:?}");
     let take = CommandBody::GetSecretToStore {
         session_id: SessionId::new("s1"),
         approval_id: herder_protocol::ApprovalId::new("secret-1"),
