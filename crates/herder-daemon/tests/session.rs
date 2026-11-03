@@ -4053,8 +4053,14 @@ impl Switching {
     /// Adds endpoint account `id` of Claude, at a CLIProxyAPI on this machine, with its own
     /// config dir.
     fn add_endpoint_account(&self, dir: &Path, id: &str) {
+        self.add_endpoint_account_of(dir, id, Provider::Claude);
+    }
+
+    /// Adds endpoint account `id` of `provider`, at a CLIProxyAPI on this machine, with its
+    /// own config dir.
+    fn add_endpoint_account_of(&self, dir: &Path, id: &str, provider: Provider) {
         let account = AccountConfig {
-            provider: Provider::Claude,
+            provider,
             label: id.to_owned(),
             config_dir: Some(dir.join(id)),
             fallback: false,
@@ -4131,6 +4137,58 @@ async fn an_unreachable_endpoint_account_fails_over_to_a_login_account() {
         .unwrap();
     assert_eq!(fleet.needs_login, None, "an endpoint account has no login");
     assert_eq!(fleet.endpoint.as_deref(), Some("http://127.0.0.1:8317"));
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn an_unreachable_codex_endpoint_account_fails_over_to_a_codex_login_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex = Scripted::new(&["failover_unreachable_codex.jsonl", "failover_retry.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Codex, codex.clone())],
+        &[("codex-login", Provider::Codex)],
+        Vec::new(),
+    )
+    .await;
+    daemon.add_endpoint_account_of(dir.path(), "fleet", Provider::Codex);
+    let session = daemon.create("fleet").await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::Idle).await;
+    assert_eq!(
+        from_first_turn(&journal),
+        [
+            "-: status Running",
+            "alice: user turn-1 Refactor the parser.",
+            "-: turn_started turn-1",
+            "-: turn_failed turn-1 Unreachable",
+            "-: account_switched codex-login",
+            "alice: user turn-2 Refactor the parser.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 Refactored the parser.",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+        ]
+    );
+    let starts = codex.starts();
+    let [on_fleet, on_login] = starts.as_slice() else {
+        panic!("expected two starts, got {starts:?}");
+    };
+    // The endpoint account runs Codex against the endpoint, in herder's own CODEX_HOME.
+    assert_eq!(on_fleet.config_dir, Some(dir.path().join("fleet")));
+    assert_eq!(
+        on_fleet.env.get("HERDER_ENDPOINT_URL").map(String::as_str),
+        Some("http://127.0.0.1:8317")
+    );
+    assert_eq!(
+        on_fleet.env.get("HERDER_ENDPOINT_KEY").map(String::as_str),
+        Some("cpa-client-key")
+    );
+    // The login account gets neither.
+    assert_eq!(on_login.config_dir, Some(dir.path().join("codex-login")));
+    assert!(!on_login.env.contains_key("HERDER_ENDPOINT_URL"));
+    assert!(!on_login.env.contains_key("HERDER_ENDPOINT_KEY"));
     daemon.shutdown.cancel();
 }
 

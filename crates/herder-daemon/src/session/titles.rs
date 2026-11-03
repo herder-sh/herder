@@ -343,8 +343,14 @@ async fn answer(
         }
         None => Command::new(&cli.program),
     };
+    // A Codex endpoint account titles on its endpoint's provider, as its sessions run.
+    let endpoint = match run.account.provider {
+        Provider::Codex => herder_adapters::codex::endpoint_args(&env),
+        _ => Vec::new(),
+    };
     command
         .args(&cli.args)
+        .args(endpoint)
         .args(["--model", &run.model])
         .env_clear()
         .envs(env)
@@ -466,6 +472,66 @@ mod tests {
 
     fn agent(turn: &str, text: &str) -> Item {
         item(turn, ItemBody::AssistantMessage { text: text.into() })
+    }
+
+    /// A Codex endpoint account titles with `codex exec` on its endpoint's provider, the key
+    /// in its environment, never on the command line; a login account's run is as before.
+    #[tokio::test]
+    async fn a_codex_endpoint_account_titles_on_its_endpoint() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("codex");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\necho \"$@\"\necho \"key=$HERDER_ENDPOINT_KEY home=$CODEX_HOME\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let home = dir.path().join(".codex-fleet");
+        let login = AccountConfig {
+            provider: Provider::Codex,
+            label: "Work".into(),
+            config_dir: Some(home.clone()),
+            fallback: false,
+            endpoint: None,
+        };
+        let fleet = AccountConfig {
+            endpoint: Some(super::super::Endpoint {
+                url: "http://127.0.0.1:8317".into(),
+                key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+            }),
+            ..login.clone()
+        };
+        let run = |account: AccountConfig| Run {
+            cli: TitleCli::codex(program.clone()),
+            model: "gpt-6-luna".into(),
+            account_id: AccountId::new("fleet"),
+            account,
+        };
+        let env = BTreeMap::from([("PATH".to_owned(), "/usr/bin:/bin".to_owned())]);
+        let titled = answer(&run(fleet), &[], env.clone(), dir.path(), "")
+            .await
+            .unwrap();
+        let common = "exec --sandbox read-only --skip-git-repo-check --ephemeral --color never";
+        assert_eq!(
+            titled,
+            format!(
+                "{common} -c model_provider=\"herder\" -c model_providers.herder.name=\"herder\" \
+                 -c model_providers.herder.base_url=\"http://127.0.0.1:8317/v1\" \
+                 -c model_providers.herder.env_key=\"HERDER_ENDPOINT_KEY\" \
+                 -c model_providers.herder.wire_api=\"responses\" --model gpt-6-luna\n\
+                 key=cpa-client-key home={}\n",
+                home.display()
+            )
+        );
+        let titled = answer(&run(login), &[], env, dir.path(), "").await.unwrap();
+        assert_eq!(
+            titled,
+            format!(
+                "{common} --model gpt-6-luna\nkey= home={}\n",
+                home.display()
+            )
+        );
     }
 
     #[test]

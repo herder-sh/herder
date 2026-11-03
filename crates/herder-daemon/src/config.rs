@@ -34,8 +34,11 @@
 //!
 //! An endpoint account names no `config_dir`: herder runs its CLI in `~/.{provider}-{id}`,
 //! which holds no login, only the CLI's own state, so its sessions' transcripts carry over to
-//! other accounts like any other. Only Claude accounts can have an endpoint; the CLI gets
-//! `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` ([`herder_adapters::claude::endpoint_env`]).
+//! other accounts like any other. Only Claude and Codex accounts can have an endpoint
+//! ([`ENDPOINT_PROVIDERS`]). Claude gets `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`
+//! ([`herder_adapters::claude::endpoint_env`]); Codex gets a model provider at
+//! `<endpoint>/v1` speaking the Responses API, with the key in a variable
+//! ([`herder_adapters::codex::endpoint_env`]).
 //! The key stays in this file: clients never see it.
 //!
 //! ```toml
@@ -2129,8 +2132,8 @@ fn resolve_accounts(
         let endpoint = match (entry.endpoint, entry.key) {
             (Some(url), Some(key)) => {
                 ensure!(
-                    provider == Provider::Claude,
-                    "account {id}: only claude accounts can have an endpoint"
+                    ENDPOINT_PROVIDERS.contains(&provider),
+                    "account {id}: only claude and codex accounts can have an endpoint"
                 );
                 ensure!(
                     entry.config_dir.is_none(),
@@ -2189,6 +2192,9 @@ fn resolve_accounts(
     }
     Ok(accounts)
 }
+
+/// The providers whose accounts can run against an endpoint instead of a login.
+pub(crate) const ENDPOINT_PROVIDERS: [Provider; 2] = [Provider::Claude, Provider::Codex];
 
 /// Whether `url` can be an endpoint: an `http` or `https` URL with a host.
 pub(crate) fn check_endpoint(url: &str) -> Result<()> {
@@ -3757,6 +3763,22 @@ mod tests {
     }
 
     #[test]
+    fn a_codex_account_can_have_an_endpoint_too() {
+        let home = tempfile::tempdir().unwrap();
+        let vars = [("HOME", home.path().to_str().unwrap())];
+        let path = write(
+            home.path(),
+            "[[accounts]]\nid = \"fleet\"\nprovider = \"codex\"\n\
+             endpoint = \"http://127.0.0.1:8317\"\nkey = \"cpa-client-key\"\n",
+        );
+        let config = Config::load_with_env(Some(&path), env(&vars)).unwrap();
+        let account = &config.accounts[&AccountId::new("fleet")];
+        assert_eq!(account.provider, Provider::Codex);
+        assert_eq!(account.endpoint, Some(fleet("http://127.0.0.1:8317")));
+        assert_eq!(account.config_dir, Some(home.path().join(".codex-fleet")));
+    }
+
+    #[test]
     fn an_endpoint_account_needs_a_url_a_key_claude_and_no_config_dir() {
         let home = tempfile::tempdir().unwrap();
         let vars = [("HOME", home.path().to_str().unwrap())];
@@ -3780,8 +3802,8 @@ mod tests {
             ),
             ("provider = \"claude\"\nkey = \"k\"", "needs its endpoint"),
             (
-                "provider = \"codex\"\nendpoint = \"http://cpa\"\nkey = \"k\"",
-                "only claude accounts",
+                "provider = \"cursor\"\nendpoint = \"http://cpa\"\nkey = \"k\"",
+                "only claude and codex accounts",
             ),
             (
                 "provider = \"claude\"\nendpoint = \"http://cpa\"\nkey = \"k\"\n\

@@ -327,7 +327,7 @@ impl Logins {
                 "this daemon adds no accounts".into(),
             )
         })?;
-        if *provider != Provider::Claude {
+        if !crate::config::ENDPOINT_PROVIDERS.contains(provider) {
             return Err(error(
                 ErrorCode::Unsupported,
                 format!(
@@ -1374,6 +1374,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_codex_endpoint_account_is_added_in_a_codex_home_of_its_own() {
+        let f = fixture().await;
+        f.add_endpoint("fleet", Provider::Codex, "http://127.0.0.1:8317")
+            .unwrap();
+        let dir = f.home.path().join(".codex-fleet");
+        assert!(dir.is_dir(), "herder makes its CODEX_HOME");
+        let fleet = f.sessions.account(&AccountId::new("fleet")).unwrap();
+        assert_eq!(fleet.provider, Provider::Codex);
+        assert_eq!(fleet.config_dir, Some(dir));
+    }
+
+    #[tokio::test]
     async fn adding_an_endpoint_account_refuses_what_herder_cannot_run() {
         let f = fixture().await;
         let saved = std::fs::read_to_string(f.home.path().join("daemon.toml")).ok();
@@ -1399,7 +1411,7 @@ mod tests {
             ),
             (
                 "fleet",
-                Provider::Codex,
+                Provider::Cursor,
                 "http://cpa:8317",
                 ErrorCode::Unsupported,
             ),

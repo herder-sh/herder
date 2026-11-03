@@ -1,0 +1,7 @@
+# A Codex endpoint account's endpoint cannot be reached: the adapter gives up on the turn after
+# Codex's third retried connection failure, as against a closed port (herder-adapters
+# fixtures/codex/unreachable.jsonl), and waits to be shut down.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Refactor the parser."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-1", "error": {"class": "unreachable", "message": "codex cannot reach its endpoint: Connection failed: error sending request"}}}
+{"expect": {"type": "shutdown"}}

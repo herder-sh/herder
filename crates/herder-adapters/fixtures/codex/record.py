@@ -12,6 +12,10 @@ account and installation ids, the host name and the home directory are redacted 
 `herder dev record`'s defaults; they are learned from a throwaway app-server first.
 
 limit_reached.jsonl is hand-built (see its header comment) and is not recorded here.
+unreachable.jsonl runs as an endpoint account whose endpoint is down: `codex` gets an empty
+CODEX_HOME of its own, the adapter's `-c` overrides for a `herder` provider at a closed local
+port and a dummy key, so it reaches no provider. Codex retries without end; the scenario gives
+up after the adapter's three retried connection failures, about 25 seconds, as the adapter does.
 """
 
 import json
@@ -21,6 +25,7 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -29,9 +34,10 @@ TIMEOUT = 120
 
 
 class Server:
-    def __init__(self, command):
+    def __init__(self, command, env=None):
         self.process = subprocess.Popen(
-            command, cwd=CWD, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1
+            command, cwd=CWD, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+            env=env,
         )
         self.lines = queue.Queue()
         self.seen = []
@@ -153,21 +159,59 @@ def scenario_seed(server):
     server.until(is_turn_end)
 
 
+def scenario_unreachable(server):
+    thread = start(server)
+    turn_request = turn(server, thread, "Reply with the word ok.")
+    turn_id = server.until(lambda m: m.get("id") == turn_request)["result"]["turn"]["id"]
+    for _ in range(3):
+        server.until(
+            lambda m: m.get("method") == "error"
+            and m["params"]["willRetry"]
+            and (m["params"]["error"].get("additionalDetails") or "").startswith("Connection failed")
+        )
+    server.request("turn/interrupt", {"threadId": thread, "turnId": turn_id})
+    server.until(is_turn_end)
+
+
+def endpoint_down():
+    """The environment and arguments of an endpoint account whose endpoint refuses connections:
+    the adapter's `codex::endpoint_args` for `http://127.0.0.1:9`."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("OPENAI_")}
+    env["CODEX_HOME"] = tempfile.mkdtemp(prefix="herder-endpoint-")
+    env["HERDER_ENDPOINT_URL"] = "http://127.0.0.1:9"
+    env["HERDER_ENDPOINT_KEY"] = "herder-fixture-key"
+    args = []
+    for key, value in [
+        ("model_provider", "herder"),
+        ("model_providers.herder.name", "herder"),
+        ("model_providers.herder.base_url", "http://127.0.0.1:9/v1"),
+        ("model_providers.herder.env_key", "HERDER_ENDPOINT_KEY"),
+        ("model_providers.herder.wire_api", "responses"),
+    ]:
+        args += ["-c", f"{key}={json.dumps(value)}"]
+    return env, args
+
+
+# Scenarios recorded in another environment than the user's own, built when recorded.
+ENVS = {"unreachable": endpoint_down}
+
 SCENARIOS = {
     "turn": scenario_turn,
     "approval": scenario_approval,
     "interrupt": scenario_interrupt,
     "seed": scenario_seed,
+    "unreachable": scenario_unreachable,
 }
 
 
-def private_values():
+def private_values(env=None, args=()):
     """Values to redact that the default patterns do not catch."""
-    server = Server(["codex", "app-server"])
+    server = Server(["codex", "app-server", *args], env)
     start(server)
     account = server.call("account/read", {"refreshToken": False})["result"]
     limits = server.call("account/rateLimits/read", None).get("result") or {}
     values = {socket.gethostname(), os.path.expanduser("~")}
+    values.update(v for v in [(env or {}).get("CODEX_HOME")] if v)
     routing = account.get("workspaceRouting") or {}
     values.update(v for v in [routing.get("chatgptAccountId"), limits.get("accountId")] if v)
     # The per-machine installation id comes with remoteControl/status/changed.
@@ -185,14 +229,16 @@ def main():
     version = subprocess.run(
         ["codex", "--version"], capture_output=True, text=True, check=True
     ).stdout.split()[-1]
-    redact = []
-    for value in private_values():
-        redact += ["--redact", re.escape(value)]
     for name in sys.argv[1:] or SCENARIOS:
+        env, args = ENVS[name]() if name in ENVS else (None, [])
+        redact = []
+        for value in private_values(env, args):
+            redact += ["--redact", re.escape(value)]
         server = Server(
             [os.path.join(os.getcwd(), "target/debug/herder"), "dev", "record", "codex", name,
              "--out", os.path.join(HERE, f"{name}.jsonl"), "--cli-version", version,
-             "--ignore-key", "version", *redact, "--", "codex", "app-server"]
+             "--ignore-key", "version", *redact, "--", "codex", "app-server", *args],
+            env,
         )
         SCENARIOS[name](server)
         server.close()
