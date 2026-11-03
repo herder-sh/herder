@@ -112,7 +112,7 @@ fn version_from_tag_url(url: &str) -> Result<Version> {
     parse_version(tag)
 }
 
-fn get(url: &str) -> Result<Vec<u8>> {
+pub(crate) fn get(url: &str) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     ureq::get(url)
         .call()
@@ -125,7 +125,7 @@ fn get(url: &str) -> Result<Vec<u8>> {
 }
 
 /// Checks `data` against a `sha256sum`-style line: `<hex digest>  <file name>`.
-fn verify_sha256(data: &[u8], checksum_file: &str) -> Result<()> {
+pub(crate) fn verify_sha256(data: &[u8], checksum_file: &str) -> Result<()> {
     let expected = checksum_file
         .split_whitespace()
         .next()
@@ -143,12 +143,16 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 
 /// Reads `herder-<version>-<target>/herder` out of a release tarball.
 fn extract_binary(tarball: &[u8], version: &Version, target: &str) -> Result<Vec<u8>> {
-    let wanted = format!("herder-{version}-{target}/herder");
+    extract_file(tarball, &format!("herder-{version}-{target}/herder"))
+}
+
+/// Reads the file at `wanted` out of a gzipped tarball.
+pub(crate) fn extract_file(tarball: &[u8], wanted: &str) -> Result<Vec<u8>> {
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tarball));
     for entry in archive.entries().context("reading the release tarball")? {
         let mut entry = entry.context("reading the release tarball")?;
         if entry.header().entry_type().is_file()
-            && entry.path().context("reading the release tarball")? == Path::new(&wanted)
+            && entry.path().context("reading the release tarball")? == Path::new(wanted)
         {
             let mut binary = Vec::new();
             entry

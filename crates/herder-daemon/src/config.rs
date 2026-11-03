@@ -2109,7 +2109,7 @@ fn edit_file(
 
 /// Replaces `path` with `data` through a temporary file in its directory, which is created if
 /// needed; a new file is owner-only, an existing one keeps its permissions.
-fn write_atomically(path: &Path, data: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, data: &[u8]) -> io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 

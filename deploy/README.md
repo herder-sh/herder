@@ -55,6 +55,63 @@ Reinstalling keeps the dir, so the vault comes back with its devices, sessions a
 `herder update` restarts an installed vault onto the new binary along with the daemon's
 service, so the two never run different versions.
 
+### CLIProxyAPI on a machine
+
+`herder vault install` also runs a [CLIProxyAPI](#provider-logins) next to the vault, holding
+the fleet's provider logins, as the Kubernetes pod does. It downloads CLIProxyAPI's pinned
+release for the machine from its GitHub Releases, checks it against the SHA-256 herder
+pins for it, and runs it as a service of its own: a LaunchAgent (`sh.herder.cliproxyapi`,
+logging to `~/Library/Logs/herder/cliproxyapi.log`) on macOS, a systemd user unit
+(`herder-cliproxyapi.service`) on Linux. Its files are in the vault's dir:
+
+- `cliproxyapi.env`: the proxy's management secret, generated at the first install and
+  readable by you only. Only the vault's service gets it, which manages the proxy with it.
+- `cliproxyapi/cli-proxy-api`: the proxy.
+- `cliproxyapi/config.yaml`: its config, with the settings of the
+  [pod's](#provider-logins) (`fill-first`, session affinity rebinding on quota only,
+  `allow-remote: false` with the management secret, never `MANAGEMENT_PASSWORD`). Each
+  install writes it again, with a random first client key, and the vault puts its hosts'
+  keys back within 30 seconds.
+- `cliproxyapi/auth`: the provider logins.
+
+The install sets `cliproxyapi` in `vault.toml`'s `[vault]` table, so the vault mints its hosts'
+keys there. Reinstalling keeps the logins and the management secret, and downloads the proxy
+again only for a new pinned release. `herder vault uninstall` stops and removes the proxy's
+service and binary and keeps its logins; `--purge` deletes them with the rest of the dir.
+`herder vault install --no-cliproxyapi` runs none, and removes one an earlier install set up.
+
+**`cliproxyapi/auth` holds every provider login in plain text**, the most sensitive thing
+herder has: anyone who can read the vault's dir, or its backups, holds the fleet's logins.
+Keep the machine's disk encrypted, and treat backups of the dir as you would the logins.
+
+By default the proxy listens on `127.0.0.1:8317` over plain HTTP, for a host daemon on the same
+machine. [Pair that host](#pair-a-host) with the vault, then give it an endpoint account in its
+`daemon.toml`, and restart it:
+
+```toml
+[[accounts]]
+id = "fleet"
+provider = "claude"              # or codex
+endpoint = "http://127.0.0.1:8317"
+key_secret = "CLIPROXYAPI_KEY"
+```
+
+For hosts on other machines, the proxy serves TLS, with a certificate from a CA the hosts trust,
+for the name they reach it at. The Claude and Codex CLIs check the server against the CAs they
+trust and cannot pin a certificate, so a self-signed one does not work. The name must resolve to
+this machine here too, such as with `127.0.0.1 cpa.example.com` in `/etc/hosts`, for the vault
+manages the proxy at that name and the proxy takes management requests from its own machine only:
+
+```sh
+herder vault install --cliproxyapi-tls-cert cpa.crt --cliproxyapi-tls-key cpa.key \
+  --cliproxyapi-name cpa.example.com   # listens on 0.0.0.0:8317; --cliproxyapi-listen picks another
+```
+
+Hosts then use `endpoint = "https://cpa.example.com:8317"`. The flags are not kept: pass them
+again when you reinstall. `herder doctor --config ~/.local/share/herder-vault/vault.toml` says
+whether the proxy answers and how many logins it holds; the [Logins](#log-the-proxy-in) tab in
+the apps adds them.
+
 ## On Kubernetes
 
 ### Build the image

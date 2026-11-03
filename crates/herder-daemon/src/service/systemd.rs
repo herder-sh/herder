@@ -31,13 +31,13 @@ fn unit_file(service: &Service, exe: &Path, path: &str) -> Result<String> {
         exec_start.push(' ');
         exec_start.push_str(&exec_arg(arg));
     }
-    let env_file = match &service.env_file {
-        Some(file) => format!(
+    let mut env_file = String::new();
+    for file in &service.env_files {
+        env_file.push_str(&format!(
             "EnvironmentFile={}\n",
             absolute_utf8(file)?.replace('%', "%%")
-        ),
-        None => String::new(),
-    };
+        ));
+    }
     Ok(format!(
         "\
 # Written by `{installer}`; rerun it after moving the herder binary or
@@ -142,7 +142,7 @@ fn env_unit_path(unit: &str) -> Result<PathBuf> {
 }
 
 pub fn install(service: &Service) -> Result<()> {
-    let exe = crate::herder_binary()?;
+    let exe = service.program()?;
     let search_path = std::env::var("PATH").context("reading PATH")?;
     let path = env_unit_path(service.unit)?;
     let dir = path.parent().context("unit path has no parent")?;
@@ -341,6 +341,24 @@ RestartSec=5
 WantedBy=default.target
 "
         );
+    }
+
+    #[test]
+    fn cliproxyapi_unit_runs_the_proxy_with_its_config() {
+        let dir = Path::new("/home/ann/.local/share/herder-vault");
+        let service = crate::vault::install::cliproxyapi::service(dir);
+        let program = service.program.clone().unwrap();
+        let unit = unit_file(&service, &program, "/usr/bin").unwrap();
+        assert_eq!(service.unit, "herder-cliproxyapi.service");
+        assert!(
+            unit.contains(
+                "ExecStart=\"/home/ann/.local/share/herder-vault/cliproxyapi/cli-proxy-api\" \
+                 -config /home/ann/.local/share/herder-vault/cliproxyapi/config.yaml\n"
+            ),
+            "{unit}"
+        );
+        assert!(!unit.contains("EnvironmentFile="), "{unit}");
+        assert!(unit.contains("Restart=on-failure\n"), "{unit}");
     }
 
     #[test]

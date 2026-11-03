@@ -12,7 +12,8 @@ mod systemd;
 
 const MACOS: bool = cfg!(target_os = "macos");
 
-/// A service herder installs: the daemon, or a vault next to it.
+/// A service herder installs: the daemon, or a vault next to it and its CLIProxyAPI.
+#[derive(Clone)]
 pub struct Service {
     /// The launchd label.
     pub label: &'static str,
@@ -24,11 +25,13 @@ pub struct Service {
     pub description: &'static str,
     /// The command that writes its service file, named in the file.
     pub installer: &'static str,
-    /// The arguments it runs the herder binary with.
+    /// The program it runs; the herder binary when absent.
+    pub program: Option<PathBuf>,
+    /// The arguments it runs its program with.
     pub args: Vec<String>,
-    /// A private file of `NAME=value` lines put in its environment, for variables no other
+    /// Private files of `NAME=value` lines put in its environment, for variables no other
     /// process should see.
-    pub env_file: Option<PathBuf>,
+    pub env_files: Vec<PathBuf>,
     /// Its log file under `~/Library/Logs/herder` on macOS.
     pub log: &'static str,
 }
@@ -42,14 +45,23 @@ impl Service {
             name: "herder service",
             description: "herder daemon",
             installer: "herder service install",
+            program: None,
             args: vec!["daemon".to_owned()],
-            env_file: None,
+            env_files: Vec::new(),
             log: "daemon.log",
+        }
+    }
+
+    /// The program it runs: its own, else this herder binary.
+    fn program(&self) -> Result<PathBuf> {
+        match &self.program {
+            Some(program) => Ok(program.clone()),
+            None => crate::herder_binary(),
         }
     }
 }
 
-/// Installs and starts `service` for this herder binary.
+/// Installs and starts `service`.
 pub fn install(service: &Service) -> Result<()> {
     if MACOS {
         launchd::install(service)
@@ -80,7 +92,7 @@ pub fn log_hint(service: &Service) -> Result<String> {
 
 /// The `NAME=value` lines of an environment file, as systemd's `EnvironmentFile=` reads them;
 /// blank lines and `#` comments are skipped.
-fn read_env_file(path: &Path) -> Result<Vec<(String, String)>> {
+pub(crate) fn read_env_file(path: &Path) -> Result<Vec<(String, String)>> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut vars = Vec::new();

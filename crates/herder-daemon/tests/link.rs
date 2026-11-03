@@ -521,6 +521,7 @@ async fn an_owner_runs_a_vault_on_the_host_from_a_client() {
         dir: tmp.path().join("herder-vault"),
         port: Some(0),
         services: Arc::clone(&services) as Arc<dyn Services>,
+        cliproxyapi: None,
     };
     let host = Daemon::start_with(&tmp.path().join("host"), "", false, Some(local)).await;
     let owner = open(&tmp.path().join("owner"));
