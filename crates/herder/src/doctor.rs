@@ -17,6 +17,7 @@ use herder_daemon::config::VaultConfig;
 use herder_daemon::login::{self, LoginProgram};
 use herder_daemon::session::AccountConfig;
 use herder_daemon::vault::cliproxyapi;
+use herder_daemon::vault::install::cliproxyapi as local_cliproxyapi;
 use herder_protocol::{AccountId, Provider};
 
 use herder_daemon::service;
@@ -109,12 +110,9 @@ fn checks(explicit: Option<&Path>, tools: &Tools, service: Option<service::State
     if let Some(config) = &config {
         checks.extend(config.listen.iter().map(|&address| listen_check(address)));
         checks.extend(config.vault.as_ref().map(vault_check));
-        checks.extend(
-            config
-                .cliproxyapi
-                .as_deref()
-                .map(|url| cliproxyapi_check(url, cliproxyapi::Management::from_env(url))),
-        );
+        checks.extend(config.cliproxyapi.as_deref().map(|url| {
+            cliproxyapi_check(url, local_cliproxyapi::management(url, &config.data_dir))
+        }));
     }
     checks
 }

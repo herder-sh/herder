@@ -166,13 +166,13 @@ fn service() -> String {
 }
 
 pub fn install(service: &Service) -> Result<()> {
-    let exe = crate::herder_binary()?;
+    let exe = service.program()?;
     let home = home()?;
     let search_path = service_path(&std::env::var("PATH").context("reading PATH")?, &home);
-    let env = match &service.env_file {
-        Some(file) => super::read_env_file(file)?,
-        None => Vec::new(),
-    };
+    let mut env = Vec::new();
+    for file in &service.env_files {
+        env.extend(super::read_env_file(file)?);
+    }
     let path = plist_path(&home, service.label);
     let log = log_path(&home, service);
     for dir in [path.parent(), log.parent()].into_iter().flatten() {
@@ -426,6 +426,38 @@ mod tests {
 </dict>
 </plist>
 "#
+        );
+    }
+
+    #[test]
+    fn cliproxyapi_plist_runs_the_proxy_with_its_config() {
+        let dir = Path::new("/Users/ann/.local/share/herder-vault");
+        let service = crate::vault::install::cliproxyapi::service(dir);
+        let home = Path::new("/Users/ann");
+        let program = service.program.clone().unwrap();
+        let plist = plist(
+            &service,
+            &program,
+            "/usr/bin",
+            &[],
+            &log_path(home, &service),
+        )
+        .unwrap();
+        assert_eq!(
+            plist_path(home, service.label),
+            Path::new("/Users/ann/Library/LaunchAgents/sh.herder.cliproxyapi.plist")
+        );
+        assert!(
+            plist.contains(
+                "\t\t<string>/Users/ann/.local/share/herder-vault/cliproxyapi/cli-proxy-api</string>\n\
+                 \t\t<string>-config</string>\n\
+                 \t\t<string>/Users/ann/.local/share/herder-vault/cliproxyapi/config.yaml</string>\n"
+            ),
+            "{plist}"
+        );
+        assert!(
+            plist.contains("<string>/Users/ann/Library/Logs/herder/cliproxyapi.log</string>"),
+            "{plist}"
         );
     }
 

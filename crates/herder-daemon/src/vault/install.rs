@@ -17,6 +17,8 @@ use crate::auth::control::{self, OwnInfo, PairingInfo, Request, Response};
 use crate::config::DEFAULT_PORT;
 use crate::service::{Service, Services};
 
+pub mod cliproxyapi;
+
 /// The port an installed vault listens on unless told otherwise: the one after the daemon's.
 pub const PORT: u16 = DEFAULT_PORT + 1;
 
@@ -32,6 +34,9 @@ pub struct LocalVault {
     pub port: Option<u16>,
     /// What installs its service.
     pub services: Arc<dyn Services>,
+    /// The CLIProxyAPI set up next to it, and how its release is downloaded; none when
+    /// absent.
+    pub cliproxyapi: Option<(cliproxyapi::Proxy, cliproxyapi::Download)>,
 }
 
 impl LocalVault {
@@ -42,6 +47,7 @@ impl LocalVault {
             dir: env_dir()?,
             port: None,
             services: Arc::new(crate::service::System),
+            cliproxyapi: None,
         })
     }
 
@@ -93,6 +99,21 @@ impl LocalVault {
             report(format!("generated a secrets key in {}", key.display()));
         }
 
+        if let Some((proxy, download)) = &self.cliproxyapi {
+            let service = cliproxyapi::service(&self.dir);
+            if !self.services.is_installed(&service) {
+                // As for the vault's port: the proxy would only fail as a service.
+                std::net::TcpListener::bind(proxy.listen).with_context(|| {
+                    format!(
+                        "{} is taken; pick another with --cliproxyapi-listen",
+                        proxy.listen
+                    )
+                })?;
+            }
+            cliproxyapi::set_up(&self.dir, &config, proxy, download, report)?;
+            crate::Config::load_file(&config)?;
+            self.services.install(&service)?;
+        }
         self.services.install(&self.service())
     }
 
@@ -170,7 +191,10 @@ pub fn service(dir: &Path) -> Service {
             "--config".to_owned(),
             config_path(dir).to_string_lossy().into_owned(),
         ],
-        env_file: Some(key_path(dir)),
+        program: None,
+        env_files: std::iter::once(key_path(dir))
+            .chain(Some(cliproxyapi::management_key_path(dir)).filter(|path| path.exists()))
+            .collect(),
         log: "vault.log",
     }
 }
@@ -258,6 +282,66 @@ mod tests {
         let (name, value) = line.split_once('=').unwrap();
         assert_eq!(name, SECRETS_KEY_ENV);
         assert!(SecretsKey::from_base64(value).is_ok());
+    }
+
+    /// A service manager that only notes what it installed.
+    #[derive(Default)]
+    struct Recorded(std::sync::Mutex<Vec<Service>>);
+
+    impl Services for Recorded {
+        fn install(&self, service: &Service) -> Result<()> {
+            self.0.lock().unwrap().push(service.clone());
+            Ok(())
+        }
+
+        fn is_installed(&self, service: &Service) -> bool {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|s| s.label == service.label)
+        }
+
+        fn log_hint(&self, _: &Service) -> String {
+            "nowhere".into()
+        }
+    }
+
+    #[test]
+    fn install_runs_cliproxyapi_next_to_the_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        let services = Arc::new(Recorded::default());
+        let listen = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listen.local_addr().unwrap().port();
+        drop(listen);
+        let vault = LocalVault {
+            dir: tmp.path().join("herder-vault"),
+            port: Some(0),
+            services: Arc::clone(&services) as Arc<dyn Services>,
+            cliproxyapi: Some((
+                cliproxyapi::Proxy {
+                    listen: ([127, 0, 0, 1], port).into(),
+                    tls: None,
+                },
+                || Ok(b"proxy".to_vec()),
+            )),
+        };
+        vault.install(&mut |_| {}).unwrap();
+
+        let installed = services.0.lock().unwrap().clone();
+        let labels: Vec<_> = installed.iter().map(|s| s.label).collect();
+        assert_eq!(labels, ["sh.herder.cliproxyapi", "sh.herder.vault"]);
+        // The vault gets the proxy's management secret, and manages it on loopback.
+        assert_eq!(
+            installed[1].env_files,
+            [
+                vault.dir.join("vault.env"),
+                vault.dir.join("cliproxyapi.env")
+            ]
+        );
+        let config = crate::Config::load_file(&config_path(&vault.dir)).unwrap();
+        assert_eq!(config.cliproxyapi, Some(format!("http://127.0.0.1:{port}")));
+        assert!(vault.dir.join("cliproxyapi/auth").is_dir());
     }
 
     #[test]
