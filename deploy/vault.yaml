@@ -28,6 +28,9 @@ data:
     # management API, which takes requests from this pod only. The name resolves to this pod
     # (hostAliases), so the proxy's certificate checks out and the proxy sees localhost.
     cliproxyapi = "https://cpa.example.com:8317"
+    # Where hosts reach it: told to each host holding a key, so the apps and TUI offer
+    # "Use the vault's logins" when adding an account there.
+    cliproxyapi_endpoint = "https://cpa.example.com:8317"
 
     [log]
     format = "json"

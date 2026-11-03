@@ -252,12 +252,15 @@
 //! [vault]
 //! archive_retention_days = 90 # archived sessions of online hosts are dropped after this
 //! cliproxyapi = "http://127.0.0.1:8317" # a CLIProxyAPI on the vault's machine; see below
+//! cliproxyapi_endpoint = "https://vault.example.com:8317" # where hosts reach that CLIProxyAPI
 //! ```
 //!
 //! With `cliproxyapi`, the vault mints a client key for each host in that CLIProxyAPI and
 //! grants it to the host as a secret for its own use ([`crate::vault::cliproxyapi`]); it reads
 //! the proxy's management secret from `HERDER_CLIPROXYAPI_MANAGEMENT_KEY`, and needs its
-//! secrets key. A host's endpoint account names that secret instead of holding the key:
+//! secrets key. With `cliproxyapi_endpoint` too, it tells each host holding a key where the
+//! proxy is, and the apps and TUI offer the vault's logins when adding an account there. A
+//! host's endpoint account names that secret instead of holding the key:
 //!
 //! ```toml
 //! [[accounts]]
@@ -329,6 +332,9 @@ pub struct Config {
     /// Base URL of the CLIProxyAPI on a vault's machine whose client keys it keeps for its
     /// hosts; read in vault mode only.
     pub cliproxyapi: Option<String>,
+    /// Where hosts reach that CLIProxyAPI, as an endpoint account's URL; read in vault mode
+    /// only.
+    pub cliproxyapi_endpoint: Option<String>,
     /// The user's MCP servers, in file order, as written.
     pub mcp_servers: Vec<McpServerSettings>,
     /// The chat bots this host holds, in file order, as written.
@@ -421,6 +427,7 @@ struct VaultFile {
     attachments_cap: Option<u64>,
     archive_retention_days: Option<u32>,
     cliproxyapi: Option<String>,
+    cliproxyapi_endpoint: Option<String>,
 }
 
 /// When the daemon prompts an idle agent on its own: the `[follow_ups]` table.
@@ -782,7 +789,12 @@ fn resolve(
     let accounts = resolve_accounts(file.accounts, env)?;
     let projects = resolve_projects(file.projects, file.project, &accounts, env)?;
     let titles = resolve_titles(file.titles, &accounts)?;
-    let (vault, retention, cliproxyapi) = resolve_vault(file.mode, file.vault)?;
+    let VaultSide {
+        vault,
+        retention,
+        cliproxyapi,
+        cliproxyapi_endpoint,
+    } = resolve_vault(file.mode, file.vault)?;
     let mcp_servers = resolve_mcp_servers(file.mcp_servers, env)?;
     validate_bots(&file.bots, &accounts)?;
     let (binaries, clis) = resolve_providers(file.providers, env)?;
@@ -803,6 +815,7 @@ fn resolve(
         vault,
         retention,
         cliproxyapi,
+        cliproxyapi_endpoint,
         mcp_servers,
         bots: file.bots,
         self_update: None,
@@ -1002,12 +1015,18 @@ pub(crate) fn mcp_command(
 
 /// Validates the `[vault]` table: a host's says where it replicates to, a vault's what it
 /// keeps.
-fn resolve_vault(
-    mode: Mode,
-    table: Option<VaultFile>,
-) -> Result<(Option<VaultConfig>, Retention, Option<String>)> {
+/// What the `[vault]` table says: a host's link, or a vault's retention and CLIProxyAPI.
+#[derive(Default)]
+struct VaultSide {
+    vault: Option<VaultConfig>,
+    retention: Retention,
+    cliproxyapi: Option<String>,
+    cliproxyapi_endpoint: Option<String>,
+}
+
+fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<VaultSide> {
     let Some(table) = table else {
-        return Ok((None, Retention::default(), None));
+        return Ok(VaultSide::default());
     };
     if mode == Mode::Vault {
         ensure!(
@@ -1019,7 +1038,7 @@ fn resolve_vault(
                 && table.attachments.is_none()
                 && table.attachments_cap.is_none(),
             "a vault does not replicate to another vault; its [vault] table takes \
-             archive_retention_days and cliproxyapi only"
+             archive_retention_days, cliproxyapi and cliproxyapi_endpoint only"
         );
         let mut retention = Retention::default();
         if let Some(days) = table.archive_retention_days {
@@ -1029,11 +1048,26 @@ fn resolve_vault(
         if let Some(url) = &table.cliproxyapi {
             check_endpoint(url).context("vault.cliproxyapi")?;
         }
-        return Ok((None, retention, table.cliproxyapi));
+        if let Some(url) = &table.cliproxyapi_endpoint {
+            ensure!(
+                table.cliproxyapi.is_some(),
+                "vault.cliproxyapi_endpoint needs vault.cliproxyapi, the proxy it is the address of"
+            );
+            check_endpoint(url).context("vault.cliproxyapi_endpoint")?;
+        }
+        return Ok(VaultSide {
+            vault: None,
+            retention,
+            cliproxyapi: table.cliproxyapi,
+            cliproxyapi_endpoint: table.cliproxyapi_endpoint,
+        });
     }
     ensure!(
-        table.archive_retention_days.is_none() && table.cliproxyapi.is_none(),
-        "vault.archive_retention_days and vault.cliproxyapi are set on the vault, not on a host"
+        table.archive_retention_days.is_none()
+            && table.cliproxyapi.is_none()
+            && table.cliproxyapi_endpoint.is_none(),
+        "vault.archive_retention_days, vault.cliproxyapi and vault.cliproxyapi_endpoint are \
+         set on the vault, not on a host"
     );
     let (Some(address), Some(fingerprint)) = (table.address, table.fingerprint) else {
         bail!("the [vault] table needs the vault's address and fingerprint");
@@ -1053,7 +1087,10 @@ fn resolve_vault(
             table.pairing_code,
         )
     };
-    Ok((Some(vault), Retention::default(), None))
+    Ok(VaultSide {
+        vault: Some(vault),
+        ..VaultSide::default()
+    })
 }
 
 /// Validates the `[titles]` table.
@@ -2560,6 +2597,7 @@ mod tests {
                 vault: None,
                 retention: Retention::default(),
                 cliproxyapi: None,
+                cliproxyapi_endpoint: None,
                 mcp_servers: Vec::new(),
                 bots: Vec::new(),
                 self_update: None,
@@ -2755,6 +2793,17 @@ mod tests {
             Some("http://127.0.0.1:8317")
         );
         assert!(load("mode = \"vault\"\n[vault]\ncliproxyapi = \"cpa\"\n".into()).is_err());
+        let proxy = "mode = \"vault\"\n[vault]\ncliproxyapi = \"http://127.0.0.1:8317\"\n";
+        let config = load(format!(
+            "{proxy}cliproxyapi_endpoint = \"https://cpa.lan:8317\"\n"
+        ));
+        assert_eq!(
+            config.unwrap().cliproxyapi_endpoint.as_deref(),
+            Some("https://cpa.lan:8317")
+        );
+        assert!(load(format!("{proxy}cliproxyapi_endpoint = \"cpa.lan\"\n")).is_err());
+        let alone = "mode = \"vault\"\n[vault]\ncliproxyapi_endpoint = \"https://cpa.lan:8317\"\n";
+        assert!(load(alone.into()).is_err());
         let err = load(format!("{host}cliproxyapi = \"http://127.0.0.1:8317\"\n")).unwrap_err();
         assert!(
             format!("{err:#}").contains("on the vault, not on a host"),

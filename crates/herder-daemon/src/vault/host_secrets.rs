@@ -56,6 +56,8 @@ pub struct HostSecrets {
 struct State {
     /// Whether the host is linked to a vault.
     linked: bool,
+    /// Where the host reaches its vault's CLIProxyAPI, as the vault last said in its hello.
+    cliproxyapi: Option<String>,
     /// The open replication connection, by its number, and where its requests go.
     connection: Option<(u64, mpsc::UnboundedSender<Ask>)>,
     /// Connections attached so far, to number the next.
@@ -173,6 +175,7 @@ impl HostSecrets {
         let mut state = self.lock();
         if state.linked != linked {
             state.linked = linked;
+            state.cliproxyapi = None;
             state.cache.clear();
             state.connection = None;
             drop(state);
@@ -183,6 +186,17 @@ impl HostSecrets {
     /// Whether the host is linked to a vault with secrets on.
     pub fn linked(&self) -> bool {
         self.lock().linked
+    }
+
+    /// Records where the host reaches its vault's CLIProxyAPI, from the vault's hello; `None`
+    /// when the vault runs none or holds no key for the host.
+    pub(super) fn set_cliproxyapi(&self, endpoint: Option<String>) {
+        self.lock().cliproxyapi = endpoint;
+    }
+
+    /// Where the host reaches its vault's CLIProxyAPI, as the vault last said.
+    pub fn cliproxyapi(&self) -> Option<String> {
+        self.lock().cliproxyapi.clone()
     }
 
     /// Sends requests to a connection that just opened, in place of any earlier one, until
