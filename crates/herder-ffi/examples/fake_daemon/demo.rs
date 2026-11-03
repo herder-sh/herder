@@ -38,7 +38,7 @@
 //!
 //! `fake_daemon --busy` adds the load the apps are profiled under (`apple/scripts/profile-mac.sh`):
 //! on `devbox`, a session with [`BUSY_TURNS`] finished turns, about 2,000 items, whose next turn
-//! keeps streaming.
+//! keeps streaming, and [`BUSY_BOT_SESSIONS`] more chats from Slack.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -116,6 +116,10 @@ const SAFARI: &str = "Carry on here: fix it and run the checkout suite in WebKit
 /// The busy session's turns: each [`NEXT_STEP`] plays [`BUSY_ROUNDS`] rounds of work and
 /// finishes, then [`KEEP_GOING`] plays a round every second for an hour.
 const BUSY_TURNS: usize = 100;
+/// The chats `--busy` adds to `trash-can`'s, so Bots is a list longer than the pane, which a
+/// scroll measurement needs; who asks each, in turn.
+const BUSY_BOT_SESSIONS: usize = 24;
+const BUSY_ASKERS: &[&str] = &["Sam", "Kim", "Alex", "Ruth"];
 const BUSY_ROUNDS: usize = 7;
 const NEXT_STEP: &str = "Next step.";
 const KEEP_GOING: &str = "Keep going.";
@@ -202,16 +206,16 @@ const FINISHED: &[(&str, &str, &str, &str, &str)] = &[
 /// The conversations people started from Slack through `devbox`'s bots: bot, who wrote, the
 /// channel they wrote in (`None` for a DM), the repository (`None` for a chat), account, title
 /// and prompt.
-type BotSession = (
-    &'static str,
-    &'static str,
-    Option<&'static str>,
-    Option<&'static str>,
-    &'static str,
-    &'static str,
-    &'static str,
+type BotSession<'a> = (
+    &'a str,
+    &'a str,
+    Option<&'a str>,
+    Option<&'a str>,
+    &'a str,
+    &'a str,
+    &'a str,
 );
-const BOT_SESSIONS: &[BotSession] = &[
+const BOT_SESSIONS: &[BotSession<'static>] = &[
     (
         "trash-can",
         "Sam",
@@ -857,8 +861,15 @@ impl Scenario<'_> {
         Ok(())
     }
 
-    /// A session with a long transcript whose last turn keeps streaming.
+    /// A session with a long transcript whose last turn keeps streaming, and more chats from
+    /// Slack.
     async fn busy(&self) -> Result<()> {
+        for (index, by) in BUSY_ASKERS.iter().cycle().take(BUSY_BOT_SESSIONS).enumerate() {
+            let title = format!("Question {} from Slack", index + 1);
+            let prompt = format!("{title}: can you look into it?");
+            let chat = ("trash-can", *by, None, None, "claude-personal", &*title, &*prompt);
+            self.bot_session(&chat).await?;
+        }
         let session = self
             .session(
                 "devbox",
@@ -931,7 +942,7 @@ impl Scenario<'_> {
     /// sends it its prompt.
     async fn bot_session(
         &self,
-        &(bot, by, channel, repo, account, title, prompt): &BotSession,
+        &(bot, by, channel, repo, account, title, prompt): &BotSession<'_>,
     ) -> Result<SessionId> {
         let daemon = self.daemon("devbox")?;
         let origin = SessionOrigin {
