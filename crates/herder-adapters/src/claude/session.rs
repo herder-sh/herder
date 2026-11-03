@@ -596,6 +596,7 @@ impl Session {
                 })
                 .collect();
             turn.failure.api_error = Some(error);
+            turn.failure.reason = assistant.api_error;
             turn.failure.text = Some(text.join("\n"));
             return;
         }
@@ -996,6 +997,7 @@ impl Session {
         } else {
             let mut failure = std::mem::take(&mut turn.failure);
             failure.status = result.api_error_status;
+            failure.reason = failure.reason.or(result.api_error);
             failure.detail = result
                 .result
                 .filter(|text| !text.is_empty())

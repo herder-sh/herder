@@ -1,0 +1,7 @@
+# The account's endpoint cannot be reached: the CLI gives up after its retries, as Claude Code
+# does against a closed port (herder-adapters fixtures/claude/unreachable.jsonl), and waits to
+# be shut down.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Refactor the parser."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-1", "error": {"class": "unreachable", "message": "API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)"}}}
+{"expect": {"type": "shutdown"}}

@@ -212,7 +212,10 @@ fn provider_checks(config: &Config) -> Vec<Check> {
             .iter()
             .filter(|(_, a)| a.provider == *provider);
         for (id, account) in accounts {
-            checks.push(account_check(id, account, logins.get(provider), name));
+            checks.push(match &account.endpoint {
+                Some(endpoint) => endpoint_check(id, &endpoint.url, name),
+                None => account_check(id, account, logins.get(provider), name),
+            });
         }
     }
     checks
@@ -315,6 +318,51 @@ fn account_check(
         Ok(false) => Check::fail(subject, format!("not logged in, {location}"), relogin()),
         Err(err) => Check::fail(subject, format!("cannot tell: {err}"), relogin()),
     }
+}
+
+/// An endpoint account needs no login: its endpoint `url` accepts TCP connections.
+fn endpoint_check(id: &AccountId, url: &str, provider: &str) -> Check {
+    let subject = format!("account {id} ({provider})");
+    let hint = || {
+        format!(
+            "start the API server at {url}, or check that this machine can reach it (network, \
+             firewall)"
+        )
+    };
+    let target = url::Url::parse(url)
+        .ok()
+        .and_then(|url| Some((url.host_str()?.to_owned(), url.port_or_known_default()?)));
+    let Some((host, port)) = target else {
+        return Check::fail(
+            subject,
+            format!("endpoint {url} is not an http or https URL"),
+            "fix its endpoint in the account's settings".into(),
+        );
+    };
+    // An IPv6 host comes bracketed, which name resolution does not take.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match connect((host, port)) {
+        Ok(()) => Check::pass(subject, format!("endpoint {url} reachable")),
+        Err(detail) => Check::fail(subject, format!("endpoint {url} {detail}"), hint()),
+    }
+}
+
+/// Whether some address `target` resolves to accepts a TCP connection; why not otherwise.
+fn connect(target: impl ToSocketAddrs) -> Result<(), String> {
+    let addresses = target
+        .to_socket_addrs()
+        .map_err(|err| format!("cannot be resolved: {err}"))?;
+    let mut last = None;
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
+            Ok(_) => return Ok(()),
+            Err(err) => last = Some(err),
+        }
+    }
+    Err(last.map_or_else(
+        || "resolves to no address".to_owned(),
+        |err| format!("unreachable: {err}"),
+    ))
 }
 
 /// The shell command that runs `login` in `dir`: the provider's own login, which herder runs
@@ -450,22 +498,10 @@ fn vault_check(vault: &VaultConfig) -> Check {
          firewall)"
             .to_owned()
     };
-    let addresses = match vault.address.to_socket_addrs() {
-        Ok(addresses) => addresses,
-        Err(err) => return Check::fail(subject, format!("cannot resolve it: {err}"), hint()),
-    };
-    let mut last = None;
-    for address in addresses {
-        match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
-            Ok(_) => return Check::pass(subject, "reachable"),
-            Err(err) => last = Some(err),
-        }
+    match connect(vault.address.as_str()) {
+        Ok(()) => Check::pass(subject, "reachable"),
+        Err(detail) => Check::fail(subject, detail, hint()),
     }
-    let detail = last.map_or_else(
-        || "resolves to no address".to_owned(),
-        |err| format!("unreachable: {err}"),
-    );
-    Check::fail(subject, detail, hint())
 }
 
 /// Runs `program` with `args` to completion, or kills it after [`COMMAND_TIMEOUT`].
@@ -663,6 +699,56 @@ binary = "{dir}/no-codex"
         assert_eq!(check.status, Status::Pass, "{check:?}");
         assert!(check.detail.ends_with("4 accounts"), "{check:?}");
         config.unwrap()
+    }
+
+    #[test]
+    fn an_endpoint_account_is_checked_by_reaching_its_endpoint_not_by_a_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = install(dir.path(), "claude", FAKE_CLAUDE);
+        let up = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let down = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let down_port = down.local_addr().unwrap().port();
+        drop(down);
+        let path = dir.path().join("daemon.toml");
+        std::fs::write(
+            &path,
+            format!(
+                r#"
+[[accounts]]
+id = "fleet-up"
+provider = "claude"
+endpoint = "http://{up}"
+key = "cpa-client-key"
+
+[[accounts]]
+id = "fleet-down"
+provider = "claude"
+endpoint = "http://127.0.0.1:{down_port}/v1"
+key = "cpa-client-key"
+
+[providers.claude]
+binary = "{claude}"
+"#,
+                up = up.local_addr().unwrap(),
+                claude = claude.display(),
+            ),
+        )
+        .unwrap();
+        let (_, config) = config_check(Some(&path));
+        let checks = provider_checks(&config.unwrap());
+        assert_eq!(
+            statuses(&checks),
+            [
+                (Status::Pass, "claude CLI"),
+                (Status::Fail, "account fleet-down (claude)"),
+                (Status::Pass, "account fleet-up (claude)"),
+            ]
+        );
+        assert!(checks[1].detail.contains("unreachable"), "{:?}", checks[1]);
+        assert!(checks[2].detail.contains("reachable"), "{:?}", checks[2]);
+        for check in &checks {
+            assert!(!format!("{check:?}").contains("cpa-client-key"));
+        }
     }
 
     #[test]

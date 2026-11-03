@@ -16,6 +16,10 @@ redacted on top of `herder dev record`'s defaults (which catch the email address
 learned from a throwaway `claude` first.
 
 limit_reached.jsonl is hand-built (see its header comment) and is not recorded here.
+unreachable.jsonl runs as an endpoint account whose endpoint is down: `claude` gets an empty
+config dir of its own, `ANTHROPIC_BASE_URL` at a closed local port and a dummy
+`ANTHROPIC_AUTH_TOKEN`, so it reaches no provider; it gives up after its own retries, about
+three minutes.
 full_access.jsonl runs in `bypassPermissions`, the adapter's flag for `full_access`.
 """
 
@@ -26,6 +30,7 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -52,9 +57,10 @@ SEED_PREAMBLE = (
 
 
 class Claude:
-    def __init__(self, command):
+    def __init__(self, command, env=None):
         self.process = subprocess.Popen(
-            command, cwd=CWD, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1
+            command, cwd=CWD, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+            env=env,
         )
         self.lines = queue.Queue()
         self.next_request = 0
@@ -240,6 +246,24 @@ def scenario_seed(claude):
     claude.until(is_result)
 
 
+def scenario_unreachable(claude):
+    claude.call({"subtype": "initialize"})
+    claude.prompt("Reply with the word ok.")
+    claude.until(is_result)
+
+
+def endpoint_down():
+    """The environment of an endpoint account whose endpoint refuses connections."""
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    env["CLAUDE_CONFIG_DIR"] = tempfile.mkdtemp(prefix="herder-endpoint-")
+    env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:9"
+    env["ANTHROPIC_AUTH_TOKEN"] = "herder-fixture-key"
+    return env
+
+
+# Scenarios recorded in another environment than the daemon's own, built when recorded.
+ENVS = {"unreachable": endpoint_down}
+
 SCENARIOS = {
     "turn": scenario_turn,
     "switch": scenario_switch,
@@ -249,15 +273,17 @@ SCENARIOS = {
     "interrupt": scenario_interrupt,
     "seed": scenario_seed,
     "full_access": scenario_full_access,
+    "unreachable": scenario_unreachable,
 }
 
 
-def private_values():
+def private_values(env=None):
     """Values to redact that the default patterns do not catch."""
-    claude = Claude(CLAUDE)
+    claude = Claude(CLAUDE, env)
     account = claude.call({"subtype": "initialize"})["response"]["response"].get("account", {})
     claude.close()
     values = {socket.gethostname(), os.path.expanduser("~")}
+    values.update(v for v in [(env or {}).get("CLAUDE_CONFIG_DIR")] if v)
     values.update(v for v in [account.get("organization")] if v)
     return sorted(values)
 
@@ -267,16 +293,18 @@ def main():
     version = subprocess.run(
         ["claude", "--version"], capture_output=True, text=True, check=True
     ).stdout.split()[0]
-    redact = []
-    for value in private_values():
-        redact += ["--redact", re.escape(value)]
     for name in sys.argv[1:] or SCENARIOS:
+        env = ENVS[name]() if name in ENVS else None
+        redact = []
+        for value in private_values(env):
+            redact += ["--redact", re.escape(value)]
         mode = MODES.get(name, "default")
         command = [mode if arg == "default" else arg for arg in CLAUDE]
         claude = Claude(
             [os.path.join(os.getcwd(), "target/debug/herder"), "dev", "record", "claude", name,
              "--out", os.path.join(HERE, f"{name}.jsonl"), "--cli-version", version,
-             *redact, "--", *command]
+             *redact, "--", *command],
+            env,
         )
         SCENARIOS[name](claude)
         claude.close()

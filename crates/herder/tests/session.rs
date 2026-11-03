@@ -71,6 +71,7 @@ async fn daemon_playing(
             label: "Work".into(),
             config_dir: Some(dir.join("account")),
             fallback: false,
+            endpoint: None,
         },
     )]);
     if switching {
@@ -83,6 +84,7 @@ async fn daemon_playing(
                     label: id.into(),
                     config_dir: Some(dir.join(id)),
                     fallback: false,
+                    endpoint: None,
                 },
             );
         }

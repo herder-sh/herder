@@ -189,6 +189,7 @@ fn drill_host() {
             label: host.to_owned(),
             config_dir: Some(dir.join("account")),
             fallback: false,
+            endpoint: None,
         },
     )]);
     tokio::runtime::Runtime::new()

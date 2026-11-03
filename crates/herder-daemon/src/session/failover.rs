@@ -1,14 +1,17 @@
-//! Reactive failover: which account a session rotates to when its turn hits a usage limit.
+//! Reactive failover: which account a session rotates to when its turn hits a usage limit, or
+//! cannot reach its endpoint.
 //!
-//! Only a turn that fails with `limit_reached` triggers it, never usage percentages alone. The
+//! Only a turn that fails with `limit_reached` or `unreachable` triggers it, never usage
+//! percentages alone. An unreachable account is passed over for [`UNREACHABLE`]. The
 //! session then rotates to the best available account ([`best`]) and retries the failed turn's
 //! prompt there, once ([`super::actor`]). Every account takes part, but a fallback account
 //! ([`super::AccountConfig::fallback`]) comes after every other available one, whatever its
 //! room: it is used only once every rotating account of the provider is limited. An account is
 //! available when it is of the session's own provider, is not the failing one, has an adapter,
 //! and is not limited: no window of its usage ([`crate::usage`]) is at 100% before it resets,
-//! it has not hit a limit since its reset time, and it has not failed to log in since it last
-//! worked ([`Limits`]). Among rotating or fallback accounts alike, those whose usage is known
+//! it has not hit a limit since its reset time, nor been unreachable in the last
+//! [`UNREACHABLE`], and it has not failed to log in since it last worked ([`Limits`]). An
+//! endpoint account reports no usage, so it ranks as one whose usage is not known. Among rotating or fallback accounts alike, those whose usage is known
 //! come before those whose usage is not,
 //! which may be used up or logged out without herder knowing. Among them the one refilled
 //! soonest is best, as what it has left is lost at its reset anyway; then the one with the most
@@ -33,6 +36,10 @@ use crate::usage::Windows;
 
 /// How long an account that hit its limit is passed over when its provider gives no reset time.
 pub const UNKNOWN_RESET: Duration = Duration::from_secs(30 * 60);
+
+/// How long an account whose endpoint could not be reached is passed over; a session with no
+/// other account to move to retries on it after that.
+pub const UNREACHABLE: Duration = Duration::from_secs(3 * 60);
 
 /// How sessions fail over: the `[failover]` table.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -83,6 +90,17 @@ impl Limits {
         let mut limits = lock(&self.until);
         let entry = limits.entry(account_id.clone()).or_insert(until);
         *entry = (*entry).max(until);
+    }
+
+    /// `account_id` could not reach its endpoint at `now`: it is passed over until
+    /// [`UNREACHABLE`] from now, or longer if it already was, until the returned time.
+    pub(crate) fn unreachable(&self, account_id: &AccountId, now: Timestamp) -> Timestamp {
+        let mut limits = lock(&self.until);
+        let entry = limits
+            .entry(account_id.clone())
+            .or_insert(now + UNREACHABLE);
+        *entry = (*entry).max(now + UNREACHABLE);
+        *entry
     }
 
     /// `account_id` failed to log in at `now`: it needs logging in again, and is passed over,
@@ -240,6 +258,7 @@ mod tests {
                     label: id.to_string(),
                     config_dir: None,
                     fallback: false,
+                    endpoint: None,
                 };
                 (AccountId::new(*id), account)
             })
@@ -305,6 +324,26 @@ mod tests {
                 account.fallback = true;
             }
         }
+    }
+
+    #[test]
+    fn an_unreachable_account_is_passed_over_for_a_while_and_a_limit_is_not_cut_short() {
+        let mut case = Case::new(&[("a", Provider::Claude), ("b", Provider::Claude)]);
+        let a = AccountId::new("a");
+        assert_eq!(
+            case.limits.unreachable(&a, case.now),
+            case.now + UNREACHABLE
+        );
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("b"));
+        case.now += UNREACHABLE;
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("a"));
+        // An unreachable endpoint never shortens a limit's longer wait.
+        case.limits.hit(&a, &[], case.now);
+        assert_eq!(
+            case.limits.unreachable(&a, case.now),
+            case.now + UNKNOWN_RESET
+        );
+        assert!(case.limits.needs_login(&a).is_none());
     }
 
     #[test]

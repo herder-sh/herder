@@ -37,13 +37,14 @@ use crate::auth::control::addresses;
 use crate::auth::{self, Auth};
 use crate::aws::Aws;
 use crate::bots::Bots;
+use crate::config::AccountSettings;
 use crate::hub::Hub;
 use crate::hub::Outbox;
 use crate::listen;
 use crate::login::{Login, Logins, NewAccount};
 use crate::mcp::{Control, ControlFuture, Overview};
 use crate::providers::Providers;
-use crate::session::SessionManager;
+use crate::session::{Endpoint, SessionManager};
 use crate::settings::Settings;
 use crate::terminal::{LoginHooks, OnExit, Terminals};
 use crate::vault::Link;
@@ -513,25 +514,34 @@ impl<B: Backend> Shared<B> {
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
         match command {
-            CommandBody::AddEndpointAccount { .. }
-            | CommandBody::SetAccountSettings {
-                endpoint: Some(_), ..
+            CommandBody::AddEndpointAccount {
+                account_id,
+                provider,
+                label,
+                endpoint,
+                key,
+            } => {
+                let endpoint = Endpoint { url: endpoint, key };
+                self.logins
+                    .add_endpoint(&account_id, &provider, label.as_deref(), endpoint)?;
+                Ok(CommandResult::Applied)
             }
-            | CommandBody::SetAccountSettings { key: Some(_), .. } => Err(ErrorInfo {
-                code: ErrorCode::Unsupported,
-                message: "this daemon cannot run endpoint accounts yet".to_owned(),
-            }),
             CommandBody::SetAccountSettings {
                 account_id,
                 label,
                 config_dir,
                 fallback,
-                endpoint: None,
-                key: None,
+                endpoint,
+                key,
             } => {
-                self.logins
-                    .set_settings(&account_id, &label, config_dir.as_deref(), fallback)
-                    .await?;
+                let settings = AccountSettings {
+                    label: &label,
+                    config_dir: config_dir.as_deref(),
+                    fallback,
+                    endpoint: endpoint.as_deref(),
+                    key: key.as_ref(),
+                };
+                self.logins.set_settings(&account_id, &settings).await?;
                 Ok(CommandResult::Applied)
             }
             CommandBody::ListAwsProfiles => Ok(CommandResult::AwsProfiles {

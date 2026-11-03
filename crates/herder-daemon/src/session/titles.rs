@@ -329,11 +329,12 @@ fn chosen(session: &Session) -> bool {
 async fn answer(
     run: &Run,
     launcher: &[std::ffi::OsString],
-    env: BTreeMap<String, String>,
+    mut env: BTreeMap<String, String>,
     cwd: &Path,
     prompt: &str,
 ) -> Result<String, String> {
     let cli = &run.cli;
+    crate::accounts::endpoint_env(&run.account, &mut env);
     let mut command = match launcher.split_first() {
         Some((program, args)) => {
             let mut command = Command::new(program);

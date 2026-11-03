@@ -331,6 +331,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             label: "Work".into(),
             config_dir: Some(account_dir.clone()),
             fallback: false,
+            endpoint: None,
         },
     )]);
     let shutdown = CancellationToken::new();

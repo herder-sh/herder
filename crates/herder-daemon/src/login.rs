@@ -60,7 +60,7 @@ use tracing::{info, warn};
 
 use crate::accounts::Clis;
 use crate::config::{self, ID_RULE, resolve_path, valid_id};
-use crate::session::{AccountConfig, SessionManager};
+use crate::session::{AccountConfig, Endpoint, SessionManager};
 
 /// How long the login status check may take.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(30);
@@ -269,10 +269,12 @@ impl Logins {
     pub(crate) async fn set_settings(
         &self,
         account_id: &AccountId,
-        label: &str,
-        config_dir: Option<&str>,
-        fallback: Option<bool>,
+        settings: &config::AccountSettings<'_>,
     ) -> Result<(), ErrorInfo> {
+        if let Some(url) = settings.endpoint {
+            config::check_endpoint(url)
+                .map_err(|err| error(ErrorCode::BadRequest, format!("endpoint: {err:#}")))?;
+        }
         let inner = self.inner.as_ref().ok_or_else(|| {
             error(
                 ErrorCode::Unsupported,
@@ -287,14 +289,97 @@ impl Logins {
                     &inner.config_file,
                     account_id,
                     previous,
-                    label,
-                    config_dir,
-                    fallback,
+                    settings,
                     may_change_directory,
                 )
                 .map_err(|err| error(ErrorCode::BadRequest, format!("{err:#}")))
             })
             .await
+    }
+
+    /// Adds endpoint account `account_id`: `provider`'s CLI runs against `endpoint` with
+    /// `key`, in a config dir herder creates, needing no login. Saved to the daemon config,
+    /// then offered to sessions and announced to clients. A login running for the same id
+    /// fails to save once it ends.
+    pub(crate) fn add_endpoint(
+        &self,
+        account_id: &AccountId,
+        provider: &Provider,
+        label: Option<&str>,
+        endpoint: Endpoint,
+    ) -> Result<(), ErrorInfo> {
+        self.add_endpoint_with_env(account_id, provider, label, endpoint, |key| {
+            std::env::var_os(key)
+        })
+    }
+
+    fn add_endpoint_with_env(
+        &self,
+        account_id: &AccountId,
+        provider: &Provider,
+        label: Option<&str>,
+        endpoint: Endpoint,
+        env: impl Fn(&str) -> Option<OsString>,
+    ) -> Result<(), ErrorInfo> {
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            error(
+                ErrorCode::Unsupported,
+                "this daemon adds no accounts".into(),
+            )
+        })?;
+        if *provider != Provider::Claude {
+            return Err(error(
+                ErrorCode::Unsupported,
+                format!(
+                    "herder cannot point {} accounts at an endpoint yet",
+                    provider.as_str()
+                ),
+            ));
+        }
+        let bad = |message: String| error(ErrorCode::BadRequest, message);
+        if !valid_id(account_id.as_str()) {
+            return Err(bad(format!(
+                "account id {:?} {ID_RULE}",
+                account_id.as_str()
+            )));
+        }
+        if inner.sessions.account(account_id).is_some() {
+            return Err(bad(format!("account {account_id} already exists")));
+        }
+        config::check_endpoint(&endpoint.url).map_err(|err| bad(format!("endpoint: {err:#}")))?;
+        let dir = config::endpoint_dir(provider, account_id, &env)
+            .map_err(|err| bad(format!("config dir: {err:#}")))?;
+        let account = AccountConfig {
+            provider: provider.clone(),
+            label: label
+                .map(str::trim)
+                .filter(|label| !label.is_empty())
+                .map_or_else(|| account_id.to_string(), str::to_owned),
+            config_dir: Some(dir.clone()),
+            fallback: false,
+            endpoint: Some(endpoint),
+        };
+        let _saving = inner.saving.lock().unwrap_or_else(PoisonError::into_inner);
+        let created = make_dir(&dir)?;
+        if let Err(err) =
+            config::append_account_with_env(&inner.config_file, account_id, &account, &env)
+        {
+            if created && let Err(err) = std::fs::remove_dir(&dir) {
+                warn!(%account_id, "cannot remove {}: {err}", dir.display());
+            }
+            return Err(bad(format!("cannot add account {account_id}: {err:#}")));
+        }
+        if !inner.sessions.add_account(account_id.clone(), account) {
+            return Err(error(
+                ErrorCode::Conflict,
+                format!(
+                    "account {account_id} was saved, but one with its id already runs; restart \
+                     the daemon"
+                ),
+            ));
+        }
+        info!(%account_id, config_file = %inner.config_file.display(), "endpoint account added");
+        Ok(())
     }
 
     /// The login of `account`, in its config dir, which is created empty if it does not exist.
@@ -427,6 +512,15 @@ impl Logins {
                 format!("account {account_id} does not exist"),
             )
         })?;
+        if account.endpoint.is_some() {
+            return Err(error(
+                ErrorCode::BadRequest,
+                format!(
+                    "account {account_id} runs against an endpoint and has no login; change its \
+                     key in its settings"
+                ),
+            ));
+        }
         if logging_in.contains(account_id) {
             return Err(error(
                 ErrorCode::Conflict,
@@ -580,6 +674,7 @@ impl Pending {
             label,
             config_dir: place.config_dir,
             fallback: false,
+            endpoint: None,
         };
         let _saving = inner.saving.lock().unwrap_or_else(PoisonError::into_inner);
         if let Err(err) = config::append_account(&inner.config_file, &account_id, &account) {
@@ -693,6 +788,20 @@ mod tests {
     use crate::session::{self, Accounts, Adapters, Setup};
     use crate::worktree::Worktrees;
 
+    fn settings<'a>(
+        label: &'a str,
+        config_dir: Option<&'a str>,
+        fallback: Option<bool>,
+    ) -> config::AccountSettings<'a> {
+        config::AccountSettings {
+            label,
+            config_dir,
+            fallback,
+            endpoint: None,
+            key: None,
+        }
+    }
+
     struct Fixture {
         home: tempfile::TempDir,
         logins: Logins,
@@ -731,6 +840,7 @@ mod tests {
                 label: "Codex".into(),
                 config_dir: None,
                 fallback: false,
+                endpoint: None,
             },
         )]);
         let setup = Setup {
@@ -781,6 +891,21 @@ mod tests {
                 })
         }
 
+        fn add_endpoint(&self, id: &str, provider: Provider, url: &str) -> Result<(), ErrorInfo> {
+            let home = self.home.path().as_os_str().to_owned();
+            let endpoint = Endpoint {
+                url: url.into(),
+                key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+            };
+            self.logins.add_endpoint_with_env(
+                &AccountId::new(id),
+                &provider,
+                Some("Fleet"),
+                endpoint,
+                move |key| (key == "HOME").then(|| home.clone()),
+            )
+        }
+
         fn again(&self, id: &str) -> Result<Login, ErrorInfo> {
             let home = self.home.path().as_os_str().to_owned();
             let logging_in = [AccountId::new("busy")];
@@ -799,6 +924,7 @@ mod tests {
                     label: id.into(),
                     config_dir: dir,
                     fallback: false,
+                    endpoint: None,
                 },
             ));
         }
@@ -1027,6 +1153,7 @@ mod tests {
                 label: "Used".into(),
                 config_dir: Some(used),
                 fallback: false,
+                endpoint: None,
             },
         );
         let cases = [
@@ -1206,6 +1333,146 @@ mod tests {
         assert_eq!(f.sessions.accounts().len(), 1);
     }
     #[tokio::test]
+    async fn an_endpoint_account_is_added_without_a_login_and_its_key_stays_on_the_host() {
+        let f = fixture().await;
+        let outbox = Arc::new(crate::hub::Outbox::default());
+        f.hub.connect(&outbox, herder_protocol::Role::Owner);
+        f.add_endpoint("fleet", Provider::Claude, "http://127.0.0.1:8317")
+            .unwrap();
+
+        let dir = f.home.path().join(".claude-fleet");
+        assert!(dir.is_dir(), "herder makes its config dir");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "it holds no login"
+        );
+        let saved = std::fs::read_to_string(f.home.path().join("daemon.toml")).unwrap();
+        assert!(
+            saved.contains("endpoint = \"http://127.0.0.1:8317\"\nkey = \"cpa-client-key\""),
+            "{saved}"
+        );
+        let fleet = f.sessions.account(&AccountId::new("fleet")).unwrap();
+        assert_eq!(fleet.config_dir, Some(dir.clone()));
+        assert_eq!(fleet.label, "Fleet");
+        let Some(herder_protocol::ServerMessage::Accounts { accounts, .. }) = outbox.pop() else {
+            panic!("the new account was not announced");
+        };
+        let fleet = accounts
+            .iter()
+            .find(|account| account.account_id == AccountId::new("fleet"))
+            .unwrap();
+        assert_eq!(fleet.endpoint.as_deref(), Some("http://127.0.0.1:8317"));
+        assert_eq!(fleet.config_dir, Some(dir.to_string_lossy().into_owned()));
+        let wire = serde_json::to_string(&accounts).unwrap();
+        assert!(!wire.contains("cpa-client-key"), "{wire}");
+
+        // It has no login to run.
+        let err = f.again("fleet").err().unwrap();
+        assert_eq!(err.code, ErrorCode::BadRequest);
+        assert!(err.message.contains("no login"), "{}", err.message);
+    }
+
+    #[tokio::test]
+    async fn adding_an_endpoint_account_refuses_what_herder_cannot_run() {
+        let f = fixture().await;
+        let saved = std::fs::read_to_string(f.home.path().join("daemon.toml")).ok();
+        let cases = [
+            (
+                "codex",
+                Provider::Claude,
+                "http://cpa:8317",
+                ErrorCode::BadRequest,
+            ),
+            (
+                "bad id",
+                Provider::Claude,
+                "http://cpa:8317",
+                ErrorCode::BadRequest,
+            ),
+            ("fleet", Provider::Claude, "cpa:8317", ErrorCode::BadRequest),
+            (
+                "fleet",
+                Provider::Claude,
+                "file:///tmp/cpa",
+                ErrorCode::BadRequest,
+            ),
+            (
+                "fleet",
+                Provider::Codex,
+                "http://cpa:8317",
+                ErrorCode::Unsupported,
+            ),
+        ];
+        for (id, provider, url, code) in cases {
+            let err = f.add_endpoint(id, provider, url).unwrap_err();
+            assert_eq!(err.code, code, "{id} {url}: {}", err.message);
+            assert!(!err.message.contains("cpa-client-key"));
+        }
+        assert_eq!(
+            std::fs::read_to_string(f.home.path().join("daemon.toml")).ok(),
+            saved
+        );
+        assert_eq!(f.sessions.accounts().len(), 1);
+        assert!(!f.home.path().join(".claude-fleet").exists());
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_accounts_endpoint_and_key_are_set_but_not_a_login_accounts() {
+        let f = fixture().await;
+        let path = f.home.path().join("daemon.toml");
+        std::fs::write(&path, "[[accounts]]\nid = 'codex'\nprovider = 'codex'\n").unwrap();
+        f.add_endpoint("fleet", Provider::Claude, "http://127.0.0.1:8317")
+            .unwrap();
+        let fleet = AccountId::new("fleet");
+        let key = herder_protocol::SecretValue::new("new-key").unwrap();
+        let change = config::AccountSettings {
+            endpoint: Some("https://cpa.example"),
+            key: Some(&key),
+            ..settings("Fleet", None, None)
+        };
+        f.logins.set_settings(&fleet, &change).await.unwrap();
+        let endpoint = f.sessions.account(&fleet).unwrap().endpoint.unwrap();
+        assert_eq!(endpoint.url, "https://cpa.example");
+        assert_eq!(endpoint.key, key);
+
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let refused = [
+            (
+                "codex",
+                config::AccountSettings {
+                    endpoint: Some("http://cpa"),
+                    ..settings("Codex", None, None)
+                },
+            ),
+            (
+                "codex",
+                config::AccountSettings {
+                    key: Some(&key),
+                    ..settings("Codex", None, None)
+                },
+            ),
+            ("fleet", settings("Fleet", Some("/tmp/herder-fleet"), None)),
+            (
+                "fleet",
+                config::AccountSettings {
+                    endpoint: Some("not a url"),
+                    ..settings("Fleet", None, None)
+                },
+            ),
+        ];
+        for (id, change) in refused {
+            let err = f
+                .logins
+                .set_settings(&AccountId::new(id), &change)
+                .await
+                .unwrap_err();
+            assert_eq!(err.code, ErrorCode::BadRequest, "{id}: {}", err.message);
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+    }
+
+    #[tokio::test]
     async fn account_settings_refresh_runtime_and_reject_unknown_accounts() {
         let f = fixture().await;
         let outbox = Arc::new(crate::hub::Outbox::default());
@@ -1219,9 +1486,7 @@ mod tests {
         f.logins
             .set_settings(
                 &AccountId::new("codex"),
-                "Personal",
-                Some("/tmp/herder-personal"),
-                Some(true),
+                &settings("Personal", Some("/tmp/herder-personal"), Some(true)),
             )
             .await
             .unwrap();
@@ -1235,7 +1500,7 @@ mod tests {
         assert_eq!(account.config_dir.as_deref(), Some("/tmp/herder-personal"));
         assert_eq!(
             f.logins
-                .set_settings(&AccountId::new("missing"), "Missing", None, None)
+                .set_settings(&AccountId::new("missing"), &settings("Missing", None, None))
                 .await
                 .unwrap_err()
                 .code,
@@ -1280,13 +1545,13 @@ mod tests {
             .unwrap();
         let account = AccountId::new("codex");
         f.logins
-            .set_settings(&account, "Renamed", None, None)
+            .set_settings(&account, &settings("Renamed", None, None))
             .await
             .unwrap();
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(
             f.logins
-                .set_settings(&account, "Renamed", Some("/tmp/new-login"), None)
+                .set_settings(&account, &settings("Renamed", Some("/tmp/new-login"), None))
                 .await
                 .is_err()
         );
@@ -1304,7 +1569,7 @@ mod tests {
             })
             .unwrap();
         f.logins
-            .set_settings(&account, "Renamed", Some("/tmp/new-login"), None)
+            .set_settings(&account, &settings("Renamed", Some("/tmp/new-login"), None))
             .await
             .unwrap();
         assert_eq!(
