@@ -1083,6 +1083,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     fingerprint: "3f9a".repeat(16),
                     backup: true,
                     secrets: false,
+                    cliproxyapi: Some("https://cpa.lan:8317".into()),
                 }),
                 volume: None,
                 local_vault: false,
@@ -3298,6 +3299,7 @@ fn vault_link_commands_have_their_wire_form() {
             fingerprint: "ab".into(),
             backup: false,
             secrets: true,
+            cliproxyapi: None,
         }),
         volume: None,
         local_vault: false,
@@ -3852,6 +3854,7 @@ fn vault_fixtures() -> Vec<VaultMessage> {
             replication_version: REPLICATION_VERSION,
             build: "herder/0.0.0".into(),
             acked: vec![cursor(12)],
+            cliproxyapi: Some("https://cpa.lan:8317".into()),
         }),
         VaultMessage::Ack(cursor(17)),
         VaultMessage::Rejected {

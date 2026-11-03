@@ -390,6 +390,12 @@ pub struct VaultHello {
     /// such as after restoring an older backup; its next events at those seqs would conflict,
     /// so the host does not replicate that session until someone resolves it.
     pub acked: Vec<Cursor>,
+    /// Where this host reaches the vault's CLIProxyAPI, such as `https://cpa.example.com:8317`;
+    /// sent only when the vault runs one and holds this host's client key, the secret
+    /// `CLIPROXYAPI_KEY` granted to the host for its own use. An endpoint account
+    /// with this `endpoint` and that `key_secret` runs on the vault's provider logins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cliproxyapi: Option<String>,
 }
 
 /// Why the vault refused a batch.

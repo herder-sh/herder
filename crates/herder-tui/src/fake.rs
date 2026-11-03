@@ -1468,6 +1468,7 @@ pub fn backups() -> App {
         fingerprint: vault.fingerprint,
         backup: true,
         secrets: true,
+        cliproxyapi: None,
     };
     let effects = app.update(Msg::Key(ratatui::crossterm::event::KeyEvent::new(
         ratatui::crossterm::event::KeyCode::Char('m'),
