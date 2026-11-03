@@ -332,8 +332,10 @@ oauth:
     )
 }
 
-/// Sets the `[vault] cliproxyapi` URL in the vault config at `path`, or removes it, keeping
-/// the rest of the file as written.
+/// Sets the `[vault] cliproxyapi` URL in the vault config at `path`, and `cliproxyapi_endpoint`
+/// to the same URL, or removes both, keeping the rest of the file as written. The vault
+/// manages the proxy at the address hosts reach it at: the loopback one, which only hosts on
+/// this machine reach, or the certificate's name, which resolves to this machine here too.
 fn set_vault_url(path: &Path, url: Option<&str>) -> Result<()> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -348,12 +350,14 @@ fn set_vault_url(path: &Path, url: Option<&str>) -> Result<()> {
                 .as_table_mut()
                 .with_context(|| format!("[vault] in {} is not a table", path.display()))?;
             table.insert("cliproxyapi", toml_edit::value(url));
+            table.insert("cliproxyapi_endpoint", toml_edit::value(url));
         }
         None => {
             let Some(table) = doc.get_mut("vault").and_then(toml_edit::Item::as_table_mut) else {
                 return Ok(());
             };
-            if table.remove("cliproxyapi").is_none() {
+            let endpoint = table.remove("cliproxyapi_endpoint");
+            if table.remove("cliproxyapi").is_none() && endpoint.is_none() {
                 return Ok(());
             }
         }
@@ -583,6 +587,10 @@ mod tests {
             vault.cliproxyapi.as_deref(),
             Some("https://cpa.example.com:8318")
         );
+        assert_eq!(
+            vault.cliproxyapi_endpoint.as_deref(),
+            Some("https://cpa.example.com:8318")
+        );
 
         // Another release is downloaded again.
         std::fs::write(version_path(dir.path()), "1.0.0\n").unwrap();
@@ -601,6 +609,11 @@ mod tests {
             &mut quiet,
         )
         .unwrap();
+        let vault = crate::Config::load_file(&vault_config).unwrap();
+        assert_eq!(
+            vault.cliproxyapi_endpoint.as_deref(),
+            Some("http://127.0.0.1:8317")
+        );
         let login = auth_dir(dir.path()).join("codex-ann.json");
         std::fs::write(&login, "{}").unwrap();
         remove(dir.path(), &vault_config, &mut quiet).unwrap();
@@ -608,6 +621,7 @@ mod tests {
         assert!(login.is_file());
         let vault = crate::Config::load_file(&vault_config).unwrap();
         assert_eq!(vault.cliproxyapi, None);
+        assert_eq!(vault.cliproxyapi_endpoint, None);
         // Again, and with no vault config, it has nothing left to do.
         remove(dir.path(), &vault_config, &mut quiet).unwrap();
         remove(dir.path(), &dir.path().join("none.toml"), &mut quiet).unwrap();
