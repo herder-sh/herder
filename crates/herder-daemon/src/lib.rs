@@ -396,6 +396,7 @@ mod tests {
             vault: None,
             retention: Default::default(),
             cliproxyapi: None,
+            cliproxyapi_endpoint: None,
             mcp_servers: Vec::new(),
             bots: Vec::new(),
             self_update: None,

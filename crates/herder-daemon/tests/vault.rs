@@ -1958,7 +1958,7 @@ async fn a_paired_host_runs_on_the_vaults_cliproxyapi_with_the_key_it_minted_unt
         &url,
         SecretValue::new("management-secret").unwrap(),
     );
-    let keys = ClientKeys::new(management).unwrap();
+    let keys = ClientKeys::new(management, Some("https://cpa.example.com:8317".into())).unwrap();
     let vault = Vault::start_with(
         &vault_dir,
         0,
@@ -1996,6 +1996,11 @@ async fn a_paired_host_runs_on_the_vaults_cliproxyapi_with_the_key_it_minted_unt
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
+    // The vault said where its proxy is, for a client to add an account on it.
+    assert_eq!(
+        host.secrets.cliproxyapi().as_deref(),
+        Some("https://cpa.example.com:8317")
+    );
     // Its sessions never get it.
     let unknown = fetch(&host, "s1", &["CLIPROXYAPI_KEY"]).await.unwrap_err();
     assert_eq!(unknown.code, SecretErrorCode::Unknown);
@@ -2114,7 +2119,7 @@ async fn an_owner_lists_the_logins_in_the_vaults_cliproxyapi() {
         0,
         LIVENESS_TIMEOUT,
         Some(SECRETS_KEY),
-        Some(ClientKeys::new(management).unwrap()),
+        Some(ClientKeys::new(management, None).unwrap()),
     )
     .await;
     let client = Client::open(

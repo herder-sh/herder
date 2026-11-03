@@ -101,7 +101,11 @@ impl Link {
                     fingerprint: vault.fingerprint,
                     backup: vault.backup,
                     secrets: vault.secrets,
-                    cliproxyapi: None,
+                    // Its key is a secret: of no use to a host that fetches none.
+                    cliproxyapi: vault
+                        .secrets
+                        .then(|| self.setup.secrets.cliproxyapi())
+                        .flatten(),
                 }),
                 volume: None,
                 local_vault: self

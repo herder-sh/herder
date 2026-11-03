@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::store::{self, Kept, Outcome, SecretUse};
-use super::{BUILD, Shared, blocking, secrets};
+use super::{BUILD, Shared, blocking, cliproxyapi, secrets};
 use crate::auth::DeviceRole;
 use crate::ws::{self, Ws};
 
@@ -119,7 +119,7 @@ async fn serve(
         }
     };
     if hello.replication_version != REPLICATION_VERSION {
-        send(ws, hello_message(Vec::new())).await?;
+        send(ws, hello_message(Vec::new(), None)).await?;
         bail!(
             "host {} speaks replication {}, this vault {REPLICATION_VERSION}",
             hello.host_id,
@@ -151,11 +151,19 @@ async fn serve(
         };
         return fail(ws, error).await;
     }
-    // Before the hello, so the host finds its key as soon as it may ask for it.
+    // Before the hello, so the host finds its key as soon as it may ask for it, and is told
+    // where the proxy is only once it holds one.
+    let mut proxy = None;
     if let (Some(keys), Some(key)) = (shared.cliproxyapi.get(), &shared.secrets_key) {
         match keys.ensure_host(&shared.store, key, &host).await {
-            Ok(true) => info!(host_id = %host, "CLIProxyAPI key minted for the host"),
-            Ok(false) => {}
+            Ok(minted) => {
+                if minted {
+                    info!(host_id = %host, "CLIProxyAPI key minted for the host");
+                }
+                if cliproxyapi::set_name(&host).is_some() {
+                    proxy = keys.endpoint().map(str::to_owned);
+                }
+            }
             Err(err) => warn!(host_id = %host, "cannot give the host a CLIProxyAPI key: {err:#}"),
         }
     }
@@ -170,7 +178,7 @@ async fn serve(
         sessions = cursors.len(),
         "host connected"
     );
-    send(ws, hello_message(cursors)).await?;
+    send(ws, hello_message(cursors, proxy)).await?;
 
     let presence = shared.fleet.presence();
     presence.connected(&host);
@@ -335,12 +343,12 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) 
     }
 }
 
-fn hello_message(acked: Vec<Cursor>) -> VaultMessage {
+fn hello_message(acked: Vec<Cursor>, cliproxyapi: Option<String>) -> VaultMessage {
     VaultMessage::Hello(VaultHello {
         replication_version: REPLICATION_VERSION,
         build: BUILD.to_owned(),
         acked,
-        cliproxyapi: None,
+        cliproxyapi,
     })
 }
 
