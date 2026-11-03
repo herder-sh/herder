@@ -27,6 +27,15 @@
 //! The process runs with exactly [`StartRequest::env`] plus `CODEX_HOME` set to the account's
 //! config dir, when it has one. The adapter never looks inside that dir.
 //!
+//! An endpoint account's CLI holds no login: the daemon adds [`endpoint_env`] to the request's
+//! environment, the API server's base URL and its client key. Seeing them, [`command`] adds
+//! [`endpoint_args`], `-c` overrides that register a model provider `herder` at
+//! `<base URL>/v1` speaking the OpenAI Responses API (`wire_api = "responses"`, which a
+//! CLIProxyAPI serves at `/v1/responses`) and make it the thread's provider. Codex reads the
+//! key from the variable the provider's `env_key` names, so it never shows on a command line,
+//! and the user's `config.toml` is never written. Such a provider needs no OpenAI login, so
+//! `account/read` reports none required.
+//!
 //! herder's MCP server and the user's ([`StartRequest::mcp_servers`]) go in `thread/start`'s
 //! (or `thread/resume`'s) `config` as `mcp_servers.<name>` overrides, next to the servers of
 //! the account's `config.toml`; Codex reaches no SSE server, so those are left out.
@@ -63,10 +72,20 @@
 //! [`ErrorClass::LimitReached`], `unauthorized` is [`ErrorClass::Auth`], overload, HTTP and
 //! stream failures and `rateLimitExceeded` (a short-term request rate limit, not the account's
 //! usage limit) are [`ErrorClass::Transient`], and anything else is [`ErrorClass::Fatal`].
+//! Before all that, an HTTP 401, as an endpoint answers a client key it refuses, is
+//! [`ErrorClass::Auth`], and a connection failure with no HTTP status (`additionalDetails` starting
+//! `Connection failed`) is [`ErrorClass::Unreachable`]: Codex could not reach the API at all.
+//!
+//! Codex never fails a turn on such a failure: it retries it without end, reporting each try
+//! as a retried `error` ("Reconnecting... waiting for network"). On an endpoint account the
+//! adapter gives up after [`UNREACHABLE_RETRIES`] of them in a row, about 25 seconds: it
+//! interrupts the turn and fails it as unreachable, so the session can move on. A login
+//! account keeps Codex's own wait, for a network that is down for everyone.
 
 mod session;
 mod wire;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use herder_protocol::{ErrorClass, HERDER_MCP_SERVER, PermissionMode, TurnError};
@@ -147,11 +166,13 @@ pub fn start(transport: Transport, request: StartRequest) -> StartFuture {
 }
 
 /// The `codex app-server` command for `request`: its environment is exactly the request's plus
-/// `CODEX_HOME` when the account has a config dir, in the session's worktree.
+/// `CODEX_HOME` when the account has a config dir, in the session's worktree. An endpoint
+/// account's also gets [`endpoint_args`].
 pub fn command(program: &std::path::Path, request: &StartRequest) -> Command {
     let mut command = request.command(program);
     command
         .arg("app-server")
+        .args(endpoint_args(&request.env))
         .env_clear()
         .envs(&request.env)
         .current_dir(&request.cwd);
@@ -159,6 +180,55 @@ pub fn command(program: &std::path::Path, request: &StartRequest) -> Command {
         command.env("CODEX_HOME", dir);
     }
     command
+}
+
+/// The variable an endpoint account's base URL is handed to the adapter in; [`command`]
+/// turns it into [`endpoint_args`].
+pub const ENDPOINT_URL_ENV: &str = "HERDER_ENDPOINT_URL";
+
+/// The variable an endpoint account's client key is in, which the `herder` provider's
+/// `env_key` names: Codex sends it as a bearer token.
+pub const ENDPOINT_KEY_ENV: &str = "HERDER_ENDPOINT_KEY";
+
+/// The model provider an endpoint account's Codex runs on.
+const ENDPOINT_PROVIDER: &str = "herder";
+
+/// How many retried connection failures in a row an endpoint account's turn gets before the
+/// adapter gives up on it as unreachable.
+pub const UNREACHABLE_RETRIES: u32 = 3;
+
+/// The variables that point `codex` at the API server `url` with client key `key`, instead of
+/// its login; [`command`] reads the URL back into [`endpoint_args`].
+pub fn endpoint_env(url: &str, key: &str) -> [(&'static str, String); 2] {
+    [
+        (ENDPOINT_URL_ENV, url.to_owned()),
+        (ENDPOINT_KEY_ENV, key.to_owned()),
+    ]
+}
+
+/// The `-c` overrides that run `codex` on the endpoint `env` names in [`ENDPOINT_URL_ENV`];
+/// none for a login account. Values are TOML strings; the key stays in `env`.
+pub fn endpoint_args(env: &BTreeMap<String, String>) -> Vec<String> {
+    let Some(url) = env.get(ENDPOINT_URL_ENV) else {
+        return Vec::new();
+    };
+    let base_url = format!("{}/v1", url.trim_end_matches('/'));
+    let provider = format!("model_providers.{ENDPOINT_PROVIDER}");
+    [
+        ("model_provider".to_owned(), ENDPOINT_PROVIDER),
+        (format!("{provider}.name"), ENDPOINT_PROVIDER),
+        (format!("{provider}.base_url"), &base_url),
+        (format!("{provider}.env_key"), ENDPOINT_KEY_ENV),
+        (format!("{provider}.wire_api"), "responses"),
+    ]
+    .into_iter()
+    .flat_map(|(key, value)| ["-c".to_owned(), format!("{key}={}", toml_string(value))])
+    .collect()
+}
+
+/// `value` as a TOML basic string; a JSON string is one.
+fn toml_string(value: &str) -> String {
+    Value::from(value).to_string()
 }
 
 /// Codex's limit on one herder tool call, in seconds: `wait_for` blocks up to 600 s, plus a
@@ -220,9 +290,32 @@ fn sandbox_policy(sandbox: SandboxMode) -> SandboxPolicy {
     }
 }
 
+/// The HTTP status `error`'s `codexErrorInfo` carries, as in
+/// `{"httpConnectionFailed": {"httpStatusCode": 401}}`; `Some(None)` for one with none.
+fn http_status(error: &CodexTurnError) -> Option<Option<u64>> {
+    let detail = error
+        .codex_error_info
+        .as_ref()?
+        .as_object()?
+        .values()
+        .next()?;
+    Some(detail.get("httpStatusCode").and_then(Value::as_u64))
+}
+
+/// Whether `error` is Codex failing to reach the API at all, with no HTTP answer.
+fn unreachable(error: &CodexTurnError) -> bool {
+    http_status(error) == Some(None)
+        && error
+            .additional_details
+            .as_deref()
+            .is_some_and(|details| details.starts_with("Connection failed"))
+}
+
 /// Classifies a Codex turn error; see the module docs.
 fn classify(error: &CodexTurnError) -> TurnError {
     let class = match error.kind() {
+        _ if unreachable(error) => ErrorClass::Unreachable,
+        _ if http_status(error) == Some(Some(401)) => ErrorClass::Auth,
         Some("usageLimitExceeded") => ErrorClass::LimitReached,
         Some("unauthorized") => ErrorClass::Auth,
         Some(
@@ -378,6 +471,107 @@ mod tests {
                 ),
                 (OsStr::new("PATH"), Some(OsStr::new("/usr/bin"))),
             ]
+        );
+    }
+
+    #[test]
+    fn an_endpoint_account_runs_on_a_herder_provider_with_its_key_off_the_command_line() {
+        let mut env = BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]);
+        env.extend(
+            endpoint_env("http://127.0.0.1:8317/", "cpa-client-key").map(|(k, v)| (k.into(), v)),
+        );
+        let request = StartRequest {
+            config_dir: Some(PathBuf::from("/home/u/.codex-fleet")),
+            env,
+            cwd: PathBuf::from("/worktrees/s1"),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+            seed: Vec::new(),
+            resume: None,
+            mcp: None,
+            mcp_servers: Vec::new(),
+            launcher: Vec::new(),
+            skills: None,
+        };
+        let command = command(std::path::Path::new("codex"), &request);
+        let command = command.as_std();
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "app-server",
+                "-c",
+                r#"model_provider="herder""#,
+                "-c",
+                r#"model_providers.herder.name="herder""#,
+                "-c",
+                r#"model_providers.herder.base_url="http://127.0.0.1:8317/v1""#,
+                "-c",
+                r#"model_providers.herder.env_key="HERDER_ENDPOINT_KEY""#,
+                "-c",
+                r#"model_providers.herder.wire_api="responses""#,
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg.contains("cpa-client-key")));
+        let mut envs: Vec<_> = command.get_envs().collect();
+        envs.sort();
+        assert_eq!(
+            envs,
+            [
+                (
+                    OsStr::new("CODEX_HOME"),
+                    Some(OsStr::new("/home/u/.codex-fleet"))
+                ),
+                (
+                    OsStr::new("HERDER_ENDPOINT_KEY"),
+                    Some(OsStr::new("cpa-client-key"))
+                ),
+                (
+                    OsStr::new("HERDER_ENDPOINT_URL"),
+                    Some(OsStr::new("http://127.0.0.1:8317/"))
+                ),
+                (OsStr::new("PATH"), Some(OsStr::new("/usr/bin"))),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_connection_failure_is_unreachable_and_a_refused_key_auth() {
+        let failed = |info: serde_json::Value, details: &str| {
+            let mut error = error(info);
+            error.additional_details = Some(details.into());
+            classify(&error).class
+        };
+        let disconnected = json!({"responseStreamDisconnected": {"httpStatusCode": null}});
+        assert_eq!(
+            failed(
+                disconnected.clone(),
+                "Connection failed: error sending request"
+            ),
+            ErrorClass::Unreachable
+        );
+        assert_eq!(
+            failed(disconnected, "stream closed before response.completed"),
+            ErrorClass::Transient
+        );
+        assert_eq!(
+            failed(
+                json!({"httpConnectionFailed": {"httpStatusCode": 502}}),
+                "Connection failed: bad gateway"
+            ),
+            ErrorClass::Transient,
+            "the server answered"
+        );
+        assert_eq!(
+            failed(
+                json!({"httpConnectionFailed": {"httpStatusCode": 401}}),
+                "unexpected status 401 Unauthorized: {\"error\":\"Invalid API key\"}"
+            ),
+            ErrorClass::Auth,
+            "an endpoint refused the client key"
         );
     }
 

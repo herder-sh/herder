@@ -705,6 +705,7 @@ binary = "{dir}/no-codex"
     fn an_endpoint_account_is_checked_by_reaching_its_endpoint_not_by_a_login() {
         let dir = tempfile::tempdir().unwrap();
         let claude = install(dir.path(), "claude", FAKE_CLAUDE);
+        let codex = install(dir.path(), "codex", "#!/bin/sh\necho 'codex-cli 0.166.0'\n");
         let up = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let down = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let down_port = down.local_addr().unwrap().port();
@@ -726,11 +727,21 @@ provider = "claude"
 endpoint = "http://127.0.0.1:{down_port}/v1"
 key = "cpa-client-key"
 
+[[accounts]]
+id = "codex-fleet"
+provider = "codex"
+endpoint = "http://{up}"
+key = "cpa-client-key"
+
 [providers.claude]
 binary = "{claude}"
+
+[providers.codex]
+binary = "{codex}"
 "#,
                 up = up.local_addr().unwrap(),
                 claude = claude.display(),
+                codex = codex.display(),
             ),
         )
         .unwrap();
@@ -742,8 +753,11 @@ binary = "{claude}"
                 (Status::Pass, "claude CLI"),
                 (Status::Fail, "account fleet-down (claude)"),
                 (Status::Pass, "account fleet-up (claude)"),
+                (Status::Pass, "codex CLI"),
+                (Status::Pass, "account codex-fleet (codex)"),
             ]
         );
+        assert!(checks[4].detail.contains("reachable"), "{:?}", checks[4]);
         assert!(checks[1].detail.contains("unreachable"), "{:?}", checks[1]);
         assert!(checks[2].detail.contains("reachable"), "{:?}", checks[2]);
         for check in &checks {

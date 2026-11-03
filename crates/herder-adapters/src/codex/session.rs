@@ -17,7 +17,10 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use super::wire::{self, Incoming, RpcError, ThreadItem, ToolStatus};
-use super::{classify, mcp_config, policy, sandbox_policy};
+use super::{
+    ENDPOINT_URL_ENV, UNREACHABLE_RETRIES, classify, mcp_config, policy, sandbox_policy,
+    unreachable,
+};
 use crate::price;
 use crate::transport::{Exit, Transport};
 use crate::{
@@ -143,6 +146,10 @@ struct OpenTurn {
     error: Option<TurnError>,
     /// An interrupt asked for before Codex's id was known.
     interrupt: bool,
+    /// Retried connection failures in a row, on an endpoint account.
+    unreachable_retries: u32,
+    /// Why the adapter gave up on the turn and interrupted it: it ends failed with this.
+    gave_up: Option<TurnError>,
     /// The tokens of the turn's model calls so far, once Codex reported one.
     usage: Option<TurnUsage>,
 }
@@ -164,6 +171,9 @@ struct Session {
     stdin: Option<mpsc::Sender<String>>,
     events: mpsc::Sender<AdapterEvent>,
     thread_id: String,
+    /// Whether the account is an endpoint account, which gives up on an endpoint it cannot
+    /// reach.
+    endpoint: bool,
     model: Option<String>,
     /// The model Codex opened the thread on, which turns run on until one is chosen.
     thread_model: Option<String>,
@@ -188,6 +198,7 @@ impl Session {
             stdin: Some(stdin),
             events,
             thread_id: String::new(),
+            endpoint: request.env.contains_key(ENDPOINT_URL_ENV),
             model: request.model.clone(),
             thread_model: None,
             mode: request.permission_mode,
@@ -438,6 +449,8 @@ impl Session {
                     started: false,
                     error: None,
                     interrupt: false,
+                    unreachable_retries: 0,
+                    gave_up: None,
                     usage: None,
                 });
                 let (approval_policy, sandbox) = policy(self.mode);
@@ -562,11 +575,8 @@ impl Session {
                 }
             }
             "error" => {
-                if let Some(notification) = parse::<wire::ErrorNotification>(params)
-                    && !notification.will_retry
-                    && let Some(turn) = &mut self.turn
-                {
-                    turn.error = Some(classify(&notification.error));
+                if let Some(notification) = parse::<wire::ErrorNotification>(params) {
+                    self.turn_error(notification).await;
                 }
             }
             "item/started" => {
@@ -672,6 +682,37 @@ impl Session {
     // ---- Turns ----
 
     /// Records Codex's id for the open turn, sending an interrupt that was waiting for it.
+    /// An `error` notification for the open turn: kept unless Codex retries it. An endpoint
+    /// account's turn that keeps failing to connect is given up on, see the module docs.
+    async fn turn_error(&mut self, notification: wire::ErrorNotification) {
+        let endpoint = self.endpoint;
+        let Some(turn) = &mut self.turn else { return };
+        if !notification.will_retry {
+            turn.error = Some(classify(&notification.error));
+            return;
+        }
+        if !endpoint || turn.gave_up.is_some() {
+            return;
+        }
+        if !unreachable(&notification.error) {
+            turn.unreachable_retries = 0;
+            return;
+        }
+        turn.unreachable_retries += 1;
+        if turn.unreachable_retries < UNREACHABLE_RETRIES {
+            return;
+        }
+        let details = notification.error.additional_details.unwrap_or_default();
+        turn.gave_up = Some(TurnError {
+            class: ErrorClass::Unreachable,
+            message: format!("codex cannot reach its endpoint: {details}"),
+        });
+        match turn.codex_id.clone() {
+            Some(codex_id) => self.interrupt(&codex_id).await,
+            None => turn.interrupt = true,
+        }
+    }
+
     async fn turn_known(&mut self, codex_id: String) {
         let Some(turn) = &mut self.turn else { return };
         if turn.codex_id.is_some() {
@@ -711,7 +752,12 @@ impl Session {
     async fn turn_completed(&mut self, turn: wire::Turn) {
         let end = match turn.status {
             wire::TurnStatus::Completed | wire::TurnStatus::InProgress => TurnEnd::Completed,
-            wire::TurnStatus::Interrupted => TurnEnd::Interrupted,
+            wire::TurnStatus::Interrupted => {
+                match self.turn.as_mut().and_then(|open| open.gave_up.take()) {
+                    Some(error) => TurnEnd::Failed(error),
+                    None => TurnEnd::Interrupted,
+                }
+            }
             wire::TurnStatus::Failed => {
                 let reported = self.turn.as_mut().and_then(|open| open.error.take());
                 TurnEnd::Failed(

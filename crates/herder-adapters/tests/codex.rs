@@ -588,6 +588,40 @@ async fn usage_limit_fails_the_turn_with_limit_reached() {
 }
 
 #[tokio::test]
+async fn an_endpoint_that_cannot_be_reached_fails_the_turn_as_unreachable() {
+    // Recorded as an endpoint account whose endpoint refuses connections, on a newer CLI than
+    // the other recordings. Codex retries without end; the adapter interrupts the turn after
+    // its third retried connection failure and fails it.
+    let recording = fixture("unreachable");
+    let header = recording.header.clone().unwrap();
+    assert_eq!(header.cli_version.as_deref(), Some("0.166.0"));
+    let mut request = request(Vec::new());
+    request.env.extend(
+        codex::endpoint_env("http://127.0.0.1:9", "herder-fixture-key")
+            .map(|(var, value)| (var.to_owned(), value)),
+    );
+    let mut session = start_with(recording, request).await;
+    session
+        .commands
+        .send(prompt("Reply with the word ok."))
+        .unwrap();
+    let events = until(&mut session, is_turn_end).await;
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::TurnFailed {
+            turn_id: turn(),
+            error: TurnError {
+                class: ErrorClass::Unreachable,
+                message: "codex cannot reach its endpoint: Connection failed: error sending \
+                          request"
+                    .into(),
+            },
+        })
+    );
+    shutdown(session).await;
+}
+
+#[tokio::test]
 async fn seed_transcript_is_context_for_the_first_turn() {
     let seed = vec![
         item(

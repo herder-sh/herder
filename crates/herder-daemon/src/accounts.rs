@@ -13,7 +13,7 @@ use std::sync::Arc;
 use herder_adapters::Adapter;
 use herder_adapters::acp::{AcpAdapter, AgentProfile};
 use herder_adapters::claude::{self, ClaudeAdapter, Cli};
-use herder_adapters::codex::CodexAdapter;
+use herder_adapters::codex::{self, CodexAdapter};
 use herder_protocol::{Account, AccountId, Provider, Timestamp};
 
 use crate::session::{AccountConfig, Accounts, Adapters, TitleCli, TitleClis};
@@ -165,11 +165,19 @@ pub(crate) fn endpoint_env(account: &AccountConfig, env: &mut BTreeMap<String, S
     let Some(endpoint) = &account.endpoint else {
         return;
     };
-    // The config only lets Claude accounts have an endpoint.
-    for var in claude::ENDPOINT_ENV_DROP {
-        env.remove(var);
-    }
-    for (var, value) in claude::endpoint_env(&endpoint.url, endpoint.key.expose()) {
+    let (url, key) = (&endpoint.url, endpoint.key.expose());
+    // The config lets only these providers' accounts have an endpoint.
+    let vars = match account.provider {
+        Provider::Claude => {
+            for var in claude::ENDPOINT_ENV_DROP {
+                env.remove(var);
+            }
+            claude::endpoint_env(url, key)
+        }
+        Provider::Codex => codex::endpoint_env(url, key),
+        _ => return,
+    };
+    for (var, value) in vars {
         env.insert(var.to_owned(), value);
     }
 }
@@ -333,6 +341,71 @@ mod tests {
                 "PATH=/usr/bin:/bin".to_owned(),
             ],
             "the endpoint's key replaces an inherited API key"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_codex_endpoint_account_runs_on_a_provider_at_its_endpoint_with_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join("cli");
+        // The environment as `env_dumper`'s, and the arguments one per line next to it.
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\nenv > \"$OUT\"\nprintf '%s\\n' \"$@\" > \"$OUT.args\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let codex_home = dir.path().join(".codex-fleet");
+        let login = account(Provider::Codex, Some(&codex_home));
+        let fleet = AccountConfig {
+            endpoint: Some(crate::session::Endpoint {
+                url: "http://127.0.0.1:8317".into(),
+                key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+            }),
+            ..login.clone()
+        };
+        let adapters = adapters(&HashMap::from([(Provider::Codex, cli)]), &Clis::new());
+        let args = || std::fs::read_to_string(dir.path().join("codex.env.args")).unwrap();
+        assert_eq!(
+            cli_env(&adapters, &fleet, dir.path()).await,
+            [
+                format!("CODEX_HOME={}", codex_home.display()),
+                "HERDER_ENDPOINT_KEY=cpa-client-key".to_owned(),
+                "HERDER_ENDPOINT_URL=http://127.0.0.1:8317".to_owned(),
+                format!("OUT={}/codex.env", dir.path().display()),
+                "PATH=/usr/bin:/bin".to_owned(),
+            ]
+        );
+        let args = args();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            [
+                "app-server",
+                "-c",
+                "model_provider=\"herder\"",
+                "-c",
+                "model_providers.herder.name=\"herder\"",
+                "-c",
+                "model_providers.herder.base_url=\"http://127.0.0.1:8317/v1\"",
+                "-c",
+                "model_providers.herder.env_key=\"HERDER_ENDPOINT_KEY\"",
+                "-c",
+                "model_providers.herder.wire_api=\"responses\"",
+            ],
+            "the key is not among them"
+        );
+        // A login account of the same provider runs as before.
+        assert_eq!(
+            cli_env(&adapters, &login, dir.path()).await,
+            [
+                format!("CODEX_HOME={}", codex_home.display()),
+                format!("OUT={}/codex.env", dir.path().display()),
+                "PATH=/usr/bin:/bin".to_owned(),
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("codex.env.args")).unwrap(),
+            "app-server\n"
         );
     }
 
