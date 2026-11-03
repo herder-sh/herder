@@ -101,6 +101,7 @@ impl Link {
                     fingerprint: vault.fingerprint,
                     backup: vault.backup,
                     secrets: vault.secrets,
+                    cliproxyapi: None,
                 }),
                 volume: None,
                 local_vault: self

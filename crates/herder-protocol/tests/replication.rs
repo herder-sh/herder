@@ -234,6 +234,7 @@ impl Vault {
                 replication_version: REPLICATION_VERSION,
                 build: "herder/0.0.0".into(),
                 acked,
+                cliproxyapi: None,
             })];
         }
         let Some(host) = link.host.clone() else {

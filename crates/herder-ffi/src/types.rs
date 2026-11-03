@@ -1393,6 +1393,8 @@ pub struct LinkedVault {
     pub fingerprint: String,
     pub backup: bool,
     pub secrets: bool,
+    #[uniffi(default = None)]
+    pub cliproxyapi: Option<String>,
 }
 
 #[uniffi::remote(Record)]

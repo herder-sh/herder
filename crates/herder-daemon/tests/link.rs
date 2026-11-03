@@ -358,6 +358,7 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
             fingerprint: on_vault.fingerprint.clone(),
             backup,
             secrets: true,
+            cliproxyapi: None,
         }),
         volume: None,
         local_vault: false,

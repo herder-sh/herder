@@ -378,6 +378,7 @@ impl App {
                         fingerprint: machine.fingerprint.clone(),
                         backup: true,
                         secrets: true,
+                        cliproxyapi: None,
                     };
                     if let Some(panel) = &mut self.machine_panel {
                         panel.links.insert(host.clone(), Known::Linked(linked));

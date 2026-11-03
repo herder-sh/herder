@@ -806,6 +806,12 @@ pub struct LinkedVault {
     pub backup: bool,
     /// Whether the host's sessions fetch secrets from the vault.
     pub secrets: bool,
+    /// Where the host reaches the vault's CLIProxyAPI, as the vault last said in its hello;
+    /// absent when the vault runs none, holds no client key for the host, or has not answered
+    /// since the daemon started. A client adds an endpoint account on the vault's provider
+    /// logins with this `endpoint` and `key_secret` `CLIPROXYAPI_KEY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cliproxyapi: Option<String>,
 }
 
 /// One entry of a folder.

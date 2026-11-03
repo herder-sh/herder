@@ -340,6 +340,7 @@ fn hello_message(acked: Vec<Cursor>) -> VaultMessage {
         replication_version: REPLICATION_VERSION,
         build: BUILD.to_owned(),
         acked,
+        cliproxyapi: None,
     })
 }
 

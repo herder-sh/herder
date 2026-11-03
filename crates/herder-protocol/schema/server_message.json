@@ -3762,6 +3762,13 @@
           "description": "Whether the host replicates its sessions to the vault.",
           "type": "boolean"
         },
+        "cliproxyapi": {
+          "description": "Where the host reaches the vault's CLIProxyAPI, as the vault last said in its hello;\nabsent when the vault runs none, holds no client key for the host, or has not answered\nsince the daemon started. A client adds an endpoint account on the vault's provider\nlogins with this `endpoint` and `key_secret` `CLIPROXYAPI_KEY`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "fingerprint": {
           "description": "SHA-256 of the vault's TLS certificate, lowercase hex.",
           "type": "string"

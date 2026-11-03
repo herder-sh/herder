@@ -374,6 +374,13 @@
           "description": "Build name and version, for logs, e.g. `herder/0.1.0`.",
           "type": "string"
         },
+        "cliproxyapi": {
+          "description": "Where this host reaches the vault's CLIProxyAPI, such as `https://cpa.example.com:8317`;\nsent only when the vault runs one and holds this host's client key, the secret\n`CLIPROXYAPI_KEY` granted to the host for its own use. An endpoint account\nwith this `endpoint` and that `key_secret` runs on the vault's provider logins.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "replication_version": {
           "description": "The vault's [`REPLICATION_VERSION`]; on a mismatch both sides disconnect.",
           "type": "integer",
