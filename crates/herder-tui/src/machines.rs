@@ -345,6 +345,9 @@ impl App {
                     self.machine_panel = None;
                     return vec![Effect::AttachTerminal { host_id, target }];
                 }
+                accounts::Outcome::AddEndpoint(command) => {
+                    return vec![accounts::send(account.host_id.clone(), command)];
+                }
             }
             return Vec::new();
         }
@@ -823,6 +826,8 @@ mod tests {
         assert_eq!(*account(&app).provider(), Provider::Claude);
         press(&mut app, KeyCode::Right);
         assert_eq!(account(&app).default_config_dir(), "~/.codex-codex");
+        // Past how the account runs, a login by default.
+        press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Tab);
         app.update(Msg::Key(KeyEvent::new(
             KeyCode::Char('u'),

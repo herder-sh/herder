@@ -39,7 +39,7 @@ private struct AddAccountPreview: View {
             AddAccountForm(draft: $draft, ticked: $ticked, showsConfigDir: $showsConfigDir, targets: [
                 AccountTarget(hostId: "work-mbp", name: "work-mbp", problem: nil),
                 AccountTarget(hostId: "trash-can-01", name: "trash-can-01", problem: nil),
-                AccountTarget(hostId: "draugelis", name: "draugelis", problem: "Member — can’t add accounts"),
+                AccountTarget(hostId: "draugelis", name: "draugelis", problem: "Member — can’t add accounts", owner: false),
             ], installing: { _ in false }, install: { _ in })
         } footer: {
             Spacer()

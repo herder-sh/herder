@@ -606,30 +606,53 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
             .map(|line| Line::styled(line.into_owned(), style))
             .collect()
     };
-    let mut top = wrapped(
-        &format!("Runs the provider's own login on {machine}, in a terminal here."),
-        ui.muted(),
-    );
+    let provider = account.provider();
+    let mut top = if account.endpoint {
+        wrapped(
+            &format!(
+                "Runs {} on {machine} against an API server, such as a CLIProxyAPI or a local \
+                 model server, with its client key. No login.",
+                provider.as_str()
+            ),
+            ui.muted(),
+        )
+    } else {
+        wrapped(
+            &format!("Runs the provider's own login on {machine}, in a terminal here."),
+            ui.muted(),
+        )
+    };
     top.push(Line::default());
     let mut bottom = vec![Line::default()];
-    bottom.extend(wrapped(
-        accounts::login_hint(account.provider()),
-        ui.muted(),
-    ));
-    bottom.extend(wrapped(
-        "The account is added once the login succeeds. ctrl+] d detaches.",
-        ui.muted(),
-    ));
+    if account.endpoint {
+        bottom.extend(wrapped(
+            &format!("The key is kept on {machine} and never shown again."),
+            ui.muted(),
+        ));
+    } else {
+        bottom.extend(wrapped(accounts::login_hint(provider), ui.muted()));
+        bottom.extend(wrapped(
+            "The account is added once the login succeeds. ctrl+] d detaches.",
+            ui.muted(),
+        ));
+    }
     if let Some(error) = &account.error {
         bottom.push(Line::default());
         bottom.extend(super::failure(ui, error, body_width));
     }
-    let fields = 4;
-    let height = u16::try_from(top.len() + fields + bottom.len()).unwrap_or(u16::MAX);
+    if account.sending {
+        bottom.push(Line::default());
+        bottom.push(Line::styled(
+            format!("Adding{}", ui.glyphs.ellipsis),
+            ui.muted(),
+        ));
+    }
+    let fields = account.fields();
+    let height = u16::try_from(top.len() + fields.len() + bottom.len()).unwrap_or(u16::MAX);
     let hints = [
-        Hint::new("enter", "log in"),
+        Hint::new("enter", if account.endpoint { "add" } else { "log in" }),
         Hint::new("tab", "field"),
-        Hint::new("←/→", "provider"),
+        Hint::new("←/→", "choose"),
         Hint::new("esc", "cancel"),
     ];
     let narrow = area.width < super::NARROW;
@@ -649,7 +672,6 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
         line(text, &mut y, buf);
     }
     let label = label_width("config dir");
-    let provider = account.provider();
     let status = app
         .machines
         .iter()
@@ -670,30 +692,50 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
         }
         _ => provider.as_str().to_owned(),
     };
-    if y < body.bottom() {
-        Choice::new(ui, "provider", Span::styled(shown, ui.text()))
-            .focused(account.focus == accounts::Field::Provider)
-            .render(Rect::new(body.x, y, body.width, 1), buf, label);
-    }
-    y += 1;
     let default_dir = account.default_config_dir();
-    for (field, name, value, placeholder) in [
-        (accounts::Field::Id, "id", &account.id, "e.g. work"),
-        (accounts::Field::Label, "label", &account.label, "the id"),
-        (
-            accounts::Field::ConfigDir,
-            "config dir",
-            &account.config_dir,
-            default_dir.as_str(),
-        ),
-    ] {
-        if y < body.bottom() {
-            let mut editor: TextArea = search_line(value, placeholder);
-            TextField::new(ui, name, &mut editor)
-                .focused(account.focus == field)
-                .render(Rect::new(body.x, y, body.width, 1), buf, label);
+    for field in fields {
+        if y >= body.bottom() {
+            break;
         }
+        let at = Rect::new(body.x, y, body.width, 1);
         y += 1;
+        let focused = account.focus == field;
+        let (name, value, placeholder) = match field {
+            accounts::Field::Provider => {
+                Choice::new(ui, "provider", Span::styled(shown.clone(), ui.text()))
+                    .focused(focused)
+                    .render(at, buf, label);
+                continue;
+            }
+            accounts::Field::Kind => {
+                let kind = if account.endpoint {
+                    "endpoint"
+                } else {
+                    "log in"
+                };
+                Choice::new(ui, "how", Span::styled(kind, ui.text()))
+                    .focused(focused)
+                    .render(at, buf, label);
+                continue;
+            }
+            accounts::Field::Id => ("id", account.id.clone(), "e.g. work"),
+            accounts::Field::Label => ("label", account.label.clone(), "the id"),
+            accounts::Field::ConfigDir => (
+                "config dir",
+                account.config_dir.clone(),
+                default_dir.as_str(),
+            ),
+            accounts::Field::Url => ("url", account.url.clone(), "http://127.0.0.1:8317"),
+            accounts::Field::Key => (
+                "key",
+                super::secrets::masked(ui, account.key.len()),
+                "typed hidden, never shown again",
+            ),
+        };
+        let mut editor: TextArea = search_line(&value, placeholder);
+        TextField::new(ui, name, &mut editor)
+            .focused(focused)
+            .render(at, buf, label);
     }
     for text in bottom {
         line(text, &mut y, buf);

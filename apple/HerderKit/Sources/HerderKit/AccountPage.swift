@@ -43,6 +43,20 @@ struct AccountMachine: Equatable, Identifiable {
     }
 }
 
+extension Account {
+    /// The command that sets this account's `label` and `fallback` (nil keeps it). A login
+    /// account takes `configDir`, nil for the provider's default; an endpoint account never
+    /// takes one, as the daemon refuses it there, and takes `endpoint` and `key` instead, each
+    /// nil to keep it. The key is sent only when replaced, and never read back.
+    func settings(label: String, configDir: String?, fallback: Bool?, endpoint: String? = nil,
+                  key: String? = nil) -> CommandBody {
+        let isEndpoint = self.endpoint != nil
+        return .setAccountSettings(accountId: accountId, label: label, configDir: isEndpoint ? nil : configDir,
+                                   fallback: fallback, endpoint: isEndpoint ? endpoint : nil,
+                                   key: isEndpoint ? key : nil)
+    }
+}
+
 extension WindowLeft {
     /// When the window resets, by the clock and from now: "resets 23:20 · in 2 h 10 min", with
     /// the day when it is not today: "resets Thu 09:00 · in 2 d 14 h".
@@ -66,10 +80,18 @@ extension WindowLeft {
 /// One login's page: what is left of its plan's limits, in large type, as that is why it is
 /// opened; what it cost over the last week; each machine with how the login stands there and
 /// its fix, Sign in again or Set up; then its display label and its role in rotation, which
-/// apply on every machine the user owns.
+/// apply on every machine the user owns. An endpoint account shows its endpoint in place of
+/// limits and config directories, has no login to sign in to again, and lets an owner change
+/// the endpoint and replace the key, which is never shown.
 struct AccountPage: View {
     let fleet: Fleet
     let loginId: String
+    /// The id the login has since its endpoint changed here, as accounts on one endpoint are
+    /// one login.
+    @State private var movedTo: String?
+    @State private var endpoint = ""
+    @State private var key = ""
+    @FocusState private var editingEndpoint: Bool
     @State private var setup: ProvidersView.Setup?
     @State private var label = ""
     @State private var fallback = false
@@ -81,7 +103,7 @@ struct AccountPage: View {
     private let period = UsagePeriod.week
 
     private var login: ProviderAccounts.Login? {
-        ProviderAccounts(machines: fleet.machines).groups.flatMap(\.logins).first { $0.id == loginId }
+        ProviderAccounts(machines: fleet.machines).groups.flatMap(\.logins).first { $0.id == (movedTo ?? loginId) }
     }
 
     var body: some View {
@@ -97,7 +119,19 @@ struct AccountPage: View {
                 PaneButton(title: "Set up on \(place.name)", symbol: "plus") { setUp(login, on: place) }
             }
         } content: {
-            if let login {
+            if let login, let url = login.endpoint {
+                endpointSection(url).detailSection("Endpoint")
+                usage(login).detailSection(period.title)
+                machines(login, rows: rows).detailSection("Machines")
+                settings(login, rows: rows).detailSection("Settings")
+                AboutSection {
+                    DetailRow(label: "Provider", value: ModelCatalog.providerName(login.provider))
+                    DetailRow(label: "Endpoint", value: url, mono: true)
+                    ForEach(rows.filter { $0.account != nil }) { row in
+                        DetailRow(label: row.place.name, value: row.account?.accountId ?? "", mono: true)
+                    }
+                }
+            } else if let login {
                 limits(login).detailSection("Limits")
                 usage(login).detailSection(period.title)
                 machines(login, rows: rows).detailSection("Machines")
@@ -115,7 +149,8 @@ struct AccountPage: View {
         }
         .task { await fleet.refreshUsage(over: period) }
         .onAppear { reset() }
-        .onChange(of: loginId) { reset() }
+        .onChange(of: loginId) { movedTo = nil; reset() }
+        .onChange(of: editingEndpoint) { if !editingEndpoint { saveEndpoint(rows) } }
         .onChange(of: editingLabel) { if !editingLabel { saveLabel(rows) } }
         .sheet(item: $setup) { setup in
             AddAccountSheet(fleet: fleet, hostId: setup.hostId, initialProvider: setup.draft.provider,
@@ -137,6 +172,8 @@ struct AccountPage: View {
         guard let login else { return }
         label = login.account.label
         fallback = !login.fallbackOn.isEmpty && login.fallbackOn.count == login.on.count
+        endpoint = login.endpoint ?? ""
+        key = ""
     }
 
     /// "Claude · work · on 2 machines · primary": accounts with the same provider and email
@@ -147,8 +184,26 @@ struct AccountPage: View {
             : login.fallbackOn.count == login.on.count ? "fallback"
             : "fallback on \(login.fallbackOn.map(\.name).joined(separator: ", "))"
         let parts: [String?] = [ModelCatalog.providerName(login.provider), login.email == nil ? nil : login.account.label,
-                                on, rotation]
+                                login.endpoint == nil ? nil : "endpoint", on, rotation]
         return parts.compactMap(\.self).joined(separator: " · ")
+    }
+
+    // MARK: Endpoint
+
+    /// Where an endpoint account runs, in place of limits: the server behind it holds them.
+    private func endpointSection(_ url: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(url).font(Theme.mono).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                .textSelection(.enabled)
+            Text("Runs against this API server with its client key; no login. Its limits are the server’s.")
+                .font(.caption).foregroundStyle(Theme.tertiary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: Limits
@@ -237,8 +292,8 @@ struct AccountPage: View {
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
             GridRow {
                 Text("Machine")
-                Text("Login")
-                Text("Config directory")
+                Text(login.endpoint == nil ? "Login" : "State")
+                Text(login.endpoint == nil ? "Config directory" : "Account")
                 Text("Sessions").gridColumnAlignment(.trailing)
                 Text("")
             }
@@ -292,7 +347,8 @@ struct AccountPage: View {
     @ViewBuilder private func state(_ row: AccountMachine) -> some View {
         switch row.state {
         case .signedIn:
-            StatusChip(text: row.place.connected ? "Signed in" : "Not connected",
+            let ready = row.account?.endpoint == nil ? "Signed in" : "Ready"
+            StatusChip(text: row.place.connected ? ready : "Not connected",
                        urgency: row.place.connected ? .done : .quiet)
         case .signedOut(let since):
             let age = Timestamp.age(since, now: .now)
@@ -303,8 +359,12 @@ struct AccountPage: View {
         }
     }
 
+    /// The account's config directory there; an endpoint account's id, as herder picks its
+    /// directory and it needs no login.
     private func directory(_ row: AccountMachine) -> String {
-        row.account.map { $0.configDir ?? "default" } ?? ""
+        guard let account = row.account else { return "" }
+        if account.endpoint != nil { return account.accountId }
+        return account.configDir ?? "default"
     }
 
     /// The row's fix, Sign in again or Set up; for a signed-in account, the rest behind ⋯.
@@ -321,7 +381,8 @@ struct AccountPage: View {
                 more(row)
             }
         case .signedIn:
-            more(row)
+            // An endpoint account has no login to sign in to, nor a directory to choose.
+            if row.account?.endpoint == nil { more(row) }
         }
     }
 
@@ -363,6 +424,36 @@ struct AccountPage: View {
                     .frame(maxWidth: 240, minHeight: 32)
                     .background(.card, in: .rect(cornerRadius: 7))
                     .accessibilityIdentifier("account-label")
+            }
+            // The endpoint and its key are the owner's: a member never sees the key's field.
+            if login.endpoint != nil && rows.contains(where: { $0.place.owner }) {
+                RowDivider()
+                SettingRow(label: "Endpoint", hint: "On every machine you own", saved: saves["Endpoint"]) {
+                    TextField("http://127.0.0.1:8317", text: $endpoint)
+                        .textFieldStyle(.plain)
+                        .font(Theme.monoSmall)
+                        .foregroundStyle(Theme.text)
+                        .multilineTextAlignment(.trailing)
+                        .autocorrectionDisabled()
+                        .focused($editingEndpoint)
+                        .onSubmit { saveEndpoint(rows) }
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: 240, minHeight: 32)
+                        .background(.card, in: .rect(cornerRadius: 7))
+                        .accessibilityIdentifier("account-endpoint")
+                }
+                RowDivider()
+                SettingRow(label: "Key", hint: "Never shown; type a new one to replace it", saved: saves["Key"]) {
+                    SecureField("Unchanged", text: $key)
+                        .textFieldStyle(.plain)
+                        .foregroundStyle(Theme.text)
+                        .multilineTextAlignment(.trailing)
+                        .onSubmit { saveKey(rows) }
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: 240, minHeight: 32)
+                        .background(.card, in: .rect(cornerRadius: 7))
+                        .accessibilityIdentifier("account-key")
+                }
             }
             RowDivider()
             SettingRow(label: "Rotation", hint: rotationHint(login),
@@ -434,6 +525,44 @@ struct AccountPage: View {
         }
     }
 
+    private func saveEndpoint(_ rows: [AccountMachine]) {
+        let url = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let changed = editable(rows).filter { $0.1.endpoint != nil && $0.1.endpoint != url }
+        guard !changed.isEmpty else { return }
+        guard AccountDraft.validEndpoint(url) else {
+            saves.fail("Endpoint", "Use an http:// or https:// URL.")
+            return
+        }
+        Task {
+            await saves.save("Endpoint") {
+                for (hostId, account) in changed {
+                    _ = try await fleet.client.send(hostId: hostId, command: account.settings(
+                        label: account.label, configDir: nil, fallback: nil, endpoint: url))
+                }
+                // Accounts on one endpoint are one login: follow it to its new id.
+                if let provider = changed.first?.1.provider {
+                    movedTo = ProviderAccounts.endpointKey(provider: provider, endpoint: url)
+                }
+            }
+        }
+    }
+
+    private func saveKey(_ rows: [AccountMachine]) {
+        let typed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let changed = editable(rows).filter { $0.1.endpoint != nil }
+        guard !typed.isEmpty, !changed.isEmpty else { return }
+        // Not kept once sent: the field goes back to "Unchanged".
+        key = ""
+        Task {
+            await saves.save("Key") {
+                for (hostId, account) in changed {
+                    _ = try await fleet.client.send(hostId: hostId, command: account.settings(
+                        label: account.label, configDir: nil, fallback: nil, key: typed))
+                }
+            }
+        }
+    }
+
     private func saveDirectory(_ row: AccountMachine) {
         guard let account = row.account else { return }
         let path = directory.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -455,8 +584,7 @@ struct AccountPage: View {
     /// Sets the account's settings on its machine; a nil `configDir` is the provider's default.
     private func send(_ account: Account, on hostId: HostId, label: String, configDir: String?,
                       fallback: Bool?) async throws {
-        _ = try await fleet.client.send(hostId: hostId, command: .setAccountSettings(
-            accountId: account.accountId, label: label, configDir: configDir, fallback: fallback,
-            endpoint: nil, key: nil))
+        _ = try await fleet.client.send(hostId: hostId, command: account.settings(
+            label: label, configDir: configDir, fallback: fallback))
     }
 }

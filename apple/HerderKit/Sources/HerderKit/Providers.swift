@@ -39,6 +39,12 @@ struct ProviderAccounts: Equatable {
 
         var id: String { ProviderAccounts.key(account) }
 
+        /// The API server it runs against, for an endpoint account; `nil` for a login.
+        var endpoint: String? { account.endpoint }
+
+        /// What it is shown as: its email, or its label without one.
+        var title: String { email ?? account.label }
+
         /// Where the login is fallback-only; machines may disagree.
         var fallbackOn: [Place] { on.filter(\.fallback) }
 
@@ -73,11 +79,14 @@ struct ProviderAccounts: Equatable {
         /// The account to log in to on a machine that lacks it, whose accounts' ids are `taken`:
         /// the same id unless taken, label, and config dir when it is in the home dir, which
         /// names the same place there.
+        /// An endpoint account's draft has its URL, and needs its key typed again: no machine
+        /// sends one back.
         func draft(taken: [String]) -> AccountDraft {
             AccountDraft(id: taken.contains(account.accountId)
                              ? AccountDraft.nextId(provider: provider, taken: taken, name: email) : account.accountId,
                          provider: provider, label: account.label,
-                         configDir: account.configDir.flatMap { $0.hasPrefix("~/") ? $0 : nil } ?? "")
+                         configDir: endpoint == nil ? account.configDir.flatMap { $0.hasPrefix("~/") ? $0 : nil } ?? "" : "",
+                         endpoint: endpoint != nil, url: endpoint ?? "")
         }
     }
 
@@ -128,9 +137,16 @@ struct ProviderAccounts: Equatable {
         return a.id < b.id
     }
 
-    /// What makes accounts one login: their provider and email, or without one their id.
+    /// What makes accounts one login: their provider and endpoint, as an endpoint account has
+    /// no email; else their provider and email, or without one their id.
     static func key(_ account: Herder.Account) -> String {
-        "\(account.provider)/\(account.email ?? "id:\(account.accountId)")"
+        if let endpoint = account.endpoint { return endpointKey(provider: account.provider, endpoint: endpoint) }
+        return "\(account.provider)/\(account.email ?? "id:\(account.accountId)")"
+    }
+
+    /// The login of `provider`'s accounts on `endpoint`.
+    static func endpointKey(provider: Herder.Provider, endpoint: String) -> String {
+        "\(provider)/endpoint:\(endpoint)"
     }
 
     /// Of the windows labelled `label`, the one that resets last, as the others are older
@@ -426,7 +442,7 @@ struct ProvidersPage: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeading(title: "Needs you", tint: Theme.accent)
             ForEach(overview.signedOut) { signedOut in
-                let name = "\(ModelCatalog.providerName(signedOut.login.provider)) · \(signedOut.login.email ?? signedOut.login.account.label)"
+                let name = "\(ModelCatalog.providerName(signedOut.login.provider)) · \(signedOut.login.title)"
                 problem(urgency: .needsYou, title: "\(name) is signed out on \(signedOut.place.name)") {
                     if let since = signedOut.place.signedOutSince {
                         // One text, so it wraps as one line does.
@@ -543,7 +559,7 @@ struct ProvidersPage: View {
     /// keeps the account, what its session window leaves and its cost.
     private func columns(narrow: Bool) -> [SortableColumn<AccountRow>] {
         let all = [
-            SortableColumn<AccountRow>("Account", value: { "\(ModelCatalog.providerName($0.login.provider)) \($0.login.email ?? $0.login.account.label)" }) { row in
+            SortableColumn<AccountRow>("Account", value: { "\(ModelCatalog.providerName($0.login.provider)) \($0.login.title)" }) { row in
                 account(row.login, label: !narrow)
             },
             SortableColumn("Machines", width: ProvidersColumns.machines, value: { $0.login.machines }) { row in
@@ -556,6 +572,9 @@ struct ProvidersPage: View {
                     Text("Signed out").font(Theme.meta.weight(.medium)).foregroundStyle(Theme.accent)
                         .padding(.horizontal, 8).padding(.vertical, 2)
                         .background(Theme.accent.opacity(0.12), in: .capsule)
+                } else if row.login.endpoint != nil {
+                    // The server behind it holds the provider's limits.
+                    Text("Endpoint").foregroundStyle(Theme.tertiary)
                 } else if row.login.session == nil && row.login.weekly == nil {
                     Text("No limits reported").foregroundStyle(Theme.tertiary)
                 } else if let session = row.login.session {
@@ -587,13 +606,21 @@ struct ProvidersPage: View {
         login.signedOutEverywhere ? -1 : login[keyPath: window]?.percentLeft ?? 101
     }
 
-    /// The account's email, or its label without one; `label` adds the label after the email.
+    /// The account's email, or its label without one; `label` adds the label after the email,
+    /// or an endpoint account's URL after its label.
     private func account(_ login: ProviderAccounts.Login, label: Bool) -> some View {
         HStack(spacing: 8) {
             ProviderMark(provider: login.provider, size: 14)
-            Text(login.email ?? login.account.label).lineLimit(1).truncationMode(.middle)
+            Text(login.title).lineLimit(1).truncationMode(.middle)
             if label && login.email != nil {
                 Text(login.account.label).foregroundStyle(Theme.tertiary).lineLimit(1)
+            }
+            if let endpoint = login.endpoint {
+                Badge(text: "Endpoint")
+                if label {
+                    Text(endpoint).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
             }
             if !login.fallbackOn.isEmpty { Badge(text: "Fallback") }
         }
@@ -871,7 +898,7 @@ struct SetUpSheet: View {
                     HStack(spacing: 10) {
                         ProviderMark(provider: gap.login.provider, size: 16)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(gap.login.email ?? gap.login.account.label).font(.subheadline.weight(.semibold))
+                            Text(gap.login.title).font(.subheadline.weight(.semibold))
                                 .foregroundStyle(Theme.text)
                             Text("On \(gap.login.on.map(\.name).joined(separator: ", "))").font(.caption)
                                 .foregroundStyle(Theme.tertiary)
