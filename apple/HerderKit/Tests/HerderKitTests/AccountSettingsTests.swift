@@ -155,7 +155,7 @@ struct AccountSettingsTests {
 
     @MainActor
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
-    func anEndpointAccountIsSentToEachMachineWhichSaysWhyItRefusedIt() async throws {
+    func anEndpointAccountIsAddedOnEachMachineAndEditedThere() async throws {
         let one = try FakeDaemon(name: "one")
         let two = try FakeDaemon(name: "two")
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
@@ -172,12 +172,32 @@ struct AccountSettingsTests {
         draft.endpoint = true
         draft.url = "http://127.0.0.1:8317"
         draft.key = "sk-proxy"
-        // No terminal, no job in Activity: the command goes straight to each machine, and each
-        // answers for itself. The fake daemon runs no endpoint accounts, and says so.
+        // No terminal, no job in Activity: the command goes straight to each machine.
         let failures = await fleet.addEndpointAccount(draft, on: [first.hostId, second.hostId])
-        #expect(Set(failures.keys) == [first.hostId, second.hostId])
-        #expect(failures.values.allSatisfy { !$0.isEmpty && !$0.contains("sk-proxy") })
+        #expect(failures.isEmpty)
         #expect(fleet.activity.keys.isEmpty)
+        let added = { (hostId: HostId) in
+            fleet.machines.first { $0.hostId == hostId }?.accounts.first { $0.endpoint != nil }
+        }
+        #expect(await eventually { added(first.hostId) != nil && added(second.hostId) != nil })
+        let account = try #require(added(first.hostId))
+        #expect(account.label == "Proxy" && account.endpoint == "http://127.0.0.1:8317")
+        // One login across both machines, by its endpoint.
+        let login = try #require(ProviderAccounts(machines: fleet.machines).groups.flatMap(\.logins)
+            .first { $0.endpoint != nil })
+        #expect(login.on.count == 2)
+
+        // An owner moves it to another endpoint and replaces its key.
+        _ = try await fleet.client.send(hostId: first.hostId, command: account.settings(
+            label: account.label, configDir: account.configDir, fallback: nil,
+            endpoint: "https://vault.lan:8317", key: "sk-new"))
+        #expect(await eventually { added(first.hostId)?.endpoint == "https://vault.lan:8317" })
+
+        // A machine that refuses the account says why, for itself.
+        var codex = draft
+        codex.provider = "codex"
+        let refused = await fleet.addEndpointAccount(codex, on: [first.hostId])
+        if let reason = refused[first.hostId] { #expect(!reason.contains("sk-proxy")) }
     }
 
     @Test func progressReadsTheTerminalAndTheAccountList() {
