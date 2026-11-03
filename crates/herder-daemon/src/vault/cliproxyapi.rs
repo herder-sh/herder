@@ -18,6 +18,12 @@
 //! `management.secret-key`, which the vault reads from [`MANAGEMENT_KEY_ENV`]. The proxy takes
 //! management requests from its own machine only (`management.allow-remote: false`); its
 //! `MANAGEMENT_PASSWORD` variable would take them from anywhere, so it is never set.
+//!
+//! The vault's owners manage the proxy's provider logins from their apps through the same API
+//! ([`command`]): `/credentials` lists and deletes them, and `/oauth/auth-url` starts a login,
+//! which waits five minutes for the address the browser was sent to, posted to
+//! `/oauth/callback`; `/oauth/status` then says when the proxy holds the login. The tokens
+//! stay in the proxy: the answers read here carry none.
 
 use std::collections::BTreeSet;
 use std::io::Read;
@@ -27,7 +33,10 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use herder_protocol::{HostId, SecretValue, Timestamp, is_valid_secret_set_name};
+use herder_protocol::{
+    CommandBody, CommandResult, ErrorCode, ErrorInfo, HostId, Provider, ProviderLogin,
+    ProviderLoginState, SecretValue, Timestamp, is_valid_secret_set_name,
+};
 use ring::rand::{SecureRandom, SystemRandom};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -54,6 +63,12 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Most bytes of a management answer read.
 const MAX_ANSWER_BYTES: u64 = 4 * 1024 * 1024;
+
+/// How long `complete_provider_login` waits for the proxy to trade the code for a login.
+const COMPLETE_WAIT: Duration = Duration::from_secs(60);
+
+/// How often the proxy is asked whether a login it is completing is done.
+const COMPLETE_POLL: Duration = Duration::from_millis(500);
 
 /// The set `host`'s client key is kept in; `None` for a host id no set can be named after.
 pub fn set_name(host: &HostId) -> Option<String> {
@@ -134,6 +149,22 @@ impl Management {
         Ok(files.len())
     }
 
+    /// The provider logins the proxy holds, ordered by provider, then label.
+    pub fn logins(&self) -> Result<Vec<ProviderLogin>> {
+        let answer = self
+            .call("GET", "/credentials", None)?
+            .context("the proxy lists no credentials")?;
+        let files = answer["files"]
+            .as_array()
+            .context("the proxy's credentials have no `files` list")?;
+        let now = Timestamp::now();
+        let mut logins: Vec<ProviderLogin> = files.iter().filter_map(|f| login(f, now)).collect();
+        logins.sort_by(|a, b| {
+            (a.provider.as_str(), &a.label, &a.name).cmp(&(b.provider.as_str(), &b.label, &b.name))
+        });
+        Ok(logins)
+    }
+
     /// Sends `method` to `path` with `body`; the JSON answer, `None` for a 404.
     fn call(
         &self,
@@ -141,11 +172,36 @@ impl Management {
         path: &str,
         body: Option<String>,
     ) -> Result<Option<serde_json::Value>> {
+        let (url, status, answer, text) = self.request(method, path, body)?;
+        match status {
+            200..=299 => answer
+                .map(Some)
+                .with_context(|| format!("{url} answered with something not JSON")),
+            404 => Ok(None),
+            _ => Err(refusal(&url, status, &text)),
+        }
+    }
+
+    /// Sends `method` to `path` with `body`: the URL, the status, the answer as JSON if it is
+    /// JSON, and its text. Fails only when the proxy cannot be reached or refuses the secret.
+    fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+    ) -> Result<(String, u16, Option<serde_json::Value>, String)> {
         let url = format!("{}{path}", self.base);
         let bearer = format!("Bearer {}", self.key.expose());
-        let response = match (method, body) {
-            ("GET", _) => self.agent.get(&url).header("Authorization", &bearer).call(),
-            (_, body) => self
+        let response = match method {
+            "GET" => self.agent.get(&url).header("Authorization", &bearer).call(),
+            "DELETE" => self.agent.delete(&url).header("Authorization", &bearer).call(),
+            "POST" => self
+                .agent
+                .post(&url)
+                .header("Authorization", &bearer)
+                .header("Content-Type", "application/json")
+                .send(body.unwrap_or_default()),
+            _ => self
                 .agent
                 .put(&url)
                 .header("Authorization", &bearer)
@@ -161,18 +217,210 @@ impl Management {
             .take(MAX_ANSWER_BYTES)
             .read_to_string(&mut text)
             .with_context(|| format!("cannot read {url}"))?;
-        match status {
-            200..=299 => serde_json::from_str(&text)
-                .map(Some)
-                .with_context(|| format!("{url} answered with something not JSON")),
-            404 => Ok(None),
-            401 | 403 => bail!(
+        if matches!(status, 401 | 403) {
+            bail!(
                 "{url} refused the management secret ({status}); set {MANAGEMENT_KEY_ENV} to the \
                  proxy's management.secret-key, and reach it from its own machine"
-            ),
-            _ => bail!("{url} answered {status}: {}", text.trim()),
+            );
+        }
+        let answer = serde_json::from_str(&text).ok();
+        Ok((url, status, answer, text))
+    }
+}
+
+/// The error for an answer of `status` the vault did not expect.
+fn refusal(url: &str, status: u16, text: &str) -> anyhow::Error {
+    anyhow::anyhow!("{url} answered {status}: {}", text.trim())
+}
+
+/// A provider login, from one of the proxy's credential entries; `None` for one with no name.
+fn login(entry: &serde_json::Value, now: Timestamp) -> Option<ProviderLogin> {
+    let text = |key: &str| {
+        entry[key]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let yes = |key: &str| entry[key].as_bool() == Some(true);
+    let name = text("name")?;
+    let provider = Provider::from(text("provider").or_else(|| text("type"))?);
+    let until = text("next_retry_after")
+        .and_then(|at| at.parse::<Timestamp>().ok())
+        .filter(|at| *at > now);
+    let state = if yes("disabled") || text("status").as_deref() == Some("disabled") {
+        ProviderLoginState::Disabled
+    } else if yes("requires_sign_in") {
+        ProviderLoginState::NeedsSignIn
+    } else if (yes("unavailable") || yes("quota_blocked")) && until.is_some() {
+        ProviderLoginState::CoolingDown
+    } else if yes("unavailable") || text("status").as_deref() == Some("error") {
+        ProviderLoginState::Error
+    } else {
+        ProviderLoginState::Active
+    };
+    Some(ProviderLogin {
+        name,
+        provider,
+        label: text("email").or_else(|| text("label")),
+        until: until.filter(|_| state == ProviderLoginState::CoolingDown),
+        message: text("status_message"),
+        state,
+    })
+}
+
+/// Answers an owner's command on the proxy's provider logins, through `management`; blocks.
+pub fn command(management: &Management, command: CommandBody) -> Result<CommandResult, ErrorInfo> {
+    let internal = |err: anyhow::Error| failed(ErrorCode::Internal, format!("{err:#}"));
+    match command {
+        CommandBody::ListProviderLogins => Ok(CommandResult::ProviderLogins {
+            logins: management.logins().map_err(internal)?,
+        }),
+        CommandBody::StartProviderLogin { provider } => {
+            if !matches!(provider, Provider::Claude | Provider::Codex) {
+                return Err(failed(
+                    ErrorCode::BadRequest,
+                    format!(
+                        "the vault's CLIProxyAPI signs in to Claude and Codex here, not {}",
+                        provider.as_str()
+                    ),
+                ));
+            }
+            let path = format!("/oauth/auth-url?provider={}", provider.as_str());
+            let answer = management
+                .call("GET", &path, None)
+                .map_err(internal)?
+                .ok_or_else(|| internal(anyhow::anyhow!("the proxy cannot start logins")))?;
+            match (answer["state"].as_str(), answer["url"].as_str()) {
+                (Some(state), Some(url)) => Ok(CommandResult::ProviderLoginStarted {
+                    login_id: state.to_owned(),
+                    url: url.to_owned(),
+                }),
+                _ => Err(internal(anyhow::anyhow!(
+                    "the proxy started a login with no URL: {answer}"
+                ))),
+            }
+        }
+        CommandBody::CompleteProviderLogin {
+            login_id,
+            redirect_url,
+        } => complete(management, &login_id, &redirect_url),
+        CommandBody::CancelProviderLogin { login_id } => {
+            let path = format!("/oauth/session?state={}", query(&login_id));
+            let answer = management
+                .call("DELETE", &path, None)
+                .map_err(internal)?
+                .unwrap_or_default();
+            if answer["cancelled"].as_bool() != Some(true) {
+                return Err(not_waiting());
+            }
+            Ok(CommandResult::Applied)
+        }
+        CommandBody::RemoveProviderLogin { name } => {
+            let path = format!("/credentials?name={}", query(&name));
+            match management.call("DELETE", &path, None).map_err(internal)? {
+                Some(_) => Ok(CommandResult::Applied),
+                None => Err(failed(
+                    ErrorCode::NotFound,
+                    format!("the vault's CLIProxyAPI holds no login {name}"),
+                )),
+            }
+        }
+        _ => Err(internal(anyhow::anyhow!("not a provider login command"))),
+    }
+}
+
+/// Hands the proxy the address the browser was sent to, and waits until it holds the login.
+fn complete(
+    management: &Management,
+    login_id: &str,
+    redirect_url: &str,
+) -> Result<CommandResult, ErrorInfo> {
+    let internal = |err: anyhow::Error| failed(ErrorCode::Internal, format!("{err:#}"));
+    let address = url::Url::parse(redirect_url.trim()).map_err(|_| {
+        failed(
+            ErrorCode::BadRequest,
+            "paste the whole address the browser ended on, starting with http://localhost".into(),
+        )
+    })?;
+    let has = |key: &str| address.query_pairs().any(|(k, v)| k == key && !v.is_empty());
+    if !has("code") && !has("error") {
+        return Err(failed(
+            ErrorCode::BadRequest,
+            "that address has no code: paste the one the browser ended on once you signed in"
+                .into(),
+        ));
+    }
+    let body = serde_json::json!({ "state": login_id, "redirect_url": address.as_str() });
+    let (url, status, answer, text) = management
+        .request("POST", "/oauth/callback", Some(body.to_string()))
+        .map_err(internal)?;
+    match status {
+        200..=299 => {}
+        404 | 409 => return Err(not_waiting()),
+        400 => {
+            let why = answer
+                .as_ref()
+                .and_then(|a| a["error"].as_str())
+                .unwrap_or("bad request")
+                .to_owned();
+            return Err(failed(
+                ErrorCode::BadRequest,
+                format!("the vault's CLIProxyAPI refused that address: {why}"),
+            ));
+        }
+        _ => return Err(internal(refusal(&url, status, &text))),
+    }
+    let deadline = std::time::Instant::now() + COMPLETE_WAIT;
+    let path = format!("/oauth/status?state={}", query(login_id));
+    loop {
+        let (_, _, answer, _) = management.request("GET", &path, None).map_err(internal)?;
+        let answer = answer.unwrap_or_default();
+        match answer["status"].as_str() {
+            Some("ok") => {
+                return Ok(CommandResult::ProviderLogins {
+                    logins: management.logins().map_err(internal)?,
+                });
+            }
+            Some("error") => {
+                let why = answer["error"].as_str().unwrap_or("the login failed");
+                if why == "unknown or expired state" {
+                    return Err(not_waiting());
+                }
+                return Err(failed(
+                    ErrorCode::Conflict,
+                    format!("the provider did not sign this login in: {why}"),
+                ));
+            }
+            _ if std::time::Instant::now() >= deadline => {
+                return Err(failed(
+                    ErrorCode::Internal,
+                    "the vault's CLIProxyAPI took the code but has not finished the login; \
+                     reload the list in a moment"
+                        .into(),
+                ));
+            }
+            _ => std::thread::sleep(COMPLETE_POLL),
         }
     }
+}
+
+/// `value`, escaped for a query string.
+fn query(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+fn not_waiting() -> ErrorInfo {
+    failed(
+        ErrorCode::NotFound,
+        "this login is no longer waiting: it was cancelled, finished, or took longer than five \
+         minutes; start it again"
+            .into(),
+    )
+}
+
+fn failed(code: ErrorCode, message: String) -> ErrorInfo {
+    ErrorInfo { code, message }
 }
 
 /// Keeps one client key per host on the vault and in its CLIProxyAPI.
@@ -195,6 +443,11 @@ impl ClientKeys {
             wake: Notify::new(),
             syncing: tokio::sync::Mutex::new(()),
         })
+    }
+
+    /// The proxy's management API.
+    pub fn management(&self) -> &Management {
+        &self.management
     }
 
     /// Gives `host` its client key if it has none yet: mints one and keeps it in its set,
@@ -322,10 +575,21 @@ mod tests {
 
     const SECRET: &str = "management-secret";
 
-    /// A CLIProxyAPI's management API, on localhost, holding client keys only.
+    /// A CLIProxyAPI's management API, on localhost: its client keys, its credentials, and
+    /// the logins it waits on, by state. A callback with the code `good` signs in.
     struct FakeProxy {
         url: String,
         keys: Arc<Mutex<Vec<String>>>,
+        credentials: Arc<Mutex<Vec<serde_json::Value>>>,
+        logins: Arc<Mutex<std::collections::BTreeMap<String, serde_json::Value>>>,
+    }
+
+    /// `path`'s query parameter `key`.
+    fn param(path: &str, key: &str) -> Option<String> {
+        let url = url::Url::parse(&format!("http://fake{path}")).ok()?;
+        url.query_pairs()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.into_owned())
     }
 
     impl FakeProxy {
@@ -333,22 +597,121 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://{}", listener.local_addr().unwrap());
             let keys = Arc::new(Mutex::new(Vec::<String>::new()));
+            let credentials = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+            let logins = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
             let held = Arc::clone(&keys);
+            let creds = Arc::clone(&credentials);
+            let waiting = Arc::clone(&logins);
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
                     let mut stream = stream.unwrap();
                     let (head, body) = read_request(&mut stream);
-                    let path = "/v8/management/config/access/api-keys";
+                    let mut words = head.split_whitespace();
+                    let method = words.next().unwrap_or_default().to_owned();
+                    let target = words.next().unwrap_or_default().to_owned();
+                    let path = target
+                        .strip_prefix("/v8/management")
+                        .unwrap_or_default()
+                        .to_owned();
+                    let route = path.split('?').next().unwrap_or_default();
+                    let ok = |answer: serde_json::Value| ("200 OK", answer.to_string());
+                    let missing = |why: &str| {
+                        let answer = serde_json::json!({ "status": "error", "error": why });
+                        ("404 Not Found", answer.to_string())
+                    };
                     let (status, answer) = if !head.contains(&format!("Bearer {SECRET}")) {
                         ("401 Unauthorized", "{}".to_owned())
-                    } else if head.starts_with(&format!("GET {path} ")) {
-                        let keys = held.lock().unwrap();
-                        ("200 OK", serde_json::to_string(&*keys).unwrap())
-                    } else if head.starts_with(&format!("PUT {path} ")) {
-                        *held.lock().unwrap() = serde_json::from_str(&body).unwrap();
-                        ("200 OK", r#"{"status":"ok"}"#.to_owned())
                     } else {
-                        ("404 Not Found", r#"{"error":"not_found"}"#.to_owned())
+                        match (method.as_str(), route) {
+                            ("GET", "/config/access/api-keys") => {
+                                ok(serde_json::json!(*held.lock().unwrap()))
+                            }
+                            ("PUT", "/config/access/api-keys") => {
+                                *held.lock().unwrap() = serde_json::from_str(&body).unwrap();
+                                ok(serde_json::json!({ "status": "ok" }))
+                            }
+                            ("GET", "/credentials") => {
+                                ok(serde_json::json!({ "files": *creds.lock().unwrap() }))
+                            }
+                            ("DELETE", "/credentials") => {
+                                let name = param(&path, "name").unwrap_or_default();
+                                let mut creds = creds.lock().unwrap();
+                                let before = creds.len();
+                                creds.retain(|c| c["name"] != name.as_str());
+                                if creds.len() < before {
+                                    ok(serde_json::json!({ "status": "ok" }))
+                                } else {
+                                    missing("auth file not found")
+                                }
+                            }
+                            ("GET", "/oauth/auth-url") => {
+                                let provider = param(&path, "provider").unwrap_or_default();
+                                let mut waiting = waiting.lock().unwrap();
+                                let state = format!("state{}", waiting.len() + 1);
+                                waiting.insert(
+                                    state.clone(),
+                                    serde_json::json!({ "status": "wait", "provider": provider }),
+                                );
+                                ok(serde_json::json!({
+                                    "status": "ok",
+                                    "state": state,
+                                    "url": format!("https://{provider}.example/oauth?state={state}"),
+                                }))
+                            }
+                            ("POST", "/oauth/callback") => {
+                                let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+                                let state = body["state"].as_str().unwrap_or_default();
+                                let redirect = body["redirect_url"].as_str().unwrap_or_default();
+                                let code = url::Url::parse(redirect)
+                                    .ok()
+                                    .and_then(|u| param(&format!("/?{}", u.query()?), "code"));
+                                let mut waiting = waiting.lock().unwrap();
+                                match waiting.get_mut(state) {
+                                    Some(login) if login["status"] == "wait" => {
+                                        if code.as_deref() == Some("good") {
+                                            let provider = login["provider"].clone();
+                                            *login = serde_json::json!({ "status": "ok" });
+                                            creds.lock().unwrap().push(serde_json::json!({
+                                                "name": format!("{}-ada@example.com.json", provider.as_str().unwrap()),
+                                                "provider": provider,
+                                                "email": "ada@example.com",
+                                                "status": "active",
+                                                // Never relayed.
+                                                "id_token": { "email": "ada@example.com" },
+                                            }));
+                                        } else {
+                                            *login = serde_json::json!({
+                                                "status": "error",
+                                                "error": "Bad request",
+                                            });
+                                        }
+                                        ok(serde_json::json!({ "status": "ok" }))
+                                    }
+                                    Some(_) => (
+                                        "409 Conflict",
+                                        r#"{"status":"error","error":"oauth flow is not pending"}"#
+                                            .to_owned(),
+                                    ),
+                                    None => missing("unknown or expired state"),
+                                }
+                            }
+                            ("GET", "/oauth/status") => {
+                                let state = param(&path, "state").unwrap_or_default();
+                                match waiting.lock().unwrap().get(&state) {
+                                    Some(login) => ok(login.clone()),
+                                    None => ok(serde_json::json!({
+                                        "status": "error",
+                                        "error": "unknown or expired state",
+                                    })),
+                                }
+                            }
+                            ("DELETE", "/oauth/session") => {
+                                let state = param(&path, "state").unwrap_or_default();
+                                let cancelled = waiting.lock().unwrap().remove(&state).is_some();
+                                ok(serde_json::json!({ "status": "ok", "cancelled": cancelled }))
+                            }
+                            _ => ("404 Not Found", r#"{"error":"not_found"}"#.to_owned()),
+                        }
                     };
                     let _ = write!(
                         stream,
@@ -358,7 +721,16 @@ mod tests {
                     );
                 }
             });
-            Self { url, keys }
+            Self {
+                url,
+                keys,
+                credentials,
+                logins,
+            }
+        }
+
+        fn management(&self) -> Management {
+            Management::new(&self.url, SecretValue::new(SECRET).unwrap())
         }
 
         fn keys(&self) -> Vec<String> {
@@ -481,5 +853,198 @@ mod tests {
             "{err:#}"
         );
         assert!(proxy.keys().is_empty());
+    }
+
+    /// Runs `body` on the proxy's logins, as the vault does for an owner.
+    async fn run(proxy: &FakeProxy, body: CommandBody) -> Result<CommandResult, ErrorInfo> {
+        let management = proxy.management();
+        tokio::task::spawn_blocking(move || command(&management, body))
+            .await
+            .unwrap()
+    }
+
+    fn listed(result: Result<CommandResult, ErrorInfo>) -> Vec<ProviderLogin> {
+        match result {
+            Ok(CommandResult::ProviderLogins { logins }) => logins,
+            other => panic!("expected logins: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_owner_adds_a_login_with_the_address_the_browser_was_sent_to_and_removes_it() {
+        let proxy = FakeProxy::start();
+        assert!(listed(run(&proxy, CommandBody::ListProviderLogins).await).is_empty());
+
+        let Ok(CommandResult::ProviderLoginStarted { login_id, url }) = run(
+            &proxy,
+            CommandBody::StartProviderLogin {
+                provider: Provider::Claude,
+            },
+        )
+        .await
+        else {
+            panic!("the login did not start");
+        };
+        assert_eq!(url, format!("https://claude.example/oauth?state={login_id}"));
+
+        // An address with no code is the wrong one, and the login keeps waiting.
+        let wrong = run(
+            &proxy,
+            CommandBody::CompleteProviderLogin {
+                login_id: login_id.clone(),
+                redirect_url: "http://localhost:54545/callback".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(wrong.code, ErrorCode::BadRequest);
+        let garbage = run(
+            &proxy,
+            CommandBody::CompleteProviderLogin {
+                login_id: login_id.clone(),
+                redirect_url: "not an address".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(garbage.code, ErrorCode::BadRequest);
+
+        let redirect_url =
+            format!("http://localhost:54545/callback?code=good&state={login_id}");
+        let logins = listed(
+            run(
+                &proxy,
+                CommandBody::CompleteProviderLogin {
+                    login_id: login_id.clone(),
+                    redirect_url: redirect_url.clone(),
+                },
+            )
+            .await,
+        );
+        assert_eq!(
+            logins,
+            vec![ProviderLogin {
+                name: "claude-ada@example.com.json".into(),
+                provider: Provider::Claude,
+                label: Some("ada@example.com".into()),
+                state: ProviderLoginState::Active,
+                until: None,
+                message: None,
+            }]
+        );
+        // Done: it no longer waits.
+        let again = run(
+            &proxy,
+            CommandBody::CompleteProviderLogin {
+                login_id,
+                redirect_url,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(again.code, ErrorCode::NotFound);
+
+        let name = logins[0].name.clone();
+        let removed = run(&proxy, CommandBody::RemoveProviderLogin { name: name.clone() }).await;
+        assert!(matches!(removed, Ok(CommandResult::Applied)), "{removed:?}");
+        assert!(proxy.credentials.lock().unwrap().is_empty());
+        let gone = run(&proxy, CommandBody::RemoveProviderLogin { name })
+            .await
+            .unwrap_err();
+        assert_eq!(gone.code, ErrorCode::NotFound);
+    }
+
+    #[tokio::test]
+    async fn a_login_the_provider_refuses_or_the_owner_cancels_is_not_kept() {
+        let proxy = FakeProxy::start();
+        let start = || CommandBody::StartProviderLogin {
+            provider: Provider::Codex,
+        };
+        let Ok(CommandResult::ProviderLoginStarted { login_id, .. }) = run(&proxy, start()).await
+        else {
+            panic!("the login did not start");
+        };
+        let refused = run(
+            &proxy,
+            CommandBody::CompleteProviderLogin {
+                login_id,
+                redirect_url: "http://localhost:1455/auth/callback?error=access_denied".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Conflict);
+        assert!(refused.message.contains("Bad request"), "{refused:?}");
+
+        let Ok(CommandResult::ProviderLoginStarted { login_id, .. }) = run(&proxy, start()).await
+        else {
+            panic!("the login did not start");
+        };
+        let cancel = || CommandBody::CancelProviderLogin {
+            login_id: login_id.clone(),
+        };
+        assert!(matches!(run(&proxy, cancel()).await, Ok(CommandResult::Applied)));
+        assert!(!proxy.logins.lock().unwrap().contains_key(&login_id));
+        let twice = run(&proxy, cancel()).await.unwrap_err();
+        assert_eq!(twice.code, ErrorCode::NotFound);
+        let late = run(
+            &proxy,
+            CommandBody::CompleteProviderLogin {
+                login_id: login_id.clone(),
+                redirect_url: format!("http://localhost:1455/auth/callback?code=good&state={login_id}"),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(late.code, ErrorCode::NotFound);
+        assert!(proxy.credentials.lock().unwrap().is_empty());
+
+        // Only the providers the proxy signs in to from here.
+        let gemini = run(
+            &proxy,
+            CommandBody::StartProviderLogin {
+                provider: Provider::Gemini,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(gemini.code, ErrorCode::BadRequest);
+    }
+
+    #[test]
+    fn a_login_says_whether_the_proxy_can_use_it() {
+        let now: Timestamp = "2026-11-03T12:00:00Z".parse().unwrap();
+        let state = |entry: serde_json::Value| login(&entry, now).unwrap();
+        let cooling = state(serde_json::json!({
+            "name": "codex-a.json", "provider": "codex", "label": "a", "status": "error",
+            "unavailable": true, "next_retry_after": "2026-11-03T13:00:00Z",
+            "status_message": "quota exhausted",
+        }));
+        assert_eq!(cooling.state, ProviderLoginState::CoolingDown);
+        assert_eq!(cooling.until, Some("2026-11-03T13:00:00Z".parse().unwrap()));
+        assert_eq!(cooling.label.as_deref(), Some("a"));
+        assert_eq!(cooling.message.as_deref(), Some("quota exhausted"));
+        // A cooldown that is over is not one.
+        let over = state(serde_json::json!({
+            "name": "codex-a.json", "provider": "codex", "status": "active",
+            "next_retry_after": "2026-11-03T11:00:00Z",
+        }));
+        assert_eq!((over.state, over.until), (ProviderLoginState::Active, None));
+        let signed_out = state(serde_json::json!({
+            "name": "claude-b.json", "provider": "claude", "requires_sign_in": true,
+            "status": "error", "status_message": "unauthorized (refresh token invalid)",
+        }));
+        assert_eq!(signed_out.state, ProviderLoginState::NeedsSignIn);
+        let failing = state(serde_json::json!({
+            "name": "claude-c.json", "type": "claude", "status": "error", "unavailable": true,
+        }));
+        assert_eq!(failing.state, ProviderLoginState::Error);
+        assert_eq!(failing.provider, Provider::Claude);
+        let off = state(serde_json::json!({
+            "name": "claude-d.json", "provider": "claude", "disabled": true,
+            "status": "disabled",
+        }));
+        assert_eq!(off.state, ProviderLoginState::Disabled);
+        assert!(login(&serde_json::json!({ "provider": "claude" }), now).is_none());
     }
 }

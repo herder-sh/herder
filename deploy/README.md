@@ -265,8 +265,16 @@ you would the logins themselves.
 
 ### Log the proxy in
 
-Until the proxy holds a login, sessions on it fail. Log it in from the pod, forwarding the
-provider's OAuth callback port to your machine, here Claude's (54545):
+Until the proxy holds a login, sessions on it fail. An owner adds logins from the Mac or
+iPhone app: on the vault's page, under **Logins**, choose **Add login**, pick Claude or Codex,
+and sign in in the browser. The provider then sends the browser to a `localhost` address that
+does not load, as the proxy is not on your machine; copy that address from the address bar
+and paste it into the app, which hands it to the proxy. The proxy trades the code in it for
+the login and keeps the tokens; herder never sees them. The same page lists the logins with
+whether each is in use, cooling down, or needs signing in again, and removes them.
+
+Or log it in from the pod, forwarding the provider's OAuth callback port to your machine,
+here Claude's (54545):
 
 ```sh
 kubectl port-forward -n herder herder-vault-0 54545:54545 &

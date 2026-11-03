@@ -50,6 +50,8 @@ pub(crate) struct Fleet {
     status_changed: Arc<Notify>,
     /// Encrypts secrets' values; without it, secret commands are refused.
     secrets_key: Option<Arc<SecretsKey>>,
+    /// The CLIProxyAPI next to the vault, whose provider logins owners manage; set once.
+    cliproxyapi: Arc<std::sync::OnceLock<super::cliproxyapi::Management>>,
 }
 
 /// How often at most clients get the vault's status.
@@ -71,7 +73,13 @@ impl Fleet {
             sending_hosts: Arc::default(),
             status_changed: Arc::default(),
             secrets_key,
+            cliproxyapi: Arc::default(),
         }
+    }
+
+    /// Answers owners' provider login commands through `management`; once.
+    pub(crate) fn use_cliproxyapi(&self, management: super::cliproxyapi::Management) {
+        let _ = self.cliproxyapi.set(management);
     }
 
     pub(crate) fn presence(&self) -> &Presence {
@@ -389,10 +397,24 @@ impl Backend for Fleet {
             | CommandBody::CompleteProviderLogin { .. }
             | CommandBody::CancelProviderLogin { .. }
             | CommandBody::RemoveProviderLogin { .. } => {
-                return Err(error(
-                    ErrorCode::Unsupported,
-                    "this vault cannot manage its CLIProxyAPI's logins yet".into(),
-                ));
+                let Some(management) = self.cliproxyapi.get().cloned() else {
+                    return Err(error(
+                        ErrorCode::Unsupported,
+                        "this vault runs no CLIProxyAPI: set `cliproxyapi` in its `[vault]` \
+                         table (see deploy/README.md)"
+                            .into(),
+                    ));
+                };
+                return tokio::task::spawn_blocking(move || {
+                    super::cliproxyapi::command(&management, command)
+                })
+                .await
+                .unwrap_or_else(|_| {
+                    Err(error(
+                        ErrorCode::Internal,
+                        "the CLIProxyAPI command panicked".into(),
+                    ))
+                });
             }
             _ => {}
         }
