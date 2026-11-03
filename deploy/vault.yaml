@@ -1,10 +1,14 @@
-# The herder vault: one replica keeping every host's replicated sessions on a volume.
+# The herder vault: one replica keeping every host's replicated sessions on a volume, with a
+# CLIProxyAPI next to it holding the fleet's provider logins.
 #
 #   kubectl apply -n herder -f deploy/vault.yaml
 #
-# Secrets need a master key in the Secret herder-vault-secrets; see README.md.
+# Needs three Secrets first; see README.md: herder-vault-secrets (the secrets key),
+# herder-cliproxyapi (the proxy's management secret) and herder-cliproxyapi-tls (the proxy's
+# certificate). Replace cpa.example.com with the name hosts reach the proxy at, the one its
+# certificate is for, here and in hostAliases below.
 #
-# Replace the image with the one you built from deploy/Containerfile.
+# Replace the vault's image with the one you built from deploy/Containerfile.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -19,8 +23,54 @@ data:
     # A subdirectory, so the vault creates it private to itself.
     data_dir = "/data/herder"
 
+    [vault]
+    # The CLIProxyAPI in this pod: the vault mints each host a client key there, through its
+    # management API, which takes requests from this pod only. The name resolves to this pod
+    # (hostAliases), so the proxy's certificate checks out and the proxy sees localhost.
+    cliproxyapi = "https://cpa.example.com:8317"
+
     [log]
     format = "json"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: herder-cliproxyapi
+  labels:
+    app.kubernetes.io/name: herder-vault
+data:
+  # Copied onto the volume at each start, with the management secret and a random client key
+  # filled in: the proxy writes its config back, and the vault keeps its client keys from then
+  # on. Every setting here wins over what the proxy wrote.
+  config.yaml: |
+    config-version: 8
+    server:
+      host: ""
+      port: 8317
+      tls:
+        enable: true
+        cert: /etc/cliproxyapi/tls/tls.crt
+        key: /etc/cliproxyapi/tls/tls.key
+    management:
+      # Only this pod may manage the proxy, with the secret below, which the proxy hashes at
+      # start. Never set MANAGEMENT_PASSWORD instead: the proxy takes that one from anywhere.
+      allow-remote: false
+      secret-key: "@MANAGEMENT_SECRET@"
+      disable-control-panel: true
+    access:
+      # The vault puts one key per host here. A proxy with no key serves anyone, so it starts
+      # with one random key nobody has.
+      api-keys: ["@PLACEHOLDER_KEY@"]
+    routing:
+      # Stay on one login until it hits its limit, as herder's own failover does.
+      strategy: fill-first
+      session-affinity: true
+      # A session moves to another login on a limit or a refused login only, not on a
+      # passing error.
+      session-affinity-rebind-on: quota
+    oauth:
+      # The provider logins, in plain text: the most sensitive thing herder has.
+      auth-dir: /data/cliproxyapi/auth
 ---
 apiVersion: v1
 kind: Service
@@ -30,8 +80,9 @@ metadata:
     app.kubernetes.io/name: herder-vault
 spec:
   # Hosts connect from outside the cluster. Use NodePort, or ClusterIP behind your own TCP
-  # ingress, if the cluster has no load balancer. TLS ends at the vault, not at a proxy:
-  # hosts pin its certificate and present their device key.
+  # ingress, if the cluster has no load balancer. TLS ends at the vault and at the proxy, not
+  # at a proxy in front: hosts pin the vault's certificate and present their device key, and
+  # check the proxy's certificate against their CAs.
   type: LoadBalancer
   selector:
     app.kubernetes.io/name: herder-vault
@@ -39,6 +90,9 @@ spec:
     - name: replication
       port: 7447
       targetPort: replication
+    - name: cliproxyapi
+      port: 8317
+      targetPort: cliproxyapi
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -65,6 +119,40 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      # The proxy's public name, reached in the pod: see cliproxyapi in daemon.toml.
+      hostAliases:
+        - ip: 127.0.0.1
+          hostnames: ["cpa.example.com"]
+      initContainers:
+        - name: cliproxyapi-config
+          image: eceasy/cli-proxy-api:v8.0.53
+          command:
+            - sh
+            - -ec
+            - |
+              umask 077
+              mkdir -p /data/cliproxyapi/auth
+              placeholder=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+              sed -e "s|@MANAGEMENT_SECRET@|$MANAGEMENT_SECRET|" \
+                  -e "s|@PLACEHOLDER_KEY@|$placeholder|" \
+                  /etc/cliproxyapi/config.yaml > /data/cliproxyapi/config.yaml
+          env:
+            - name: MANAGEMENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: herder-cliproxyapi
+                  key: management-secret
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: cliproxyapi-config
+              mountPath: /etc/cliproxyapi
+              readOnly: true
       containers:
         - name: vault
           image: ghcr.io/herder-sh/herder:latest
@@ -73,14 +161,19 @@ spec:
             # `herder pair` run in the pod finds the data dir through the same config.
             - name: HERDER_CONFIG
               value: /etc/herder/daemon.toml
-            # Encrypts secrets' values at rest; without it the vault keeps no secrets. See
-            # README.md for how to create it.
+            # Encrypts secrets' values at rest; the hosts' proxy keys are secrets, so a vault
+            # with a CLIProxyAPI needs it. See README.md for how to create it.
             - name: HERDER_VAULT_SECRETS_KEY
               valueFrom:
                 secretKeyRef:
                   name: herder-vault-secrets
                   key: key
-                  optional: true
+            # Lets the vault manage the proxy's client keys.
+            - name: HERDER_CLIPROXYAPI_MANAGEMENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: herder-cliproxyapi
+                  key: management-secret
           ports:
             - name: replication
               containerPort: 7447
@@ -110,12 +203,50 @@ spec:
             - name: config
               mountPath: /etc/herder
               readOnly: true
+        - name: cliproxyapi
+          image: eceasy/cli-proxy-api:v8.0.53
+          command: ["/CLIProxyAPI/CLIProxyAPI", "-config", "/data/cliproxyapi/config.yaml"]
+          ports:
+            - name: cliproxyapi
+              containerPort: 8317
+          readinessProbe:
+            tcpSocket:
+              port: cliproxyapi
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: cliproxyapi
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: cliproxyapi-tls
+              mountPath: /etc/cliproxyapi/tls
+              readOnly: true
       # Lets the daemon finish its last transaction and close connections on SIGTERM.
       terminationGracePeriodSeconds: 30
       volumes:
         - name: config
           configMap:
             name: herder-vault
+        - name: cliproxyapi-config
+          configMap:
+            name: herder-cliproxyapi
+        - name: cliproxyapi-tls
+          secret:
+            secretName: herder-cliproxyapi-tls
   volumeClaimTemplates:
     - metadata:
         name: data

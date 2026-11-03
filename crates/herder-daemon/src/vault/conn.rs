@@ -151,6 +151,14 @@ async fn serve(
         };
         return fail(ws, error).await;
     }
+    // Before the hello, so the host finds its key as soon as it may ask for it.
+    if let (Some(keys), Some(key)) = (shared.cliproxyapi.get(), &shared.secrets_key) {
+        match keys.ensure_host(&shared.store, key, &host).await {
+            Ok(true) => info!(host_id = %host, "CLIProxyAPI key minted for the host"),
+            Ok(false) => {}
+            Err(err) => warn!(host_id = %host, "cannot give the host a CLIProxyAPI key: {err:#}"),
+        }
+    }
     let cursors = {
         let host = host.clone();
         blocking(&shared.store, move |store| store.cursors(&host)).await?

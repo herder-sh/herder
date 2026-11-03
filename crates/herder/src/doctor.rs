@@ -16,6 +16,7 @@ use herder_daemon::Config;
 use herder_daemon::config::VaultConfig;
 use herder_daemon::login::{self, LoginProgram};
 use herder_daemon::session::AccountConfig;
+use herder_daemon::vault::cliproxyapi;
 use herder_protocol::{AccountId, Provider};
 
 use herder_daemon::service;
@@ -108,6 +109,12 @@ fn checks(explicit: Option<&Path>, tools: &Tools, service: Option<service::State
     if let Some(config) = &config {
         checks.extend(config.listen.iter().map(|&address| listen_check(address)));
         checks.extend(config.vault.as_ref().map(vault_check));
+        checks.extend(
+            config
+                .cliproxyapi
+                .as_deref()
+                .map(|url| cliproxyapi_check(url, cliproxyapi::Management::from_env(url))),
+        );
     }
     checks
 }
@@ -501,6 +508,37 @@ fn vault_check(vault: &VaultConfig) -> Check {
     match connect(vault.address.as_str()) {
         Ok(()) => Check::pass(subject, "reachable"),
         Err(detail) => Check::fail(subject, detail, hint()),
+    }
+}
+
+/// A vault's CLIProxyAPI at `url` answers its management API, `management`, and holds provider
+/// credentials for the hosts' sessions.
+fn cliproxyapi_check(url: &str, management: anyhow::Result<cliproxyapi::Management>) -> Check {
+    let subject = format!("CLIProxyAPI {url}");
+    let management = match management {
+        Ok(management) => management,
+        Err(err) => {
+            return Check::fail(
+                subject,
+                format!("{err:#}"),
+                "give the vault the proxy's management secret (see deploy/README.md)".into(),
+            );
+        }
+    };
+    match management.credentials() {
+        Ok(0) => Check::warn(
+            subject,
+            "answers, and holds no provider credentials",
+            "log the proxy in to a provider (see deploy/README.md); until then hosts' sessions \
+             on it fail"
+                .into(),
+        ),
+        Ok(count) => Check::pass(subject, format!("answers, and holds {count} credentials")),
+        Err(err) => Check::fail(
+            subject,
+            format!("{err:#}"),
+            "start the CLIProxyAPI next to the vault, with its management API on".into(),
+        ),
     }
 }
 
@@ -905,5 +943,71 @@ binary = "{codex}"
         };
         assert_eq!(vault(open).status, Status::Pass);
         assert_eq!(vault(closed).status, Status::Fail);
+    }
+
+    /// A CLIProxyAPI management API answering every request with `answer`, a status line and
+    /// JSON body, for as long as the test runs; its base URL.
+    fn fake_cliproxyapi(answer: &'static str) -> String {
+        use std::io::{Read, Write};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut request = [0u8; 4096];
+                let read = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                let (status, body) = if request.contains("Bearer management-secret")
+                    && request.starts_with("GET /v8/management/credentials ")
+                {
+                    answer.split_once('\n').unwrap()
+                } else {
+                    ("401 Unauthorized", "{}")
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        url
+    }
+
+    #[test]
+    fn a_vaults_cliproxyapi_is_checked_through_its_management_api() {
+        let management = |url: &str, secret: &str| {
+            Ok(cliproxyapi::Management::new(
+                url,
+                herder_protocol::SecretValue::new(secret).unwrap(),
+            ))
+        };
+        let two = fake_cliproxyapi("200 OK\n{\"files\":[{\"id\":\"a\"},{\"id\":\"b\"}]}");
+        let check = cliproxyapi_check(&two, management(&two, "management-secret"));
+        assert_eq!(check.status, Status::Pass, "{}", check.detail);
+        assert!(
+            check.detail.contains("holds 2 credentials"),
+            "{}",
+            check.detail
+        );
+        // A wrong secret is refused, and said so.
+        let check = cliproxyapi_check(&two, management(&two, "wrong"));
+        assert_eq!(check.status, Status::Fail);
+        assert!(
+            check.detail.contains("refused the management secret"),
+            "{}",
+            check.detail
+        );
+        // No credentials: the hosts' sessions cannot run on it yet.
+        let none = fake_cliproxyapi("200 OK\n{\"files\":[]}");
+        let check = cliproxyapi_check(&none, management(&none, "management-secret"));
+        assert_eq!(check.status, Status::Warn);
+        // Nothing listening.
+        let closed = "http://127.0.0.1:1";
+        let check = cliproxyapi_check(closed, management(closed, "management-secret"));
+        assert_eq!(check.status, Status::Fail);
+        let check = cliproxyapi_check(closed, Err(anyhow::anyhow!("no secret")));
+        assert_eq!(check.status, Status::Fail);
     }
 }

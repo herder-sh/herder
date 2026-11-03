@@ -267,9 +267,9 @@ use herder_protocol::{
     Account, AccountId, Attachment, AttachmentId, Bot, BotFact, BotId, Bytes, CommandBody,
     CommandId, CommandResult, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, FactId, FollowUp,
     HostId, Image, Item, ItemId, JournalRecord, MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS,
-    PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project, ProjectId, Provider, SecretValue, Seq,
-    SessionHead, SessionId, SessionOrigin, SessionStatus, SessionSummary, ThreadLink, Timestamp,
-    TitleSource, TurnId, UsageWindow, UserId, clean_title,
+    PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project, ProjectId, Provider, SecretRef, SecretValue,
+    Seq, SessionHead, SessionId, SessionOrigin, SessionStatus, SessionSummary, ThreadLink,
+    Timestamp, TitleSource, TurnError, TurnId, UsageWindow, UserId, clean_title,
 };
 use herder_store::{Session, Store};
 use jiff::SignedDuration;
@@ -342,6 +342,17 @@ pub struct AccountConfig {
     pub endpoint: Option<Endpoint>,
 }
 
+/// What the host fetches endpoint account `account_id`'s key from its vault for, as the vault's
+/// audit shows it: `endpoint:<id>` in lowercase, or `endpoint` for an id too long for that.
+fn key_purpose(account_id: &AccountId) -> String {
+    let purpose = format!("endpoint:{}", account_id.as_str().to_ascii_lowercase());
+    if herder_protocol::is_valid_secret_purpose(&purpose) {
+        purpose
+    } else {
+        "endpoint".to_owned()
+    }
+}
+
 /// An API server an endpoint account's CLI is pointed at, such as a CLIProxyAPI or a local
 /// model server, which holds the provider credentials outside herder.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -349,7 +360,17 @@ pub struct Endpoint {
     /// Its base URL, `http` or `https`.
     pub url: String,
     /// Its client key; never a provider login token, never sent to clients or logged.
-    pub key: SecretValue,
+    pub key: EndpointKey,
+}
+
+/// Where an endpoint account's client key is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EndpointKey {
+    /// In the daemon's config.
+    Held(SecretValue),
+    /// In a secret on the host's vault, granted to the host for its own use, such as the key
+    /// the vault's CLIProxyAPI minted for it; fetched when a CLI starts on the account.
+    Secret(SecretRef),
 }
 
 /// Every account sessions may run on, by id.
@@ -556,6 +577,56 @@ impl Inner {
                 self.unreachable(account_id);
             }
             _ => {}
+        }
+    }
+
+    /// `account`, account `account_id`, ready for its CLI to start: an endpoint account whose
+    /// key is a vault secret gets the key, fetched for the host's own use from the host's
+    /// vault, or from memory for a few minutes after. A vault that cannot be reached, with no
+    /// key in memory, fails as `unreachable`, as an endpoint that cannot be, so failover moves
+    /// the session; a vault that refuses the key fails for its owner.
+    pub(super) async fn ready_to_start(
+        &self,
+        account_id: &AccountId,
+        mut account: AccountConfig,
+    ) -> Result<AccountConfig, TurnError> {
+        let Some(endpoint) = &mut account.endpoint else {
+            return Ok(account);
+        };
+        let EndpointKey::Secret(secret) = &endpoint.key else {
+            return Ok(account);
+        };
+        let fetched = match self.secrets.get() {
+            Some(secrets) => {
+                secrets
+                    .fetch_for_host(&key_purpose(account_id), std::slice::from_ref(secret))
+                    .await
+            }
+            None => Err(tasks::no_vault()),
+        };
+        match fetched.map(|mut fetched| fetched.pop()) {
+            Ok(Some(fetched)) => {
+                endpoint.key = EndpointKey::Held(fetched.value);
+                Ok(account)
+            }
+            Ok(None) => Err(TurnError {
+                class: ErrorClass::Fatal,
+                message: format!("the vault sent no value for {secret}"),
+            }),
+            Err(error) => {
+                let class = match error.code {
+                    herder_protocol::SecretErrorCode::VaultUnreachable => ErrorClass::Unreachable,
+                    _ => ErrorClass::Fatal,
+                };
+                Err(TurnError {
+                    class,
+                    message: format!(
+                        "cannot get the client key of account {account_id} from the vault \
+                         secret {secret}: {}",
+                        error.message
+                    ),
+                })
+            }
         }
     }
 

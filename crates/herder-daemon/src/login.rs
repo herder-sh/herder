@@ -799,6 +799,7 @@ mod tests {
             fallback,
             endpoint: None,
             key: None,
+            key_secret: None,
         }
     }
 
@@ -895,7 +896,9 @@ mod tests {
             let home = self.home.path().as_os_str().to_owned();
             let endpoint = Endpoint {
                 url: url.into(),
-                key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+                key: crate::session::EndpointKey::Held(
+                    herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+                ),
             };
             self.logins.add_endpoint_with_env(
                 &AccountId::new(id),
@@ -1446,7 +1449,7 @@ mod tests {
         f.logins.set_settings(&fleet, &change).await.unwrap();
         let endpoint = f.sessions.account(&fleet).unwrap().endpoint.unwrap();
         assert_eq!(endpoint.url, "https://cpa.example");
-        assert_eq!(endpoint.key, key);
+        assert_eq!(endpoint.key, crate::session::EndpointKey::Held(key.clone()));
 
         let saved = std::fs::read_to_string(&path).unwrap();
         let refused = [

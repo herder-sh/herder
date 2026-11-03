@@ -44,7 +44,7 @@ pub enum Grant {
 }
 
 /// What a host fetches secrets for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SecretUse {
     /// One of its sessions, from the sets granted to the host.
     Session(SessionId),
@@ -136,6 +136,22 @@ impl VaultStore {
         ])?;
         tx.commit()?;
         Ok(true)
+    }
+
+    /// The value of the secret `name` of `set`, sealed; `None` when there is none.
+    pub fn sealed_secret(&self, set: &str, name: &str) -> Result<Option<Sealed>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT nonce, ciphertext FROM secrets WHERE set_name = ?1 AND name = ?2",
+            )?
+            .query_row([set, name], |row| {
+                Ok(Sealed {
+                    nonce: row.get(0)?,
+                    ciphertext: row.get(1)?,
+                })
+            })
+            .optional()?)
     }
 
     /// Deletes the secret `name` of `set`; false when there is none.

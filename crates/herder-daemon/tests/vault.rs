@@ -21,8 +21,8 @@ use herder_daemon::auth::{Auth, DeviceRole, PAIRING_TTL};
 use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::session::{Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::vault::{
-    Admin, Held, HeldSecrets, HostSecrets, LIVENESS_TIMEOUT, Replicator, SecretsKey, Server,
-    VaultStore, WakeOnEvent,
+    Admin, ClientKeys, Held, HeldSecrets, HostSecrets, LIVENESS_TIMEOUT, Replicator, SecretsKey,
+    Server, VaultStore, WakeOnEvent,
 };
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Tls};
@@ -98,7 +98,7 @@ struct Vault {
 impl Vault {
     /// Starts a vault on `dir`, listening on `port` (0 for any).
     async fn start(dir: &Path, port: u16) -> Self {
-        Self::start_with(dir, port, LIVENESS_TIMEOUT, Some(SECRETS_KEY)).await
+        Self::start_with(dir, port, LIVENESS_TIMEOUT, Some(SECRETS_KEY), None).await
     }
 
     /// Starts a vault that takes a host silent for `liveness` for gone, and keeps secrets
@@ -108,6 +108,7 @@ impl Vault {
         port: u16,
         liveness: Duration,
         secrets_key: Option<[u8; 32]>,
+        cliproxyapi: Option<ClientKeys>,
     ) -> Self {
         let runtime = Runtime::new();
         let dir = dir.to_owned();
@@ -134,6 +135,9 @@ impl Vault {
                     Retention::default(),
                     secrets_key.as_ref().map(SecretsKey::new),
                 );
+                if let Some(keys) = cliproxyapi {
+                    server.use_cliproxyapi(keys).unwrap();
+                }
                 started
                     .send((addr, fingerprint, auth, server.admin()))
                     .ok()
@@ -206,11 +210,16 @@ struct HostDaemon {
 
 impl HostDaemon {
     async fn start(dir: &Path, vault: VaultConfig) -> Self {
-        Self::start_with(dir, vault, HostSecrets::default()).await
+        Self::start_with(dir, vault, HostSecrets::default(), Adapters::new()).await
     }
 
-    /// Starts a host whose secrets are `secrets`.
-    async fn start_with(dir: &Path, vault: VaultConfig, secrets: HostSecrets) -> Self {
+    /// Starts a host whose secrets are `secrets`, running sessions on `adapters`.
+    async fn start_with(
+        dir: &Path,
+        vault: VaultConfig,
+        secrets: HostSecrets,
+        adapters: Adapters,
+    ) -> Self {
         let runtime = Runtime::new();
         let dir = dir.to_owned();
         let secrets = Arc::new(secrets);
@@ -226,7 +235,7 @@ impl HostDaemon {
                 });
                 let setup = Setup {
                     store: Store::open(dir.join("herder.db")).unwrap(),
-                    adapters: Adapters::new(),
+                    adapters,
                     accounts: Accounts::new(),
                     sink,
                     turn_ids: Box::new(|| TurnId::new("turn")),
@@ -236,6 +245,7 @@ impl HostDaemon {
                 };
                 let shutdown = CancellationToken::new();
                 let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
+                sessions.use_secrets(Arc::clone(&host_secrets)).unwrap();
                 let replicator = Replicator {
                     vault,
                     device: Replicator::device_key(&dir).unwrap(),
@@ -795,7 +805,7 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
     std::fs::create_dir_all(&host_dir).unwrap();
     seed(&host_dir, 1, 0);
     let liveness = Duration::from_millis(500);
-    let vault = Vault::start_with(&vault_dir, 0, liveness, None).await;
+    let vault = Vault::start_with(&vault_dir, 0, liveness, None, None).await;
     // A real host replicates the session, then stops for good.
     let host = HostDaemon::start(&host_dir, vault.config()).await;
     caught_up(&host_dir, &vault_dir).await;
@@ -1527,7 +1537,7 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_vault_is_down
     seed(&host_dir, 1, 1);
     let vault = Vault::start(&vault_dir, 0).await;
     let secrets = HostSecrets::with_ttl(Duration::from_millis(300));
-    let host = HostDaemon::start_with(&host_dir, vault.config(), secrets).await;
+    let host = HostDaemon::start_with(&host_dir, vault.config(), secrets, Adapters::new()).await;
     caught_up(&host_dir, &vault_dir).await;
     let client = Client::open(
         tmp.path().join("client").display().to_string(),
@@ -1752,7 +1762,7 @@ async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
     vault.runtime.kill().await;
 
     // Without a key: hosts replicate as before, secret commands and fetches are refused.
-    let vault = Vault::start_with(&vault_dir, addr.port(), LIVENESS_TIMEOUT, None).await;
+    let vault = Vault::start_with(&vault_dir, addr.port(), LIVENESS_TIMEOUT, None, None).await;
     seed(&host_dir, 1, 3);
     let config = VaultConfig {
         pairing_code: None,
@@ -1786,7 +1796,14 @@ async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
     vault.runtime.kill().await;
 
     // With another key: what was stored under the old one does not open.
-    let vault = Vault::start_with(&vault_dir, addr.port(), LIVENESS_TIMEOUT, Some([8; 32])).await;
+    let vault = Vault::start_with(
+        &vault_dir,
+        addr.port(),
+        LIVENESS_TIMEOUT,
+        Some([8; 32]),
+        None,
+    )
+    .await;
     // New events, so catching up means the host is connected again.
     seed(&host_dir, 1, 5);
     let host = HostDaemon::start(&host_dir, config).await;
@@ -1869,5 +1886,215 @@ async fn a_host_backs_up_and_fetches_secrets_only_as_its_switches_say() {
     let refused = fetch(&host, "s2", &["TOKEN"]).await.unwrap_err();
     assert_eq!(refused.code, SecretErrorCode::NoVault);
     host.runtime.kill().await;
+    vault.runtime.kill().await;
+}
+
+/// A CLIProxyAPI's management API on localhost, keeping the client keys the vault puts there.
+fn fake_cliproxyapi() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let keys = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let held = Arc::clone(&keys);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let (mut head, mut length) = (String::new(), 0);
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                head.push_str(&line);
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let path = "/v8/management/config/access/api-keys";
+            let answer = if !head.contains("Bearer management-secret") {
+                "{}".to_owned()
+            } else if head.starts_with(&format!("PUT {path} ")) {
+                *held.lock().unwrap() = serde_json::from_slice(&body).unwrap();
+                r#"{"status":"ok"}"#.to_owned()
+            } else {
+                serde_json::to_string(&*held.lock().unwrap()).unwrap()
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n{answer}",
+                answer.len()
+            );
+        }
+    });
+    (url, keys)
+}
+
+/// An adapter that records each start's environment, then plays `failover_retry.jsonl`.
+struct RecordingEnv(Arc<std::sync::Mutex<Vec<BTreeMap<String, String>>>>);
+
+impl herder_adapters::Adapter for RecordingEnv {
+    fn start(&self, request: herder_adapters::StartRequest) -> herder_adapters::StartFuture {
+        self.0.lock().unwrap().push(request.env.clone());
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/session/failover_retry.jsonl");
+        herder_adapters::fake::FakeAdapter::new(script).start(request)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_paired_host_runs_on_the_vaults_cliproxyapi_with_the_key_it_minted_until_forgotten() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    let (url, proxy_keys) = fake_cliproxyapi();
+    let management = herder_daemon::vault::cliproxyapi::Management::new(
+        &url,
+        SecretValue::new("management-secret").unwrap(),
+    );
+    let keys = ClientKeys::new(management).unwrap();
+    let vault = Vault::start_with(
+        &vault_dir,
+        0,
+        LIVENESS_TIMEOUT,
+        Some(SECRETS_KEY),
+        Some(keys),
+    )
+    .await;
+    let starts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut adapters = Adapters::new();
+    adapters.register(
+        Provider::Claude,
+        Arc::new(RecordingEnv(Arc::clone(&starts))),
+    );
+    let host =
+        HostDaemon::start_with(&host_dir, vault.config(), HostSecrets::default(), adapters).await;
+
+    // Pairing gives the host a key: in the proxy, and to the host for its own use.
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    let minted = loop {
+        let held = proxy_keys.lock().unwrap().clone();
+        if let [key] = held.as_slice()
+            && key.starts_with("herder-")
+            && let Ok(fetched) = host
+                .secrets
+                .fetch_for_host("endpoint:vault", &[secret("CLIPROXYAPI_KEY")])
+                .await
+        {
+            assert_eq!(fetched[0].value.expose(), key);
+            break key.clone();
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no key minted: {held:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    // Its sessions never get it.
+    let unknown = fetch(&host, "s1", &["CLIPROXYAPI_KEY"]).await.unwrap_err();
+    assert_eq!(unknown.code, SecretErrorCode::Unknown);
+
+    // An endpoint account naming the secret starts its CLI with the key, typed nowhere.
+    let account = herder_daemon::session::AccountConfig {
+        provider: Provider::Claude,
+        label: "Vault".into(),
+        config_dir: Some(host_dir.join("vault-account")),
+        fallback: false,
+        endpoint: Some(herder_daemon::session::Endpoint {
+            url: "https://vault.example.com:8317".into(),
+            key: herder_daemon::session::EndpointKey::Secret(secret("CLIPROXYAPI_KEY")),
+        }),
+    };
+    assert!(host.sessions.add_account(AccountId::new("vault"), account));
+    let repo = host_dir.join("app");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [
+        &["init", "--quiet", "--initial-branch=main"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@e",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    ] {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+    let sessions = host.sessions.clone();
+    let created = host
+        .runtime
+        .handle()
+        .spawn(async move {
+            let alice = UserId::new("alice");
+            let create = CommandBody::CreateSession {
+                repo: Some(repo.to_str().unwrap().to_owned()),
+                project_id: None,
+                branch: None,
+                account_id: Some(AccountId::new("vault")),
+                provider: None,
+                model: None,
+                permission_mode: Some(PermissionMode::Ask),
+                failover_pin: None,
+                chat: false,
+            };
+            let Ok(CommandResult::SessionCreated { session_id }) =
+                sessions.handle(alice.clone(), create).await
+            else {
+                panic!("no session on the vault account");
+            };
+            let prompt = CommandBody::SendPrompt {
+                session_id,
+                text: "Refactor the parser.".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            };
+            sessions.handle(alice, prompt).await.unwrap();
+        })
+        .await;
+    created.unwrap();
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    let env = loop {
+        if let Some(env) = starts.lock().unwrap().first().cloned() {
+            break env;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the CLI never started"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(
+        env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+        Some("https://vault.example.com:8317")
+    );
+    assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN"), Some(&minted));
+
+    // Forgotten, the host's key leaves the proxy: it has no access any more.
+    host.runtime.kill().await;
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    while let Err(err) = vault.admin.forget_host("devbox").await {
+        assert!(tokio::time::Instant::now() < deadline, "{err:#}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let held = proxy_keys.lock().unwrap().clone();
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_ne!(held[0], minted);
     vault.runtime.kill().await;
 }

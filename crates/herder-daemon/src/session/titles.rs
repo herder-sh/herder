@@ -235,9 +235,13 @@ async fn generate(inner: Arc<Inner>, session_id: SessionId, ask: Ask) {
     if matches!(ask, Ask::Auto) && chosen(&session) {
         return;
     }
-    let run = match resolve(&inner, &session) {
+    let mut run = match resolve(&inner, &session) {
         Ok(run) => run,
         Err(why) => return debug!(%session_id, "not titling the session: {why}"),
+    };
+    run.account = match inner.ready_to_start(&run.account_id, run.account).await {
+        Ok(account) => account,
+        Err(error) => return debug!(%session_id, "not titling the session: {}", error.message),
     };
     let events = match inner.journal.all(session_id.clone()).await {
         Ok(events) => events,
@@ -498,7 +502,9 @@ mod tests {
         let fleet = AccountConfig {
             endpoint: Some(super::super::Endpoint {
                 url: "http://127.0.0.1:8317".into(),
-                key: herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+                key: crate::session::EndpointKey::Held(
+                    herder_protocol::SecretValue::new("cpa-client-key").unwrap(),
+                ),
             }),
             ..login.clone()
         };

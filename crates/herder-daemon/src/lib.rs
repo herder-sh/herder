@@ -395,6 +395,7 @@ mod tests {
             mode: config::Mode::Host,
             vault: None,
             retention: Default::default(),
+            cliproxyapi: None,
             mcp_servers: Vec::new(),
             bots: Vec::new(),
             self_update: None,
