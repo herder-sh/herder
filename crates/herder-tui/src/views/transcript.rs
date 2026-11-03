@@ -233,6 +233,7 @@ impl<'a> Builder<'a> {
                 let class = match class {
                     ErrorClass::LimitReached => "limit reached",
                     ErrorClass::Auth => "login needed",
+                    ErrorClass::Unreachable => "endpoint unreachable",
                     ErrorClass::Transient => "transient",
                     ErrorClass::Fatal => "fatal",
                 };

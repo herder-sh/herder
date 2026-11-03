@@ -402,6 +402,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             usage: Vec::new(),
             fallback: false,
             needs_login: None,
+            endpoint: None,
         }]
     );
     assert_eq!(failover, FailoverSettings::default());

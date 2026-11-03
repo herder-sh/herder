@@ -628,6 +628,13 @@ fn client_fixtures() -> Vec<ClientMessage> {
             cols: 120,
             rows: 40,
         }),
+        command(CommandBody::AddEndpointAccount {
+            account_id: AccountId::new("claude-fleet"),
+            provider: Provider::Claude,
+            label: Some("Fleet".into()),
+            endpoint: "http://127.0.0.1:8317".into(),
+            key: SecretValue::new("cpa_client_key").unwrap(),
+        }),
         command(CommandBody::InstallProvider {
             provider: Provider::Cursor,
             cols: 120,
@@ -649,6 +656,16 @@ fn client_fixtures() -> Vec<ClientMessage> {
             label: "Personal".into(),
             config_dir: Some("~/.claude-personal".into()),
             fallback: Some(true),
+            endpoint: None,
+            key: None,
+        }),
+        command(CommandBody::SetAccountSettings {
+            account_id: AccountId::new("claude-fleet"),
+            label: "Fleet".into(),
+            config_dir: None,
+            fallback: None,
+            endpoint: Some("https://vault.example.com:8317".into()),
+            key: Some(SecretValue::new("cpa_rotated_key").unwrap()),
         }),
         command(CommandBody::SetResourceLimits { max_turns: 6 }),
         command(CommandBody::GetSettings),
@@ -1768,6 +1785,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
     }
     for class in [
         ErrorClass::LimitReached,
+        ErrorClass::Unreachable,
         ErrorClass::Auth,
         ErrorClass::Transient,
         ErrorClass::Fatal,
@@ -1864,6 +1882,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         .map(|provider| Account {
             fallback: provider == Provider::Codex,
             config_dir: None,
+            endpoint: (provider == Provider::Codex).then(|| "http://127.0.0.1:8317".into()),
             account_id: account_id(),
             label: format!("{} work", provider.as_str()),
             needs_login: (provider == Provider::Claude).then(at),
@@ -4013,6 +4032,49 @@ fn follow_up_provenance_is_optional_and_round_trips_with_the_item() {
     assert_eq!((stalled.pr, stalled.head_sha), (None, None));
     let future: FollowUp = serde_json::from_value(json!({ "reason": "deployed" })).unwrap();
     assert_eq!(future.reason, FollowUpReason::Unknown);
+}
+
+#[test]
+fn an_endpoint_key_is_never_shown_in_debug_output() {
+    let command = CommandBody::AddEndpointAccount {
+        account_id: AccountId::new("claude-fleet"),
+        provider: Provider::Claude,
+        label: None,
+        endpoint: "http://127.0.0.1:8317".into(),
+        key: SecretValue::new("cpa_client_key").unwrap(),
+    };
+    assert!(!format!("{command:?}").contains("cpa_client_key"));
+    let json = serde_json::to_value(&command).unwrap();
+    assert_eq!(json["type"], "add_endpoint_account");
+    assert_eq!(json["key"], "cpa_client_key");
+}
+
+#[test]
+fn an_account_without_an_endpoint_logs_in() {
+    let account: Account = serde_json::from_value(json!({
+        "account_id": "a",
+        "provider": "claude",
+        "label": "Main",
+        "usage": []
+    }))
+    .unwrap();
+    assert_eq!(account.endpoint, None);
+    let json = serde_json::to_value(&account).unwrap();
+    assert!(json.get("endpoint").is_none());
+    let message: ClientMessage = serde_json::from_value(json!({
+        "type": "command",
+        "id": "c",
+        "body": { "type": "set_account_settings", "account_id": "a", "label": "Main" }
+    }))
+    .unwrap();
+    let ClientMessage::Command(Command {
+        body: CommandBody::SetAccountSettings { endpoint, key, .. },
+        ..
+    }) = message
+    else {
+        panic!("expected set_account_settings");
+    };
+    assert_eq!((endpoint, key), (None, None));
 }
 
 #[test]

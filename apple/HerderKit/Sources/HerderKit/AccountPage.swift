@@ -456,6 +456,7 @@ struct AccountPage: View {
     private func send(_ account: Account, on hostId: HostId, label: String, configDir: String?,
                       fallback: Bool?) async throws {
         _ = try await fleet.client.send(hostId: hostId, command: .setAccountSettings(
-            accountId: account.accountId, label: label, configDir: configDir, fallback: fallback))
+            accountId: account.accountId, label: label, configDir: configDir, fallback: fallback,
+            endpoint: nil, key: nil))
     }
 }

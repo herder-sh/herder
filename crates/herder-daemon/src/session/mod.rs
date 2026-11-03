@@ -899,6 +899,7 @@ impl SessionManager {
             CommandBody::OpenTerminal { .. }
             | CommandBody::SetAccountSettings { .. }
             | CommandBody::AddAccount { .. }
+            | CommandBody::AddEndpointAccount { .. }
             | CommandBody::InstallProvider { .. }
             | CommandBody::LogInAccount { .. }
             | CommandBody::ListAwsProfiles

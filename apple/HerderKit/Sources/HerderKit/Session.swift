@@ -913,6 +913,8 @@ enum TurnFailure {
             return ["usage limit reached", reset].compactMap { $0 }.joined(separator: " · ")
         case .auth:
             return "the account needs signing in again"
+        case .unreachable:
+            return "the account's endpoint could not be reached"
         case .transient, .fatal:
             let first = parts.first ?? error.message
             let sentence = first.split(separator: "\n").first.map(String.init) ?? first

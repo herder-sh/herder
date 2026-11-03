@@ -67,7 +67,10 @@ cargo test --workspace
 ## Product rules (never break)
 
 - Never read, store, copy or relay provider login tokens (Claude, Gemini, or any other).
-  herder only drives the unmodified vendor CLI under a per-account config dir.
+  herder only drives the unmodified vendor CLI, under a per-account config dir. A login
+  account's CLI holds its own login there. An endpoint account's CLI is pointed at an API
+  server (a CLIProxyAPI, a local model server) that holds the provider credentials outside
+  herder; herder keeps only that server's client key, and never sends it to clients.
 - Terminals are owner-only: only users with the owner role on that daemon can open, attach to
   or see one. Members can drive sessions but never get a shell.
 - Failover is reactive-only; it rotates across the provider's available accounts. Never switch

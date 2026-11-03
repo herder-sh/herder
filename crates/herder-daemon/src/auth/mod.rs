@@ -1158,7 +1158,11 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             "bringing down containers is for the daemon's owners only",
         ));
     }
-    if matches!(command, CommandBody::SetAccountSettings { .. }) && role != Role::Owner {
+    if matches!(
+        command,
+        CommandBody::SetAccountSettings { .. } | CommandBody::AddEndpointAccount { .. }
+    ) && role != Role::Owner
+    {
         return Err(forbidden(
             "changing accounts is for the daemon's owners only",
         ));
@@ -1669,18 +1673,32 @@ mod tests {
     fn only_owners_may_configure_accounts() {
         let (_tmp, auth) = open();
         let mut alice = auth.legacy_user("alice", Role::Owner, "fp-a");
-        let command = CommandBody::SetAccountSettings {
-            account_id: herder_protocol::AccountId::new("work"),
-            label: "Work".into(),
-            config_dir: None,
-            fallback: None,
-        };
-        assert!(authorize(alice.role, &command).is_ok());
-        alice.role = Role::Member;
-        assert_eq!(
-            authorize(alice.role, &command).unwrap_err().code,
-            ErrorCode::Forbidden
-        );
+        let commands = [
+            CommandBody::SetAccountSettings {
+                account_id: herder_protocol::AccountId::new("work"),
+                label: "Work".into(),
+                config_dir: None,
+                fallback: None,
+                endpoint: None,
+                key: None,
+            },
+            CommandBody::AddEndpointAccount {
+                account_id: herder_protocol::AccountId::new("fleet"),
+                provider: herder_protocol::Provider::Claude,
+                label: None,
+                endpoint: "http://127.0.0.1:8317".into(),
+                key: herder_protocol::SecretValue::new("cpa_client_key").unwrap(),
+            },
+        ];
+        for command in commands {
+            alice.role = Role::Owner;
+            assert!(authorize(alice.role, &command).is_ok());
+            alice.role = Role::Member;
+            assert_eq!(
+                authorize(alice.role, &command).unwrap_err().code,
+                ErrorCode::Forbidden
+            );
+        }
     }
 
     #[test]

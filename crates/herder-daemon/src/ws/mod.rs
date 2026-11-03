@@ -513,11 +513,21 @@ impl<B: Backend> Shared<B> {
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
         match command {
+            CommandBody::AddEndpointAccount { .. }
+            | CommandBody::SetAccountSettings {
+                endpoint: Some(_), ..
+            }
+            | CommandBody::SetAccountSettings { key: Some(_), .. } => Err(ErrorInfo {
+                code: ErrorCode::Unsupported,
+                message: "this daemon cannot run endpoint accounts yet".to_owned(),
+            }),
             CommandBody::SetAccountSettings {
                 account_id,
                 label,
                 config_dir,
                 fallback,
+                endpoint: None,
+                key: None,
             } => {
                 self.logins
                     .set_settings(&account_id, &label, config_dir.as_deref(), fallback)

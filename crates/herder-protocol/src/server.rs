@@ -462,6 +462,12 @@ pub struct Account {
     /// Config directory on the host; absent for the provider default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
+    /// API base URL the provider's CLI is pointed at instead of a login, such as a
+    /// CLIProxyAPI or a local model server; absent for an account that logs in. The server
+    /// behind it holds the provider credentials; herder holds only that server's client key,
+    /// which it never sends to clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
     /// Email address the provider login is signed in as, as its CLI last reported it; absent
     /// until it reports one, and for a login without one, such as an API key. Accounts with
     /// the same provider and email share one login, and so its limits.

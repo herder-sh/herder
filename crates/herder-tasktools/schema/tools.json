@@ -718,6 +718,13 @@
                     "null"
                   ]
                 },
+                "endpoint": {
+                  "description": "API base URL the provider's CLI is pointed at instead of a login, such as a\nCLIProxyAPI or a local model server; absent for an account that logs in. The server\nbehind it holds the provider credentials; herder holds only that server's client key,\nwhich it never sends to clients.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "fallback": {
                   "description": "Whether the account is fallback-only: sessions started by provider, failover and\ntitles pick it only while every other account of its provider is unavailable. Naming\nit, or a project defaulting to it, still runs on it.",
                   "type": "boolean",
@@ -1294,6 +1301,7 @@
                   "compose_down",
                   "open_terminal",
                   "add_account",
+                  "add_endpoint_account",
                   "install_provider",
                   "log_in_account",
                   "list_aws_profiles",

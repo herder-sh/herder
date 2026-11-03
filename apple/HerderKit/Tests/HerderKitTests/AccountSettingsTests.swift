@@ -199,7 +199,8 @@ struct AccountSettingsTests {
         let original = machine.accounts.first
         do {
             _ = try await fleet.client.send(hostId: machine.hostId, command: .setAccountSettings(
-                accountId: original?.accountId ?? "fake", label: "Renamed", configDir: nil, fallback: nil))
+                accountId: original?.accountId ?? "fake", label: "Renamed", configDir: nil, fallback: nil,
+                endpoint: nil, key: nil))
             Issue.record("fake daemon must reject account edits without config persistence")
         } catch let error as HerderError {
             guard case .Rejected(let info) = error else { throw error }

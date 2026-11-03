@@ -469,6 +469,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::ApproveAction { .. }
         | CommandBody::RefuseAction { .. }
         | CommandBody::SetAccountSettings { .. }
+        | CommandBody::AddEndpointAccount { .. }
         | CommandBody::SetResourceLimits { .. }
         | CommandBody::GetSettings
         | CommandBody::SetSettings { .. }

@@ -382,6 +382,7 @@ pub struct TurnError {
 #[uniffi::remote(Enum)]
 pub enum ErrorClass {
     LimitReached,
+    Unreachable,
     Auth,
     Transient,
     Fatal,
@@ -835,6 +836,8 @@ pub enum CommandBody {
         label: String,
         config_dir: Option<String>,
         fallback: Option<bool>,
+        endpoint: Option<String>,
+        key: Option<SecretValue>,
     },
     SetResourceLimits {
         max_turns: u32,
@@ -854,6 +857,13 @@ pub enum CommandBody {
         config_dir: Option<String>,
         cols: u16,
         rows: u16,
+    },
+    AddEndpointAccount {
+        account_id: AccountId,
+        provider: Provider,
+        label: Option<String>,
+        endpoint: String,
+        key: SecretValue,
     },
     InstallProvider {
         provider: Provider,
@@ -1521,6 +1531,8 @@ pub struct Account {
     pub fallback: bool,
     #[uniffi(default)]
     pub needs_login: Option<Timestamp>,
+    #[uniffi(default)]
+    pub endpoint: Option<String>,
 }
 
 #[uniffi::remote(Record)]
