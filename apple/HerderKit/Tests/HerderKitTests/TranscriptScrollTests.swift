@@ -263,7 +263,7 @@ final class TranscriptScrollTests {
     private func open() async throws -> NSScrollView {
         show()
         var found: NSScrollView?
-        Self.wait { found = Self.transcript(in: self.window.contentView); return found != nil }
+        await Self.wait { found = Self.transcript(in: self.window.contentView); return found != nil }
         guard let scroll = found else { throw CocoaError(.fileNoSuchFile) }
         await Self.settle(scroll)
         return scroll
@@ -358,7 +358,7 @@ final class TranscriptScrollTests {
     /// Runs the main loop for `seconds`, then lets the main actor's other work run: a test held
     /// in the loop the whole time stalled every other main-actor test until it ended.
     private static func spin(_ seconds: Double) async {
-        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+        CFRunLoopRunInMode(.defaultMode, seconds, false)
         await Task.yield()
     }
 }
