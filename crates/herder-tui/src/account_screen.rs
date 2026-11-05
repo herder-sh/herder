@@ -168,11 +168,16 @@ impl App {
                     self.notice = Some("select an account to log in again".to_owned());
                     return Vec::new();
                 };
-                if find(&self.machines, &host_id, &account_id)
-                    .is_some_and(|account| account.endpoint.is_some())
-                {
-                    self.notice = Some("an endpoint account has no login".to_owned());
-                    return Vec::new();
+                match find(&self.machines, &host_id, &account_id) {
+                    Some(account) if account.vault_login.is_some() => {
+                        self.notice = Some("a vault login signs in on the vault".to_owned());
+                        return Vec::new();
+                    }
+                    Some(account) if account.endpoint.is_some() => {
+                        self.notice = Some("an endpoint account has no login".to_owned());
+                        return Vec::new();
+                    }
+                    _ => {}
                 }
                 match terminal::refusal(&self.machines, &host_id) {
                     Some(refusal) => self.notice = Some(format!("logging in again: {refusal}")),
@@ -195,7 +200,9 @@ impl App {
             let rows = rows(&self.machines);
             screen.selected(&rows).is_some_and(|at| match &rows[at] {
                 Pick::Account(host_id, account_id) => find(&self.machines, host_id, account_id)
-                    .is_some_and(|account| account.endpoint.is_none()),
+                    .is_some_and(|account| {
+                        account.endpoint.is_none() && account.vault_login.is_none()
+                    }),
                 Pick::Machine(_) => false,
             })
         })
@@ -533,6 +540,21 @@ mod tests {
         assert_eq!(form.provider(), &Provider::Cursor);
         assert_eq!(form.kind, accounts::Kind::Login);
         assert!(!form.fields().contains(&accounts::Field::Kind));
+    }
+
+    #[test]
+    fn a_vault_login_has_no_login_to_run_here() {
+        let mut app = App::default();
+        let mut h1 = machine("h1", "box", &[]);
+        h1.accounts = vec![fake::vault_login_account("work", "claude-ada.json", "Work")];
+        app.update(Msg::Machines(vec![h1]));
+        press(&mut app, KeyCode::Char('A'));
+        assert!(!app.on_account());
+        assert_eq!(press(&mut app, KeyCode::Char('l')), []);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("a vault login signs in on the vault")
+        );
     }
 
     #[test]

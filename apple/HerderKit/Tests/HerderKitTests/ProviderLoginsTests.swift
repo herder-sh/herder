@@ -22,7 +22,20 @@ import Testing
                     throw HerderError.Rejected(info: ErrorInfo(code: .badRequest, message: "that address has no code"))
                 }
                 logins.append(ProviderLogin(name: "claude-grace@example.com.json", provider: "claude",
-                                            label: "grace@example.com", state: .active, until: nil, message: nil))
+                                            label: "grace@example.com", email: "grace@example.com", pin: "grace",
+                                            state: .active, until: nil, message: nil))
+                return .providerLogins(logins: logins)
+            case .setProviderLogin(let name, let label, let fallback):
+                guard let at = logins.firstIndex(where: { $0.name == name }) else {
+                    throw HerderError.Rejected(info: ErrorInfo(code: .notFound, message: "the proxy holds no login \(name)"))
+                }
+                if let label {
+                    guard label.count <= 64 else {
+                        throw HerderError.Rejected(info: ErrorInfo(code: .badRequest, message: "a label is 64 characters at most"))
+                    }
+                    logins[at].label = label.isEmpty ? logins[at].email : label
+                }
+                if let fallback { logins[at].fallback = fallback }
                 return .providerLogins(logins: logins)
             case .removeProviderLogin(let name):
                 logins.removeAll { $0.name == name }
@@ -34,14 +47,20 @@ import Testing
     }
 }
 
-/// Three logins: one in use, one cooling down for an hour, one signed out.
+/// Three logins: one in use named by its owner, with usage; one cooling down for an hour,
+/// marked fallback; one signed out.
 func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
-    [
-        ProviderLogin(name: "claude-ada@example.com.json", provider: "claude", label: "ada@example.com",
-                      state: .active, until: nil, message: nil),
+    let resets = { (hours: Double) in now.addingTimeInterval(hours * 3600).ISO8601Format() }
+    return [
+        ProviderLogin(name: "claude-ada@example.com.json", provider: "claude", label: "Work", email: "ada@example.com",
+                      usage: [UsageWindow(window: "five_hour", usedPercent: 42, resetsAt: resets(2)),
+                              UsageWindow(window: "seven_day", usedPercent: 81, resetsAt: resets(100))],
+                      pin: "work", state: .active, until: nil, message: nil),
         ProviderLogin(name: "codex-ada@example.com-plus.json", provider: "codex", label: "ada@example.com",
+                      email: "ada@example.com", fallback: true,
+                      usage: [UsageWindow(window: "five_hour", usedPercent: 100, resetsAt: resets(1))], pin: "codex-ada",
                       state: .coolingDown, until: now.addingTimeInterval(3600).ISO8601Format(), message: "quota exhausted"),
-        ProviderLogin(name: "claude-old.json", provider: "claude", label: nil,
+        ProviderLogin(name: "claude-old.json", provider: "claude", label: nil, pin: "old",
                       state: .needsSignIn, until: nil, message: "unauthorized (refresh token invalid)"),
     ]
 }
@@ -103,6 +122,85 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
             return
         }
         #expect(why.contains("runs no CLIProxyAPI"))
+    }
+
+    @Test func renamingALoginSendsItsNewNameAndShowsTheVaultsList() async {
+        let vault = FakeLoginsVault()
+        let logins = vault.model()
+        await logins.reload()
+        let work = logins.logins[0]
+        #expect(VaultLogins.ownName(work) == "Work")
+        // The same name, trimmed, changes nothing.
+        #expect(await logins.rename(work, to: " Work "))
+        #expect(await logins.rename(work, to: "  Personal "))
+        #expect(logins.logins[0].label == "Personal")
+        // Emptied, it goes back to its email.
+        #expect(await logins.rename(logins.logins[0], to: ""))
+        #expect(logins.logins[0].label == "ada@example.com")
+        #expect(VaultLogins.ownName(logins.logins[0]) == "")
+        #expect(VaultLogins.email(logins.logins[0]) == nil)
+        #expect(vault.sent.dropFirst() == [
+            .setProviderLogin(name: work.name, label: "Personal", fallback: nil),
+            .setProviderLogin(name: work.name, label: "", fallback: nil),
+        ])
+    }
+
+    @Test func markingALoginFallbackSendsOnlyTheMark() async {
+        let vault = FakeLoginsVault()
+        let logins = vault.model()
+        await logins.reload()
+        await logins.setFallback(logins.logins[0], true)
+        #expect(logins.logins[0].fallback)
+        // Already so: nothing to send.
+        await logins.setFallback(logins.logins[0], true)
+        await logins.setFallback(logins.logins[1], false)
+        #expect(!logins.logins[1].fallback)
+        #expect(vault.sent.dropFirst() == [
+            .setProviderLogin(name: "claude-ada@example.com.json", label: nil, fallback: true),
+            .setProviderLogin(name: "codex-ada@example.com-plus.json", label: nil, fallback: false),
+        ])
+    }
+
+    @Test func aRefusedChangeShowsOnItsLoginUntilTheNext() async {
+        let vault = FakeLoginsVault()
+        let logins = vault.model()
+        await logins.reload()
+        let work = logins.logins[0]
+        #expect(await logins.rename(work, to: String(repeating: "x", count: 65)) == false)
+        #expect(logins.errors[work.name] == "a label is 64 characters at most")
+        #expect(logins.errors[logins.logins[1].name] == nil)
+        #expect(logins.logins[0].label == "Work")
+        #expect(await logins.rename(work, to: "Personal"))
+        #expect(logins.errors.isEmpty)
+    }
+
+    @Test func aVaultThatCannotNameLoginsYetSaysSo() async {
+        let logins = sampleProviderLogins()
+        let model = VaultLogins(vault: "h-vault") { command in
+            if case .setProviderLogin = command {
+                throw HerderError.Rejected(info: ErrorInfo(code: .unsupported, message: "update the vault to name its logins"))
+            }
+            return .providerLogins(logins: logins)
+        }
+        await model.reload()
+        await model.setFallback(model.logins[0], true)
+        #expect(model.errors[logins[0].name] == "update the vault to name its logins")
+        #expect(!model.logins[0].fallback)
+    }
+
+    @Test func aLoginShowsWhatIsLeftOfItsWindowsAndNothingUnreported() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let logins = sampleProviderLogins(now: now)
+        let work = VaultLogins.windows(logins[0], now: now)
+        #expect(work.session?.percentLeft == 58)
+        #expect(work.weekly?.percentLeft == 19)
+        #expect(work.session?.resets == "2h 0m")
+        let codex = VaultLogins.windows(logins[1], now: now)
+        #expect(codex.session?.percentLeft == 0 && codex.weekly == nil)
+        let old = VaultLogins.windows(logins[2], now: now)
+        #expect(old.session == nil && old.weekly == nil)
+        // The email shows under an owner's own name only.
+        #expect(logins.map(VaultLogins.email) == ["ada@example.com", nil, nil])
     }
 
     @Test func eachStateReadsAsWhatItMeans() {

@@ -39,8 +39,13 @@ struct ProviderAccounts: Equatable {
 
         var id: String { ProviderAccounts.key(account) }
 
-        /// The API server it runs against, for an endpoint account; `nil` for a login.
-        var endpoint: String? { account.endpoint }
+        /// The API server it runs against, for an endpoint account; `nil` for a login and for
+        /// one of the vault's logins, which the vault runs.
+        var endpoint: String? { vaultLogin == nil ? account.endpoint : nil }
+
+        /// The vault login it runs on, by its name on the vault: its label, fallback mark and
+        /// usage are the vault's.
+        var vaultLogin: String? { account.vaultLogin }
 
         /// Whether an endpoint account's key is fetched from the machine's vault, rather than held.
         var keyFromVault: Bool { account.keySecret != nil }
@@ -52,8 +57,16 @@ struct ProviderAccounts: Equatable {
                 : "Runs against this API server with its client key; no login. Its limits are the server’s."
         }
 
-        /// What it is shown as: its email, or its label without one.
-        var title: String { email ?? account.label }
+        /// What it is shown as: its email, or its label without one; a vault login's label, which
+        /// the vault's owner chose.
+        var title: String { vaultLogin == nil ? email ?? account.label : account.label }
+
+        /// What is shown beside the title, when it says more: a login's label, a vault login's
+        /// email.
+        var subtitle: String? {
+            let other = vaultLogin == nil ? email.map { _ in account.label } : email
+            return other == title ? nil : other
+        }
 
         /// Where the login is fallback-only; machines may disagree.
         var fallbackOn: [Place] { on.filter(\.fallback) }
@@ -131,7 +144,9 @@ struct ProviderAccounts: Equatable {
             }
             let windows = daemons.flatMap(\.accounts).filter { Self.key($0) == id }.flatMap(\.usage)
             return Login(provider: account.provider, email: account.email, account: account,
-                         on: daemons.filter(has).map(place), missing: daemons.filter { !has($0) }.map(place),
+                         // A vault login is on every host of its vault by itself: none sets it up.
+                         on: daemons.filter(has).map(place),
+                         missing: account.vaultLogin == nil ? daemons.filter { !has($0) }.map(place) : [],
                          session: Self.latest("Session", of: windows, now: now),
                          weekly: Self.latest("Weekly", of: windows, now: now))
         }
@@ -148,11 +163,19 @@ struct ProviderAccounts: Equatable {
         return a.id < b.id
     }
 
-    /// What makes accounts one login: their provider and endpoint, as an endpoint account has
-    /// no email; else their provider and email, or without one their id.
+    /// What makes accounts one login: the vault login they run on, as each of the vault's logins
+    /// is its own account though they share the vault's endpoint; else their provider and
+    /// endpoint, as an endpoint account has no email; else their provider and email, or without
+    /// one their id.
     static func key(_ account: Herder.Account) -> String {
+        if let vaultLogin = account.vaultLogin { return vaultKey(provider: account.provider, name: vaultLogin) }
         if let endpoint = account.endpoint { return endpointKey(provider: account.provider, endpoint: endpoint) }
         return "\(account.provider)/\(account.email ?? "id:\(account.accountId)")"
+    }
+
+    /// The login of `provider`'s accounts on the vault login `name`.
+    static func vaultKey(provider: Herder.Provider, name: String) -> String {
+        "\(provider)/vault:\(name)"
     }
 
     /// The login of `provider`'s accounts on `endpoint`.
@@ -162,7 +185,7 @@ struct ProviderAccounts: Equatable {
 
     /// Of the windows labelled `label`, the one that resets last, as the others are older
     /// reports of it; the more used one when they reset together.
-    private static func latest(_ label: String, of windows: [UsageWindow], now: Date) -> WindowLeft? {
+    static func latest(_ label: String, of windows: [UsageWindow], now: Date) -> WindowLeft? {
         let reset = { (window: UsageWindow) in window.resetsAt.flatMap(Timestamp.date) ?? .distantPast }
         return windows.filter { Lists.usageLabel($0.window) == label }
             .max { (reset($0), $0.usedPercent) < (reset($1), $1.usedPercent) }
@@ -618,14 +641,16 @@ struct ProvidersPage: View {
     }
 
     /// The account's email, or its label without one; `label` adds the label after the email,
-    /// or an endpoint account's URL after its label.
+    /// or an endpoint account's URL after its label. A vault login shows its label, then its
+    /// email, marked Vault.
     private func account(_ login: ProviderAccounts.Login, label: Bool) -> some View {
         HStack(spacing: 8) {
             ProviderMark(provider: login.provider, size: 14)
             Text(login.title).lineLimit(1).truncationMode(.middle)
-            if label && login.email != nil {
-                Text(login.account.label).foregroundStyle(Theme.tertiary).lineLimit(1)
+            if label, let subtitle = login.subtitle {
+                Text(subtitle).foregroundStyle(Theme.tertiary).lineLimit(1)
             }
+            if login.vaultLogin != nil { Badge(text: "Vault") }
             if let endpoint = login.endpoint {
                 Badge(text: login.keyFromVault ? "Vault" : "Endpoint")
                 if label {

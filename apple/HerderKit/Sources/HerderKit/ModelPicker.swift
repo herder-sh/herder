@@ -62,12 +62,18 @@ struct SettingsOption: Hashable, Identifiable {
     var unavailable: String?
     /// What to pick within it instead, as a machine's accounts; it opens them when picked.
     var children: [SettingsOption] = []
+    /// Small marks after the title: Vault for one of the vault's logins, Fallback for a
+    /// fallback-only account.
+    var badges: [String] = []
 
     /// Accounts on a machine, each with its provider, email and busiest usage window. Accounts
     /// signed in to the same login, by provider and email, are one option, as they share its
-    /// limits: the current one, or else the first.
+    /// limits: the current one, or else the first. Each of the vault's logins is its own
+    /// option, under the label the vault gives it, marked Vault.
     static func accounts(_ accounts: [Account], current: AccountId?) -> [SettingsOption] {
-        let login = { (account: Account) in account.email.map { "\(account.provider)/\($0)" } ?? account.accountId }
+        let login = { (account: Account) in
+            account.vaultLogin.map { "vault:\($0)" } ?? account.email.map { "\(account.provider)/\($0)" } ?? account.accountId
+        }
         let currentLogin = accounts.first { $0.accountId == current }.map(login)
         var seen: Set<String> = []
         return accounts.filter { account in
@@ -78,9 +84,11 @@ struct SettingsOption: Hashable, Identifiable {
         .map { account in
             let busiest = account.usage.max { $0.usedPercent < $1.usedPercent }
             return SettingsOption(
-                id: account.accountId, title: account.label, subtitle: account.email,
+                id: account.accountId, title: account.label,
+                subtitle: account.email == account.label ? nil : account.email,
                 detail: busiest.map { "\(Lists.usageLabel($0.window)) \(Int(max(0, 100 - $0.usedPercent).rounded()))% left" },
-                provider: account.provider, usage: busiest?.usedPercent, current: account.accountId == current)
+                provider: account.provider, usage: busiest?.usedPercent, current: account.accountId == current,
+                badges: (account.vaultLogin == nil ? [] : ["Vault"]) + (account.fallback ? ["Fallback"] : []))
         }
     }
 
@@ -433,13 +441,16 @@ struct SettingsSectionRows: View {
     }
 }
 
-/// An option's title, with its subtitle under it in a smaller face.
+/// An option's title and its badges, with its subtitle under it in a smaller face.
 private struct OptionTitle: View {
     let option: SettingsOption
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(option.title).foregroundStyle(Theme.text)
+            HStack(spacing: 6) {
+                Text(option.title).foregroundStyle(Theme.text).layoutPriority(1)
+                ForEach(option.badges, id: \.self) { Badge(text: $0) }
+            }
             if let subtitle = option.subtitle {
                 Text(subtitle).font(.caption).foregroundStyle(Theme.tertiary)
             }

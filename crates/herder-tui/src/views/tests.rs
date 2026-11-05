@@ -1471,6 +1471,66 @@ fn the_accounts_screen_shows_an_endpoint_account_s_endpoint_instead_of_usage() {
 }
 
 #[test]
+fn the_accounts_screen_marks_vault_logins_and_shows_their_usage() {
+    let mut app = fake::tree();
+    let mut machines = app.machines.clone();
+    let mut work = fake::vault_login_account("work", "claude-ada@example.com.json", "Work");
+    work.usage = vec![herder_protocol::UsageWindow {
+        window: "five_hour".into(),
+        used_percent: 42.0,
+        resets_at: None,
+    }];
+    let mut spare = fake::vault_login_account("spare", "claude-old.json", "Spare");
+    spare.fallback = true;
+    machines[0].accounts = vec![work, spare];
+    app.update(Msg::Machines(machines));
+    press(&mut app, KeyCode::Char('A'));
+    let screen = render(&mut app, 100, 20).backend().to_string();
+    // A vault login's usage shows, unlike an endpoint account's, and no endpoint does.
+    assert!(screen.contains("Session"), "{screen}");
+    assert!(screen.contains("42%"), "{screen}");
+    assert!(!screen.contains("endpoint"), "{screen}");
+    assert_eq!(screen.matches(" · vault ").count(), 2, "{screen}");
+    assert!(screen.contains("fallback"), "{screen}");
+    assert_eq!(
+        screen
+            .matches("named and marked fallback on the vault")
+            .count(),
+        2,
+        "{screen}"
+    );
+    insta::assert_snapshot!(render(&mut app, 100, 20).backend());
+}
+
+#[test]
+fn the_switch_dialog_marks_vault_logins_and_fallback_accounts() {
+    let mut app = with_accounts();
+    press(&mut app, KeyCode::Enter);
+    app.open_switch();
+    // The dialog lists the machine's accounts as they are now.
+    let mut machines = app.machines.clone();
+    let mut spare = fake::vault_login_account("spare", "claude-old.json", "Spare");
+    spare.fallback = true;
+    spare.usage = vec![herder_protocol::UsageWindow {
+        window: "five_hour".into(),
+        used_percent: 12.0,
+        resets_at: None,
+    }];
+    machines[0].accounts.push(spare);
+    app.update(Msg::Machines(machines));
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    let line = screen
+        .lines()
+        .find(|line| line.contains("Spare"))
+        .unwrap_or_default();
+    assert!(
+        line.contains("vault") && line.contains("fallback") && line.contains("12%"),
+        "{screen}"
+    );
+    insta::assert_snapshot!(render(&mut app, 100, 30).backend());
+}
+
+#[test]
 fn the_switch_dialog_on_narrow_and_wide_screens() {
     let mut app = with_accounts();
     press(&mut app, KeyCode::Enter);

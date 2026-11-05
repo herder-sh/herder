@@ -13,6 +13,8 @@
 //! ```
 //!
 //! An endpoint account shows its endpoint instead: it has no login, so no usage of its own.
+//! An account on one of the vault's logins is marked `vault` and shows the login's usage; its
+//! name and fallback mark are the vault's, changed in the app's vault Logins tab.
 
 use herder_client_core::{Machine, provider_hints};
 use herder_protocol::{Account, HostId, SessionStatus, Timestamp, UsageWindow};
@@ -229,6 +231,9 @@ fn account_row(
     if account.label != account.account_id.as_str() && !columns.compact {
         facts.push(Span::styled(account.account_id.to_string(), ui.muted()));
     }
+    if account.vault_login.is_some() {
+        facts.push(Span::styled("vault", ui.accent()));
+    }
     if account.fallback {
         facts.push(Span::styled("fallback", ui.muted()));
     }
@@ -244,7 +249,18 @@ fn account_row(
         n => format!("{n} sessions"),
     };
     let mut body = Vec::new();
-    if let Some(endpoint) = &account.endpoint {
+    let vault_login = account.vault_login.is_some();
+    if vault_login {
+        // The vault's login: it reports the login's usage, and the vault holds its name and
+        // fallback mark.
+        body.push(Line::styled(
+            "  named and marked fallback on the vault",
+            ui.muted(),
+        ));
+        if account.usage.is_empty() {
+            body.push(Line::styled("  no usage reported yet", ui.muted()));
+        }
+    } else if let Some(endpoint) = &account.endpoint {
         // An endpoint account has no login, so no usage windows: the server behind it
         // holds the provider's limits.
         body.push(Line::from(vec![
@@ -257,7 +273,7 @@ fn account_row(
     } else if account.usage.is_empty() {
         body.push(Line::styled("  no usage reported yet", ui.muted()));
     }
-    if account.endpoint.is_none() {
+    if vault_login || account.endpoint.is_none() {
         for window in &account.usage {
             body.extend(window_lines(ui, window, columns, width, now));
         }

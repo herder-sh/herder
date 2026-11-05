@@ -173,7 +173,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
     }
 }
 
-/// An account to pick: marked if the session is on it, its label, and its busiest window.
+/// An account to pick: marked if the session is on it, its label, `vault` for a vault login,
+/// `fallback` for a fallback one, and its busiest window.
 fn row<'a>(ui: Ui, session: &Session, account: &Account, narrow: bool) -> Row<'a> {
     let current = switch::kind(session, account) == Kind::Current;
     let mark = if current {
@@ -189,6 +190,14 @@ fn row<'a>(ui: Ui, session: &Session, account: &Account, narrow: bool) -> Row<'a
     if !narrow && account.label != account.account_id.as_str() {
         left.push(Span::raw("  "));
         left.push(Span::styled(account.account_id.to_string(), ui.muted()));
+    }
+    if account.vault_login.is_some() {
+        left.push(Span::raw("  "));
+        left.push(Span::styled("vault", ui.accent()));
+    }
+    if account.fallback {
+        left.push(Span::raw("  "));
+        left.push(Span::styled("fallback", ui.muted()));
     }
     let mut right = Vec::new();
     if let Some(usage) = account
