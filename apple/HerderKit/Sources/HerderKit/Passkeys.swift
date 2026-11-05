@@ -1,6 +1,7 @@
 import AuthenticationServices
 import Foundation
 import Herder
+import Security
 
 /// Your herder passkey, for herder.sh: kept in iCloud Keychain or your password manager, its
 /// private key never leaving them. Machines store only its public key; each approval signs a
@@ -60,7 +61,18 @@ extension Authenticator {
     }
 
     private func perform(_ request: ASAuthorizationRequest) async throws -> ASAuthorization {
-        try await withCheckedThrowingContinuation { continuation in
+        #if os(macOS)
+        // An ad-hoc signed app has no application identifier nor associated domains, and macOS
+        // fails its passkey requests with an error that names neither.
+        let task = SecTaskCreateFromSelf(nil)
+        if task.flatMap({ SecTaskCopyValueForEntitlement($0, "com.apple.developer.associated-domains" as CFString, nil) }) == nil {
+            throw HerderError.Local(detail: """
+                this copy of herder is not signed by its team, so macOS keeps it from your passkey: \
+                install a team-signed build, such as apple/scripts/install-mac.sh builds
+                """)
+        }
+        #endif
+        return try await withCheckedThrowingContinuation { continuation in
             pending = continuation
             let controller = ASAuthorizationController(authorizationRequests: [request])
             controller.delegate = self
