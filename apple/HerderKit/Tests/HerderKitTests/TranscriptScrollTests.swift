@@ -6,6 +6,7 @@ import Observation
 import Synchronization
 import SwiftUI
 import Testing
+import WebKit
 
 /// A long session as `fake_daemon --busy` has it: `turns` turns of `rounds` rounds, each a
 /// Markdown message with a code block, a command and its output.
@@ -82,8 +83,6 @@ func leadSession(_ script: inout Script, turns: Int = 40, page: Data, pages: ino
 final class TranscriptScrollTests {
     let fleet: Fleet
     var script = Script("01A", host: "h")
-    /// The flick's last frames, for a blank one's report.
-    var trace: [String] = []
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled],
                           backing: .buffered, defer: false)
 
@@ -216,36 +215,14 @@ final class TranscriptScrollTests {
         #expect(abs(kept - placeholder - (300 - 160)) < 0.5, "\(kept) against \(placeholder)")
     }
 
-    /// Expects the transcript to show rows. When it shows none, says where its layers are, how
-    /// the flick's last frames moved, and what draws the rows again: a moment, the scroll view
-    /// taking its clip view's place again, the clip view moved a point, or a layout.
+    /// Expects the transcript to show rows; when it shows none, says whether it draws them a
+    /// tenth of a second later, and what its layers hold around what it shows.
     private func expectDrawn(_ scroll: NSScrollView, _ when: String) async {
-        trace = Array((trace + ["\(when): top \(Int(scroll.top)) of \(Int(scroll.height))"]).suffix(30))
         guard !drawn(scroll) else { return }
         let state = layers(scroll)
-        let frames = trace.joined(separator: "\n  ")
-        await Self.spin(0.016)
-        let frameLater = drawn(scroll)
         await Self.spin(0.1)
-        let tenthLater = drawn(scroll)
-        scroll.reflectScrolledClipView(scroll.contentView)
-        await Self.spin(0.05)
-        let reflected = drawn(scroll)
-        let top = scroll.top
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: top + 1))
-        scroll.reflectScrolledClipView(scroll.contentView)
-        await Self.spin(0.05)
-        let nudged = "\(drawn(scroll)) at \(Int(scroll.top))"
-        scroll.documentView?.needsLayout = true
-        scroll.documentView?.layoutSubtreeIfNeeded()
-        await Self.spin(0.05)
-        let laidOut = drawn(scroll)
         #expect(Bool(false), """
-            blank \(when) at \(scroll.top) of \(scroll.height); drawn a frame later: \(frameLater), \
-            a tenth later: \(tenthLater), reflected: \(reflected), nudged a point: \(nudged), \
-            laid out: \(laidOut); \(state)
-            frames:
-              \(frames)
+            blank \(when) at \(scroll.top) of \(scroll.height); drawn a tenth later: \(drawn(scroll)); \(state)
             """)
     }
 
@@ -307,8 +284,14 @@ final class TranscriptScrollTests {
     }
 
     /// Whether the transcript shows rows: what its layers draw, without laying anything out, has
-    /// ink beyond the checkpoint rail at its left edge.
+    /// ink beyond the checkpoint rail at its left edge, or a page's web view is in view. A page
+    /// draws out of process, so the window's layers hold none of it: a card's page filling most
+    /// of the view, under a reply's last lines, read as blank.
     private func drawn(_ scroll: NSScrollView) -> Bool {
+        if let document = scroll.documentView,
+           Self.webViews(in: document).contains(where: { $0.convert($0.bounds, to: document).intersects(scroll.documentVisibleRect) }) {
+            return true
+        }
         guard let root = window.contentView, let layer = root.layer else { return false }
         let frame = scroll.convert(scroll.bounds, to: root)
         let (width, height) = (Int(frame.width), Int(frame.height))
@@ -328,8 +311,13 @@ final class TranscriptScrollTests {
         for y in stride(from: 0, to: height, by: 4) {
             for x in stride(from: 60, to: width, by: 4) where abs(light(x, y) - ground) > 90 { ink += 1 }
         }
-        // A blank transcript has none; the sparsest stretch of rows, a few hundred.
-        return ink > 100
+        // A blank transcript has none; a reply's last two lines over a page, under a hundred.
+        return ink > 20
+    }
+
+    /// The web views under `view`: the pages of artifact cards.
+    private static func webViews(in view: NSView) -> [WKWebView] {
+        view.subviews.flatMap { ($0 as? WKWebView).map { [$0] } ?? webViews(in: $0) }
     }
 
     /// The demo's wide HTML mockup.
