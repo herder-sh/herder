@@ -222,7 +222,7 @@ final class TranscriptScrollTests {
     private func expectDrawn(_ scroll: NSScrollView, _ when: String) async {
         trace = Array((trace + ["\(when): top \(Int(scroll.top)) of \(Int(scroll.height))"]).suffix(30))
         guard !drawn(scroll) else { return }
-        let state = Self.layers(scroll)
+        let state = layers(scroll)
         let frames = trace.joined(separator: "\n  ")
         await Self.spin(0.016)
         let frameLater = drawn(scroll)
@@ -249,37 +249,61 @@ final class TranscriptScrollTests {
             """)
     }
 
-    /// Where the transcript's layers are against what it shows, in the document's points: how
-    /// many cross the visible rect, and the nearest above and below it.
-    private static func layers(_ scroll: NSScrollView) -> String {
+    /// What the transcript's layers hold around what it shows, in the document's points (its
+    /// layers' own space runs the same way): each layer within 300 points of the visible rect,
+    /// with its class, span, whether it shows and whether it has contents; and which 24-point
+    /// bands of the visible rect have ink.
+    private func layers(_ scroll: NSScrollView) -> String {
         guard let document = scroll.documentView, let root = document.layer else { return "no document layer" }
         let visible = scroll.documentVisibleRect
-        var frames: [CGRect] = []
+        let near = visible.minY - 300...visible.maxY + 300
+        var lines: [String] = []
+        var total = 0
         func walk(_ layer: CALayer, depth: Int) {
             for sub in layer.sublayers ?? [] {
+                total += 1
                 let frame = sub.convert(sub.bounds, to: root)
-                if frame.height > 4, frame.height < 3000, frame.width > 40, !sub.isHidden, sub.opacity > 0 {
-                    frames.append(frame)
+                if frame.height > 0, (frame.minY...frame.maxY).overlaps(near), lines.count < 40 {
+                    lines.append("\(String(repeating: " ", count: depth))\(type(of: sub)) \(Int(frame.minY))+\(Int(frame.height)) "
+                        + "x\(Int(frame.minX))+\(Int(frame.width))\(sub.isHidden ? " hidden" : "")"
+                        + "\(sub.opacity < 1 ? " opacity \(sub.opacity)" : "")\(sub.contents == nil ? "" : " contents")")
                 }
-                if depth < 8 { walk(sub, depth: depth + 1) }
+                if depth < 10 { walk(sub, depth: depth + 1) }
             }
         }
         walk(root, depth: 0)
-        // The layer's own space runs up or down as the view's does, or not.
-        let flip = document.isFlipped != root.isGeometryFlipped
-        let ys = frames.map { flip ? (root.bounds.height - $0.maxY)...(root.bounds.height - $0.minY) : $0.minY...$0.maxY }
-        let crossing = ys.filter { $0.overlaps(visible.minY...visible.maxY) }.count
-        let above = ys.filter { $0.upperBound <= visible.minY }.map(\.upperBound).max()
-        let below = ys.filter { $0.lowerBound >= visible.maxY }.map(\.lowerBound).min()
-        let raw = frames.sorted { $0.height > $1.height }.prefix(8)
-            .map { "\(Int($0.minY))+\(Int($0.height))" }.joined(separator: " ")
         return """
-            largest layers, raw y+height: \(raw); \
-            visible \(Int(visible.minY))...\(Int(visible.maxY)), document \(Int(document.frame.height)) \
-            (flipped view \(document.isFlipped), layer \(root.isGeometryFlipped)), \(frames.count) layers, \
-            \(crossing) crossing it, nearest above ending \(above.map { "\(Int($0))" } ?? "none"), \
-            below starting \(below.map { "\(Int($0))" } ?? "none")
+            visible \(Int(visible.minY))...\(Int(visible.maxY)), document \(Int(document.frame.height)), \
+            \(total) layers, ink by band from the top: \(inkBands(scroll))
+              \(lines.joined(separator: "\n  "))
             """
+    }
+
+    /// How many of the visible rect's sampled pixels have ink, per 24 points from its top.
+    private func inkBands(_ scroll: NSScrollView) -> String {
+        guard let root = window.contentView, let layer = root.layer else { return "none" }
+        let frame = scroll.convert(scroll.bounds, to: root)
+        let (width, height) = (Int(frame.width), Int(frame.height))
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = context.data else { return "none" }
+        context.translateBy(x: -frame.minX, y: -(root.isFlipped ? root.bounds.height - frame.maxY : frame.minY))
+        layer.render(in: context)
+        let pixels = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        func light(_ x: Int, _ y: Int) -> Int {
+            let i = (y * width + x) * 4
+            return Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2])
+        }
+        let ground = light(width - 2, height / 2)
+        // The bitmap's memory runs from its top row.
+        return stride(from: 0, to: height, by: 24).map { top in
+            var ink = 0
+            for y in stride(from: top, to: min(top + 24, height), by: 2) {
+                for x in stride(from: 60, to: width, by: 4) where abs(light(x, y) - ground) > 90 { ink += 1 }
+            }
+            return "\(ink)"
+        }.joined(separator: " ")
     }
 
     /// Whether the transcript shows rows: what its layers draw, without laying anything out, has

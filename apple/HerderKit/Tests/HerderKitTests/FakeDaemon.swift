@@ -83,10 +83,11 @@ func temporaryProfile() -> URL {
 }
 
 /// Waits until `condition` holds, checking every 50 ms for up to `seconds`. Every test shares
-/// the main actor, and CI's parallel run keeps it busy for many seconds at a time, so the wait
-/// is long; a condition that holds still returns at once.
+/// the main actor, and CI's parallel run keeps it busy for up to a minute at a time (laying out
+/// a long transcript in a window takes one pass that long), so the wait is long; a condition
+/// that holds still returns at once.
 @MainActor
-func eventually(within seconds: Double = 30, _ condition: () -> Bool) async -> Bool {
+func eventually(within seconds: Double = 120, _ condition: () -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + .seconds(seconds)
     while ContinuousClock.now < deadline {
         if condition() { return true }
