@@ -82,6 +82,8 @@ func leadSession(_ script: inout Script, turns: Int = 40, page: Data, pages: ino
 final class TranscriptScrollTests {
     let fleet: Fleet
     var script = Script("01A", host: "h")
+    /// The flick's last frames, for a blank one's report.
+    var trace: [String] = []
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled],
                           backing: .buffered, defer: false)
 
@@ -214,17 +216,36 @@ final class TranscriptScrollTests {
         #expect(abs(kept - placeholder - (300 - 160)) < 0.5, "\(kept) against \(placeholder)")
     }
 
-    /// Expects the transcript to show rows; when it shows none, says where its layers are, and
-    /// whether it draws again a frame and a tenth of a second later.
+    /// Expects the transcript to show rows. When it shows none, says where its layers are, how
+    /// the flick's last frames moved, and what draws the rows again: a moment, the scroll view
+    /// taking its clip view's place again, the clip view moved a point, or a layout.
     private func expectDrawn(_ scroll: NSScrollView, _ when: String) async {
+        trace = Array((trace + ["\(when): top \(Int(scroll.top)) of \(Int(scroll.height))"]).suffix(30))
         guard !drawn(scroll) else { return }
         let state = Self.layers(scroll)
+        let frames = trace.joined(separator: "\n  ")
         await Self.spin(0.016)
         let frameLater = drawn(scroll)
         await Self.spin(0.1)
+        let tenthLater = drawn(scroll)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        await Self.spin(0.05)
+        let reflected = drawn(scroll)
+        let top = scroll.top
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: top + 1))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        await Self.spin(0.05)
+        let nudged = "\(drawn(scroll)) at \(Int(scroll.top))"
+        scroll.documentView?.needsLayout = true
+        scroll.documentView?.layoutSubtreeIfNeeded()
+        await Self.spin(0.05)
+        let laidOut = drawn(scroll)
         #expect(Bool(false), """
             blank \(when) at \(scroll.top) of \(scroll.height); drawn a frame later: \(frameLater), \
-            a tenth later: \(drawn(scroll)); \(state)
+            a tenth later: \(tenthLater), reflected: \(reflected), nudged a point: \(nudged), \
+            laid out: \(laidOut); \(state)
+            frames:
+              \(frames)
             """)
     }
 
@@ -250,7 +271,10 @@ final class TranscriptScrollTests {
         let crossing = ys.filter { $0.overlaps(visible.minY...visible.maxY) }.count
         let above = ys.filter { $0.upperBound <= visible.minY }.map(\.upperBound).max()
         let below = ys.filter { $0.lowerBound >= visible.maxY }.map(\.lowerBound).min()
+        let raw = frames.sorted { $0.height > $1.height }.prefix(8)
+            .map { "\(Int($0.minY))+\(Int($0.height))" }.joined(separator: " ")
         return """
+            largest layers, raw y+height: \(raw); \
             visible \(Int(visible.minY))...\(Int(visible.maxY)), document \(Int(document.frame.height)) \
             (flipped view \(document.isFlipped), layer \(root.isGeometryFlipped)), \(frames.count) layers, \
             \(crossing) crossing it, nearest above ending \(above.map { "\(Int($0))" } ?? "none"), \
