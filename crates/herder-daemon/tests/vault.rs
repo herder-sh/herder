@@ -246,6 +246,10 @@ impl HostDaemon {
                 let shutdown = CancellationToken::new();
                 let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
                 sessions.use_secrets(Arc::clone(&host_secrets)).unwrap();
+                sessions
+                    .use_vault_logins(dir.join("vault-accounts"))
+                    .await
+                    .unwrap();
                 let replicator = Replicator {
                     vault,
                     device: Replicator::device_key(&dir).unwrap(),
@@ -2106,6 +2110,341 @@ async fn a_paired_host_runs_on_the_vaults_cliproxyapi_with_the_key_it_minted_unt
     vault.runtime.kill().await;
 }
 
+/// A CLIProxyAPI on localhost holding three Claude logins: ada, used to 42%; carol, to 10%;
+/// and bob, fallback-only. It keeps the client keys the vault puts there and the fields it
+/// patches, and answers `/v1/messages`, recording each request's model and key.
+struct FakeLogins {
+    url: String,
+    keys: Arc<std::sync::Mutex<Vec<String>>>,
+    patched: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    messages: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+}
+
+fn fake_cliproxyapi_logins() -> FakeLogins {
+    use std::io::{BufRead, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let fake = FakeLogins {
+        url,
+        keys: Arc::default(),
+        patched: Arc::default(),
+        messages: Arc::default(),
+    };
+    let (keys, patched, messages) = (
+        Arc::clone(&fake.keys),
+        Arc::clone(&fake.patched),
+        Arc::clone(&fake.messages),
+    );
+    let reset = (Timestamp::now().as_second() + 3600).to_string();
+    let later = (Timestamp::now().as_second() + 7200).to_string();
+    let credentials = serde_json::json!({ "files": [
+        { "name": "claude-ada@example.com.json", "provider": "claude", "email": "ada@example.com",
+          "status": "active", "note": "Work", "quota": { "signals": {
+            "Anthropic-Ratelimit-Unified-5h-Utilization": "0.42",
+            "Anthropic-Ratelimit-Unified-5h-Reset": reset } } },
+        { "name": "claude-carol@example.com.json", "provider": "claude",
+          "email": "carol@example.com", "status": "active", "quota": { "signals": {
+            "Anthropic-Ratelimit-Unified-5h-Utilization": "0.10",
+            "Anthropic-Ratelimit-Unified-5h-Reset": later } } },
+        { "name": "claude-bob@example.com.json", "provider": "claude", "email": "bob@example.com",
+          "status": "active", "priority": -1 },
+    ]})
+    .to_string();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let (mut head, mut length) = (String::new(), 0);
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                head.push_str(&line);
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let managed = head.contains("Bearer management-secret");
+            let answer = if head.starts_with("POST /v1/messages") {
+                let key = head
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("authorization: bearer ")
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_default();
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                let model = request["model"].as_str().unwrap_or_default().to_owned();
+                messages.lock().unwrap().push((model, key));
+                r#"{"type":"message","content":[]}"#.to_owned()
+            } else if !managed {
+                "{}".to_owned()
+            } else if head.starts_with("PUT /v8/management/config/access/api-keys ") {
+                *keys.lock().unwrap() = serde_json::from_slice(&body).unwrap();
+                r#"{"status":"ok"}"#.to_owned()
+            } else if head.starts_with("GET /v8/management/credentials ") {
+                credentials.clone()
+            } else if head.starts_with("PATCH /v8/management/credentials/fields ") {
+                patched
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::from_slice(&body).unwrap());
+                r#"{"status":"ok"}"#.to_owned()
+            } else {
+                serde_json::to_string(&*keys.lock().unwrap()).unwrap()
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n{answer}",
+                answer.len()
+            );
+        }
+    });
+    fake
+}
+
+/// An adapter that records each start, then plays the next of its scripts.
+struct RecordingScripts {
+    starts: Arc<std::sync::Mutex<Vec<herder_adapters::StartRequest>>>,
+    scripts: std::sync::Mutex<Vec<std::path::PathBuf>>,
+}
+
+impl herder_adapters::Adapter for RecordingScripts {
+    fn start(&self, request: herder_adapters::StartRequest) -> herder_adapters::StartFuture {
+        self.starts.lock().unwrap().push(request.clone());
+        let script = self.scripts.lock().unwrap().remove(0);
+        herder_adapters::fake::FakeAdapter::new(script).start(request)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_vault_login_is_an_account_pinned_to_it_that_fails_over_to_the_next() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    let proxy = fake_cliproxyapi_logins();
+    let management = herder_daemon::vault::cliproxyapi::Management::new(
+        &proxy.url,
+        SecretValue::new("management-secret").unwrap(),
+    );
+    // Hosts reach the proxy where the vault does.
+    let keys = ClientKeys::new(management, Some(proxy.url.clone())).unwrap();
+    let vault = Vault::start_with(
+        &vault_dir,
+        0,
+        LIVENESS_TIMEOUT,
+        Some(SECRETS_KEY),
+        Some(keys),
+    )
+    .await;
+    // The first turn runs out of its limit; the retry completes.
+    let limit = host_dir.join("limit.jsonl");
+    std::fs::write(
+        &limit,
+        concat!(
+            r#"{"expect": {"type": "send_prompt", "turn_id": "turn", "text": "Refactor the parser."}}"#, "\n",
+            r#"{"emit": {"type": "turn_started", "turn_id": "turn"}}"#, "\n",
+            r#"{"emit": {"type": "turn_failed", "turn_id": "turn", "error": {"class": "limit_reached", "message": "5-hour limit reached"}}}"#, "\n",
+            r#"{"expect": {"type": "shutdown"}}"#, "\n",
+        ),
+    )
+    .unwrap();
+    let retry = host_dir.join("retry.jsonl");
+    std::fs::write(
+        &retry,
+        concat!(
+            r#"{"expect": {"type": "send_prompt", "turn_id": "turn", "text": "Refactor the parser."}}"#, "\n",
+            r#"{"emit": {"type": "turn_started", "turn_id": "turn"}}"#, "\n",
+            r#"{"emit": {"type": "turn_completed", "turn_id": "turn"}}"#, "\n",
+        ),
+    )
+    .unwrap();
+    let starts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut adapters = Adapters::new();
+    adapters.register(
+        Provider::Claude,
+        Arc::new(RecordingScripts {
+            starts: Arc::clone(&starts),
+            scripts: std::sync::Mutex::new(vec![limit, retry]),
+        }),
+    );
+    let host =
+        HostDaemon::start_with(&host_dir, vault.config(), HostSecrets::default(), adapters).await;
+
+    // Each login becomes an account, with the vault's label, fallback mark, email and usage.
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    let accounts = loop {
+        let accounts = host.sessions.accounts();
+        if accounts.len() == 3 && !accounts[0].usage.is_empty() {
+            break accounts;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no vault accounts: {accounts:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let ids: Vec<&str> = accounts.iter().map(|a| a.account_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "vault-claude-ada-example.com",
+            "vault-claude-bob-example.com",
+            "vault-claude-carol-example.com"
+        ]
+    );
+    let (ada, bob, carol) = (&accounts[0], &accounts[1], &accounts[2]);
+    assert_eq!(ada.label, "Work");
+    assert_eq!(
+        ada.vault_login.as_deref(),
+        Some("claude-ada@example.com.json")
+    );
+    assert_eq!(ada.email.as_deref(), Some("ada@example.com"));
+    assert_eq!(ada.usage[0].window, "five_hour");
+    assert!((ada.usage[0].used_percent - 42.0).abs() < 1e-9);
+    assert_eq!(ada.key_secret, Some(secret("CLIPROXYAPI_KEY")));
+    assert!(bob.fallback && !ada.fallback && !carol.fallback);
+    assert_eq!(bob.label, "bob@example.com");
+    // The vault pinned every login on the proxy.
+    let pins: Vec<String> = proxy
+        .patched
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|patch| patch["prefix"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        pins,
+        [
+            "claude-ada-example.com",
+            "claude-bob-example.com",
+            "claude-carol-example.com"
+        ]
+    );
+    // A request through ada's account runs on ada, with the model pinned and the host's key.
+    let minted = loop {
+        if let [key] = proxy.keys.lock().unwrap().as_slice()
+            && key.starts_with("herder-")
+        {
+            break key.clone();
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no key minted");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let url = ada.endpoint.clone().unwrap();
+    assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+    let key = minted.clone();
+    tokio::task::spawn_blocking(move || {
+        ureq::post(format!("{url}/v1/messages?beta=true"))
+            .header("Authorization", format!("Bearer {key}"))
+            .send(r#"{"model":"claude-opus-5-5","max_tokens":1,"messages":[]}"#)
+            .unwrap();
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        proxy.messages.lock().unwrap().as_slice(),
+        [(
+            "claude-ada-example.com/claude-opus-5-5".to_owned(),
+            minted.to_ascii_lowercase()
+        )]
+    );
+
+    // A session on ada that hits its limit moves to carol, the rotating login with room, not
+    // to bob, the fallback.
+    let repo = host_dir.join("app");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [
+        &["init", "--quiet", "--initial-branch=main"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@e",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    ] {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+    let sessions = host.sessions.clone();
+    host.runtime
+        .handle()
+        .spawn(async move {
+            let alice = UserId::new("alice");
+            let create = CommandBody::CreateSession {
+                repo: Some(repo.to_str().unwrap().to_owned()),
+                project_id: None,
+                branch: None,
+                account_id: Some(AccountId::new("vault-claude-ada-example.com")),
+                provider: None,
+                model: None,
+                permission_mode: Some(PermissionMode::Ask),
+                failover_pin: None,
+                chat: false,
+            };
+            let Ok(CommandResult::SessionCreated { session_id }) =
+                sessions.handle(alice.clone(), create).await
+            else {
+                panic!("no session on the vault login");
+            };
+            let prompt = CommandBody::SendPrompt {
+                session_id,
+                text: "Refactor the parser.".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            };
+            sessions.handle(alice, prompt).await.unwrap();
+        })
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    let bases = loop {
+        let bases: Vec<String> = starts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|start| {
+                start
+                    .env
+                    .get("ANTHROPIC_BASE_URL")
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+        if bases.len() == 2 {
+            break bases;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no failover: {bases:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert!(bases[0].ends_with("/claude-ada-example.com"), "{bases:?}");
+    assert!(bases[1].ends_with("/claude-carol-example.com"), "{bases:?}");
+    host.runtime.kill().await;
+    vault.runtime.kill().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_owner_lists_the_logins_in_the_vaults_cliproxyapi() {
     let tmp = tempfile::tempdir().unwrap();
@@ -2143,7 +2482,7 @@ async fn an_owner_lists_the_logins_in_the_vaults_cliproxyapi() {
             email: Some("ada@example.com".into()),
             fallback: false,
             usage: Vec::new(),
-            pin: String::new(),
+            pin: "claude-ada-example.com".into(),
             state: herder_protocol::ProviderLoginState::Active,
             until: None,
             message: None,

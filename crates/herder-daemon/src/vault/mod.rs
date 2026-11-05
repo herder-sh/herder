@@ -39,6 +39,7 @@ mod fleet;
 mod host_secrets;
 pub mod install;
 mod link;
+pub mod pin;
 mod replicator;
 mod retention;
 mod secrets;

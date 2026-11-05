@@ -22,8 +22,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use herder_protocol::{
-    FetchedSecret, HostSecretsState, SecretError, SecretErrorCode, SecretInfo, SecretRef,
-    SecretValue, SessionId,
+    FetchedSecret, HostSecretsState, ProviderLogin, SecretError, SecretErrorCode, SecretInfo,
+    SecretRef, SecretValue, SessionId,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -50,6 +50,9 @@ pub struct HostSecrets {
     state: Mutex<State>,
     /// Bumped whenever the link or the connection changes, so held secrets are asked for again.
     reconnected: watch::Sender<()>,
+    /// The vault's CLIProxyAPI logins, as it last sent them; empty while the host is not told
+    /// where the proxy is.
+    logins: watch::Sender<Vec<ProviderLogin>>,
 }
 
 #[derive(Default)]
@@ -166,6 +169,7 @@ impl HostSecrets {
             ttl,
             state: Mutex::default(),
             reconnected: watch::Sender::new(()),
+            logins: watch::Sender::new(Vec::new()),
         }
     }
 
@@ -180,6 +184,7 @@ impl HostSecrets {
             state.connection = None;
             drop(state);
             self.reconnected.send_replace(());
+            self.set_provider_logins(Vec::new());
         }
     }
 
@@ -191,7 +196,25 @@ impl HostSecrets {
     /// Records where the host reaches its vault's CLIProxyAPI, from the vault's hello; `None`
     /// when the vault runs none or holds no key for the host.
     pub(super) fn set_cliproxyapi(&self, endpoint: Option<String>) {
+        let none = endpoint.is_none();
         self.lock().cliproxyapi = endpoint;
+        if none {
+            self.set_provider_logins(Vec::new());
+        }
+    }
+
+    /// Records the vault's CLIProxyAPI logins, as it sent them.
+    pub(super) fn set_provider_logins(&self, logins: Vec<ProviderLogin>) {
+        self.logins.send_if_modified(|held| {
+            let changed = *held != logins;
+            *held = logins;
+            changed
+        });
+    }
+
+    /// The vault's CLIProxyAPI logins, kept current: each is an account on this host.
+    pub fn provider_logins(&self) -> watch::Receiver<Vec<ProviderLogin>> {
+        self.logins.subscribe()
     }
 
     /// Where the host reaches its vault's CLIProxyAPI, as the vault last said.

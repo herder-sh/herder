@@ -24,8 +24,25 @@
 //! which waits five minutes for the address the browser was sent to, posted to
 //! `/oauth/callback`; `/oauth/status` then says when the proxy holds the login. The tokens
 //! stay in the proxy: the answers read here carry none.
+//!
+//! Every login is also an account on each host holding a key ([`Management::logins`]). The
+//! proxy itself keeps what herder sets on a login, in its credential file:
+//!
+//! - its pin: the vault sets the credential's `prefix` to [`pin`] of its name, so a request
+//!   for `<pin>/<model>` runs on that login only, with the model as the provider knows it. A
+//!   request with no prefix still runs on any login, so a plain endpoint account on the proxy
+//!   keeps using the whole pool.
+//! - its label, as the credential's `note`; none falls back to its email.
+//! - its fallback mark, as the credential's `priority`: [`FALLBACK_PRIORITY`] for a fallback
+//!   login, 0 for the others. The proxy's own pool prefers the higher, so it too uses a
+//!   fallback login only while no other is available.
+//!
+//! Its usage is what the proxy saw last in the provider's answers to it: the proxy keeps each
+//! Claude credential's `anthropic-ratelimit-unified-*` headers as its `quota.signals`, so the
+//! sessions' own requests measure it and no request is ever made for it. A window whose reset
+//! has passed is left out until the login is used again.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -35,10 +52,10 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use herder_protocol::{
     CommandBody, CommandResult, ErrorCode, ErrorInfo, HostId, Provider, ProviderLogin,
-    ProviderLoginState, SecretValue, Timestamp, is_valid_secret_set_name,
+    ProviderLoginState, SecretValue, Timestamp, UsageWindow, is_valid_secret_set_name,
 };
 use ring::rand::{SecureRandom, SystemRandom};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -54,6 +71,12 @@ pub const MANAGEMENT_KEY_ENV: &str = "HERDER_CLIPROXYAPI_MANAGEMENT_KEY";
 
 /// How often the vault checks the proxy's client keys.
 pub const SYNC_EVERY: Duration = Duration::from_secs(30);
+
+/// The `priority` of a fallback login's credential; the others have 0, the proxy's default.
+pub const FALLBACK_PRIORITY: i64 = -1;
+
+/// Longest label a login may have, in characters.
+const MAX_LABEL_CHARS: usize = 64;
 
 /// What starts the name of a host's set; the host id follows.
 const SET_PREFIX: &str = "cliproxyapi-";
@@ -93,6 +116,10 @@ pub struct Management {
     base: String,
     key: SecretValue,
     agent: ureq::Agent,
+    /// The logins as last listed, for hosts; `None` until first listed.
+    logins: Arc<watch::Sender<Option<Vec<ProviderLogin>>>>,
+    /// The logins whose credential this process set the pin of.
+    pinned: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Management {
@@ -107,6 +134,8 @@ impl Management {
             base: format!("{}/v8/management", url.trim_end_matches('/')),
             key,
             agent,
+            logins: Arc::new(watch::Sender::new(None)),
+            pinned: Arc::default(),
         }
     }
 
@@ -149,7 +178,8 @@ impl Management {
         Ok(files.len())
     }
 
-    /// The provider logins the proxy holds, ordered by provider, then label.
+    /// The provider logins the proxy holds, ordered by provider, then label. Pins every one
+    /// this process has not pinned yet, and hands the list to hosts ([`Self::subscribe`]).
     pub fn logins(&self) -> Result<Vec<ProviderLogin>> {
         let answer = self
             .call("GET", "/credentials", None)?
@@ -162,7 +192,56 @@ impl Management {
         logins.sort_by(|a, b| {
             (a.provider.as_str(), &a.label, &a.name).cmp(&(b.provider.as_str(), &b.label, &b.name))
         });
+        // Two names with one pin would share it: neither gets it, and neither is an account.
+        let mut pins: BTreeMap<String, usize> = BTreeMap::new();
+        for login in &logins {
+            *pins.entry(pin(&login.name)).or_default() += 1;
+        }
+        for login in &mut logins {
+            let wanted = pin(&login.name);
+            if pins[&wanted] > 1 {
+                warn!(
+                    name = login.name,
+                    "another CLIProxyAPI login has this one's pin; not pinning either"
+                );
+                continue;
+            }
+            if !self.pinned().contains(&login.name) {
+                let body = serde_json::json!({ "name": login.name, "prefix": wanted });
+                match self.call("PATCH", "/credentials/fields", Some(body.to_string())) {
+                    Ok(Some(_)) => {
+                        info!(name = login.name, pin = wanted, "CLIProxyAPI login pinned");
+                        self.pinned().insert(login.name.clone());
+                    }
+                    Ok(None) => continue,
+                    Err(err) => {
+                        warn!(name = login.name, "cannot pin a CLIProxyAPI login: {err:#}");
+                        continue;
+                    }
+                }
+            }
+            login.pin = wanted;
+        }
+        self.logins.send_if_modified(|held| {
+            let changed = held.as_ref() != Some(&logins);
+            if changed {
+                *held = Some(logins.clone());
+            }
+            changed
+        });
         Ok(logins)
+    }
+
+    /// The logins as last listed, kept current; `None` until first listed.
+    pub fn subscribe(&self) -> watch::Receiver<Option<Vec<ProviderLogin>>> {
+        self.logins.subscribe()
+    }
+
+    fn pinned(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+        // Every update is a single insert, so a poisoned set is consistent.
+        self.pinned
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Sends `method` to `path` with `body`; the JSON answer, `None` for a 404.
@@ -199,6 +278,12 @@ impl Management {
                 .delete(&url)
                 .header("Authorization", &bearer)
                 .call(),
+            "PATCH" => self
+                .agent
+                .patch(&url)
+                .header("Authorization", &bearer)
+                .header("Content-Type", "application/json")
+                .send(body.unwrap_or_default()),
             "POST" => self
                 .agent
                 .post(&url)
@@ -263,18 +348,87 @@ fn login(entry: &serde_json::Value, now: Timestamp) -> Option<ProviderLogin> {
     } else {
         ProviderLoginState::Active
     };
+    let usage = if provider == Provider::Claude {
+        claude_usage(&entry["quota"]["signals"], now)
+    } else {
+        Vec::new()
+    };
     Some(ProviderLogin {
         pin: String::new(),
         email: text("email"),
-        fallback: false,
-        usage: Vec::new(),
+        fallback: entry["priority"]
+            .as_i64()
+            .or_else(|| entry["priority"].as_str()?.trim().parse().ok())
+            .is_some_and(|priority| priority < 0),
+        usage,
         name,
         provider,
-        label: text("email").or_else(|| text("label")),
+        label: text("note")
+            .or_else(|| text("email"))
+            .or_else(|| text("label")),
         until: until.filter(|_| state == ProviderLoginState::CoolingDown),
         message: text("status_message"),
         state,
     })
+}
+
+/// What a host puts before a model name for the proxy to run it on the login named `name`: the
+/// name without its `.json`, in lowercase, with anything but letters, digits, `.` and `-` made
+/// a `-`. The proxy takes no `/` in it.
+pub fn pin(name: &str) -> String {
+    let stem = name.strip_suffix(".json").unwrap_or(name);
+    stem.chars()
+        .map(|c| match c.to_ascii_lowercase() {
+            c @ ('a'..='z' | '0'..='9' | '.' | '-') => c,
+            _ => '-',
+        })
+        .collect()
+}
+
+/// A Claude login's limit windows, from the `anthropic-ratelimit-unified-<claim>-utilization`
+/// and `-reset` headers the proxy kept, `signals`, named as the CLI names them: `5h` is
+/// `five_hour`, `7d` `seven_day`, and `7d_<model>` `seven_day_<model>`. A window whose reset
+/// has passed by `now` says nothing any more.
+fn claude_usage(signals: &serde_json::Value, now: Timestamp) -> Vec<UsageWindow> {
+    let Some(signals) = signals.as_object() else {
+        return Vec::new();
+    };
+    let header = |name: &str| {
+        signals
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .and_then(|(_, value)| value.as_str())
+            .map(str::trim)
+    };
+    let mut windows: Vec<UsageWindow> = signals
+        .keys()
+        .filter_map(|key| {
+            let claim = key
+                .to_ascii_lowercase()
+                .strip_prefix("anthropic-ratelimit-unified-")?
+                .strip_suffix("-utilization")?
+                .to_owned();
+            let window = match claim.as_str() {
+                "5h" => "five_hour".to_owned(),
+                "7d" => "seven_day".to_owned(),
+                _ => format!("seven_day_{}", claim.strip_prefix("7d_")?),
+            };
+            let used: f64 = header(key)?.parse().ok()?;
+            let resets_at = header(&format!("anthropic-ratelimit-unified-{claim}-reset"))
+                .and_then(|at| at.parse::<i64>().ok())
+                .and_then(|at| Timestamp::from_second(at).ok());
+            if resets_at.is_some_and(|at| at <= now) {
+                return None;
+            }
+            Some(UsageWindow {
+                window,
+                used_percent: (used * 100.0).clamp(0.0, 100.0),
+                resets_at,
+            })
+        })
+        .collect();
+    windows.sort_by(|a, b| a.window.cmp(&b.window));
+    windows
 }
 
 /// Answers an owner's command on the proxy's provider logins, through `management`; blocks.
@@ -327,17 +481,51 @@ pub fn command(management: &Management, command: CommandBody) -> Result<CommandR
         CommandBody::RemoveProviderLogin { name } => {
             let path = format!("/credentials?name={}", query(&name));
             match management.call("DELETE", &path, None).map_err(internal)? {
-                Some(_) => Ok(CommandResult::Applied),
+                Some(_) => {
+                    // Hosts drop its account now rather than at the next sync.
+                    if let Err(err) = management.logins() {
+                        warn!("cannot list the CLIProxyAPI's logins: {err:#}");
+                    }
+                    Ok(CommandResult::Applied)
+                }
                 None => Err(failed(
                     ErrorCode::NotFound,
                     format!("the vault's CLIProxyAPI holds no login {name}"),
                 )),
             }
         }
-        CommandBody::SetProviderLogin { .. } => Err(failed(
-            ErrorCode::Unsupported,
-            "this vault cannot name its provider logins yet; update it".into(),
-        )),
+        CommandBody::SetProviderLogin {
+            name,
+            label,
+            fallback,
+        } => {
+            let mut body = serde_json::json!({ "name": name });
+            if let Some(label) = label {
+                let label = label.trim();
+                if label.chars().count() > MAX_LABEL_CHARS {
+                    return Err(failed(
+                        ErrorCode::BadRequest,
+                        format!("a login's label has at most {MAX_LABEL_CHARS} characters"),
+                    ));
+                }
+                body["note"] = label.into();
+            }
+            if let Some(fallback) = fallback {
+                body["priority"] = if fallback { FALLBACK_PRIORITY } else { 0 }.into();
+            }
+            match management
+                .call("PATCH", "/credentials/fields", Some(body.to_string()))
+                .map_err(internal)?
+            {
+                Some(_) => Ok(CommandResult::ProviderLogins {
+                    logins: management.logins().map_err(internal)?,
+                }),
+                None => Err(failed(
+                    ErrorCode::NotFound,
+                    format!("the vault's CLIProxyAPI holds no login {name}"),
+                )),
+            }
+        }
         _ => Err(internal(anyhow::anyhow!("not a provider login command"))),
     }
 }
@@ -567,7 +755,8 @@ impl ClientKeys {
         .context("the CLIProxyAPI sync panicked")?
     }
 
-    /// Syncs now and every [`SYNC_EVERY`], and when a host gets a key, until `shutdown`.
+    /// Syncs now and every [`SYNC_EVERY`], and when a host gets a key, until `shutdown`; and
+    /// lists the logins each time, for hosts, pinning new ones.
     pub async fn run(
         self: Arc<Self>,
         store: Arc<Mutex<VaultStore>>,
@@ -578,6 +767,12 @@ impl ClientKeys {
         loop {
             if let Err(err) = self.sync(&store, &key).await {
                 warn!("cannot sync the CLIProxyAPI's client keys: {err:#}");
+            }
+            let management = self.management.clone();
+            match tokio::task::spawn_blocking(move || management.logins()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => warn!("cannot list the CLIProxyAPI's logins: {err:#}"),
+                Err(err) => warn!("listing the CLIProxyAPI's logins panicked: {err}"),
             }
             tokio::select! {
                 () = shutdown.cancelled() => return,
@@ -667,6 +862,20 @@ mod tests {
                                     ok(serde_json::json!({ "status": "ok" }))
                                 } else {
                                     missing("auth file not found")
+                                }
+                            }
+                            ("PATCH", "/credentials/fields") => {
+                                let fields: serde_json::Map<String, serde_json::Value> =
+                                    serde_json::from_str(&body).unwrap();
+                                let mut creds = creds.lock().unwrap();
+                                match creds.iter_mut().find(|c| c["name"] == fields["name"]) {
+                                    Some(entry) => {
+                                        for (field, value) in fields {
+                                            entry[field] = value;
+                                        }
+                                        ok(serde_json::json!({ "status": "ok" }))
+                                    }
+                                    None => missing("auth file not found"),
                                 }
                             }
                             ("GET", "/oauth/auth-url") => {
@@ -957,7 +1166,7 @@ mod tests {
                 email: Some("ada@example.com".into()),
                 fallback: false,
                 usage: Vec::new(),
-                pin: String::new(),
+                pin: "claude-ada-example.com".into(),
                 state: ProviderLoginState::Active,
                 until: None,
                 message: None,
@@ -1086,5 +1295,137 @@ mod tests {
         }));
         assert_eq!(off.state, ProviderLoginState::Disabled);
         assert!(login(&serde_json::json!({ "provider": "claude" }), now).is_none());
+    }
+
+    /// The fields the vault put on the proxy's credential `name`.
+    fn credential(proxy: &FakeProxy, name: &str) -> serde_json::Value {
+        let creds = proxy.credentials.lock().unwrap();
+        creds.iter().find(|c| c["name"] == name).unwrap().clone()
+    }
+
+    #[test]
+    fn logins_are_pinned_once_and_carry_their_fallback_mark_and_usage() {
+        let proxy = FakeProxy::start();
+        let now = Timestamp::now().as_second();
+        proxy.credentials.lock().unwrap().extend([
+            serde_json::json!({
+                "name": "claude-ada@example.com.json",
+                "provider": "claude",
+                "email": "ada@example.com",
+                "status": "active",
+                "priority": 0,
+                "quota": { "observed_at": "2026-11-05T11:00:00Z", "signals": {
+                    "Anthropic-Ratelimit-Unified-5h-Utilization": "0.42",
+                    "Anthropic-Ratelimit-Unified-5h-Reset": (now + 3600).to_string(),
+                    // Reset already: it says nothing any more.
+                    "Anthropic-Ratelimit-Unified-7d-Utilization": "0.99",
+                    "Anthropic-Ratelimit-Unified-7d-Reset": (now - 60).to_string(),
+                    "Anthropic-Ratelimit-Unified-7d_oi-Utilization": "1.0",
+                    "Anthropic-Ratelimit-Unified-Status": "allowed",
+                    "Retry-After": "30",
+                }},
+            }),
+            serde_json::json!({
+                "name": "codex-Bob.json",
+                "provider": "codex",
+                "status": "active",
+                "priority": FALLBACK_PRIORITY,
+            }),
+        ]);
+        let management = proxy.management();
+        let mut hosts = management.subscribe();
+        assert_eq!(*hosts.borrow_and_update(), None);
+        let logins = management.logins().unwrap();
+        let ada = &logins[0];
+        assert_eq!(ada.pin, "claude-ada-example.com");
+        assert!(!ada.fallback);
+        assert_eq!(ada.label.as_deref(), Some("ada@example.com"));
+        assert_eq!(
+            ada.usage,
+            vec![
+                UsageWindow {
+                    window: "five_hour".into(),
+                    used_percent: 42.0,
+                    resets_at: Some(Timestamp::from_second(now + 3600).unwrap()),
+                },
+                UsageWindow {
+                    window: "seven_day_oi".into(),
+                    used_percent: 100.0,
+                    resets_at: None,
+                },
+            ]
+        );
+        let bob = &logins[1];
+        assert_eq!(bob.pin, "codex-bob");
+        assert!(bob.fallback);
+        assert!(bob.usage.is_empty());
+        // Each credential got its pin as its prefix, and hosts the list.
+        assert_eq!(credential(&proxy, "codex-Bob.json")["prefix"], "codex-bob");
+        assert_eq!(hosts.borrow_and_update().as_ref(), Some(&logins));
+        // Pinned once: a prefix set by hand stays until the vault restarts.
+        proxy.credentials.lock().unwrap()[1]["prefix"] = "by-hand".into();
+        assert_eq!(management.logins().unwrap(), logins);
+        assert!(!hosts.has_changed().unwrap());
+        assert_eq!(credential(&proxy, "codex-Bob.json")["prefix"], "by-hand");
+    }
+
+    #[test]
+    fn two_logins_with_one_pin_get_none() {
+        let proxy = FakeProxy::start();
+        for name in ["claude-Ada.json", "claude-ada.json", "claude-grace.json"] {
+            proxy.credentials.lock().unwrap().push(serde_json::json!({
+                "name": name, "provider": "claude", "status": "active",
+            }));
+        }
+        let logins = proxy.management().logins().unwrap();
+        let pins: Vec<&str> = logins.iter().map(|l| l.pin.as_str()).collect();
+        assert_eq!(pins, ["", "", "claude-grace"]);
+        assert_eq!(credential(&proxy, "claude-ada.json").get("prefix"), None);
+    }
+
+    #[tokio::test]
+    async fn an_owner_names_a_login_and_marks_it_fallback_on_the_proxy() {
+        let proxy = FakeProxy::start();
+        proxy.credentials.lock().unwrap().push(serde_json::json!({
+            "name": "claude-ada@example.com.json",
+            "provider": "claude",
+            "email": "ada@example.com",
+            "status": "active",
+        }));
+        let set = |label: Option<&str>, fallback: Option<bool>| CommandBody::SetProviderLogin {
+            name: "claude-ada@example.com.json".into(),
+            label: label.map(str::to_owned),
+            fallback,
+        };
+        let logins = listed(run(&proxy, set(Some(" Work "), Some(true))).await);
+        assert_eq!(logins[0].label.as_deref(), Some("Work"));
+        assert!(logins[0].fallback);
+        let kept = credential(&proxy, "claude-ada@example.com.json");
+        assert_eq!(kept["note"], "Work");
+        assert_eq!(kept["priority"], FALLBACK_PRIORITY);
+        // Each stays as it is unless named; an empty label goes back to the email.
+        let logins = listed(run(&proxy, set(None, Some(false))).await);
+        assert_eq!(logins[0].label.as_deref(), Some("Work"));
+        assert!(!logins[0].fallback);
+        assert_eq!(
+            credential(&proxy, "claude-ada@example.com.json")["priority"],
+            0
+        );
+        let logins = listed(run(&proxy, set(Some(""), None)).await);
+        assert_eq!(logins[0].label.as_deref(), Some("ada@example.com"));
+        assert!(!logins[0].fallback);
+
+        let long = "x".repeat(MAX_LABEL_CHARS + 1);
+        let refused = run(&proxy, set(Some(&long), None)).await.unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+        let unknown = CommandBody::SetProviderLogin {
+            name: "claude-gone.json".into(),
+            label: None,
+            fallback: Some(true),
+        };
+        assert_eq!(
+            run(&proxy, unknown).await.unwrap_err().code,
+            ErrorCode::NotFound
+        );
     }
 }

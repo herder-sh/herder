@@ -12,10 +12,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
-    Cursor, DeviceId, HostId, HostMessage, REPLICATION_VERSION, ReplicationError,
+    Cursor, DeviceId, HostId, HostMessage, ProviderLogin, REPLICATION_VERSION, ReplicationError,
     ReplicationErrorCode, VaultHello, VaultMessage,
 };
 use tokio::net::TcpStream;
+use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -178,12 +179,17 @@ async fn serve(
         sessions = cursors.len(),
         "host connected"
     );
+    // A host told where the proxy is runs its logins as accounts.
+    let logins = match (&proxy, shared.cliproxyapi.get()) {
+        (Some(_), Some(keys)) => Some(keys.management().subscribe()),
+        _ => None,
+    };
     send(ws, hello_message(cursors, proxy)).await?;
 
     let presence = shared.fleet.presence();
     presence.connected(&host);
     shared.fleet.refresh_hosts().await;
-    let result = receive(ws, shared, &host, cap).await;
+    let result = receive(ws, shared, &host, cap, logins).await;
     let seen = presence.disconnected(&host);
     let device = identity.device_id.clone();
     blocking(&shared.store, move |store| store.seen(&device, seen)).await?;
@@ -194,12 +200,28 @@ async fn serve(
 
 /// Handles the host's messages once it is connected, keeping at most `cap` bytes of its
 /// images, until another host takes over one of its sessions: then the connection is
-/// dropped, so the host reconnects and stops that session.
-async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) -> Result<()> {
+/// dropped, so the host reconnects and stops that session. Sends the host `logins` as they
+/// are listed, the current ones first.
+async fn receive(
+    ws: &mut Ws,
+    shared: &Shared,
+    host: &HostId,
+    cap: Option<u64>,
+    mut logins: Option<watch::Receiver<Option<Vec<ProviderLogin>>>>,
+) -> Result<()> {
     let mut superseded = shared.superseded.subscribe();
+    if let Some(logins) = &mut logins {
+        logins.mark_changed();
+    }
+    // Sending the host its logins is no sign of life from it.
+    let mut deadline = tokio::time::Instant::now() + shared.liveness;
     loop {
         let frame = tokio::select! {
-            frame = tokio::time::timeout(shared.liveness, ws.next()) => frame,
+            listed = next_logins(&mut logins) => {
+                send(ws, VaultMessage::ProviderLogins { logins: listed }).await?;
+                continue;
+            }
+            frame = tokio::time::timeout_at(deadline, ws.next()) => frame,
             other = superseded.recv() => match other {
                 Ok(other) if other != *host => continue,
                 _ => bail!("another host took over one of this host's sessions"),
@@ -210,6 +232,7 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) 
             Ok(None) => return Ok(()),
             Ok(Some(frame)) => frame.context("reading from the host")?,
         };
+        deadline = tokio::time::Instant::now() + shared.liveness;
         shared.fleet.presence().heard(host);
         let message = match frame {
             Message::Text(text) => {
@@ -340,6 +363,24 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) 
             Err(err) => return fail(ws, bad(&err)).await,
         };
         send(ws, reply).await?;
+    }
+}
+
+/// The logins once they change and have been listed; never, without a receiver or once its
+/// sender is gone.
+async fn next_logins(
+    logins: &mut Option<watch::Receiver<Option<Vec<ProviderLogin>>>>,
+) -> Vec<ProviderLogin> {
+    let Some(receiver) = logins else {
+        return std::future::pending().await;
+    };
+    loop {
+        if receiver.changed().await.is_err() {
+            return std::future::pending().await;
+        }
+        if let Some(listed) = receiver.borrow_and_update().clone() {
+            return listed;
+        }
     }
 }
 
