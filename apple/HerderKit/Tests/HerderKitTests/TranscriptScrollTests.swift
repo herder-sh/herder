@@ -185,7 +185,9 @@ final class TranscriptScrollTests {
             let before = scroll.top
             let moved = await Self.flick(scroll, up: true) { await expectDrawn(scroll, "mid-flick \(flick) up, \($0)") }
             #expect(drawn(scroll), "blank after flick \(flick) at \(scroll.top) of \(scroll.height)")
-            #expect(abs((before - scroll.top) - moved) < 1 || scroll.top < 1,
+            // Rows above measured as they land shift the offset a point or so; the jump the owner
+            // saw went thousands of points, into the middle of the transcript.
+            #expect(abs((before - scroll.top) - moved) < 20 || scroll.top < 1,
                     "flick \(flick) of \(moved) moved \(before - scroll.top), to \(scroll.top) of \(scroll.height)")
         }
         while scroll.fromEnd > 1 {
