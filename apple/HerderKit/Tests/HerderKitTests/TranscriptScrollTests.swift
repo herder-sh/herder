@@ -206,7 +206,7 @@ final class TranscriptScrollTests {
         fleet.setAttachmentForTesting("01PAGE", try Self.mockup())
         let artifact = try #require(fleet.artifacts(of: script.key).first)
         let card = ArtifactBlock(artifact: artifact, fleet: fleet, key: script.key)
-            .environment(\.pageHeights, .constant(["01PAGE": 300]))
+            .environment(\.pageHeights, PageHeights(["01PAGE": 300]))
             .frame(width: 600)
         let plain = ArtifactBlock(artifact: artifact, fleet: fleet, key: script.key).frame(width: 600)
         let kept = NSHostingView(rootView: card).fittingSize.height

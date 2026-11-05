@@ -29,7 +29,7 @@ struct SessionView: View {
     /// The folded blocks shown open, by id; outside the rows, so a row drawn again keeps them.
     @State private var expanded: Set<String> = []
     /// Each artifact's page height as last measured, kept for the same reason.
-    @State private var pageHeights: [AttachmentId: CGFloat] = [:]
+    @State private var pageHeights = PageHeights()
 
     var body: some View {
         let model = fleet.session(key)
@@ -117,7 +117,7 @@ struct SessionView: View {
         }
         .environment(\.prLinks, PRLinks(linkablePRs))
         .environment(\.transcriptExpanded, $expanded)
-        .environment(\.pageHeights, $pageHeights)
+        .environment(\.pageHeights, pageHeights)
         .background(.ground)
         .overlay(alignment: .trailing) { EmptyView() }
         .safeAreaInset(edge: .trailing, spacing: 0) {
@@ -132,7 +132,7 @@ struct SessionView: View {
             showsTerminal = false
             find = TranscriptFind()
             expanded = []
-            pageHeights = [:]
+            pageHeights = PageHeights()
             showsPRs = false
             fleet.unwatch(old)
             fleet.watch(key)

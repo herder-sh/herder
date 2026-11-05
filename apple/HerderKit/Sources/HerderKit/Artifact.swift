@@ -266,9 +266,9 @@ struct ArtifactBlock: View {
                 let id = artifact.attachment.attachmentId
                 SandboxedWebView(html: String(decoding: data, as: UTF8.self), thumbnail: true, measured: { height in
                     measured = height
-                    if heights.wrappedValue[id] != height { heights.wrappedValue[id] = height }
+                    heights?.heights[id] = height
                 })
-                .frame(height: (heights.wrappedValue[id] ?? measured).map { min($0, Self.cap) } ?? 160)
+                .frame(height: (measured ?? heights?.heights[id]).map { min($0, Self.cap) } ?? 160)
                 .allowsHitTesting(false)
                 .opening(open)
             case .pdf:
