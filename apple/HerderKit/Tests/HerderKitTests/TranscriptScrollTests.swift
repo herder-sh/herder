@@ -184,7 +184,7 @@ final class TranscriptScrollTests {
             let before = scroll.top
             let moved = Self.flick(scroll, up: true) { #expect(drawn(scroll), "blank mid-flick \(flick) at \(scroll.top) of \(scroll.height)") }
             #expect(drawn(scroll), "blank after flick \(flick) at \(scroll.top) of \(scroll.height)")
-            #expect(abs((before - scroll.top) - moved) < 50 || scroll.top < 1,
+            #expect(abs((before - scroll.top) - moved) < 1 || scroll.top < 1,
                     "flick \(flick) of \(moved) moved \(before - scroll.top), to \(scroll.top) of \(scroll.height)")
         }
         while scroll.fromEnd > 1 {
@@ -308,33 +308,26 @@ final class TranscriptScrollTests {
         settle(scroll)
     }
 
-    /// Flicks as a trackpad does, a frame at a time: fingers moving 40 points a frame, then the
-    /// momentum after they lift, slowing. Calls `frame` between frames; returns the points sent.
+    /// Flicks as a trackpad does, a frame at a time: a gesture, its fingers moving 40 points a
+    /// frame. Calls `frame` between frames; returns the points moved. The momentum after the
+    /// fingers lift is the system's, and a scroll view ignores momentum events a test sends.
     @discardableResult
     private static func flick(_ scroll: NSScrollView, up: Bool, frame: () -> Void = {}) -> CGFloat {
         var sent: CGFloat = 0
-        func send(_ delta: Int, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase) {
+        func send(_ delta: Int, _ phase: CGScrollPhase) {
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
                                       wheel1: Int32(up ? delta : -delta), wheel2: 0, wheel3: 0) else { return }
             event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase?.rawValue ?? 0))
-            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: Int64(momentum.rawValue))
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
             guard let ns = NSEvent(cgEvent: event) else { return }
             scroll.scrollWheel(with: ns)
             sent += CGFloat(delta)
             spin(0.008)
             frame()
         }
-        send(0, phase: .began, momentum: .none)
-        for _ in 0..<12 { send(40, phase: .changed, momentum: .none) }
-        send(0, phase: .ended, momentum: .none)
-        var speed = 40
-        send(speed, phase: nil, momentum: .begin)
-        while speed > 1 {
-            speed = speed * 9 / 10
-            send(speed, phase: nil, momentum: .continuous)
-        }
-        send(0, phase: nil, momentum: .end)
+        send(0, .began)
+        for _ in 0..<12 { send(40, .changed) }
+        send(0, .ended)
         settle(scroll)
         return sent
     }
