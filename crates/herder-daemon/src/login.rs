@@ -934,6 +934,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_vault_logins_account_is_the_vaults_to_set_and_leaves_with_the_login() {
+        let f = fixture().await;
+        let proxy = crate::vault::pin::PinProxy::start(Arc::new(|| None), CancellationToken::new())
+            .await
+            .unwrap();
+        let login = herder_protocol::ProviderLogin {
+            name: "claude-ada.json".into(),
+            provider: Provider::Claude,
+            label: Some("Ada".into()),
+            email: None,
+            fallback: true,
+            usage: Vec::new(),
+            pin: "claude-ada".into(),
+            state: herder_protocol::ProviderLoginState::Active,
+            until: None,
+            message: None,
+        };
+        let dir = f.home.path().join("vault-accounts");
+        f.sessions.set_vault_logins(&[login], &proxy, &dir);
+        let id = AccountId::new("vault-claude-ada");
+        let account = f.sessions.account(&id).unwrap();
+        assert_eq!(account.label, "Ada");
+        assert!(account.fallback);
+        assert_eq!(account.config_dir, Some(dir.join("vault-claude-ada")));
+        let refused = f
+            .logins
+            .set_settings(&id, &settings("Mine", None, Some(false)))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest, "{refused:?}");
+        assert!(!std::fs::exists(f.home.path().join("daemon.toml")).unwrap());
+
+        f.sessions.set_vault_logins(&[], &proxy, &dir);
+        assert!(f.sessions.account(&id).is_none());
+        assert!(f.sessions.account(&AccountId::new("codex")).is_some());
+    }
+
+    #[tokio::test]
     async fn logging_in_again_runs_in_the_accounts_own_dir_and_changes_no_config() {
         let f = fixture().await;
         let dir = f.home.path().join("work");

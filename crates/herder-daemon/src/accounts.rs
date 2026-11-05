@@ -188,11 +188,12 @@ pub(crate) fn endpoint_env(account: &AccountConfig, env: &mut BTreeMap<String, S
 
 /// `accounts` as clients see them, ordered by id, each with the email and windows `usage`
 /// holds for it, none until its provider reports them, and since when it needs logging in
-/// again, as `needs_login` says.
+/// again, as `needs_login` says, and the vault login it is, as `vault_logins` says.
 pub(crate) fn list(
     accounts: &Accounts,
     usage: &Known,
     needs_login: &BTreeMap<AccountId, Timestamp>,
+    vault_logins: &BTreeMap<AccountId, String>,
 ) -> Vec<Account> {
     accounts
         .iter()
@@ -219,7 +220,7 @@ pub(crate) fn list(
                     EndpointKey::Secret(secret) => Some(secret.clone()),
                     EndpointKey::Held(_) => None,
                 }),
-            vault_login: None,
+            vault_login: vault_logins.get(id).cloned(),
         })
         .collect()
 }
@@ -500,7 +501,7 @@ mod tests {
         let since: Timestamp = "2026-10-25T09:00:00Z".parse().unwrap();
         let needs_login = BTreeMap::from([(AccountId::new("codex"), since)]);
         assert_eq!(
-            list(&accounts, &usage, &needs_login),
+            list(&accounts, &usage, &needs_login, &BTreeMap::new()),
             [
                 Account {
                     config_dir: Some("/secret/dir".into()),

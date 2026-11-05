@@ -267,9 +267,10 @@ use herder_protocol::{
     Account, AccountId, Attachment, AttachmentId, Bot, BotFact, BotId, Bytes, CommandBody,
     CommandId, CommandResult, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, FactId, FollowUp,
     HostId, Image, Item, ItemId, JournalRecord, MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS,
-    PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project, ProjectId, Provider, SecretRef, SecretValue,
-    Seq, SessionHead, SessionId, SessionOrigin, SessionStatus, SessionSummary, ThreadLink,
-    Timestamp, TitleSource, TurnError, TurnId, UsageWindow, UserId, clean_title,
+    PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project, ProjectId, Provider, ProviderLogin,
+    SecretRef, SecretValue, Seq, SessionHead, SessionId, SessionOrigin, SessionStatus,
+    SessionSummary, ThreadLink, Timestamp, TitleSource, TurnError, TurnId, UsageWindow, UserId,
+    clean_title,
 };
 use herder_store::{Session, Store};
 use jiff::SignedDuration;
@@ -296,6 +297,8 @@ use crate::skills::Skills;
 use crate::stalls::{self, Stalls};
 use crate::usage::{self, Usage};
 use crate::vault::HostSecrets;
+use crate::vault::cliproxyapi::KEY_SECRET;
+use crate::vault::pin::{self, PinProxy};
 use crate::worktree::{self, Worktree, Worktrees, checkpoint};
 
 /// The bot of an id, as it runs now; `None` for one the host does not hold.
@@ -445,8 +448,11 @@ pub struct SessionManager {
 struct Inner {
     journal: Journal,
     adapters: Adapters,
-    /// Grows as accounts are added ([`SessionManager::add_account`]); never shrinks.
+    /// Grows as accounts are added ([`SessionManager::add_account`]), and follows the vault's
+    /// logins ([`SessionManager::use_vault_logins`]): only those ever leave it.
     accounts: RwLock<Accounts>,
+    /// The accounts that are the vault's logins, with each login's name on the vault.
+    vault_logins: RwLock<BTreeMap<AccountId, String>>,
     account_settings: Mutex<()>,
     turn_ids: TurnIds,
     worktrees: Worktrees,
@@ -540,9 +546,19 @@ impl Inner {
 
     /// Publishes every account, with `usage`.
     fn publish_accounts(&self, usage: &crate::usage::Known) {
+        self.journal
+            .sink()
+            .accounts_changed(&self.account_list(usage));
+    }
+
+    /// Every account, with `usage`, as clients see them.
+    fn account_list(&self, usage: &crate::usage::Known) -> Vec<Account> {
         let needs_login = self.limits.logins().borrow().clone();
-        let accounts = crate::accounts::list(&self.accounts_lock(), usage, &needs_login);
-        self.journal.sink().accounts_changed(&accounts);
+        let vault_logins = self
+            .vault_logins
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        crate::accounts::list(&self.accounts_lock(), usage, &needs_login, &vault_logins)
     }
 
     /// Notes that `account_id` hit its limit just now; failover passes it over until it resets.
@@ -713,6 +729,7 @@ impl SessionManager {
                 journal,
                 adapters: setup.adapters,
                 accounts: RwLock::new(setup.accounts),
+                vault_logins: RwLock::default(),
                 account_settings: Mutex::new(()),
                 turn_ids: setup.turn_ids,
                 worktrees: setup.worktrees,
@@ -2000,12 +2017,125 @@ impl SessionManager {
 
     /// Every account sessions may run on, as clients see them.
     pub fn accounts(&self) -> Vec<Account> {
-        let needs_login = self.inner.limits.logins().borrow().clone();
-        crate::accounts::list(
-            &self.inner.accounts_lock(),
-            &self.inner.usage.all(),
-            &needs_login,
-        )
+        self.inner.account_list(&self.inner.usage.all())
+    }
+
+    /// Runs every login of the vault's CLIProxyAPI as an account, as the vault sends them, until
+    /// the manager's shutdown; once per manager, after [`Self::use_secrets`]. Each runs its CLI
+    /// in a config dir of its own under `dir`, through a [`PinProxy`] that pins its requests to
+    /// the login, with the host's client key [`KEY_SECRET`] from the vault. Its label, fallback
+    /// mark, email and usage are the vault's; a login the vault no longer lists is no longer an
+    /// account. A login whose account id an account of the config has keeps that one.
+    pub async fn use_vault_logins(&self, dir: PathBuf) -> anyhow::Result<()> {
+        let secrets = self
+            .inner
+            .secrets
+            .get()
+            .cloned()
+            .context("vault logins need the vault's secrets")?;
+        let upstream: pin::Upstream = {
+            let secrets = Arc::clone(&secrets);
+            Arc::new(move || secrets.cliproxyapi())
+        };
+        let proxy = PinProxy::start(upstream, self.inner.shutdown.clone()).await?;
+        let mut logins = secrets.provider_logins();
+        let manager = self.clone();
+        let shutdown = self.inner.shutdown.clone();
+        tokio::spawn(async move {
+            loop {
+                let listed = logins.borrow_and_update().clone();
+                manager.set_vault_logins(&listed, &proxy, &dir);
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    changed = logins.changed() => if changed.is_err() { return },
+                }
+            }
+        });
+        Ok(())
+    }
+
+    /// Makes the accounts on the vault's logins `logins`, run through `proxy`, with config dirs
+    /// under `dir`.
+    pub(crate) fn set_vault_logins(&self, logins: &[ProviderLogin], proxy: &PinProxy, dir: &Path) {
+        let inner = &self.inner;
+        let Ok(key) = KEY_SECRET.parse::<SecretRef>() else {
+            return warn!("{KEY_SECRET} cannot name a secret");
+        };
+        let mut wanted: BTreeMap<
+            AccountId,
+            (AccountConfig, String, herder_adapters::AccountUsage),
+        > = BTreeMap::new();
+        for login in logins {
+            if login.pin.is_empty() || !matches!(login.provider, Provider::Claude | Provider::Codex)
+            {
+                continue;
+            }
+            let account_id = AccountId::new(format!("vault-{}", login.pin));
+            let config_dir = dir.join(account_id.as_str());
+            if let Err(err) = std::fs::create_dir_all(&config_dir) {
+                warn!(%account_id, "cannot make the vault login's config dir: {err}");
+                continue;
+            }
+            let account = AccountConfig {
+                provider: login.provider.clone(),
+                label: login
+                    .label
+                    .clone()
+                    .or_else(|| login.email.clone())
+                    .unwrap_or_else(|| login.name.clone()),
+                config_dir: Some(config_dir),
+                fallback: login.fallback,
+                endpoint: Some(Endpoint {
+                    url: proxy.url(&login.pin),
+                    key: EndpointKey::Secret(key.clone()),
+                }),
+            };
+            let usage = herder_adapters::AccountUsage {
+                email: login.email.clone(),
+                windows: login.usage.clone(),
+            };
+            wanted.insert(account_id, (account, login.name.clone(), usage));
+        }
+        let mut changed = false;
+        {
+            let mut accounts = inner
+                .accounts
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            let mut vault = inner
+                .vault_logins
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            vault.retain(|account_id, _| {
+                let keep = wanted.contains_key(account_id);
+                if !keep {
+                    accounts.remove(account_id);
+                    inner.usage.forget(account_id);
+                    changed = true;
+                }
+                keep
+            });
+            for (account_id, (account, name, usage)) in wanted {
+                if accounts.contains_key(&account_id) && !vault.contains_key(&account_id) {
+                    warn!(%account_id, "an account of the config has this vault login's id; keeping it");
+                    continue;
+                }
+                if accounts.get(&account_id) != Some(&account) {
+                    accounts.insert(account_id.clone(), account);
+                    changed = true;
+                }
+                vault.insert(account_id.clone(), name);
+                // The vault's usage is all there is of it: it replaces what was known.
+                inner.usage.forget(&account_id);
+                inner.usage.probed(&account_id, usage);
+            }
+        }
+        // Usage moves on every listing, so the list goes out each time.
+        inner.publish_accounts(&inner.usage.all());
+        if changed {
+            self.skill_accounts();
+            self.refresh_skills();
+        }
     }
 
     /// How the account `account_id` runs, if it is one.
@@ -2025,6 +2155,18 @@ impl SessionManager {
         let previous = inner
             .account(account_id)
             .ok_or_else(|| error(ErrorCode::NotFound, "account does not exist"))?;
+        if inner
+            .vault_logins
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(account_id)
+        {
+            return Err(error(
+                ErrorCode::BadRequest,
+                "this account is one of the vault's logins: rename it, or mark it fallback, on \
+                 the vault's Logins page",
+            ));
+        }
         let may_change_directory = inner
             .journal
             .sessions()

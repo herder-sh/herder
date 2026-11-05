@@ -32,7 +32,7 @@ herder-store = { path = "crates/herder-store" }
 herder-tasktools = { path = "crates/herder-tasktools" }
 herder-tui = { path = "crates/herder-tui" }
 http-body-util = "0.1"
-hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper = { version = "1", default-features = false, features = ["client", "http1", "server"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "native-tokio", "ring"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }

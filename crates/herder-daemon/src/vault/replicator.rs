@@ -215,7 +215,12 @@ impl Replicator {
                 frame = ws.next() => {
                     heard = Instant::now();
                     match frame.context("the vault closed the connection")?? {
-                        Message::Text(text) => link.receive(serde_json::from_str(&text)?)?,
+                        Message::Text(text) => match serde_json::from_str(&text)? {
+                            VaultMessage::ProviderLogins { logins } => {
+                                self.secrets.set_provider_logins(logins);
+                            }
+                            message => link.receive(message)?,
+                        },
                         Message::Close(_) => bail!("the vault closed the connection"),
                         _ => {}
                     }
@@ -464,7 +469,7 @@ impl Link {
                     let _ = answer.send(Err(error));
                 }
             }
-            // Hosts take the vault's logins as accounts from P21.2 on.
+            // Taken by the connection's loop, for the host's secrets.
             VaultMessage::ProviderLogins { .. }
             | VaultMessage::Hello(_)
             | VaultMessage::Unknown => {}
