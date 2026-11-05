@@ -557,6 +557,11 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::CancelProviderLogin {
             login_id: "2c3aa71dfa309d66262b1a34202481ea".into(),
         }),
+        command(CommandBody::SetProviderLogin {
+            name: "claude-ada@example.com.json".into(),
+            label: Some("Work".into()),
+            fallback: Some(true),
+        }),
         command(CommandBody::RemoveProviderLogin {
             name: "claude-ada@example.com.json".into(),
         }),
@@ -1379,6 +1384,14 @@ fn server_fixtures() -> Vec<ServerMessage> {
                         name: "claude-ada@example.com.json".into(),
                         provider: Provider::Claude,
                         label: Some("ada@example.com".into()),
+                        email: Some("ada@example.com".into()),
+                        fallback: false,
+                        usage: vec![UsageWindow {
+                            window: "five_hour".into(),
+                            used_percent: 42.0,
+                            resets_at: Some(at()),
+                        }],
+                        pin: "claude-ada-example-com".into(),
                         state: ProviderLoginState::Active,
                         until: None,
                         message: None,
@@ -1387,6 +1400,10 @@ fn server_fixtures() -> Vec<ServerMessage> {
                         name: "codex-ada@example.com-plus.json".into(),
                         provider: Provider::Codex,
                         label: Some("ada@example.com".into()),
+                        email: None,
+                        fallback: true,
+                        usage: Vec::new(),
+                        pin: "codex-ada-example-com-plus".into(),
                         state: ProviderLoginState::CoolingDown,
                         until: Some(at()),
                         message: Some("quota exhausted".into()),
@@ -1395,6 +1412,10 @@ fn server_fixtures() -> Vec<ServerMessage> {
                         name: "claude-old.json".into(),
                         provider: Provider::Claude,
                         label: None,
+                        email: None,
+                        fallback: false,
+                        usage: Vec::new(),
+                        pin: "claude-old".into(),
                         state: ProviderLoginState::NeedsSignIn,
                         until: None,
                         message: Some("unauthorized (refresh token invalid)".into()),
@@ -1403,6 +1424,10 @@ fn server_fixtures() -> Vec<ServerMessage> {
                         name: "codex-broken.json".into(),
                         provider: Provider::Codex,
                         label: None,
+                        email: None,
+                        fallback: false,
+                        usage: Vec::new(),
+                        pin: "codex-broken".into(),
                         state: ProviderLoginState::Error,
                         until: None,
                         message: None,
@@ -1411,6 +1436,10 @@ fn server_fixtures() -> Vec<ServerMessage> {
                         name: "codex-off.json".into(),
                         provider: Provider::Codex,
                         label: None,
+                        email: None,
+                        fallback: false,
+                        usage: Vec::new(),
+                        pin: "codex-off".into(),
                         state: ProviderLoginState::Disabled,
                         until: None,
                         message: None,
@@ -1979,6 +2008,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             account_id: account_id(),
             label: format!("{} work", provider.as_str()),
             needs_login: (provider == Provider::Claude).then(at),
+            vault_login: (provider == Provider::Gemini).then(|| "gemini-ada.json".into()),
             provider,
             email: None,
             usage: vec![
@@ -3249,9 +3279,25 @@ fn provider_logins_have_their_wire_form() {
         "name": "claude-ada@example.com.json",
         "provider": "claude",
         "state": "cooling_down",
+        "pin": "claude-ada-example-com",
     }))
     .unwrap();
     assert_eq!(login.label, None);
+    assert!(!login.fallback);
+    assert!(login.usage.is_empty());
+    assert_eq!(
+        serde_json::to_value(CommandBody::SetProviderLogin {
+            name: "claude-ada@example.com.json".into(),
+            label: Some(String::new()),
+            fallback: None,
+        })
+        .unwrap(),
+        json!({
+            "type": "set_provider_login",
+            "name": "claude-ada@example.com.json",
+            "label": "",
+        })
+    );
     assert_eq!(login.until, None);
     assert_eq!(login.state, ProviderLoginState::CoolingDown);
 }
@@ -3877,6 +3923,34 @@ fn vault_fixtures() -> Vec<VaultMessage> {
             set: "prod".into(),
             value: SecretValue::new("sk_test_123").unwrap(),
         }],
+    });
+    let states = [
+        ProviderLoginState::Active,
+        ProviderLoginState::CoolingDown,
+        ProviderLoginState::NeedsSignIn,
+        ProviderLoginState::Error,
+        ProviderLoginState::Disabled,
+    ];
+    messages.push(VaultMessage::ProviderLogins {
+        logins: states
+            .into_iter()
+            .map(|state| ProviderLogin {
+                name: "claude-ada@example.com.json".into(),
+                provider: Provider::Claude,
+                label: Some("Work".into()),
+                email: Some("ada@example.com".into()),
+                fallback: true,
+                usage: vec![UsageWindow {
+                    window: "seven_day".into(),
+                    used_percent: 12.5,
+                    resets_at: Some(at()),
+                }],
+                pin: "claude-ada-example-com".into(),
+                state,
+                until: (state == ProviderLoginState::CoolingDown).then(at),
+                message: None,
+            })
+            .collect(),
     });
     for code in [
         SecretErrorCode::Ambiguous,

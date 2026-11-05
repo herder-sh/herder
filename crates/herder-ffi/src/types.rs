@@ -824,6 +824,11 @@ pub enum CommandBody {
     CancelProviderLogin {
         login_id: String,
     },
+    SetProviderLogin {
+        name: String,
+        label: Option<String>,
+        fallback: Option<bool>,
+    },
     RemoveProviderLogin {
         name: String,
     },
@@ -1334,6 +1339,14 @@ pub struct ProviderLogin {
     pub provider: Provider,
     #[uniffi(default)]
     pub label: Option<String>,
+    #[uniffi(default)]
+    pub email: Option<String>,
+    #[uniffi(default)]
+    pub fallback: bool,
+    #[uniffi(default)]
+    pub usage: Vec<UsageWindow>,
+    #[uniffi(default)]
+    pub pin: String,
     pub state: ProviderLoginState,
     #[uniffi(default)]
     pub until: Option<Timestamp>,
@@ -1586,6 +1599,8 @@ pub struct Account {
     pub endpoint: Option<String>,
     #[uniffi(default)]
     pub key_secret: Option<SecretRef>,
+    #[uniffi(default)]
+    pub vault_login: Option<String>,
 }
 
 #[uniffi::remote(Record)]

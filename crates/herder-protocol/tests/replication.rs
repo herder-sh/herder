@@ -132,8 +132,9 @@ impl Host {
                 self.link = None;
                 Vec::new()
             }
-            // Secrets are not modelled here: they never touch the journals.
+            // Secrets and provider logins are not modelled here: they never touch the journals.
             VaultMessage::SecretList { .. }
+            | VaultMessage::ProviderLogins { .. }
             | VaultMessage::SecretValues { .. }
             | VaultMessage::SecretsRefused { .. }
             | VaultMessage::Unknown => Vec::new(),

@@ -464,7 +464,10 @@ impl Link {
                     let _ = answer.send(Err(error));
                 }
             }
-            VaultMessage::Hello(_) | VaultMessage::Unknown => {}
+            // Hosts take the vault's logins as accounts from P21.2 on.
+            VaultMessage::ProviderLogins { .. }
+            | VaultMessage::Hello(_)
+            | VaultMessage::Unknown => {}
         }
         Ok(())
     }

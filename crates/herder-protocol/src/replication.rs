@@ -369,6 +369,14 @@ pub enum VaultMessage {
         /// Why.
         error: SecretError,
     },
+    /// Every provider login of the vault's CLIProxyAPI, ordered by provider, then label; sent
+    /// right after the hello and whenever one changes, only to a host the vault told where the
+    /// proxy is (`VaultHello.cliproxyapi`). Each is an account on the host, run through the
+    /// proxy pinned to it; one not listed any more is no longer an account.
+    ProviderLogins {
+        /// The logins.
+        logins: Vec<crate::ProviderLogin>,
+    },
     /// A message type newer than this build; skip it.
     #[serde(other, skip_serializing)]
     #[schemars(skip)]

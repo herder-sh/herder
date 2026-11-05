@@ -1009,6 +1009,20 @@ pub enum CommandBody {
         /// The login, as `provider_login_started` named it.
         login_id: String,
     },
+    /// On a vault, name a provider login, or mark it fallback-only, for every host it is an
+    /// account on; owners only. Answered with `provider_logins`. Refused with `bad_request` for
+    /// a label longer than 64 characters, `not_found` for a login the proxy does not hold, and
+    /// `unsupported` as `list_provider_logins` is.
+    SetProviderLogin {
+        /// The login, by its `name`.
+        name: String,
+        /// Its new label; an empty one goes back to its email. Absent keeps it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        /// Whether it becomes fallback-only; absent keeps it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback: Option<bool>,
+    },
     /// On a vault, have its CLIProxyAPI drop a provider login and its tokens; owners only.
     /// Answered with `applied`. Refused with `not_found` for a login it does not hold, and
     /// `unsupported` as `list_provider_logins` is.

@@ -792,6 +792,13 @@
                       "used_percent"
                     ]
                   }
+                },
+                "vault_login": {
+                  "description": "The vault login it runs on, by its `name` on the vault, for an account the host's vault\ngives it: one per login of the vault's CLIProxyAPI. Such an account is the vault's: its\nlabel, fallback mark and usage are the login's, set on the vault with\n`set_provider_login`, and it leaves the list when the vault drops the login.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -1361,6 +1368,7 @@
                   "start_provider_login",
                   "complete_provider_login",
                   "cancel_provider_login",
+                  "set_provider_login",
                   "remove_provider_login",
                   "set_skills_repo",
                   "put_skill",

@@ -485,6 +485,12 @@ pub struct Account {
     /// it, or a project defaulting to it, still runs on it.
     #[serde(default)]
     pub fallback: bool,
+    /// The vault login it runs on, by its `name` on the vault, for an account the host's vault
+    /// gives it: one per login of the vault's CLIProxyAPI. Such an account is the vault's: its
+    /// label, fallback mark and usage are the login's, set on the vault with
+    /// `set_provider_login`, and it leaves the list when the vault drops the login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_login: Option<String>,
     /// Since when the account needs logging in again on this host: a turn on it failed as
     /// `auth`. Its sessions hold their prompts meanwhile (`needs_login`); herder never moves
     /// them to another account by itself. Cleared by logging in again, or by the next turn on
