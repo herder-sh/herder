@@ -358,8 +358,15 @@ final class TranscriptScrollTests {
     /// Runs the main loop for `seconds`, then lets the main actor's other work run: a test held
     /// in the loop the whole time stalled every other main-actor test until it ended.
     private static func spin(_ seconds: Double) async {
-        CFRunLoopRunInMode(.defaultMode, seconds, false)
+        runLoop(seconds)
         await Task.yield()
+    }
+
+    /// Runs the main loop for `seconds`, so the window lays out and draws. Async code may not
+    /// run a loop itself; this does, from the main actor, for a slice short enough to let the
+    /// actor's other work through between slices.
+    private static func runLoop(_ seconds: Double) {
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 }
 
