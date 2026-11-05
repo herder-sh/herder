@@ -92,76 +92,76 @@ final class TranscriptScrollTests {
         self.fleet = fleet
     }
 
-    @Test func aLongSessionOpensAtItsEndAndFollowsWhatComes() throws {
+    @Test func aLongSessionOpensAtItsEndAndFollowsWhatComes() async throws {
         load()
-        let scroll = try open()
+        let scroll = try await open()
         #expect(scroll.fromEnd < 1)
         #expect(scroll.top > 10_000)
-        reply(turn: "n1", words: 200)
+        await reply(turn: "n1", words: 200)
         #expect(scroll.fromEnd < 1)
     }
 
-    @Test func aSessionOpenedAsItsHistoryLoadsStaysAtItsEnd() throws {
+    @Test func aSessionOpenedAsItsHistoryLoadsStaysAtItsEnd() async throws {
         show()
         load()
-        let scroll = try open()
+        let scroll = try await open()
         #expect(scroll.top > 10_000)
         #expect(scroll.fromEnd < 1)
     }
 
-    @Test func scrolledUpTheReaderKeepsTheirPlaceAsOutputComes() throws {
+    @Test func scrolledUpTheReaderKeepsTheirPlaceAsOutputComes() async throws {
         load()
-        let scroll = try open()
-        Self.wheel(scroll, 600)
+        let scroll = try await open()
+        await Self.wheel(scroll, 600)
         let top = scroll.top
         #expect(abs(scroll.fromEnd - 600) < 1)
-        reply(turn: "n1", words: 200)
+        await reply(turn: "n1", words: 200)
         #expect(scroll.top == top)
         for words in stride(from: 0, to: 400, by: 40) {
-            stream(turn: "n2", words: words)
+            await stream(turn: "n2", words: words)
         }
         #expect(scroll.top == top)
     }
 
     /// Drawing a page more each time the reader neared the top of what was drawn put them back
     /// at the top of it, which drew another: one scroll up went all the way to the start.
-    @Test func scrollingUpMovesAsFarAsScrolled() throws {
+    @Test func scrollingUpMovesAsFarAsScrolled() async throws {
         load()
-        let scroll = try open()
+        let scroll = try await open()
         let top = scroll.top
-        Self.wheel(scroll, 3000)
+        await Self.wheel(scroll, 3000)
         #expect(abs(scroll.top - (top - 3000)) < 1)
     }
 
     /// The owner's session went blank on the Mac: rows resizing as they appear (a page's card
     /// measured after it loads) under a jump left the lazy stack over rows it never drew.
-    @Test func aLongSessionKeepsItsRowsOnScreenWhereverItIsScrolled() throws {
+    @Test func aLongSessionKeepsItsRowsOnScreenWhereverItIsScrolled() async throws {
         var pages: [AttachmentId: Data] = [:]
         let events = leadSession(&script, page: try Self.mockup(), pages: &pages)
         fleet.applyForTesting(SessionUpdate(events: events, streaming: []), to: script.key)
         for (id, page) in pages { fleet.setAttachmentForTesting(id, page) }
-        let scroll = try open()
+        let scroll = try await open()
         #expect(drawn(scroll))
         // To the top a wheel at a time, and back.
         while scroll.top > 0 {
-            Self.wheel(scroll, 1000)
+            await Self.wheel(scroll, 1000)
             #expect(drawn(scroll), "blank at \(scroll.top) of \(scroll.height)")
         }
         while scroll.fromEnd > 1 {
-            Self.wheel(scroll, -1000)
+            await Self.wheel(scroll, -1000)
             #expect(drawn(scroll), "blank at \(scroll.top) of \(scroll.height)")
         }
         // Dragged on the scroller, to anywhere.
         for fraction in [0.0, 0.9, 0.1, 0.5, 1.0, 0.3, 0.05, 0.99, 0.0, 0.7] {
             scroll.contentView.scroll(to: NSPoint(x: 0, y: fraction * max(scroll.height - scroll.contentView.bounds.height, 0)))
             scroll.reflectScrolledClipView(scroll.contentView)
-            Self.settle(scroll)
+            await Self.settle(scroll)
             #expect(drawn(scroll), "blank at \(scroll.top) of \(scroll.height)")
         }
         // Resized.
         for width in [600.0, 1300, 900] {
             window.setContentSize(NSSize(width: width, height: 700))
-            Self.settle(scroll)
+            await Self.settle(scroll)
             #expect(drawn(scroll), "blank at \(scroll.top) of \(scroll.height) at \(width) wide")
         }
     }
@@ -169,7 +169,7 @@ final class TranscriptScrollTests {
     /// The owner's session went blank on the Mac as a trackpad flicked it up from its end: the
     /// view jumped to the middle of the transcript, over rows it never drew.
     @Test(arguments: [false, true])
-    func aTrackpadFlickUpFromTheEndMovesAsFarAsFlickedAndStaysDrawn(lead: Bool) throws {
+    func aTrackpadFlickUpFromTheEndMovesAsFarAsFlickedAndStaysDrawn(lead: Bool) async throws {
         if lead {
             var pages: [AttachmentId: Data] = [:]
             let events = leadSession(&script, turns: 120, page: try Self.mockup(), pages: &pages)
@@ -178,18 +178,18 @@ final class TranscriptScrollTests {
         } else {
             load()
         }
-        let scroll = try open()
+        let scroll = try await open()
         #expect(scroll.fromEnd < 1)
         for flick in 0..<8 {
             let before = scroll.top
-            let moved = Self.flick(scroll, up: true) { #expect(drawn(scroll), "blank mid-flick \(flick) at \(scroll.top) of \(scroll.height)") }
+            let moved = await Self.flick(scroll, up: true) { #expect(drawn(scroll), "blank mid-flick \(flick) at \(scroll.top) of \(scroll.height)") }
             #expect(drawn(scroll), "blank after flick \(flick) at \(scroll.top) of \(scroll.height)")
             #expect(abs((before - scroll.top) - moved) < 1 || scroll.top < 1,
                     "flick \(flick) of \(moved) moved \(before - scroll.top), to \(scroll.top) of \(scroll.height)")
         }
         while scroll.fromEnd > 1 {
             let before = scroll.top
-            Self.flick(scroll, up: false) { #expect(drawn(scroll), "blank mid-flick down at \(scroll.top) of \(scroll.height)") }
+            await Self.flick(scroll, up: false) { #expect(drawn(scroll), "blank mid-flick down at \(scroll.top) of \(scroll.height)") }
             #expect(drawn(scroll), "blank flicking down at \(scroll.top) of \(scroll.height)")
             if scroll.top <= before { break }
         }
@@ -260,16 +260,16 @@ final class TranscriptScrollTests {
     }
 
     /// Shows the session, if it isn't, and waits for its transcript to be laid out at its end.
-    private func open() throws -> NSScrollView {
+    private func open() async throws -> NSScrollView {
         show()
         var found: NSScrollView?
         Self.wait { found = Self.transcript(in: self.window.contentView); return found != nil }
         guard let scroll = found else { throw CocoaError(.fileNoSuchFile) }
-        Self.settle(scroll)
+        await Self.settle(scroll)
         return scroll
     }
 
-    private func reply(turn: String, words: Int) {
+    private func reply(turn: String, words: Int) async {
         let text = String(repeating: "word ", count: words)
         fleet.applyForTesting(SessionUpdate(events: [
             script.event(.turnStarted(turnId: turn)),
@@ -277,15 +277,15 @@ final class TranscriptScrollTests {
                                                body: .assistantMessage(text: text)))),
             script.event(.turnCompleted(turnId: turn, usage: nil)),
         ], streaming: []), to: script.key)
-        if let scroll = Self.transcript(in: window.contentView) { Self.settle(scroll) }
+        if let scroll = Self.transcript(in: window.contentView) { await Self.settle(scroll) }
     }
 
-    private func stream(turn: String, words: Int) {
+    private func stream(turn: String, words: Int) async {
         fleet.applyForTesting(SessionUpdate(events: [], streaming: [
             Item(agentMessage: nil, parentCallId: nil, id: "s", turnId: turn,
                  body: .assistantMessage(text: String(repeating: "word ", count: words))),
         ]), to: script.key)
-        if let scroll = Self.transcript(in: window.contentView) { Self.settle(scroll) }
+        if let scroll = Self.transcript(in: window.contentView) { await Self.settle(scroll) }
     }
 
     /// The window's scroll view taller than itself: the transcript.
@@ -298,23 +298,23 @@ final class TranscriptScrollTests {
     }
 
     /// Scrolls as a mouse wheel does, 50 points at a time: positive `points` towards the top.
-    private static func wheel(_ scroll: NSScrollView, _ points: Int) {
+    private static func wheel(_ scroll: NSScrollView, _ points: Int) async {
         for _ in 0..<abs(points) / 50 {
             let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
                                 wheel1: Int32(points.signum() * 50), wheel2: 0, wheel3: 0)
             if let event = event.flatMap(NSEvent.init(cgEvent:)) { scroll.scrollWheel(with: event) }
-            spin(0.016)
+            await spin(0.016)
         }
-        settle(scroll)
+        await settle(scroll)
     }
 
     /// Flicks as a trackpad does, a frame at a time: fingers moving 60 points a frame, then slowing
     /// as momentum does. Calls `frame` between frames; returns the points moved. The slowing is
     /// sent as the gesture's own: a scroll view ignores momentum events a test sends.
     @discardableResult
-    private static func flick(_ scroll: NSScrollView, up: Bool, frame: () -> Void = {}) -> CGFloat {
+    private static func flick(_ scroll: NSScrollView, up: Bool, frame: () -> Void = {}) async -> CGFloat {
         var sent: CGFloat = 0
-        func send(_ delta: Int, _ phase: CGScrollPhase) {
+        func send(_ delta: Int, _ phase: CGScrollPhase) async {
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
                                       wheel1: Int32(up ? delta : -delta), wheel2: 0, wheel3: 0) else { return }
             event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
@@ -322,32 +322,32 @@ final class TranscriptScrollTests {
             guard let ns = NSEvent(cgEvent: event) else { return }
             scroll.scrollWheel(with: ns)
             sent += CGFloat(delta)
-            spin(0.008)
+            await spin(0.008)
             frame()
         }
-        send(0, .began)
-        for _ in 0..<10 { send(60, .changed) }
+        await send(0, .began)
+        for _ in 0..<10 { await send(60, .changed) }
         var speed = 60.0
         while speed >= 1 {
-            send(Int(speed), .changed)
+            await send(Int(speed), .changed)
             speed *= 0.95
         }
-        send(0, .ended)
-        settle(scroll)
+        await send(0, .ended)
+        await settle(scroll)
         return sent
     }
 
     /// Runs the main loop until `done`, for up to 10 seconds.
-    private static func wait(_ done: () -> Bool) {
+    private static func wait(_ done: () -> Bool) async {
         let deadline = Date().addingTimeInterval(10)
-        while !done() && Date() < deadline { spin(0.02) }
+        while !done() && Date() < deadline { await spin(0.02) }
     }
 
     /// Runs the main loop until the transcript's size and position hold for a few frames.
-    private static func settle(_ scroll: NSScrollView) {
+    private static func settle(_ scroll: NSScrollView) async {
         var last = (scroll.height, scroll.top)
         var still = 0
-        wait {
+        await wait {
             let now = (scroll.height, scroll.top)
             still = now == last ? still + 1 : 0
             last = now
@@ -355,8 +355,11 @@ final class TranscriptScrollTests {
         }
     }
 
-    private static func spin(_ seconds: Double) {
+    /// Runs the main loop for `seconds`, then lets the main actor's other work run: a test held
+    /// in the loop the whole time stalled every other main-actor test until it ended.
+    private static func spin(_ seconds: Double) async {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+        await Task.yield()
     }
 }
 
