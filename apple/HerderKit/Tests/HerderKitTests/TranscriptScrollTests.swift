@@ -180,7 +180,7 @@ final class TranscriptScrollTests {
         }
         let scroll = try open()
         #expect(scroll.fromEnd < 1)
-        for flick in 0..<6 {
+        for flick in 0..<8 {
             let before = scroll.top
             let moved = Self.flick(scroll, up: true) { #expect(drawn(scroll), "blank mid-flick \(flick) at \(scroll.top) of \(scroll.height)") }
             #expect(drawn(scroll), "blank after flick \(flick) at \(scroll.top) of \(scroll.height)")
@@ -308,9 +308,9 @@ final class TranscriptScrollTests {
         settle(scroll)
     }
 
-    /// Flicks as a trackpad does, a frame at a time: a gesture, its fingers moving 40 points a
-    /// frame. Calls `frame` between frames; returns the points moved. The momentum after the
-    /// fingers lift is the system's, and a scroll view ignores momentum events a test sends.
+    /// Flicks as a trackpad does, a frame at a time: fingers moving 60 points a frame, then slowing
+    /// as momentum does. Calls `frame` between frames; returns the points moved. The slowing is
+    /// sent as the gesture's own: a scroll view ignores momentum events a test sends.
     @discardableResult
     private static func flick(_ scroll: NSScrollView, up: Bool, frame: () -> Void = {}) -> CGFloat {
         var sent: CGFloat = 0
@@ -326,7 +326,12 @@ final class TranscriptScrollTests {
             frame()
         }
         send(0, .began)
-        for _ in 0..<12 { send(40, .changed) }
+        for _ in 0..<10 { send(60, .changed) }
+        var speed = 60.0
+        while speed >= 1 {
+            send(Int(speed), .changed)
+            speed *= 0.95
+        }
         send(0, .ended)
         settle(scroll)
         return sent
