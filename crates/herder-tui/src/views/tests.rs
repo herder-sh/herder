@@ -133,6 +133,7 @@ pub(super) fn herd() -> App {
         needs_login: None,
         endpoint: None,
         key_secret: None,
+        vault_login: None,
     }];
     machines[1].accounts = machines[0].accounts.clone();
     machines[0].resources = Some(fake::host_resources(2));
@@ -942,6 +943,7 @@ fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
         needs_login: None,
         endpoint: None,
         key_secret: None,
+        vault_login: None,
     }];
     app.update(Msg::Machines(machines));
     press(&mut app, KeyCode::Char('m'));

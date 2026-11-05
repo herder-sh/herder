@@ -152,6 +152,27 @@
         "request_id",
         "error"
       ]
+    },
+    {
+      "description": "Every provider login of the vault's CLIProxyAPI, ordered by provider, then label; sent\nright after the hello and whenever one changes, only to a host the vault told where the\nproxy is (`VaultHello.cliproxyapi`). Each is an account on the host, run through the\nproxy pinned to it; one not listed any more is no longer an account.",
+      "type": "object",
+      "properties": {
+        "logins": {
+          "description": "The logins.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderLogin"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "provider_logins"
+        }
+      },
+      "required": [
+        "type",
+        "logins"
+      ]
     }
   ],
   "$defs": {
@@ -196,6 +217,118 @@
         "secret",
         "set",
         "value"
+      ]
+    },
+    "Provider": {
+      "description": "Vendor CLI that runs a session. Open set: accept names not listed in `examples`.",
+      "type": "string",
+      "examples": [
+        "claude",
+        "codex",
+        "cursor",
+        "grok",
+        "opencode",
+        "gemini"
+      ]
+    },
+    "ProviderLogin": {
+      "description": "A provider login a vault's CLIProxyAPI holds, without its tokens.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "description": "The email it is signed in as, when the proxy knows it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallback": {
+          "description": "Whether it is fallback-only, as `Account.fallback` is: hosts and the proxy's own pool\npick it only while every other login of its provider is unavailable.",
+          "type": "boolean",
+          "default": false
+        },
+        "label": {
+          "description": "The owner's name for it; else its email, or the proxy's label for it when it has none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "description": "What the proxy says about it, such as why it is cooling down or failing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The proxy's name for it, the file it is kept in; for `remove_provider_login`.",
+          "type": "string"
+        },
+        "pin": {
+          "description": "What a host puts before a model name, `<pin>/<model>`, for the proxy to run the request\non this login only.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "The provider it signs in to.",
+          "$ref": "#/$defs/Provider"
+        },
+        "state": {
+          "description": "Whether the proxy can use it now.",
+          "$ref": "#/$defs/ProviderLoginState"
+        },
+        "until": {
+          "description": "When a login in `cooling_down` is tried again, as far as the proxy knows.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "usage": {
+          "description": "Every limit window it last reported, from the provider's answers to requests the proxy\nmade with it; empty until it made one.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UsageWindow"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "provider",
+        "pin",
+        "state"
+      ]
+    },
+    "ProviderLoginState": {
+      "description": "Whether a vault's CLIProxyAPI can use a provider login now.",
+      "oneOf": [
+        {
+          "description": "In use.",
+          "type": "string",
+          "const": "active"
+        },
+        {
+          "description": "Out of quota or rate-limited, until `until`.",
+          "type": "string",
+          "const": "cooling_down"
+        },
+        {
+          "description": "The provider no longer takes it: sign in again, or remove it.",
+          "type": "string",
+          "const": "needs_sign_in"
+        },
+        {
+          "description": "Failing for another reason, which `message` gives.",
+          "type": "string",
+          "const": "error"
+        },
+        {
+          "description": "Turned off on the proxy.",
+          "type": "string",
+          "const": "disabled"
+        }
       ]
     },
     "RejectReason": {
@@ -358,6 +491,33 @@
     "SessionId": {
       "description": "Identifies a session; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "UsageWindow": {
+      "description": "Usage of one provider limit window, such as a five-hour or weekly limit.",
+      "type": "object",
+      "properties": {
+        "resets_at": {
+          "description": "When the window resets; absent when the provider does not say.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "used_percent": {
+          "description": "Share of the window's limit used, from 0 to 100.",
+          "type": "number",
+          "format": "double"
+        },
+        "window": {
+          "description": "Window name, in the provider's own naming.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "window",
+        "used_percent"
+      ]
     },
     "VaultHello": {
       "description": "The vault's answer to a host's hello.",

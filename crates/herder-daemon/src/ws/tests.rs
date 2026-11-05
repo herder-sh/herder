@@ -70,6 +70,7 @@ impl Backend for TestBackend {
             needs_login: None,
             endpoint: None,
             key_secret: None,
+            vault_login: None,
         }]
     }
 

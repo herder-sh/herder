@@ -1080,6 +1080,7 @@ impl SessionManager {
             | CommandBody::StartProviderLogin { .. }
             | CommandBody::CompleteProviderLogin { .. }
             | CommandBody::CancelProviderLogin { .. }
+            | CommandBody::SetProviderLogin { .. }
             | CommandBody::RemoveProviderLogin { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,

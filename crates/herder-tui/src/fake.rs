@@ -470,6 +470,7 @@ pub fn account(id: &str, label: &str) -> herder_protocol::Account {
         needs_login: None,
         endpoint: None,
         key_secret: None,
+        vault_login: None,
     }
 }
 

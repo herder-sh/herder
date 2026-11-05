@@ -405,6 +405,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             needs_login: None,
             endpoint: None,
             key_secret: None,
+            vault_login: None,
         }]
     );
     assert_eq!(failover, FailoverSettings::default());

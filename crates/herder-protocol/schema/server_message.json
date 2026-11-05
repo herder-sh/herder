@@ -607,6 +607,13 @@
           "items": {
             "$ref": "#/$defs/UsageWindow"
           }
+        },
+        "vault_login": {
+          "description": "The vault login it runs on, by its `name` on the vault, for an account the host's vault\ngives it: one per login of the vault's CLIProxyAPI. Such an account is the vault's: its\nlabel, fallback mark and usage are the login's, set on the vault with\n`set_provider_login`, and it leaves the list when the vault drops the login.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -4327,8 +4334,20 @@
       "description": "A provider login a vault's CLIProxyAPI holds, without its tokens.",
       "type": "object",
       "properties": {
+        "email": {
+          "description": "The email it is signed in as, when the proxy knows it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallback": {
+          "description": "Whether it is fallback-only, as `Account.fallback` is: hosts and the proxy's own pool\npick it only while every other login of its provider is unavailable.",
+          "type": "boolean",
+          "default": false
+        },
         "label": {
-          "description": "The account's email, or the proxy's label for it when it has none.",
+          "description": "The owner's name for it; else its email, or the proxy's label for it when it has none.",
           "type": [
             "string",
             "null"
@@ -4343,6 +4362,10 @@
         },
         "name": {
           "description": "The proxy's name for it, the file it is kept in; for `remove_provider_login`.",
+          "type": "string"
+        },
+        "pin": {
+          "description": "What a host puts before a model name, `<pin>/<model>`, for the proxy to run the request\non this login only.",
           "type": "string"
         },
         "provider": {
@@ -4360,11 +4383,20 @@
             "null"
           ],
           "format": "date-time"
+        },
+        "usage": {
+          "description": "Every limit window it last reported, from the provider's answers to requests the proxy\nmade with it; empty until it made one.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UsageWindow"
+          }
         }
       },
       "required": [
         "name",
         "provider",
+        "pin",
         "state"
       ]
     },

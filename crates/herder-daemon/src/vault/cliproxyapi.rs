@@ -264,6 +264,10 @@ fn login(entry: &serde_json::Value, now: Timestamp) -> Option<ProviderLogin> {
         ProviderLoginState::Active
     };
     Some(ProviderLogin {
+        pin: String::new(),
+        email: text("email"),
+        fallback: false,
+        usage: Vec::new(),
         name,
         provider,
         label: text("email").or_else(|| text("label")),
@@ -330,6 +334,10 @@ pub fn command(management: &Management, command: CommandBody) -> Result<CommandR
                 )),
             }
         }
+        CommandBody::SetProviderLogin { .. } => Err(failed(
+            ErrorCode::Unsupported,
+            "this vault cannot name its provider logins yet; update it".into(),
+        )),
         _ => Err(internal(anyhow::anyhow!("not a provider login command"))),
     }
 }
@@ -946,6 +954,10 @@ mod tests {
                 name: "claude-ada@example.com.json".into(),
                 provider: Provider::Claude,
                 label: Some("ada@example.com".into()),
+                email: Some("ada@example.com".into()),
+                fallback: false,
+                usage: Vec::new(),
+                pin: String::new(),
                 state: ProviderLoginState::Active,
                 until: None,
                 message: None,

@@ -396,6 +396,7 @@ impl Backend for Fleet {
             | CommandBody::StartProviderLogin { .. }
             | CommandBody::CompleteProviderLogin { .. }
             | CommandBody::CancelProviderLogin { .. }
+            | CommandBody::SetProviderLogin { .. }
             | CommandBody::RemoveProviderLogin { .. } => {
                 let Some(management) = self.cliproxyapi.get().cloned() else {
                     return Err(error(
@@ -492,6 +493,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::StartProviderLogin { .. }
         | CommandBody::CompleteProviderLogin { .. }
         | CommandBody::CancelProviderLogin { .. }
+        | CommandBody::SetProviderLogin { .. }
         | CommandBody::RemoveProviderLogin { .. }
         | CommandBody::RevokeDevice { .. }
         | CommandBody::PasskeyChallenge

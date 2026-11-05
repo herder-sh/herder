@@ -1281,6 +1281,7 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             | CommandBody::StartProviderLogin { .. }
             | CommandBody::CompleteProviderLogin { .. }
             | CommandBody::CancelProviderLogin { .. }
+            | CommandBody::SetProviderLogin { .. }
             | CommandBody::RemoveProviderLogin { .. }
     );
     if logins && role != Role::Owner {

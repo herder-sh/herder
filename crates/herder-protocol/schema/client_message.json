@@ -2787,6 +2787,38 @@
           ]
         },
         {
+          "description": "On a vault, name a provider login, or mark it fallback-only, for every host it is an\naccount on; owners only. Answered with `provider_logins`. Refused with `bad_request` for\na label longer than 64 characters, `not_found` for a login the proxy does not hold, and\n`unsupported` as `list_provider_logins` is.",
+          "type": "object",
+          "properties": {
+            "fallback": {
+              "description": "Whether it becomes fallback-only; absent keeps it.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "label": {
+              "description": "Its new label; an empty one goes back to its email. Absent keeps it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "The login, by its `name`.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_provider_login"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ]
+        },
+        {
           "description": "On a vault, have its CLIProxyAPI drop a provider login and its tokens; owners only.\nAnswered with `applied`. Refused with `not_found` for a login it does not hold, and\n`unsupported` as `list_provider_logins` is.",
           "type": "object",
           "properties": {

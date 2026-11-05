@@ -838,6 +838,7 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::StartProviderLogin { .. }
                     | CommandBody::CompleteProviderLogin { .. }
                     | CommandBody::CancelProviderLogin { .. }
+                    | CommandBody::SetProviderLogin { .. }
                     | CommandBody::RemoveProviderLogin { .. }
             );
             // A bot's allowlist grants people access, as a pairing code does, and a bot's

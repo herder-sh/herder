@@ -219,6 +219,7 @@ pub(crate) fn list(
                     EndpointKey::Secret(secret) => Some(secret.clone()),
                     EndpointKey::Held(_) => None,
                 }),
+            vault_login: None,
         })
         .collect()
 }
@@ -512,6 +513,7 @@ mod tests {
                     needs_login: None,
                     endpoint: None,
                     key_secret: None,
+                    vault_login: None,
                 },
                 Account {
                     config_dir: None,
@@ -524,6 +526,7 @@ mod tests {
                     needs_login: Some(since),
                     endpoint: None,
                     key_secret: None,
+                    vault_login: None,
                 }
             ]
         );
