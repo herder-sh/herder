@@ -182,14 +182,14 @@ final class TranscriptScrollTests {
         #expect(scroll.fromEnd < 1)
         for flick in 0..<8 {
             let before = scroll.top
-            let moved = await Self.flick(scroll, up: true) { #expect(drawn(scroll), "blank mid-flick \(flick) at \(scroll.top) of \(scroll.height)") }
+            let moved = await Self.flick(scroll, up: true) { await expectDrawn(scroll, "mid-flick \(flick) up, \($0)") }
             #expect(drawn(scroll), "blank after flick \(flick) at \(scroll.top) of \(scroll.height)")
             #expect(abs((before - scroll.top) - moved) < 1 || scroll.top < 1,
                     "flick \(flick) of \(moved) moved \(before - scroll.top), to \(scroll.top) of \(scroll.height)")
         }
         while scroll.fromEnd > 1 {
             let before = scroll.top
-            await Self.flick(scroll, up: false) { #expect(drawn(scroll), "blank mid-flick down at \(scroll.top) of \(scroll.height)") }
+            await Self.flick(scroll, up: false) { await expectDrawn(scroll, "mid-flick down, \($0)") }
             #expect(drawn(scroll), "blank flicking down at \(scroll.top) of \(scroll.height)")
             if scroll.top <= before { break }
         }
@@ -212,6 +212,50 @@ final class TranscriptScrollTests {
         let kept = NSHostingView(rootView: card).fittingSize.height
         let placeholder = NSHostingView(rootView: plain).fittingSize.height
         #expect(abs(kept - placeholder - (300 - 160)) < 0.5, "\(kept) against \(placeholder)")
+    }
+
+    /// Expects the transcript to show rows; when it shows none, says where its layers are, and
+    /// whether it draws again a frame and a tenth of a second later.
+    private func expectDrawn(_ scroll: NSScrollView, _ when: String) async {
+        guard !drawn(scroll) else { return }
+        let state = Self.layers(scroll)
+        await Self.spin(0.016)
+        let frameLater = drawn(scroll)
+        await Self.spin(0.1)
+        #expect(Bool(false), """
+            blank \(when) at \(scroll.top) of \(scroll.height); drawn a frame later: \(frameLater), \
+            a tenth later: \(drawn(scroll)); \(state)
+            """)
+    }
+
+    /// Where the transcript's layers are against what it shows, in the document's points: how
+    /// many cross the visible rect, and the nearest above and below it.
+    private static func layers(_ scroll: NSScrollView) -> String {
+        guard let document = scroll.documentView, let root = document.layer else { return "no document layer" }
+        let visible = scroll.documentVisibleRect
+        var frames: [CGRect] = []
+        func walk(_ layer: CALayer, depth: Int) {
+            for sub in layer.sublayers ?? [] {
+                let frame = sub.convert(sub.bounds, to: root)
+                if frame.height > 4, frame.height < 3000, frame.width > 40, !sub.isHidden, sub.opacity > 0 {
+                    frames.append(frame)
+                }
+                if depth < 8 { walk(sub, depth: depth + 1) }
+            }
+        }
+        walk(root, depth: 0)
+        // The layer's own space runs up or down as the view's does, or not.
+        let flip = document.isFlipped != root.isGeometryFlipped
+        let ys = frames.map { flip ? (root.bounds.height - $0.maxY)...(root.bounds.height - $0.minY) : $0.minY...$0.maxY }
+        let crossing = ys.filter { $0.overlaps(visible.minY...visible.maxY) }.count
+        let above = ys.filter { $0.upperBound <= visible.minY }.map(\.upperBound).max()
+        let below = ys.filter { $0.lowerBound >= visible.maxY }.map(\.lowerBound).min()
+        return """
+            visible \(Int(visible.minY))...\(Int(visible.maxY)), document \(Int(document.frame.height)) \
+            (flipped view \(document.isFlipped), layer \(root.isGeometryFlipped)), \(frames.count) layers, \
+            \(crossing) crossing it, nearest above ending \(above.map { "\(Int($0))" } ?? "none"), \
+            below starting \(below.map { "\(Int($0))" } ?? "none")
+            """
     }
 
     /// Whether the transcript shows rows: what its layers draw, without laying anything out, has
@@ -309,11 +353,13 @@ final class TranscriptScrollTests {
     }
 
     /// Flicks as a trackpad does, a frame at a time: fingers moving 60 points a frame, then slowing
-    /// as momentum does. Calls `frame` between frames; returns the points moved. The slowing is
-    /// sent as the gesture's own: a scroll view ignores momentum events a test sends.
+    /// as momentum does. Calls `frame` between frames with which frame it was; returns the points
+    /// moved. The slowing is sent as the gesture's own: a scroll view ignores momentum events a
+    /// test sends.
     @discardableResult
-    private static func flick(_ scroll: NSScrollView, up: Bool, frame: () -> Void = {}) async -> CGFloat {
+    private static func flick(_ scroll: NSScrollView, up: Bool, frame: (String) async -> Void = { _ in }) async -> CGFloat {
         var sent: CGFloat = 0
+        var count = 0
         func send(_ delta: Int, _ phase: CGScrollPhase) async {
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
                                       wheel1: Int32(up ? delta : -delta), wheel2: 0, wheel3: 0) else { return }
@@ -323,7 +369,8 @@ final class TranscriptScrollTests {
             scroll.scrollWheel(with: ns)
             sent += CGFloat(delta)
             await spin(0.008)
-            frame()
+            count += 1
+            await frame("frame \(count), \(phase == .began ? "began" : phase == .ended ? "ended" : "moved \(delta)")")
         }
         await send(0, .began)
         for _ in 0..<10 { await send(60, .changed) }
