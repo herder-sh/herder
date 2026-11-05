@@ -482,6 +482,14 @@ pub fn endpoint_account(id: &str, label: &str, endpoint: &str) -> herder_protoco
     }
 }
 
+/// An account on the vault's login `name`, as a host runs it: `vault-<pin>` through the proxy.
+pub fn vault_login_account(pin: &str, name: &str, label: &str) -> herder_protocol::Account {
+    herder_protocol::Account {
+        vault_login: Some(name.to_owned()),
+        ..endpoint_account(&format!("vault-{pin}"), label, "https://cpa.lan:8317")
+    }
+}
+
 /// Presses each character of `text`.
 pub fn type_text(app: &mut App, text: &str) {
     for c in text.chars() {

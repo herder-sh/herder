@@ -86,6 +86,7 @@ extension WindowLeft {
 struct AccountPage: View {
     let fleet: Fleet
     let loginId: String
+    @Environment(\.pages) private var pages
     /// The id the login has since its endpoint changed here, as accounts on one endpoint are
     /// one login.
     @State private var movedTo: String?
@@ -111,7 +112,7 @@ struct AccountPage: View {
     var body: some View {
         let login = login
         let rows = login.map { AccountMachine.rows($0, machines: fleet.machines, summaries: fleet.lists.machines) } ?? []
-        DetailPage(title: login.map { $0.email ?? $0.account.label } ?? "Account",
+        DetailPage(title: login?.title ?? "Account",
                    chip: rows.contains { if case .signedOut = $0.state { true } else { false } }
                        ? StatusChip(text: "Signed out", urgency: .needsYou) : nil,
                    status: login.map(status) ?? "") {
@@ -129,6 +130,19 @@ struct AccountPage: View {
                 AboutSection {
                     DetailRow(label: "Provider", value: ModelCatalog.providerName(login.provider))
                     DetailRow(label: "Endpoint", value: url, mono: true)
+                    ForEach(rows.filter { $0.account != nil }) { row in
+                        DetailRow(label: row.place.name, value: row.account?.accountId ?? "", mono: true)
+                    }
+                }
+            } else if let login, let name = login.vaultLogin {
+                limits(login).detailSection("Limits")
+                usage(login).detailSection(period.title)
+                machines(login, rows: rows).detailSection("Machines")
+                fromVault(login, rows: rows).detailSection("Vault")
+                AboutSection {
+                    DetailRow(label: "Provider", value: ModelCatalog.providerName(login.provider))
+                    if let email = login.email { DetailRow(label: "Email", value: email) }
+                    DetailRow(label: "Vault login", value: name, mono: true)
                     ForEach(rows.filter { $0.account != nil }) { row in
                         DetailRow(label: row.place.name, value: row.account?.accountId ?? "", mono: true)
                     }
@@ -190,9 +204,51 @@ struct AccountPage: View {
         let rotation = login.fallbackOn.isEmpty ? "primary"
             : login.fallbackOn.count == login.on.count ? "fallback"
             : "fallback on \(login.fallbackOn.map(\.name).joined(separator: ", "))"
-        let parts: [String?] = [ModelCatalog.providerName(login.provider), login.email == nil ? nil : login.account.label,
-                                login.endpoint == nil ? nil : login.keyFromVault ? "vault logins" : "endpoint", on, rotation]
+        let kind = login.vaultLogin != nil ? "vault login"
+            : login.endpoint == nil ? nil : login.keyFromVault ? "vault logins" : "endpoint"
+        let parts: [String?] = [ModelCatalog.providerName(login.provider), login.subtitle, kind, on, rotation]
         return parts.compactMap(\.self).joined(separator: " · ")
+    }
+
+    // MARK: Vault login
+
+    /// Where a vault login's name and fallback mark are set: on the vault, once for every host.
+    /// Its owners get a link to the vault's Logins tab; a member only reads where they are.
+    @ViewBuilder private func fromVault(_ login: ProviderAccounts.Login, rows: [AccountMachine]) -> some View {
+        let vault = Self.vault(of: rows.compactMap { $0.account == nil ? nil : $0.place.hostId }, in: fleet.machines)
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(vault.map { "From the vault \($0.name)" } ?? "From the vault")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                Text(Self.vaultNote(owner: vault?.role == .owner))
+                    .font(.caption).foregroundStyle(Theme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            if let vault, vault.role == .owner {
+                PillButton(title: "Open Logins", symbol: "arrow.up.right", prominent: true) {
+                    pages.open(.vault(vault.hostId, tab: .logins))
+                }
+                .accessibilityIdentifier("account-vault-logins")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
+    }
+
+    /// What a vault login's page says about where it is changed.
+    nonisolated static func vaultNote(owner: Bool) -> String {
+        owner
+            ? "Its name and fallback mark are the vault’s, the same on every host. Change them in the vault’s Logins tab."
+            : "Its name and fallback mark are the vault’s, the same on every host. The vault’s owners change them."
+    }
+
+    /// The vault that serves `hosts`: the one listing the first of them as its host.
+    nonisolated static func vault(of hosts: [HostId], in machines: [Machine]) -> Machine? {
+        machines.first { vault in vault.hosts.contains { hosts.contains($0.hostId) } }
     }
 
     // MARK: Endpoint
@@ -299,8 +355,8 @@ struct AccountPage: View {
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
             GridRow {
                 Text("Machine")
-                Text(login.endpoint == nil ? "Login" : "State")
-                Text(login.endpoint == nil ? "Config directory" : "Account")
+                Text(login.endpoint == nil && login.vaultLogin == nil ? "Login" : "State")
+                Text(login.endpoint == nil && login.vaultLogin == nil ? "Config directory" : "Account")
                 Text("Sessions").gridColumnAlignment(.trailing)
                 Text("")
             }
@@ -354,7 +410,7 @@ struct AccountPage: View {
     @ViewBuilder private func state(_ row: AccountMachine) -> some View {
         switch row.state {
         case .signedIn:
-            let ready = row.account?.endpoint == nil ? "Signed in" : "Ready"
+            let ready = row.account?.endpoint == nil && row.account?.vaultLogin == nil ? "Signed in" : "Ready"
             StatusChip(text: row.place.connected ? ready : "Not connected",
                        urgency: row.place.connected ? .done : .quiet)
         case .signedOut(let since):
@@ -370,7 +426,7 @@ struct AccountPage: View {
     /// directory and it needs no login.
     private func directory(_ row: AccountMachine) -> String {
         guard let account = row.account else { return "" }
-        if account.endpoint != nil { return account.accountId }
+        if account.endpoint != nil || account.vaultLogin != nil { return account.accountId }
         return account.configDir ?? "default"
     }
 
@@ -388,8 +444,9 @@ struct AccountPage: View {
                 more(row)
             }
         case .signedIn:
-            // An endpoint account has no login to sign in to, nor a directory to choose.
-            if row.account?.endpoint == nil { more(row) }
+            // An endpoint account, or a vault login, has no login here to sign in to, nor a
+            // directory to choose.
+            if row.account?.endpoint == nil && row.account?.vaultLogin == nil { more(row) }
         }
     }
 

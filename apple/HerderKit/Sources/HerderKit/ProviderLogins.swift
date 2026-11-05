@@ -63,9 +63,65 @@ final class VaultLogins {
         _ = try? await send(.cancelProviderLogin(loginId: loginId))
     }
 
+    /// Why the vault refused the last change to each login, by its name; cleared by the next.
+    private(set) var errors: [String: String] = [:]
+    /// The logins with a change on its way.
+    private(set) var changing: Set<String> = []
+
+    /// Names `login` for every host it is an account on; an empty name goes back to its email.
+    /// Whether the vault took it.
+    @discardableResult
+    func rename(_ login: ProviderLogin, to label: String) async -> Bool {
+        let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard label != Self.ownName(login) else { return true }
+        return await change(login, label: label, fallback: nil)
+    }
+
+    /// Marks `login` fallback-only, or primary again, on every host.
+    func setFallback(_ login: ProviderLogin, _ fallback: Bool) async {
+        guard fallback != login.fallback else { return }
+        await change(login, label: nil, fallback: fallback)
+    }
+
+    @discardableResult
+    private func change(_ login: ProviderLogin, label: String?, fallback: Bool?) async -> Bool {
+        errors[login.name] = nil
+        changing.insert(login.name)
+        defer { changing.remove(login.name) }
+        do {
+            guard case .providerLogins(let logins) = try await send(.setProviderLogin(name: login.name, label: label,
+                                                                                         fallback: fallback)) else {
+                throw HerderError.Local(detail: "the vault did not list its provider logins")
+            }
+            list = .loaded(logins)
+            return true
+        } catch {
+            errors[login.name] = describe(error)
+            return false
+        }
+    }
+
     func remove(_ login: ProviderLogin) async throws {
         _ = try await send(.removeProviderLogin(name: login.name))
         await reload()
+    }
+
+    /// What is left of `login`'s session and weekly windows, as it last reported them; nil for
+    /// one it never reported.
+    nonisolated static func windows(_ login: ProviderLogin, now: Date = .now) -> (session: WindowLeft?, weekly: WindowLeft?) {
+        (ProviderAccounts.latest("Session", of: login.usage, now: now),
+         ProviderAccounts.latest("Weekly", of: login.usage, now: now))
+    }
+
+    /// The name the owner gave `login`; empty while it goes by its email.
+    nonisolated static func ownName(_ login: ProviderLogin) -> String {
+        login.label == login.email ? "" : login.label ?? ""
+    }
+
+    /// The email under a login's label, when the label is the owner's own name for it.
+    nonisolated static func email(_ login: ProviderLogin) -> String? {
+        guard let email = login.email, email != login.label else { return nil }
+        return email
     }
 
     /// The providers the proxy signs in to from an app.
@@ -139,9 +195,12 @@ final class LoginAdder {
     }
 }
 
-/// The vault's provider logins, each with its state, an Add button and Remove on each.
+/// The vault's provider logins, each with its state, what is left of its limits, an Add button,
+/// and on each for owners Rename, a Fallback switch and Remove.
 struct ProviderLoginsSection: View {
     let logins: VaultLogins
+    /// Whether this device's user owns the vault: only they rename a login or mark it fallback.
+    var owner = true
     let add: () -> Void
     let remove: (ProviderLogin) -> Void
 
@@ -149,7 +208,7 @@ struct ProviderLoginsSection: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 4) {
                 SectionHeading(title: "Provider logins", count: logins.logins.count)
-                InfoButton(text: "The logins in the CLIProxyAPI next to this vault, which hosts reach through endpoint accounts. Their tokens stay on the vault; herder never sees them.")
+                InfoButton(text: "The logins in the CLIProxyAPI next to this vault. Each is an account on every host the vault serves, under the name you give it here; a fallback one is used only once the others are out. Their tokens stay on the vault; herder never sees them.")
                 Spacer()
                 PillButton(title: "Add login", symbol: "plus", prominent: true, action: add)
                     .accessibilityIdentifier("provider-login-add")
@@ -168,7 +227,7 @@ struct ProviderLoginsSection: View {
                 VStack(spacing: 0) {
                     ForEach(Array(list.enumerated()), id: \.element.name) { index, login in
                         if index > 0 { Divider().overlay(Theme.stroke) }
-                        ProviderLoginRow(login: login) { remove(login) }
+                        ProviderLoginRow(login: login, logins: logins, owner: owner) { remove(login) }
                     }
                 }
                 .background(.card, in: .rect(cornerRadius: Theme.corner))
@@ -177,28 +236,53 @@ struct ProviderLoginsSection: View {
     }
 }
 
-/// A login: its provider, account and state, and Remove.
+/// A login: its label and email, provider and state, what is left of its session and weekly
+/// windows, and for owners an inline rename, its Fallback switch and Remove. A change the vault
+/// refuses shows under it.
 private struct ProviderLoginRow: View {
     let login: ProviderLogin
+    let logins: VaultLogins
+    let owner: Bool
     let remove: () -> Void
+    @State private var renaming = false
+    @State private var label = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(login.label ?? login.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                    .lineLimit(1).truncationMode(.middle)
-                HStack(spacing: 6) {
-                    Text(ModelCatalog.providerName(login.provider)).foregroundStyle(Theme.secondary)
-                    if let message = login.message, login.state != .active {
-                        Text("· \(message)").foregroundStyle(Theme.tertiary).lineLimit(1)
+        let windows = VaultLogins.windows(login)
+        VStack(alignment: .leading, spacing: 8) {
+            // On a phone the switch and buttons go on their own line, under the state.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 12) {
+                    about
+                    Spacer(minLength: 8)
+                    state
+                    if owner { controls }
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        about
+                        Spacer(minLength: 8)
+                        state
                     }
+                    if owner { controls }
+                }
+            }
+            if windows.session != nil || windows.weekly != nil {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) {
+                        limits(windows)
+                        Spacer(minLength: 0)
+                    }
+                    VStack(alignment: .leading, spacing: 6) { limits(windows) }
                 }
                 .font(.caption)
             }
-            Spacer(minLength: 8)
-            Chip(text: VaultLogins.stateLabel(login), tint: VaultLogins.stateTint(login.state))
-            IconButton(symbol: "trash", help: "Remove Login", action: remove)
-                .accessibilityIdentifier("provider-login-remove-\(login.name)")
+            if let error = logins.errors[login.name] {
+                Text(error).font(.caption).foregroundStyle(Theme.failure)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("provider-login-error-\(login.name)")
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -206,6 +290,104 @@ private struct ProviderLoginRow: View {
         .contentShape(.rect)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("provider-login-\(login.name)")
+        .onChange(of: focused) { if !focused && renaming { save() } }
+    }
+
+    /// Its label, or the field renaming it, and its provider, email and why it is not in use.
+    private var about: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if renaming { field } else { title }
+            HStack(spacing: 6) {
+                Text(ModelCatalog.providerName(login.provider)).foregroundStyle(Theme.secondary)
+                if let email = VaultLogins.email(login) {
+                    Text("· \(email)").foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.middle)
+                }
+                if let message = login.message, login.state != .active {
+                    Text("· \(message)").foregroundStyle(Theme.tertiary).lineLimit(1)
+                }
+            }
+            .font(.caption)
+        }
+    }
+
+    private var state: some View {
+        Chip(text: VaultLogins.stateLabel(login), tint: VaultLogins.stateTint(login.state)).fixedSize()
+    }
+
+    @ViewBuilder private func limits(_ windows: (session: WindowLeft?, weekly: WindowLeft?)) -> some View {
+        if let session = windows.session { limit("5-hour", session) }
+        if let weekly = windows.weekly { limit("Weekly", weekly) }
+    }
+
+    private var title: some View {
+        HStack(spacing: 6) {
+            Text(login.label ?? login.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                .lineLimit(1).truncationMode(.middle)
+            if login.fallback { Badge(text: "Fallback") }
+        }
+    }
+
+    private var field: some View {
+        TextField(login.email ?? login.name, text: $label)
+            .textFieldStyle(.plain)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Theme.text)
+            .autocorrectionDisabled()
+            .focused($focused)
+            .onSubmit { save() }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: 280, minHeight: 28)
+            .background(Theme.raised, in: .rect(cornerRadius: 6))
+            .accessibilityIdentifier("provider-login-label-\(login.name)")
+    }
+
+    /// Rename, the Fallback switch and Remove.
+    private var controls: some View {
+        HStack(spacing: 8) {
+            Toggle("Fallback", isOn: Binding(get: { login.fallback },
+                                             set: { on in Task { await logins.setFallback(login, on) } }))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .font(.caption)
+                .foregroundStyle(Theme.secondary)
+                .fixedSize()
+                .disabled(logins.changing.contains(login.name))
+                .help("A fallback login is used only once every other login of its provider is at its limit or signed out.")
+                .accessibilityIdentifier("provider-login-fallback-\(login.name)")
+            IconButton(symbol: renaming ? "checkmark" : "pencil", help: renaming ? "Save Name" : "Rename Login") {
+                if renaming { save() } else { startRenaming() }
+            }
+            .accessibilityIdentifier("provider-login-rename-\(login.name)")
+            IconButton(symbol: "trash", help: "Remove Login", action: remove)
+                .accessibilityIdentifier("provider-login-remove-\(login.name)")
+        }
+    }
+
+    private func limit(_ name: String, _ window: WindowLeft) -> some View {
+        HStack(spacing: 6) {
+            Text(name).foregroundStyle(Theme.secondary)
+            UsageBar(percent: window.percentUsed).frame(width: ProvidersColumns.bar)
+            Text("\(Int(window.percentLeft.rounded()))% left").monospacedDigit().foregroundStyle(Theme.text)
+            if !window.resets.isEmpty {
+                Text("· \(window.resets)").foregroundStyle(Theme.tertiary)
+            }
+        }
+        .lineLimit(1)
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+    }
+
+    private func startRenaming() {
+        label = VaultLogins.ownName(login)
+        renaming = true
+        focused = true
+    }
+
+    private func save() {
+        guard renaming else { return }
+        renaming = false
+        let label = label
+        Task { await logins.rename(login, to: label) }
     }
 }
 
