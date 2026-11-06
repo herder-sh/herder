@@ -25,6 +25,9 @@ The script installs the binary to `~/.local/bin/herder` after checking its sha25
 the service is a systemd user service; on macOS it is a launchd LaunchAgent
 (`~/Library/LaunchAgents/sh.herder.daemon.plist`) that starts at login and logs to
 `~/Library/Logs/herder/daemon.log`.
+The daemon listens on `127.0.0.1:7447` by default. Set `listen` in `daemon.toml` to an
+address your clients can reach when setting up remote access. Members can drive sessions in
+existing projects or chats. Full access and approving tool execution require a daemon owner.
 Set `HERDER_VERSION=1.2.3` to install a specific release.
 
 ### Check the machine
