@@ -6,7 +6,7 @@
 //! bound, and the links devices sign in with name each one other devices can reach:
 //!
 //! ```toml
-//! listen = "0.0.0.0:7447"                               # every interface; the default
+//! listen = "127.0.0.1:7447"                             # this machine only; the default
 //! listen = ["127.0.0.1:7447", "100.124.135.114:7447"] # loopback and a Tailscale address only
 //! ```
 //!
@@ -513,7 +513,7 @@ impl Default for ConfigFile {
     fn default() -> Self {
         Self {
             listen: Listen::One(SocketAddr::V4(SocketAddrV4::new(
-                Ipv4Addr::UNSPECIFIED,
+                Ipv4Addr::LOCALHOST,
                 DEFAULT_PORT,
             ))),
             data_dir: None,
@@ -2449,7 +2449,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let home = home.path().to_str().unwrap();
         let config = Config::load_with_env(None, env(&[("HOME", home)])).unwrap();
-        assert_eq!(config.listen, ["0.0.0.0:7447".parse().unwrap()]);
+        assert_eq!(config.listen, ["127.0.0.1:7447".parse().unwrap()]);
         assert_eq!(config.data_dir, Path::new(home).join(".local/share/herder"));
         assert_eq!(config.log, LogConfig::default());
         assert_eq!(config.log.format, LogFormat::Pretty);
@@ -2847,7 +2847,7 @@ mod tests {
         let settings = Config::load_file(&tmp.path().join("daemon.toml"))
             .unwrap()
             .settings();
-        assert_eq!(settings.listen, ["0.0.0.0:7447"]);
+        assert_eq!(settings.listen, ["127.0.0.1:7447"]);
         assert_eq!(settings.log.format, herder_protocol::LogFormat::Pretty);
         assert!(settings.titles.enabled);
         assert_eq!(settings.resources.max_turns, None);

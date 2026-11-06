@@ -161,6 +161,7 @@ pub async fn serve(
         chats: data_dir.chats(),
     };
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
+    sessions.authorize_with(Arc::clone(&auth))?;
     let projects = Arc::new(projects::Overrides::new(
         config.path.clone(),
         data_dir.root().join("project-icons"),

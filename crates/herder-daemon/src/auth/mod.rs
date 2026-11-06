@@ -45,9 +45,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use herder_protocol::{
-    CommandBody, DeviceId, ErrorCode, ErrorInfo, NewPerson, PasskeyAssertion, PasskeyChallenge,
-    PasskeyCreation, PersonCard, PersonId, PersonInfo, PersonPasskey, Role, SignIn, Timestamp,
-    UserDevice, UserId, UserInfo,
+    ApprovalDecision, CommandBody, DeviceId, ErrorCode, ErrorInfo, NewPerson, PasskeyAssertion,
+    PasskeyChallenge, PasskeyCreation, PermissionMode, PersonCard, PersonId, PersonInfo,
+    PersonPasskey, Role, SignIn, Timestamp, UserDevice, UserId, UserInfo,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
@@ -1128,7 +1128,29 @@ impl Auth {
     }
 }
 
-/// Refuses commands `role` does not allow: terminals, and so adding accounts or
+pub(crate) fn authorize_session_mode(role: Role, mode: PermissionMode) -> Result<(), ErrorInfo> {
+    if mode == PermissionMode::FullAccess && role != Role::Owner {
+        return Err(forbidden(
+            "full access sessions are for the daemon's owners only",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn authorize_tool_approval(
+    role: Role,
+    decision: ApprovalDecision,
+) -> Result<(), ErrorInfo> {
+    if decision == ApprovalDecision::Allow && role != Role::Owner {
+        return Err(forbidden(
+            "only a daemon owner can allow an agent's tool call",
+        ));
+    }
+    Ok(())
+}
+
+/// Refuses commands `role` does not allow. Full access, allowing an agent's tool calls,
+/// terminals, and so adding accounts or
 /// logging them in again and signing the host in to AWS, bringing down containers, browsing folders, changing projects,
 /// reading or changing the daemon's settings, restarting it, backing up to a vault, forking
 /// sessions onto the host, changing the skill library or which of its skills are enabled,
@@ -1136,6 +1158,15 @@ impl Auth {
 /// users as a person, pairing a device as anyone but the caller, managing
 /// secrets and storing an agent's are for owners only.
 pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
+    match command {
+        CommandBody::CreateSession {
+            permission_mode: Some(mode),
+            ..
+        }
+        | CommandBody::SetPermissionMode { mode, .. } => authorize_session_mode(role, *mode)?,
+        CommandBody::AnswerApproval { decision, .. } => authorize_tool_approval(role, *decision)?,
+        _ => {}
+    }
     let terminal = matches!(
         command,
         CommandBody::OpenTerminal { .. }
