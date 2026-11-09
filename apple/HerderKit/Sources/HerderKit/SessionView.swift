@@ -87,7 +87,7 @@ struct SessionView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("transcript")
-            .modifier(FollowsEnd(blocks: blocks, top: top))
+            .modifier(FollowsEnd(key: key, blocks: blocks, top: top))
             .id(key)
             .environment(\.transcriptScroll) { id, anchor in proxy.scrollTo(id, anchor: anchor) }
             .onChange(of: find.current) {
@@ -432,6 +432,7 @@ struct SessionView: View {
 /// session's history included as it loads. Scrolled up, nothing moves what they read: what
 /// comes below shows a "New" pill instead. Tells `top` the block at the top of the view.
 private struct FollowsEnd: ViewModifier {
+    let key: SessionKey
     let blocks: [TranscriptBlock]
     let top: TranscriptTop
     /// Not bound to a block: only the pill sets it, to the end, past the transcript's margin.
@@ -439,6 +440,8 @@ private struct FollowsEnd: ViewModifier {
     @State private var atEnd = true
     /// The transcript grew below the reader since they scrolled up.
     @State private var unseen = false
+    /// Not observed: logging the scroll state redraws nothing.
+    @State private var log = TranscriptLog()
 
     private func grew() {
         if !atEnd { unseen = true }
@@ -452,15 +455,26 @@ private struct FollowsEnd: ViewModifier {
             // Anchored at the bottom, growth anywhere pushes what is read up; unanchored, the
             // view keeps its offset, and a lazy stack keeps the rows in view where they are.
             .defaultScrollAnchor(atEnd ? .bottom : nil, for: .sizeChanges)
-            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { top.id = $0.first }
+            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+                top.id = ids.first
+                log.visible(ids, blocks: blocks.count, key: key)
+            }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.visibleRect.maxY >= geometry.contentSize.height + geometry.contentInsets.bottom - 40
             } action: { _, end in
                 atEnd = end
                 if end { unseen = false }
+                log.atEnd(end, blocks: blocks.count, key: key)
             }
+            .onScrollGeometryChange(for: TranscriptScrollState.self, of: { TranscriptScrollState($0) }) { _, state in
+                log.geometry(state, blocks: blocks.count, key: key)
+            }
+            .onAppear { log.appeared(key, blocks: blocks.count) }
             // A block more, or the last one grown: a running turn's "Working" line stays last.
-            .onChange(of: blocks.count) { grew() }
+            .onChange(of: blocks.count) { old, new in
+                log.blocks(from: old, to: new, key: key)
+                grew()
+            }
             .onChange(of: blocks.last) { grew() }
             .overlay(alignment: .bottom) {
                 if unseen {
