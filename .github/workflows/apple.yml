@@ -124,11 +124,15 @@ jobs:
         run: >-
           xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj
           -scheme herder-iOS -destination "platform=iOS Simulator,id=$device" COMPILER_INDEX_STORE_ENABLE=NO
+      # Apart from the tests' own limit: a cold boot's data migration alone can take 7 minutes.
+      - name: Wait for the simulator to boot
+        timeout-minutes: 15
+        run: xcrun simctl bootstatus "$device"
       - name: Test the iOS app on a simulator against the fake daemons
-        # A UI test that loses its way can leave xcodebuild waiting forever.
-        timeout-minutes: 20
+        # A UI test that loses its way can leave xcodebuild waiting forever. A green run takes up
+        # to 20 minutes, most of it before the first test launches.
+        timeout-minutes: 30
         run: |
-          xcrun simctl bootstatus "$device"
           # The photo test picks the newest photo, which the picker shows first. The simulator's own
           # photos can still be loading when it runs, and the picker then never hands one over;
           # this one is in the library, ready, once addmedia returns.
