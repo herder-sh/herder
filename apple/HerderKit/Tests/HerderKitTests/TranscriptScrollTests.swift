@@ -198,6 +198,52 @@ final class TranscriptScrollTests {
         }
     }
 
+    /// The owner's idle lead session went blank on the Mac as they sat at its end, its three
+    /// children still at work, and stayed blank until they opened another session.
+    @Test func anIdleLeadAtItsEndStaysDrawnAsItsChildrenWork() async throws {
+        var pages: [AttachmentId: Data] = [:]
+        var events = leadSession(&script, page: try Self.mockup(), pages: &pages)
+        let children = ["01K1", "01K2", "01K3"]
+        events.append(script.event(.turnStarted(turnId: "lead")))
+        for child in children {
+            events.append(script.event(.childSpawned(childSessionId: child, hostId: nil, task: "Trace the transfer \(child)")))
+        }
+        events.append(script.event(.turnCompleted(turnId: "lead", usage: nil)))
+        for child in children {
+            events.append(script.event(.childReported(childSessionId: child, turnId: "k0", summary: "## Findings\n\n"
+                + String(repeating: "- Followed the key's use to another wallet.\n", count: 14))))
+        }
+        fleet.applyForTesting(SessionUpdate(events: events, streaming: []), to: script.key)
+        for (id, page) in pages { fleet.setAttachmentForTesting(id, page) }
+        var scripts = children.map { Script($0, host: script.key.hostId) }
+        for index in scripts.indices {
+            let parent = script.key.sessionId
+            fleet.applyForTesting(SessionUpdate(events: [scripts[index].event(created(task: "Trace", parent: parent))],
+                                                streaming: []), to: scripts[index].key)
+        }
+        let scroll = try await open()
+        #expect(scroll.fromEnd < 1)
+        #expect(drawn(scroll))
+        for round in 0..<20 {
+            for index in scripts.indices {
+                let turn = "k\(round + 1)"
+                let words = String(repeating: "Checked the next hop. ", count: 3 + (round * 5 + index * 7) % 30)
+                fleet.applyForTesting(SessionUpdate(events: [
+                    scripts[index].event(.turnStarted(turnId: turn)),
+                    scripts[index].event(.itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: "m", turnId: turn,
+                                                               body: .assistantMessage(text: words)))),
+                ], streaming: []), to: scripts[index].key)
+                await Self.settle(scroll)
+                #expect(drawn(scroll), "blank in round \(round) at \(scroll.top) of \(scroll.height)")
+                fleet.applyForTesting(SessionUpdate(events: [scripts[index].event(.turnCompleted(turnId: turn, usage: nil))],
+                                                    streaming: []), to: scripts[index].key)
+                await Self.settle(scroll)
+                #expect(drawn(scroll), "blank in round \(round) at \(scroll.top) of \(scroll.height)")
+            }
+        }
+        #expect(scroll.fromEnd < 1)
+    }
+
     /// A page's card scrolled out of the lazy stack and back is drawn again at the height its
     /// page measured, not at the placeholder's, which grew as it landed.
     @Test func aPagesCardDrawnAgainKeepsItsMeasuredHeight() throws {
