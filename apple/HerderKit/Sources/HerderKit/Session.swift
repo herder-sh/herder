@@ -27,6 +27,8 @@ struct Pending: Hashable {
     var since: Date
     /// For an agent's `store_secret`, what to store, which an owner allows from its card.
     var secret: SecretStoreRequest?
+    /// For an agent's `request_secret`, the secret an owner supplies from its card.
+    var secretRequest: SecretRequest?
 }
 
 /// A session's state, observed on its own: see `Fleet.session(_:)`.
@@ -201,10 +203,10 @@ struct SessionModel {
                 lastTool = toolActivity(name: name, input: input, spawned: spawned)
             default: break
             }
-        case .approvalRequested(let id, let turnId, _, let summary, let routedTo, let reason, let secret):
+        case .approvalRequested(let id, let turnId, _, let summary, let routedTo, let reason, let secret, let secretRequest):
             approvals.append(Pending(
                 id: id, turnId: turnId, kind: .approval(summary: summary), routedTo: routedTo,
-                reason: reason, since: at, secret: secret))
+                reason: reason, since: at, secret: secret, secretRequest: secretRequest))
         case .approvalEscalated(let id, let reason, let note):
             escalate(&approvals, id: id, reason: reason, note: note, at: at)
         case .approvalResolved(let id, _, _):
@@ -276,7 +278,7 @@ struct SessionModel {
         case .sessionStatusChanged(let status, _) where self.status == .needsLogin && (status == .idle || status == .running):
             // The account was logged in again, and what it held runs.
             resolveFailure(.signedIn)
-        case .approvalRequested(_, _, _, let summary, let routedTo, let reason, _):
+        case .approvalRequested(_, _, _, let summary, let routedTo, let reason, _, _):
             asked("Approval", summary, routedTo, reason)
         case .questionAsked(let id, _, let text, let choices, _, let routedTo, let reason):
             log.append(.question(AskedQuestion(
@@ -433,7 +435,7 @@ struct SessionModel {
                 }
             default: break
             }
-        case .approvalRequested(_, let turnId, _, let summary, _, _, _): add(.approval(summary), turn: turnId)
+        case .approvalRequested(_, let turnId, _, let summary, _, _, _, _): add(.approval(summary), turn: turnId)
         case .approvalResolved(_, let decision, let answeredBy): add(.decided(decision, byUser: answeredBy == .user))
         case .questionAsked(_, let turnId, let text, _, _, _, _): add(.question(text), turn: turnId)
         case .questionAnswered(let id, let answer, let answeredBy):
@@ -544,7 +546,7 @@ struct SessionModel {
             case .unknown: return "Item"
             }
         case .itemAdded: return "Sub-agent activity"
-        case .approvalRequested(_, _, _, let summary, _, _, _): return "Approval asked: \(summary)"
+        case .approvalRequested(_, _, _, let summary, _, _, _, _): return "Approval asked: \(summary)"
         case .approvalEscalated: return "Approval escalated to you"
         case .approvalResolved(_, let decision, _): return "Approval \(decision)"
         case .questionAsked(_, _, let text, _, _, _, _): return "Question: \(firstLine(text))"
@@ -605,6 +607,7 @@ struct SessionModel {
             requestId: pending.id, session: session, kind: kind, since: pending.since,
             age: Timestamp.age(pending.since, now: now), reason: reason, note: pending.note,
             more: approvals.count + questions.count - 1, secret: pending.secret,
+            secretRequest: pending.secretRequest,
             step: approvals.isEmpty && questionRun > 1
                 ? .init(number: questionRun - self.questions.count + 1, of: questionRun) : nil)
     }

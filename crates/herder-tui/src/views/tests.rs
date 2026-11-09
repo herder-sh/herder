@@ -1683,6 +1683,21 @@ fn an_approval_replaces_the_prompt_and_a_question_sits_over_it() {
 }
 
 #[test]
+fn a_secret_request_offers_store_and_masks_the_value() {
+    let mut app = fake::chat_secret_request();
+    insta::assert_snapshot!("secret_request", render(&mut app, 100, 30).backend());
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('y'),
+        KeyModifiers::NONE,
+    )));
+    assert!(app.supply.is_some());
+    fake::type_text(&mut app, "github_pat_SECRET");
+    let screen = render(&mut app, 100, 30);
+    assert!(!format!("{:?}", screen.backend()).contains("github_pat"));
+    insta::assert_snapshot!("secret_request_value", screen.backend());
+}
+
+#[test]
 fn the_command_popup_opens_over_the_transcript() {
     let mut app = fake::chat();
     fake::type_text(&mut app, "/mo");

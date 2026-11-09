@@ -951,15 +951,15 @@ pub enum CommandBody {
         /// The open `store_secret` approval.
         approval_id: ApprovalId,
     },
-    /// On a host, allow an agent's `store_secret` once the owner's app has put its value on
-    /// the host's vault, in `set`: the approval resolves as allowed, the host deletes the file
-    /// when the agent asked, and the agent learns the secret is stored. Owners only. Answered
-    /// with `applied`; refused with `not_found` once the approval is not open or is not a
-    /// `store_secret` one.
+    /// On a host, allow an agent's `store_secret` or `request_secret` once the owner's app has
+    /// put its value on the host's vault, in `set`: the approval resolves as allowed, the host
+    /// deletes a `store_secret`'s file when the agent asked, and the agent learns the secret
+    /// is stored. Owners only. Answered with `applied`; refused with `not_found` once the
+    /// approval is not open or is neither a `store_secret` nor a `request_secret` one.
     ConfirmSecretStored {
         /// Session that asked.
         session_id: SessionId,
-        /// The open `store_secret` approval.
+        /// The open `store_secret` or `request_secret` approval.
         approval_id: ApprovalId,
         /// The set the value was put in, which the owner may have picked over the agent's.
         set: String,

@@ -12,6 +12,11 @@ struct SecretInput: Equatable, CustomStringConvertible, CustomDebugStringConvert
 
     init() {}
 
+    /// A value the user pasted, as it is.
+    init(text: String) {
+        self.text = text
+    }
+
     /// The contents of the file at `url` as they are, newlines and all, as a PEM key needs
     /// them: text of at most 64 KiB, which a vault keeps.
     init(contentsOf url: URL) throws {

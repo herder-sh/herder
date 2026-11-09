@@ -4,7 +4,7 @@
 //! The daemon reads the file itself, on the host: at most [`MAX_SECRET_VALUE_BYTES`] of text
 //! without a NUL, as [`SecretValue`] holds. Files of the providers' logins are refused: herder
 //! never copies a login token. The value stays in the session's actor while the approval it
-//! raises is open ([`actor::Request::StoreSecret`]); neither the approval, nor the tool's
+//! raises is open ([`actor::SecretAsk::Store`]); neither the approval, nor the tool's
 //! result, nor any log carries it, only its path, size and [`fingerprint`].
 //!
 //! The approval is always the user's. An owner allows it from an app, which takes the value
@@ -39,20 +39,8 @@ impl SessionManager {
         caller: SessionId,
         input: StoreSecretInput,
     ) -> Result<StoreSecretOutput, ToolError> {
-        let linked = self
-            .inner
-            .secrets
-            .get()
-            .is_some_and(|secrets| secrets.linked());
-        if !linked {
-            return Err(ToolError::new(
-                ErrorCode::Unavailable,
-                "this machine is not linked to a vault with Secrets on, so it has nowhere to \
-                 store a secret; ask an owner to link it to a vault in the herder app (the \
-                 machine's page, Secrets), then try again",
-            ));
-        }
-        check(&input)?;
+        self.check_linked()?;
+        check(&input.set, &input.name, &input.description)?;
         let session = self.caller(&caller).await?;
         let path = resolve(&input.from_file, Path::new(&session.worktree))?;
         self.refuse_login(&path)?;
@@ -68,22 +56,15 @@ impl SessionManager {
             description: input.description,
             delete_file_after: input.delete_file_after,
         };
-        let (done, outcome) = oneshot::channel();
-        let request = actor::Request::StoreSecret { store, value, done };
-        self.send(caller.clone(), None, request)
-            .await
-            .map_err(super::tasks::tool_error)?;
-        // The turn uses no CPU while it waits for the owner: its slot goes to others meanwhile.
-        let parked = self.inner.admission.get().and_then(|a| a.park(&caller));
-        let outcome = outcome.await;
-        drop(parked);
-        let set = outcome.map_err(|_| {
-            ToolError::new(
-                ErrorCode::NotAllowed,
-                "the request to store the secret closed unanswered, as its turn ended; nothing \
-                 was stored",
-            )
-        })??;
+        let set = self
+            .ask_owner(caller, actor::SecretAsk::Store { store, value })
+            .await?
+            .ok_or_else(|| {
+                ToolError::new(
+                    ErrorCode::NotAllowed,
+                    "the user denied storing the secret; nothing was stored",
+                )
+            })?;
         let file_deleted = input.delete_file_after && tokio::fs::remove_file(&path).await.is_ok();
         Ok(StoreSecretOutput {
             set,
@@ -91,6 +72,48 @@ impl SessionManager {
             bytes,
             fingerprint,
             file_deleted,
+        })
+    }
+
+    /// Refuses a secret tool when this machine has no vault with Secrets on to store in.
+    pub(super) fn check_linked(&self) -> Result<(), ToolError> {
+        let linked = self
+            .inner
+            .secrets
+            .get()
+            .is_some_and(|secrets| secrets.linked());
+        if linked {
+            return Ok(());
+        }
+        Err(ToolError::new(
+            ErrorCode::Unavailable,
+            "this machine is not linked to a vault with Secrets on, so it has nowhere to \
+             store a secret; ask an owner to link it to a vault in the herder app (the \
+             machine's page, Secrets), then try again",
+        ))
+    }
+
+    /// Raises `ask` as an approval on `caller`'s running turn and waits for the owner: the set
+    /// they stored the value in, or `None` when the user denied it. Fails when the turn ended
+    /// first.
+    pub(super) async fn ask_owner(
+        &self,
+        caller: SessionId,
+        ask: actor::SecretAsk,
+    ) -> Result<Option<String>, ToolError> {
+        let (done, outcome) = oneshot::channel();
+        self.send(caller.clone(), None, actor::Request::Secret { ask, done })
+            .await
+            .map_err(super::tasks::tool_error)?;
+        // The turn uses no CPU while it waits for the owner: its slot goes to others meanwhile.
+        let parked = self.inner.admission.get().and_then(|a| a.park(&caller));
+        let outcome = outcome.await;
+        drop(parked);
+        outcome.map_err(|_| {
+            ToolError::new(
+                ErrorCode::NotAllowed,
+                "the request closed unanswered, as its turn ended; nothing was stored",
+            )
         })
     }
 
@@ -121,20 +144,19 @@ impl SessionManager {
 }
 
 /// Refuses a set, name or description the vault would refuse, before the user is asked.
-fn check(input: &StoreSecretInput) -> Result<(), ToolError> {
+pub(super) fn check(set: &str, name: &str, description: &str) -> Result<(), ToolError> {
     let invalid = |message: &str| ToolError::new(ErrorCode::InvalidArguments, message);
-    if !is_valid_secret_set_name(&input.set) {
+    if !is_valid_secret_set_name(set) {
         return Err(invalid(
             "`set` is a set's name: lowercase letters, digits and hyphens, such as `personal`",
         ));
     }
-    if !is_valid_secret_name(&input.name) {
+    if !is_valid_secret_name(name) {
         return Err(invalid(
             "`name` is an environment variable's name: uppercase letters, digits and \
              underscores, not starting with a digit, such as `ASC_PRIVATE_KEY`",
         ));
     }
-    let description = &input.description;
     if description.chars().count() > MAX_SECRET_DESCRIPTION_CHARS || description.contains('\n') {
         return Err(invalid(
             "`description` is one line of at most 200 characters",
@@ -219,26 +241,17 @@ pub(crate) fn fingerprint(value: &SecretValue) -> String {
 mod tests {
     use super::*;
 
-    fn input(set: &str, name: &str, description: &str) -> StoreSecretInput {
-        StoreSecretInput {
-            set: set.into(),
-            name: name.into(),
-            description: description.into(),
-            from_file: "key.p8".into(),
-            delete_file_after: false,
-        }
-    }
-
     #[test]
     fn check_refuses_what_the_vault_would() {
-        assert!(check(&input("personal", "ASC_PRIVATE_KEY", "App Store key")).is_ok());
-        for bad in [
-            input("Personal", "ASC_PRIVATE_KEY", ""),
-            input("personal", "asc_key", ""),
-            input("personal", "KEY", "two\nlines"),
-            input("personal", "KEY", &"x".repeat(201)),
+        assert!(check("personal", "ASC_PRIVATE_KEY", "App Store key").is_ok());
+        assert!(check("coingate", "GITHUB_SIEM_PAT", "").is_ok());
+        for (set, name, description) in [
+            ("Personal", "ASC_PRIVATE_KEY", ""),
+            ("personal", "asc_key", ""),
+            ("personal", "KEY", "two\nlines"),
+            ("personal", "KEY", &"x".repeat(201)),
         ] {
-            let err = check(&bad).unwrap_err();
+            let err = check(set, name, description).unwrap_err();
             assert_eq!(err.code, ErrorCode::InvalidArguments);
         }
     }

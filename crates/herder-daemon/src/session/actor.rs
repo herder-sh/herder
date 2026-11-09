@@ -15,8 +15,8 @@ use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
     CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, FollowUp, Image,
     Item, ItemBody, ItemId, MAX_PROMPT_ATTACHMENT_BYTES, PermissionMode, PrState, PromptFile,
-    PromptId, QuestionId, Route, SecretRef, SecretStoreRequest, SecretValue, SessionId,
-    SessionStatus, Timestamp, TurnError, TurnId, UserId,
+    PromptId, QuestionId, Route, SecretRef, SecretRequest, SecretStoreRequest, SecretValue,
+    SessionId, SessionStatus, Timestamp, TurnError, TurnId, UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -148,30 +148,41 @@ pub(super) enum Request {
     },
     /// Another host took the session over: stop it and make it read-only here.
     MovedAway,
-    /// The agent's `store_secret` read `value`: asks the user to approve `store`; `done`
-    /// learns the set an owner stored it in, or why it was not. Refused unless a turn runs.
-    StoreSecret {
-        store: SecretStoreRequest,
-        value: SecretValue,
-        done: oneshot::Sender<Result<String, ToolError>>,
+    /// The agent's `store_secret` or `request_secret`: asks the user to approve `ask`; `done`
+    /// learns the set an owner stored the value in, or `None` when the user denied it.
+    /// Refused unless a turn runs.
+    Secret {
+        ask: SecretAsk,
+        done: oneshot::Sender<Option<String>>,
     },
     /// The value of the open `store_secret` approval `approval_id`, for an owner's app.
     GetSecretToStore {
         approval_id: ApprovalId,
     },
-    /// An owner's app put the value of the open `store_secret` approval `approval_id` on the
-    /// vault, in `set`.
+    /// An owner's app put the value of the open `store_secret` or `request_secret` approval
+    /// `approval_id` on the vault, in `set`.
     ConfirmSecretStored {
         approval_id: ApprovalId,
         set: String,
     },
 }
 
-/// An agent's `store_secret` waiting for an owner: the value it read, never journaled, and
-/// who learns the outcome.
+/// What an agent's secret approval asks an owner to put on the vault.
+pub(super) enum SecretAsk {
+    /// `store_secret`: `value`, which the host read from the file `store` names.
+    Store {
+        store: SecretStoreRequest,
+        value: SecretValue,
+    },
+    /// `request_secret`: a value the owner supplies in an app; the host never holds it.
+    Request(SecretRequest),
+}
+
+/// An agent's `store_secret` or `request_secret` waiting for an owner: the value a
+/// `store_secret` read, never journaled, and who learns the outcome.
 struct PendingStore {
-    value: SecretValue,
-    done: oneshot::Sender<Result<String, ToolError>>,
+    value: Option<SecretValue>,
+    done: oneshot::Sender<Option<String>>,
 }
 
 /// What a switch to another account changes.
@@ -291,7 +302,7 @@ pub(super) struct Actor {
     last_reply: Option<String>,
     /// Approval requests of the running turn not yet answered, oldest first.
     approvals: Vec<(ApprovalId, Open)>,
-    /// The `store_secret` ones among them.
+    /// The `store_secret` and `request_secret` ones among them.
     stores: HashMap<ApprovalId, PendingStore>,
     /// Questions of the running turn not yet answered, with the choices each offers.
     questions: HashMap<QuestionId, (Picks, Open)>,
@@ -869,16 +880,17 @@ impl Actor {
             }
             Request::SetUp { command, timeout } => self.set_up(command, timeout).await,
             Request::MovedAway => self.moved_away().await,
-            Request::StoreSecret { store, value, done } => {
-                self.ask_store(store, value, done).await?;
-            }
+            Request::Secret { ask, done } => self.ask_secret(ask, done).await?,
             Request::GetSecretToStore { approval_id } => {
-                let Some(pending) = self.stores.get(&approval_id) else {
+                // A `request_secret` holds no value: the owner's app supplies it.
+                let Some(value) = self
+                    .stores
+                    .get(&approval_id)
+                    .and_then(|pending| pending.value.clone())
+                else {
                     return Err(no_store(&approval_id));
                 };
-                return Ok(CommandResult::SecretToStore {
-                    value: pending.value.clone(),
-                });
+                return Ok(CommandResult::SecretToStore { value });
             }
             Request::ConfirmSecretStored { approval_id, set } => {
                 let Some(open) = self.approvals.iter().position(|(id, _)| *id == approval_id)
@@ -893,7 +905,7 @@ impl Actor {
                     .await
                     .map_err(super::internal)?;
                 if let Some(store) = store {
-                    let _ = store.done.send(Ok(set));
+                    let _ = store.done.send(Some(set));
                 }
             }
             Request::FromPrimary { .. } | Request::Unarchive | Request::RemoveWorktree => {}
@@ -916,8 +928,8 @@ impl Actor {
         if decision == ApprovalDecision::Allow && self.stores.contains_key(&approval_id) {
             return Err(error(
                 ErrorCode::BadRequest,
-                "allow storing a secret from its card in a herder app, as an owner of this \
-                 machine and of its vault: the app puts the value on the vault",
+                "store or supply a secret from its card in a herder app or the TUI, as an \
+                 owner of this machine and of its vault: the client puts the value on the vault",
             ));
         }
         let store = self
@@ -925,18 +937,14 @@ impl Actor {
             .await
             .map_err(super::internal)?;
         if let Some(store) = store {
-            let denied = ToolError::new(
-                tasktools::ErrorCode::NotAllowed,
-                "the user denied storing the secret; nothing was stored",
-            );
-            let _ = store.done.send(Err(denied));
+            let _ = store.done.send(None);
         }
         Ok(())
     }
 
     /// Journals the answer to the open approval at `open`, then lets the agent go on: the CLI
-    /// that asked, or, for a `store_secret`, the tool call, which the caller tells through the
-    /// [`PendingStore`] returned.
+    /// that asked, or, for a `store_secret` or `request_secret`, the tool call, which the
+    /// caller tells through the [`PendingStore`] returned.
     async fn resolve_approval(
         &mut self,
         by: Option<UserId>,
@@ -967,28 +975,53 @@ impl Actor {
         Ok(store)
     }
 
-    /// Asks the user to approve the agent's `store_secret` of `value`, as `store` describes
-    /// it, in the running turn; `done` learns the outcome. Always the user's: an owner's app
-    /// stores it, never the primary session.
-    async fn ask_store(
+    /// Asks the user to approve the agent's `store_secret` or `request_secret`, as `ask`
+    /// describes it, in the running turn; `done` learns the outcome. Always the user's: an
+    /// owner's app stores it, never the primary session.
+    async fn ask_secret(
         &mut self,
-        store: SecretStoreRequest,
-        value: SecretValue,
-        done: oneshot::Sender<Result<String, ToolError>>,
+        ask: SecretAsk,
+        done: oneshot::Sender<Option<String>>,
     ) -> Result<(), ErrorInfo> {
+        let tool = match ask {
+            SecretAsk::Store { .. } => "store_secret",
+            SecretAsk::Request(_) => "request_secret",
+        };
         let Some(turn_id) = self.turn.clone() else {
             return Err(error(
                 ErrorCode::Conflict,
-                "store_secret is asked for in a turn, and none is running",
+                format!("{tool} is asked for in a turn, and none is running"),
             ));
         };
         let approval_id = ApprovalId::new(format!("secret-{}", ulid::Ulid::generate()));
-        let summary = format!(
-            "Store {} ({} B) as {} in {}",
-            store.path, store.bytes, store.name, store.set
-        );
+        let (summary, secret, secret_request, value) = match ask {
+            SecretAsk::Store { store, value } => (
+                format!(
+                    "Store {} ({} B) as {} in {}",
+                    store.path, store.bytes, store.name, store.set
+                ),
+                Some(store),
+                None,
+                Some(value),
+            ),
+            SecretAsk::Request(request) => (
+                format!(
+                    "Supply the secret {} in {}{}",
+                    request.name,
+                    request.set,
+                    if request.replaces {
+                        ", replacing its value"
+                    } else {
+                        ""
+                    }
+                ),
+                None,
+                Some(request),
+                None,
+            ),
+        };
         let tool_call_id = self
-            .store_call(&turn_id)
+            .tool_call(&turn_id, tool)
             .await
             .unwrap_or_else(|| ItemId::new(approval_id.to_string()));
         let open = Open {
@@ -1010,7 +1043,8 @@ impl Actor {
                 .parent
                 .is_some()
                 .then_some(EscalationReason::ExceedsAuthority),
-            secret: Some(store),
+            secret,
+            secret_request,
         })
         .await;
         self.put(&open);
@@ -1021,9 +1055,9 @@ impl Actor {
         Ok(())
     }
 
-    /// The latest `store_secret` tool call of `turn_id`, which the approval is for; `None` when
-    /// the adapter journaled none, or the journal cannot be read.
-    async fn store_call(&self, turn_id: &TurnId) -> Option<ItemId> {
+    /// The latest call of the task tool `tool` in `turn_id`, which the approval is for; `None`
+    /// when the adapter journaled none, or the journal cannot be read.
+    async fn tool_call(&self, turn_id: &TurnId, tool: &str) -> Option<ItemId> {
         let events = self
             .inner
             .journal
@@ -1033,7 +1067,7 @@ impl Actor {
         events.into_iter().rev().find_map(|event| match event.body {
             EventBody::ItemAdded { item }
                 if item.turn_id == *turn_id
-                    && matches!(&item.body, ItemBody::ToolCall { name, .. } if name.ends_with("store_secret")) =>
+                    && matches!(&item.body, ItemBody::ToolCall { name, .. } if name.ends_with(tool)) =>
             {
                 Some(item.id)
             }
@@ -1394,7 +1428,7 @@ impl Actor {
             self.withdraw(&open, RequestRef::Approval(approval_id.clone()));
             self.log(voided(approval_id)).await;
         }
-        // Dropping them tells each `store_secret` it expired.
+        // Dropping them tells each `store_secret` and `request_secret` it expired.
         self.stores.clear();
         for (question_id, (_, open)) in std::mem::take(&mut self.questions) {
             self.withdraw(&open, RequestRef::Question(question_id));
@@ -2540,6 +2574,7 @@ impl Actor {
                     routed_to: open.route,
                     reason,
                     secret: None,
+                    secret_request: None,
                 })
                 .await;
                 self.put(&open);
@@ -3260,8 +3295,8 @@ fn describe(request: &RequestRef) -> String {
     }
 }
 
-/// An approval the daemon closed because no answer can reach the agent any more.
-/// Why a `store_secret` command for `approval_id` is refused: it is not open, or not one.
+/// Why a secret command for `approval_id` is refused: it is not open, or not a `store_secret`
+/// (or, but for `get_secret_to_store`, `request_secret`) one.
 fn no_store(approval_id: &ApprovalId) -> ErrorInfo {
     error(
         ErrorCode::NotFound,
@@ -3269,6 +3304,7 @@ fn no_store(approval_id: &ApprovalId) -> ErrorInfo {
     )
 }
 
+/// An approval the daemon closed because no answer can reach the agent any more.
 fn voided(approval_id: ApprovalId) -> EventBody {
     EventBody::ApprovalResolved {
         approval_id,

@@ -63,7 +63,7 @@ struct ScrollDeferralTests {
         endlessScroll(fleet)
         let asked = SessionUpdate(events: [script.event(.approvalRequested(
             approvalId: "a", turnId: "t", toolCallId: "i", summary: "rm -rf build", routedTo: .user, reason: nil,
-            secret: nil))], streaming: [])
+            secret: nil, secretRequest: nil))], streaming: [])
         let started = ContinuousClock.now
         #expect(await fleet.receive(asked, for: script.key))
         #expect(ContinuousClock.now - started < .milliseconds(100))

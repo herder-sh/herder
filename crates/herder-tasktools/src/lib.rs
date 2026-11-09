@@ -21,10 +21,11 @@ use serde_json::{Map, Value};
 pub use tools::{
     AnswerArgs, AnswerInput, AnswerOutput, ChildStatus, CommandInput, EscalateArgs, EscalateInput,
     EscalateOutput, ForgetInput, ForgetOutput, MemoryFact, OverviewInput, OverviewOutput,
-    PublishInput, PublishOutput, RememberInput, RememberOutput, Request, RequestRef, SecretEntry,
-    SecretsInput, SecretsOutput, SendInput, SendOutput, SendSessionInput, SendSessionOutput,
-    SpawnInput, SpawnOutput, StatusInput, StatusOutput, StoreSecretInput, StoreSecretOutput,
-    WaitForInput, WaitForOutput,
+    PublishInput, PublishOutput, RememberInput, RememberOutput, Request, RequestRef,
+    RequestSecretInput, RequestSecretOutcome, RequestSecretOutput, SecretEntry, SecretsInput,
+    SecretsOutput, SendInput, SendOutput, SendSessionInput, SendSessionOutput, SpawnInput,
+    SpawnOutput, StatusInput, StatusOutput, StoreSecretInput, StoreSecretOutput, WaitForInput,
+    WaitForOutput,
 };
 
 /// One of the task tools.
@@ -54,6 +55,8 @@ pub enum Tool {
     Secrets,
     /// Store a file's contents as a secret on the vault, once an owner allows it.
     StoreSecret,
+    /// Ask the user to supply a secret's value on the vault, which the agent never sees.
+    RequestSecret,
     /// Keep a fact in the bot's memory; a bot's sessions only.
     Remember,
     /// Drop a fact from the bot's memory; a bot's sessions only.
@@ -62,7 +65,7 @@ pub enum Tool {
 
 impl Tool {
     /// Every tool, in `tools/list` order.
-    pub const ALL: [Tool; 14] = [
+    pub const ALL: [Tool; 15] = [
         Tool::Spawn,
         Tool::Send,
         Tool::SendSession,
@@ -75,6 +78,7 @@ impl Tool {
         Tool::Command,
         Tool::Secrets,
         Tool::StoreSecret,
+        Tool::RequestSecret,
         Tool::Remember,
         Tool::Forget,
     ];
@@ -97,6 +101,7 @@ impl Tool {
             Tool::Command => "command",
             Tool::Secrets => "secrets",
             Tool::StoreSecret => "store_secret",
+            Tool::RequestSecret => "request_secret",
             Tool::Remember => "remember",
             Tool::Forget => "forget",
         }
@@ -225,7 +230,8 @@ impl Tool {
                  environment as the variable `NAME`. Refer to it there as `$NAME`, e.g. \
                  `herder secret run STRIPE_KEY -- sh -c 'curl -u \"$STRIPE_KEY:\" ...'`. Name a \
                  secret `set/NAME` only when `secret` says so. Never print, log, commit or \
-                 publish a value. Fails with `unavailable` when this host has no vault or \
+                 publish a value. When a secret you need is not listed, ask the user for it \
+                 with `request_secret`. Fails with `unavailable` when this host has no vault or \
                  cannot reach it now."
             }
             Tool::StoreSecret => {
@@ -236,12 +242,29 @@ impl Tool {
                  user to approve; an owner of the vault allows it in a herder app, which may \
                  pick another set, and the call returns once they answered. Never read, print \
                  or copy the file yourself. There is no way to pass a value: when the user \
-                 typed a secret in the chat, do not write it to a file; ask them to add it in \
-                 the app, on the vault's Secrets tab (Add secret). With `delete_file_after`, \
+                 typed a secret in the chat, do not write it to a file; ask them for it with \
+                 `request_secret` instead. With `delete_file_after`, \
                  the file is deleted once the vault stored the value. Returns the set, name, \
                  size and a short fingerprint, never the value. Fails with `unavailable` when \
                  this machine is not linked to a vault with Secrets on, and `not_allowed` \
                  when the user denies it."
+            }
+            Tool::RequestSecret => {
+                "Ask the user to supply a secret you need and do not have, such as an API \
+                 token or key they have to create or look up, e.g. `name: \"GITHUB_SIEM_PAT\", \
+                 set: \"coingate\", description: \"GitHub fine-grained PAT, read-only on the \
+                 org audit log\"`. herder shows the request in their herder app; an owner of \
+                 the vault pastes the value into a secure field there, and it goes straight to \
+                 this machine's vault: you never see it, and neither does this machine until a \
+                 command runs with it. Use this rather than telling the user to add the secret \
+                 themselves and come back, and never ask them to paste a value in the chat. \
+                 When the value is already in a file on this machine, use `store_secret` \
+                 instead. Say in `description` what the value is and where they get it; it \
+                 becomes the secret's description. When the set already holds a secret of that \
+                 name, the user is told the value will replace it. The call returns once they \
+                 answered: `stored`, with the set they picked, or `declined`; never the value. \
+                 Then run commands with it as `secrets` describes. Fails with `unavailable` \
+                 when this machine is not linked to a vault with Secrets on."
             }
             Tool::Remember => {
                 "Save a fact to the chat bot's memory, which every future conversation with the \
@@ -281,6 +304,7 @@ impl Tool {
             Tool::Command => tool_schema::<CommandInput>(),
             Tool::Secrets => tool_schema::<SecretsInput>(),
             Tool::StoreSecret => tool_schema::<StoreSecretInput>(),
+            Tool::RequestSecret => tool_schema::<RequestSecretInput>(),
             Tool::Remember => tool_schema::<RememberInput>(),
             Tool::Forget => tool_schema::<ForgetInput>(),
         }
@@ -300,6 +324,7 @@ impl Tool {
             Tool::Overview => tool_schema::<OverviewOutput>(),
             Tool::Secrets => tool_schema::<SecretsOutput>(),
             Tool::StoreSecret => tool_schema::<StoreSecretOutput>(),
+            Tool::RequestSecret => tool_schema::<RequestSecretOutput>(),
             Tool::Remember => tool_schema::<RememberOutput>(),
             Tool::Forget => tool_schema::<ForgetOutput>(),
             Tool::Command => json_schema!({
@@ -433,6 +458,8 @@ pub enum ToolCall {
     Secrets(SecretsInput),
     /// `store_secret`.
     StoreSecret(StoreSecretInput),
+    /// `request_secret`.
+    RequestSecret(RequestSecretInput),
     /// `remember`.
     Remember(RememberInput),
     /// `forget`.
@@ -465,11 +492,11 @@ impl ToolCall {
                     ErrorCode::InvalidArguments,
                     "store_secret never takes a value, so none passes through the \
                      conversation: name the file holding it with `from_file`, or, for a value \
-                     the user typed, ask them to add it in the herder app, on the vault's \
-                     Secrets tab (Add secret)",
+                     the user has, ask them for it with `request_secret`",
                 ));
             }
             Tool::StoreSecret => serde_json::from_value(arguments).map(ToolCall::StoreSecret),
+            Tool::RequestSecret => serde_json::from_value(arguments).map(ToolCall::RequestSecret),
             Tool::Remember => serde_json::from_value(arguments).map(ToolCall::Remember),
             Tool::Forget => serde_json::from_value(arguments).map(ToolCall::Forget),
         };
@@ -500,6 +527,7 @@ impl ToolCall {
             ToolCall::Command(_) => Tool::Command,
             ToolCall::Secrets(_) => Tool::Secrets,
             ToolCall::StoreSecret(_) => Tool::StoreSecret,
+            ToolCall::RequestSecret(_) => Tool::RequestSecret,
             ToolCall::Remember(_) => Tool::Remember,
             ToolCall::Forget(_) => Tool::Forget,
         }
@@ -529,7 +557,7 @@ pub enum ErrorCode {
     HostBusy,
     /// `publish` could not upload the artifact for its public link.
     UploadFailed,
-    /// `secrets` or `store_secret` found this host without a vault, or unable to reach it now.
+    /// `secrets`, `store_secret` or `request_secret` found this host without a vault, or unable to reach it now.
     Unavailable,
     /// The daemon failed.
     Internal,

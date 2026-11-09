@@ -369,13 +369,7 @@ public final class Fleet {
     func storeSecret(_ request: PendingRequest, _ secret: SecretStoreRequest, in set: String) async {
         let key = request.session.key
         do {
-            let vault = try await ownedVault(of: key.hostId)
-            guard case .secrets(let sets, _) = try await client.send(hostId: vault.hostId, command: .listSecrets) else {
-                throw HerderError.Local(detail: "the vault did not list its secrets")
-            }
-            if !sets.contains(where: { $0.name == set }) {
-                _ = try await client.send(hostId: vault.hostId, command: .createSecretSet(set: set, assertion: nil))
-            }
+            let vault = try await ownedVault(of: key.hostId, creating: set).vault
             guard case .secretToStore(let value) = try await client.send(
                 hostId: key.hostId, command: .getSecretToStore(sessionId: key.sessionId, approvalId: request.requestId))
             else { throw HerderError.Local(detail: "the machine did not hand over the value") }
@@ -388,6 +382,31 @@ public final class Fleet {
             refusals[key] = nil
         } catch {
             refusals[key] = describe(error)
+        }
+    }
+
+    /// Answers `request`, an agent's `request_secret` of `secret`, with `value` the owner typed,
+    /// stored in `set`: a set the vault lacks is created first. The value goes from this device
+    /// to the host's vault alone, as its owner, never to the host, its journal or the agent,
+    /// which learns only that it was stored. Whether the vault stored it; a refusal is kept to
+    /// show on the card.
+    func supplySecret(_ request: PendingRequest, _ secret: SecretRequest, value: SecretInput, in set: String) async -> Bool {
+        let key = request.session.key
+        do {
+            if let problem = SecretRequestAsk.problem(value) { throw HerderError.Local(detail: problem) }
+            let (vault, held) = try await ownedVault(of: key.hostId, creating: set)
+            let description = SecretRequestAsk.description(secret, set: set, held: held)
+            _ = try await client.send(
+                hostId: vault.hostId,
+                command: .putSecret(set: set, name: secret.name, description: description, value: value.text, assertion: nil))
+            _ = try await client.send(
+                hostId: key.hostId,
+                command: .confirmSecretStored(sessionId: key.sessionId, approvalId: request.requestId, set: set, assertion: nil))
+            refusals[key] = nil
+            return true
+        } catch {
+            refusals[key] = describe(error)
+            return false
         }
     }
 

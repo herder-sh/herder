@@ -7,7 +7,8 @@ use herder_client_core::SessionUpdate;
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalId, ApprovalOutcome, AttachmentId, ErrorClass,
     EscalationReason, Event, EventBody, HostId, Item, ItemBody, ItemId, PermissionMode, Provider,
-    PullRequest, QuestionId, Route, SessionId, SessionStatus, Timestamp, TitleSource, TurnId,
+    PullRequest, QuestionId, Route, SecretRequest, SessionId, SessionStatus, Timestamp,
+    TitleSource, TurnId,
 };
 
 /// A session of a machine; the key of everything per session.
@@ -114,6 +115,8 @@ pub struct PendingApproval {
     pub note: Option<String>,
     /// When it was put to whoever it waits on now: asked, or escalated.
     pub since: Timestamp,
+    /// For an agent's `request_secret`, the secret it asks the user to supply.
+    pub secret_request: Option<SecretRequest>,
 }
 
 /// A question waiting for an answer.
@@ -431,6 +434,7 @@ impl Session {
                 summary,
                 routed_to,
                 reason,
+                secret_request,
                 ..
             } => {
                 let line = asked("approval", &summary, routed_to);
@@ -444,6 +448,7 @@ impl Session {
                     reason,
                     note: None,
                     since: at,
+                    secret_request,
                 });
                 line
             }

@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, ApprovalId, Attachment, HostId, ItemId, PermissionMode, Provider, QuestionId,
-    SecretStoreRequest, Seq, SessionId, ThreadLink, Timestamp, TurnId, TurnUsage, UserId,
+    SecretRequest, SecretStoreRequest, Seq, SessionId, ThreadLink, Timestamp, TurnId, TurnUsage,
+    UserId,
 };
 
 /// One journal record: `seq` orders it within its session, `by` names the user who caused it.
@@ -141,6 +142,11 @@ pub enum EventBody {
         /// host's vault, then `confirm_secret_stored`. `answer_approval` may only deny it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         secret: Option<SecretStoreRequest>,
+        /// For an agent's `request_secret`, the secret it asks the user to supply; always
+        /// routed to the user. Only an owner supplies it, from an app: `put_secret` on the
+        /// host's vault, then `confirm_secret_stored`. `answer_approval` may only decline it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret_request: Option<SecretRequest>,
     },
     /// A request routed to the primary session now waits for the user.
     ApprovalEscalated {

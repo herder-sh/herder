@@ -42,6 +42,7 @@ mod secrets;
 mod selection;
 mod session;
 mod settings;
+mod supply;
 mod switch;
 mod terminal;
 pub mod ui;

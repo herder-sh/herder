@@ -50,6 +50,7 @@ fn tools_list_is_the_mcp_shape() {
             "command",
             "secrets",
             "store_secret",
+            "request_secret",
             "remember",
             "forget"
         ]
@@ -306,6 +307,18 @@ fn calls_parse_validate_and_round_trip() {
                 delete_file_after: true,
             }),
         ),
+        (
+            json!({
+                "set": "coingate",
+                "name": "GITHUB_SIEM_PAT",
+                "description": "GitHub fine-grained PAT, read-only on the org audit log",
+            }),
+            ToolCall::RequestSecret(RequestSecretInput {
+                set: "coingate".into(),
+                name: "GITHUB_SIEM_PAT".into(),
+                description: "GitHub fine-grained PAT, read-only on the org audit log".into(),
+            }),
+        ),
     ];
     for (arguments, expected) in cases {
         let tool = expected.tool();
@@ -324,6 +337,7 @@ fn calls_parse_validate_and_round_trip() {
             ToolCall::Command(input) => serde_json::to_value(input),
             ToolCall::Secrets(input) => serde_json::to_value(input),
             ToolCall::StoreSecret(input) => serde_json::to_value(input),
+            ToolCall::RequestSecret(input) => serde_json::to_value(input),
             ToolCall::Remember(input) => serde_json::to_value(input),
             ToolCall::Forget(input) => serde_json::to_value(input),
         };
@@ -341,8 +355,45 @@ fn store_secret_never_takes_a_value() {
     });
     let error = ToolCall::parse(Tool::StoreSecret, Some(typed)).unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidArguments);
-    assert!(error.message.contains("Add secret"), "{}", error.message);
+    assert!(
+        error.message.contains("request_secret"),
+        "{}",
+        error.message
+    );
     assert!(!error.message.contains("sk-typed-in-chat"));
+}
+
+#[test]
+fn request_secret_takes_no_value_and_answers_without_one() {
+    let bare = json!({ "set": "coingate", "name": "GITHUB_SIEM_PAT" });
+    assert_valid(&Tool::RequestSecret.input_schema(), &bare);
+    assert_eq!(
+        call(Tool::RequestSecret, bare),
+        Ok(ToolCall::RequestSecret(RequestSecretInput {
+            set: "coingate".into(),
+            name: "GITHUB_SIEM_PAT".into(),
+            description: String::new(),
+        }))
+    );
+    let typed = json!({ "set": "coingate", "name": "GITHUB_SIEM_PAT", "value": "ghp_x" });
+    let error = ToolCall::parse(Tool::RequestSecret, Some(typed)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArguments);
+    assert!(!error.message.contains("ghp_x"), "{}", error.message);
+
+    for outcome in [RequestSecretOutcome::Stored, RequestSecretOutcome::Declined] {
+        let output = RequestSecretOutput {
+            outcome,
+            set: "coingate".into(),
+            name: "GITHUB_SIEM_PAT".into(),
+        };
+        let json = serde_json::to_value(&output).unwrap();
+        assert_valid(&Tool::RequestSecret.output_schema(), &json);
+        assert_eq!(json.as_object().unwrap().len(), 3);
+    }
+    assert_eq!(
+        serde_json::to_value(RequestSecretOutcome::Declined).unwrap(),
+        json!("declined")
+    );
 }
 
 #[test]

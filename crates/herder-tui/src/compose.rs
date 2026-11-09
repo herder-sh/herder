@@ -92,6 +92,8 @@ pub enum Origin {
     },
     /// The fork dialog's fork of a session onto this host.
     Fork(HostId),
+    /// A step of supplying a secret an agent asked for.
+    Supply(crate::supply::Sent),
     /// The add-account dialog's endpoint account, added to this host.
     AddAccount(HostId),
     /// The add-account dialog's question to this host of where it backs up.
@@ -545,6 +547,7 @@ impl App {
             Origin::AddAccount(_) => self.account_added(result.map(|_| ())),
             Origin::AccountVault(host_id) => self.account_vault(&host_id, result),
             Origin::Secrets(sent) => return self.secrets_sent(sent, result),
+            Origin::Supply(sent) => return self.supply_sent(sent, result),
             Origin::Fork(host_id) => {
                 let forked = result.and_then(|result| match result {
                     CommandResult::SessionForked { session_id, .. } => Ok(session_id),
@@ -745,6 +748,14 @@ impl App {
         let Some(approval) = session.approvals.first() else {
             return Vec::new();
         };
+        // An agent's `request_secret` is allowed by typing the value it asks for.
+        if decision == ApprovalDecision::Allow
+            && let Some(request) = &approval.secret_request
+        {
+            let (key, id, request) = (key.clone(), approval.id.clone(), request.clone());
+            self.open_supply(key, id, request);
+            return Vec::new();
+        }
         let command = CommandBody::AnswerApproval {
             session_id: session.id.clone(),
             approval_id: approval.id.clone(),

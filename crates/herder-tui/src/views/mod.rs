@@ -48,6 +48,7 @@ mod resources;
 mod secrets;
 mod sessions;
 mod status;
+mod supply;
 mod switch;
 mod table;
 mod tabs;
@@ -184,6 +185,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     switch::draw(frame, body, app, &mut hits);
     fork::draw(frame, body, app, &mut hits);
+    supply::draw(frame, body, app, &mut hits);
     if let Some(panel) = &app.machine_panel {
         machines::draw(frame, main, app, panel, &mut hits);
     }

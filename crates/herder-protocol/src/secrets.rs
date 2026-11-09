@@ -25,6 +25,11 @@
 //! only result carrying a value, of a host's own file, to an owner of the host; it is never
 //! journaled nor kept.
 //!
+//! An agent that does not have a value asks the owner for it with `request_secret`
+//! ([`SecretRequest`]): the owner types it in an app, which puts it on the vault with
+//! `put_secret`, as the owner, and tells the host with `confirm_secret_stored`. The value never
+//! passes through the host at all.
+//!
 //! On a host, a secret is named `NAME` when exactly one set granted to the host has it, and
 //! `set/NAME` otherwise ([`SecretRef`]); the environment variable is `NAME` either way.
 
@@ -194,6 +199,25 @@ pub struct SecretStoreRequest {
     pub description: String,
     /// Whether the host deletes the file once the owner confirms the vault stored it.
     pub delete_file_after: bool,
+}
+
+/// What an agent asked the owner to supply with `request_secret`, as its approval request
+/// shows it: where the value is to go, and what it is. The agent never has the value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretRequest {
+    /// The set the agent asked for; the owner who supplies it may pick another.
+    pub set: String,
+    /// The secret's name, as [`is_valid_secret_name`] accepts it.
+    pub name: String,
+    /// What it is and where to find it, on one line, such as "GitHub fine-grained PAT,
+    /// read-only on the org audit log"; it becomes the secret's description. Empty when the
+    /// agent gave none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Whether a secret of that name is already in that set, as the host sees its granted
+    /// sets: supplying a value replaces it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replaces: bool,
 }
 
 /// A secret, without its value.

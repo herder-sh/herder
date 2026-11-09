@@ -82,6 +82,8 @@ struct PendingRequest: Hashable, Identifiable {
     var more = 0
     /// For an agent's `store_secret`, what to store: Allow puts it on the vault.
     var secret: SecretStoreRequest?
+    /// For an agent's `request_secret`, the secret the owner types: Store puts it on the vault.
+    var secretRequest: SecretRequest?
     var step: Step?
 }
 

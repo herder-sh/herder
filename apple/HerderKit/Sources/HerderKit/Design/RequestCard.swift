@@ -15,8 +15,11 @@ struct RequestCard: View {
     @State private var answer = ""
     /// The choices ticked on a multi-select question, sent together with Submit.
     @State private var picks = Picks()
-    /// The set a `store_secret` goes to, when the user picked another than the agent's.
+    /// The set a `store_secret` or `request_secret` goes to, when the user picked another than
+    /// the agent's.
     @State private var storeSet: String?
+    /// The value the owner typed for a `request_secret`, until it is stored.
+    @State private var secretValue = SecretInput()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -29,7 +32,19 @@ struct RequestCard: View {
             }
             // Outside the scroll, so short of room (the keyboard up under a pinned card) the
             // approval's text gives way and Allow and Deny stay.
-            if case .approval = request.kind {
+            if let secret = request.secretRequest {
+                HStack(spacing: 10) {
+                    ActionButton(title: "Decline", style: .secondary) { await fleet.answer(request, allow: false) }
+                    ActionButton(title: "Store", style: .primary) {
+                        if await fleet.supplySecret(request, secret, value: secretValue, in: storeSet ?? secret.set) {
+                            secretValue = SecretInput()
+                        }
+                    }
+                    .disabled(secretValue.isEmpty)
+                    .opacity(secretValue.isEmpty ? 0.5 : 1)
+                    .accessibilityIdentifier("request-secret-store")
+                }
+            } else if case .approval = request.kind {
                 HStack(spacing: 10) {
                     ActionButton(title: "Deny", style: .secondary) { await fleet.answer(request, allow: false) }
                     ActionButton(title: "Allow", style: .primary) {
@@ -52,14 +67,15 @@ struct RequestCard: View {
         .onChange(of: request.requestId) {
             picks = Picks()
             storeSet = nil
+            secretValue = SecretInput()
         }
     }
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: request.isQuestion ? "questionmark.bubble.fill" : "hand.raised.fill")
+            Image(systemName: request.isQuestion ? "questionmark.bubble.fill" : request.secretRequest != nil ? "key.fill" : "hand.raised.fill")
                 .font(.subheadline.weight(.bold))
-            Text(request.isQuestion ? "Question" : "Approval needed")
+            Text(request.isQuestion ? "Question" : request.secretRequest != nil ? "Secret requested" : "Approval needed")
                 .font(.subheadline.weight(.semibold))
             if let step = request.step {
                 StepDots(number: step.number, of: step.of)
@@ -75,6 +91,13 @@ struct RequestCard: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             switch request.kind {
+            case .approval where request.secretRequest != nil:
+                if let secret = request.secretRequest {
+                    SecretRequestAsk(
+                        fleet: fleet, hostId: request.session.key.hostId, secret: secret,
+                        picked: $storeSet, value: $secretValue)
+                }
+                reasonLines
             case .approval where request.secret != nil:
                 if let secret = request.secret {
                     SecretStoreAsk(fleet: fleet, hostId: request.session.key.hostId, secret: secret, picked: $storeSet)
