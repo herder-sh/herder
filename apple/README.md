@@ -113,6 +113,26 @@ Read the main thread's busy time first: hitches count every late frame on the ma
 other apps loading the window server inflate them. Keep away from the keyboard and mouse
 until the recording starts, as the test drives them.
 
+## A blank transcript
+
+The Mac and iOS apps log the transcript's scroll state: content height, offset, the view's
+rect, insets, whether it is at the end, and the ids of the first and last blocks in view. They
+log numbers and block ids only, never the transcript's text. `blank` lines (no block in view
+though the session has blocks) and `outside-content` lines (the view scrolled off its content)
+are errors. When a transcript goes blank, leave it blank and read the last ten minutes:
+
+```sh
+/usr/bin/log show --last 10m --info --style compact \
+  --predicate 'subsystem == "sh.herder.Herder" AND category == "transcript"' > transcript.log
+```
+
+Or watch it live before it happens:
+
+```sh
+/usr/bin/log stream --level info --style compact \
+  --predicate 'subsystem == "sh.herder.Herder" AND category == "transcript"'
+```
+
 ## Scrolling smoothness
 
 Each long screen has to scroll with a hitch time ratio under 5 ms/s, Apple's "good":
