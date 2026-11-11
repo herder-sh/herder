@@ -90,6 +90,8 @@ pub enum Action {
     OpenFork,
     /// Input to the fork dialog.
     Fork(crate::fork::Input),
+    /// Input to the dialog supplying a secret an agent asked for.
+    Supply(crate::supply::Input),
     /// Rename the selected or open session: the palette, with its `rename` line to edit.
     Rename,
     /// Ask AI to title the selected or open session again from its conversation so far.
@@ -143,6 +145,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     }
     if app.fork.is_some() {
         return crate::fork::for_key(key);
+    }
+    if app.supply.is_some() {
+        return crate::supply::for_key(key);
     }
     if app.terminals.is_some() {
         return keys::lookup(keys::TERMINALS, key, app.focus);

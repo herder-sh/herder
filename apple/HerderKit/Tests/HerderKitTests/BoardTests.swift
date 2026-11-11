@@ -96,7 +96,7 @@ struct BoardTests {
             parent.model([created(task: "Lead"), .prLinked(pr: pr(1, ci: .failing))]),
             asking.model([
                 created(task: "Asking", parent: "01A"),
-                .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "s", routedTo: .user, reason: nil, secret: nil),
+                .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "s", routedTo: .user, reason: nil, secret: nil, secretRequest: nil),
             ]),
             running.model([created(task: "Running", parent: "01A"), .sessionStatusChanged(status: .running, retryAt: nil)]),
             // An archived child leaves the board.
@@ -223,7 +223,7 @@ struct BoardTests {
             asking.model([
                 created(task: "Asking", parent: "01A"),
                 .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "Run cargo test?",
-                                   routedTo: .user, reason: nil, secret: nil),
+                                   routedTo: .user, reason: nil, secret: nil, secretRequest: nil),
             ]),
             running.model([created(task: "Running", parent: "01A"), .sessionStatusChanged(status: .running, retryAt: nil)]),
         ])[0]
@@ -364,7 +364,7 @@ struct BoardTests {
             waiting.model([
                 created(task: "Waiting"),
                 .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "Run cargo test?",
-                                   routedTo: .user, reason: nil, secret: nil),
+                                   routedTo: .user, reason: nil, secret: nil, secretRequest: nil),
             ]),
             working.model([created(task: "Working"), .sessionStatusChanged(status: .running, retryAt: nil)]),
             child.model([created(task: "Child", parent: "01B"), .sessionStatusChanged(status: .running, retryAt: nil)]),

@@ -72,7 +72,7 @@ struct SessionModelTests {
         var script = Script()
         var model = script.model([
             created(), .sessionStatusChanged(status: .running, retryAt: nil), .turnStarted(turnId: "t1"),
-            .approvalRequested(approvalId: "a1", turnId: "t1", toolCallId: "i1", summary: "Bash: ls", routedTo: .user, reason: nil, secret: nil),
+            .approvalRequested(approvalId: "a1", turnId: "t1", toolCallId: "i1", summary: "Bash: ls", routedTo: .user, reason: nil, secret: nil, secretRequest: nil),
         ])
         #expect(model.state == .needsYou)
         #expect(model.activity == "Bash: ls")
@@ -89,9 +89,25 @@ struct SessionModelTests {
             created(), .turnStarted(turnId: "t1"),
             .approvalRequested(
                 approvalId: "secret-1", turnId: "t1", toolCallId: "i1", summary: "Store", routedTo: .user,
-                reason: nil, secret: secret),
+                reason: nil, secret: secret, secretRequest: nil),
         ])
         #expect(model.forUser.first?.secret == secret)
+    }
+
+    @Test func aRequestSecretApprovalCarriesTheSecretToItsCard() {
+        let secret = SecretRequest(set: "coingate", name: "GITHUB_SIEM_PAT", description: "", replaces: false)
+        var script = Script()
+        var model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            .approvalRequested(
+                approvalId: "secret-1", turnId: "t1", toolCallId: "i1", summary: "Supply the secret GITHUB_SIEM_PAT in coingate",
+                routedTo: .user, reason: nil, secret: nil, secretRequest: secret),
+        ])
+        #expect(model.needsUser)
+        #expect(model.forUser.first?.secretRequest == secret)
+        #expect(model.forUser.first?.secret == nil)
+        model.apply(script.event(.approvalResolved(approvalId: "secret-1", decision: .allow, answeredBy: .user)))
+        #expect(model.forUser.isEmpty)
     }
 
     @Test func aRequestForThePrimaryNeedsTheUserOnlyOnceEscalated() {

@@ -20,6 +20,19 @@ extension Fleet {
         }
         return vault
     }
+
+    /// `ownedVault(of:)`, once it has the set `set`: created when it lacks it. With the
+    /// vault's secrets, as it listed them.
+    func ownedVault(of hostId: HostId, creating set: String) async throws -> (vault: Machine, secrets: [SecretInfo]) {
+        let vault = try await ownedVault(of: hostId)
+        guard case .secrets(let sets, let secrets) = try await client.send(hostId: vault.hostId, command: .listSecrets) else {
+            throw HerderError.Local(detail: "the vault did not list its secrets")
+        }
+        if !sets.contains(where: { $0.name == set }) {
+            _ = try await client.send(hostId: vault.hostId, command: .createSecretSet(set: set, assertion: nil))
+        }
+        return (vault, secrets)
+    }
 }
 
 /// What an agent's `store_secret` asks: "Store ~/Downloads/AuthKey_X.p8 (257 B) as

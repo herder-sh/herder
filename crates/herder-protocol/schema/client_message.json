@@ -2654,11 +2654,11 @@
           ]
         },
         {
-          "description": "On a host, allow an agent's `store_secret` once the owner's app has put its value on\nthe host's vault, in `set`: the approval resolves as allowed, the host deletes the file\nwhen the agent asked, and the agent learns the secret is stored. Owners only. Answered\nwith `applied`; refused with `not_found` once the approval is not open or is not a\n`store_secret` one.",
+          "description": "On a host, allow an agent's `store_secret` or `request_secret` once the owner's app has\nput its value on the host's vault, in `set`: the approval resolves as allowed, the host\ndeletes a `store_secret`'s file when the agent asked, and the agent learns the secret\nis stored. Owners only. Answered with `applied`; refused with `not_found` once the\napproval is not open or is neither a `store_secret` nor a `request_secret` one.",
           "type": "object",
           "properties": {
             "approval_id": {
-              "description": "The open `store_secret` approval.",
+              "description": "The open `store_secret` or `request_secret` approval.",
               "$ref": "#/$defs/ApprovalId"
             },
             "assertion": {
@@ -3712,6 +3712,17 @@
               "anyOf": [
                 {
                   "$ref": "#/$defs/SecretStoreRequest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "secret_request": {
+              "description": "For an agent's `request_secret`, the secret it asks the user to supply; always\nrouted to the user. Only an owner supplies it, from an app: `put_secret` on the\nhost's vault, then `confirm_secret_stored`. `answer_approval` may only decline it.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SecretRequest"
                 },
                 {
                   "type": "null"
@@ -5344,6 +5355,32 @@
       "description": "A secret as a host's session names it: `NAME`, or `set/NAME` when more than one set granted to the host has `NAME`.",
       "type": "string",
       "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[A-Z_][A-Z0-9_]*$"
+    },
+    "SecretRequest": {
+      "description": "What an agent asked the owner to supply with `request_secret`, as its approval request\nshows it: where the value is to go, and what it is. The agent never has the value.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What it is and where to find it, on one line, such as \"GitHub fine-grained PAT,\nread-only on the org audit log\"; it becomes the secret's description. Empty when the\nagent gave none.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The secret's name, as [`is_valid_secret_name`] accepts it.",
+          "type": "string"
+        },
+        "replaces": {
+          "description": "Whether a secret of that name is already in that set, as the host sees its granted\nsets: supplying a value replaces it.",
+          "type": "boolean"
+        },
+        "set": {
+          "description": "The set the agent asked for; the owner who supplies it may pick another.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "set",
+        "name"
+      ]
     },
     "SecretStoreRequest": {
       "description": "What an agent asked to store as a secret with `store_secret`, as its approval request\nshows it: where the host read the value, and where it is to go. Never the value.",

@@ -882,8 +882,7 @@ impl<B: Backend> Control for AgentControl<B> {
                     code: ErrorCode::Forbidden,
                     message: "an agent never handles a secret's value: store a file's contents \
                               with store_secret, which an owner allows in a herder app, or ask \
-                              the user to add the secret on the vault's Secrets tab in the app \
-                              (Add secret)"
+                              the user to supply the value with request_secret"
                         .to_owned(),
                 });
             }

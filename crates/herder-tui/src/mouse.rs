@@ -395,6 +395,7 @@ impl App {
             || self.account_screen.is_some()
             || self.switch.is_some()
             || self.fork.is_some()
+            || self.supply.is_some()
             || self.terminals.is_some()
             || self.compose.dialog.is_some()
             || self.compose.palette.is_some()

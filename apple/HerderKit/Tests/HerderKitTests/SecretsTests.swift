@@ -199,6 +199,41 @@ struct SecretsTests {
         #expect(SecretStoreAsk.detail(secret) == "Fingerprint 2bb80d53 · the file is deleted once the vault stored it")
     }
 
+    @Test func aRequestSecretCardAsksForTheValueAndWarnsOfAReplace() {
+        let secret = SecretRequest(
+            set: "coingate", name: "GITHUB_SIEM_PAT",
+            description: "GitHub fine-grained PAT, read-only on the org audit log", replaces: true)
+        #expect(SecretRequestAsk.question(secret, set: "coingate", vault: "herder-vault-0")
+            == "This session asks you to add the secret GITHUB_SIEM_PAT in coingate on herder-vault-0.")
+        // Until the vault lists its secrets, as the host saw them; then as the vault has them.
+        #expect(SecretRequestAsk.replaces(secret, set: "coingate", held: nil))
+        #expect(!SecretRequestAsk.replaces(secret, set: "personal", held: nil))
+        let held = [SecretInfo(set: "personal", name: "GITHUB_SIEM_PAT", description: "", updatedAt: "2026-11-09T12:00:00Z")]
+        #expect(!SecretRequestAsk.replaces(secret, set: "coingate", held: held))
+        #expect(SecretRequestAsk.replaces(secret, set: "personal", held: held))
+        // A replaced secret keeps its description when the agent gave none.
+        let bare = SecretRequest(set: "personal", name: "GITHUB_SIEM_PAT", description: "", replaces: true)
+        let described = [SecretInfo(set: "personal", name: "GITHUB_SIEM_PAT", description: "SIEM audit log", updatedAt: "2026-11-09T12:00:00Z")]
+        #expect(SecretRequestAsk.description(bare, set: "personal", held: described) == "SIEM audit log")
+        #expect(SecretRequestAsk.description(bare, set: "coingate", held: described) == "")
+        #expect(SecretRequestAsk.description(secret, set: "personal", held: described) == secret.description)
+    }
+
+    @Test func aRequestedValueIsCheckedAsTheVaultChecksIt() {
+        #expect(SecretRequestAsk.problem(SecretInput()) == "Enter or paste the value.")
+        #expect(SecretRequestAsk.problem(SecretInput(text: "a\0b")) != nil)
+        #expect(SecretRequestAsk.problem(SecretInput(text: String(repeating: "k", count: 64 * 1024 + 1))) != nil)
+        let pem = "-----BEGIN PRIVATE KEY-----\nMIGT\n-----END PRIVATE KEY-----\n"
+        let pasted = SecretInput(text: pem)
+        #expect(SecretRequestAsk.problem(pasted) == nil)
+        #expect(SecretRequestAsk.isMultiline(pasted))
+        #expect(!SecretRequestAsk.isMultiline(SecretInput(text: "ghp_x")))
+        #expect(SecretRequestAsk.pasted(pasted) == "Pasted 59 B, 3 lines")
+        // Nothing that prints the value shows it.
+        #expect(!"\(pasted)".contains("MIGT"))
+        #expect(!String(reflecting: pasted).contains("MIGT"))
+    }
+
     @Test func secretNamesAreEnvironmentVariables() {
         #expect(VaultSecrets.isValidSecretName("API_KEY"))
         #expect(VaultSecrets.isValidSecretName("_X1"))

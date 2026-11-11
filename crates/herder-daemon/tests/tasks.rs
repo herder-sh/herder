@@ -2617,6 +2617,173 @@ async fn store_secret_is_unavailable_on_a_host_without_a_vault() {
     assert_eq!(tools.fails("store_secret", store).await, "unavailable");
 }
 
+/// The open `request_secret` approval of `session`, with what it shows.
+async fn secret_request(
+    daemon: &Daemon,
+    session: &SessionId,
+) -> (ApprovalId, String, herder_protocol::SecretRequest) {
+    daemon
+        .until(session, |event| {
+            matches!(
+                event,
+                EventBody::ApprovalRequested {
+                    secret_request: Some(_),
+                    ..
+                }
+            )
+        })
+        .await;
+    last(&daemon.journal(session).await, |event| match &event.body {
+        EventBody::ApprovalRequested {
+            approval_id,
+            summary,
+            secret: None,
+            secret_request: Some(request),
+            routed_to: Route::User,
+            ..
+        } => Some((approval_id.clone(), summary.clone(), request.clone())),
+        _ => None,
+    })
+}
+
+/// What the owner types into the app for a `request_secret`: it goes to the vault, never
+/// through the host.
+const TYPED: &str = "github_pat_SECRETMARKER";
+
+#[tokio::test]
+async fn an_agent_asks_for_a_secret_and_learns_only_that_an_owner_stored_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (daemon, session) = storing(dir.path()).await;
+    let mut tools = daemon.connect(&session);
+    let arguments = json!({
+        "set": "coingate",
+        "name": "GITHUB_SIEM_PAT",
+        "description": "GitHub fine-grained PAT, read-only on the org audit log",
+    });
+    let call = tokio::spawn(async move { tools.call("request_secret", arguments).await });
+
+    let (approval_id, summary, request) = secret_request(&daemon, &session).await;
+    assert_eq!(
+        request,
+        herder_protocol::SecretRequest {
+            set: "coingate".into(),
+            name: "GITHUB_SIEM_PAT".into(),
+            description: "GitHub fine-grained PAT, read-only on the org audit log".into(),
+            replaces: false,
+        }
+    );
+    assert_eq!(summary, "Supply the secret GITHUB_SIEM_PAT in coingate");
+    assert_eq!(daemon.status(&session).await, SessionStatus::NeedsYou);
+
+    // Only an owner's app answers it, by putting the value on the vault; the host holds none
+    // to hand over.
+    let allow = CommandBody::AnswerApproval {
+        session_id: session.clone(),
+        approval_id: approval_id.clone(),
+        decision: ApprovalDecision::Allow,
+    };
+    let refused = daemon.manager.handle(alice(), allow).await.unwrap_err();
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    let take = CommandBody::GetSecretToStore {
+        session_id: session.clone(),
+        approval_id: approval_id.clone(),
+    };
+    let none = daemon.manager.handle(alice(), take).await.unwrap_err();
+    assert_eq!(none.code, ErrorCode::NotFound);
+    daemon
+        .user_answers(CommandBody::ConfirmSecretStored {
+            session_id: session.clone(),
+            approval_id: approval_id.clone(),
+            set: "work".into(),
+            assertion: None,
+        })
+        .await;
+
+    let result = call.await.unwrap();
+    assert!(!result.is_error, "{result:?}");
+    assert_eq!(
+        result.structured_content.unwrap(),
+        json!({ "outcome": "stored", "set": "work", "name": "GITHUB_SIEM_PAT" })
+    );
+    let journal = daemon.journal(&session).await;
+    assert!(journal.iter().any(|event| matches!(
+        &event.body,
+        EventBody::ApprovalResolved { approval_id: id, decision: ApprovalOutcome::Allow, .. }
+            if *id == approval_id
+    )));
+    assert_eq!(daemon.status(&session).await, SessionStatus::Running);
+    assert!(!anywhere(dir.path(), TYPED));
+
+    // It is no longer open.
+    let again = CommandBody::ConfirmSecretStored {
+        session_id: session.clone(),
+        approval_id,
+        set: "work".into(),
+        assertion: None,
+    };
+    let gone = daemon.manager.handle(alice(), again).await.unwrap_err();
+    assert_eq!(gone.code, ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn a_declined_request_secret_tells_the_agent_and_stores_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (daemon, session) = storing(dir.path()).await;
+    let mut tools = daemon.connect(&session);
+    let arguments = json!({ "set": "coingate", "name": "GITHUB_SIEM_PAT" });
+    let call = tokio::spawn(async move {
+        let result = tools.call("request_secret", arguments).await;
+        (tools, result)
+    });
+    let (approval_id, _, request) = secret_request(&daemon, &session).await;
+    assert_eq!(request.description, "");
+    daemon
+        .user_answers(CommandBody::AnswerApproval {
+            session_id: session.clone(),
+            approval_id: approval_id.clone(),
+            decision: ApprovalDecision::Deny,
+        })
+        .await;
+    let (mut tools, result) = call.await.unwrap();
+    assert!(!result.is_error, "{result:?}");
+    assert_eq!(
+        result.structured_content.unwrap(),
+        json!({ "outcome": "declined", "set": "coingate", "name": "GITHUB_SIEM_PAT" })
+    );
+    let confirm = CommandBody::ConfirmSecretStored {
+        session_id: session.clone(),
+        approval_id,
+        set: "coingate".into(),
+        assertion: None,
+    };
+    let late = daemon.manager.handle(alice(), confirm).await.unwrap_err();
+    assert_eq!(late.code, ErrorCode::NotFound);
+
+    // What it refuses before asking anyone.
+    for refused in [
+        json!({ "set": "coingate", "name": "github_pat" }),
+        json!({ "set": "Coin Gate", "name": "GITHUB_SIEM_PAT" }),
+        json!({ "set": "coingate", "name": "GITHUB_SIEM_PAT", "description": "two\nlines" }),
+        json!({ "set": "coingate", "name": "GITHUB_SIEM_PAT", "value": TYPED }),
+    ] {
+        assert_eq!(
+            tools.fails("request_secret", refused).await,
+            "invalid_arguments"
+        );
+    }
+    assert!(!anywhere(dir.path(), TYPED));
+}
+
+#[tokio::test]
+async fn request_secret_is_unavailable_on_a_host_without_a_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let request = json!({ "set": "coingate", "name": "GITHUB_SIEM_PAT" });
+    assert_eq!(tools.fails("request_secret", request).await, "unavailable");
+}
+
 fn command_id() -> herder_protocol::CommandId {
     herder_protocol::CommandId::new("take-1")
 }

@@ -125,8 +125,9 @@ jobs:
           xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj
           -scheme herder-iOS -destination "platform=iOS Simulator,id=$device" COMPILER_INDEX_STORE_ENABLE=NO
       - name: Test the iOS app on a simulator against the fake daemons
-        # A UI test that loses its way can leave xcodebuild waiting forever.
-        timeout-minutes: 20
+        # A UI test that loses its way can leave xcodebuild waiting forever. A healthy run takes
+        # 15 to 20 minutes, writing the result bundle included, so stop at 30.
+        timeout-minutes: 30
         run: |
           xcrun simctl bootstatus "$device"
           # The photo test picks the newest photo, which the picker shows first. The simulator's own

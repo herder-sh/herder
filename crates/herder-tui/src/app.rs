@@ -288,6 +288,8 @@ pub struct App {
     pub switch: Option<Switch>,
     /// The fork dialog, while it is open.
     pub fork: Option<Fork>,
+    /// The dialog supplying a secret an agent asked for, while it is open.
+    pub supply: Option<crate::supply::Supply>,
     /// How the session list groups sessions.
     pub grouping: Grouping,
     /// Whether the session list shows archived sessions, which it hides by default.
@@ -359,6 +361,7 @@ impl Default for App {
             account_screen: None,
             switch: None,
             fork: None,
+            supply: None,
             grouping: Grouping::default(),
             show_archived: false,
             mouse: true,
@@ -455,7 +458,9 @@ impl App {
                 Vec::new()
             }
             Msg::Paste(text) => {
-                if !self.paste_accounts(&text)
+                if let Some(dialog) = &mut self.supply {
+                    dialog.paste(&text);
+                } else if !self.paste_accounts(&text)
                     && !self.paste_link(&text)
                     && !self.paste_inbox(&text)
                 {
@@ -586,6 +591,7 @@ impl App {
             Action::ToggleArchived => self.show_archived = !self.show_archived,
             Action::OpenFork => self.open_fork(),
             Action::Fork(input) => return self.fork_input(input),
+            Action::Supply(input) => return self.supply_input(input),
             Action::Rename => self.open_rename(),
             Action::Retitle => return self.retitle(),
             Action::Leader => self.arm_leader(std::time::Instant::now()),

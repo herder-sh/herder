@@ -262,6 +262,9 @@ impl ToolHandler for TaskTools {
                 ToolCall::Command(input) => success(manager.command(caller, input).await),
                 ToolCall::Secrets(SecretsInput {}) => success(manager.list_secrets().await),
                 ToolCall::StoreSecret(input) => success(manager.store_secret(caller, input).await),
+                ToolCall::RequestSecret(input) => {
+                    success(manager.request_secret(caller, input).await)
+                }
                 ToolCall::Remember(input) => success(manager.remember(caller, input).await),
                 ToolCall::Forget(input) => success(manager.forget(caller, input).await),
             };

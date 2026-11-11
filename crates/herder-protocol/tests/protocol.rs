@@ -1601,6 +1601,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 routed_to: Route::User,
                 reason: None,
                 secret: None,
+                secret_request: None,
             },
         ),
         event(
@@ -1622,6 +1623,26 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     name: "ASC_PRIVATE_KEY".into(),
                     description: "App Store Connect API key".into(),
                     delete_file_after: true,
+                }),
+                secret_request: None,
+            },
+        ),
+        event(
+            7,
+            None,
+            EventBody::ApprovalRequested {
+                approval_id: ApprovalId::new("secret-01J9ASK"),
+                turn_id: turn_id(),
+                tool_call_id: ItemId::new("01J9REQUEST"),
+                summary: "Supply GITHUB_SIEM_PAT in coingate".into(),
+                routed_to: Route::User,
+                reason: None,
+                secret: None,
+                secret_request: Some(SecretRequest {
+                    set: "coingate".into(),
+                    name: "GITHUB_SIEM_PAT".into(),
+                    description: "GitHub fine-grained PAT, read-only on the org audit log".into(),
+                    replaces: true,
                 }),
             },
         ),
@@ -2432,6 +2453,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 routed_to: Route::Primary,
                 reason: None,
                 secret: None,
+                secret_request: None,
             },
         ),
         event(
@@ -4593,6 +4615,33 @@ fn secret_values_go_out_only_in_put_secret_fetches_and_stores() {
                 .contains("sk_test_123")
         );
     }
+}
+
+#[test]
+fn a_secret_request_has_its_wire_form() {
+    let body = EventBody::ApprovalRequested {
+        approval_id: ApprovalId::new("secret-01J9ASK"),
+        turn_id: TurnId::new("01J9TURN"),
+        tool_call_id: ItemId::new("01J9REQUEST"),
+        summary: "Supply GITHUB_SIEM_PAT in coingate".into(),
+        routed_to: Route::User,
+        reason: None,
+        secret: None,
+        secret_request: Some(SecretRequest {
+            set: "coingate".into(),
+            name: "GITHUB_SIEM_PAT".into(),
+            description: String::new(),
+            replaces: false,
+        }),
+    };
+    let json = serde_json::to_value(&body).unwrap();
+    // No description and nothing to replace leave the request at its set and name.
+    assert_eq!(
+        json["secret_request"],
+        json!({ "set": "coingate", "name": "GITHUB_SIEM_PAT" })
+    );
+    assert!(json.get("secret").is_none());
+    assert_eq!(serde_json::from_value::<EventBody>(json).unwrap(), body);
 }
 
 #[test]

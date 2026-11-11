@@ -23,12 +23,12 @@ use herder_protocol::{
     PersonPasskey, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId,
     Provider, ProviderBinary, ProviderLogin, ProviderLoginState, ProviderReload, ProviderStatus,
     PullRequest, QuestionId, QueuedPrompt, RegistrationResponse, Relay, ResourceSettings,
-    ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef, SecretSet, SecretStoreRequest,
-    SecretValue, SessionHead, SessionId, SessionOrigin, SessionSkill, SessionStatus, SessionUsage,
-    SignIn, SkillFile, SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId,
-    TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource, TurnError, TurnId,
-    TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId,
-    UserInfo, VaultStatus, VaultVolume,
+    ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef, SecretRequest, SecretSet,
+    SecretStoreRequest, SecretValue, SessionHead, SessionId, SessionOrigin, SessionSkill,
+    SessionStatus, SessionUsage, SignIn, SkillFile, SkillReload, SkillSource, SkillsStatus,
+    Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource,
+    TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow,
+    UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -271,6 +271,7 @@ pub enum EventBody {
         routed_to: Route,
         reason: Option<EscalationReason>,
         secret: Option<SecretStoreRequest>,
+        secret_request: Option<SecretRequest>,
     },
     ApprovalEscalated {
         approval_id: ApprovalId,
@@ -1376,6 +1377,14 @@ pub struct SecretInfo {
     pub name: String,
     pub description: String,
     pub updated_at: Timestamp,
+}
+
+#[uniffi::remote(Record)]
+pub struct SecretRequest {
+    pub set: String,
+    pub name: String,
+    pub description: String,
+    pub replaces: bool,
 }
 
 #[uniffi::remote(Record)]

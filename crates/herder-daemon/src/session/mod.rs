@@ -249,6 +249,7 @@ pub mod fork;
 pub(crate) mod journal;
 mod merge;
 pub mod publish;
+mod request_secret;
 mod routing;
 mod setup;
 mod store_secret;
@@ -1118,7 +1119,8 @@ impl SessionManager {
                     ErrorCode::Unsupported,
                     "this machine is not a vault: secrets live on the vault it is linked to; \
                      manage them on that vault's Secrets tab in the herder app, or have an \
-                     agent store a file's contents with store_secret",
+                     agent store a file's contents with store_secret or ask the user for a \
+                     value with request_secret",
                 ));
             }
             // Every user sees every session, children included, so owners and members get

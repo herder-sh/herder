@@ -433,6 +433,7 @@ pub fn approval(id: &str, summary: &str) -> EventBody {
         routed_to: herder_protocol::Route::User,
         reason: None,
         secret: None,
+        secret_request: None,
     }
 }
 
@@ -1087,6 +1088,51 @@ pub fn chat_approval() -> App {
             routed_to: herder_protocol::Route::User,
             reason: None,
             secret: None,
+            secret_request: None,
+        },
+    ];
+    feed(
+        &mut app,
+        "h1",
+        "s2",
+        at(update("s2", 300, bodies, Vec::new()), 260),
+    );
+    app
+}
+
+/// [`chat`] with the second turn asking for the secret `coingate/GITHUB_SIEM_PAT` with
+/// `request_secret`, which replaces one; `h1` fetches its secrets from the vault `vault-0`,
+/// paired here with this user its owner.
+pub fn chat_secret_request() -> App {
+    let mut app = chat();
+    let mut machines = app.machines.clone();
+    machines.push(Machine {
+        fingerprint: "cd".repeat(32),
+        ..machine("v", "vault-0", &[])
+    });
+    app.update(Msg::Machines(machines));
+    let bodies = vec![
+        call(
+            "c6",
+            "turn-2",
+            "mcp__herder__request_secret",
+            serde_json::json!({"set": "coingate", "name": "GITHUB_SIEM_PAT"}),
+        ),
+        EventBody::ApprovalRequested {
+            approval_id: herder_protocol::ApprovalId::new("secret-1"),
+            turn_id: TurnId::new("turn-2"),
+            tool_call_id: ItemId::new("c6"),
+            summary: "Supply the secret GITHUB_SIEM_PAT in coingate, replacing its value"
+                .to_owned(),
+            routed_to: herder_protocol::Route::User,
+            reason: None,
+            secret: None,
+            secret_request: Some(herder_protocol::SecretRequest {
+                set: "coingate".to_owned(),
+                name: "GITHUB_SIEM_PAT".to_owned(),
+                description: "GitHub fine-grained PAT, read-only on the org audit log".to_owned(),
+                replaces: true,
+            }),
         },
     ];
     feed(

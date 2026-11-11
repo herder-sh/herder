@@ -2707,6 +2707,17 @@
                 }
               ]
             },
+            "secret_request": {
+              "description": "For an agent's `request_secret`, the secret it asks the user to supply; always\nrouted to the user. Only an owner supplies it, from an app: `put_secret` on the\nhost's vault, then `confirm_secret_stored`. `answer_approval` may only decline it.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SecretRequest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "summary": {
               "description": "One-line description of what the agent wants to do.",
               "type": "string"
@@ -4845,6 +4856,32 @@
       "description": "A secret as a host's session names it: `NAME`, or `set/NAME` when more than one set granted to the host has `NAME`.",
       "type": "string",
       "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[A-Z_][A-Z0-9_]*$"
+    },
+    "SecretRequest": {
+      "description": "What an agent asked the owner to supply with `request_secret`, as its approval request\nshows it: where the value is to go, and what it is. The agent never has the value.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What it is and where to find it, on one line, such as \"GitHub fine-grained PAT,\nread-only on the org audit log\"; it becomes the secret's description. Empty when the\nagent gave none.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The secret's name, as [`is_valid_secret_name`] accepts it.",
+          "type": "string"
+        },
+        "replaces": {
+          "description": "Whether a secret of that name is already in that set, as the host sees its granted\nsets: supplying a value replaces it.",
+          "type": "boolean"
+        },
+        "set": {
+          "description": "The set the agent asked for; the owner who supplies it may pick another.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "set",
+        "name"
+      ]
     },
     "SecretSet": {
       "description": "A set of secrets on a vault, and the hosts it is granted to.",

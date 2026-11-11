@@ -112,13 +112,22 @@ fn request<'a>(
         let tool = session
             .tool_name(&approval.tool_call_id)
             .unwrap_or_else(|| "tool".to_owned());
-        let mut header = request::header(ui, ui.glyphs.approval, "approval".to_owned());
+        let secret = approval.secret_request.as_ref();
+        let title = if secret.is_some() {
+            "secret requested"
+        } else {
+            "approval"
+        };
+        let mut header = request::header(ui, ui.glyphs.approval, title.to_owned());
         header.push(Span::styled(
             format!("{}{tool}", ui.glyphs.separator),
             ui.muted(),
         ));
         let summary = super::tools::in_worktree(&approval.summary, &session.worktree);
         text(&mut body, &summary, ui.text());
+        if let Some(secret) = secret.filter(|secret| !secret.description.is_empty()) {
+            text(&mut body, &secret.description, ui.muted());
+        }
         let hidden = body.len().saturating_sub(cap);
         body.truncate(cap);
         if hidden > 0 {
@@ -133,12 +142,16 @@ fn request<'a>(
             approval.note.as_deref(),
             approval.routed_to,
         );
-        let (buttons, taps) = request::buttons(ui, &["allow", "deny"], app.compose.button);
-        let keys = if compact {
-            "y allow · n deny"
-        } else {
-            "y allow · n deny · ←/→ enter · f full"
+        let (labels, keys) = match (secret.is_some(), compact) {
+            (true, true) => (["store", "decline"], "y store · n decline"),
+            (true, false) => (
+                ["store", "decline"],
+                "y store · n decline · ←/→ enter · f full",
+            ),
+            (false, true) => (["allow", "deny"], "y allow · n deny"),
+            (false, false) => (["allow", "deny"], "y allow · n deny · ←/→ enter · f full"),
         };
+        let (buttons, taps) = request::buttons(ui, &labels, app.compose.button);
         let hint = Line::from(Span::styled(fit_sep(ui, keys), ui.muted()));
         let decisions = [ApprovalDecision::Allow, ApprovalDecision::Deny];
         let taps = taps

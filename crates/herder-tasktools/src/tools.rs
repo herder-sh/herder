@@ -537,6 +537,44 @@ pub struct StoreSecretOutput {
     pub file_deleted: bool,
 }
 
+/// Arguments of `request_secret`. There is no value: the user supplies it in a herder app.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RequestSecretInput {
+    /// The set to store it in, such as `personal`; the owner who supplies it may pick another.
+    pub set: String,
+    /// Its name, the environment variable commands get it as: uppercase letters, digits and
+    /// underscores, not starting with a digit, such as `GITHUB_SIEM_PAT`.
+    pub name: String,
+    /// What the value is and where the user gets it, on one line of at most 200 characters,
+    /// such as "GitHub fine-grained PAT, read-only on the org audit log"; it becomes the
+    /// secret's description.
+    #[serde(default)]
+    pub description: String,
+}
+
+/// How the user answered a `request_secret`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestSecretOutcome {
+    /// An owner put the value on the vault.
+    Stored,
+    /// The user declined to supply it; nothing was stored.
+    Declined,
+}
+
+/// Result of `request_secret`: how the user answered, never the value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RequestSecretOutput {
+    /// Whether the value was stored.
+    pub outcome: RequestSecretOutcome,
+    /// The set it was stored in, which the owner may have picked over the one asked for; the
+    /// one asked for when declined.
+    pub set: String,
+    /// Its name.
+    pub name: String,
+}
+
 /// Arguments of `command`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
