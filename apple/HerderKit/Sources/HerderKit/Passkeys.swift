@@ -30,6 +30,18 @@ extension Authenticator {
     private let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: relyingParty)
     private var pending: CheckedContinuation<ASAuthorization, Error>?
 
+    /// Whether macOS lets this copy of the app use the platform's passkey: always on iOS; on the
+    /// Mac only a team-signed build, which has the herder.sh associated domains. The ad-hoc
+    /// signed release zip has none.
+    static let isAvailable: Bool = {
+        #if os(macOS)
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        return SecTaskCopyValueForEntitlement(task, "com.apple.developer.associated-domains" as CFString, nil) != nil
+        #else
+        return true
+        #endif
+    }()
+
     func register(name: String, userId: Data, challenge: Data) async throws -> PasskeyRegistration {
         let request = provider.createCredentialRegistrationRequest(challenge: challenge, name: name, userID: userId)
         guard let credential = try await perform(request).credential
@@ -61,17 +73,15 @@ extension Authenticator {
     }
 
     private func perform(_ request: ASAuthorizationRequest) async throws -> ASAuthorization {
-        #if os(macOS)
         // An ad-hoc signed app has no application identifier nor associated domains, and macOS
-        // fails its passkey requests with an error that names neither.
-        let task = SecTaskCreateFromSelf(nil)
-        if task.flatMap({ SecTaskCopyValueForEntitlement($0, "com.apple.developer.associated-domains" as CFString, nil) }) == nil {
+        // fails its passkey requests with an error that names neither. `passkeyAuthenticator`
+        // gives such a copy a local passkey instead, so this is a last guard.
+        if !Self.isAvailable {
             throw HerderError.Local(detail: """
                 this copy of herder is not signed by its team, so macOS keeps it from your passkey: \
                 install a team-signed build, such as apple/scripts/install-mac.sh builds
                 """)
         }
-        #endif
         return try await withCheckedThrowingContinuation { continuation in
             pending = continuation
             let controller = ASAuthorizationController(authorizationRequests: [request])
@@ -112,7 +122,7 @@ extension PlatformAuthenticator: ASAuthorizationControllerDelegate, ASAuthorizat
 
 /// Whether `error` is the person closing the Face ID prompt, which is no failure to report.
 func isCancelled(_ error: Error) -> Bool {
-    (error as? ASAuthorizationError)?.code == .canceled
+    (error as? ASAuthorizationError)?.code == .canceled || error is CancellationError
 }
 
 extension Data {

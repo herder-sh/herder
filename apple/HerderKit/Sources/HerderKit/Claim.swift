@@ -172,7 +172,9 @@ extension Fleet {
         await people.reload(self.machines)
         let known = Self.yours(FleetPeople.me(self.machines), in: people.people)
         return ClaimPlan(machines: machines, name: known.count == 1 ? known[0].name : Self.deviceUserName,
-                         known: known, biometry: Biometry.name)
+                         known: known,
+                         keychain: PlatformAuthenticator.isAvailable ? "iCloud Keychain" : SoftwarePasskey.store,
+                         biometry: Biometry.name)
     }
 
     /// Who your passkey may be: the person the machines say you are, else every owner with a
