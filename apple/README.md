@@ -44,12 +44,11 @@ open. To install it on an Apple silicon Mac:
 
 That ad-hoc signed copy cannot use the platform's passkey: macOS gives passkeys only to an app
 signed by its team, with the herder.sh associated domains. It signs with a local passkey instead
-(`SoftwarePasskey`): a key the app makes on first use and keeps in its own container, used only
+(`LocalPasskey`): a key made in that Mac's Secure Enclave, which never leaves it and signs only
 after Touch ID or the Mac's password. Claiming, inviting and every other approval work with it,
-but it stays on that Mac: it is not synced, and is only as safe as the account it lives in, so
-add another device from People to keep a way in. On a Mac the team's development profile lists,
-build and install a team-signed copy with `apple/scripts/install-mac.sh` to use the platform's
-passkey instead.
+but it is bound to that Mac and does not sync, so add another device from People to keep a way
+in. On a Mac the team's development profile lists, build and install a team-signed copy with
+`apple/scripts/install-mac.sh` to use the platform's passkey instead.
 
 The iOS app goes out through TestFlight. The `release` workflow's `testflight` job runs
 `apple/scripts/upload-testflight.sh` on each `v*` tag, and on workflow_dispatch: it archives the

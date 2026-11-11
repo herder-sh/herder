@@ -173,7 +173,7 @@ extension Fleet {
         let known = Self.yours(FleetPeople.me(self.machines), in: people.people)
         return ClaimPlan(machines: machines, name: known.count == 1 ? known[0].name : Self.deviceUserName,
                          known: known,
-                         keychain: PlatformAuthenticator.isAvailable ? "iCloud Keychain" : SoftwarePasskey.store,
+                         keychain: PlatformAuthenticator.isAvailable ? "iCloud Keychain" : LocalPasskey.store,
                          biometry: Biometry.name)
     }
 
