@@ -44,9 +44,16 @@ pub(super) enum Incoming {
 pub(super) struct System {
     #[serde(default)]
     pub subtype: Option<String>,
-    /// The tool call that started the task, on `task_started`.
+    /// The tool call that started the task, on `task_started` and `task_notification`.
     #[serde(default, rename = "tool_use_id")]
     pub tool_use_id: Option<String>,
+    /// How the task ended, on `task_notification`: `completed`, `failed` or `stopped`.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// What the task ended with, on `task_notification`: an agent's result, else a line
+    /// about the task.
+    #[serde(default)]
+    pub summary: Option<String>,
     /// The effective model, on `init`.
     #[serde(default)]
     pub model: Option<String>,

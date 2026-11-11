@@ -6543,6 +6543,48 @@ async fn a_turn_the_cli_starts_is_journaled_without_a_prompt_and_queues_the_next
 }
 
 #[tokio::test]
+async fn background_agents_stopped_by_archive_do_not_keep_the_unarchived_session_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let scripts = ["background_archived.jsonl", "second.jsonl"];
+    let mut daemon = Daemon::open_scripts(dir.path(), &scripts, Default::default()).await;
+    let session = daemon.create().await;
+    daemon
+        .prompt(alice(), &session, "Review it in the background.")
+        .await;
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { .. }))
+        .await;
+    daemon
+        .manager
+        .archive(alice(), session.clone())
+        .await
+        .unwrap();
+    daemon.until_status(SessionStatus::Archived).await;
+    let unarchive = CommandBody::UnarchiveSession {
+        session_id: session.clone(),
+    };
+    let result = daemon.manager.handle(alice(), unarchive).await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    daemon.until_status(SessionStatus::Idle).await;
+
+    // The new CLI runs no background agent: its turn's end leaves the session idle.
+    daemon.prompt(alice(), &session, "Second.").await;
+    let events = daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(
+        describe(&events),
+        [
+            "-: status Running",
+            "alice: user turn-2 Second.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 Two.",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+        ]
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn a_turn_the_cli_starts_ahead_of_a_sent_prompt_runs_first() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "cli_turn_ahead.jsonl", Default::default()).await;
