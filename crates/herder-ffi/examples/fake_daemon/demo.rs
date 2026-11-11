@@ -677,14 +677,16 @@ impl Scenario<'_> {
             .await?;
         self.prompt("devbox", &ledger, LEDGER).await?;
         // Published during its turn, before any other session exists: its last activity stays
-        // the turn's end, so the Board orders every task as it would without it. Its MCP server
-        // answers once the turn has started.
+        // the turn's end, so the Board orders every task as it would without it. Called once the
+        // turn has failed over and the Personal account's CLI is playing: the failover grants
+        // the session a new MCP token, which turns away a call made with the Work CLI's.
         let devbox = self.daemon("devbox")?;
         devbox
             .until(&ledger, |events| {
                 events
                     .iter()
-                    .any(|body| matches!(body, EventBody::TurnStarted { .. }))
+                    .skip_while(|body| !matches!(body, EventBody::AccountSwitched { .. }))
+                    .any(|body| matches!(body, EventBody::ItemAdded { .. }))
             })
             .await?;
         devbox
