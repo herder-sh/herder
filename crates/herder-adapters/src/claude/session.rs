@@ -79,6 +79,7 @@ pub(super) async fn start(
         tool_calls: HashMap::new(),
         agents: HashSet::new(),
         commands: HashSet::new(),
+        ended: Vec::new(),
         approvals: HashMap::new(),
         asks: Vec::new(),
         next_item: 0,
@@ -211,6 +212,14 @@ struct Call {
     agent: bool,
 }
 
+/// A background task the CLI reported ended, from its `task_notification` line.
+struct Ended {
+    /// Claude's id of the tool call that started it.
+    tool_use_id: String,
+    failed: bool,
+    summary: Option<String>,
+}
+
 /// A text or thinking item being streamed.
 struct Streaming {
     id: ItemId,
@@ -251,6 +260,8 @@ struct Session {
     /// Claude's `tool_use` ids of the other tasks running in the background, such as `Bash`
     /// commands.
     commands: HashSet<String>,
+    /// Tasks that ended while no turn ran, held for the turn the CLI starts to reply to them.
+    ended: Vec<Ended>,
     /// Open approval requests and the CLI's `request_id` to answer each on.
     approvals: HashMap<ApprovalId, String>,
     /// Open `AskUserQuestion` calls, in the order asked.
@@ -407,6 +418,7 @@ impl Session {
         })
         .await;
         self.emit(AdapterEvent::TurnStarted { turn_id }).await;
+        self.held_ended().await;
     }
 
     // ---- Lines from the CLI ----
@@ -430,17 +442,34 @@ impl Session {
                 if let Some(mode) = system.permission_mode.as_deref().and_then(mode_from_flag) {
                     self.mode_known(mode).await;
                 }
-                if system.subtype.as_deref() == Some("task_started")
-                    && let Some(tool_use_id) = system.tool_use_id
-                    && let Some(call) = self.tool_calls.get(&tool_use_id)
-                {
-                    if call.agent {
-                        if self.agents.insert(tool_use_id) {
-                            self.agents_changed().await;
+                match (system.subtype.as_deref(), system.tool_use_id) {
+                    (Some("task_started"), Some(tool_use_id)) => {
+                        if let Some(call) = self.tool_calls.get(&tool_use_id) {
+                            if call.agent {
+                                if self.agents.insert(tool_use_id) {
+                                    self.agents_changed().await;
+                                }
+                            } else if self.commands.insert(tool_use_id) {
+                                self.commands_changed().await;
+                            }
                         }
-                    } else if self.commands.insert(tool_use_id) {
-                        self.commands_changed().await;
                     }
+                    (Some("task_notification"), Some(tool_use_id)) => {
+                        let stopped = system.status.as_deref() == Some("stopped");
+                        let ended = Ended {
+                            tool_use_id,
+                            failed: system.status.as_deref() == Some("failed"),
+                            summary: system.summary,
+                        };
+                        // A task that ends while no turn runs gets a turn of the CLI's own that
+                        // replies to it, so it is counted until then; one stopped may not.
+                        if self.turn.is_some() || stopped {
+                            self.task_ended(ended).await;
+                        } else {
+                            self.ended.push(ended);
+                        }
+                    }
+                    _ => {}
                 }
             }
             Incoming::StreamEvent(stream) if stream.parent_tool_use_id.is_none() => {
@@ -456,13 +485,13 @@ impl Session {
                 }
             }
             Incoming::User(user) => match (user.origin, user.message.content) {
-                // A prompt the CLI wrote itself to the main agent; herder's own, echoed back,
-                // are not items.
-                (Some(origin), Value::String(text))
+                // A prompt the CLI wrote itself to the main agent, such as a background task's
+                // notification folded into the running turn, which its `task_notification`
+                // line already ended; herder's own, echoed back, are not items.
+                (Some(origin), Value::String(_))
                     if origin.kind != "human" && user.parent_tool_use_id.is_none() =>
                 {
                     self.open_unprompted().await;
-                    self.notifications(&text).await;
                 }
                 (_, content) => self.tool_results(content, user.parent_tool_use_id).await,
             },
@@ -741,34 +770,13 @@ impl Session {
             failure: Failure::default(),
         });
         self.emit(AdapterEvent::TurnStarted { turn_id }).await;
+        self.held_ended().await;
     }
 
-    /// Each `<task-notification>` in a prompt the CLI wrote, whose task a tool call of this
-    /// session started, as that call's final result.
-    async fn notifications(&mut self, text: &str) {
-        let Some(turn_id) = self.turn.as_ref().map(|turn| turn.id.clone()) else {
-            return;
-        };
-        for notification in text.split(NOTIFICATION).skip(1) {
-            let Some(tool_use_id) = tag(notification, "tool-use-id") else {
-                continue;
-            };
-            let call_id = self
-                .tool_calls
-                .get(&tool_use_id)
-                .map(|call| call.id.clone());
-            let output = tag(notification, "result").or_else(|| tag(notification, "summary"));
-            if let (Some(call_id), Some(output)) = (call_id, output) {
-                let is_error = tag(notification, "status").as_deref() == Some("failed");
-                let id = self.item_id();
-                let body = ItemBody::ToolResult {
-                    call_id,
-                    output,
-                    is_error,
-                };
-                self.emit_item(id, turn_id.clone(), body).await;
-            }
-            self.agent_ended(&tool_use_id).await;
+    /// Ends the tasks held for the turn just opened.
+    async fn held_ended(&mut self) {
+        for ended in std::mem::take(&mut self.ended) {
+            self.task_ended(ended).await;
         }
     }
 
@@ -1064,12 +1072,27 @@ impl Session {
         .await;
     }
 
-    /// The background agent `tool_use_id` started, if one did, is done.
-    async fn agent_ended(&mut self, tool_use_id: &str) {
-        if self.agents.remove(tool_use_id) {
+    /// The background task `ended` is done: what it ended with answers the call that started
+    /// it, in the open turn, if this process saw the call; it is no longer counted.
+    async fn task_ended(&mut self, ended: Ended) {
+        let call_id = self
+            .tool_calls
+            .get(&ended.tool_use_id)
+            .map(|call| call.id.clone());
+        let turn_id = self.turn.as_ref().map(|turn| turn.id.clone());
+        if let (Some(call_id), Some(turn_id), Some(output)) = (call_id, turn_id, ended.summary) {
+            let id = self.item_id();
+            let body = ItemBody::ToolResult {
+                call_id,
+                output,
+                is_error: ended.failed,
+            };
+            self.emit_item(id, turn_id, body).await;
+        }
+        if self.agents.remove(&ended.tool_use_id) {
             self.agents_changed().await;
         }
-        if self.commands.remove(tool_use_id) {
+        if self.commands.remove(&ended.tool_use_id) {
             self.commands_changed().await;
         }
     }
@@ -1178,23 +1201,6 @@ fn streamed_body(reasoning: bool, text: String) -> ItemBody {
     } else {
         ItemBody::AssistantMessage { text }
     }
-}
-
-/// Opens each of the CLI's reports that a background task ended.
-const NOTIFICATION: &str = "<task-notification>";
-
-/// The text of the first `<name>` element in `text`, unescaped, as the CLI writes a
-/// notification's fields: `tool-use-id`, `status`, `summary`, `result` and others.
-fn tag(text: &str, name: &str) -> Option<String> {
-    let (_, rest) = text.split_once(&format!("<{name}>"))?;
-    let (value, _) = rest.split_once(&format!("</{name}>"))?;
-    let value = value
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&");
-    Some(value.trim().to_owned())
 }
 
 /// A tool result's text: a string, or the text blocks of an array.

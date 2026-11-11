@@ -1,0 +1,7 @@
+# A background agent works on after the turn ended, and the session is archived meanwhile:
+# the CLI, and the agent with it, stops before the agent ends.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Review it in the background."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "tool_call", "name": "Agent", "input": {"description": "Review", "run_in_background": true}}}}}
+{"emit": {"type": "background_agents", "running": 1}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}

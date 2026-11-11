@@ -133,25 +133,27 @@
 //! background whether or not the call asked for `run_in_background`), or a `Bash` command run
 //! in the background. Its `tool_result` only acknowledges the launch, and the CLI announces the
 //! task with a `system` `task_started` line naming the call's `tool_use_id`. When the task
-//! ends, the CLI writes a prompt of its own: a `<task-notification>` block with the task's
-//! `task-id`, `tool-use-id`, `output-file`, `status` (`completed`, `failed` or `stopped`),
-//! `summary` and, for an agent, its `result`, each XML-escaped. `--replay-user-messages` puts
-//! that prompt on stdout as a `user` line whose `origin.kind` is `task-notification` (it also
-//! echoes herder's own prompts, `origin.kind` `human` or none, which the adapter skips).
+//! ends, the CLI writes a `system` `task_notification` line naming the call too, with the
+//! task's `status` (`completed`, `failed` or `stopped`) and `summary`: an agent's result, else
+//! a line about the task. It then gives the model a prompt of its own, a `<task-notification>`
+//! block saying the same. Folded into a running turn, `--replay-user-messages` echoes that
+//! prompt as a `user` line whose `origin.kind` is `task-notification` (it also echoes herder's
+//! own prompts, `origin.kind` `human` or none, which the adapter skips); a prompt that starts
+//! a turn of its own is not echoed. So the `task_notification` line is what ends a task.
 //!
-//! The notification becomes a `tool_result` item for the call that started the task, its
-//! output the `result` (else the `summary`) and `is_error` set for `failed`, so a client links
-//! the task's real outcome to its call by `call_id`, as for any tool. The calls that started a
-//! task are remembered for the rest of the session; a notification for a call this process did
-//! not see, as after a restart, adds no item.
+//! It becomes a `tool_result` item for the call that started the task, its output the
+//! `summary` and `is_error` set for `failed`, so a client links the task's real outcome to its
+//! call by `call_id`, as for any tool. The calls that started a task are remembered for the
+//! rest of the session; a notification for a call this process did not see, as after a
+//! restart, adds no item.
 //!
-//! An agent's task runs from its `task_started` to its notification; `BackgroundAgents`
-//! reports how many run each time that changes. The count drops only once the notification's
-//! turn is open, not at the `system` `task_notification` line the CLI writes just before, so
-//! the session never looks idle between the agent's end and the reply to it. Any other task,
-//! such as a `Bash` command run in the background, is counted apart in `BackgroundCommands`,
-//! from its `task_started` to its notification the same way: it does not keep the session
-//! `running`, as a dev server runs for as long as the session.
+//! An agent's task runs from its `task_started` to its `task_notification`;
+//! `BackgroundAgents` reports how many run each time that changes. A task that ends while no
+//! turn runs is held until the turn that replies to it opens, so the session never looks idle
+//! between the agent's end and the reply to it; one `stopped` is not, as no reply may come.
+//! Any other task, such as a `Bash` command run in the background, is counted apart in
+//! `BackgroundCommands` the same way: it does not keep the session `running`, as a dev server
+//! runs for as long as the session.
 //!
 //! When the task ends while a turn runs, the CLI folds the notification into that turn. When
 //! none runs, the CLI starts a turn itself: the adapter then sends `TurnStarted` with an id it

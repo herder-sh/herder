@@ -1311,8 +1311,18 @@ fn out(line: serde_json::Value) -> String {
     format!("{}\n", json!({"dir": "out", "line": line.to_string()}))
 }
 
+/// The CLI's `system` line saying the task `tool_use_id` started ended with `summary`.
+fn task_ended(tool_use_id: &str, status: &str, summary: &str) -> String {
+    out(json!({
+        "type": "system", "subtype": "task_notification", "task_id": "a1",
+        "tool_use_id": tool_use_id, "status": status,
+        "output_file": "/tmp/tasks/a1.output", "summary": summary,
+        "uuid": "u1", "session_id": "s1",
+    }))
+}
+
 /// A `<task-notification>` prompt the CLI wrote and replayed, for the task `tool_use_id`
-/// started.
+/// started: only one folded into a running turn is replayed.
 fn notification(tool_use_id: &str, status: &str, result: &str) -> String {
     let text = format!(
         "<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>{tool_use_id}</tool-use-id>\n\
@@ -1424,14 +1434,10 @@ async fn a_background_agent_works_between_turns_and_its_result_starts_one() {
                 }]},
                 "parent_tool_use_id": "toolu_agent",
             })),
-            // The agent ends while no turn runs: the CLI says so and starts a turn itself.
-            out(json!({
-                "type": "system", "subtype": "task_notification", "task_id": "a1",
-                "tool_use_id": "toolu_agent", "status": "completed",
-                "output_file": "/tmp/tasks/a1.output", "summary": "Agent \"Review\" finished",
-                "uuid": "u1", "session_id": "s1",
-            })),
-            notification("toolu_agent", "completed", "Found 2 issues: a &lt; b &amp;&amp; c."),
+            // The agent ends while no turn runs: the CLI says so and starts a turn itself,
+            // without replaying the prompt it starts it with (Claude Code 2.1.321).
+            task_ended("toolu_agent", "completed", "Found 2 issues: a < b && c."),
+            out(json!({"type": "system", "subtype": "background_tasks_changed", "tasks": []})),
             out(json!({"type": "system", "subtype": "init", "session_id": "s1"})),
             reply("The review found 2 issues."),
             success(),
@@ -1568,7 +1574,7 @@ async fn a_background_command_is_counted_apart_from_agents_until_it_ends() {
             })),
             reply("Building."),
             success(),
-            notification("toolu_build", "completed", "Finished"),
+            task_ended("toolu_build", "completed", "Background command \"cargo build\" completed (exit code 0)"),
             out(json!({"type": "system", "subtype": "init", "session_id": "s1"})),
             reply("It built."),
             success(),
@@ -1606,6 +1612,128 @@ async fn a_background_command_is_counted_apart_from_agents_until_it_ends() {
     assert!(
         matches!(own.last(), Some(AdapterEvent::TurnCompleted { .. })),
         "{own:?}"
+    );
+    shutdown(session).await;
+}
+
+/// The launch of a background agent `toolu_agent` in herder's turn: its call, `task_started`
+/// and the call's result.
+fn agent_launched() -> String {
+    [
+        out(json!({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use", "id": "toolu_agent", "name": "Agent",
+                "input": {"description": "Review", "prompt": "Review the diff.", "run_in_background": true},
+            }]},
+            "parent_tool_use_id": null,
+        })),
+        out(json!({
+            "type": "system", "subtype": "task_started", "task_id": "a1",
+            "tool_use_id": "toolu_agent", "description": "Review", "task_type": "local_agent",
+            "is_backgrounded": true, "uuid": "u0", "session_id": "s1",
+        })),
+        out(json!({
+            "type": "user",
+            "message": {"role": "user", "content": [{
+                "type": "tool_result", "tool_use_id": "toolu_agent",
+                "content": [{"type": "text", "text": "Async agent launched successfully.\nagentId: a1"}],
+            }]},
+            "parent_tool_use_id": null,
+        })),
+    ]
+    .concat()
+}
+
+#[tokio::test]
+async fn a_background_agent_that_ends_during_a_turn_answers_its_call_once() {
+    let fixture = Fixture::parse(
+        "inline",
+        &[
+            INITIALIZED.to_owned(),
+            sent("Review it, then wait."),
+            agent_launched(),
+            // The agent ends while the turn runs: the CLI folds its notification into the
+            // turn and replays that prompt too.
+            task_ended("toolu_agent", "completed", "Found 2 issues."),
+            notification("toolu_agent", "completed", "Found 2 issues."),
+            reply("The review found 2 issues."),
+            success(),
+            STOPPED.to_owned(),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let mut session = start_with(fixture, request(Vec::new())).await;
+    session
+        .commands
+        .send(prompt("Review it, then wait."))
+        .unwrap();
+    let events = until(&mut session, is_turn_end).await;
+    let results: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                AdapterEvent::ItemCompleted { item }
+                    if item.body == ItemBody::ToolResult {
+                        call_id: id(1),
+                        output: "Found 2 issues.".into(),
+                        is_error: false,
+                    }
+            )
+        })
+        .collect();
+    assert_eq!(results.len(), 1, "{events:?}");
+    let counts: Vec<_> = events
+        .iter()
+        .filter(|event| matches!(event, AdapterEvent::BackgroundAgents { .. }))
+        .collect();
+    assert_eq!(
+        counts,
+        [
+            &AdapterEvent::BackgroundAgents { running: 1 },
+            &AdapterEvent::BackgroundAgents { running: 0 },
+        ]
+    );
+    assert_eq!(events.last(), Some(&completed()));
+    shutdown(session).await;
+}
+
+#[tokio::test]
+async fn a_background_agent_stopped_while_no_turn_runs_is_no_longer_counted() {
+    let fixture = Fixture::parse(
+        "inline",
+        &[
+            INITIALIZED.to_owned(),
+            sent("Review it in the background."),
+            agent_launched(),
+            reply("Started a review."),
+            success(),
+            // Stopped, it may get no turn that replies to it.
+            task_ended("toolu_agent", "stopped", "Review"),
+            STOPPED.to_owned(),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let mut session = start_with(fixture, request(Vec::new())).await;
+    session
+        .commands
+        .send(prompt("Review it in the background."))
+        .unwrap();
+    let launched = until(&mut session, is_turn_end).await;
+    assert!(
+        launched.contains(&AdapterEvent::BackgroundAgents { running: 1 }),
+        "{launched:?}"
+    );
+    assert_eq!(
+        until(&mut session, |event| matches!(
+            event,
+            AdapterEvent::BackgroundAgents { .. }
+        ))
+        .await,
+        [AdapterEvent::BackgroundAgents { running: 0 }]
     );
     shutdown(session).await;
 }

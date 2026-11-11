@@ -1464,6 +1464,8 @@ impl Actor {
         if let Some(adapter) = self.adapter.take() {
             let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
         }
+        // Its background agents went with the CLI: unarchived, the session runs a new one.
+        self.background = 0;
         // Whatever the agent left running, such as a dev server, goes with the session.
         if let Some(scopes) = self.inner.scopes.get() {
             scopes.stop(&self.session.session_id).await;
@@ -1681,6 +1683,7 @@ impl Actor {
         if let Some(adapter) = self.adapter.take() {
             let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
         }
+        self.background = 0;
         self.void_requests().await;
         if let Some(turn_id) = open {
             let error = TurnError {
