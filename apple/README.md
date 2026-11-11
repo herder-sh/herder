@@ -42,6 +42,11 @@ open. To install it on an Apple silicon Mac:
    Or right-click the app, choose **Open**, then **Open** again (on recent macOS: try to open
    it once, then **System Settings › Privacy & Security › Open Anyway**).
 
+That ad-hoc signed copy cannot use your passkey: macOS gives passkeys only to an app signed by
+its team, with the herder.sh associated domains, so every approval fails (creating a secret set,
+inviting, claiming). On a Mac the team's development profile lists, build and install a
+team-signed copy instead with `apple/scripts/install-mac.sh`.
+
 The iOS app goes out through TestFlight. The `release` workflow's `testflight` job runs
 `apple/scripts/upload-testflight.sh` on each `v*` tag, and on workflow_dispatch: it archives the
 app in Release with the herder version and the run number as its build, and uploads it to App
