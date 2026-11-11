@@ -128,7 +128,7 @@ spec:
           hostnames: ["cpa.example.com"]
       initContainers:
         - name: cliproxyapi-config
-          image: eceasy/cli-proxy-api:v8.0.53
+          image: eceasy/cli-proxy-api:v8.0.59
           command:
             - sh
             - -ec
@@ -207,7 +207,7 @@ spec:
               mountPath: /etc/herder
               readOnly: true
         - name: cliproxyapi
-          image: eceasy/cli-proxy-api:v8.0.53
+          image: eceasy/cli-proxy-api:v8.0.59
           command: ["/CLIProxyAPI/CLIProxyAPI", "-config", "/data/cliproxyapi/config.yaml"]
           ports:
             - name: cliproxyapi
