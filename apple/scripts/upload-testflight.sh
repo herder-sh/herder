@@ -17,13 +17,17 @@ auth=(-allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH"
 xcodegen generate --spec apple/project.yml
 # Archived unsigned: signing the archive needs a development certificate, which a fresh runner
 # lacks, so Xcode made a new one on every run until the account hit Apple's limit. The export
-# below signs for distribution with a cloud-managed certificate. The iOS app has no entitlements
-# for the unsigned archive to lose.
+# below signs for distribution with a cloud-managed certificate.
 xcodebuild archive -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
   -scheme herder-iOS -configuration Release -destination "generic/platform=iOS" \
   -archivePath "$work/herder.xcarchive" COMPILER_INDEX_STORE_ENABLE=NO \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+# The export signs with the entitlements it finds in the archived app's signature, and an
+# unsigned app has none: without this ad-hoc signature carrying them, the app lacks
+# webcredentials:herder.sh and every passkey approval fails as "not associated with domain".
+codesign --force --sign - --entitlements apple/App/herder-iOS.entitlements \
+  "$work/herder.xcarchive/Products/Applications/herder.app"
 
 cat > "$work/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
