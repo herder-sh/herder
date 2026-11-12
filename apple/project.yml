@@ -184,4 +184,7 @@ targets:
         # The `herder` URL scheme; iOS's launch screen in it means nothing on the Mac.
         INFOPLIST_FILE: App/Info.plist
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        # As for iOS: only standard, exempt encryption (TLS to the daemons), so TestFlight
+        # builds do not wait on the export compliance question.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
     scheme: {}
