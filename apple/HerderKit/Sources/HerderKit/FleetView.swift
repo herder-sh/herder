@@ -279,6 +279,8 @@ struct FleetView: View {
             sheet = .approve(request)
         case .join(let link):
             sheet = .join(link)
+        case .invite(let link):
+            sheet = .acceptInvite(link)
         case nil:
             fleet.toast = Toast(text: "herder cannot open that link", failed: true)
         }
