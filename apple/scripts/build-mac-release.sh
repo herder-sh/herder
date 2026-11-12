@@ -5,9 +5,10 @@
 # With APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH (the App Store Connect key's
 # .p8 file) set, and the team's Developer ID Application certificate in a keychain
 # (import-mac-cert.sh), as in the release workflow, the app is signed with that certificate and
-# a Developer ID provisioning profile, which Xcode fetches or creates through the key and which
-# grants the herder.sh associated domains passkeys need, then notarized and stapled. The build
-# fails unless the app carries the team, its application identifier and associated domains,
+# a Developer ID provisioning profile, which developer-id-profile.py finds or creates through
+# the key (Xcode's automatic signing asks for cloud signing, which this team may not use) and
+# which grants the herder.sh associated domains passkeys need, then notarized and stapled. The
+# build fails unless the app carries the team, its application identifier and associated domains,
 # and Gatekeeper accepts it as notarized. Without APPLE_TEAM_ID, as from a fork, the app is
 # ad-hoc signed, without associated domains, and cannot use a passkey (see apple/README.md).
 # Needs what build-ffi.sh builds, XcodeGen, and Xcode with its Metal toolchain.
@@ -38,9 +39,6 @@ else
     echo "site/.well-known/apple-app-site-association does not list $app_id" >&2
     exit 1
   }
-  auth=(-allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH"
-    -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
-
   # Archived with the ad-hoc entitlements, which Xcode accepts without a profile, then signed
   # ad hoc again with the full set, so the export, which keeps the archive's entitlements,
   # signs the associated domains in with the Developer ID profile.
@@ -49,6 +47,14 @@ else
   codesign --force --sign - --options runtime --entitlements apple/App/herder.entitlements \
     "$work/herder.xcarchive/Products/Applications/herder.app"
 
+  identity=$(security find-identity -v -p codesigning |
+    awk '/"Developer ID Application: .*\('"$APPLE_TEAM_ID"'\)"/ { print $2; exit }')
+  [ -n "$identity" ] || {
+    echo "no keychain holds the team's Developer ID Application certificate" >&2
+    exit 1
+  }
+  profile=$(apple/scripts/developer-id-profile.py sh.herder.Herder "$identity")
+
   cat > "$work/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -56,13 +62,15 @@ else
 <dict>
   <key>method</key><string>developer-id</string>
   <key>teamID</key><string>$APPLE_TEAM_ID</string>
-  <key>signingStyle</key><string>automatic</string>
-  <key>signingCertificate</key><string>Developer ID Application</string>
+  <key>signingStyle</key><string>manual</string>
+  <key>signingCertificate</key><string>$identity</string>
+  <key>provisioningProfiles</key>
+  <dict><key>sh.herder.Herder</key><string>$profile</string></dict>
 </dict>
 </plist>
 PLIST
   xcodebuild -exportArchive -archivePath "$work/herder.xcarchive" \
-    -exportOptionsPlist "$work/ExportOptions.plist" -exportPath "$work/export" "${auth[@]}"
+    -exportOptionsPlist "$work/ExportOptions.plist" -exportPath "$work/export"
   app="$work/export/herder.app"
 
   codesign --verify --strict --deep "$app"

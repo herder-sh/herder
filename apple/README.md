@@ -32,9 +32,9 @@ and zips it into `dist/herder-app-<version>-macos-arm64.zip`, with its `.sha256`
 workflow attaches it to the GitHub Release of each `v*` tag, next to the CLI, and the `apple`
 workflow uploads it on each push to main as the `herder-app-macos-arm64` artifact. Both sign it
 with the team's Developer ID Application certificate, which `apple/scripts/import-mac-cert.sh`
-puts in a temporary keychain, and a Developer ID provisioning profile, which Xcode fetches or
-creates through the App Store Connect key and which grants the herder.sh associated domains
-passkeys need. The script then notarizes and staples the app, and fails the build unless it
+puts in a temporary keychain, and a Developer ID provisioning profile, which
+`apple/scripts/developer-id-profile.py` finds or creates through the App Store Connect key and
+which grants the herder.sh associated domains passkeys need. The script then notarizes and staples the app, and fails the build unless it
 carries the team, its application identifier and associated domains, and Gatekeeper accepts
 it as notarized. Download the zip, unzip it and move `herder.app` to `/Applications`.
 
@@ -51,7 +51,7 @@ Store Connect API key, so the repo keeps no certificate or profile, only these s
 
 - `APPLE_TEAM_ID`: the Apple Developer team the app belongs to.
 - `ASC_KEY_ID`, `ASC_ISSUER_ID`: the App Store Connect API key (Users and Access › Integrations),
-  with the Admin role, which cloud signing needs. It also gets the Mac app its Developer ID profile and notarizes it.
+  with the Admin role, which cloud signing needs. It also makes the Mac app's Developer ID profile and notarizes the app.
 - `ASC_KEY`: the contents of the key's `.p8` file.
 - `MAC_P12_BASE64`, `MAC_P12_PASSWORD`: the Mac app's Developer ID Application certificate with
   its private key, as a base64 `.p12`, and its password. Cloud-managed signing cannot make a
