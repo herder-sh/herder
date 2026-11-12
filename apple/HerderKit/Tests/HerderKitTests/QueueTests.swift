@@ -68,7 +68,8 @@ struct QueueTests {
         let other = try Client.open(configDir: temporaryProfile().path, client: "other")
         let passkey = try #require(RecordedPasskey(daemon.passkey))
         for at in shared.machines {
-            let pending = try await other.signIn(hosts: at.hosts, fingerprint: at.fingerprint)
+            let pending = try await other.signIn(hosts: at.hosts, fingerprint: at.fingerprint,
+                                                 passkeys: shared.person.passkeys)
             _ = try await pending.finish(signIn: .passkey(assertion: try await passkey.sign(pending.challenge())))
         }
         try await other.synced(hostId: machine.hostId)

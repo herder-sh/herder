@@ -43,7 +43,9 @@ struct Sample {
             .appendingPathComponent("herder-swift-\(UUID().uuidString)")
         let client = try Client.open(configDir: config.path, client: "herder-swift-sample/0")
         let at = fleet.machines[0]
-        let pending = try await client.signIn(hosts: at.hosts, fingerprint: at.fingerprint)
+        let pending = try await client.signIn(hosts: at.hosts, fingerprint: at.fingerprint,
+                                              passkeys: fleet.person.passkeys)
+        try check(pending.challenge().allowCredentials == fleet.person.passkeys, "the challenge allows the link's passkeys")
         let machine = try await pending.finish(signIn: .passkey(assertion: try passkey.assert(pending.challenge())))
         try check(machine.name == "fake-host", "signed in to \(machine.name)")
         let host = machine.hostId

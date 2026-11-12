@@ -265,6 +265,7 @@ impl Passkeys {
             rp_id: PASSKEY_RP_ID.to_owned(),
             challenge,
             expires_at: self.expires_at()?,
+            allow_credentials: Vec::new(),
         })
     }
 

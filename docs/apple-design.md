@@ -210,13 +210,17 @@ Activity with `Fleet.install`. The daemon checks the CLI's version again before 
 install's terminal, so the machine's versions are current when the job ends.
 
 **Adding a device** (`AddDevice.swift`). A device with machines offers **Add a device…** under
-People › You and at the foot of Fleet. Its sheet (`AddDeviceSheet`) shows the `herder://fleet`
-link of `Client::share()` as a QR code with Copy, and three steps: install herder on the other
+People › You and at the foot of Fleet, once a machine knows it as a person (`Fleet.canShare`).
+Its sheet (`AddDeviceSheet`) shows the `herder://fleet` link of `Client::share()`, which names
+you and your passkeys as your connected machines list them, as a QR code with Copy (or why it
+could not make one), and three steps: install herder on the other
 device, scan this code with it (Add to Fleet › From another device), approve with your passkey,
 the same one, synced by iCloud Keychain or a password manager. The link grants nothing by
 itself. The other device takes it from the scanner, a paste or an opened link, and
 `JoinFleetSheet` lists every machine in it, "Sign in to 5 machines as you": one passkey
-assertion per machine (each asks its own challenge, so Face ID asks once per machine), each row
+assertion per machine, restricted to the passkeys the link names (`allowCredentials`), so Face
+ID offers only the sharing person's (`FleetJoin.person` has their name and credential ids for
+the sheet to show) (each asks its own challenge, so Face ID asks once per machine), each row
 ending signed in, already on this device (never signed in again), can't reach it (on Tailscale?),
 it doesn't know this passkey (pick yours, or ask its owner / run `herder claim` there), or the
 machine's error. Closing Face ID stops; **Try Again** retries what is left. A device with no

@@ -560,6 +560,7 @@ mod tests {
     use crate::app::Msg;
     use crate::fake::machine;
     use crate::terminal::Target;
+    use herder_client_core::FleetPerson;
 
     const FP: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -591,8 +592,16 @@ mod tests {
         }
     }
 
+    fn person() -> FleetPerson {
+        FleetPerson {
+            name: "alice".into(),
+            passkeys: vec!["Y3JlZC0x".into()],
+        }
+    }
+
     fn link() -> String {
         FleetLink {
+            person: person(),
             machines: vec![target()],
         }
         .to_string()
@@ -753,6 +762,7 @@ mod tests {
     fn a_link_of_several_machines_is_added_one_at_a_time() {
         let mut app = App::default();
         let two = FleetLink {
+            person: person(),
             machines: vec![target(), target()],
         };
         app.update(Msg::Paste(two.to_string()));

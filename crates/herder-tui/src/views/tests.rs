@@ -864,7 +864,7 @@ fn typed(app: &mut App, text: &str) {
     }
 }
 
-pub(super) const LINK: &str = "herder://fleet?host=192.168.1.5%3A7447&host=10.0.0.2%3A7447\
+pub(super) const LINK: &str = "herder://fleet?person=alice&passkey=Y3JlZC0x&host=192.168.1.5%3A7447&host=10.0.0.2%3A7447\
                     &fp=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
 #[test]

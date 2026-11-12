@@ -65,7 +65,7 @@ struct FaceIDTests {
             throw HerderError.Local(detail: "not in these tests")
         }
 
-        func assert(challenge: Data) async throws -> PasskeyAssertion {
+        func assert(challenge: Data, allowing credentials: [Data]) async throws -> PasskeyAssertion {
             if let failure { throw failure }
             signed.append(challenge)
             return PasskeyAssertion(id: "AQ", rawId: "AQ", response: AssertionResponse(

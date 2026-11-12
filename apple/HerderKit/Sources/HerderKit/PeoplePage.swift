@@ -237,7 +237,7 @@ struct PeoplePage: View {
                                    run { try await people.itsMe(person, me: directory.me.id, machines: machines, sign: sign) }
                                },
                                invite: invite,
-                               addDevice: fleet.shareLink != nil ? { sheet = .addDevice } : nil,
+                               addDevice: fleet.canShare ? { sheet = .addDevice } : nil,
                                claim: fleet.hasUnclaimed ? { fleet.offerClaim(in: $sheet) } : nil)
                 } else if people.failures.isEmpty {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 120)

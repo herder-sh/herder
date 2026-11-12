@@ -379,22 +379,27 @@ impl Client {
         })
     }
 
-    /// The `herder://fleet` link of this device's machines, for another device of yours to
-    /// sign in to each with its passkey; `None` while no machine is saved.
-    pub fn share(&self) -> Option<FleetLink> {
-        self.inner.share()
+    /// The `herder://fleet` link of this device's machines and of you, with your passkeys,
+    /// for another device of yours to sign in to each with one of them. Fails while no
+    /// machine is saved and while no connected machine knows this device as a person.
+    pub async fn share(&self) -> Result<FleetLink, HerderError> {
+        let client = self.inner.clone();
+        call(&self.handle, async move { client.share().await }).await
     }
 
     /// Connects to the machine at `hosts` with certificate `fingerprint` under a new device
-    /// key, to sign in as a person; finish with [`PendingSignIn::finish`].
+    /// key, to sign in as a person with one of the passkeys `passkeys` (credential ids, as a
+    /// fleet link's person names them; empty for any); finish with
+    /// [`PendingSignIn::finish`].
     pub async fn sign_in(
         &self,
         hosts: Vec<String>,
         fingerprint: String,
+        passkeys: Vec<String>,
     ) -> Result<Arc<PendingSignIn>, HerderError> {
         let client = self.inner.clone();
         let inner = call(&self.handle, async move {
-            client.sign_in(hosts, fingerprint).await
+            client.sign_in(hosts, fingerprint, passkeys).await
         })
         .await?;
         Ok(Arc::new(PendingSignIn {

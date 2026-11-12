@@ -10,9 +10,11 @@
 //!   one `herder claim` ran on, waiting for an owner to claim it (`claim_ownership`).
 //! - `herder://login?host=<addr>&fp=<sha256 hex>&code=<code>`: a terminal's `herder login`,
 //!   waiting for an app of the person to approve it (`approve_login`).
-//! - `herder://fleet?host=<addr>&fp=<sha256 hex>&name=<name>&host=<addr>&fp=…`: the machines
-//!   a device shares with another device of the same person, which signs in to each with its
-//!   passkey. It carries no code, so it grants nothing by itself.
+//! - `herder://fleet?person=<name>&passkey=<credential id>&host=<addr>&fp=<sha256 hex>&name=<name>&host=…`:
+//!   the machines a device shares with another device of the same person, which signs in to
+//!   each with that person's passkey: `person` names them once, and each `passkey` is the
+//!   credential id of one of their passkeys, base64url. Neither belongs to a machine's group.
+//!   It carries no code, so it grants nothing by itself.
 
 use std::fmt;
 use std::str::FromStr;
@@ -21,13 +23,25 @@ use url::Url;
 
 use crate::Error;
 
-/// The `herder://fleet` link [`crate::Client::share`] makes: machines by address and
-/// fingerprint, for another device of the person to sign in to with its passkey
-/// ([`crate::Client::sign_in`]).
+/// The `herder://fleet` link [`crate::Client::share`] makes: the person who shares it, and
+/// machines by address and fingerprint, for another device of theirs to sign in to with one of
+/// their passkeys ([`crate::Client::sign_in`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FleetLink {
+    /// Who shares it, and the passkeys the other device signs in with.
+    pub person: FleetPerson,
     /// The machines, in the link's order; never empty.
     pub machines: Vec<FleetMachine>,
+}
+
+/// The person who shares a [`FleetLink`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FleetPerson {
+    /// Their name, as their machines know them.
+    pub name: String,
+    /// Their passkeys' credential ids, base64url; never empty. Signing in from the link
+    /// accepts only an assertion by one of them (`allow_credentials`).
+    pub passkeys: Vec<String>,
 }
 
 /// One machine of a [`FleetLink`].
@@ -78,9 +92,16 @@ struct Group {
     name: Option<String>,
 }
 
-/// Formats the link, `herder://fleet?…`.
+/// Formats the link, `herder://fleet?…`, with the person first.
 impl fmt::Display for FleetLink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut person = vec![("person", self.person.name.as_str())];
+        person.extend(
+            self.person
+                .passkeys
+                .iter()
+                .map(|id| ("passkey", id.as_str())),
+        );
         let groups: Vec<Group> = self
             .machines
             .iter()
@@ -91,17 +112,38 @@ impl fmt::Display for FleetLink {
                 name: machine.name.clone(),
             })
             .collect();
-        format(FLEET, &groups, f)
+        format(FLEET, &person, &groups, f)
     }
 }
 
 impl FromStr for FleetLink {
     type Err = Error;
 
-    /// Parses a link of one or more machines; fails with [`Error::InvalidLink`], also for a
-    /// link with a code, which a fleet link never has.
+    /// Parses a link of a person and one or more machines; fails with [`Error::InvalidLink`],
+    /// also for a link with a code, which a fleet link never has, and one that does not name
+    /// its person and at least one of their passkeys.
     fn from_str(text: &str) -> Result<Self, Error> {
-        let machines = parse(FLEET, text, false)?
+        let url = herder_url(FLEET, text)?;
+        let mut name = None;
+        let mut passkeys = Vec::new();
+        for (key, value) in url.query_pairs() {
+            match &*key {
+                "person" => {
+                    if name.replace(value.into_owned()).is_some() {
+                        return Err(invalid("the link names its person twice"));
+                    }
+                }
+                "passkey" => passkeys.push(value.into_owned()),
+                _ => {}
+            }
+        }
+        let Some(name) = name.filter(|name| !name.is_empty()) else {
+            return Err(invalid("the link names no person"));
+        };
+        if passkeys.is_empty() || passkeys.iter().any(String::is_empty) {
+            return Err(invalid("the link names none of its person's passkeys"));
+        }
+        let machines = groups(FLEET, &url, false)?
             .into_iter()
             .map(|group| FleetMachine {
                 hosts: group.hosts,
@@ -109,7 +151,10 @@ impl FromStr for FleetLink {
                 name: group.name,
             })
             .collect();
-        Ok(Self { machines })
+        Ok(Self {
+            person: FleetPerson { name, passkeys },
+            machines,
+        })
     }
 }
 
@@ -122,7 +167,7 @@ impl fmt::Display for LoginUri {
             code: Some(self.code.clone()),
             name: None,
         };
-        format(LOGIN, &[group], f)
+        format(LOGIN, &[], &[group], f)
     }
 }
 
@@ -154,7 +199,7 @@ impl fmt::Display for OwnUri {
             code: Some(self.code.clone()),
             name: self.name.clone(),
         };
-        format(OWN, &[group], f)
+        format(OWN, &[], &[group], f)
     }
 }
 
@@ -186,7 +231,7 @@ const OWN: &str = "own";
 
 /// The one machine of a `herder://<kind>` link with a code, which has its fingerprint and code.
 fn one(kind: &str, text: &str) -> Result<Group, Error> {
-    let mut groups = parse(kind, text, true)?;
+    let mut groups = groups(kind, &herder_url(kind, text)?, true)?;
     if groups.len() != 1 {
         return Err(invalid(&format!(
             "the {kind} link names {} machines, not one",
@@ -196,10 +241,17 @@ fn one(kind: &str, text: &str) -> Result<Group, Error> {
     Ok(groups.remove(0))
 }
 
-fn format(kind: &str, groups: &[Group], f: &mut fmt::Formatter<'_>) -> fmt::Result {
+/// Formats a `herder://<kind>` link of the parameters `before` the groups, then the groups.
+fn format(
+    kind: &str,
+    before: &[(&str, &str)],
+    groups: &[Group],
+    f: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
     let mut url = format!("herder://{kind}?");
     let start = url.len();
     let mut query = url::form_urlencoded::Serializer::for_suffix(&mut url, start);
+    query.extend_pairs(before);
     for group in groups {
         for host in &group.hosts {
             query.append_pair("host", host);
@@ -239,12 +291,17 @@ impl Group {
     }
 }
 
-/// The machines of a `herder://<kind>` link, each with a code when `coded`.
-fn parse(kind: &str, text: &str, coded: bool) -> Result<Vec<Group>, Error> {
+/// `text` as a `herder://<kind>` link.
+fn herder_url(kind: &str, text: &str) -> Result<Url, Error> {
     let url = Url::parse(text).map_err(|err| invalid(&format!("not a {kind} link: {err}")))?;
     if url.scheme() != "herder" || url.host_str() != Some(kind) {
         return Err(invalid(&format!("not a herder://{kind} link")));
     }
+    Ok(url)
+}
+
+/// The machines of `url`, a `herder://<kind>` link, each with a code when `coded`.
+fn groups(kind: &str, url: &Url, coded: bool) -> Result<Vec<Group>, Error> {
     let mut machines = Vec::new();
     let mut group = Group::default();
     for (key, value) in url.query_pairs() {
@@ -286,6 +343,15 @@ fn invalid(message: &str) -> Error {
 mod tests {
     use super::*;
 
+    /// The person of the links below, and how a link names them.
+    fn alice() -> FleetPerson {
+        FleetPerson {
+            name: "alice".into(),
+            passkeys: vec!["Y3JlZC0x".into()],
+        }
+    }
+    const ALICE: &str = "person=alice&passkey=Y3JlZC0x";
+
     fn machine(host: &str, fingerprint: &str) -> FleetMachine {
         FleetMachine {
             hosts: vec![host.into()],
@@ -299,21 +365,24 @@ mod tests {
         let mut first = machine("192.168.1.5:7447", "ab");
         first.hosts.push("[fd00::1]:7447".into());
         let link = FleetLink {
+            person: alice(),
             machines: vec![first, machine("10.0.0.9:7447", "cd")],
         };
         let text = link.to_string();
         assert_eq!(
             text,
             format!(
-                "herder://fleet?host=192.168.1.5%3A7447&host=%5Bfd00%3A%3A1%5D%3A7447&fp={}\
-                 &host=10.0.0.9%3A7447&fp={}",
+                "herder://fleet?{ALICE}&host=192.168.1.5%3A7447&host=%5Bfd00%3A%3A1%5D%3A7447\
+                 &fp={}&host=10.0.0.9%3A7447&fp={}",
                 "ab".repeat(32),
                 "cd".repeat(32)
             )
         );
         assert_eq!(text.parse::<FleetLink>().unwrap(), link);
         // A group's parameters may come in any order.
-        let reordered: FleetLink = "herder://fleet?fp=a&host=c".parse().unwrap();
+        let reordered: FleetLink = format!("herder://fleet?fp=a&{ALICE}&host=c")
+            .parse()
+            .unwrap();
         assert_eq!(
             reordered.machines,
             [FleetMachine {
@@ -324,11 +393,11 @@ mod tests {
         );
         let fp = "ab".repeat(32);
         for text in [
-            format!("herder://fleet?host=a&fp={fp}&code=X"),
-            format!("herder://fleet?host=a&fp={fp}&fp={fp}"),
-            format!("herder://fleet?host=a&fp={fp}&host=b"),
-            "herder://fleet?host=a".to_owned(),
-            "herder://fleet".to_owned(),
+            format!("herder://fleet?{ALICE}&host=a&fp={fp}&code=X"),
+            format!("herder://fleet?{ALICE}&host=a&fp={fp}&fp={fp}"),
+            format!("herder://fleet?{ALICE}&host=a&fp={fp}&host=b"),
+            format!("herder://fleet?{ALICE}&host=a"),
+            format!("herder://fleet?{ALICE}"),
             format!("herder://pair?host=a&fp={fp}&code=X"),
             format!("https://fleet?host=a&fp={fp}"),
         ] {
@@ -346,13 +415,14 @@ mod tests {
         let mut mac = machine("192.168.1.5:7447", "ab");
         mac.name = Some("Coingate-CJH9FXV367".into());
         let link = FleetLink {
+            person: alice(),
             machines: vec![mac, machine("10.0.0.9:7447", "ef"), vault],
         };
         let text = link.to_string();
         assert_eq!(
             text,
             format!(
-                "herder://fleet?host=192.168.1.5%3A7447&fp={}&name=Coingate-CJH9FXV367\
+                "herder://fleet?{ALICE}&host=192.168.1.5%3A7447&fp={}&name=Coingate-CJH9FXV367\
                  &host=10.0.0.9%3A7447&fp={}\
                  &host=100.64.0.7%3A7447&fp={}&name=draugelis%27s+vault",
                 "ab".repeat(32),
@@ -363,15 +433,68 @@ mod tests {
         assert_eq!(text.parse::<FleetLink>().unwrap(), link);
 
         // A name belongs to the group it follows, wherever in that group it comes.
-        let named: FleetLink = "herder://fleet?name=one&host=a&fp=b&host=c&name=two&fp=d"
-            .parse()
-            .unwrap();
+        let named: FleetLink =
+            format!("herder://fleet?name=one&host=a&fp=b&{ALICE}&host=c&name=two&fp=d")
+                .parse()
+                .unwrap();
         let names: Vec<_> = named.machines.iter().map(|m| m.name.as_deref()).collect();
         assert_eq!(names, [Some("one"), Some("two")]);
         assert!(matches!(
-            "herder://fleet?host=a&fp=b&name=x&name=y".parse::<FleetLink>(),
+            format!("herder://fleet?{ALICE}&host=a&fp=b&name=x&name=y").parse::<FleetLink>(),
             Err(Error::InvalidLink { .. })
         ));
+    }
+
+    #[test]
+    fn a_fleet_link_names_its_person_and_their_passkeys() {
+        let link = FleetLink {
+            person: FleetPerson {
+                name: "Tomas A.".into(),
+                passkeys: vec!["Y3JlZC0x".into(), "Y3JlZC0y_-".into()],
+            },
+            machines: vec![machine("10.0.0.9:7447", "ab")],
+        };
+        let text = link.to_string();
+        assert_eq!(
+            text,
+            format!(
+                "herder://fleet?person=Tomas+A.&passkey=Y3JlZC0x&passkey=Y3JlZC0y_-\
+                 &host=10.0.0.9%3A7447&fp={}",
+                "ab".repeat(32)
+            )
+        );
+        assert_eq!(text.parse::<FleetLink>().unwrap(), link);
+
+        // The person's parameters belong to no machine, wherever they come.
+        let spread: FleetLink = "herder://fleet?host=a&passkey=p1&fp=b&host=c&person=bob&fp=d\
+                                 &passkey=p2"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            spread.person,
+            FleetPerson {
+                name: "bob".into(),
+                passkeys: vec!["p1".into(), "p2".into()],
+            }
+        );
+        assert_eq!(spread.machines.len(), 2);
+
+        // A link without its person, as one shared before they were named, signs in to
+        // nothing.
+        let fp = "ab".repeat(32);
+        for text in [
+            format!("herder://fleet?host=a&fp={fp}"),
+            format!("herder://fleet?person=alice&host=a&fp={fp}"),
+            format!("herder://fleet?passkey=p1&host=a&fp={fp}"),
+            format!("herder://fleet?person=&passkey=p1&host=a&fp={fp}"),
+            format!("herder://fleet?person=alice&passkey=&host=a&fp={fp}"),
+            format!("herder://fleet?person=a&person=b&passkey=p1&host=a&fp={fp}"),
+        ] {
+            assert!(
+                matches!(text.parse::<FleetLink>(), Err(Error::InvalidLink { .. })),
+                "{text}"
+            );
+        }
     }
 
     #[test]

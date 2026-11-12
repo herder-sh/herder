@@ -199,6 +199,7 @@ impl Fake {
                 rp_id: PASSKEY_RP_ID.into(),
                 challenge: "Y2hhbGxlbmdl".into(),
                 expires_at: jiff::Timestamp::now(),
+                allow_credentials: Vec::new(),
             },
             registration: None,
         };
@@ -384,7 +385,11 @@ impl ClientCertVerifier for AnyDevice {
 /// Signs `client` in to `fake` with a passkey, which the fake takes from anyone.
 async fn pair(client: &Client, fake: &Fake) {
     let pending = client
-        .sign_in(vec![fake.addr.to_string()], fake.fingerprint.clone())
+        .sign_in(
+            vec![fake.addr.to_string()],
+            fake.fingerprint.clone(),
+            Vec::new(),
+        )
         .await
         .unwrap();
     let assertion = Authenticator::new("alice", &[]).assert(&pending.challenge());

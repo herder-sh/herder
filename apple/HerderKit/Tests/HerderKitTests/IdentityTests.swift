@@ -8,6 +8,8 @@ import Testing
 @MainActor final class FakeAuthenticator: Authenticator {
     var failure: Error?
     private(set) var signed: [Data] = []
+    /// The passkeys each assertion allowed, by credential id.
+    private(set) var allowed: [[Data]] = []
     private(set) var registered: [String] = []
 
     func register(name: String, userId: Data, challenge: Data) async throws -> PasskeyRegistration {
@@ -18,9 +20,10 @@ import Testing
                                    kind: "public-key")
     }
 
-    func assert(challenge: Data) async throws -> PasskeyAssertion {
+    func assert(challenge: Data, allowing credentials: [Data]) async throws -> PasskeyAssertion {
         if let failure { throw failure }
         signed.append(challenge)
+        allowed.append(credentials)
         return PasskeyAssertion(id: "AQ", rawId: "AQ",
                                 response: AssertionResponse(clientDataJson: "Bg", authenticatorData: "BA",
                                                             signature: "BQ", userHandle: "AQ"),

@@ -9,18 +9,36 @@ import Security
 @MainActor protocol Authenticator {
     /// Creates the passkey for `name`, returning what the machines store, as WebAuthn JSON.
     func register(name: String, userId: Data, challenge: Data) async throws -> PasskeyRegistration
-    /// Signs `challenge` with the passkey, after Face ID or Touch ID, as WebAuthn JSON.
-    func assert(challenge: Data) async throws -> PasskeyAssertion
+    /// Signs `challenge` with the passkey, after Face ID or Touch ID, as WebAuthn JSON: with one
+    /// of `credentials`, by credential id, or with any passkey for herder.sh when it is empty.
+    func assert(challenge: Data, allowing credentials: [Data]) async throws -> PasskeyAssertion
 }
 
 extension Authenticator {
-    /// Signs a machine's challenge: what People and the approval sheets sign with.
+    /// Signs `challenge` with any passkey for herder.sh.
+    func assert(challenge: Data) async throws -> PasskeyAssertion {
+        try await assert(challenge: challenge, allowing: [])
+    }
+
+    /// Signs a machine's challenge, with one of the passkeys it allows: what People, the
+    /// approval sheets and signing in from another device's link sign with.
     func sign(_ challenge: PasskeyChallenge) async throws -> PasskeyAssertion {
         guard let bytes = Data(base64URL: challenge.challenge) else {
             throw HerderError.Local(detail: "the machine sent a challenge that is not base64url")
         }
-        return try await assert(challenge: bytes)
+        let credentials = challenge.allowCredentials.compactMap { Data(base64URL: $0) }
+        guard credentials.count == challenge.allowCredentials.count else {
+            throw HerderError.Local(detail: "a passkey to sign with is not base64url")
+        }
+        return try await assert(challenge: bytes, allowing: credentials)
     }
+}
+
+/// The error of an authenticator whose passkey `credentialId` is not among `credentials`, as
+/// a platform offers no passkey then; nil when it is, or any passkey will do.
+func notAllowed(_ credentialId: Data, _ credentials: [Data]) -> HerderError? {
+    credentials.isEmpty || credentials.contains(credentialId)
+        ? nil : HerderError.Local(detail: "this passkey is not one the link allows")
 }
 
 /// The passkey of the device's platform authenticator, through AuthenticationServices.
@@ -44,8 +62,11 @@ extension Authenticator {
             kind: "public-key")
     }
 
-    func assert(challenge: Data) async throws -> PasskeyAssertion {
+    func assert(challenge: Data, allowing credentials: [Data]) async throws -> PasskeyAssertion {
         let request = provider.createCredentialAssertionRequest(challenge: challenge)
+        request.allowedCredentials = credentials.map {
+            ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
+        }
         guard let credential = try await perform(request).credential
             as? ASAuthorizationPlatformPublicKeyCredentialAssertion
         else { throw HerderError.Local(detail: "the passkey did not sign") }
