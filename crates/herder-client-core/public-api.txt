@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 20;
+pub const CLIENT_API_VERSION: u32 = 21;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -13,6 +13,7 @@ pub enum Error {
     InvalidLink { message: String },
     UnknownMachine { host_id: HostId },
     Rejected { info: ErrorInfo },
+    SignInRefused { refusal: SignInRefusal, message: String },
     Unreachable { message: String },
     Local { message: String },
     Closed,

@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 20`
+`CLIENT_API_VERSION = 21`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -388,6 +388,12 @@ change to secrets need a fresh passkey assertion.
 | Rust | Does |
 | ---- | ---- |
 | `trait Authenticator: Send + Sync { fn assert(&self, host_id: HostId, challenge: PasskeyChallenge) -> Assertion }` | Signs `challenge`, asking the user; `Assertion` is a boxed `Send` future of `Result<PasskeyAssertion, Error>`. |
+
+## Changes in version 21
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Error::SignInRefused { refusal, message }` | A machine says why it refused a passkey: it knows the person by another passkey, does not know them, or the user was not verified. A new variant breaks exhaustive matches. |
 
 ## Changes in version 20
 
