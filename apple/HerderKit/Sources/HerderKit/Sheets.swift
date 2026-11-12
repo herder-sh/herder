@@ -8,8 +8,9 @@ import AppKit
 
 /// The sheets the app presents: short create flows only. Objects open as pages (`Page`).
 enum AppSheet: Identifiable, Hashable {
-    /// Add to Fleet, on what it adds: a vault already chosen, for one a machine backs up to.
-    case pair(PairKind, UnpairedVault? = nil)
+    /// Add a machine, on one of its tabs; on a vault a machine backs up to, to sign in to; or,
+    /// on the iPhone, with the camera on.
+    case addMachine(MachineSource = .install, vault: UnpairedVault? = nil, scanning: Bool = false)
     /// A new session: pick its project first.
     case newSession
     /// A new project: a first session in a repository herder does not list yet.
@@ -34,8 +35,8 @@ enum AppSheet: Identifiable, Hashable {
     case addDevice
     /// Signing in to the machines of another device's `herder://fleet` link.
     case join(FleetLink)
-    /// Claim your machines: offered once on launch, and from People and Fleet, while a machine
-    /// you own is not claimed.
+    /// Moving your machines' old per-machine users to your passkey, and the users that need a
+    /// decision: from People (Setup's Needs you), while a machine you own is not moved yet.
     case claim(ClaimPlan)
 
     var id: Self { self }
@@ -46,8 +47,9 @@ extension AppSheet {
     func view(fleet: Fleet, drafted: @escaping (Draft) -> Void, openMachine: @escaping (HostId) -> Void,
               present: @escaping (AppSheet) -> Void) -> some View {
         switch self {
-        case .pair(let kind, let vault):
-            AddMachineSheet(fleet: fleet, kind: kind, vault: vault) { present($0.sheet) }
+        case .addMachine(let source, let vault, let scanning):
+            AddMachineSheet(fleet: fleet, source: source, vault: vault, scanning: scanning,
+                            present: present, drafted: drafted)
         case .newSession: ProjectPicker(fleet: fleet, newProject: false, picked: drafted)
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
         case .addAccount: AddAccountSheet(fleet: fleet)
@@ -59,7 +61,7 @@ extension AppSheet {
         case .invite(let hostId):
             InviteSheet(fleet: fleet, hostId: hostId)
         case .approve(let request):
-            ApproveSheet(fleet: fleet, request: request, open: openMachine) { present(.pair(.vault)) }
+            ApproveSheet(fleet: fleet, request: request, open: openMachine) { present(.addMachine(.hasHerder)) }
         case .claim(let plan):
             ClaimSheet(fleet: fleet, plan: plan)
         case .addDevice:

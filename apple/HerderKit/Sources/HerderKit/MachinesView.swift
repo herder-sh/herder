@@ -118,13 +118,10 @@ struct MachinesView: View {
                         integrationsLink
                     }
                 }
-                if fleet.hasUnclaimed {
-                    ClaimBanner { fleet.offerClaim(in: $sheet) }
-                }
                 let rows = MachineRow.rows(fleet.machines, summaries: fleet.lists.machines)
                 let vaults = fleet.vaults.map(VaultLine.paired) + unpaired.map(VaultLine.unpaired)
                 if rows.isEmpty && vaults.isEmpty {
-                    EmptyFleet { sheet = .pair($0) }
+                    EmptyFleet { sheet = .addMachine(scanning: $0) }
                 } else {
                     SortableTable("machines", rows: rows, sortedBy: TableSort(column: "Machine"),
                                   columns: columns) { pages.open(.machine($0.hostId)) }
@@ -136,7 +133,7 @@ struct MachinesView: View {
                                       columns: vaultColumns) { line in
                             switch line {
                             case .paired(let vault): pages.open(.vault(vault.hostId))
-                            case .unpaired(let vault): sheet = .pair(.vault, vault)
+                            case .unpaired(let vault): sheet = .addMachine(vault: vault)
                             }
                         }
                     }
@@ -164,8 +161,8 @@ struct MachinesView: View {
             if !AwsSignIn.machines(fleet.machines).isEmpty {
                 Button("AWS Sign-in", systemImage: "key") { sheet = .awsSignIn }
             }
-            Button("Add to Fleet", systemImage: "plus") { sheet = .pair(.machine) }
-                .accessibilityIdentifier("add-to-fleet")
+            Button("Add a Machine", systemImage: "plus") { sheet = .addMachine() }
+                .accessibilityIdentifier("add-machine")
             #endif
         }
     }
@@ -284,7 +281,7 @@ struct MachinesView: View {
             ]
         }
         columns.append(SortableColumn("Backup", value: { $0.behind ?? -1 }) { line in
-            BackupCell(line: line) { if case .unpaired(let vault) = line { sheet = .pair(.vault, vault) } }
+            BackupCell(line: line) { if case .unpaired(let vault) = line { sheet = .addMachine(vault: vault) } }
         })
         return columns
     }

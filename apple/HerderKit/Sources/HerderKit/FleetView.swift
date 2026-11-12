@@ -71,8 +71,6 @@ struct FleetView: View {
     /// The request of a device without a passkey on show, and those put off by closing the sheet.
     @State private var actionRequest: ActionRequest?
     @State private var putOff: Set<ActionRequest.ID> = []
-    /// Whether Claim your machines came up this launch; Later puts it off until the next.
-    @State private var claimOffered = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -105,15 +103,6 @@ struct FleetView: View {
                 fleet.claiming = nil
                 sheet = .approve(request)
             }
-            // Claim your machines comes up once a launch, when the machines you own that connect
-            // within a moment of each other still know you by a per-daemon user.
-            .task(observing: { ClaimPlan.unclaimed(fleet.machines).map(\.hostId) }) {
-                guard !claimOffered, fleet.hasUnclaimed else { return }
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled, !claimOffered, sheet == nil, let plan = await fleet.claimPlan() else { return }
-                claimOffered = true
-                sheet = .claim(plan)
-            }
             // As a link does: the new session shows once its machine lists it.
             .onChange(of: fleet.revealed) {
                 guard let key = fleet.revealed else { return }
@@ -135,7 +124,7 @@ struct FleetView: View {
                    presenting: linkProblem) { problem in
                 switch problem {
                 case .unpaired:
-                    Button("Add to Fleet") { sheet = .pair(.machine) }
+                    Button("Add a Machine") { sheet = .addMachine() }
                     Button("Cancel", role: .cancel) {}
                 default:
                     Button("OK", role: .cancel) {}
@@ -436,29 +425,33 @@ struct ConnectionLine: View {
 }
 
 /// A device with no machines: the two ways to get some. The common one first, herder on
-/// another device of yours, whose Add a Device shows a code; then a new machine, claimed.
+/// another device of yours, whose Add a Device shows a code; then a new machine.
 struct EmptyFleet: View {
-    /// Opens Add to Fleet on what it adds.
-    let add: (PairKind) -> Void
+    /// Opens Add a machine: with the camera on, for another device's code.
+    let add: (_ scanning: Bool) -> Void
 
     #if os(iOS)
     static let deviceAction = "Scan Its Code"
     static let deviceDetail = "On it, open People › You › Add a device, and scan the code it shows."
     #else
     static let deviceAction = "Paste Its Link"
-    static let deviceDetail = "On it, open People › You › Add a device, and paste the link it shows."
+    static let deviceDetail = "On it, open People › You › Add a device, and copy the link it shows."
     #endif
 
     var body: some View {
         Card {
             VStack(alignment: .leading, spacing: 16) {
                 Text("No machines yet").font(.headline).foregroundStyle(Theme.text)
-                choice(.device, title: "I have herder on another device", detail: Self.deviceDetail,
-                       action: Self.deviceAction, primary: true, id: "add-from-device")
+                choice(symbol: "laptopcomputer.and.iphone", title: "I have herder on another device",
+                       detail: Self.deviceDetail, action: Self.deviceAction, primary: true, id: "add-from-device") {
+                    add(true)
+                }
                 Rectangle().fill(Theme.stroke).frame(height: 1)
-                choice(.machine, title: "Set up a new machine",
-                       detail: "Run `herder claim` on it, then add it here with the link it prints.",
-                       action: "Add a Machine", primary: false, id: "add-to-fleet")
+                choice(symbol: "server.rack", title: "Set up a new machine",
+                       detail: "Install herder on it with one command, then approve it here.",
+                       action: "Add a Machine", primary: false, id: "add-machine") {
+                    add(false)
+                }
                 ExploreDemoButton()
                     #if os(macOS)
                     .frame(maxWidth: 220)
@@ -467,18 +460,18 @@ struct EmptyFleet: View {
         }
     }
 
-    private func choice(_ kind: PairKind, title: String, detail: String, action: String,
-                        primary: Bool, id: String) -> some View {
+    private func choice(symbol: String, title: String, detail: String, action: String,
+                        primary: Bool, id: String, run: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: kind.symbol).foregroundStyle(Theme.secondary).frame(width: 24)
+                Image(systemName: symbol).foregroundStyle(Theme.secondary).frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                     Text(LocalizedStringKey(detail)).font(.footnote).foregroundStyle(Theme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            ActionButton(title: action, style: primary ? .primary : .secondary) { add(kind) }
+            ActionButton(title: action, style: primary ? .primary : .secondary) { run() }
                 .accessibilityIdentifier(id)
                 #if os(macOS)
                 .frame(maxWidth: 220)

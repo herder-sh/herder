@@ -17,7 +17,7 @@ final class DemoUITests: XCTestCase {
         XCTAssertTrue(app.buttons["leave-demo"].waitForExistence(timeout: 10), "the demo is not marked")
         let waiting = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Waiting for you, '")).firstMatch
         XCTAssertTrue(waiting.waitForExistence(timeout: 10), "the demo Board has no task waiting on you")
-        XCTAssertFalse(app.buttons["add-to-fleet"].exists, "the demo Board is empty")
+        XCTAssertFalse(app.buttons["add-machine"].exists, "the demo Board is empty")
 
         app.buttons["leave-demo"].tap()
         XCTAssertTrue(app.buttons["explore-demo"].firstMatch.waitForExistence(timeout: 10),
