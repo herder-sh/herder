@@ -2014,11 +2014,30 @@ async fn agents_run_commands_as_their_user_within_its_role() {
                     key: PasskeyKey {
                         credential_id: "Y3JlZA".into(),
                         public_key: "pQ".into(),
+                        aaguid: None,
+                        added_at: None,
                     },
                     assertion: stale_assertion(),
                 },
             }),
             also: Vec::new(),
+        },
+        CommandBody::AddPasskey {
+            passkey: Box::new(PersonPasskey::Existing {
+                person_id: PersonId::new("p1"),
+                key: PasskeyKey {
+                    credential_id: "Y3JlZA".into(),
+                    public_key: "pQ".into(),
+                    aaguid: None,
+                    added_at: None,
+                },
+                assertion: stale_assertion(),
+            }),
+            assertion: Box::new(stale_assertion()),
+        },
+        CommandBody::RemovePasskey {
+            credential_id: "Y3JlZA".into(),
+            assertion: Box::new(stale_assertion()),
         },
         CommandBody::DecideLeftover {
             user_id: owner.clone(),
@@ -2826,6 +2845,75 @@ async fn an_invited_member_connects_a_role_change_applies_and_a_revoke_disconnec
     assert!(sam.try_recv().await.is_none(), "the revoke closed it");
     let again = daemon.client_on(&laptop, None).await;
     assert_eq!(refused(again).await.code, ErrorCode::Forbidden);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_adds_a_passkey_and_removes_their_old_one() {
+    let daemon = Daemon::start().await;
+    let laptop = daemon.member("sam");
+    let old = Authenticator::of(&daemon.auth, "sam").unwrap();
+    let mut sam = daemon.client_on(&laptop, None).await;
+    let sam_id = sam.hello(Vec::new()).await.person_id.unwrap();
+
+    // The challenge comes with what to create another passkey of Sam's from.
+    let (challenge, creation) = challenge(&mut sam, "c1").await;
+    let creation = creation.expect("a person can create another passkey");
+    assert_eq!(creation.person_id, sam_id);
+    let (new, registration) = Authenticator::register("carol", &creation);
+    assert_eq!(new.user_handle, old.user_handle);
+    let add = CommandBody::AddPasskey {
+        passkey: Box::new(PersonPasskey::Register { registration }),
+        assertion: Box::new(old.assert(&challenge)),
+    };
+    assert!(matches!(
+        sam.answer("add", add).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::People { people },
+        ..
+    } = sam.answer("list", CommandBody::ListPeople).await
+    else {
+        panic!("expected the people");
+    };
+    let keys = &people
+        .iter()
+        .find(|p| p.person_id == sam_id)
+        .unwrap()
+        .passkeys;
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[1].aaguid.as_deref(), Some(authenticator::AAGUID));
+
+    // With the new one, Sam removes the old.
+    let remove = CommandBody::RemovePasskey {
+        credential_id: keys[0].credential_id.clone(),
+        assertion: fresh(&mut sam, &new).await,
+    };
+    assert!(matches!(
+        sam.answer("remove", remove).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+    // Not the last one, though.
+    let remove = CommandBody::RemovePasskey {
+        credential_id: keys[1].credential_id.clone(),
+        assertion: fresh(&mut sam, &new).await,
+    };
+    let ServerMessage::CommandRejected { error, .. } = sam.answer("last", remove).await else {
+        panic!("the last passkey was removed");
+    };
+    assert_eq!(error.code, ErrorCode::Conflict);
+    assert!(
+        daemon
+            .auth
+            .verify_assertion(&sam_id, &old.assert(&daemon.auth.challenge().unwrap()))
+            .is_err()
+    );
 }
 
 /// Signs a new device in to `daemon` through an invite to `role` that `owner`, holding

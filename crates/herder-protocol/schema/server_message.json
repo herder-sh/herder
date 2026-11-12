@@ -1722,7 +1722,7 @@
               "$ref": "#/$defs/PasskeyChallenge"
             },
             "registration": {
-              "description": "What a new passkey is created from, for `claim_users` with `register`; only for a\nper-daemon owner, who is no person yet.",
+              "description": "What a new passkey is created from: for a person, another passkey of theirs, for\n`add_passkey` with `register`; for a per-daemon owner, who is no person yet, their\nfirst, for `claim_users` with `register`. None for anyone else.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/PasskeyCreation"
@@ -4051,6 +4051,21 @@
       "description": "A passkey's public key, as WebAuthn defines it, to introduce its person to another daemon.",
       "type": "object",
       "properties": {
+        "aaguid": {
+          "description": "The AAGUID of the authenticator that made it, as a hyphenated UUID, naming the password\nmanager it lives in; absent when it gave none (all zeros) or for a passkey added\nbefore daemons kept it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "added_at": {
+          "description": "When it was first added to a daemon; absent for a passkey added before daemons kept it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
         "credential_id": {
           "description": "The credential id, base64url.",
           "type": "string"

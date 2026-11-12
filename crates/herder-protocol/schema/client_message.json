@@ -2119,7 +2119,7 @@
           ]
         },
         {
-          "description": "Mint a challenge for the caller's passkey to sign, which the people commands, the\nterminal commands that open or attach one, and the secret changes carry an assertion\nover. It works once, for [`crate::PASSKEY_CHALLENGE_SECS`]. A per-daemon owner, moving to a person\nwith `claim_users`, also gets what to create a passkey from. Answered with\n`passkey_challenge`. Refused with `forbidden` for a per-daemon member.",
+          "description": "Mint a challenge for the caller's passkey to sign, which the people commands, the\nterminal commands that open or attach one, and the secret changes carry an assertion\nover. It works once, for [`crate::PASSKEY_CHALLENGE_SECS`]. A person also gets what to\ncreate another passkey of theirs from, for `add_passkey`; a per-daemon owner, moving to\na person with `claim_users`, what to create their first from. Answered with\n`passkey_challenge`. Refused with `forbidden` for a per-daemon member.",
           "type": "object",
           "properties": {
             "type": {
@@ -2226,6 +2226,52 @@
           "required": [
             "type",
             "person_id",
+            "assertion"
+          ]
+        },
+        {
+          "description": "Add a passkey to the caller's own person; owners and members alike. `assertion`, by one\nof the caller's passkeys over a fresh `passkey_challenge`, authorizes it. `passkey` is\neither one created just now from that challenge's `registration`, or one the caller\nregistered on another daemon, as its `list_people` lists it, with an assertion by it\nover the same challenge: how an app spreads a new passkey to every daemon its person is\non. Answered with `applied`. Refused with `forbidden` for a caller who is no person or\na bad assertion, `bad_request` for a passkey of another person, and `conflict` for a\npasskey this daemon has already.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "An assertion by one of the caller's passkeys over a fresh `passkey_challenge`.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "passkey": {
+              "description": "The passkey to add.",
+              "$ref": "#/$defs/PersonPasskey"
+            },
+            "type": {
+              "type": "string",
+              "const": "add_passkey"
+            }
+          },
+          "required": [
+            "type",
+            "passkey",
+            "assertion"
+          ]
+        },
+        {
+          "description": "Remove one of the caller's own passkeys; owners and members alike. The assertion must\nbe by another of their passkeys, one that stays. Answered with `applied`. Refused with\n`not_found` for a passkey the caller does not have, `conflict` for their last one, and\n`forbidden` for an assertion by the passkey being removed.",
+          "type": "object",
+          "properties": {
+            "assertion": {
+              "description": "An assertion by another of the caller's passkeys over a fresh `passkey_challenge`.",
+              "$ref": "#/$defs/PasskeyAssertion"
+            },
+            "credential_id": {
+              "description": "The passkey's credential id, base64url, as `list_people` lists it.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_passkey"
+            }
+          },
+          "required": [
+            "type",
+            "credential_id",
             "assertion"
           ]
         },
@@ -4856,6 +4902,21 @@
       "description": "A passkey's public key, as WebAuthn defines it, to introduce its person to another daemon.",
       "type": "object",
       "properties": {
+        "aaguid": {
+          "description": "The AAGUID of the authenticator that made it, as a hyphenated UUID, naming the password\nmanager it lives in; absent when it gave none (all zeros) or for a passkey added\nbefore daemons kept it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "added_at": {
+          "description": "When it was first added to a daemon; absent for a passkey added before daemons kept it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
         "credential_id": {
           "description": "The credential id, base64url.",
           "type": "string"

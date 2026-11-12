@@ -215,6 +215,25 @@ impl Users {
             .find(|person| &person.person_id == person_id)
     }
 
+    fn person_mut(&mut self, person_id: &PersonId) -> Option<&mut Person> {
+        self.people
+            .iter_mut()
+            .find(|person| &person.person_id == person_id)
+    }
+
+    /// The person whose passkey `credential_id` is, if anyone's here.
+    fn passkey_owner(&self, credential_id: &str) -> Option<&PersonId> {
+        self.people
+            .iter()
+            .find(|person| {
+                person
+                    .passkeys
+                    .iter()
+                    .any(|key| key.credential_id == credential_id)
+            })
+            .map(|person| &person.person_id)
+    }
+
     /// The user `user_id` is now: the person a claim moved it to, or itself.
     fn resolve<'a>(&'a self, user_id: &'a UserId) -> &'a UserId {
         self.moved
@@ -753,6 +772,11 @@ impl Auth {
         self.passkeys.creation()
     }
 
+    /// A fresh challenge to create another passkey of `person_id` from.
+    pub fn creation_of(&self, person_id: &PersonId) -> Result<PasskeyCreation, ErrorInfo> {
+        self.passkeys.creation_of(person_id)
+    }
+
     /// What a device signing in signs, and what a new passkey is created from while the
     /// daemon takes a claim or an invite.
     pub fn sign_in_challenge(
@@ -1078,6 +1102,118 @@ impl Auth {
         disconnect(&mut state, &user_id);
         state.users = users;
         info!(%person_id, "person revoked");
+        Ok(())
+    }
+
+    /// Adds `passkey` to `person_id`, who authorizes it with `assertion` by one of their
+    /// passkeys. A passkey created now names its challenge; one created before signs the same
+    /// challenge as `assertion`.
+    pub fn add_passkey(
+        &self,
+        person_id: &PersonId,
+        passkey: &PersonPasskey,
+        assertion: &PasskeyAssertion,
+    ) -> Result<(), ErrorInfo> {
+        let mut state = self.lock();
+        let Some(person) = state.users.person(person_id).cloned() else {
+            return Err(forbidden("you are no longer on this daemon"));
+        };
+        let theirs = |id: &PersonId| match id == person_id {
+            true => person.passkeys.clone(),
+            false => Vec::new(),
+        };
+        let (asserted, key) = match passkey {
+            PersonPasskey::Register { registration } => {
+                let asserted = self.passkeys.verify(assertion, theirs)?;
+                let (created_for, key) = self.passkeys.register(registration)?;
+                if &created_for != person_id {
+                    return Err(bad_request("that passkey was created for another person"));
+                }
+                (asserted, key)
+            }
+            PersonPasskey::Existing {
+                person_id: named,
+                key,
+                assertion: by_key,
+            } => {
+                if named != person_id {
+                    return Err(bad_request("that passkey is another person's"));
+                }
+                let mut key = Key::from_wire(key)?;
+                if state.users.passkey_owner(&key.credential_id).is_some() {
+                    return Err(conflict("this daemon has that passkey already"));
+                }
+                let new = |id: &PersonId| match id == person_id {
+                    true => vec![key.clone()],
+                    false => Vec::new(),
+                };
+                let (asserted, proven) = self
+                    .passkeys
+                    .verify_both((assertion, theirs), (by_key, new))?;
+                key.note(&proven.result);
+                (asserted, key)
+            }
+        };
+        if state.users.passkey_owner(&key.credential_id).is_some() {
+            return Err(conflict("this daemon has that passkey already"));
+        }
+        let mut users = state.users.clone();
+        note(&mut users, person_id, &asserted.result);
+        let credential_id = key.credential_id.clone();
+        if let Some(person) = users.person_mut(person_id) {
+            person.passkeys.push(key);
+        }
+        self.save(&users).map_err(saving)?;
+        state.users = users;
+        info!(%person_id, %credential_id, "passkey added");
+        Ok(())
+    }
+
+    /// Removes `person_id`'s passkey `credential_id`, with `assertion` by another of theirs.
+    /// Refuses to remove their last.
+    pub fn remove_passkey(
+        &self,
+        person_id: &PersonId,
+        credential_id: &str,
+        assertion: &PasskeyAssertion,
+    ) -> Result<(), ErrorInfo> {
+        let mut state = self.lock();
+        let Some(person) = state.users.person(person_id).cloned() else {
+            return Err(forbidden("you are no longer on this daemon"));
+        };
+        let Some(removed) = person
+            .passkeys
+            .iter()
+            .find(|key| key.credential_id == credential_id)
+        else {
+            return Err(not_found("you have no such passkey on this daemon"));
+        };
+        if person.passkeys.len() == 1 {
+            return Err(conflict(
+                "that is your last passkey on this daemon; add another before you remove it",
+            ));
+        }
+        let asserted = self
+            .passkeys
+            .verify(assertion, |id| match id == person_id {
+                true => person.passkeys.clone(),
+                false => Vec::new(),
+            })?;
+        if removed.signed(&asserted.result) {
+            return Err(forbidden(
+                "sign with another of your passkeys, one that stays, to remove this one",
+            ));
+        }
+        let mut users = state.users.clone();
+        note(&mut users, person_id, &asserted.result);
+        if let Some(person) = users.person_mut(person_id) {
+            person
+                .passkeys
+                .retain(|key| key.credential_id != credential_id);
+        }
+        self.save(&users).map_err(saving)?;
+        state.users = users;
+        info!(%person_id, %credential_id, "passkey removed");
         Ok(())
     }
 
@@ -1917,7 +2053,9 @@ mod people_tests {
     use herder_protocol::{ErrorCode, NewPerson, PersonCard, PersonPasskey, Role, SignIn, UserId};
     use tokio_util::sync::CancellationToken;
 
-    use super::authenticator::Authenticator;
+    use herder_protocol::CommandBody;
+
+    use super::authenticator::{self, Authenticator};
     use super::passkeys::Passkeys;
     use super::{Auth, DeviceRole, Identity};
 
@@ -2262,5 +2400,325 @@ mod people_tests {
         let stale = fresh(&auth, &passkey);
         let refused = auth.verify_assertion(&tomas_id, &stale).unwrap_err();
         assert!(refused.message.contains("expired"), "{}", refused.message);
+    }
+
+    /// Tomas's second passkey, the recorded `carol`, created from `auth`'s creation for him.
+    fn second_passkey(
+        auth: &Auth,
+        tomas: &herder_protocol::PersonId,
+    ) -> (Authenticator, herder_protocol::PasskeyRegistration) {
+        Authenticator::register("carol", &auth.creation_of(tomas).unwrap())
+    }
+
+    #[test]
+    fn a_person_adds_a_passkey_created_now_and_signs_in_with_it() {
+        let (_tmp, auth) = open();
+        let (tomas, first) = claim(&auth);
+        let tomas_id = tomas.person_id.unwrap();
+        let (second, registration) = second_passkey(&auth, &tomas_id);
+        // Created under Tomas's user handle, so the platform files it with his first.
+        assert_eq!(second.user_handle, first.user_handle);
+        let register = PersonPasskey::Register { registration };
+
+        // Only one of his passkeys authorizes it.
+        let by_itself = second.assert(&auth.challenge().unwrap());
+        let refused = auth
+            .add_passkey(&tomas_id, &register, &by_itself)
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Forbidden);
+
+        let (second, registration) = second_passkey(&auth, &tomas_id);
+        let register = PersonPasskey::Register { registration };
+        auth.add_passkey(&tomas_id, &register, &fresh(&auth, &first))
+            .unwrap();
+        let keys = &auth.people()[0].passkeys;
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[1].aaguid.as_deref(), Some(authenticator::AAGUID));
+        assert!(keys[1].added_at.is_some());
+
+        // A device signs in with it, as Tomas.
+        assert_eq!(second.sign_in(&auth, "fp-phone").person_id, Some(tomas_id));
+
+        // It survives a restart.
+        let reopened = Auth::open(_tmp.path()).unwrap();
+        assert_eq!(reopened.people()[0].passkeys, auth.people()[0].passkeys);
+    }
+
+    #[test]
+    fn a_passkey_created_for_someone_else_is_refused() {
+        let (_tmp, auth) = open();
+        let (tomas, first) = claim(&auth);
+        let tomas_id = tomas.person_id.unwrap();
+        // A creation for a new person names someone who is not Tomas.
+        let (_, registration) = Authenticator::register("carol", &auth.creation().unwrap());
+        let refused = auth
+            .add_passkey(
+                &tomas_id,
+                &PersonPasskey::Register { registration },
+                &fresh(&auth, &first),
+            )
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+        assert_eq!(auth.people()[0].passkeys.len(), 1);
+    }
+
+    #[test]
+    fn a_passkey_from_another_daemon_spreads_with_proof_of_possession() {
+        // Tomas adds his second passkey on the Mac.
+        let (_mac_tmp, mac) = open();
+        let (tomas, first) = claim(&mac);
+        let tomas_id = tomas.person_id.unwrap();
+        let (second, registration) = second_passkey(&mac, &tomas_id);
+        mac.add_passkey(
+            &tomas_id,
+            &PersonPasskey::Register { registration },
+            &fresh(&mac, &first),
+        )
+        .unwrap();
+        let listed = mac.people()[0].passkeys.clone();
+
+        // The vault knows him by his first passkey only.
+        let (_tmp, vault) = open();
+        let (code, _) = vault.open_claim().unwrap();
+        let claim = SignIn::ClaimOwnership {
+            code,
+            person: NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Existing {
+                    person_id: tomas_id.clone(),
+                    key: listed[0].clone(),
+                    assertion: fresh(&vault, &first),
+                },
+            },
+        };
+        sign_in(&vault, "fp-mac", claim).unwrap();
+        assert!(
+            sign_in(
+                &vault,
+                "fp-phone",
+                SignIn::Passkey {
+                    assertion: fresh(&vault, &second)
+                }
+            )
+            .is_err()
+        );
+
+        let existing = |person_id: &herder_protocol::PersonId, by_key| PersonPasskey::Existing {
+            person_id: person_id.clone(),
+            key: listed[1].clone(),
+            assertion: by_key,
+        };
+        // Both sign the same challenge.
+        let challenge = vault.challenge().unwrap();
+        let refused = vault
+            .add_passkey(
+                &tomas_id,
+                &existing(&tomas_id, fresh(&vault, &second)),
+                &first.assert(&challenge),
+            )
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+        // The key is the caller's own.
+        let challenge = vault.challenge().unwrap();
+        let someone = herder_protocol::PersonId::new(uuid::Uuid::now_v7().to_string());
+        let refused = vault
+            .add_passkey(
+                &tomas_id,
+                &existing(&someone, second.assert(&challenge)),
+                &first.assert(&challenge),
+            )
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+        // The caller proves who they are with a passkey this daemon has.
+        let challenge = vault.challenge().unwrap();
+        let refused = vault
+            .add_passkey(
+                &tomas_id,
+                &existing(&tomas_id, second.assert(&challenge)),
+                &second.assert(&challenge),
+            )
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Forbidden);
+        // And holds the new one: Sam's signature is no proof.
+        let sam = Authenticator::new("sam", &first.user_handle);
+        let challenge = vault.challenge().unwrap();
+        let refused = vault
+            .add_passkey(
+                &tomas_id,
+                &existing(&tomas_id, sam.assert(&challenge)),
+                &first.assert(&challenge),
+            )
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Forbidden);
+        assert_eq!(vault.people()[0].passkeys.len(), 1);
+
+        let challenge = vault.challenge().unwrap();
+        vault
+            .add_passkey(
+                &tomas_id,
+                &existing(&tomas_id, second.assert(&challenge)),
+                &first.assert(&challenge),
+            )
+            .unwrap();
+        // It keeps what the Mac knows of it.
+        assert_eq!(vault.people()[0].passkeys, listed);
+        // The challenge was used once.
+        let replay = vault.add_passkey(
+            &tomas_id,
+            &existing(&tomas_id, second.assert(&challenge)),
+            &first.assert(&challenge),
+        );
+        assert_eq!(replay.unwrap_err().code, ErrorCode::Conflict);
+        assert_eq!(
+            vault
+                .verify_assertion(&tomas_id, &first.assert(&challenge))
+                .unwrap_err()
+                .code,
+            ErrorCode::Forbidden
+        );
+
+        assert_eq!(second.sign_in(&vault, "fp-phone").person_id, Some(tomas_id));
+    }
+
+    #[test]
+    fn a_passkey_this_daemon_has_is_not_added_again() {
+        let (_tmp, auth) = open();
+        let (tomas, first) = claim(&auth);
+        let tomas_id = tomas.person_id.unwrap();
+        let (sam, _) = super::authenticator::enroll(&auth, "sam", Role::Member, "fp-sam");
+        let people = auth.people();
+        let sams_key = people[1].passkeys[0].clone();
+        let tomas_key = people[0].passkeys[0].clone();
+
+        // Tomas's own, again.
+        let challenge = auth.challenge().unwrap();
+        let again = PersonPasskey::Existing {
+            person_id: tomas_id.clone(),
+            key: tomas_key,
+            assertion: first.assert(&challenge),
+        };
+        let refused = auth
+            .add_passkey(&tomas_id, &again, &first.assert(&challenge))
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Conflict);
+
+        // Sam's, whoever signs for it.
+        let sam_as_tomas = Authenticator::new("sam", &first.user_handle);
+        let challenge = auth.challenge().unwrap();
+        let theirs = PersonPasskey::Existing {
+            person_id: tomas_id.clone(),
+            key: sams_key,
+            assertion: sam_as_tomas.assert(&challenge),
+        };
+        let refused = auth
+            .add_passkey(&tomas_id, &theirs, &first.assert(&challenge))
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Conflict);
+        // Sam's credential, created anew under Tomas's handle, is Sam's all the same.
+        let (_, registration) =
+            Authenticator::register("sam", &auth.creation_of(&tomas_id).unwrap());
+        let refused = auth
+            .add_passkey(
+                &tomas_id,
+                &PersonPasskey::Register { registration },
+                &fresh(&auth, &first),
+            )
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Conflict);
+
+        let people = auth.people();
+        assert_eq!((people[0].passkeys.len(), people[1].passkeys.len()), (1, 1));
+        assert!(sam.sign_in(&auth, "fp-sam-phone").person_id.is_some());
+    }
+
+    #[test]
+    fn a_person_removes_a_passkey_with_another_but_never_their_last() {
+        let (_tmp, auth) = open();
+        let (tomas, first) = claim(&auth);
+        let tomas_id = tomas.person_id.unwrap();
+        let (second, registration) = second_passkey(&auth, &tomas_id);
+        auth.add_passkey(
+            &tomas_id,
+            &PersonPasskey::Register { registration },
+            &fresh(&auth, &first),
+        )
+        .unwrap();
+        let keys = auth.people()[0].passkeys.clone();
+        let (first_id, second_id) = (&keys[0].credential_id, &keys[1].credential_id);
+
+        let unknown = auth
+            .remove_passkey(&tomas_id, "bm8tc3VjaA", &fresh(&auth, &first))
+            .unwrap_err();
+        assert_eq!(unknown.code, ErrorCode::NotFound);
+        // Not with the passkey being removed.
+        let by_itself = auth
+            .remove_passkey(&tomas_id, first_id, &fresh(&auth, &first))
+            .unwrap_err();
+        assert_eq!(by_itself.code, ErrorCode::Forbidden);
+        assert_eq!(auth.people()[0].passkeys.len(), 2);
+
+        auth.remove_passkey(&tomas_id, first_id, &fresh(&auth, &second))
+            .unwrap();
+        assert_eq!(&auth.people()[0].passkeys[0].credential_id, second_id);
+        // The removed passkey signs nothing any more; the other still does.
+        let gone = SignIn::Passkey {
+            assertion: fresh(&auth, &first),
+        };
+        assert_eq!(
+            sign_in(&auth, "fp-old", gone).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+        assert!(
+            auth.verify_assertion(&tomas_id, &fresh(&auth, &first))
+                .is_err()
+        );
+        auth.verify_assertion(&tomas_id, &fresh(&auth, &second))
+            .unwrap();
+
+        let last = auth
+            .remove_passkey(&tomas_id, second_id, &fresh(&auth, &second))
+            .unwrap_err();
+        assert_eq!(last.code, ErrorCode::Conflict);
+        assert_eq!(auth.people()[0].passkeys.len(), 1);
+    }
+
+    #[test]
+    fn members_change_their_own_passkeys() {
+        for body in [
+            CommandBody::AddPasskey {
+                passkey: Box::new(PersonPasskey::Register {
+                    registration: herder_protocol::PasskeyRegistration {
+                        id: String::new(),
+                        raw_id: String::new(),
+                        response: herder_protocol::RegistrationResponse {
+                            client_data_json: String::new(),
+                            attestation_object: String::new(),
+                        },
+                        kind: String::new(),
+                    },
+                }),
+                assertion: Box::new(dummy_assertion()),
+            },
+            CommandBody::RemovePasskey {
+                credential_id: String::new(),
+                assertion: Box::new(dummy_assertion()),
+            },
+        ] {
+            assert!(super::authorize(Role::Member, &body).is_ok());
+        }
+    }
+
+    fn dummy_assertion() -> herder_protocol::PasskeyAssertion {
+        herder_protocol::PasskeyAssertion {
+            id: String::new(),
+            raw_id: String::new(),
+            response: herder_protocol::AssertionResponse {
+                client_data_json: String::new(),
+                authenticator_data: String::new(),
+                signature: String::new(),
+                user_handle: None,
+            },
+            kind: String::new(),
+        }
     }
 }

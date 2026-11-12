@@ -68,6 +68,12 @@ pub struct Key {
     /// Its signature counter at its last use; synced passkeys always show 0.
     #[serde(default)]
     pub counter: u32,
+    /// The AAGUID of the authenticator that made it, hyphenated; none when it gave none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aaguid: Option<String>,
+    /// When it was first added to a daemon; none for a key kept from before this was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_at: Option<Timestamp>,
 }
 
 impl Key {
@@ -76,34 +82,45 @@ impl Key {
         PasskeyKey {
             credential_id: self.credential_id.clone(),
             public_key: self.public_key.clone(),
+            aaguid: self.aaguid.clone(),
+            added_at: self.added_at,
         }
     }
 
-    /// The key `key` carries, once its id and COSE_Key decode.
+    /// The key `key` carries, once its id and COSE_Key decode; added now unless another
+    /// daemon says when it was.
     pub fn from_wire(key: &PasskeyKey) -> Result<Self, ErrorInfo> {
         let parsed = Self {
             credential_id: key.credential_id.clone(),
             public_key: key.public_key.clone(),
             counter: 0,
+            aaguid: key.aaguid.clone(),
+            added_at: Some(key.added_at.unwrap_or_else(Timestamp::now)),
         };
         parsed.credential(false, false)?;
         Ok(parsed)
     }
 
-    /// The key webauthn-rs registered.
-    fn registered(passkey: Passkey) -> Result<Self, ErrorInfo> {
+    /// The key webauthn-rs registered, made by the authenticator `aaguid` names.
+    fn registered(passkey: Passkey, aaguid: Option<Uuid>) -> Result<Self, ErrorInfo> {
         let credential = Credential::from(passkey);
         Ok(Self {
             credential_id: URL_SAFE_NO_PAD.encode(&credential.cred_id),
             public_key: URL_SAFE_NO_PAD.encode(cose_encode(&credential.cred)?),
             counter: credential.counter,
+            aaguid: aaguid.map(|aaguid| aaguid.hyphenated().to_string()),
+            added_at: Some(Timestamp::now()),
         })
+    }
+
+    /// Whether `result` is an assertion by this key.
+    pub fn signed(&self, result: &AuthenticationResult) -> bool {
+        URL_SAFE_NO_PAD.encode(result.cred_id()) == self.credential_id
     }
 
     /// Notes a verified use; whether the counter moved.
     pub fn note(&mut self, result: &AuthenticationResult) -> bool {
-        let used = URL_SAFE_NO_PAD.encode(result.cred_id()) == self.credential_id;
-        if !used || result.counter() <= self.counter {
+        if !self.signed(result) || result.counter() <= self.counter {
             return false;
         }
         self.counter = result.counter();
@@ -165,6 +182,21 @@ fn cose_encode(key: &COSEKey) -> Result<Vec<u8>, ErrorInfo> {
         ],
     };
     serde_cbor_2::to_vec(&Value::Map(entries.into_iter().collect())).map_err(internal)
+}
+
+/// The AAGUID in a registration's attestation object: the 16 bytes after the RP id hash,
+/// flags and counter of its authenticator data. None when the authenticator gives none, as
+/// all zeros.
+fn aaguid_of(attestation_object: &[u8]) -> Option<Uuid> {
+    const AT: usize = FLAGS_AT + 1 + 4;
+    let Value::Map(object) = serde_cbor_2::from_slice(attestation_object).ok()? else {
+        return None;
+    };
+    let Some(Value::Bytes(data)) = object.get(&Value::Text("authData".to_owned())) else {
+        return None;
+    };
+    let bytes: [u8; 16] = data.get(AT..AT + 16)?.try_into().ok()?;
+    Some(Uuid::from_bytes(bytes)).filter(|aaguid| !aaguid.is_nil())
 }
 
 /// The person a passkey identifies, from its user handle.
@@ -238,7 +270,17 @@ impl Passkeys {
 
     /// A fresh challenge to create a passkey for a new person from.
     pub fn creation(&self) -> Result<PasskeyCreation, ErrorInfo> {
-        let uuid = Uuid::now_v7();
+        self.creation_for(Uuid::now_v7())
+    }
+
+    /// A fresh challenge to create another passkey of `person_id` from: it carries their user
+    /// handle, so the platform files it under the same account.
+    pub fn creation_of(&self, person_id: &PersonId) -> Result<PasskeyCreation, ErrorInfo> {
+        let uuid = Uuid::parse_str(person_id.as_str()).map_err(internal)?;
+        self.creation_for(uuid)
+    }
+
+    fn creation_for(&self, uuid: Uuid) -> Result<PasskeyCreation, ErrorInfo> {
         let (request, state) = self
             .webauthn
             .start_passkey_registration(uuid, "herder", "herder", None)
@@ -289,9 +331,20 @@ impl Passkeys {
             true => self.take_batch(&signed)?,
             false => take(&self.assertions, &signed)?,
         };
+        self.finish(&credential, state, keys)
+    }
+
+    /// Verifies `credential` within the ceremony `state`, against the passkeys `keys` gives
+    /// for the person it names.
+    fn finish(
+        &self,
+        credential: &PublicKeyCredential,
+        state: DiscoverableAuthentication,
+        keys: impl FnOnce(&PersonId) -> Vec<Key>,
+    ) -> Result<Asserted, ErrorInfo> {
         let (uuid, _) = self
             .webauthn
-            .identify_discoverable_authentication(&credential)
+            .identify_discoverable_authentication(credential)
             .map_err(|_| forbidden("the passkey gave no person"))?;
         let person_id = person_of(uuid);
         let flags = credential
@@ -313,12 +366,37 @@ impl Passkeys {
         }
         let result = self
             .webauthn
-            .finish_discoverable_authentication(&credential, state, &keys)
+            .finish_discoverable_authentication(credential, state, &keys)
             .map_err(|err| {
                 debug!("passkey assertion refused: {err}");
                 forbidden("the passkey's signature does not verify")
             })?;
         Ok(Asserted { person_id, result })
+    }
+
+    /// Verifies two assertions over the same one of this daemon's unexpired challenges, using
+    /// it up. Each pair is an assertion and what gives the passkeys of the person it names.
+    /// One proves who the caller is, the other that they hold another passkey.
+    pub fn verify_both(
+        &self,
+        first: (&PasskeyAssertion, impl FnOnce(&PersonId) -> Vec<Key>),
+        second: (&PasskeyAssertion, impl FnOnce(&PersonId) -> Vec<Key>),
+    ) -> Result<(Asserted, Asserted), ErrorInfo> {
+        let parsed = |assertion: &PasskeyAssertion| {
+            let credential: PublicKeyCredential = convert(assertion)?;
+            let signed = challenge_of(&credential.response.client_data_json)?;
+            Ok::<_, ErrorInfo>((credential, signed))
+        };
+        let (first_credential, signed) = parsed(first.0)?;
+        let (second_credential, second_signed) = parsed(second.0)?;
+        if signed != second_signed {
+            return Err(bad_request("the two passkeys signed different challenges"));
+        }
+        let state = take(&self.assertions, &signed)?;
+        Ok((
+            self.finish(&first_credential, state.clone(), first.1)?,
+            self.finish(&second_credential, state, second.1)?,
+        ))
     }
 
     /// The ceremony of this daemon's challenge within `signed`, used up, as the ceremony of all
@@ -364,7 +442,8 @@ impl Passkeys {
                 debug!("passkey registration refused: {err}");
                 forbidden("the new passkey does not verify")
             })?;
-        Ok((person_of(uuid), Key::registered(passkey)?))
+        let aaguid = aaguid_of(&credential.response.attestation_object);
+        Ok((person_of(uuid), Key::registered(passkey, aaguid)?))
     }
 }
 
@@ -449,6 +528,12 @@ mod tests {
         // The wire carries exactly that, and reads back as the same key.
         let wire = key.wire();
         assert_eq!(Key::from_wire(&wire).unwrap(), Key { counter: 0, ..key });
+        // The test authenticator names itself, as a password manager does.
+        assert_eq!(
+            wire.aaguid.as_deref(),
+            Some(super::super::authenticator::AAGUID)
+        );
+        assert!(wire.added_at.is_some());
     }
 
     #[test]
@@ -511,6 +596,8 @@ mod tests {
             let key = PasskeyKey {
                 credential_id: id.clone(),
                 public_key: public_key.to_owned(),
+                aaguid: None,
+                added_at: None,
             };
             assert!(Key::from_wire(&key).is_err(), "{public_key}");
         }
