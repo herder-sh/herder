@@ -32,6 +32,9 @@ const FLAGS: u8 = 0x01 | 0x04 | 0x08 | 0x10;
 /// Attested credential data follows.
 const ATTESTED: u8 = 0x40;
 
+/// The AAGUID the authenticator's registrations carry, as a password manager's name it.
+pub const AAGUID: &str = "f3809540-7f14-49c1-a8b3-8f813b225541";
+
 /// One recorded passkey.
 pub struct Authenticator {
     credential_id: Vec<u8>,
@@ -73,7 +76,7 @@ impl Authenticator {
         let authenticator = Self::new(name, &handle);
         let client_data = client_data("webauthn.create", &creation.challenge);
         let mut auth_data = authenticator.auth_data(FLAGS | ATTESTED);
-        auth_data.extend([0; 16]); // No AAGUID.
+        auth_data.extend(Uuid::parse_str(AAGUID).unwrap().as_bytes());
         let id_len = u16::try_from(authenticator.credential_id.len()).unwrap();
         auth_data.extend(id_len.to_be_bytes());
         auth_data.extend(&authenticator.credential_id);
@@ -126,6 +129,16 @@ impl Authenticator {
     /// their devices, names them on every machine.
     pub fn known(name: &str) -> Self {
         Self::new(name, known_person(name).as_bytes())
+    }
+
+    /// The passkey's public key, as `list_people` lists it on another daemon.
+    pub fn key(&self) -> PasskeyKey {
+        PasskeyKey {
+            credential_id: URL_SAFE_NO_PAD.encode(&self.credential_id),
+            public_key: URL_SAFE_NO_PAD.encode(self.cose_key()),
+            aaguid: None,
+            added_at: None,
+        }
     }
 
     /// The passkey as `<credential id>.<PKCS#8 private key>.<user handle>`, each base64url, for
@@ -309,10 +322,7 @@ pub fn enroll_known(
         name: name.to_owned(),
         passkey: PersonPasskey::Existing {
             person_id: PersonId::new(known_person(name).to_string()),
-            key: PasskeyKey {
-                credential_id: URL_SAFE_NO_PAD.encode(&passkey.credential_id),
-                public_key: URL_SAFE_NO_PAD.encode(passkey.cose_key()),
-            },
+            key: passkey.key(),
             assertion: passkey.assert(&challenge),
         },
     };

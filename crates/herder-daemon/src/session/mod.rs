@@ -1038,6 +1038,8 @@ impl SessionManager {
             | CommandBody::MergePerson { .. }
             | CommandBody::ApproveAction { .. }
             | CommandBody::RefuseAction { .. }
+            | CommandBody::AddPasskey { .. }
+            | CommandBody::RemovePasskey { .. }
             | CommandBody::ApproveLogin { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,

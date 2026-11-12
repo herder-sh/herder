@@ -175,6 +175,14 @@ pub struct PasskeyKey {
     pub credential_id: String,
     /// The credential public key, a COSE_Key as the authenticator data carries it, base64url.
     pub public_key: String,
+    /// The AAGUID of the authenticator that made it, as a hyphenated UUID, naming the password
+    /// manager it lives in; absent when it gave none (all zeros) or for a passkey added
+    /// before daemons kept it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aaguid: Option<String>,
+    /// When it was first added to a daemon; absent for a passkey added before daemons kept it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_at: Option<Timestamp>,
 }
 
 /// A person to add to a daemon that does not know them yet, as another daemon lists them.
