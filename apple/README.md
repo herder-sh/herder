@@ -92,7 +92,9 @@ To try the app against it, launch the app with `HERDER_FAKE_FLEET` set to the li
 `fake_daemon` prints and `HERDER_FAKE_PASSKEY` to the passkey after it: it signs in to those
 machines at launch. For a real machine, run `herder claim` on it: on iOS, scan the QR code it
 prints with **Scan QR Code**; on the Mac, paste the link (or all of its output), and approve
-with your passkey.
+with your passkey. To add another device of yours to every machine one already has, open
+**People › You › Add a device…** (or **Fleet › Add a device…**) on that one, then on the new
+device choose **Add to Fleet › From another device** and scan or paste the link it shows.
 
 The `apple` workflow runs the tests and builds both apps on every change to `apple/` or to what
 it builds on.

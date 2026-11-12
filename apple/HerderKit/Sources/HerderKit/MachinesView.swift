@@ -103,7 +103,6 @@ struct MachinesView: View {
     var showsSections = false
     @State private var unpaired: [UnpairedVault] = []
     @Environment(\.pages) private var pages
-    @Environment(\.exploreDemo) private var exploreDemo
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -125,19 +124,7 @@ struct MachinesView: View {
                 let rows = MachineRow.rows(fleet.machines, summaries: fleet.lists.machines)
                 let vaults = fleet.vaults.map(VaultLine.paired) + unpaired.map(VaultLine.unpaired)
                 if rows.isEmpty && vaults.isEmpty {
-                    ContentUnavailableView {
-                        Label("No machines", systemImage: "server.rack")
-                    } description: {
-                        Text("Run herder on a machine, then pair this device with it.")
-                    } actions: {
-                        PillButton(title: "Add to Fleet", symbol: "plus", prominent: true) { sheet = .pair(.machine) }
-                            .accessibilityIdentifier("add-to-fleet")
-                        if let exploreDemo {
-                            PillButton(title: "Explore a demo") { exploreDemo() }
-                                .accessibilityIdentifier("explore-demo")
-                        }
-                    }
-                    .padding(.top, 60)
+                    EmptyFleet { sheet = .pair($0) }
                 } else {
                     SortableTable("machines", rows: rows, sortedBy: TableSort(column: "Machine"),
                                   columns: columns) { pages.open(.machine($0.hostId)) }
@@ -152,6 +139,12 @@ struct MachinesView: View {
                             case .unpaired(let vault): sheet = .pair(.vault, vault)
                             }
                         }
+                    }
+                }
+                if fleet.shareLink != nil {
+                    SettingsGroup {
+                        AddRow(title: "Add a device…") { sheet = .addDevice }
+                            .accessibilityIdentifier("add-device")
                     }
                 }
             }

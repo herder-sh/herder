@@ -277,6 +277,8 @@ struct FleetView: View {
             resolveLink()
         case .approve(let request):
             sheet = .approve(request)
+        case .join(let link):
+            sheet = .join(link)
         case nil:
             fleet.toast = Toast(text: "herder cannot open that link", failed: true)
         }
@@ -433,26 +435,54 @@ struct ConnectionLine: View {
     }
 }
 
+/// A device with no machines: the two ways to get some. The common one first, herder on
+/// another device of yours, whose Add a Device shows a code; then a new machine, claimed.
 struct EmptyFleet: View {
-    let add: () -> Void
+    /// Opens Add to Fleet on what it adds.
+    let add: (PairKind) -> Void
+
+    #if os(iOS)
+    static let deviceAction = "Scan Its Code"
+    static let deviceDetail = "On it, open People › You › Add a device, and scan the code it shows."
+    #else
+    static let deviceAction = "Paste Its Link"
+    static let deviceDetail = "On it, open People › You › Add a device, and paste the link it shows."
+    #endif
 
     var body: some View {
         Card {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 16) {
                 Text("No machines yet").font(.headline).foregroundStyle(Theme.text)
-                Text("Run `herder claim` on a machine, then add it here with the link it prints.")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondary)
-                ActionButton(title: "Add to Fleet", style: .primary) { add() }
-                    .accessibilityIdentifier("add-to-fleet")
-                    #if os(macOS)
-                    .frame(maxWidth: 220)
-                    #endif
+                choice(.device, title: "I have herder on another device", detail: Self.deviceDetail,
+                       action: Self.deviceAction, primary: true, id: "add-from-device")
+                Rectangle().fill(Theme.stroke).frame(height: 1)
+                choice(.machine, title: "Set up a new machine",
+                       detail: "Run `herder claim` on it, then add it here with the link it prints.",
+                       action: "Add a Machine", primary: false, id: "add-to-fleet")
                 ExploreDemoButton()
                     #if os(macOS)
                     .frame(maxWidth: 220)
                     #endif
             }
+        }
+    }
+
+    private func choice(_ kind: PairKind, title: String, detail: String, action: String,
+                        primary: Bool, id: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: kind.symbol).foregroundStyle(Theme.secondary).frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                    Text(LocalizedStringKey(detail)).font(.footnote).foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            ActionButton(title: action, style: primary ? .primary : .secondary) { add(kind) }
+                .accessibilityIdentifier(id)
+                #if os(macOS)
+                .frame(maxWidth: 220)
+                #endif
         }
     }
 }
