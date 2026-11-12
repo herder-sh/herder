@@ -265,7 +265,16 @@ jobs:
       - name: Test HerderKit against the fake daemon
         env:
           HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
-        run: swift test --disable-index-store --package-path apple/HerderKit
+          HERDER_SCREENSHOT_DIR: ${{ runner.temp }}/herderkit-shots
+        run: |
+          mkdir -p "$HERDER_SCREENSHOT_DIR"
+          swift test --disable-index-store --package-path apple/HerderKit
+      - uses: actions/upload-artifact@v7
+        if: success() || failure()
+        with:
+          name: herderkit-screenshots
+          path: ${{ runner.temp }}/herderkit-shots
+          if-no-files-found: ignore
       - name: Build, sign with the Developer ID, notarize and zip the macOS app
         if: github.event_name == 'push'
         env:
