@@ -43,11 +43,11 @@ associated domains: such a copy opens only through **System Settings › Privacy
 Open Anyway** and cannot use your passkey. On a Mac the team's development profile lists,
 `apple/scripts/install-mac.sh` builds and installs a team-signed copy.
 
-The iOS app goes out through TestFlight. The `release` workflow's `testflight` job runs
-`apple/scripts/upload-testflight.sh` on each `v*` tag, and on workflow_dispatch: it archives the
-app in Release with the herder version and the run number as its build, and uploads it to App
-Store Connect. Xcode signs it with cloud-managed certificates through an App
-Store Connect API key, so the repo keeps no certificate or profile, only these secrets:
+Both apps also go out through TestFlight. The `release` workflow's `testflight` job runs
+`apple/scripts/upload-testflight.sh ios`, then `macos`, on each `v*` tag, and on
+workflow_dispatch: it archives each app in Release with the herder version and the run number as
+its build, and uploads it to App Store Connect. Xcode signs them with cloud-managed certificates
+through an App Store Connect API key. The release needs these secrets:
 
 - `APPLE_TEAM_ID`: the Apple Developer team the app belongs to.
 - `ASC_KEY_ID`, `ASC_ISSUER_ID`: the App Store Connect API key (Users and Access › Integrations),
@@ -57,9 +57,11 @@ Store Connect API key, so the repo keeps no certificate or profile, only these s
   its private key, as a base64 `.p12`, and its password. Cloud-managed signing cannot make a
   Developer ID certificate for this team.
 
-App Store Connect needs an app record for `sh.herder.Herder` before the first upload. Once a
-build has processed, the testers in the app's internal TestFlight group get it in the TestFlight
-app.
+App Store Connect needs an app record for `sh.herder.Herder`, with both the iOS and the macOS
+platform, before the first upload. Once a build has processed, the testers in the app's internal
+TestFlight group get it in the TestFlight app, on the iPhone or the Mac. The Mac's TestFlight
+build is the same app as a team-signed `install-mac.sh` one, so it keeps its machines
+(`~/.config/herder`) and its container.
 
 ## Test
 
