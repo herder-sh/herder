@@ -2392,7 +2392,7 @@ async fn a_refused_passkey_sign_in_says_why() {
         let (phone, hosts, fingerprint) =
             (phone.clone(), hosts.clone(), daemon.fingerprint.clone());
         async move {
-            let pending = phone.sign_in(hosts, fingerprint).await.unwrap();
+            let pending = phone.sign_in(hosts, fingerprint, Vec::new()).await.unwrap();
             let assertion = sign(&pending.challenge());
             pending
                 .finish(SignIn::Passkey { assertion })

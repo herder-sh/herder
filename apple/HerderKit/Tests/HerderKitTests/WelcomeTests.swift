@@ -40,7 +40,7 @@ import Testing
         #expect(flow.step == .machine)
 
         // Another device's code: you already use herder, so it signs in to those instead.
-        let fleet = fleetLinkToString(link: FleetLink(machines: [
+        let fleet = fleetLinkToString(link: FleetLink(person: FleetPerson(name: "alice", passkeys: ["Y3JlZC0x"]), machines: [
             FleetMachine(hosts: ["100.64.0.1:7447"], fingerprint: Self.fingerprint, name: "devbox"),
         ]))
         let shared = try #require(flow.take(fleet))
