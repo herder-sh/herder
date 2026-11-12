@@ -20,7 +20,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 ## 1. Decisions at a glance
 
 1. **One information architecture everywhere.** Board, Projects, Usage, Skills,
-   Fleet (machines, with a vault inside), a session, and settings sheets. The Mac, the iPad and the iPhone show the
+   Setup (machines, with a vault inside, and people), a session, and settings sheets. The Mac, the iPad and the iPhone show the
    same sections with the same names; only the navigation chrome changes (§3).
 2. **Three layouts, chosen by width, not by device.** `FleetView` picks the layout from the
    horizontal size class; `ListAndSession` picks list-beside-session from the pane's width.
@@ -55,8 +55,8 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 | **Projects** | every project with its sessions, children under parents | sidebar *projects* tree | `ProjectsView` (iPhone), `ProjectSessions` (Mac/iPad) |
 | **Usage** | tokens and API-equivalent dollars over a period, per account and model | — | `UsageView` |
 | **Skills** | the skill library on every machine, and a session's project skills | — | `SkillsView` |
-| **Fleet** | each paired machine as a table row: connection, load, CLIs, accounts, backup; then the vaults | fleet + accounts | `MachinesView` |
-| Vault (inside Fleet) | a vault's hosts, how current each is, and its secrets | fleet, host grouping | `VaultPage` |
+| **Setup** | what needs you, each with its fix; you; the machines with the vault as a row; the people | fleet + accounts | `SetupView` |
+| Vault (inside Setup) | a vault's hosts, how current each is, and its secrets | fleet, host grouping | `VaultPage` |
 | **Session** | one session: transcript, request, composer | session pane, chat tab | `SessionView` |
 | Terminal | owner-only shells in the session's worktree | term tab | `TerminalPane` |
 | Inspector | the session's events and stats | details panel | `SessionInspector` |
@@ -83,7 +83,7 @@ the project header's gear).
 | | Mac window / iPad regular | narrow regular (< 820 pt content) | iPhone / compact |
 |---|---|---|---|
 | frame | `DesktopShell` | `DesktopShell` | `FleetView.tabs` |
-| navigation | sidebar: rail (76 pt) or full (228 pt) | same | tab bar: Board · Projects · Usage · Fleet |
+| navigation | sidebar: rail (76 pt) or full (228 pt) | same | tab bar: Board · Chats · Projects · Setup |
 | section switch | sidebar rows; the pane title's menu (`Switcher`) | same | tabs |
 | list | 380 pt pane beside the session (`ListAndSession`) | full width until a session opens | full screen, `NavigationStack` |
 | session | fills the rest | replaces the list, with **Back** | pushed; tab bar hidden |
@@ -98,7 +98,7 @@ Rules:
   size class is compact and `DesktopShell` otherwise, so an iPad in slide-over gets the iPhone
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
-- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats), then **Workspace**, the setup (Providers, Skills, Fleet; a vault lives inside Fleet), then the
+- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats), then **Workspace**, the setup (Providers, Skills, Setup, Integrations; a vault lives inside Setup), then the
   projects, then one footer line for the machines (`MachinesFooter`). It starts collapsed to
   the rail (`sidebarCollapsed`), which leaves the width to the session and lists the same
   things in the same order; ⇧⌘\ toggles it. The window's traffic lights sit in its top bar
@@ -115,7 +115,7 @@ Rules:
   The sessions no project holds yet stay last.
 - **The machines footer** is a dot per machine coloured by its connection (`ConnectionMark`)
   and a summary ("4 machines · 1 offline"). Clicking it opens a popover with each machine's
-  status, each row opening its page, and a link to Fleet. On the rail it is the dots alone.
+  status, each row opening its page, and a link to Setup. On the rail it is the dots alone.
 - **The list pane** is 380 pt (`ListAndSession`). ⌘\ hides it to give the session the whole
   width (`listHidden`); with no session open it always shows.
 - **The pane header** (`Pane`) is a `PageHeader` (§8.4): the title (a menu of sections and
@@ -123,7 +123,8 @@ Rules:
   narrow pane to "1 needs you · 238 tasks", never cut), the pane's actions on the right as
   header controls (§8.4), then a search field where the pane lists sessions.
 - **The tab bar** on compact width has the same sections as the sidebar: Board (badged with the
-  request count), Projects, Usage, Fleet. Skills and a vault show inside Fleet. Each tab is its own `NavigationStack` (`boardPath`,
+  request count), Chats, Projects, Setup (badged amber with what needs you). Skills, Providers,
+  Integrations and a vault show inside Setup. Each tab is its own `NavigationStack` (`boardPath`,
   `projectsPath`), so switching tabs keeps each tab's place.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
@@ -166,27 +167,56 @@ The apps have no Pull Requests section (unlike the TUI's prs view), and nothing 
 across sessions. A session shows its PRs as text: the chip in its header (§5.1) and the badges
 on its row.
 
-### 4.4 Fleet and vault (`MachinesView`, `VaultPage`)
+### 4.4 Setup and vault (`SetupView`, `MachinesView`, `VaultPage`)
 
-Fleet is a `SortableTable` of the machines that run sessions (`MachineRow`), with the columns
-you act on: machine (its role, and "this Mac" when its address is loopback or this Mac's host
-name), status and the latest ping's round trip, running sessions, load (CPU as a `UsageBar`,
-memory on hover), CLIs ("current", or "N updates" from `ProviderVersions`), accounts (with an "N
-signed out" chip) and the paired vault it backs up to. A row opens the machine's page. On compact
-width only machine, status and running show; the page has the rest. The pane's status line ends
-with each vault that is behind: "All 3 machines connected · herder-vault-0 6 h behind".
+Setup is one page for your machines, your devices and the people on them: the sidebar's
+**Setup** row under Workspace and the iPhone's fourth tab, both badged amber with how many
+things need you (`SetupCount`). Its header reads "2 need you · 5 machines · 3 devices", or
+"Everything is set up · …", and has two actions: **Add a Device** (`AddDeviceSheet`) and
+**Add a Machine** (Add a Machine's sheet), with AWS Sign-in while a machine has a profile. In
+order, the page has:
 
-Under the table, the **Vault** section has a `VaultRow` per paired vault: its hosts, sessions and
-size, and the host furthest behind ("work-mbp 6 h behind", or "✓ caught up"); it opens the
-vault's page. A vault that connected machines back up to (`get_vault_link`, asked of the
-machines this device owns) but this device is not paired with gets an `UnpairedVaultRow`: who
-backs up to it, and Add a machine to sign in to it. Vault has no sidebar section of its own.
+- **Needs you** (`NeedsYouSection`), only while something does: a card per item, its mark in
+  amber or, for a suggestion, blue, what happened in a line, and the one button that fixes it,
+  beside the text on the Mac and under it on the iPhone (`NeedsYouCard`). `SetupProblem.found`
+  derives them from what the app already knows: a machine not connected (Reconnect), machines
+  that still know you by an earlier setup (Approve…, which opens Claim your machines), your
+  other Mac or iPhone missing from a machine you own (Add a Device), an account signed out on a
+  machine you own (Sign In…, its Account page), then the suggestions: an older herder on
+  machines you own (Update All, as each machine's Update) and CLI updates (Update All).
+- **You**: one row with your role and passkey and how many devices you have, opening the You
+  page (`YouPage`: your devices, Add a device).
+- **Machines**: one `SortableTable` (`MachineLine`) of the machines that run sessions
+  (`MachineRow`) and the vaults among them, a vault marked as one. The first column has the
+  name, then "this Mac" and the address in monospace, or what a vault backs up. Then Status
+  ("Connected", "Connecting…", "Offline", with the round trip on hover), Running, Load (CPU as a
+  `UsageBar`, memory on hover), CLIs ("Up to date" or "N updates"), Accounts (an amber dot
+  while one is signed out), Backup (how current the machine's backup is, "Up to date" or "6 h
+  behind"; for a vault, its host furthest behind) and You (your role there). A row opens the
+  machine's or the vault's page. On compact width only machine, status and running show.
+  A vault that connected machines back up to (`get_vault_link`) but this device is not paired
+  with is a row too, "Not on this device yet", with Add.
+- **People** (`PeopleSection`, `PeopleView`): one row per person, you first, with the line that
+  says where they can do what ("Owner of every machine", "Owner on draugelis · member
+  elsewhere") and a role menu: Owner on all my machines, Member on all my machines, Different
+  per machine…. A row opens the person's sheet (`PersonSheet`): Owner on all, Member on all or
+  Per machine, each machine's role under Per machine, their devices with Sign Out…, "This is
+  me…" to fold a duplicate of you into you, and **Remove** at the bottom left. Every change
+  is signed with your passkey (§8.4 Face ID). A machine's page opens its own people
+  (`PeoplePage`), the same rows narrowed to it.
+
+There is no who-can-do-what grid and no "Add a device…" row at the foot of the machines.
+On iPhone, Skills, Providers and Integrations are rows at the foot of Setup. Screenshots:
+`setup-mac.png`, `setup-person-mac.png`, `setup-needs-you-iphone.png`
+(`SetupScreenshotTests`), `machines.png`, `vault-page.png` (`MachinesScreenshotTests`), and the
+app's `mac-machines.png`, `ios-machines.png`, `mac-person-sheet.png`, `ios-person-sheet.png`
+(`ScreenshotTests`).
 
 The vault's page (`VaultPage`) reads "Connected · backing up 2 hosts · last batch 3 min. ago".
 Its owners get two tabs: **Overview** and **Secrets** (the sets, their grants and secrets, and the
 recent access). Overview is a strip of quiet chips (sessions, with the per-state breakdown on
 hover; idle; archived; size), then a hosts table: freshness, sessions and top projects.
-Freshness (`Freshness`) is always relative: "✓ caught up" with the last
+Freshness (`Freshness`) is always relative on the vault's page: "✓ caught up" with the last
 batch's age, or "6 h behind" with a "Why?" popover, when the host has been offline that long or
 its last batch arrived that late (more than five minutes). The gear opens the vault's machine
 page (connection, forget). Screenshots: `machines.png`, `vault-page.png` (HerderKit's
@@ -209,8 +239,8 @@ Providers › **Update All**, a CLI's Install or Update, and **Install & Set Up*
 Activity with `Fleet.install`. The daemon checks the CLI's version again before it closes an
 install's terminal, so the machine's versions are current when the job ends.
 
-**Adding a device** (`AddDevice.swift`). A device with machines offers **Add a device…** under
-the You page's Devices (§8.9) and at the foot of Fleet. Its sheet (`AddDeviceSheet`) shows the `herder://fleet`
+**Adding a device** (`AddDevice.swift`). A device with machines offers **Add a Device** in
+Setup's header and on the You page's Devices (§8.9). Its sheet (`AddDeviceSheet`) shows the `herder://fleet`
 link of `Client::share()` as a QR code with Copy, and three steps: install herder on the other
 device, scan this code with it (I already use herder, or Add a machine), approve with your passkey,
 the same one, synced by iCloud Keychain or a password manager. The link grants nothing by
@@ -227,7 +257,7 @@ refusal shows the machine's error. Amber marks what needs you; red only the unex
 Closing Face ID stops; **Try Again** retries what is left. A device with no machines shows
 Welcome instead (§4.10). `AddDeviceScreenshotTests` draws both sheets.
 
-**Inviting a teammate** (`InviteSheet.swift`, P22.8). People's **Invite** opens Invite a
+**Inviting a teammate** (`InviteSheet.swift`, P22.8). People's **Invite a teammate…** opens Invite a
 Teammate: an optional name (it only labels the link), Member or Owner as a segmented control with
 its meaning in one line under it ("Drives sessions. Never gets a terminal."), and the machines as
 a checklist under **All my machines**, every machine you own and is connected ticked, or only the
@@ -332,7 +362,7 @@ the app cannot read a skill's files); **Import** opens `SkillImportSheet`: a fol
 device, every file in it but the hidden ones, named after it (`SkillFolder`), or a git URL and a
 folder in it. Both are `AppSheet`s; a refused change shows as a toast. Members see everything and
 change nothing: the actions and menus are hidden, the switches disabled, and a line says why. It
-fills the width on the Mac; on iPhone it opens from the top of Fleet. Screenshots:
+fills the width on the Mac; on iPhone it opens from the foot of Setup. Screenshots:
 `mac-skills.png`, `ios-skills.png` (`apple/ScreenshotTests`, against the demo fleet's library).
 
 ### 4.7 List rules (every session list)
@@ -782,7 +812,7 @@ Xcode preview in its file.
 Objects get pages, actions get sheets. A machine, an account, a project's settings, a vault and
 a provider's sub-agent are a `Page`. On the Mac and iPad a page opens over its section in the
 main area (`PageStack` in `DesktopShell`), under a breadcrumb of the section and each page on
-the way ("Fleet › trash-can-01"), each crumb a way back to it and ⌘[ one step back
+the way ("Setup › trash-can-01"), each crumb a way back to it and ⌘[ one step back
 (`PageTrail`); choosing a section in the sidebar, even the one shown, closes its pages. On iPhone
 the same page is pushed on the tab's `NavigationStack` (`NavRoute.page`). Views open and close
 pages through the environment's `pages` (`PageNavigator`), so they need not know which.
@@ -897,8 +927,8 @@ session onto its default model, and the model menu picks the model.
 
 ### 8.9 You page (P22.7)
 
-`YouPage` replaces People › You: People keeps one row for you (your role across the fleet and
-how many devices), which opens it (`Page.you`). Setup will link it the same way. Top to bottom:
+`YouPage` replaces People › You: Setup's You row (your role, passkey and how many devices)
+and your row in People open it (`Page.you`). Top to bottom:
 
 - **Header** (`YouHeader`): your avatar, name and what you are on the machines ("Owner of 5
   machines", "Owner of 3 machines · member of 2").
@@ -953,7 +983,7 @@ iPhone layout fixes land in P7.21.
 |---|---|---|
 | Board | `mac-home.png`, `mac-sidebar-expanded.png` | `ios-home.png` |
 | Project / Projects | `mac-project.png` | `ios-projects.png` |
-| Fleet, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
+| Setup, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
 | Session (idle, approval, running) | `mac-session.png`, `mac-session-approval.png`, `mac-session-running.png` | `ios-session.png`, `ios-session-keyboard.png`, `ios-session-approval.png`, `ios-session-running.png` |
 | Session menu | — | `ios-session-menu.png` |
 | Inspector | `mac-session-inspector.png` | `ios-session-inspector.png` |

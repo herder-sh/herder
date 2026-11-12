@@ -16,12 +16,11 @@ enum Page: Hashable {
     case vault(HostId, tab: VaultPage.Tab = .overview)
     /// A provider's own sub-agent, in its session.
     case agent(SessionKey, NativeAgent.ID)
-    /// Every bot on every machine, opened from Machines on iPhone, where it is no tab.
+    /// Every bot on every machine, opened from Setup on iPhone, where it is no tab.
     case integrations
-    /// Everyone across the fleet, or one machine's people, opened from its page; on iPhone from
-    /// Fleet, where it is no tab.
-    case people(HostId?)
-    /// You: your passkeys, your devices and recovery, opened from People.
+    /// One machine's people, opened from its page.
+    case people(HostId)
+    /// You: your passkeys, your devices and recovery, opened from Setup.
     case you
     /// If you lose your devices: how to get back in, opened from You.
     case recovery

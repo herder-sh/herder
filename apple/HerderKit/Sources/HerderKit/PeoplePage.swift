@@ -189,21 +189,100 @@ final class FleetPeople {
     }
 }
 
-/// The People page: the whole fleet's, or one machine's when opened from its page.
-struct PeoplePage: View {
+/// People as Setup and a machine's page list them: a row per person, each opening their
+/// sheet, every change signed with your passkey; then the machines are asked again.
+struct PeopleSection: View {
     let fleet: Fleet
-    /// The machine whose people show; every machine's when nil.
+    let people: FleetPeople
+    let directory: Directory
+    /// The machine whose people show, which an invite is to; else the first machine you own.
     var hostId: HostId?
     @Binding var sheet: AppSheet?
-    @State private var people: FleetPeople
+    @State private var shown: Directory.Person?
     @State private var error: String?
     @Environment(\.signPasskey) private var sign
     @Environment(\.pages) private var pages
-    #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    #endif
 
-    init(fleet: Fleet, hostId: HostId? = nil, sheet: Binding<AppSheet?>) {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let error, shown == nil {
+                Text(error).font(.footnote).foregroundStyle(Theme.failure).accessibilityIdentifier("people-error")
+            }
+            PeopleView(directory: directory, setRole: setRole,
+                       show: { person in
+                           if person.id == directory.me.id { pages.open(.you) } else { shown = person }
+                       },
+                       invite: invite)
+        }
+        .sheet(item: $shown) { person in
+            PersonSheetHost(fleet: fleet, people: people, hostId: hostId, personId: person.id, error: error,
+                            setRole: setRole, signOut: signOut, itsMe: itsMe)
+        }
+        .onChange(of: shown) { error = nil }
+    }
+
+    /// Gives `person` `role` on `host`, or on every machine for nil: a member on every one
+    /// but the vaults, where a member has nothing to do.
+    private func setRole(_ person: Directory.Person, _ role: Role?, _ host: HostId?) {
+        let machines = fleet.machines
+        let hosts = host.map { id in directory.columns.filter { $0.id == id } }
+            ?? directory.columns.filter { !$0.vault || role != .member }
+        run { try await people.setRole(role, of: person, on: hosts, machines: machines, sign: sign) }
+    }
+
+    private func signOut(_ device: Directory.Device) {
+        let machines = fleet.machines
+        run { try await people.signOut(device, machines: machines, sign: sign) }
+    }
+
+    private func itsMe(_ person: Directory.Person) {
+        let machines = fleet.machines
+        let me = directory.me.id
+        run { try await people.itsMe(person, me: me, machines: machines, sign: sign) }
+    }
+
+    /// Invites someone to the machine shown, else to every machine you own.
+    private func invite() {
+        sheet = .invite(hostId)
+    }
+
+    private func run(_ action: @escaping () async throws -> Void) {
+        error = nil
+        Task {
+            do { try await action() } catch { self.error = describe(error) }
+        }
+    }
+}
+
+/// A person's sheet over the people it was opened from, as the machines list them now: it
+/// follows each change, and has nothing to show once they are gone.
+private struct PersonSheetHost: View {
+    let fleet: Fleet
+    let people: FleetPeople
+    let hostId: HostId?
+    let personId: String
+    let error: String?
+    let setRole: (Directory.Person, Role?, HostId?) -> Void
+    let signOut: (Directory.Device) -> Void
+    let itsMe: (Directory.Person) -> Void
+
+    var body: some View {
+        let directory = people.directory(fleet.machines).map { directory in hostId.map(directory.only) ?? directory }
+        if let directory, let person = directory.teammates.first(where: { $0.id == personId }) {
+            PersonSheet(directory: directory, person: person, error: error,
+                        setRole: { setRole(person, $0, $1) }, signOut: signOut, itsMe: { itsMe(person) })
+        }
+    }
+}
+
+/// One machine's people, opened from its page.
+struct PeoplePage: View {
+    let fleet: Fleet
+    let hostId: HostId
+    @Binding var sheet: AppSheet?
+    @State private var people: FleetPeople
+
+    init(fleet: Fleet, hostId: HostId, sheet: Binding<AppSheet?>) {
         self.fleet = fleet
         self.hostId = hostId
         _sheet = sheet
@@ -214,22 +293,8 @@ struct PeoplePage: View {
         let machines = fleet.machines
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                if let error {
-                    Text(error).font(.footnote).foregroundStyle(Theme.failure).accessibilityIdentifier("people-error")
-                }
-                if let directory = directory(machines) {
-                    PeopleView(directory: directory, grid: grid,
-                               setRole: { person, role, host in
-                                   let hosts = host.map { id in directory.columns.filter { $0.id == id } }
-                                       ?? directory.columns.filter { !$0.vault || role != .member }
-                                   run { try await people.setRole(role, of: person, on: hosts, machines: machines, sign: sign) }
-                               },
-                               itsMe: { person in
-                                   run { try await people.itsMe(person, me: directory.me.id, machines: machines, sign: sign) }
-                               },
-                               invite: invite,
-                               openYou: { pages.open(.you) },
-                               claim: fleet.hasUnclaimed ? { fleet.offerClaim(in: $sheet) } : nil)
+                if let directory = people.directory(machines)?.only(hostId) {
+                    PeopleSection(fleet: fleet, people: people, directory: directory, hostId: hostId, sheet: $sheet)
                 } else if people.failures.isEmpty {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 120)
                 } else {
@@ -243,7 +308,7 @@ struct PeoplePage: View {
         .navigationTitle("People")
         #if os(iOS)
         .toolbar {
-            Button("Invite", systemImage: "plus", action: invite)
+            Button("Invite", systemImage: "plus") { sheet = .invite(hostId) }
         }
         #endif
         .refreshable { await people.reload(machines) }
@@ -251,30 +316,6 @@ struct PeoplePage: View {
         .onChange(of: sheet) { if sheet == nil { Task { await people.reload(machines) } } }
     }
 
-    private func directory(_ machines: [Machine]) -> Directory? {
-        guard let directory = people.directory(machines) else { return nil }
-        return hostId.map(directory.only) ?? directory
-    }
-
-    private var grid: Bool {
-        #if os(iOS)
-        sizeClass != .compact
-        #else
-        true
-        #endif
-    }
-
-    /// Invites someone to every machine you own, or to the machine shown.
-    private func invite() {
-        sheet = .invite(hostId)
-    }
-
-    private func run(_ action: @escaping () async throws -> Void) {
-        error = nil
-        Task {
-            do { try await action() } catch { self.error = describe(error) }
-        }
-    }
 }
 
 /// A machine's way to its people: the People page, narrowed to it.

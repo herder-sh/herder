@@ -12,6 +12,8 @@ struct DesktopShell: View {
     @Binding var pages: PageStack
     @Binding var session: SessionKey?
     @Binding var draft: Draft?
+    /// Everyone on the machines, for Setup and what needs you there.
+    let people: FleetPeople
     let opened: (SessionKey) -> Void
     @AppStorage("sidebarCollapsed") private var sidebarCollapsed = true
     @AppStorage(ProjectOrder.sortKey) private var projectSort = ProjectSort.manual
@@ -24,12 +26,13 @@ struct DesktopShell: View {
         HStack(spacing: 0) {
             Group {
                 if sidebarCollapsed {
-                    SidebarRail(fleet: fleet, item: section, session: $session, collapsed: $sidebarCollapsed,
-                                order: order, newSession: newSession)
+                    SidebarRail(fleet: fleet, people: people, item: section, session: $session,
+                                collapsed: $sidebarCollapsed, order: order, newSession: newSession)
                         .frame(width: 76)
                 } else {
-                    Sidebar(fleet: fleet, item: section, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed,
-                            sort: $projectSort, manual: $projectOrder, newSession: newSession)
+                    Sidebar(fleet: fleet, people: people, item: section, session: $session, sheet: $sheet,
+                            collapsed: $sidebarCollapsed, sort: $projectSort, manual: $projectOrder,
+                            newSession: newSession)
                         .frame(width: 228)
                 }
             }
@@ -74,8 +77,7 @@ struct DesktopShell: View {
         case .chats: "Chats"
         case .skills: "Skills"
         case .providers: "Providers"
-        case .machines: "Fleet"
-        case .people: "People"
+        case .setup: "Setup"
         case .integrations: "Integrations"
         case .project(let id): lists.projects.first { $0.id == id }?.name ?? "Project"
         case .bots(let id): lists.bots.first { $0.id == id }.map(fleet.botName) ?? "Bots"
@@ -164,23 +166,8 @@ struct DesktopShell: View {
                 }
                 PaneButton(title: "Add Account", symbol: "plus", prominent: true) { sheet = .addAccount }
             }
-        case .machines:
-            Pane(fleet: fleet, title: "Fleet", status: MachinesView.status(lists.machines, vaults: fleet.vaults),
-                 switcher: switcher) {
-                MachinesView(fleet: fleet, sheet: $sheet)
-            } actions: {
-                if !AwsSignIn.machines(fleet.machines).isEmpty {
-                    PaneButton(title: "AWS Sign-in", symbol: "key") { sheet = .awsSignIn }
-                }
-                PaneButton(title: "Add a Machine", symbol: "plus", prominent: true) { sheet = .addMachine() }
-                    .accessibilityIdentifier("add-machine")
-            }
-        case .people:
-            Pane(fleet: fleet, title: "People", switcher: switcher) {
-                PeoplePage(fleet: fleet, sheet: $sheet)
-            } actions: {
-                PaneButton(title: "Invite", symbol: "plus") { sheet = .invite(nil) }
-            }
+        case .setup:
+            SetupPane(fleet: fleet, people: people, sheet: $sheet, switcher: switcher)
         case .integrations:
             Pane(fleet: fleet, title: "Integrations", status: fleet.bots.status, switcher: switcher) {
                 IntegrationsView(fleet: fleet, sheet: $sheet)
@@ -377,6 +364,8 @@ struct Switcher {
     static let botsSymbol = "ellipsis.bubble"
     /// The symbol of Integrations.
     static let integrationsSymbol = "puzzlepiece.extension"
+    /// The symbol of Setup.
+    static let setupSymbol = "slider.horizontal.3"
     let fleet: Fleet
     let item: Binding<SidebarItem>
     let session: Binding<SessionKey?>
@@ -390,7 +379,7 @@ struct Switcher {
         Divider()
         Button("Providers", systemImage: "person.2") { go(.providers) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
-        Button("Fleet", systemImage: "server.rack") { go(.machines) }
+        Button("Setup", systemImage: Self.setupSymbol) { go(.setup) }
         Button("Integrations", systemImage: Switcher.integrationsSymbol) { go(.integrations) }
         Divider()
         ForEach(order.sorted(fleet.lists.projects)) { project in
@@ -450,6 +439,7 @@ struct Sidebar: View {
     static let gap: CGFloat = 10
     static var labelInset: CGFloat { inset + icon + gap }
     let fleet: Fleet
+    let people: FleetPeople
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
     @Binding var sheet: AppSheet?
@@ -500,8 +490,11 @@ struct Sidebar: View {
             heading("Workspace")
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
-            SidebarRow(title: "Fleet", symbol: "server.rack", selected: item == .machines) { select(.machines) }
-            SidebarRow(title: "People", symbol: "person.2.circle", selected: item == .people) { select(.people) }
+            SetupCount(fleet: fleet, people: people) { count in
+                SidebarRow(title: "Setup", symbol: Switcher.setupSymbol, needsYou: count, selected: item == .setup) {
+                    select(.setup)
+                }
+            }
             SidebarRow(title: "Integrations", symbol: Switcher.integrationsSymbol, selected: item == .integrations) {
                 select(.integrations)
             }
@@ -553,7 +546,7 @@ struct Sidebar: View {
                 }
             }
             Spacer(minLength: 0)
-            MachinesFooter(machines: lists.machines) { select(.machines) }
+            MachinesFooter(machines: lists.machines) { select(.setup) }
                 .padding(.vertical, 10)
         }
         .padding(.horizontal, 8)
@@ -679,7 +672,7 @@ struct MachinesFooter: View {
                     open = false
                     showAll()
                 } label: {
-                    Text("Open Fleet").foregroundStyle(Theme.link).padding(.horizontal, 10).frame(height: 28)
+                    Text("Open Setup").foregroundStyle(Theme.link).padding(.horizontal, 10).frame(height: 28)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -708,6 +701,7 @@ struct MachinesFooter: View {
 /// sidebar does, in the same order, the quiet projects folded away.
 private struct SidebarRail: View {
     let fleet: Fleet
+    let people: FleetPeople
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
     @Binding var collapsed: Bool
@@ -730,8 +724,9 @@ private struct SidebarRail: View {
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("person.2", "Providers", .providers)
             rail("book.closed", "Skills", .skills)
-            rail("server.rack", "Fleet", .machines)
-            rail("person.2.circle", "People", .people)
+            SetupCount(fleet: fleet, people: people) { count in
+                rail(Switcher.setupSymbol, "Setup", .setup, needsYou: count)
+            }
             rail(Switcher.integrationsSymbol, "Integrations", .integrations)
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             ScrollView {
@@ -747,8 +742,8 @@ private struct SidebarRail: View {
             .scrollIndicators(.never)
             Spacer(minLength: 0)
             MachinesFooter(machines: lists.machines, compact: true) {
-                if item != .machines { session = nil }
-                item = .machines
+                if item != .setup { session = nil }
+                item = .setup
             }
         }
         .padding(.bottom, 14)
