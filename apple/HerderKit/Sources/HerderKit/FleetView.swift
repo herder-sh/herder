@@ -73,9 +73,16 @@ struct FleetView: View {
     @State private var putOff: Set<ActionRequest.ID> = []
     /// Whether Claim your machines came up this launch; Later puts it off until the next.
     @State private var claimOffered = false
+    /// Welcome, on a device with no machines, until its new path is done.
+    @State private var welcome: WelcomeFlow?
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
+
+    init(fleet: Fleet) {
+        self.fleet = fleet
+        _welcome = State(initialValue: fleet.machines.isEmpty ? WelcomeFlow() : nil)
+    }
 
     var body: some View {
         screens
@@ -147,13 +154,30 @@ struct FleetView: View {
 
     private var screens: some View {
         Group {
-            #if os(iOS)
-            if sizeClass == .compact { tabs } else { shell }
-            #else
-            shell
-            #endif
+            if let welcome {
+                WelcomeView(flow: welcome, fleet: fleet, existing: { sheet = .pair(.device) },
+                            join: { sheet = .join($0) }, finish: { next in
+                    self.welcome = nil
+                    sheet = next
+                })
+            } else {
+                #if os(iOS)
+                if sizeClass == .compact { tabs } else { shell }
+                #else
+                shell
+                #endif
+            }
         }
         .tint(Theme.text)
+        // A device whose last machine goes welcomes you again; one that gets a machine another
+        // way, such as from another device's code, leaves Welcome unless its new path is on.
+        .onChange(observing: { fleet.machines.isEmpty }) { _, empty in
+            if empty {
+                if welcome == nil { welcome = WelcomeFlow() }
+            } else if welcome?.yieldsToAMachine == true {
+                welcome = nil
+            }
+        }
         #if os(iOS)
         // An iPad going compact keeps the section it showed.
         .onChange(of: sizeClass) { if sizeClass == .compact { tab = CompactTab(item) } }
@@ -381,7 +405,7 @@ struct FleetView: View {
             .environment(\.sessionPath, $chatsPath)
         case .board:
             NavigationStack(path: $boardPath) {
-                BoardView(fleet: fleet, sheet: $sheet, query: boardQuery)
+                BoardView(fleet: fleet, query: boardQuery)
                     .alwaysSearchable(text: $boardQuery, prompt: "Tasks")
                     .toolbar {
                         ActivityToolbarButton(fleet: fleet) { sheet = .activity }
@@ -431,58 +455,6 @@ struct ConnectionLine: View {
             }
             .font(.footnote.weight(.medium))
             .foregroundStyle(Theme.secondary)
-        }
-    }
-}
-
-/// A device with no machines: the two ways to get some. The common one first, herder on
-/// another device of yours, whose Add a Device shows a code; then a new machine, claimed.
-struct EmptyFleet: View {
-    /// Opens Add to Fleet on what it adds.
-    let add: (PairKind) -> Void
-
-    #if os(iOS)
-    static let deviceAction = "Scan Its Code"
-    static let deviceDetail = "On it, open People › You › Add a device, and scan the code it shows."
-    #else
-    static let deviceAction = "Paste Its Link"
-    static let deviceDetail = "On it, open People › You › Add a device, and paste the link it shows."
-    #endif
-
-    var body: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("No machines yet").font(.headline).foregroundStyle(Theme.text)
-                choice(.device, title: "I have herder on another device", detail: Self.deviceDetail,
-                       action: Self.deviceAction, primary: true, id: "add-from-device")
-                Rectangle().fill(Theme.stroke).frame(height: 1)
-                choice(.machine, title: "Set up a new machine",
-                       detail: "Run `herder claim` on it, then add it here with the link it prints.",
-                       action: "Add a Machine", primary: false, id: "add-to-fleet")
-                ExploreDemoButton()
-                    #if os(macOS)
-                    .frame(maxWidth: 220)
-                    #endif
-            }
-        }
-    }
-
-    private func choice(_ kind: PairKind, title: String, detail: String, action: String,
-                        primary: Bool, id: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: kind.symbol).foregroundStyle(Theme.secondary).frame(width: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                    Text(LocalizedStringKey(detail)).font(.footnote).foregroundStyle(Theme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            ActionButton(title: action, style: primary ? .primary : .secondary) { add(kind) }
-                .accessibilityIdentifier(id)
-                #if os(macOS)
-                .frame(maxWidth: 220)
-                #endif
         }
     }
 }

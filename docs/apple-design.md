@@ -220,9 +220,7 @@ assertion per machine (each asks its own challenge, so Face ID asks once per mac
 ending signed in, already on this device (never signed in again), can't reach it (on Tailscale?),
 it doesn't know this passkey (pick yours, or ask its owner / run `herder claim` there), or the
 machine's error. Closing Face ID stops; **Try Again** retries what is left. A device with no
-machines says "No machines yet" with two choices (`EmptyFleet`): I have herder on another
-device (scan its code, the common case), or set up a new machine (`herder claim`).
-`AddDeviceScreenshotTests` draws all three.
+machines shows Welcome instead (§4.10). `AddDeviceScreenshotTests` draws both sheets.
 
 ### 4.5 Usage (`UsageView`)
 
@@ -353,6 +351,50 @@ Screenshots: [`screenshots/p14-6/activity.png`](screenshots/p14-6/activity.png)
 (`ActivityScreenshotTests`); `mac-activity-queued.png`, `mac-activity-done.png`,
 `mac-activity-detail.png`, `mac-activity-login.png`, `ios-activity-login.png` from
 ScreenshotTests.
+
+### 4.10 Welcome, the first launch (`WelcomeView`, P22.4)
+
+A device with no machines shows Welcome full screen, in place of the tabs or the sidebar
+(`FleetView` holds a `WelcomeFlow` while it is on). It asks one question and nothing else:
+
+- **I’m new to herder**: three steps, under a progress bar (`WelcomeProgress`: You · Machine ·
+  Approve), each with one forward button.
+- **I already use herder**: Add to Fleet › From another device, the camera on iPhone (§4.4), so
+  a returning person signs in with the passkey they have and never becomes a second person.
+- **Explore a demo**, quietly under the two. A teammate's invite line ("Got an invite from a
+  teammate? Open it") shows once the app can open `herder://invite` links; `WelcomeView(invite:)`
+  takes it.
+
+The new path:
+
+1. **You.** "What should we call you?" The name is asked once, here: it becomes the person on
+   the machine and the label of the passkey, so a picker later shows the name, not "Owner".
+   The passkey is made at Approve. "Already have a herder passkey? Use it instead" goes to the
+   existing path.
+2. **Machine.** "Install herder on a machine": the command to run, ready to copy, and where
+   herder runs as rows: Linux or Mac (the install script and `herder service install`),
+   Kubernetes or Docker (`herder claim` in the container), It already runs herder (`herder
+   claim`). The iPhone scans the QR code it prints (**Scan the Code**, or **Paste a Link
+   Instead**); the Mac pastes the `herder://own` link (**Paste the Link**). A terminal's
+   `herder://login` link is refused with why; another device's `herder://fleet` code signs in
+   to its machines instead (`JoinFleetSheet`). There is no "This Mac" choice: the app cannot
+   install the daemon on the Mac it runs on yet.
+3. **Approve.** "Make trash-can-01 yours": the machine by name with its address in monospace,
+   the code its terminal shows, small, to compare; "You’ll sign in as" and the passkey card,
+   the name and "New passkey · saved in Apple Passwords or your password manager". **Create
+   Passkey and Approve** makes the passkey and claims the machine as a new person of that name
+   (`Fleet.approve(_:with:newPasskey:)`, as `ApproveSheet`'s new-passkey path): one Face ID or
+   Touch ID. Closing the prompt stays to try again; a refusal shows the machine's reason.
+4. **Done.** "trash-can-01 is yours", where the passkey is kept, then one forward button,
+   **Start a Session** (New Session), with Add another machine, Use herder on your Mac/iPhone
+   (Add a device) and Invite a teammate as rows.
+
+On the iPhone, Back is a chevron at the top and the buttons dock at the bottom: the forward one
+a 52 pt `Theme.action` capsule. On the Mac the step sits in a 520 pt column with Back bottom
+left and the forward button, filled `Theme.action`, bottom right. A machine added another way
+(an opened link, another device's code) ends Welcome, unless the new path is approving or done;
+forgetting the last machine brings it back. `WelcomeScreenshotTests` draws every step on the Mac
+and an iPhone (`welcome-<step>-<mac|iphone>.png`).
 
 ---
 

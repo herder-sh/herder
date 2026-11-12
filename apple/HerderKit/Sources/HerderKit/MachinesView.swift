@@ -123,9 +123,8 @@ struct MachinesView: View {
                 }
                 let rows = MachineRow.rows(fleet.machines, summaries: fleet.lists.machines)
                 let vaults = fleet.vaults.map(VaultLine.paired) + unpaired.map(VaultLine.unpaired)
-                if rows.isEmpty && vaults.isEmpty {
-                    EmptyFleet { sheet = .pair($0) }
-                } else {
+                // A device with no machines shows Welcome instead.
+                if !rows.isEmpty || !vaults.isEmpty {
                     SortableTable("machines", rows: rows, sortedBy: TableSort(column: "Machine"),
                                   columns: columns) { pages.open(.machine($0.hostId)) }
                 }
