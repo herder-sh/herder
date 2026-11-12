@@ -4,6 +4,7 @@
 # Delete it with `security delete-keychain <path>` when the job ends.
 # Needs MAC_P12_BASE64 (the certificate and its key as a base64 .p12) and MAC_P12_PASSWORD.
 set -euo pipefail
+# shellcheck disable=SC2046 # `security list-keychains` prints one path per line, none with spaces
 
 : "${MAC_P12_BASE64:?}" "${MAC_P12_PASSWORD:?}" "${RUNNER_TEMP:?}"
 keychain="$RUNNER_TEMP/herder-signing.keychain-db"
@@ -40,11 +41,13 @@ security unlock-keychain -p "$password" "$keychain" >&2
 security import "$p12" -k "$keychain" -f pkcs12 -P "$MAC_P12_PASSWORD" -T /usr/bin/codesign \
   -T /usr/bin/security -T /usr/bin/xcodebuild >&2
 rm -f "$p12"
-security import "$ca" -k "$keychain" -t cert >&2
+# Imported only where no keychain has it yet: a second copy is refused as "already exists".
+security find-certificate -c "Developer ID Certification Authority" "$keychain" \
+  $(security list-keychains -d user | tr -d '"') > /dev/null 2>&1 ||
+  security import "$ca" -k "$keychain" -t cert >&2
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" \
   "$keychain" > /dev/null
 # Searched first, before the runner's own keychains.
-# shellcheck disable=SC2046 # one keychain path per line, none with spaces
 security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
 security find-identity -v -p codesigning "$keychain" >&2
 echo "$keychain"
