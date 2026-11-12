@@ -24,8 +24,7 @@ final class SecretsUITests: XCTestCase {
         let name = app.textFields["secret-set-name"]
         XCTAssertTrue(name.waitForExistence(timeout: 15), "the vault's page did not list its sets")
         let set = "ci-\(Int.random(in: 1000...9999))"
-        name.tap()
-        name.typeText(set)
+        enter(set, into: name)
         app.buttons["secret-set-create"].tap()
         let add = app.buttons["secret-add-\(set)"]
         XCTAssertTrue(add.waitForExistence(timeout: 10), "the new set did not show")
@@ -34,11 +33,8 @@ final class SecretsUITests: XCTestCase {
         add.tap()
         let secretName = app.textFields["secret-name"]
         XCTAssertTrue(secretName.waitForExistence(timeout: 10))
-        secretName.tap()
-        secretName.typeText("NPM_TOKEN")
-        let description = app.textFields["secret-description"]
-        description.tap()
-        description.typeText("Publishes packages to npm")
+        enter("NPM_TOKEN", into: secretName)
+        enter("Publishes packages to npm", into: app.textFields["secret-description"])
         let value = app.secureTextFields["secret-value"]
         XCTAssertTrue(value.exists, "the value is not typed into a secure field")
         // A secure field can drop what is typed before it has taken focus, leaving Save disabled:
@@ -69,5 +65,23 @@ final class SecretsUITests: XCTestCase {
         // The page was pushed on Fleet: Back returns there.
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(open.waitForExistence(timeout: 5), "Back did not return to Fleet")
+    }
+
+    /// Types `text` into `field` until it holds exactly that: the simulator can drop keystrokes
+    /// typed before a field has taken focus, and the test would then go on with another name.
+    @MainActor
+    private func enter(_ text: String, into field: XCUIElement) {
+        for _ in 1...3 {
+            field.tap()
+            let typed = field.value as? String ?? ""
+            if typed == text { return }
+            let placeholder = field.placeholderValue ?? ""
+            if !typed.isEmpty, typed != placeholder {
+                field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: typed.count))
+            }
+            field.typeText(text)
+            if field.value as? String == text { return }
+        }
+        XCTAssertEqual(field.value as? String, text, "the field never took what was typed")
     }
 }
