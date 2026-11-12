@@ -2,10 +2,10 @@
 """Finds or creates the Mac app's Developer ID provisioning profile through the App Store
 Connect API, installs it for Xcode, and prints its UUID:
 
-    apple/scripts/developer-id-profile.py BUNDLE_ID CERT_SHA1
+    apple/scripts/developer-id-profile.py BUNDLE_ID CERT_SERIAL
 
 The profile is a MAC_APP_DIRECT one for BUNDLE_ID with the Developer ID certificate whose
-SHA-1 is CERT_SHA1 (as `security find-identity` prints it). It carries the App ID's
+serial number is CERT_SERIAL, in hex (as `openssl x509 -serial` prints it). It carries the App ID's
 capabilities, among them the associated domains passkeys need. An active profile of that name
 with the certificate is reused; others of that name, made for an earlier certificate, are
 deleted first. Needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH (the key's .p8 file).
@@ -14,7 +14,6 @@ deleted first. Needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH (the key's .p8 f
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
 import pathlib
@@ -88,8 +87,13 @@ def call(method: str, path: str, query: dict | None = None, body: dict | None = 
     return json.loads(text) if text else {}
 
 
+def serial_of(text: str) -> str:
+    """A serial number in hex as openssl and App Store Connect write it, in one form."""
+    return text.upper().lstrip("0")
+
+
 def main() -> None:
-    bundle, sha1 = sys.argv[1], sys.argv[2].upper()
+    bundle, serial = sys.argv[1], serial_of(sys.argv[2])
 
     ids = call("GET", "bundleIds", {"filter[identifier]": bundle, "limit": 200})["data"]
     bundle_id = next((i["id"] for i in ids if i["attributes"]["identifier"] == bundle), None)
@@ -101,16 +105,12 @@ def main() -> None:
         (
             c["id"]
             for c in certificates
-            if c["attributes"].get("certificateContent")
-            and hashlib.sha1(base64.b64decode(c["attributes"]["certificateContent"]))
-            .hexdigest()
-            .upper()
-            == sha1
+            if serial_of(c["attributes"].get("serialNumber") or "") == serial
         ),
         None,
     )
     if certificate is None:
-        sys.exit(f"App Store Connect has no certificate with SHA-1 {sha1}")
+        sys.exit(f"App Store Connect has no certificate with serial number {serial}")
 
     profile = None
     existing = call(

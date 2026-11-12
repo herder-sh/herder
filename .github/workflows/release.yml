@@ -15,6 +15,7 @@ on:
       - ".github/workflows/release.yml"
       - "apple/scripts/build-mac-release.sh"
       - "apple/scripts/import-mac-cert.sh"
+      - "apple/scripts/developer-id-profile.py"
 
 concurrency:
   group: release-${{ github.ref }}

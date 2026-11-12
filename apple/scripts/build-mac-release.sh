@@ -53,7 +53,11 @@ else
     echo "no keychain holds the team's Developer ID Application certificate" >&2
     exit 1
   }
-  profile=$(apple/scripts/developer-id-profile.py sh.herder.Herder "$identity")
+  serial=$(security find-certificate -a -Z -p |
+    awk -v id="$identity" '/^SHA-1 hash:/ { take = $3 == id; next }
+      take && /BEGIN CERTIFICATE/ { pem = 1 } pem { print } pem && /END CERTIFICATE/ { exit }' |
+    openssl x509 -noout -serial | cut -d= -f2)
+  profile=$(apple/scripts/developer-id-profile.py sh.herder.Herder "$serial")
 
   cat > "$work/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
