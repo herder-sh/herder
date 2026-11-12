@@ -76,6 +76,15 @@ final class FleetJoin {
         let machine: FleetMachine
         var state: State
         var id: String { machine.fingerprint }
+
+        /// The machine's name on this device once on it, else the one the link gives it, else
+        /// its address.
+        var name: String {
+            switch state {
+            case .added(let name), .signedIn(let name): name
+            default: FleetJoin.name(machine)
+            }
+        }
     }
 
     /// Signs this device in to a machine with your passkey: its name.
@@ -177,7 +186,7 @@ extension Fleet {
     /// Signs this device in to `machine` of a shared fleet with your passkey: its name.
     func join(_ machine: FleetMachine, with authenticator: Authenticator) async throws -> String {
         let hostId = try await signIn(hosts: machine.hosts, fingerprint: machine.fingerprint, with: authenticator)
-        return client.machines().first { $0.hostId == hostId }?.name ?? FleetJoin.address(machine)
+        return client.machines().first { $0.hostId == hostId }?.name ?? FleetJoin.name(machine)
     }
 
     /// The link that adds another device of yours to every machine this one has: nil while it
@@ -186,9 +195,14 @@ extension Fleet {
 }
 
 extension FleetJoin {
-    /// "10.0.4.17": where a machine is, until it names itself.
+    /// "10.0.4.17": where a machine is.
     nonisolated static func address(_ machine: FleetMachine) -> String {
         ApprovalRequest.address(machine.hosts.first ?? "")
+    }
+
+    /// "devbox": the name the sharing device gives a machine, else its address.
+    nonisolated static func name(_ machine: FleetMachine) -> String {
+        machine.name.flatMap { $0.isEmpty ? nil : $0 } ?? address(machine)
     }
 }
 
@@ -326,7 +340,7 @@ struct JoinFleetButtons: View {
     }
 }
 
-/// A machine of a shared fleet: its name once known, else its address, and how it went.
+/// A machine of a shared fleet: its name, its address beside it, and how it went.
 private struct JoinRow: View {
     let row: FleetJoin.Row
 
@@ -353,13 +367,7 @@ private struct JoinRow: View {
     }
 
     private var address: String { FleetJoin.address(row.machine) }
-
-    private var name: String {
-        switch row.state {
-        case .added(let name), .signedIn(let name): name
-        default: address
-        }
-    }
+    private var name: String { row.name }
 
     @ViewBuilder private var icon: some View {
         switch row.state {

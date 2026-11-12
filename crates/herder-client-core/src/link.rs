@@ -1,16 +1,18 @@
 //! The links a person's devices pass each other, as text and as a QR code.
 //!
 //! A link names one or more machines, each as a group of query parameters: one or more
-//! `host`, then `fp`, then `code` for a link that carries one. A group is complete once it has
-//! them all; the next parameter after a complete group starts the next group.
+//! `host`, then `fp`, then `code` for a link that carries one, then an optional `name`. A
+//! group is complete once it has its hosts, fingerprint and code; the next `host`, `fp` or
+//! `code` after a complete group starts the next group, while a `name` belongs to the group
+//! it follows.
 //!
 //! - `herder://own?host=<addr>&fp=<sha256 hex>&code=<code>&name=<name>`: a fresh daemon, or
 //!   one `herder claim` ran on, waiting for an owner to claim it (`claim_ownership`).
 //! - `herder://login?host=<addr>&fp=<sha256 hex>&code=<code>`: a terminal's `herder login`,
 //!   waiting for an app of the person to approve it (`approve_login`).
-//! - `herder://fleet?host=<addr>&fp=<sha256 hex>&host=<addr>&fp=…`: the machines a device
-//!   shares with another device of the same person, which signs in to each with its passkey.
-//!   It carries no code, so it grants nothing by itself.
+//! - `herder://fleet?host=<addr>&fp=<sha256 hex>&name=<name>&host=<addr>&fp=…`: the machines
+//!   a device shares with another device of the same person, which signs in to each with its
+//!   passkey. It carries no code, so it grants nothing by itself.
 
 use std::fmt;
 use std::str::FromStr;
@@ -35,6 +37,9 @@ pub struct FleetMachine {
     pub hosts: Vec<String>,
     /// SHA-256 of the daemon's certificate, lowercase hex: the client pins it.
     pub fingerprint: String,
+    /// The machine's name on the sharing device, to show until signed in; `None` when the
+    /// link has none.
+    pub name: Option<String>,
 }
 
 /// The `herder://login` link `herder login` shows: the machine a terminal waits on, and the
@@ -70,6 +75,7 @@ struct Group {
     hosts: Vec<String>,
     fingerprint: Option<String>,
     code: Option<String>,
+    name: Option<String>,
 }
 
 /// Formats the link, `herder://fleet?…`.
@@ -82,6 +88,7 @@ impl fmt::Display for FleetLink {
                 hosts: machine.hosts.clone(),
                 fingerprint: Some(machine.fingerprint.clone()),
                 code: None,
+                name: machine.name.clone(),
             })
             .collect();
         format(FLEET, &groups, f)
@@ -99,6 +106,7 @@ impl FromStr for FleetLink {
             .map(|group| FleetMachine {
                 hosts: group.hosts,
                 fingerprint: group.fingerprint.unwrap_or_default(),
+                name: group.name,
             })
             .collect();
         Ok(Self { machines })
@@ -112,6 +120,7 @@ impl fmt::Display for LoginUri {
             hosts: self.hosts.clone(),
             fingerprint: Some(self.fingerprint.clone()),
             code: Some(self.code.clone()),
+            name: None,
         };
         format(LOGIN, &[group], f)
     }
@@ -122,11 +131,16 @@ impl FromStr for LoginUri {
 
     /// Parses a `herder://login` link; fails with [`Error::InvalidLink`].
     fn from_str(text: &str) -> Result<Self, Error> {
-        let (hosts, fingerprint, code) = one(LOGIN, text)?;
-        Ok(Self {
+        let Group {
             hosts,
             fingerprint,
             code,
+            ..
+        } = one(LOGIN, text)?;
+        Ok(Self {
+            hosts,
+            fingerprint: fingerprint.unwrap_or_default(),
+            code: code.unwrap_or_default(),
         })
     }
 }
@@ -138,15 +152,9 @@ impl fmt::Display for OwnUri {
             hosts: self.hosts.clone(),
             fingerprint: Some(self.fingerprint.clone()),
             code: Some(self.code.clone()),
+            name: self.name.clone(),
         };
-        format(OWN, &[group], f)?;
-        if let Some(name) = &self.name {
-            let name = url::form_urlencoded::Serializer::new(String::new())
-                .append_pair("name", name)
-                .finish();
-            write!(f, "&{name}")?;
-        }
-        Ok(())
+        format(OWN, &[group], f)
     }
 }
 
@@ -156,17 +164,16 @@ impl FromStr for OwnUri {
     /// Parses a `herder://own` link, skipping parameters it does not know; fails with
     /// [`Error::InvalidLink`].
     fn from_str(text: &str) -> Result<Self, Error> {
-        let (hosts, fingerprint, code) = one(OWN, text)?;
-        // `one` checked it parses.
-        let name = Url::parse(text).ok().and_then(|url| {
-            url.query_pairs()
-                .find(|(key, _)| key == "name")
-                .map(|(_, name)| name.into_owned())
-        });
-        Ok(Self {
+        let Group {
             hosts,
             fingerprint,
             code,
+            name,
+        } = one(OWN, text)?;
+        Ok(Self {
+            hosts,
+            fingerprint: fingerprint.unwrap_or_default(),
+            code: code.unwrap_or_default(),
             name,
         })
     }
@@ -177,8 +184,8 @@ const FLEET: &str = "fleet";
 const LOGIN: &str = "login";
 const OWN: &str = "own";
 
-/// The one machine of a `herder://<kind>` link with a code: its hosts, fingerprint and code.
-fn one(kind: &str, text: &str) -> Result<(Vec<String>, String, String), Error> {
+/// The one machine of a `herder://<kind>` link with a code, which has its fingerprint and code.
+fn one(kind: &str, text: &str) -> Result<Group, Error> {
     let mut groups = parse(kind, text, true)?;
     if groups.len() != 1 {
         return Err(invalid(&format!(
@@ -186,12 +193,7 @@ fn one(kind: &str, text: &str) -> Result<(Vec<String>, String, String), Error> {
             groups.len()
         )));
     }
-    let group = groups.remove(0);
-    Ok((
-        group.hosts,
-        group.fingerprint.unwrap_or_default(),
-        group.code.unwrap_or_default(),
-    ))
+    Ok(groups.remove(0))
 }
 
 fn format(kind: &str, groups: &[Group], f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -207,6 +209,9 @@ fn format(kind: &str, groups: &[Group], f: &mut fmt::Formatter<'_>) -> fmt::Resu
         }
         if let Some(code) = &group.code {
             query.append_pair("code", code);
+        }
+        if let Some(name) = &group.name {
+            query.append_pair("name", name);
         }
     }
     query.finish();
@@ -243,13 +248,14 @@ fn parse(kind: &str, text: &str, coded: bool) -> Result<Vec<Group>, Error> {
     let mut machines = Vec::new();
     let mut group = Group::default();
     for (key, value) in url.query_pairs() {
-        if !matches!(&*key, "host" | "fp" | "code") {
+        if !matches!(&*key, "host" | "fp" | "code" | "name") {
             continue;
         }
         if !coded && key == "code" {
             return Err(invalid(&format!("a {kind} link carries no code")));
         }
-        if group.complete(coded) {
+        // A name belongs to the group it follows, so it never starts the next one.
+        if key != "name" && group.complete(coded) {
             machines.push(std::mem::take(&mut group).finish(coded)?);
         }
         let value = value.into_owned();
@@ -259,6 +265,7 @@ fn parse(kind: &str, text: &str, coded: bool) -> Result<Vec<Group>, Error> {
                 false
             }
             "fp" => group.fingerprint.replace(value).is_some(),
+            "name" => group.name.replace(value).is_some(),
             _ => group.code.replace(value).is_some(),
         };
         if repeated {
@@ -283,6 +290,7 @@ mod tests {
         FleetMachine {
             hosts: vec![host.into()],
             fingerprint: fingerprint.repeat(32),
+            name: None,
         }
     }
 
@@ -311,6 +319,7 @@ mod tests {
             [FleetMachine {
                 hosts: vec!["c".into()],
                 fingerprint: "a".into(),
+                name: None,
             }]
         );
         let fp = "ab".repeat(32);
@@ -328,6 +337,41 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn a_fleet_link_names_its_machines() {
+        let mut vault = machine("100.64.0.7:7447", "cd");
+        vault.name = Some("draugelis's vault".into());
+        let mut mac = machine("192.168.1.5:7447", "ab");
+        mac.name = Some("Coingate-CJH9FXV367".into());
+        let link = FleetLink {
+            machines: vec![mac, machine("10.0.0.9:7447", "ef"), vault],
+        };
+        let text = link.to_string();
+        assert_eq!(
+            text,
+            format!(
+                "herder://fleet?host=192.168.1.5%3A7447&fp={}&name=Coingate-CJH9FXV367\
+                 &host=10.0.0.9%3A7447&fp={}\
+                 &host=100.64.0.7%3A7447&fp={}&name=draugelis%27s+vault",
+                "ab".repeat(32),
+                "ef".repeat(32),
+                "cd".repeat(32)
+            )
+        );
+        assert_eq!(text.parse::<FleetLink>().unwrap(), link);
+
+        // A name belongs to the group it follows, wherever in that group it comes.
+        let named: FleetLink = "herder://fleet?name=one&host=a&fp=b&host=c&name=two&fp=d"
+            .parse()
+            .unwrap();
+        let names: Vec<_> = named.machines.iter().map(|m| m.name.as_deref()).collect();
+        assert_eq!(names, [Some("one"), Some("two")]);
+        assert!(matches!(
+            "herder://fleet?host=a&fp=b&name=x&name=y".parse::<FleetLink>(),
+            Err(Error::InvalidLink { .. })
+        ));
     }
 
     #[test]

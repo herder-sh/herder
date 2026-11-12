@@ -178,7 +178,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 18;
+pub const CLIENT_API_VERSION: u32 = 19;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -548,9 +548,10 @@ impl Client {
     }
 
     /// The link that shares this device's machines with another device of the person's: each
-    /// machine's addresses and fingerprint, which that device signs in to with its passkey
-    /// ([`Client::sign_in`]). It carries no code, so it grants nothing by itself. `None` while
-    /// no machine is saved, and in a demo.
+    /// machine's name, addresses and fingerprint, which that device signs in to with its
+    /// passkey ([`Client::sign_in`]). It carries no code, so it grants nothing by itself. It
+    /// leaves out loopback addresses, and so a machine with no other, as no other device
+    /// reaches them. `None` while no machine is left, and in a demo.
     pub fn share(&self) -> Option<FleetLink> {
         // A demo's machines are nowhere another device could reach.
         if self.inner.demo {
@@ -559,9 +560,18 @@ impl Client {
         let machines: Vec<FleetMachine> = self
             .lock()
             .iter()
-            .map(|machine| FleetMachine {
-                hosts: machine.saved.addresses.clone(),
-                fingerprint: machine.saved.fingerprint.clone(),
+            .filter_map(|machine| {
+                let saved = machine.saved();
+                let hosts: Vec<String> = saved
+                    .addresses
+                    .into_iter()
+                    .filter(|host| !address::is_loopback(host))
+                    .collect();
+                (!hosts.is_empty()).then_some(FleetMachine {
+                    hosts,
+                    fingerprint: saved.fingerprint,
+                    name: Some(saved.name),
+                })
             })
             .collect();
         (!machines.is_empty()).then_some(FleetLink { machines })

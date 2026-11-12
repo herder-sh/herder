@@ -28,6 +28,24 @@ import Testing
         #expect(join.summary(biometry: "Face ID") == "Signed in to all 4.")
     }
 
+    @Test func namesEachMachineAsTheLinkDoesElseByItsAddress() async {
+        var named = Self.machine(1)
+        named.name = "alice’s vault"
+        var blank = Self.machine(3)
+        blank.name = ""
+        let link = FleetLink(machines: [named, Self.machine(2), blank, Self.machine(4)])
+        let join = FleetJoin(link, known: { $0 == Self.machine(4).fingerprint ? "devbox" : nil }) { machine in
+            if machine.hosts[0] == "10.0.4.1:7447" { throw HerderError.Unreachable(detail: "down") }
+            return "host-\(machine.hosts[0])"
+        }
+        #expect(join.rows.map(\.name) == ["alice’s vault", "10.0.4.2", "10.0.4.3", "devbox"])
+        await join.run()
+        // Signing in names it as the machine does; one it could not reach keeps the link's name.
+        #expect(join.rows.map(\.name) == ["alice’s vault", "host-10.0.4.2:7447", "host-10.0.4.3:7447", "devbox"])
+        #expect(FleetJoin.name(named) == "alice’s vault")
+        #expect(FleetJoin.name(Self.machine(2)) == "10.0.4.2")
+    }
+
     @Test func saysWhyEachMachineDidNotSignIn() async {
         let join = FleetJoin(Self.link, known: { _ in nil }) { machine in
             switch machine.hosts[0] {

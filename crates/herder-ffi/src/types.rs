@@ -182,6 +182,8 @@ pub struct NewAccount {
 pub struct FleetMachine {
     pub hosts: Vec<String>,
     pub fingerprint: String,
+    #[uniffi(default = None)]
+    pub name: Option<String>,
 }
 
 #[uniffi::remote(Record)]
