@@ -2,9 +2,9 @@ name: release
 
 # A `v*` tag builds static musl binaries, an Apple silicon macOS binary and the macOS app, signed
 # with the Developer ID and notarized, and publishes them as a GitHub Release; it also uploads
-# the iOS app to TestFlight. workflow_dispatch runs the same, without publishing the GitHub
-# Release. PRs that change this file or the app's release script run the builds only, without
-# the TestFlight upload; from a fork, which gets no secrets, the macOS app is signed ad hoc.
+# the iOS and macOS apps to TestFlight. workflow_dispatch runs the same, without publishing the
+# GitHub Release. PRs that change this file or the app's release script run the builds only,
+# without the TestFlight upload; from a fork, which gets no secrets, the macOS app is signed ad hoc.
 
 on:
   push:
@@ -155,7 +155,7 @@ jobs:
           if-no-files-found: error
 
   testflight:
-    name: upload iOS app to TestFlight
+    name: upload the apps to TestFlight
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
@@ -170,10 +170,10 @@ jobs:
           xcodebuild -downloadComponent MetalToolchain
           brew install xcodegen
       - name: Build the bindings and the xcframework
-        run: apple/scripts/build-ffi.sh aarch64-apple-ios
+        run: apple/scripts/build-ffi.sh aarch64-apple-ios aarch64-apple-darwin
       - name: Record the demo fleet
         run: apple/scripts/record-demo.sh
-      - name: Archive and upload the iOS app
+      - name: Archive and upload the iOS and macOS apps
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -184,7 +184,8 @@ jobs:
         run: |
           export ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
           printf '%s' "$ASC_KEY" > "$ASC_KEY_PATH"
-          apple/scripts/upload-testflight.sh
+          apple/scripts/upload-testflight.sh ios
+          apple/scripts/upload-testflight.sh macos
 
   publish:
     name: publish
