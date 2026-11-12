@@ -160,6 +160,28 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
         #expect(!MachineRow.isLocal("devbox.lan:7447", names: names))
         #expect(!MachineRow.isLocal(nil, names: names))
     }
+
+    @Test func thisMacAnswersToItsHostNameWithAndWithoutLocal() {
+        let names: Set<String> = ["localhost", "127.0.0.1", "::1", "studio", "studio.local"]
+        #expect(MachineRow.names(host: "Studio") == names)
+        #expect(MachineRow.names(host: "studio.local") == names)
+    }
+
+    #if os(macOS)
+    /// This Mac's names come from the kernel, as its daemon names its machine (`gethostname`),
+    /// not from a DNS lookup, which held the main thread on each draw of the sidebar.
+    @Test func thisMacGoesByTheNameItsDaemonGivesIt() throws {
+        let hostname = Process()
+        hostname.executableURL = URL(fileURLWithPath: "/bin/hostname")
+        let out = Pipe()
+        hostname.standardOutput = out
+        try hostname.run()
+        hostname.waitUntilExit()
+        let name = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(MachineRow.localNames == MachineRow.names(host: name))
+    }
+    #endif
 }
 
 #if os(macOS)

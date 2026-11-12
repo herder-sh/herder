@@ -51,14 +51,26 @@ struct MachineRow: Hashable, Identifiable {
         }
     }
 
-    /// The names this Mac answers to, lowercased: loopback and its host name.
-    static var localNames: Set<String> {
+    /// The names this Mac answers to, lowercased: loopback and its host name, as the kernel has
+    /// it, which is what a daemon here names its machine. Read once, and with no lookup:
+    /// `ProcessInfo.hostName` resolves the name over DNS and mDNS on the calling thread, and the
+    /// sidebar reads this on every draw. Where no resolver answers, as on CI's Macs, each read
+    /// held the main thread for seconds, and the mDNS query asked for Local Network access.
+    static let localNames: Set<String> = {
         #if os(macOS)
-        let host = ProcessInfo.processInfo.hostName.lowercased()
-        return loopback.union([host, host.replacingOccurrences(of: ".local", with: "")])
+        var buffer = [CChar](repeating: 0, count: Int(MAXHOSTNAMELEN) + 1)
+        guard gethostname(&buffer, buffer.count - 1) == 0 else { return loopback }
+        return names(host: String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self))
         #else
         return []
         #endif
+    }()
+
+    /// Loopback and `host`, lowercased, with and without ".local".
+    static func names(host: String) -> Set<String> {
+        let host = host.lowercased()
+        let bare = host.hasSuffix(".local") ? String(host.dropLast(".local".count)) : host
+        return loopback.union([host, bare, bare + ".local"])
     }
 
     /// The machine whose daemon runs on this Mac: of those reached at an address that names it,
