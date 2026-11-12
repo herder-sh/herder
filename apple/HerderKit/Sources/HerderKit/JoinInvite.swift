@@ -169,7 +169,7 @@ extension Fleet {
     /// Makes a passkey named `name` from `machine`'s offer, and joins it with the invite.
     func acceptInvite(_ machine: InviteLink.Machine, name: String,
                       with authenticator: Authenticator) async throws -> (name: String, me: PersonInfo) {
-        let pending = try await client.signIn(hosts: machine.hosts, fingerprint: machine.fingerprint)
+        let pending = try await client.signIn(hosts: machine.hosts, fingerprint: machine.fingerprint, passkeys: [])
         guard let creation = pending.registration(),
               let userId = Data(base64URL: creation.userHandle), let challenge = Data(base64URL: creation.challenge)
         else { throw HerderError.Local(detail: "the machine did not offer to make a passkey") }
@@ -186,7 +186,7 @@ extension Fleet {
     /// Joins `machine` with the invite as `me`, by a passkey of theirs.
     func acceptInvite(_ machine: InviteLink.Machine, as me: PersonInfo,
                       with authenticator: Authenticator) async throws -> String {
-        let pending = try await client.signIn(hosts: machine.hosts, fingerprint: machine.fingerprint)
+        let pending = try await client.signIn(hosts: machine.hosts, fingerprint: machine.fingerprint, passkeys: [])
         let assertion = try await authenticator.sign(pending.challenge())
         guard let key = me.passkeys.first(where: { $0.credentialId == assertion.id }) else {
             throw HerderError.Local(detail: "that passkey is not \(me.name)’s; sign with the one you joined with")

@@ -126,6 +126,12 @@ pub struct PasskeyChallenge {
     pub challenge: String,
     /// When the daemon stops accepting an assertion over it.
     pub expires_at: Timestamp,
+    /// The passkeys the assertion may come from, as credential ids, base64url: the
+    /// platform's `allowCredentials`. Empty for any passkey for [`PASSKEY_RP_ID`]. A daemon
+    /// sends it empty; a client signing in from a shared fleet link fills it with the sharing
+    /// person's passkeys, so the device offers only theirs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_credentials: Vec<String>,
 }
 
 /// What a new passkey is created from: the arguments of the platform's registration request.

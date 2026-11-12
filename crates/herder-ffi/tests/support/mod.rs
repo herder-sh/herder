@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, ensure};
 use herder_adapters::fake::FakeAdapter;
-use herder_client_core::{FleetLink, FleetMachine};
+use herder_client_core::{FleetLink, FleetMachine, FleetPerson};
 use herder_daemon::auth::Auth;
 use herder_daemon::auth::authenticator;
 use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
@@ -198,6 +198,7 @@ impl FakeDaemon {
         });
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let link = FleetLink {
+            person: person(OWNER),
             machines: vec![FleetMachine {
                 hosts: vec![listener.local_addr()?.to_string()],
                 fingerprint: tls.fingerprint().to_owned(),
@@ -265,6 +266,19 @@ fn fake_login() -> LoginProgram {
             args: script(r#"[ -e "$XDG_DATA_HOME/logged-in" ]"#),
             logged_in_field: None,
         },
+    }
+}
+
+/// The person of the recorded passkey `name`, as a link another of their devices shares
+/// names them.
+pub fn person(name: &str) -> FleetPerson {
+    FleetPerson {
+        name: name.into(),
+        passkeys: vec![
+            authenticator::Authenticator::known(name)
+                .key()
+                .credential_id,
+        ],
     }
 }
 

@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 19`
+`CLIENT_API_VERSION = 20`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -65,7 +65,7 @@ adapting anything:
 | Rust                                                          | UniFFI                          |
 | ------------------------------------------------------------- | ------------------------------- |
 | `Client`, `SessionSubscription`, `TerminalStream`, `Changes`, `PendingSignIn` | objects (`Arc`, `Send + Sync`)  |
-| `Machine`, `ConnectionQuality`, `SessionUpdate`, `NewAccount`, `FleetLink`, `FleetMachine`, `LoginUri`, `OwnUri` | records |
+| `Machine`, `ConnectionQuality`, `SessionUpdate`, `NewAccount`, `FleetLink`, `FleetPerson`, `FleetMachine`, `LoginUri`, `OwnUri` | records |
 | `ConnectionState`, `TerminalEvent`                            | enums with named fields         |
 | `Error`                                                       | error enum with named fields    |
 | `async fn` methods                                            | async methods on a tokio runtime (`async_runtime = "tokio"`) |
@@ -152,12 +152,12 @@ everything stops once the last clone is dropped.
 | `open_demo(demo: Demo) -> Client` | Opens a recorded fleet with no profile and no connection; see [Demo](#demo). |
 | `machines() -> Vec<Machine>` | Every paired machine, in pairing order. |
 | `changes() -> Changes` | Notifications that `machines()` changed. |
-| `share() -> Option<FleetLink>` | The `herder://fleet` link of every saved machine, connected or not, by the name this device gives it, for another device of the person to sign in to each with its passkey. It carries no code, and no loopback address (`localhost`, `127.0.0.0/8`, `::1`): a machine with only those is left out. `None` while no machine is left. See [Fleet links](#fleet-links). |
+| `async share() -> Result<FleetLink, Error>` | The `herder://fleet` link of every saved machine, connected or not, by the name this device gives it, and of the person this device acts for, by their name and passkeys as the connected machines list them (`list_people`), for another device of the person to sign in to each with one of those passkeys. It carries no code, and no loopback address (`localhost`, `127.0.0.0/8`, `::1`): a machine with only those is left out. Fails with `Local` while no machine is left, in a demo, and while no connected machine knows this device as a person; with the machines' error when none lists the person. See [Fleet links](#fleet-links). |
 | `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
 | `set_addresses(host_id: HostId, addresses: Vec<String>) -> Result<(), Error>` | Connects to a machine at `addresses`, in this order of preference, from now on; each a host or IP with an optional port (7447 by default). Fails with `Error::Local` on an invalid address or an empty list. |
 | `async reconnect(host_id: HostId) -> Result<String, Error>` | Drops a machine's connection, if up, and connects again at once, racing its addresses in order: the address the new connection uses, or `Unreachable` when none answered. |
 | `forget(host_id: HostId) -> Result<(), Error>` | Unpairs a machine on this device. |
-| `async sign_in(hosts: Vec<String>, fingerprint: String) -> Result<PendingSignIn, Error>` | Connects to a machine under a new device key to sign in as a person: the `PendingSignIn` holds what the person's passkey signs. Fails with `Unreachable` when no address answered. See [Signing in](#signing-in). |
+| `async sign_in(hosts: Vec<String>, fingerprint: String, passkeys: Vec<String>) -> Result<PendingSignIn, Error>` | Connects to a machine under a new device key to sign in as a person: the `PendingSignIn` holds what the person's passkey signs, restricted to the credential ids `passkeys` (a fleet link's person's; empty for any passkey). Fails with `Unreachable` when no address answered. See [Signing in](#signing-in). |
 | `async log_in(hosts: Vec<String>, fingerprint: String, shown: impl FnOnce(&str, Timestamp) + Send) -> Result<Machine, Error>` | Rust-only, for `herder login`: signs this device in without a passkey. `shown` gets the code to show and when it expires; once an app of a person approves it, the machine is saved as theirs. Fails with `Rejected` when the request expires or is refused. |
 | `async synced(host_id: HostId) -> Result<(), Error>` | Waits until a machine is connected and has sent everything owed for what was sent before. |
 | `suspend()` | The app went to the background: saves the offline cache (blocking) and stops retrying lost connections. |
@@ -215,9 +215,11 @@ everything stops once the last clone is dropped.
 - `NewAccount` — `account_id`, `provider`, `label: Option<String>`, `config_dir: Option<String>`.
 - `FleetMachine` — one machine of a fleet link: `hosts: Vec<String>`, `fingerprint: String`,
   `name: Option<String>` (its name on the sharing device, to show before signing in).
-- `FleetLink` — `machines: Vec<FleetMachine>`, never empty; `FromStr` (fails with
-  `Error::InvalidLink`, also for a link with a code) and `Display` (`herder://fleet?…`). See
-  [Fleet links](#fleet-links).
+- `FleetPerson` — who shares a fleet link: `name: String`, and `passkeys: Vec<String>`, their
+  passkeys' credential ids, base64url, never empty.
+- `FleetLink` — `person: FleetPerson` and `machines: Vec<FleetMachine>`, never empty;
+  `FromStr` (fails with `Error::InvalidLink`, also for a link with a code or without its
+  person) and `Display` (`herder://fleet?…`). See [Fleet links](#fleet-links).
 - `LoginUri` — `hosts: Vec<String>`, `fingerprint: String`, `code: String` (`XXX-XXX`):
   the machine a terminal waits on in `herder login` and the code an app approves it with;
   `FromStr` and `Display` (`herder://login?…`).
@@ -301,22 +303,27 @@ connected machine.
 
 ## Fleet links
 
-A `herder://fleet` link names one or more machines. Each is a group of query parameters: one
-or more `host` (`host:port`, tried in order), then `fp` (SHA-256 of the daemon's certificate,
-lowercase hex), then an optional `name` to show for it. A group is complete once it has hosts
-and `fp`, and the next `host` or `fp` after a complete group starts the next machine; a `name`
-belongs to the group it follows:
+A `herder://fleet` link names the person who shares it and one or more machines. `person`
+gives the person's name, once, and each `passkey` the credential id of one of their passkeys,
+base64url; it has at least one. They belong to no machine, and `share` puts them first. Each
+machine is a group of query parameters: one or more `host` (`host:port`, tried in order), then
+`fp` (SHA-256 of the daemon's certificate, lowercase hex), then an optional `name` to show for
+it. A group is complete once it has hosts and `fp`, and the next `host` or `fp` after a
+complete group starts the next machine; a `name` belongs to the group it follows:
 
 ```
-herder://fleet?host=192.168.1.5%3A7447&fp=<hex>&name=devbox&host=10.0.0.9%3A7447&host=%5Bfd00%3A%3A9%5D%3A7447&fp=<hex>&name=alice%27s+vault
+herder://fleet?person=alice&passkey=<id>&host=192.168.1.5%3A7447&fp=<hex>&name=devbox&host=10.0.0.9%3A7447&host=%5Bfd00%3A%3A9%5D%3A7447&fp=<hex>&name=alice%27s+vault
 ```
+
+A link without its person, as shared before version 20, does not parse.
 
 `Client::share` makes one of every machine the device has saved, named as this device names
 it, without the loopback addresses no other device reaches it at. It holds no code and grants
-nothing: another device of the same person signs in to each machine with its own passkey
-(`sign_in`, then `finish(SignIn::Passkey)`), synced to it with the person's other passkeys,
-and gets a key of its own on each, revocable on its own. A machine that does not know the
-person refuses the sign-in.
+nothing: another device of the same person signs in to each machine with one of the person's
+passkeys (`sign_in` with `link.person.passkeys`, then `finish(SignIn::Passkey)`), synced to it,
+and gets a key of its own on each, revocable on its own. Its challenge allows only those
+passkeys (`allow_credentials`), so the device can name the passkey before Face ID and offers
+no other. A machine that does not know the person refuses the sign-in.
 
 ## Signing in
 
@@ -326,7 +333,7 @@ key with `sign_in` set, and returns a `PendingSignIn` once the machine answers:
 
 | Method | Does |
 | ------ | ---- |
-| `challenge() -> PasskeyChallenge` | What an existing passkey signs (`rp_id`, `challenge`, `expires_at`). |
+| `challenge() -> PasskeyChallenge` | What an existing passkey signs (`rp_id`, `challenge`, `expires_at`), and the passkeys `sign_in` allowed (`allow_credentials`, the platform's `allowCredentials`). |
 | `registration() -> Option<PasskeyCreation>` | What a new passkey is created from, to claim the machine or accept an invite with one; `None` while the machine takes neither. |
 | `async finish(sign_in: SignIn) -> Result<Machine, Error>` | Sends `sign_in` (`Passkey`, `ClaimOwnership` or `AcceptInvite`), and once the machine says hello saves it, replacing it if paired before. Fails with `Rejected` when the machine refuses (e.g. `forbidden` for a bad assertion or code), `Local` for `StartLogin`, and `Closed` when called again. |
 
@@ -355,7 +362,7 @@ answers to the commands the apps send to read (`list_people`, `list_bots`, `get_
 - `send` returns the recorded answer to an equal command; any other command, and
   `open_terminal`, `attach_terminal`, `reconnect`, `sign_in`, `log_in`, `rename`,
   `set_addresses` and `forget`, fail with `Error::Demo`, which the apps show as "This is a
-  demo; nothing is sent". `synced` returns at once, and `share` gives `None`.
+  demo; nothing is sent". `synced` returns at once, and `share` fails with `Local`.
 
 ## Passkeys
 
@@ -381,6 +388,14 @@ change to secrets need a fresh passkey assertion.
 | Rust | Does |
 | ---- | ---- |
 | `trait Authenticator: Send + Sync { fn assert(&self, host_id: HostId, challenge: PasskeyChallenge) -> Assertion }` | Signs `challenge`, asking the user; `Assertion` is a boxed `Send` future of `Result<PasskeyAssertion, Error>`. |
+
+## Changes in version 20
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| `share() -> Option<FleetLink>` | `async share() -> Result<FleetLink, Error>` | The link names the person, as their machines list them, so `share` asks them. |
+| `FleetLink { machines }` | `FleetLink { person, machines }`, `FleetPerson` | The receiving device names who shared it and restricts the passkey assertion to theirs. |
+| `sign_in(hosts, fingerprint)` | `sign_in(hosts, fingerprint, passkeys)` | The challenge allows only the link's person's passkeys (`PasskeyChallenge::allow_credentials`). |
 
 ## Changes in version 18
 

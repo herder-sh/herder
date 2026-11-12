@@ -240,13 +240,17 @@ Activity with `Fleet.install`. The daemon checks the CLI's version again before 
 install's terminal, so the machine's versions are current when the job ends.
 
 **Adding a device** (`AddDevice.swift`). A device with machines offers **Add a Device** in
-Setup's header and on the You page's Devices (§8.9). Its sheet (`AddDeviceSheet`) shows the `herder://fleet`
-link of `Client::share()` as a QR code with Copy, and three steps: install herder on the other
+Setup's header and on the You page's Devices (§8.9), once a machine knows it as a person
+(`Fleet.canShare`). Its sheet (`AddDeviceSheet`) shows the `herder://fleet` link of
+`Client::share()`, which names you and your passkeys as your connected machines list them, as a
+QR code with Copy (or why it could not make one), and three steps: install herder on the other
 device, scan this code with it (I already use herder, or Add a machine), approve with your passkey,
 the same one, synced by iCloud Keychain or a password manager. The link grants nothing by
 itself. The other device takes it from the scanner, a paste or an opened link, and
 `JoinFleetSheet` lists every machine in it, "Sign in to 5 machines as you": one passkey
-assertion per machine (each asks its own challenge, so Face ID asks once per machine), each row
+assertion per machine, restricted to the passkeys the link names (`allowCredentials`), so Face
+ID offers only the sharing person's (`FleetJoin.person` has their name and credential ids for
+the sheet to show) (each asks its own challenge, so Face ID asks once per machine), each row
 ending signed in, already on this device (never signed in again), can't reach it (on Tailscale?),
 or refused with the reason the machine gives (`SignInRefusal`): "Knows you by another
 passkey: Tomas in 1Password" (pick that one; the place comes from the passkey's AAGUID,

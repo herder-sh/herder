@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use herder_client_core::{
-    ConnectionQuality, ConnectionState, FleetLink, FleetMachine, LoginUri, Machine, NewAccount,
-    OwnUri, SessionUpdate, TerminalEvent,
+    ConnectionQuality, ConnectionState, FleetLink, FleetMachine, FleetPerson, LoginUri, Machine,
+    NewAccount, OwnUri, SessionUpdate, TerminalEvent,
 };
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
@@ -187,7 +187,14 @@ pub struct FleetMachine {
 }
 
 #[uniffi::remote(Record)]
+pub struct FleetPerson {
+    pub name: String,
+    pub passkeys: Vec<String>,
+}
+
+#[uniffi::remote(Record)]
 pub struct FleetLink {
+    pub person: FleetPerson,
     pub machines: Vec<FleetMachine>,
 }
 
@@ -1265,6 +1272,8 @@ pub struct PasskeyChallenge {
     pub rp_id: String,
     pub challenge: String,
     pub expires_at: Timestamp,
+    #[uniffi(default)]
+    pub allow_credentials: Vec<String>,
 }
 
 #[uniffi::remote(Record)]

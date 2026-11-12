@@ -157,6 +157,11 @@ impl Authenticator {
 
     /// Signs `challenge`.
     pub fn assert(&self, challenge: &PasskeyChallenge) -> PasskeyAssertion {
+        assert!(
+            self.allowed(challenge),
+            "the challenge allows only {:?}",
+            challenge.allow_credentials
+        );
         self.assert_raw(&challenge.challenge, "https://herder.sh")
     }
 
@@ -164,6 +169,13 @@ impl Authenticator {
     /// may when not asked to verify.
     pub fn assert_unverified(&self, challenge: &PasskeyChallenge) -> PasskeyAssertion {
         self.sign(&challenge.challenge, "https://herder.sh", FLAGS & !VERIFIED)
+    }
+
+    /// Whether a platform would offer this passkey for `challenge`: its `allow_credentials`
+    /// are empty or name it.
+    pub fn allowed(&self, challenge: &PasskeyChallenge) -> bool {
+        let id = URL_SAFE_NO_PAD.encode(&self.credential_id);
+        challenge.allow_credentials.is_empty() || challenge.allow_credentials.contains(&id)
     }
 
     /// Signs the base64url `challenge` as if for `origin`.
@@ -255,7 +267,10 @@ impl Join {
         fingerprint: &str,
         name: &str,
     ) -> (Authenticator, Machine) {
-        let pending = client.sign_in(hosts, fingerprint.to_owned()).await.unwrap();
+        let pending = client
+            .sign_in(hosts, fingerprint.to_owned(), Vec::new())
+            .await
+            .unwrap();
         let (passkey, sign_in) = self.sign_in(name, &pending.registration().unwrap());
         (passkey, pending.finish(sign_in).await.unwrap())
     }
@@ -293,7 +308,9 @@ pub async fn sign_in(
     name: &str,
 ) -> Result<Machine, Error> {
     if let Some(passkey) = Authenticator::of(auth, name) {
-        let pending = client.sign_in(hosts, fingerprint.to_owned()).await?;
+        let pending = client
+            .sign_in(hosts, fingerprint.to_owned(), Vec::new())
+            .await?;
         let assertion = passkey.assert(&pending.challenge());
         return pending.finish(SignIn::Passkey { assertion }).await;
     }
@@ -302,7 +319,9 @@ pub async fn sign_in(
         Some(_) => Role::Member,
     };
     let join = Join::open(auth, role);
-    let pending = client.sign_in(hosts, fingerprint.to_owned()).await?;
+    let pending = client
+        .sign_in(hosts, fingerprint.to_owned(), Vec::new())
+        .await?;
     let (_, sign_in) = join.sign_in(name, &pending.registration().unwrap());
     pending.finish(sign_in).await
 }

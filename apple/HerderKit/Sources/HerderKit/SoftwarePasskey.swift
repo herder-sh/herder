@@ -75,8 +75,9 @@ import Herder
             kind: "public-key")
     }
 
-    func assert(challenge: Data) async throws -> PasskeyAssertion {
-        try SoftwareSigning.assertion(key: key, credentialId: credentialId, userHandle: userId, challenge: challenge)
+    func assert(challenge: Data, allowing credentials: [Data]) async throws -> PasskeyAssertion {
+        if let error = notAllowed(credentialId, credentials) { throw error }
+        return try SoftwareSigning.assertion(key: key, credentialId: credentialId, userHandle: userId, challenge: challenge)
     }
 
     /// The public key as a COSE_Key: EC2, ES256, P-256, x, y.

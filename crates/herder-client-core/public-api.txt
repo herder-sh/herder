@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 19;
+pub const CLIENT_API_VERSION: u32 = 20;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -101,6 +101,7 @@ impl Client {
         &self,
         hosts: Vec<String>,
         fingerprint: String,
+        passkeys: Vec<String>,
     ) -> Result<PendingSignIn, Error> {}
 }
 
@@ -114,7 +115,7 @@ impl Client {
 }
 
 impl Client {
-    pub fn share(&self) -> Option<FleetLink> {}
+    pub async fn share(&self) -> Result<FleetLink, Error> {}
 }
 
 impl Client {
@@ -374,7 +375,14 @@ pub struct DemoAnswer {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FleetLink {
+    pub person: FleetPerson,
     pub machines: Vec<FleetMachine>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FleetPerson {
+    pub name: String,
+    pub passkeys: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

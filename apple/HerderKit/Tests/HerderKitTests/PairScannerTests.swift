@@ -24,7 +24,7 @@ struct PairScannerTests {
     }
 
     @Test func findsAnotherDevicesFleetLink() throws {
-        let link = fleetLinkToString(link: FleetLink(machines: [
+        let link = fleetLinkToString(link: FleetLink(person: FleetPerson(name: "alice", passkeys: ["Y3JlZC0x"]), machines: [
             FleetMachine(hosts: ["10.0.4.17:7447", "devbox.tail0.ts.net:7447"], fingerprint: String(repeating: "ab", count: 32)),
             FleetMachine(hosts: ["10.0.4.18:7447"], fingerprint: String(repeating: "cd", count: 32)),
         ]))
@@ -32,6 +32,7 @@ struct PairScannerTests {
         guard case .fleet(let fleet)? = pairLink(in: output) else { Issue.record("not a fleet link"); return }
         #expect(fleet.machines.map(\.hosts) == [["10.0.4.17:7447", "devbox.tail0.ts.net:7447"], ["10.0.4.18:7447"]])
         #expect(fleet.machines.map(\.fingerprint) == [String(repeating: "ab", count: 32), String(repeating: "cd", count: 32)])
+        #expect(fleet.person == FleetPerson(name: "alice", passkeys: ["Y3JlZC0x"]))
         #expect(pairLink(in: link)?.sheet == .join(fleet))
         #expect(pairLink(in: own)?.sheet == .approve(try #require(pairLink(in: own)?.approval)))
     }

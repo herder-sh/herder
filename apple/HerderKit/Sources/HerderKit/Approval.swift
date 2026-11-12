@@ -158,7 +158,7 @@ extension Fleet {
                  newPasskey: String? = nil) async throws -> HostId? {
         switch request.kind {
         case .machine:
-            let pending = try await client.signIn(hosts: request.hosts, fingerprint: request.fingerprint)
+            let pending = try await client.signIn(hosts: request.hosts, fingerprint: request.fingerprint, passkeys: [])
             let hostId = try await claim(request, pending, authenticator: authenticator, newPasskey: newPasskey)
             settleClaim(request, .success(hostId))
             return hostId
@@ -175,9 +175,11 @@ extension Fleet {
     }
 
     /// Signs this device in to the machine at `hosts` with `authenticator`'s passkey, as the
-    /// person the machine knows by it, and saves the machine; its host id returned.
-    func signIn(hosts: [String], fingerprint: String, with authenticator: Authenticator) async throws -> HostId {
-        let pending = try await client.signIn(hosts: hosts, fingerprint: fingerprint)
+    /// person the machine knows by it, and saves the machine; its host id returned. With
+    /// `passkeys`, credential ids as a fleet link names them, only one of those may sign.
+    func signIn(hosts: [String], fingerprint: String, passkeys: [String] = [],
+                with authenticator: Authenticator) async throws -> HostId {
+        let pending = try await client.signIn(hosts: hosts, fingerprint: fingerprint, passkeys: passkeys)
         let assertion = try await authenticator.sign(pending.challenge())
         return try await pending.finish(signIn: .passkey(assertion: assertion)).hostId
     }

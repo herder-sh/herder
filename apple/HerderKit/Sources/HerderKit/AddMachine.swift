@@ -211,7 +211,7 @@ struct AddMachineSheet: View {
             error = nil
             step = .approve(.vault(vault))
         }
-        actions.addDevice = fleet.shareLink == nil ? nil : { present(.addDevice) }
+        actions.addDevice = !fleet.canShare ? nil : { present(.addDevice) }
         if case .done(.machine, let hostId) = step, runsSessions(hostId) {
             actions.startSession = {
                 drafted(Draft(hostId: hostId))

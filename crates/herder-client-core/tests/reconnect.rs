@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::{
-    Client, ConnectionState, Error, FleetLink, LoginUri, Machine, NewAccount, SessionSubscription,
-    SessionUpdate, TerminalEvent, TerminalStream,
+    Client, ConnectionState, Error, FleetLink, FleetPerson, LoginUri, Machine, NewAccount,
+    SessionSubscription, SessionUpdate, TerminalEvent, TerminalStream,
 };
 use herder_daemon::auth::Auth;
 use herder_daemon::auth::authenticator::{self, Authenticator};
@@ -808,7 +808,7 @@ async fn signing_in_fails_on_a_wrong_fingerprint_and_saves_nothing() {
 
     let hosts = vec![daemon.addr.to_string()];
     let err = client
-        .sign_in(hosts.clone(), "00".repeat(32))
+        .sign_in(hosts.clone(), "00".repeat(32), Vec::new())
         .await
         .err()
         .unwrap();
@@ -1806,10 +1806,21 @@ async fn a_shared_link_names_every_machine_for_another_device_to_sign_in_to() {
     // The name this device gives a machine is the one it shares.
     mac.rename(HostId::new("host-2"), "alice's vault".into())
         .unwrap();
+    wait_host(&mac, "host-1", true).await;
+    wait_host(&mac, "host-2", true).await;
 
     // Every saved machine, connected or not, by its name, its addresses but loopback ones,
-    // and its certificate, with no code.
-    let link = mac.share().unwrap();
+    // and its certificate, with no code; and alice, by her name and her passkey, as the
+    // machines list her.
+    let link = mac.share().await.unwrap();
+    let alice = Authenticator::of(&first.auth, "alice").unwrap();
+    assert_eq!(
+        link.person,
+        FleetPerson {
+            name: "alice".into(),
+            passkeys: vec![alice.key().credential_id],
+        }
+    );
     let hosts: Vec<_> = link.machines.iter().map(|m| m.hosts.clone()).collect();
     assert_eq!(
         hosts,
@@ -1837,6 +1848,7 @@ async fn a_shared_link_names_every_machine_for_another_device_to_sign_in_to() {
     readdress("host-3", &[gone_addr, "[::1]:7447".into()]);
     let fingerprints: Vec<_> = mac
         .share()
+        .await
         .unwrap()
         .machines
         .into_iter()
@@ -1854,13 +1866,23 @@ async fn a_shared_link_names_every_machine_for_another_device_to_sign_in_to() {
         "herder-test/0".into(),
     )
     .unwrap();
+    // Signing in from the link offers only her passkeys: not carol's, though carol is a person
+    // of the second machine too.
+    let carol = Authenticator::of(&second.auth, "carol").unwrap();
     for (daemon, machine) in [(&first, &link.machines[0]), (&second, &link.machines[1])] {
         let passkey = Authenticator::of(&daemon.auth, "alice").unwrap();
         let pending = phone
-            .sign_in(vec![daemon.addr.to_string()], machine.fingerprint.clone())
+            .sign_in(
+                vec![daemon.addr.to_string()],
+                machine.fingerprint.clone(),
+                link.person.passkeys.clone(),
+            )
             .await
             .unwrap();
-        let assertion = passkey.assert(&pending.challenge());
+        let challenge = pending.challenge();
+        assert_eq!(challenge.allow_credentials, link.person.passkeys);
+        assert!(!carol.allowed(&challenge));
+        let assertion = passkey.assert(&challenge);
         pending.finish(SignIn::Passkey { assertion }).await.unwrap();
     }
     wait_host(&phone, "host-1", true).await;
@@ -1886,7 +1908,32 @@ async fn a_device_with_no_machines_shares_nothing() {
         "herder-test/0".into(),
     )
     .unwrap();
-    assert_eq!(client.share(), None);
+    assert!(matches!(client.share().await, Err(Error::Local { .. })));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_device_shares_nothing_while_no_machine_says_who_it_is() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("host-1");
+    let daemon = Daemon::start_as("host-1", &dir, 0, "mid_turn.jsonl", Arc::default()).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    daemon.sign_in(&client, "alice", daemon.addr).await.unwrap();
+    client
+        .set_addresses(
+            HostId::new("host-1"),
+            vec![daemon.addr.to_string(), "192.0.2.1:7447".into()],
+        )
+        .unwrap();
+    daemon.kill().await;
+    wait_host(&client, "host-1", false).await;
+    // The machine is saved, but only a connected one lists who this device's person is.
+    let err = client.share().await.unwrap_err();
+    assert!(matches!(err, Error::Local { .. }), "{err}");
+    assert!(err.to_string().contains("person"), "{err}");
 }
 
 /// Waits until the machine `host` of `client` is connected, or not when `up` is false.
@@ -2005,7 +2052,7 @@ async fn a_new_device_is_asked_to_sign_in_and_a_terminal_gets_a_code_to_show() {
 
     let pending = tokio::time::timeout(
         TIMEOUT,
-        client.sign_in(hosts.clone(), daemon.fingerprint.clone()),
+        client.sign_in(hosts.clone(), daemon.fingerprint.clone(), Vec::new()),
     )
     .await
     .unwrap()
@@ -2065,7 +2112,7 @@ async fn an_app_claims_a_machine_and_approves_a_terminal_that_logs_in() {
     let (claim, _) = daemon.auth.open_claim().unwrap();
     let pending = tokio::time::timeout(
         TIMEOUT,
-        app.sign_in(hosts.clone(), daemon.fingerprint.clone()),
+        app.sign_in(hosts.clone(), daemon.fingerprint.clone(), Vec::new()),
     )
     .await
     .unwrap()
@@ -2197,7 +2244,7 @@ async fn the_app_signs_with_face_id_and_approves_what_a_terminal_asks() {
     .unwrap();
     let (claim, _) = daemon.auth.open_claim().unwrap();
     let pending = app
-        .sign_in(hosts.clone(), daemon.fingerprint.clone())
+        .sign_in(hosts.clone(), daemon.fingerprint.clone(), Vec::new())
         .await
         .unwrap();
     let (passkey, registration) = Authenticator::register(
@@ -2345,7 +2392,7 @@ async fn a_refused_passkey_sign_in_says_why() {
         let (phone, hosts, fingerprint) =
             (phone.clone(), hosts.clone(), daemon.fingerprint.clone());
         async move {
-            let pending = phone.sign_in(hosts, fingerprint).await.unwrap();
+            let pending = phone.sign_in(hosts, fingerprint, Vec::new()).await.unwrap();
             let assertion = sign(&pending.challenge());
             pending
                 .finish(SignIn::Passkey { assertion })
