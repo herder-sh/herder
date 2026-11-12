@@ -112,7 +112,7 @@ enum Fake {
     }
 
     /// Your passkey, signing as `cred-you`; the challenge it signed shows as its client data.
-    static let sign: PasskeySigner = { challenge in assertion("cred-you", over: challenge.challenge) }
+    static let sign: PasskeySigner = { challenge in Fake.assertion("cred-you", over: challenge.challenge) }
 
     static func assertion(_ id: String, over challenge: String) -> PasskeyAssertion {
         PasskeyAssertion(id: id, rawId: id, response: AssertionResponse(
