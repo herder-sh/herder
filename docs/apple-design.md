@@ -209,20 +209,39 @@ Providers › **Update All**, a CLI's Install or Update, and **Install & Set Up*
 Activity with `Fleet.install`. The daemon checks the CLI's version again before it closes an
 install's terminal, so the machine's versions are current when the job ends.
 
-**Adding a device** (`AddDevice.swift`). A device with machines offers **Add a device…** under
-People › You and at the foot of Fleet. Its sheet (`AddDeviceSheet`) shows the `herder://fleet`
-link of `Client::share()` as a QR code with Copy, and three steps: install herder on the other
-device, scan this code with it (Add to Fleet › From another device), approve with your passkey,
-the same one, synced by iCloud Keychain or a password manager. The link grants nothing by
-itself. The other device takes it from the scanner, a paste or an opened link, and
-`JoinFleetSheet` lists every machine in it, "Sign in to 5 machines as you": one passkey
-assertion per machine (each asks its own challenge, so Face ID asks once per machine), each row
-ending signed in, already on this device (never signed in again), can't reach it (on Tailscale?),
-it doesn't know this passkey (pick yours, or ask its owner / run `herder claim` there), or the
-machine's error. Closing Face ID stops; **Try Again** retries what is left. A device with no
-machines says "No machines yet" with two choices (`EmptyFleet`): I have herder on another
-device (scan its code, the common case), or set up a new machine (`herder claim`).
-`AddDeviceScreenshotTests` draws all three.
+**Adding a device** (`AddDevice.swift`, P22.5). Two halves of one flow, sharing the
+per-machine rows and their marks. A device with machines offers **Add a device…** under
+People › You and at the foot of Fleet (Setup's header action once Setup lands). Its sheet
+(`AddDeviceSheet`, "Add a device") shows the `herder://fleet` link of `Client::share()` as a
+large QR code, then **Shares your 5 machines** with each machine's name as a chip, and one line:
+the code grants nothing by itself, it holds names and addresses, not keys, and each machine lets
+in only a device with your passkey. The footer has the hint (on a Mac, copy the link and paste
+it), **Copy Link** and **Done**.
+
+The other device takes the link from the camera, the scanner, a paste or an opened link, and
+`JoinFleetSheet` (`FleetJoin`) opens on a progress bar, **Scan · Sign in · Done**, and "Sign in
+to your 5 machines". Under **As**, a passkey card names the passkey it signs in with and where it
+is kept ("Tomas · Your passkey in Apple Passwords") once the link carries them (P22.1); until
+then it reads "Your herder passkey, the one your other device uses". Rows are machine **names**,
+the address only in secondary monospace text. Every machine is reached first, before any Face
+ID (`Fleet.reach` opens a sign-in connection and drops it): a green dot reads Ready, and one no
+address answers says why at once, "Can't reach it: Tailscale may be off on this iPhone" for a
+Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48, `*.ts.net`) or "may be on another
+network" otherwise, with its fix and **Try Again**. One button, **Sign In with Face ID**, signs
+in to every machine reached; Face ID still asks once per machine, as each asks its own challenge,
+and the hint says so ("mini-k8s can wait"). Afterwards the title reads "Signed in to 3 of 5" and
+each row that needs you gives its cause and fix inline, with **Try Again** on the row: can't
+reach it; it doesn't know this passkey (`FleetJoin.Refusal`, one case while a refusal says only
+`forbidden`; P22.2's typed reasons such as "knows you by another passkey" go there); or the
+machine's own error. **Done for Now** closes with what is left named in the hint; once nothing
+is left the title reads "This iPhone is on all 5 machines" and the bar reaches Done. Marks:
+✓ green on it, `!` amber needs you, a spinner while reached or signing in, a green dot ready.
+Closing Face ID stops; **Sign In** again signs in to what is left. A machine this device has
+already shows "Already on this iPhone" and is never signed in again. A device with no machines
+says "No machines yet" with two choices (`EmptyFleet`): I have herder on another device (scan
+its code, the common case), or set up a new machine (`herder claim`).
+`AddDeviceScreenshotTests` draws Add a device, the receiving side before Face ID, with what is
+left, and done, and the empty fleet.
 
 ### 4.5 Usage (`UsageView`)
 

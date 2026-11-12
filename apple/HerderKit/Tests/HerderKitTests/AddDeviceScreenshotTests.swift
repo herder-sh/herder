@@ -7,46 +7,85 @@ import SwiftUI
 import Testing
 
 /// Draws getting a second device onto your machines, at the Mac sheet's width and the
-/// iPhone's: Add a Device with its QR code, signing in to the machines it shares with some
-/// failing, and the Board of a device with no machines yet. With `HERDER_SCREENSHOT_DIR` set,
-/// also writes them there.
+/// iPhone's: Add a device with its QR code and the machines it shares; the receiving side with
+/// each machine reached before Face ID, after signing in with some needing you, and done; and
+/// the Board of a device with no machines yet. With `HERDER_SCREENSHOT_DIR` set, also writes
+/// them there.
 @MainActor struct AddDeviceScreenshotTests {
     nonisolated static let widths = [(560.0, "mac"), (390.0, "ios")]
 
-    /// The names the sharing device gives the machines, as its link carries them.
-    nonisolated static let names = [1: "devbox", 2: "nas", 3: "build-01", 4: "alice’s vault", 5: "mac-mini"]
+    /// The machines the sharing device names in its link: mini-k8s only on Tailscale.
+    nonisolated static let machines = [
+        ("devbox", "192.168.1.20"), ("nas", "192.168.1.31"), ("build-01", "192.168.1.147"),
+        ("mini-k8s", "100.71.3.22"), ("studio", "192.168.1.60"),
+    ]
 
-    static func machine(_ n: Int, port: Int = 7447) -> FleetMachine {
-        FleetMachine(hosts: ["100.64.0.\(n):\(port)"], fingerprint: String(repeating: String(format: "%02x", n), count: 32),
-                     name: names[n])
+    static func machine(_ n: Int) -> FleetMachine {
+        FleetMachine(hosts: ["\(machines[n].1):7447"], fingerprint: String(repeating: String(format: "%02x", n + 1), count: 32),
+                     name: machines[n].0)
+    }
+
+    static let link = FleetLink(machines: machines.indices.map(machine))
+
+    static func device(_ platform: String) -> (device: String, biometry: String) {
+        platform == "mac" ? ("Mac", "Touch ID") : ("iPhone", "Face ID")
+    }
+
+    /// The receiving side of `link`: mini-k8s unreachable, studio refusing the passkey.
+    static func join(passkey: FleetJoin.Passkey = .init(), refuses: Bool = true) -> FleetJoin {
+        FleetJoin(link, known: { _ in nil }, passkey: passkey, check: { machine in
+            if machine.name == "mini-k8s" { throw HerderError.Unreachable(detail: "timed out") }
+        }) { machine in
+            if refuses, machine.name == "studio" {
+                throw HerderError.Rejected(info: ErrorInfo(code: .forbidden, message: "unknown"))
+            }
+            return machine.name ?? "?"
+        }
     }
 
     @Test(arguments: widths)
     func drawsAddADevice(width: Double, platform: String) throws {
-        let link = fleetLinkToString(link: FleetLink(machines: (1...5).map { Self.machine($0) }))
-        try shoot(SheetPreview(title: "Add a Device", subtitle: AddDeviceSheet.subtitle, hint: "") {
-            AddDeviceSteps(link: link)
+        try shoot(SheetPreview(title: AddDeviceSheet.title, subtitle: AddDeviceSheet.subtitle, hint: AddDeviceSheet.hint) {
+            AddDeviceContent(link: Self.link)
         } footer: {
-            ActionButton(title: "Done", style: .primary) {}.frame(maxWidth: 160)
-        }, width: width, height: 1000, named: "\(platform)-add-device.png")
+            AddDeviceButtons(link: Self.link)
+        }, width: width, height: 860, named: "\(platform)-add-device.png")
+    }
+
+    /// Before Face ID: every machine reached but mini-k8s, which says why; the passkey as the
+    /// link does not name it yet.
+    @Test(arguments: widths)
+    func drawsReachingTheMachinesBeforeSigningIn(width: Double, platform: String) async throws {
+        let join = Self.join()
+        await join.check()
+        try shoot(join: join, platform: platform, width: width, named: "\(platform)-join-fleet.png")
+    }
+
+    /// After Face ID: three signed in, studio refused the passkey, mini-k8s still unreachable;
+    /// the passkey named, as once the link carries it.
+    @Test(arguments: widths)
+    func drawsWhatIsLeftAfterSigningIn(width: Double, platform: String) async throws {
+        let join = Self.join(passkey: FleetJoin.Passkey(name: "Tomas", store: "Apple Passwords"))
+        await join.check()
+        await join.run()
+        try shoot(join: join, platform: platform, width: width, named: "\(platform)-join-fleet-left.png")
     }
 
     @Test(arguments: widths)
-    func drawsSigningInToAnotherDevicesMachines(width: Double, platform: String) async throws {
-        let join = FleetJoin(FleetLink(machines: (1...5).map { Self.machine($0) }),
-                             known: { $0 == Self.machine(5).fingerprint ? "mac-mini" : nil }) { machine in
-            switch machine.hosts[0] {
-            case "100.64.0.2:7447": throw HerderError.Unreachable(detail: "timed out")
-            case "100.64.0.4:7447": throw HerderError.Rejected(info: ErrorInfo(code: .forbidden, message: "unknown"))
-            default: return machine.name ?? "?"
-            }
-        }
+    func drawsSignedInToEveryMachine(width: Double, platform: String) async throws {
+        let join = FleetJoin(Self.link, known: { _ in nil }, check: { _ in }) { $0.name ?? "?" }
+        await join.check()
         await join.run()
-        try shoot(SheetPreview(title: join.title, subtitle: JoinFleetView.subtitle, hint: join.summary(biometry: "Face ID")) {
-            JoinFleetRows(join: join)
+        try shoot(join: join, platform: platform, width: width, named: "\(platform)-join-fleet-done.png")
+    }
+
+    private func shoot(join: FleetJoin, platform: String, width: Double, named name: String) throws {
+        let (device, biometry) = Self.device(platform)
+        try shoot(SheetPreview(title: join.title(device: device), subtitle: join.subtitle, hint: join.hint(biometry: biometry)) {
+            JoinFleetContent(join: join, device: device)
         } footer: {
-            JoinFleetButtons(join: join, biometry: "Face ID")
-        }, width: width, height: 900, named: "\(platform)-join-fleet.png")
+            JoinFleetButtons(join: join, biometry: biometry)
+        }, width: width, height: 1000, named: name)
     }
 
     @Test(arguments: widths)
@@ -86,7 +125,6 @@ private struct SheetPreview<Content: View, Footer: View>: View {
             SheetScaffold(title: title, subtitle: subtitle, height: 1000, hint: hint) {
                 content
             } footer: {
-                Spacer()
                 footer
             }
             VStack(alignment: .leading, spacing: 0) {
