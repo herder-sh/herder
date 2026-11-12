@@ -14,6 +14,9 @@
 //! `fake_daemon --demo` runs the demo fleet of the site's screenshots ([`demo`]) and prints only
 //! the link a device signed in to all of it shares and the user's passkey; `fake_daemon --busy`
 //! adds the load the apps are profiled under.
+//! `fake_daemon --load NAME SESSIONS EVENTS` runs host `NAME` with the journal of a machine used
+//! for months ([`load`]) and prints only its link and its owner's passkey: for measuring how
+//! the apps open and resume against a fleet of a real one's size.
 //! `fake_daemon --vault` runs a vault that keeps secrets ([`vault`]) and prints only its link
 //! and its owner's passkey.
 //! `fake_daemon --own` runs `fake-own`, which waits for a new owner as after `herder claim`, and
@@ -23,6 +26,8 @@
 
 #[path = "fake_daemon/demo.rs"]
 mod demo;
+#[path = "fake_daemon/load.rs"]
+mod load;
 #[path = "fake_daemon/record.rs"]
 mod record;
 #[path = "../tests/support/mod.rs"]
@@ -62,6 +67,25 @@ async fn main() -> Result<()> {
         Some("--own") => {
             let daemon = support::FakeDaemon::start("fake-own").await?;
             println!("{}", own_link(&daemon)?);
+            tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
+            return daemon.stop().await;
+        }
+        Some("--load") => {
+            let mut args = std::env::args().skip(2);
+            let name = args.next().context("--load needs a host name")?;
+            let sessions: usize = args
+                .next()
+                .context("--load needs a session count")?
+                .parse()?;
+            let events: usize = args
+                .next()
+                .context("--load needs an event count")?
+                .parse()?;
+            let daemon = support::FakeDaemon::start_seeded(&name, |store, repo| {
+                load::seed(store, &name, repo, sessions, events)
+            })
+            .await?;
+            println!("{}\n{}", daemon.link, daemon.passkey);
             tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
             return daemon.stop().await;
         }

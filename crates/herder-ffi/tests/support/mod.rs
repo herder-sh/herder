@@ -102,8 +102,12 @@ pub struct FakeDaemon {
     /// Who is on the daemon, for a test to sign people in to it.
     pub auth: Arc<Auth>,
     /// Absolute path of a git repository with one commit, holding [`PROJECT_SKILL`].
+    // The `launch_load` test only reads the journal its daemon was seeded with.
+    #[allow(dead_code)]
     pub repo: String,
     /// Absolute path of a git repository with [`IMPORTED_SKILL`] in a folder of its name.
+    // Likewise.
+    #[allow(dead_code)]
     pub skill_source: String,
     shutdown: CancellationToken,
     server: JoinHandle<()>,
@@ -112,7 +116,18 @@ pub struct FakeDaemon {
 
 impl FakeDaemon {
     /// Starts the daemon of host `name` on the current tokio runtime.
+    // The `launch_load` test starts its daemon seeded.
+    #[allow(dead_code)]
     pub async fn start(name: &str) -> Result<Self> {
+        Self::start_seeded(name, |_, _| Ok(())).await
+    }
+
+    /// Starts the daemon of host `name` with the journal `seed` writes into its store, given
+    /// the store and the repository's path, before the daemon opens it.
+    pub async fn start_seeded(
+        name: &str,
+        seed: impl FnOnce(&mut Store, &str) -> Result<()>,
+    ) -> Result<Self> {
         let tmp = tempfile::tempdir()?;
         let dir = tmp.path().join("daemon");
         let app = repo(&tmp.path().join("app"), &[PROJECT_SKILL], ".claude/skills/")?;
@@ -150,8 +165,10 @@ impl FakeDaemon {
             );
         }
         let turns = AtomicU64::new(0);
+        let mut store = Store::open(dir.join("herder.db"))?;
+        seed(&mut store, &app)?;
         let setup = Setup {
-            store: Store::open(dir.join("herder.db"))?,
+            store,
             adapters,
             accounts,
             sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
