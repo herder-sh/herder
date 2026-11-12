@@ -59,15 +59,19 @@ final class FleetJoin {
         case signedIn(String)
         /// No address of it answered.
         case unreachable
-        /// It knows no person by the passkey signed with.
-        case unknownPasskey
+        /// It knows you by another passkey: which, and where it is kept ("Tomas in 1Password").
+        case otherPasskey(String)
+        /// It knows nobody by the passkey signed with: its owners, to ask.
+        case unknownPerson(owners: [String])
+        /// The passkey signed without Face ID, which every machine needs.
+        case notVerified
         case failed(String)
 
         /// Whether signing in is still to do, or to try again.
         var pending: Bool {
             switch self {
             case .added, .signedIn, .signingIn: false
-            case .waiting, .unreachable, .unknownPasskey, .failed: true
+            case .waiting, .unreachable, .otherPasskey, .unknownPerson, .notVerified, .failed: true
             }
         }
     }
@@ -123,10 +127,29 @@ final class FleetJoin {
 
     nonisolated static func state(of error: Error) -> State {
         switch error as? HerderError {
-        case .Unreachable?: .unreachable
-        case .Rejected(let info)? where info.code == .forbidden: .unknownPasskey
-        default: .failed(describe(error))
+        case .Unreachable?: return .unreachable
+        case .SignInRefused(let refusal, _)?:
+            switch refusal {
+            case .otherPasskey(let passkeys): return .otherPasskey(passkeyPlaces(passkeys))
+            case .unknownPerson(let owners): return .unknownPerson(owners: owners)
+            case .userNotVerified: return .notVerified
+            }
+        default: return .failed(describe(error))
         }
+    }
+
+    /// "Tomas in 1Password": the passkeys a machine knows you by, by where they are kept when
+    /// this app knows the place, else by their labels.
+    nonisolated static func passkeyPlaces(_ passkeys: [RefusedPasskey]) -> String {
+        let kept = passkeys.compactMap { passkey in
+            passkey.aaguid.flatMap { passkeyStore(aaguid: $0) }.map { "\(passkey.label) in \($0)" }
+        }
+        let places = unique(kept.isEmpty ? passkeys.map(\.label) : kept)
+        return places.isEmpty ? "another passkey" : places.joined(separator: " or ")
+    }
+
+    private nonisolated static func unique(_ items: [String]) -> [String] {
+        items.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
     }
 
     /// The machines this device does not have yet, as the link listed them.
@@ -156,29 +179,50 @@ final class FleetJoin {
 }
 
 extension FleetJoin.State {
-    /// What happened, in plain words.
-    var title: String {
+    /// What happened, in plain words, with `biometry` for what verifies you.
+    func title(biometry: String) -> String {
         switch self {
         case .added: "Already on this device"
         case .waiting: "Waiting"
         case .signingIn: "Signing in…"
         case .signedIn: "Signed in as you"
         case .unreachable: "Can’t reach it"
-        case .unknownPasskey: "It doesn’t know this passkey"
+        case .otherPasskey(let places): "Knows you by another passkey: \(places)"
+        case .unknownPerson(let owners): owners.first.map { "Ask \($0) to add you" } ?? "Ask its owner to add you"
+        case .notVerified: "\(biometry) was skipped, try again"
         case .failed: "Couldn’t sign in"
         }
     }
 
     /// What to do about it, where there is something to do.
-    var help: String {
+    func help(biometry: String) -> String {
         switch self {
         case .added, .waiting, .signingIn, .signedIn: ""
         case .unreachable:
             "Is this device on the same network, or on Tailscale? Try again once it can reach the machine."
-        case .unknownPasskey:
-            "Pick the herder passkey your other device uses. If you are not on this machine yet, ask its owner to invite you, or run `herder claim` on it."
+        case .otherPasskey:
+            "Try again and pick that passkey. Then add this one from it, if you want both."
+        case .unknownPerson(let owners):
+            owners.isEmpty
+                ? "You are not on this machine yet. Ask its owner to invite you, or run `herder claim` on it."
+                : "You are not on this machine yet. Owners: \(ListFormatter.localizedString(byJoining: owners))."
+        case .notVerified:
+            "Your password manager signed without \(biometry), and machines need it. Try again and confirm with \(biometry)."
         case .failed(let why): why
         }
+    }
+}
+
+/// The password manager a passkey lives in, by the AAGUID of the authenticator that made it;
+/// nil for one this app does not know.
+func passkeyStore(aaguid: String) -> String? {
+    switch aaguid.lowercased() {
+    case "fbfc3007-154e-4ecc-8c0b-6e020557d7bd", "dd4ec289-e01d-41c9-bb89-70fa845d4bf2": "Apple Passwords"
+    case "bada5566-a7aa-401f-bd96-45619a55120d": "1Password"
+    case "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4": "Google Password Manager"
+    case "d548826e-79b4-db40-a3d8-11116f7e8349": "Bitwarden"
+    case "531126d6-e717-415c-9320-3d9aa6981239": "Dashlane"
+    default: nil
     }
 }
 
@@ -286,7 +330,7 @@ struct JoinFleetView: View {
 
     var body: some View {
         SheetScaffold(title: join.title, subtitle: Self.subtitle, height: 640, hint: join.summary(biometry: biometry)) {
-            JoinFleetRows(join: join)
+            JoinFleetRows(join: join, biometry: biometry)
         } footer: {
             Spacer()
             JoinFleetButtons(join: join, biometry: biometry)
@@ -297,12 +341,13 @@ struct JoinFleetView: View {
 /// The shared fleet's machines, one row each.
 struct JoinFleetRows: View {
     let join: FleetJoin
+    var biometry = Biometry.name
 
     var body: some View {
         SettingsGroup {
             ForEach(Array(join.rows.enumerated()), id: \.element.id) { index, row in
                 if index > 0 { RowDivider() }
-                JoinRow(row: row)
+                JoinRow(row: row, biometry: biometry)
             }
         }
         Text("Before you sign in, each machine proves it is the one your other device knows (by its fingerprint).")
@@ -343,15 +388,17 @@ struct JoinFleetButtons: View {
 /// A machine of a shared fleet: its name, its address beside it, and how it went.
 private struct JoinRow: View {
     let row: FleetJoin.Row
+    let biometry: String
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             icon.frame(width: 22, height: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text).lineLimit(1)
-                Text(row.state.title).font(.caption).foregroundStyle(tint)
-                if !row.state.help.isEmpty {
-                    Text(LocalizedStringKey(row.state.help)).font(.caption).foregroundStyle(Theme.secondary)
+                Text(row.state.title(biometry: biometry)).font(.caption).foregroundStyle(tint)
+                let help = row.state.help(biometry: biometry)
+                if !help.isEmpty {
+                    Text(LocalizedStringKey(help)).font(.caption).foregroundStyle(Theme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -382,7 +429,9 @@ private struct JoinRow: View {
         case .waiting, .signingIn: "circle"
         case .signedIn: "checkmark.circle.fill"
         case .unreachable: "wifi.exclamationmark"
-        case .unknownPasskey: "person.badge.key"
+        case .otherPasskey: "key"
+        case .unknownPerson: "person.badge.plus"
+        case .notVerified: "faceid"
         case .failed: "exclamationmark.triangle.fill"
         }
     }
@@ -391,8 +440,8 @@ private struct JoinRow: View {
         switch row.state {
         case .added, .waiting, .signingIn: Theme.tertiary
         case .signedIn: Theme.success
-        case .unreachable: Theme.accent
-        case .unknownPasskey, .failed: Theme.failure
+        case .unreachable, .otherPasskey, .unknownPerson, .notVerified: Theme.accent
+        case .failed: Theme.failure
         }
     }
 }

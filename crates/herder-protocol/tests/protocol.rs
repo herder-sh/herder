@@ -2094,7 +2094,30 @@ fn server_fixtures() -> Vec<ServerMessage> {
             command_id: CommandId::new("01J9COMMAND"),
             error: error.clone(),
         });
-        messages.push(ServerMessage::Error { error });
+        messages.push(ServerMessage::Error {
+            error,
+            refusal: None,
+        });
+    }
+    for refusal in [
+        SignInRefusal::OtherPasskey {
+            passkeys: vec![RefusedPasskey {
+                label: "Ada".into(),
+                aaguid: Some("bada5566-a7aa-401f-bd96-45619a55120d".into()),
+            }],
+        },
+        SignInRefusal::UnknownPerson {
+            owners: vec!["Ada".into()],
+        },
+        SignInRefusal::UserNotVerified,
+    ] {
+        messages.push(ServerMessage::Error {
+            error: ErrorInfo {
+                code: ErrorCode::Forbidden,
+                message: "no".into(),
+            },
+            refusal: Some(refusal),
+        });
     }
     messages.push(ServerMessage::Hello(ServerHello {
         protocol_version: PROTOCOL_VERSION,
@@ -2743,6 +2766,53 @@ fn wire_shape_is_tagged_and_nested() {
         serde_json::to_value(&input).unwrap()["body"]["data"],
         "bHMN"
     );
+}
+
+#[test]
+fn a_sign_in_refusal_says_why_beside_its_error() {
+    let refused = ServerMessage::Error {
+        error: ErrorInfo {
+            code: ErrorCode::Forbidden,
+            message: "this daemon knows you by another passkey".into(),
+        },
+        refusal: Some(SignInRefusal::OtherPasskey {
+            passkeys: vec![RefusedPasskey {
+                label: "Ada".into(),
+                aaguid: Some("bada5566-a7aa-401f-bd96-45619a55120d".into()),
+            }],
+        }),
+    };
+    let wire = json!({
+        "type": "error",
+        "error": { "code": "forbidden", "message": "this daemon knows you by another passkey" },
+        "refusal": {
+            "reason": "other_passkey",
+            "passkeys": [{ "label": "Ada", "aaguid": "bada5566-a7aa-401f-bd96-45619a55120d" }]
+        }
+    });
+    assert_eq!(serde_json::to_value(&refused).unwrap(), wire);
+    assert_eq!(
+        serde_json::from_value::<ServerMessage>(wire).unwrap(),
+        refused
+    );
+    assert_eq!(
+        serde_json::to_value(SignInRefusal::UnknownPerson {
+            owners: vec!["Ada".into()]
+        })
+        .unwrap(),
+        json!({ "reason": "unknown_person", "owners": ["Ada"] })
+    );
+    assert_eq!(
+        serde_json::to_value(SignInRefusal::UserNotVerified).unwrap(),
+        json!({ "reason": "user_not_verified" })
+    );
+    // Any other error has no refusal, and says nothing of one.
+    let plain: ServerMessage = serde_json::from_value(json!({
+        "type": "error",
+        "error": { "code": "bad_request", "message": "no" }
+    }))
+    .unwrap();
+    assert!(matches!(plain, ServerMessage::Error { refusal: None, .. }));
 }
 
 #[test]

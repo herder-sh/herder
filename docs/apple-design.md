@@ -218,9 +218,14 @@ itself. The other device takes it from the scanner, a paste or an opened link, a
 `JoinFleetSheet` lists every machine in it, "Sign in to 5 machines as you": one passkey
 assertion per machine (each asks its own challenge, so Face ID asks once per machine), each row
 ending signed in, already on this device (never signed in again), can't reach it (on Tailscale?),
-it doesn't know this passkey (pick yours, or ask its owner / run `herder claim` there), or the
-machine's error. Closing Face ID stops; **Try Again** retries what is left. A device with no
-machines shows Welcome instead (§4.10). `AddDeviceScreenshotTests` draws both sheets.
+or refused with the reason the machine gives (`SignInRefusal`): "Knows you by another
+passkey: Tomas in 1Password" (pick that one; the place comes from the passkey's AAGUID,
+`passkeyStore`), "Ask Tomas to add you" (it knows nobody by this passkey; it names its owners,
+or says to run `herder claim` when it has none to name), or "Face ID was skipped, try again"
+(the password manager signed without user verification, which machines require). Any other
+refusal shows the machine's error. Amber marks what needs you; red only the unexplained.
+Closing Face ID stops; **Try Again** retries what is left. A device with no machines shows
+Welcome instead (§4.10). `AddDeviceScreenshotTests` draws both sheets.
 
 ### 4.5 Usage (`UsageView`)
 

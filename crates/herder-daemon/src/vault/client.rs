@@ -83,7 +83,7 @@ async fn read_sessions(vault: &VaultConfig, device: &DeviceKey) -> Result<Vec<Se
         };
         match serde_json::from_str(&text)? {
             ServerMessage::Sessions { sessions: listed } => sessions = listed,
-            ServerMessage::Error { error } => bail!("the vault refused: {}", error.message),
+            ServerMessage::Error { error, .. } => bail!("the vault refused: {}", error.message),
             ServerMessage::Synced { token: synced } if synced == token => break,
             _ => {}
         }

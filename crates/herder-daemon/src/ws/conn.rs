@@ -143,18 +143,21 @@ async fn read<B: Backend>(
     let identity = if hello.sign_in && !shared.auth.is_paired(device) {
         sign_in(&mut stream, shared, outbox, device, &hello.client, cancel).await
     } else {
-        shared.auth.authenticate(
-            device,
-            hello.pairing_code.as_deref(),
-            &hello.client,
-            auth::DeviceRole::Client,
-            cancel,
-        )
+        shared
+            .auth
+            .authenticate(
+                device,
+                hello.pairing_code.as_deref(),
+                &hello.client,
+                auth::DeviceRole::Client,
+                cancel,
+            )
+            .map_err(auth::SignInRefused::from)
     };
     let identity = match identity {
         Ok(identity) => identity,
-        Err(error) => {
-            outbox.push(ServerMessage::Error { error });
+        Err(auth::SignInRefused { error, refusal }) => {
+            outbox.push(ServerMessage::Error { error, refusal });
             bail!("device {device} refused");
         }
     };
@@ -399,6 +402,7 @@ fn error(outbox: &Outbox, code: ErrorCode, message: &str) {
             code,
             message: message.to_owned(),
         },
+        refusal: None,
     });
 }
 
@@ -411,15 +415,17 @@ async fn sign_in<B: Backend>(
     device: &str,
     client: &str,
     cancel: &CancellationToken,
-) -> Result<Identity, ErrorInfo> {
+) -> Result<Identity, auth::SignInRefused> {
     let (challenge, registration) = shared.auth.sign_in_challenge()?;
     outbox.push(ServerMessage::SignInChallenge {
         challenge,
         registration,
     });
-    let refused = |message: &str| ErrorInfo {
-        code: ErrorCode::BadRequest,
-        message: message.to_owned(),
+    let refused = |message: &str| {
+        auth::SignInRefused::from(ErrorInfo {
+            code: ErrorCode::BadRequest,
+            message: message.to_owned(),
+        })
     };
     // A person gets the challenge's lifetime to answer it with their passkey.
     let answer = tokio::time::timeout(Duration::from_secs(PASSKEY_CHALLENGE_SECS), next(stream))
@@ -447,14 +453,14 @@ async fn sign_in<B: Backend>(
     tokio::select! {
         approved = tokio::time::timeout(auth::PAIRING_TTL, request.approved) => match approved {
             Ok(Ok(())) => {}
-            _ => return Err(expired()),
+            _ => return Err(expired().into()),
         },
         // The device says nothing while it waits; anything it sends ends the wait.
         _ = next(stream) => return Err(refused("the device stopped waiting for its login")),
     }
-    shared
+    Ok(shared
         .auth
-        .authenticate(device, None, client, auth::DeviceRole::Client, cancel)
+        .authenticate(device, None, client, auth::DeviceRole::Client, cancel)?)
 }
 
 /// The answer to command `command_id`.

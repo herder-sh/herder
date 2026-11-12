@@ -57,6 +57,53 @@ const CHALLENGE_LEN: usize = 32;
 /// Offset of the flags in the authenticator data, after the RP id hash.
 const FLAGS_AT: usize = 32;
 
+/// User verified, in the authenticator data's flags.
+const USER_VERIFIED: u8 = 0x04;
+
+/// An assertion this daemon refused, with why when the passkey is the reason.
+#[derive(Debug)]
+pub struct Refused {
+    /// The error to answer with.
+    pub error: ErrorInfo,
+    /// Why, when the passkey is the reason.
+    pub reason: Option<Reason>,
+}
+
+/// Why a passkey's assertion was refused, where the passkey itself is the reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reason {
+    /// No person the passkey could name is on this daemon.
+    UnknownPerson,
+    /// The person it names is on this daemon, by other passkeys.
+    OtherPasskey(PersonId),
+    /// It signed without user verification.
+    UserNotVerified,
+}
+
+impl Refused {
+    fn because(reason: Reason, message: &str) -> Self {
+        Self {
+            error: forbidden(message),
+            reason: Some(reason),
+        }
+    }
+}
+
+impl From<ErrorInfo> for Refused {
+    fn from(error: ErrorInfo) -> Self {
+        Self {
+            error,
+            reason: None,
+        }
+    }
+}
+
+impl From<Refused> for ErrorInfo {
+    fn from(refused: Refused) -> Self {
+        refused.error
+    }
+}
+
 /// A passkey's public key as this daemon keeps it: WebAuthn's credential id and COSE_Key, and
 /// the signature counter it last showed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,7 +352,7 @@ impl Passkeys {
         &self,
         assertion: &PasskeyAssertion,
         keys: impl FnOnce(&PersonId) -> Vec<Key>,
-    ) -> Result<Asserted, ErrorInfo> {
+    ) -> Result<Asserted, Refused> {
         self.verify_signed(assertion, keys, false)
     }
 
@@ -315,7 +362,7 @@ impl Passkeys {
         &self,
         assertion: &PasskeyAssertion,
         keys: impl FnOnce(&PersonId) -> Vec<Key>,
-    ) -> Result<Asserted, ErrorInfo> {
+    ) -> Result<Asserted, Refused> {
         self.verify_signed(assertion, keys, true)
     }
 
@@ -324,7 +371,7 @@ impl Passkeys {
         assertion: &PasskeyAssertion,
         keys: impl FnOnce(&PersonId) -> Vec<Key>,
         batch: bool,
-    ) -> Result<Asserted, ErrorInfo> {
+    ) -> Result<Asserted, Refused> {
         let credential: PublicKeyCredential = convert(assertion)?;
         let signed = challenge_of(&credential.response.client_data_json)?;
         let state = match batch {
@@ -335,13 +382,14 @@ impl Passkeys {
     }
 
     /// Verifies `credential` within the ceremony `state`, against the passkeys `keys` gives
-    /// for the person it names.
+    /// for the person it names. Refuses, saying why, an assertion by a person not on this
+    /// daemon, by a passkey of theirs it does not know, or without user verification.
     fn finish(
         &self,
         credential: &PublicKeyCredential,
         state: DiscoverableAuthentication,
         keys: impl FnOnce(&PersonId) -> Vec<Key>,
-    ) -> Result<Asserted, ErrorInfo> {
+    ) -> Result<Asserted, Refused> {
         let (uuid, _) = self
             .webauthn
             .identify_discoverable_authentication(credential)
@@ -354,16 +402,34 @@ impl Passkeys {
             .copied()
             .unwrap_or_default();
         let (eligible, backed_up) = (flags & BACKUP_ELIGIBLE != 0, flags & BACKED_UP != 0);
-        let keys = keys(&person_id)
+        let known = keys(&person_id);
+        if known.is_empty() {
+            return Err(Refused::because(
+                Reason::UnknownPerson,
+                "this passkey's person is not on this daemon",
+            ));
+        }
+        let signed_by = URL_SAFE_NO_PAD.encode(&credential.raw_id[..]);
+        if !known.iter().any(|key| key.credential_id == signed_by) {
+            return Err(Refused::because(
+                Reason::OtherPasskey(person_id),
+                "this daemon knows you by another passkey",
+            ));
+        }
+        // webauthn-rs refuses this too, but only after the signature, and with no way to tell.
+        if flags & USER_VERIFIED == 0 {
+            return Err(Refused::because(
+                Reason::UserNotVerified,
+                "the passkey signed without user verification; try again and verify",
+            ));
+        }
+        let keys = known
             .iter()
             .map(|key| {
                 let passkey = Passkey::from(key.credential(eligible, backed_up)?);
                 Ok(DiscoverableKey::from(&passkey))
             })
             .collect::<Result<Vec<_>, ErrorInfo>>()?;
-        if keys.is_empty() {
-            return Err(forbidden("this passkey's person is not on this daemon"));
-        }
         let result = self
             .webauthn
             .finish_discoverable_authentication(credential, state, &keys)

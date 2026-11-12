@@ -51,7 +51,8 @@ pub use ids::{
 pub use people::{
     AssertionResponse, LeftoverDecision, NewPerson, PASSKEY_CHALLENGE_SECS, PASSKEY_RP_ID,
     PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey, PasskeyRegistration,
-    PersonCard, PersonInfo, PersonPasskey, RegistrationResponse, SignIn,
+    PersonCard, PersonInfo, PersonPasskey, RefusedPasskey, RegistrationResponse, SignIn,
+    SignInRefusal,
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use provider_logins::{ProviderLogin, ProviderLoginState};
