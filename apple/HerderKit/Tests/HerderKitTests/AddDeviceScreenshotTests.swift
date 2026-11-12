@@ -19,7 +19,7 @@ import Testing
         ("mini-k8s", "100.71.3.22"), ("studio", "192.168.1.60"),
     ]
 
-    static func machine(_ n: Int) -> FleetMachine {
+    nonisolated static func machine(_ n: Int) -> FleetMachine {
         FleetMachine(hosts: ["\(machines[n].1):7447"], fingerprint: String(repeating: String(format: "%02x", n + 1), count: 32),
                      name: machines[n].0)
     }

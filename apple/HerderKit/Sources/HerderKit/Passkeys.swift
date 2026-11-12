@@ -70,6 +70,22 @@ func notAllowed(_ credentialId: Data, _ credentials: [Data]) -> HerderError? {
 
     private let securityKeys = ASAuthorizationSecurityKeyPublicKeyCredentialProvider(relyingPartyIdentifier: relyingParty)
 
+    // Every machine requires user verification (Face ID, Touch ID, the passcode or the key's
+    // PIN). Left at its default, "preferred", a password manager such as 1Password signs
+    // without it while unlocked, and the machine refuses the assertion.
+
+    /// `request`, asking for user verification.
+    static func verified<Request: ASAuthorizationPublicKeyCredentialAssertionRequest>(_ request: Request) -> Request {
+        request.userVerificationPreference = .required
+        return request
+    }
+
+    /// `request`, asking for user verification.
+    static func verified<Request: ASAuthorizationPublicKeyCredentialRegistrationRequest>(_ request: Request) -> Request {
+        request.userVerificationPreference = .required
+        return request
+    }
+
     func register(name: String, userId: Data, challenge: Data) async throws -> PasskeyRegistration {
         let registration = try await register(name: name, userId: userId, challenge: challenge, on: .passwordManager)
         ThisDevicePasskey.remember(registration.id)
@@ -77,7 +93,7 @@ func notAllowed(_ credentialId: Data, _ credentials: [Data]) -> HerderError? {
     }
 
     func assert(challenge: Data, allowing credentials: [Data]) async throws -> PasskeyAssertion {
-        let request = provider.createCredentialAssertionRequest(challenge: challenge)
+        let request = Self.verified(provider.createCredentialAssertionRequest(challenge: challenge))
         request.allowedCredentials = credentials.map {
             ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
         }
@@ -93,10 +109,10 @@ func notAllowed(_ credentialId: Data, _ credentials: [Data]) -> HerderError? {
         let request: ASAuthorizationRequest
         switch place {
         case .passwordManager:
-            request = provider.createCredentialRegistrationRequest(challenge: challenge, name: name, userID: userId)
+            request = Self.verified(provider.createCredentialRegistrationRequest(challenge: challenge, name: name, userID: userId))
         case .securityKey:
-            let key = securityKeys.createCredentialRegistrationRequest(challenge: challenge, displayName: name, name: name,
-                                                                       userID: userId)
+            let key = Self.verified(securityKeys.createCredentialRegistrationRequest(challenge: challenge, displayName: name,
+                                                                                     name: name, userID: userId))
             key.credentialParameters = [ASAuthorizationPublicKeyCredentialParameters(algorithm: .ES256)]
             // Machines sign you in without naming you first, so the key must hold who you are.
             key.residentKeyPreference = .required
@@ -116,11 +132,11 @@ func notAllowed(_ credentialId: Data, _ credentials: [Data]) -> HerderError? {
         let request: ASAuthorizationRequest
         switch place {
         case .passwordManager:
-            let platform = provider.createCredentialAssertionRequest(challenge: challenge)
+            let platform = Self.verified(provider.createCredentialAssertionRequest(challenge: challenge))
             platform.allowedCredentials = [ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: credentialId)]
             request = platform
         case .securityKey:
-            let key = securityKeys.createCredentialAssertionRequest(challenge: challenge)
+            let key = Self.verified(securityKeys.createCredentialAssertionRequest(challenge: challenge))
             key.allowedCredentials = [ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor(
                 credentialID: credentialId, transports: ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.Transport.allSupported)]
             request = key

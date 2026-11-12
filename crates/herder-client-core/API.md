@@ -239,7 +239,9 @@ everything stops once the last clone is dropped.
 - `TerminalEvent` — `Output { data: Vec<u8> }`, `Reattached`, `Closed { exit_code: Option<i32> }`.
 - `Error` — `InvalidLink { message }`, `UnknownMachine { host_id }`,
   `Rejected { info: ErrorInfo }` (the daemon refused; `info.code` says why, e.g. `forbidden`,
-  `read_only`), `Unreachable { message }` (no address answered a `reconnect`), `Local {
+  `read_only`), `SignInRefused { refusal: SignInRefusal, message }` (a machine refused a
+  sign-in by passkey: another passkey it knows the person by, an unknown person, or no user
+  verification), `Unreachable { message }` (no address answered a `reconnect`), `Local {
   message }`, `Closed`, `Demo` (a demo client sends nothing).
 
 `Machine`, `ConnectionState` and `ConnectionQuality` are serde, for `Demo`.
