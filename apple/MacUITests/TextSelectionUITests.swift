@@ -59,6 +59,9 @@ final class TextSelectionUITests: XCTestCase {
     func testDraggingAcrossAPromptCopiesAllOfIt() throws {
         open(Self.session)
         let prompt = message(Self.prompt)
+        // The transcript opens at its end, where this first message can sit under the session's
+        // header, which then takes the press.
+        scrollToStart(showing: prompt)
         drag(across: prompt)
         XCTAssertEqual(copied(), Self.prompt)
     }
@@ -130,6 +133,18 @@ final class TextSelectionUITests: XCTestCase {
         let element = app.textViews.matching(NSPredicate(format: "value BEGINSWITH %@", text)).firstMatch
         XCTAssertTrue(element.waitForExistence(timeout: 15), "no message begins \(text)")
         return element
+    }
+
+    /// Scrolls the transcript back to its start, where `element`, a message there, sits clear
+    /// of the session's header. Scrolls the other way when the first try left it where it was,
+    /// as one way is already the end.
+    private func scrollToStart(showing element: XCUIElement) {
+        let transcript = app.descendants(matching: .any)["transcript"].firstMatch
+        let before = element.frame.minY
+        transcript.scroll(byDeltaX: 0, deltaY: 2000)
+        if element.frame.minY <= before {
+            transcript.scroll(byDeltaX: 0, deltaY: -2000)
+        }
     }
 
     /// Presses just left of `element`'s first letter and drags to just past its last one, as a
