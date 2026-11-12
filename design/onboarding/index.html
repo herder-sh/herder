@@ -1,0 +1,914 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>herder · setup, devices and passkeys (prototype)</title>
+<style>
+@font-face{font-family:InterLocal;src:url(../../site/fonts/inter.woff2) format("woff2");font-weight:100 900}
+@font-face{font-family:MonoLocal;src:url(../../site/fonts/jetbrains-mono.woff2) format("woff2")}
+/* Theme.swift, dark */
+:root{
+  --canvas:#161618;--pane:#1b1b1e;--card:#222226;--sheet:#26262a;--cis:#2e2e33;--raised:#313136;--stroke:#34343a;
+  --text:#f7f7f7;--sec:#d1d1d1;--ter:#939393;--quiet:#6e6e76;
+  --accent:#e69f00;--run:#5382ee;--fail:#d55e00;--ok:#009e73;--on:#3ecf8e;--action:#5b8cff;--danger:#ef6b5b;--link:#7fa6f5;
+  --pf:#26262b;--ps:#3d3d44;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro",InterLocal,system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,MonoLocal,monospace;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:#0c0c0e;color:var(--text);font:14px/1.4 var(--sans);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit}
+.mono{font-family:var(--mono);font-size:.92em}
+[data-go]{cursor:pointer}
+
+/* ---------- prototype chrome ---------- */
+.top{position:sticky;top:0;z-index:20;background:rgba(12,12,14,.86);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid #222;padding:10px 14px 0}
+.top h1{font-size:15px;margin:0;font-weight:650;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+.top h1 small{color:var(--ter);font-weight:450}
+.toprow{display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap}
+.seg{display:inline-flex;background:#1d1d21;border:1px solid #2c2c32;border-radius:99px;padding:2px}
+.seg button{border:0;background:none;padding:5px 11px;border-radius:99px;font-size:12.5px;color:var(--ter);cursor:pointer}
+.seg button.on{background:var(--raised);color:var(--text)}
+.flows{display:flex;gap:6px;overflow-x:auto;padding:10px 0 10px;scrollbar-width:none}
+.flows::-webkit-scrollbar{display:none}
+.flows button{flex:none;border:1px solid #2c2c32;background:#18181b;color:var(--sec);border-radius:99px;padding:6px 12px;font-size:12.5px;cursor:pointer;white-space:nowrap}
+.flows button b{color:var(--ter);font-weight:600;margin-right:5px}
+.flows button.on{background:var(--text);color:#111;border-color:var(--text)}
+.flows button.on b{color:#555}
+.intro{max-width:980px;margin:0 auto;padding:14px 16px 0;color:var(--sec);font-size:13.5px}
+.intro b{color:var(--text)}
+.stepbar{max-width:1400px;margin:0 auto;padding:12px 16px 4px;display:flex;align-items:flex-start;gap:14px}
+.stepbar .txt{flex:1;min-width:0}
+.stepbar h2{margin:0;font-size:17px;font-weight:650;letter-spacing:-.01em}
+.stepbar p{margin:4px 0 0;color:var(--ter);font-size:13px;max-width:880px}
+.stepbar p b{color:var(--sec);font-weight:600}
+.nav{display:flex;gap:6px;align-items:center;flex:none}
+.nav button{width:34px;height:34px;border-radius:99px;border:1px solid #2c2c32;background:#1a1a1e;cursor:pointer;display:grid;place-items:center}
+.nav button:disabled{opacity:.35;cursor:default}
+.nav span{font-size:12px;color:var(--ter);min-width:38px;text-align:center}
+.dots{display:flex;gap:5px;justify-content:center;padding:6px 0 0}
+.dots i{width:6px;height:6px;border-radius:9px;background:#3a3a40;cursor:pointer}
+.dots i.on{background:var(--text);width:16px}
+.stage{display:flex;gap:28px;justify-content:center;align-items:flex-start;padding:14px 12px 60px;flex-wrap:wrap}
+.frame-wrap{display:flex;flex-direction:column;align-items:center;gap:8px}
+.frame-label{font-size:11.5px;color:var(--ter);letter-spacing:.04em;text-transform:uppercase}
+.hint-tap{color:var(--ter);font-size:12px;text-align:center;padding-bottom:30px}
+
+/* ---------- iPhone ---------- */
+.phone{width:402px;height:874px;border-radius:62px;background:#000;padding:0;position:relative;box-shadow:0 0 0 2px #2a2a2e,0 0 0 9px #0d0d0f,0 0 0 10px #333,0 30px 80px rgba(0,0,0,.6);overflow:hidden;flex:none}
+.screen{position:absolute;inset:0;background:var(--canvas);overflow:hidden;display:flex;flex-direction:column}
+.island{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:124px;height:36px;border-radius:20px;background:#000;z-index:50}
+.sbar{height:54px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:6px 34px 0 46px;font-weight:600;font-size:16.5px;z-index:40;position:relative}
+.sbar .r{display:flex;gap:6px;align-items:center}
+.homebar{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:140px;height:5px;border-radius:9px;background:#f2f2f2;z-index:60}
+.scroll{flex:1;overflow-y:auto;overflow-x:hidden;padding:0 16px 120px;scrollbar-width:none}
+.scroll::-webkit-scrollbar{display:none}
+.inav{display:flex;align-items:center;justify-content:space-between;height:52px;padding:0 16px;flex:none;position:relative}
+.inav .t{position:absolute;left:0;right:0;text-align:center;font-weight:600;font-size:17px;pointer-events:none}
+.glass{height:44px;min-width:44px;border-radius:99px;background:rgba(60,60,66,.55);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.08);display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 13px;font-size:16px;font-weight:500;position:relative;z-index:2;box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
+.glass.icon{padding:0;width:44px}
+.ltitle{font-size:34px;font-weight:700;letter-spacing:-.02em;margin:2px 4px 2px}
+.lsub{color:var(--ter);font-size:15px;margin:0 4px 14px}
+.grp{margin:0 0 22px}
+.grp>h6{margin:0 16px 7px;font-size:13px;font-weight:500;color:var(--ter);text-transform:uppercase;letter-spacing:.02em;display:flex;justify-content:space-between}
+.grp>h6 a{text-transform:none;color:var(--action);font-weight:500;letter-spacing:0}
+.box{background:var(--card);border-radius:24px;overflow:hidden}
+.grp>.foot{margin:7px 16px 0;font-size:13px;color:var(--ter)}
+.row{display:flex;align-items:center;gap:12px;padding:11px 16px;min-height:52px;position:relative}
+.row+.row:before{content:"";position:absolute;top:0;right:0;left:58px;border-top:.5px solid var(--stroke)}
+.box.noicons .row+.row:before{left:16px}
+.row .k{flex:1;min-width:0}
+.row .k .tt{font-size:16.5px;line-height:1.25;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.row .k .ss{font-size:13.5px;color:var(--ter);line-height:1.3;margin-top:2px}
+.row .k .ss .mono{font-size:12px}
+.row .tr{color:var(--ter);font-size:15px;display:flex;align-items:center;gap:6px;flex:none}
+.row.add{color:var(--action);font-size:16.5px}
+.row.add .lead{background:none;color:var(--action)}
+.lead{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:none;background:var(--raised);color:var(--sec)}
+.lead.round{border-radius:99px}
+.av{width:34px;height:34px;border-radius:99px;display:grid;place-items:center;flex:none;color:#fff;font-weight:650;font-size:14px}
+.av.big{width:76px;height:76px;font-size:32px}
+.a0{background:#2f8f83}.a1{background:#6a5acd}.a2{background:#b5653a}.a3{background:#3d7fc1}.a4{background:#a8508f}
+.tag{font-size:11.5px;font-weight:600;padding:2px 7px;border-radius:99px;background:var(--raised);color:var(--sec);white-space:nowrap}
+.tag.ok{color:var(--on);background:rgba(62,207,142,.12)}
+.tag.amb{color:var(--accent);background:rgba(230,159,0,.14)}
+.tag.blue{color:var(--action);background:rgba(91,140,255,.14)}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;height:52px;border-radius:99px;font-size:17px;font-weight:600;border:0;width:100%;cursor:pointer}
+.btn.pri{background:var(--action);color:#fff}
+.btn.sec{background:var(--raised);color:var(--text)}
+.btn.plain{background:none;color:var(--action);font-weight:500;height:44px}
+.btn.small{height:34px;font-size:14.5px;width:auto;padding:0 14px}
+.btn.danger{background:rgba(239,107,91,.14);color:var(--danger)}
+.dock{position:absolute;left:0;right:0;bottom:0;padding:14px 20px 34px;background:linear-gradient(to top,var(--canvas) 72%,rgba(22,22,24,0));z-index:30;display:flex;flex-direction:column;gap:6px}
+.dock .fine{font-size:12.5px;color:var(--ter);text-align:center;padding:0 10px 4px}
+.prog{display:flex;gap:6px;padding:0 4px;margin:4px 0 22px}
+.prog i{flex:1;height:4px;border-radius:9px;background:var(--raised)}
+.prog i.on{background:var(--text)}
+.prog-l{display:flex;justify-content:space-between;font-size:12px;color:var(--ter);margin:-16px 4px 22px}
+.prog-l span.on{color:var(--text)}
+.hero{text-align:center;padding:10px 6px 0}
+.hero h2{font-size:28px;letter-spacing:-.02em;margin:14px 0 8px;line-height:1.15}
+.hero p{color:var(--ter);font-size:16px;margin:0 8px 0}
+.choice{background:var(--card);border-radius:24px;padding:18px;display:flex;gap:14px;align-items:center;margin-bottom:12px;border:1px solid transparent}
+.choice .ci{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;background:var(--raised);flex:none}
+.choice .k{flex:1}
+.choice .k b{display:block;font-size:17px;font-weight:600}
+.choice .k span{color:var(--ter);font-size:14px}
+.choice.hl{border-color:rgba(91,140,255,.55)}
+.field{background:var(--card);border-radius:16px;padding:14px 16px;font-size:17px;display:flex;align-items:center;gap:8px}
+.field .caret{width:2px;height:22px;background:var(--action);animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.fl{font-size:13px;color:var(--ter);margin:0 6px 7px}
+.cmd{background:#0f0f11;border:1px solid var(--stroke);border-radius:14px;padding:12px 12px 12px 14px;font:13px/1.5 var(--mono);color:#e8e8ec;display:flex;gap:10px;align-items:flex-start}
+.cmd code{flex:1;white-space:pre-wrap;word-break:break-all}
+.cmd .cp{flex:none;color:var(--ter);padding:2px}
+.note{display:flex;gap:10px;font-size:14px;color:var(--ter);padding:4px 6px;line-height:1.4}
+.note b{color:var(--sec);font-weight:600}
+.note svg{flex:none;margin-top:1px}
+.card{background:var(--card);border-radius:24px;padding:16px}
+.pk{display:flex;gap:12px;align-items:center}
+.pk .key{width:40px;height:40px;border-radius:12px;background:rgba(91,140,255,.14);color:var(--action);display:grid;place-items:center;flex:none}
+.pk .k b{font-size:16px;font-weight:600;display:block}
+.pk .k span{font-size:13.5px;color:var(--ter)}
+.attn{background:var(--card);border-radius:22px;padding:14px 16px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start}
+.attn .ic{width:30px;height:30px;border-radius:99px;display:grid;place-items:center;flex:none;background:rgba(230,159,0,.15);color:var(--accent)}
+.attn .ic.err{background:rgba(213,94,0,.16);color:var(--fail)}
+.attn .ic.info{background:rgba(91,140,255,.15);color:var(--action)}
+.attn .k{flex:1;min-width:0}
+.attn .k b{font-size:15.5px;font-weight:600;display:block;line-height:1.3}
+.attn .k>span{font-size:13.5px;color:var(--ter);display:block;margin-top:2px;line-height:1.35}
+.act{display:flex;gap:8px;flex-wrap:wrap}
+.attn .act{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;height:34px;border-radius:99px;padding:0 14px;font-size:14.5px;font-weight:600;background:var(--raised);color:var(--text);white-space:nowrap}
+.chip.pri{background:var(--action);color:#fff}
+.chip.q{background:none;color:var(--ter);font-weight:500;padding:0 6px}
+.allclear{text-align:center;padding:28px 10px 30px}
+.allclear .ok{width:54px;height:54px;border-radius:99px;margin:0 auto 10px;background:rgba(62,207,142,.13);color:var(--on);display:grid;place-items:center}
+.allclear b{font-size:17px;display:block}
+.allclear span{color:var(--ter);font-size:14px}
+.st{width:22px;height:22px;display:grid;place-items:center;flex:none}
+.spin{width:18px;height:18px;border-radius:99px;border:2.2px solid rgba(83,130,238,.25);border-top-color:var(--run);animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.tabbar{position:absolute;left:16px;right:16px;bottom:24px;height:62px;border-radius:99px;background:rgba(40,40,44,.72);backdrop-filter:blur(24px) saturate(1.4);-webkit-backdrop-filter:blur(24px) saturate(1.4);border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-around;padding:0 6px;z-index:30;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.tabbar div{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;font-weight:600;color:var(--sec);padding:6px 14px;border-radius:99px;position:relative}
+.tabbar div.on{background:rgba(255,255,255,.1);color:var(--text)}
+.tabbar .badge{position:absolute;top:2px;right:8px;background:var(--accent);color:#000;font-size:10.5px;font-weight:700;border-radius:99px;min-width:17px;height:17px;display:grid;place-items:center;padding:0 4px}
+.dim{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:70}
+.isheet{position:absolute;left:8px;right:8px;bottom:8px;top:62px;background:var(--sheet);border-radius:40px;z-index:80;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -10px 40px rgba(0,0,0,.4)}
+.isheet.med{top:auto;height:auto}
+.isheet .grab{width:38px;height:5px;border-radius:9px;background:#56565c;margin:7px auto 0;flex:none}
+.isheet .inav{height:56px}
+.isheet .box{background:var(--cis)}
+.isheet .card,.isheet .attn,.isheet .field,.isheet .choice{background:var(--cis)}
+.isheet .lead{background:#3a3a40}
+.isheet .scroll{padding-bottom:30px}
+.isheet .dock{position:relative;background:none;padding:10px 20px 26px}
+.sysalert{position:absolute;left:10px;right:10px;bottom:10px;background:rgba(44,44,48,.97);border-radius:40px;z-index:90;padding:22px 22px 28px;box-shadow:0 -10px 50px rgba(0,0,0,.6)}
+.sysalert .hd{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ter);margin-bottom:16px}
+.sysalert .hd .x{margin-left:auto;width:30px;height:30px;border-radius:99px;background:#48484e;display:grid;place-items:center}
+.sysalert h4{font-size:21px;margin:0 0 6px;text-align:center;letter-spacing:-.01em}
+.sysalert p{text-align:center;color:var(--ter);font-size:14.5px;margin:0 0 18px}
+.sysalert .who{display:flex;gap:12px;align-items:center;background:#3a3a40;border-radius:16px;padding:12px 14px;margin-bottom:16px}
+.sysalert .btn.pri{background:#0a84ff}
+.faceid{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);width:156px;height:156px;border-radius:36px;background:rgba(48,48,52,.9);backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px);z-index:95;display:grid;place-items:center;color:#f2f2f2}
+.cam{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 40%,#2a2c30,#08090a 75%);z-index:1}
+.cam .term{position:absolute;left:50%;top:40%;transform:translate(-50%,-50%) rotate(-3deg) perspective(600px) rotateX(8deg);width:320px;background:#101113;border-radius:10px;padding:14px;font:10px/1.45 var(--mono);color:#cfd2d6;box-shadow:0 20px 60px #000;filter:blur(.3px)}
+.cam .reticle{position:absolute;left:50%;top:40%;width:236px;height:236px;transform:translate(-50%,-50%);z-index:3}
+.cam .reticle i{position:absolute;width:44px;height:44px;border:4px solid #fff;border-radius:6px}
+.cam .reticle i:nth-child(1){top:0;left:0;border-right:0;border-bottom:0;border-radius:18px 0 0 0}
+.cam .reticle i:nth-child(2){top:0;right:0;border-left:0;border-bottom:0;border-radius:0 18px 0 0}
+.cam .reticle i:nth-child(3){bottom:0;left:0;border-right:0;border-top:0;border-radius:0 0 0 18px}
+.cam .reticle i:nth-child(4){bottom:0;right:0;border-left:0;border-top:0;border-radius:0 0 18px 0}
+.cam .found{position:absolute;left:24px;right:24px;bottom:150px;z-index:4;background:rgba(40,40,44,.85);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-radius:22px;padding:12px 14px;display:flex;gap:12px;align-items:center}
+.qrbox{background:#fff;border-radius:22px;padding:14px;display:inline-block;line-height:0}
+.center{text-align:center}
+.mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}.mt22{margin-top:22px}.mb12{margin-bottom:12px}
+.big-ok{width:84px;height:84px;border-radius:99px;margin:6px auto 0;background:rgba(62,207,142,.13);color:var(--on);display:grid;place-items:center}
+.logo{width:86px;height:86px;border-radius:22px;margin:0 auto;background:linear-gradient(160deg,#2c2c32,#141416);border:1px solid #3a3a42;display:grid;place-items:center;box-shadow:0 14px 40px rgba(0,0,0,.5)}
+.seg2{display:flex;background:var(--raised);border-radius:99px;padding:3px}
+.seg2 div{flex:1;text-align:center;padding:7px 0;border-radius:99px;font-size:14.5px;font-weight:600;color:var(--sec)}
+.seg2 div.on{background:#5a5a62;color:#fff}
+.sw{width:51px;height:31px;border-radius:99px;background:var(--on);position:relative;flex:none}
+.sw:after{content:"";position:absolute;right:2px;top:2px;width:27px;height:27px;border-radius:99px;background:#fff}
+.sw.off{background:#39393f}.sw.off:after{right:auto;left:2px}
+.check{width:24px;height:24px;border-radius:99px;background:var(--action);display:grid;place-items:center;color:#fff;flex:none}
+.check.off{background:none;border:1.5px solid #55555c}
+
+/* ---------- Mac ---------- */
+.mac{width:1280px;height:800px;border-radius:14px;background:var(--canvas);box-shadow:0 0 0 1px #3a3a40,0 30px 90px rgba(0,0,0,.65);overflow:hidden;position:relative;display:flex;flex:none;font-size:13px}
+.mside{width:228px;flex:none;background:rgba(30,30,34,.92);border-right:1px solid #2a2a2f;padding:0 10px;display:flex;flex-direction:column}
+.lights{display:flex;gap:8px;height:52px;align-items:center;padding-left:8px}
+.lights i{width:12px;height:12px;border-radius:99px;background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.mside .sr{display:flex;align-items:center;gap:9px;height:30px;padding:0 9px;border-radius:8px;color:var(--sec);font-size:13px;position:relative}
+.mside .sr svg{color:var(--ter)}
+.mside .sr.on{background:var(--raised);color:var(--text)}
+.mside .sr.on svg{color:var(--text)}
+.mside .sr .n{margin-left:auto;font-size:11.5px;font-weight:650;color:var(--accent)}
+.mside .sr .n.b{color:var(--run)}
+.mside h6{font-size:11px;color:var(--quiet);margin:16px 9px 4px;font-weight:600;letter-spacing:.02em}
+.mside .foot{margin-top:auto;padding:12px 9px 14px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ter);border-top:1px solid #2a2a2f}
+.mside .foot i{width:7px;height:7px;border-radius:9px;background:var(--ok)}
+.mside .foot i.off{background:var(--fail)}
+.mmain{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+.mhead{height:52px;display:flex;align-items:center;gap:12px;padding:0 24px;flex:none}
+.mhead .t{font-size:20px;font-weight:700;letter-spacing:-.01em}
+.mhead .s{color:var(--ter);font-size:13px}
+.mhead .sp{flex:1}
+.pbtn{height:32px;border-radius:9px;padding:0 12px;display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;background:none;border:1px solid transparent;color:var(--sec);white-space:nowrap}
+.pbtn.pri{background:var(--pf);border-color:var(--ps);color:var(--text)}
+.pbtn.blue{background:var(--action);color:#fff}
+.pbtn.raised{background:var(--raised);color:var(--text)}
+.pbtn.danger{color:var(--danger);background:rgba(239,107,91,.1)}
+.mbody{flex:1;overflow:auto;padding:6px 24px 40px}
+.mcol{max-width:880px}
+.mh{font-size:11.5px;font-weight:650;letter-spacing:.06em;text-transform:uppercase;color:var(--ter);margin:22px 0 8px;display:flex;align-items:center;gap:8px}
+.mh .c{color:var(--quiet)}
+.mh a{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:550;color:var(--action);font-size:12.5px}
+.mlist{background:var(--card);border-radius:12px;overflow:hidden;border:1px solid #2a2a2f}
+.mrow{display:flex;align-items:center;gap:12px;padding:0 14px;min-height:52px;position:relative}
+.mrow+.mrow{border-top:1px solid var(--stroke)}
+.mrow .k{flex:1;min-width:0;padding:8px 0}
+.mrow .k .tt{font-size:13.5px;font-weight:550;display:flex;align-items:center;gap:7px}
+.mrow .k .ss{font-size:12px;color:var(--ter);margin-top:1px}
+.mrow .k .ss .mono{font-size:11px}
+.mrow .tr{color:var(--ter);font-size:12.5px;display:flex;gap:8px;align-items:center}
+.mrow.thead{min-height:30px}.mrow.thead .k{padding:0}
+.mrow.add{color:var(--action);min-height:42px;font-size:13px}
+.mrow .lead{width:28px;height:28px;border-radius:8px}
+.mrow .av{width:28px;height:28px;font-size:12px}
+.mrow .col{width:130px;font-size:12.5px;color:var(--sec)}
+.mrow .col.w{width:170px}
+.mattn{display:flex;gap:12px;align-items:center;background:var(--card);border:1px solid #2a2a2f;border-radius:12px;padding:12px 14px;margin-bottom:8px}
+.mattn .ic{width:28px;height:28px;border-radius:99px;display:grid;place-items:center;flex:none;background:rgba(230,159,0,.15);color:var(--accent)}
+.mattn .ic.err{background:rgba(213,94,0,.16);color:var(--fail)}
+.mattn .ic.info{background:rgba(91,140,255,.15);color:var(--action)}
+.mattn .k{flex:1}
+.mattn .k b{font-size:13.5px;font-weight:600;display:block}
+.mattn .k>span{font-size:12px;color:var(--ter)}
+.mdim{position:absolute;inset:0;background:rgba(0,0,0,.45);z-index:20}
+.msheet{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:560px;max-height:720px;background:var(--sheet);border-radius:18px;z-index:30;box-shadow:0 0 0 1px #3c3c42,0 30px 80px rgba(0,0,0,.6);display:flex;flex-direction:column;overflow:hidden}
+.msheet.wide{width:640px}
+.msh{padding:20px 22px 6px;display:flex;gap:12px;align-items:flex-start}
+.msh .k{flex:1}
+.msh h3{margin:0;font-size:17px;font-weight:700;letter-spacing:-.01em}
+.msh p{margin:3px 0 0;color:var(--ter);font-size:13px}
+.msh .x{width:26px;height:26px;border-radius:99px;background:var(--raised);display:grid;place-items:center;color:var(--ter);flex:none}
+.msb{padding:10px 22px 16px;overflow:auto;flex:1}
+.msb .mlist{background:var(--cis);border-color:#3a3a40}
+.msb .mrow+.mrow{border-color:#3d3d44}
+.msb .card{background:var(--cis);border-radius:14px}
+.msb .lead{background:#3d3d44}
+.msf{padding:12px 22px 16px;display:flex;align-items:center;gap:10px;border-top:1px solid #34343a}
+.msf .h{flex:1;font-size:12px;color:var(--ter)}
+.mprog{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ter);margin:2px 0 14px}
+.mprog i{width:22px;height:22px;border-radius:99px;display:grid;place-items:center;font-style:normal;font-size:11.5px;font-weight:700;background:var(--raised);color:var(--ter)}
+.mprog i.on{background:var(--text);color:#111}
+.mprog i.done{background:rgba(62,207,142,.15);color:var(--on)}
+.mprog span.on{color:var(--text);font-weight:600}
+.mprog .ln{flex:1;height:1px;background:var(--stroke);max-width:40px}
+.mstep{display:flex;gap:12px;margin-bottom:16px}
+.mstep>i{width:22px;height:22px;border-radius:99px;background:var(--raised);font-style:normal;font-size:12px;font-weight:700;display:grid;place-items:center;flex:none;color:var(--sec)}
+.mstep>i.done{background:rgba(62,207,142,.15);color:var(--on)}
+.mstep>i.now{background:var(--text);color:#111}
+.mstep .k{flex:1;min-width:0}
+.mstep .k b{font-size:13.5px;font-weight:600;display:block;margin-bottom:6px}
+.mstep .k span{font-size:12.5px;color:var(--ter)}
+.mac .cmd{font-size:12px;border-radius:10px;padding:10px 12px}
+.mac .btn{height:36px;font-size:13.5px;border-radius:9px}
+.mac .field{background:var(--cis);border-radius:9px;padding:8px 11px;font-size:14px}
+.mac .tag{font-size:11px}
+.mwel{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 0%,#232328,var(--canvas) 70%)}
+.mwel .in{width:520px}
+.mwel .lights{position:absolute;top:0;left:12px}
+.mterm{background:#0e0e10;border:1px solid #2c2c32;border-radius:12px;padding:12px 14px;font:11.5px/1.5 var(--mono);color:#cfd2d6;white-space:pre}
+.mterm .g{color:var(--on)}.mterm .d{color:var(--quiet)}.mterm .y{color:var(--accent)}
+.touchid{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:340px;background:rgba(44,44,48,.97);border-radius:16px;z-index:40;padding:22px;text-align:center;box-shadow:0 0 0 1px #4a4a50,0 30px 80px #000}
+.touchid h4{margin:12px 0 4px;font-size:14px}
+.touchid p{margin:0 0 14px;font-size:12px;color:var(--ter)}
+.touchid .fp{width:54px;height:54px;margin:0 auto;border-radius:99px;display:grid;place-items:center;color:#ff453a;background:rgba(255,69,58,.12)}
+.touchid .bb{display:flex;gap:8px}
+.touchid .bb div{flex:1;height:28px;border-radius:7px;background:#4a4a50;display:grid;place-items:center;font-size:13px}
+.touchid .bb div.p{background:#0a84ff}
+.ring{box-shadow:0 0 0 2px var(--action),0 0 0 6px rgba(91,140,255,.25)!important}
+.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 2px var(--action),0 0 0 10px rgba(91,140,255,.1)}}
+.toast{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);background:var(--raised);border:1px solid #44444a;border-radius:99px;padding:8px 16px;font-size:13px;z-index:40;display:flex;gap:8px;align-items:center;white-space:nowrap}
+.phone .toast{bottom:100px;font-size:14.5px;padding:10px 18px}
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="toprow">
+    <h1>herder <small>· setup, devices and passkeys · prototype</small></h1>
+    <div class="seg" id="dev">
+      <button data-d="both">Both</button><button data-d="phone">iPhone</button><button data-d="mac">Mac</button>
+    </div>
+  </div>
+  <div class="flows" id="flows"></div>
+</div>
+<div class="stepbar">
+  <div class="txt"><h2 id="st-title"></h2><p id="st-note"></p></div>
+  <div class="nav"><button id="prev" aria-label="Previous">‹</button><span id="pos"></span><button id="next" aria-label="Next">›</button></div>
+</div>
+<div class="dots" id="dots"></div>
+<div class="stage" id="stage"></div>
+<div class="hint-tap">Tap the highlighted buttons inside a screen, or use ‹ › and ← →. Every flow starts from its first chip.</div>
+<script>
+/* ===== helpers ===== */
+const P = {
+  check:'<path d="M5 12.5l4.2 4.2L19 7"/>', chev:'<path d="M9 5l7 7-7 7"/>', chevL:'<path d="M15 5l-7 7 7 7"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>', x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  face:'<path d="M4 8V6a2 2 0 012-2h2M16 4h2a2 2 0 012 2v2M20 16v2a2 2 0 01-2 2h-2M8 20H6a2 2 0 01-2-2v-2"/><path d="M9 9.5v1.2M15 9.5v1.2M12 9.5v3.5h-1M9.2 15.6c1.6 1.2 4 1.2 5.6 0"/>',
+  finger:'<path d="M12 11v3.5c0 2-.6 3.8-1.6 5.3M8.6 9.4A4 4 0 0116 11v1.5M16 15.5c-.2 1.6-.6 3-1.3 4.3M5.8 14.6c.2-1 .2-2 .2-3.1a6 6 0 0110.6-3.9M18 11.5v.7c0 .9 0 1.7-.2 2.6M8.4 13.2c0 2.5-.6 4.6-1.8 6.3"/>',
+  key:'<circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l2.5 2.5M14 9l2 2"/>',
+  qr:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2M20 14v.01M14 20h2M18 18h2v2M18 14v2"/>',
+  copy:'<rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/>',
+  laptop:'<rect x="5" y="5" width="14" height="10" rx="1.5"/><path d="M3 19h18"/>',
+  phone:'<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/>',
+  term:'<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M7.5 9.5l3 2.5-3 2.5M12.5 15h4"/>',
+  server:'<rect x="4" y="4" width="16" height="7" rx="1.8"/><rect x="4" y="13" width="16" height="7" rx="1.8"/><path d="M8 7.5h.01M8 16.5h.01"/>',
+  vault:'<rect x="4" y="4" width="16" height="16" rx="2.5"/><circle cx="12" cy="12" r="3.2"/><path d="M12 8.8V7M15.2 12H17"/>',
+  person:'<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/>',
+  people:'<circle cx="9" cy="9" r="3.2"/><path d="M3.5 19c.7-3.2 2.9-4.8 5.5-4.8s4.8 1.6 5.5 4.8M15.5 6.2a3 3 0 010 5.6M17 14.5c1.8.5 3 1.9 3.5 4.5"/>',
+  warn:'<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
+  bang:'<path d="M12 6v8M12 18h.01"/>',
+  net:'<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.4 2.3 3.5 5 3.5 8s-1.1 5.7-3.5 8c-2.4-2.3-3.5-5-3.5-8s1.1-5.7 3.5-8z"/>',
+  up:'<path d="M12 19V6M6 11.5L12 5.5l6 6"/>', down:'<path d="M12 5v13M6 12.5l6 6 6-6"/>',
+  shield:'<path d="M12 3.5l7 3v5.5c0 4.2-3 7.4-7 8.5-4-1.1-7-4.3-7-8.5V6.5z"/><path d="M9 12l2 2 4-4"/>',
+  link:'<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',
+  trash:'<path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/>',
+  board:'<path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/>',
+  chat:'<path d="M5 5h14v10H10l-4 4v-4H5z"/>', bot:'<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 8V5M9.5 13h.01M14.5 13h.01"/>',
+  folder:'<path d="M3.5 7a2 2 0 012-2h4l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2h-13a2 2 0 01-2-2z"/>',
+  gear:'<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/>',
+  book:'<path d="M5 4.5h10a3 3 0 013 3V20H8a3 3 0 01-3-3z"/><path d="M5 17a3 3 0 013-3h10"/>',
+  plug:'<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 01-12 0zM12 17v4"/>',
+  info:'<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
+  camera:'<path d="M4 8h3l2-2.5h6L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+  share:'<path d="M12 4v11M7.5 8.5L12 4l4.5 4.5M6 12v7h12v-7"/>',
+  arrowR:'<path d="M5 12h14M13 6l6 6-6 6"/>', clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  cloud:'<path d="M7 18a4.5 4.5 0 01-.5-9 6 6 0 0111.4 1.6A3.8 3.8 0 0117.5 18z"/>',
+  setup:'<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  dots:'<path d="M6 12h.01M12 12h.01M18 12h.01"/>',
+  merge:'<path d="M7 4v4a4 4 0 004 4h6M17 12l-3-3M17 12l-3 3M7 20v-4"/>',
+};
+const ic = (n, s=18, w=1.9) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
+const go = t => t ? ` data-go="${t}"` : '';
+
+/* deterministic fake QR */
+function qr(seed, px=180){
+  const n=25; let s=0; for (const ch of seed) s=(s*31+ch.charCodeAt(0))>>>0;
+  const rnd=()=>(s=(s*1103515245+12345)>>>0, (s>>>16)&1);
+  const c=px/n; let r='';
+  const fin=(x,y)=>{ r+=`<rect x="${x*c}" y="${y*c}" width="${7*c}" height="${7*c}" fill="#000"/><rect x="${(x+1)*c}" y="${(y+1)*c}" width="${5*c}" height="${5*c}" fill="#fff"/><rect x="${(x+2)*c}" y="${(y+2)*c}" width="${3*c}" height="${3*c}" fill="#000"/>`; };
+  for (let y=0;y<n;y++) for (let x=0;x<n;x++){
+    const inF=(x<8&&y<8)||(x>n-9&&y<8)||(x<8&&y>n-9); if(inF) continue;
+    if (rnd()) r+=`<rect x="${x*c}" y="${y*c}" width="${c+.3}" height="${c+.3}" fill="#000"/>`;
+  }
+  fin(0,0); fin(n-7,0); fin(0,n-7);
+  return `<svg width="${px}" height="${px}" viewBox="0 0 ${px} ${px}" shape-rendering="crispEdges">${r}</svg>`;
+}
+
+/* demo data: the owner's own fleet */
+const M = [
+  {n:'trash-can-01', k:'Linux server', a:'192.168.1.20', via:'home network', ic:'server'},
+  {n:'draugelis', k:'Linux desktop', a:'192.168.1.147', via:'home network', ic:'server'},
+  {n:'work-mbp', k:'MacBook Pro · this Mac', a:'127.0.0.1', via:'this Mac', ic:'laptop'},
+  {n:'mini-k8s', k:'Kubernetes', a:'100.71.3.22', via:'Tailscale', ic:'server'},
+  {n:'studio', k:'Mac Studio', a:'192.168.1.60', via:'home network', ic:'laptop'},
+];
+
+/* ===== iPhone ===== */
+const SBAR = `<div class="sbar"><span>9:41</span><span class="r">
+<svg width="18" height="12" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5.5" width="3" height="6.5" rx="1"/><rect x="10" y="3" width="3" height="9" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1"/></svg>
+<svg width="16" height="12" viewBox="0 0 16 12" fill="#fff"><path d="M8 2.2c2.4 0 4.6.9 6.2 2.4l1.3-1.4A10.9 10.9 0 008 .3 10.9 10.9 0 00.5 3.2l1.3 1.4A9 9 0 018 2.2zm0 3.7c1.4 0 2.7.5 3.6 1.4l1.3-1.4A7.1 7.1 0 008 4a7.1 7.1 0 00-4.9 1.9l1.3 1.4c1-.9 2.2-1.4 3.6-1.4zm0 3.6c.5 0 1 .2 1.3.5L8 11.4 6.7 10c.3-.3.8-.5 1.3-.5z"/></svg>
+<svg width="27" height="13" viewBox="0 0 27 13"><rect x=".5" y=".5" width="23" height="12" rx="3.5" fill="none" stroke="#fff" opacity=".4"/><rect x="2" y="2" width="18" height="9" rx="2" fill="#fff"/><rect x="25" y="4.5" width="1.6" height="4" rx=".8" fill="#fff" opacity=".4"/></svg></span></div>`;
+const phone = inner => `<div class="phone"><div class="island"></div><div class="screen">${SBAR}${inner}</div><div class="homebar"></div></div>`;
+const inav = (l='', t='', r='') => `<div class="inav">${l||'<span></span>'}<div class="t">${t}</div>${r||'<span></span>'}</div>`;
+const back = (label, to) => `<span class="glass"${go(to)}>${ic('chevL',20,2.2)}${label?`<span style="font-size:16px">${label}</span>`:''}</span>`;
+const gbtn = (icon, to, cls='') => `<span class="glass icon ${cls}"${go(to)}>${ic(icon,20,2)}</span>`;
+const grp = (h, rows, foot='', cls='') => `<div class="grp">${h?`<h6>${h}</h6>`:''}<div class="box ${cls}">${rows}</div>${foot?`<div class="foot">${foot}</div>`:''}</div>`;
+const row = ({lead='', t, s='', tr='', chev=false, to='', add=false, cls=''}) =>
+  `<div class="row ${add?'add':''} ${cls}"${go(to)}>${lead}<div class="k"><div class="tt">${t}</div>${s?`<div class="ss">${s}</div>`:''}</div>${tr||chev?`<div class="tr">${tr}${chev?ic('chev',15,2.2):''}</div>`:''}</div>`;
+const lead = (n, color='') => `<div class="lead" ${color?`style="background:${color};color:#fff"`:''}>${ic(n,17)}</div>`;
+const av = (l, c='a0', cls='') => `<div class="av ${c} ${cls}">${l}</div>`;
+const btn = (label, to='', cls='pri', icon='') => `<div class="btn ${cls}"${go(to)}>${icon?ic(icon,20,2):''}${label}</div>`;
+const dock = (...items) => `<div class="dock">${items.join('')}</div>`;
+const fine = t => `<div class="fine">${t}</div>`;
+const prog = (i, labels) => `<div class="prog">${labels.map((_,j)=>`<i class="${j<=i?'on':''}"></i>`).join('')}</div><div class="prog-l">${labels.map((l,j)=>`<span class="${j===i?'on':''}">${l}</span>`).join('')}</div>`;
+const scroll = (html, pad='') => `<div class="scroll" style="${pad}">${html}</div>`;
+const isheet = (inner, cls='') => `<div class="dim"></div><div class="isheet ${cls}"><div class="grab"></div>${inner}</div>`;
+const tabbar = (on='Setup', badge=0) => `<div class="tabbar">${[['Board','board'],['Chats','chat'],['Projects','folder'],['Setup','setup']].map(([t,i])=>`<div class="${t===on?'on':''}"${t==='Setup'&&on!=='Setup'?go('6:0'):''}>${ic(i,22,1.9)}${t}${t==='Setup'&&badge?`<span class="badge">${badge}</span>`:''}</div>`).join('')}</div>`;
+const st = k => ({
+  ok:`<span class="st" style="color:var(--on)">${ic('check',19,2.6)}</span>`,
+  amb:`<span class="st" style="color:var(--accent)">${ic('bang',19,2.8)}</span>`,
+  err:`<span class="st" style="color:var(--fail)">${ic('x',17,2.6)}</span>`,
+  spin:`<span class="st"><span class="spin"></span></span>`,
+  wait:`<span class="st" style="color:var(--quiet)"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 3"/></svg></span>`,
+  dot:`<span class="st"><span style="width:9px;height:9px;border-radius:9px;background:var(--on)"></span></span>`,
+  dotoff:`<span class="st"><span style="width:9px;height:9px;border-radius:9px;background:var(--fail)"></span></span>`,
+})[k];
+const attn = ({kind='amb', icon='bang', t, s, acts=''}) => `<div class="attn"><div class="ic ${kind}">${ic(icon,17,2.4)}</div><div class="k"><b>${t}</b><span>${s}</span>${acts?`<div class="act">${acts}</div>`:''}</div></div>`;
+const chip = (label, to='', cls='', icon='') => `<span class="chip ${cls}"${go(to)}>${icon?ic(icon,15,2.2):''}${label}</span>`;
+const cmd = (c, cls='') => `<div class="cmd ${cls}"><code>${c}</code><span class="cp">${ic('copy',17)}</span></div>`;
+const note = (t, i='info') => `<div class="note">${ic(i,17)}<div>${t}</div></div>`;
+const pkcard = (name, where, sub='', badge='') => `<div class="card pk"><div class="key">${ic('key',20,2)}</div><div class="k"><b>${name} ${badge}</b><span>${where}${sub?` · ${sub}`:''}</span></div></div>`;
+const toast = (t, i='check') => `<div class="toast"><span style="color:var(--on)">${ic(i,16,2.6)}</span>${t}</div>`;
+
+/* ===== Mac ===== */
+const SIDE = [['Board','board',''],['Chats','chat',''],['Bots','bot','']];
+const WORK = [['Providers','people'],['Skills','book'],['Setup','setup'],['Integrations','plug']];
+function mside(on, badge){
+  const sr = (t,i,n='',nb=false) => `<div class="sr ${t===on?'on':''}"${t==='Setup'?go('6:0'):''}>${ic(i,16)}${t}${n?`<span class="n ${nb?'b':''}">${n}</span>`:''}</div>`;
+  return `<div class="mside"><div class="lights"><i></i><i></i><i></i></div>
+  ${sr('Board','board','2')}${sr('Chats','chat','3',true)}${sr('Bots','bot')}
+  <h6>Workspace</h6>${WORK.map(([t,i])=>sr(t,i,t==='Setup'&&badge?String(badge):'')).join('')}
+  <h6>Projects</h6>${['herder','herder.sh','infra'].map(p=>`<div class="sr">${ic('folder',16)}${p}</div>`).join('')}
+  <div class="foot"><i></i><i></i><i></i><i></i><i></i> 5 machines</div></div>`;
+}
+const mac = ({on='Setup', badge=0, head='', body='', over=''}) =>
+  `<div class="mac">${mside(on,badge)}<div class="mmain">${head}<div class="mbody"><div class="mcol">${body}</div></div>${over}</div></div>`;
+const mhead = (t, s='', acts='', crumb='') => `<div class="mhead">${crumb?`<span class="s" style="color:var(--ter)">${crumb}</span>`:''}<span class="t">${t}</span><span class="s">${s}</span><span class="sp"></span>${acts}</div>`;
+const pbtn = (label, to='', cls='', icon='') => `<span class="pbtn ${cls}"${go(to)}>${icon?ic(icon,15,2.1):''}${label}</span>`;
+const mh = (t, c='', a='') => `<div class="mh">${t}${c!==''?`<span class="c">${c}</span>`:''}${a}</div>`;
+const mrow = ({lead='', t, s='', cols='', tr='', to='', add=false, cls=''}) => `<div class="mrow ${add?'add':''} ${cls}"${go(to)}>${lead}<div class="k"><div class="tt">${t}</div>${s?`<div class="ss">${s}</div>`:''}</div>${cols}${tr?`<div class="tr">${tr}</div>`:''}</div>`;
+const mattn = ({kind='amb', icon='bang', t, s, acts=''}) => `<div class="mattn"><div class="ic ${kind}">${ic(icon,15,2.4)}</div><div class="k"><b>${t}</b><span>${s}</span></div>${acts}</div>`;
+const msheet = ({t, s='', body, foot='', hint='', cls=''}) => `<div class="mdim"></div><div class="msheet ${cls}"><div class="msh"><div class="k"><h3>${t}</h3>${s?`<p>${s}</p>`:''}</div><span class="x">${ic('x',13,2.4)}</span></div><div class="msb">${body}</div>${foot?`<div class="msf"><div class="h">${hint}</div>${foot}</div>`:''}</div>`;
+const mprog = (i, labels) => `<div class="mprog">${labels.map((l,j)=>`${j?'<span class="ln"></span>':''}<i class="${j<i?'done':j===i?'on':''}">${j<i?ic('check',12,3):j+1}</i><span class="${j===i?'on':''}">${l}</span>`).join('')}</div>`;
+const mstep = (n, t, inner, state='') => `<div class="mstep"><i class="${state}">${state==='done'?ic('check',12,3):n}</i><div class="k"><b>${t}</b>${inner}</div></div>`;
+const touchid = (title, sub) => `<div class="mdim" style="z-index:35"></div><div class="touchid" data-go="next"><div class="fp">${ic('finger',30,1.8)}</div><h4>${title}</h4><p>${sub}</p><div class="bb"><div>Cancel</div><div class="p" data-go="next">Use Password…</div></div></div>`;
+
+/* ===== shared pages ===== */
+const NEED = {
+  dup:{icon:'merge', t:'2 people here are probably you', s:'Earlier setups made “Owner” on mini-k8s and “Mobile User” on studio.', acts:[['Merge into Tomas','5:6','pri'],['Not me','','q']]},
+  unknown:{icon:'person', t:'studio doesn’t know this passkey', s:'It knows you by your 1Password passkey. Use that one once and herder adds this one too.', acts:[['Use 1Password passkey','6:1','pri']]},
+  tail:{kind:'err', icon:'net', t:'Tailscale is off on this iPhone', s:'mini-k8s is only reachable over Tailscale, so this iPhone can’t use it.', acts:[['Open Tailscale','6:1','pri']]},
+  devmac:{icon:'phone', t:'Your iPhone isn’t on mini-k8s yet', s:'It couldn’t reach it. Turn on Tailscale on the iPhone; it finishes by itself.', acts:[['Got it','6:1','']]},
+  update:{kind:'info', icon:'up', t:'herder 0.21.0 is out', s:'trash-can-01, draugelis and mini-k8s run 0.20.0.', acts:[['Update all 3','6:1','pri']]},
+  backup:{kind:'info', icon:'key', t:'Add a second passkey', s:'Your only passkey is in Apple Passwords. A second one, say in 1Password, keeps you in if you lose it.', acts:[['Add a passkey','4:2','pri'],['Later','','q']]},
+  newm:{kind:'info', icon:'server', t:'New machine: gpu-box', s:'You added it on your Mac. Sign in on this iPhone too.', acts:[['Sign in with Face ID','3:6','pri']]},
+  ask:{icon:'people', t:'Lina asks to use studio', s:'Lina joined as a member; studio wasn’t in her invite.', acts:[['Add Lina','6:1','pri'],['Decline','','q']]},
+};
+const needP = k => { const n=NEED[k]; return attn({...n, acts:n.acts.map(([l,t,c])=>chip(l,t,c)).join('')}); };
+const needM = k => { const n=NEED[k]; return mattn({...n, acts:`<div style="display:flex;gap:6px">${n.acts.map(([l,t,c])=>pbtn(l,t,c==='pri'?'blue':c==='q'?'':'raised')).join('')}</div>`}); };
+
+function machineRowsP(unreach=[], extra=''){
+  return M.map(m=>{
+    const off = unreach.includes(m.n);
+    return row({lead:lead(m.ic), t:m.n, s:`${m.k.replace(' · this Mac','')} · ${off?'<span style="color:var(--fail)">Can’t reach it</span>':'Connected'}`, chev:true, to:''});
+  }).join('') + extra +
+  row({lead:lead('vault'), t:'herder-vault-0', s:'Vault · backs up 4 machines · up to date', chev:true}) +
+  row({lead:`<div class="lead" style="background:none;color:var(--action)">${ic('plus',20,2.2)}</div>`, t:'Add a machine', add:true, to:'3:1'});
+}
+const PEOPLE = [
+  {l:'T', c:'a0', n:'Tomas', you:true, r:'Owner', s:'All machines'},
+  {l:'S', c:'a1', n:'Sam', r:'Member', s:'All machines'},
+  {l:'K', c:'a2', n:'Kim', r:'Custom', s:'Owner on draugelis · member on 4'},
+];
+function peopleRowsP(sam='member'){
+  return PEOPLE.map(p=>row({lead:av(p.l,p.c), t:`${p.n}${p.you?' <span class="tag">You</span>':''}`, s:`${p.r} · ${p.s}`, chev:true, to:p.n==='Kim'?'5:5':p.you?'4:0':''})).join('') +
+    row({lead:`<div class="lead" style="background:none;color:var(--action)">${ic('plus',20,2.2)}</div>`, t:'Invite a teammate', add:true, to:'5:1'});
+}
+
+function setupPhone({needs=[], ringAdd=false, unreach=[], over='', extraMachine='', title=true}={}){
+  const n = needs.length;
+  const body =
+    `<div class="ltitle">Setup</div><div class="lsub">${n?`${n} need${n>1?'':'s'} you · `:'Everything is set up · '}5 machines</div>` +
+    (n ? `<div class="grp"><h6>Needs you</h6>${needs.map(needP).join('')}</div>` : '') +
+    grp('', row({lead:av('T','a0'), t:'Tomas', s:'You · owner · 2 passkeys · 3 devices', chev:true, to:'4:0'}), '') +
+    grp('Machines', machineRowsP(unreach, extraMachine)) +
+    grp('People', peopleRowsP());
+  return inav('', '', `<span style="display:flex;gap:8px">${gbtn('qr', '2:1', ringAdd?'ring pulse':'')}${gbtn('plus','3:1')}</span>`) +
+    scroll(body) + tabbar('Setup', n) + over;
+}
+
+function machineRowsM(unreach=[], extra=''){
+  const cols = (a,b,c) => `<div class="col">${a}</div><div class="col">${b}</div><div class="col" style="width:80px">${c}</div>`;
+  return mrow({t:'<span style="color:var(--ter);font-weight:500;font-size:11.5px">Machine</span>', cols:cols('<span style="color:var(--ter);font-size:11.5px">Status</span>','<span style="color:var(--ter);font-size:11.5px">Backup</span>','<span style="color:var(--ter);font-size:11.5px">You</span>'), cls:'thead'}) +
+  M.map(m=>{ const off=unreach.includes(m.n);
+    return mrow({lead:lead(m.ic), t:m.n, s:`${m.k}<span class="mono" style="color:var(--quiet)"> · ${m.a}</span>`,
+      cols:cols(off?`<span style="color:var(--fail)">● Can’t reach it</span>`:'<span style="color:var(--on)">●</span> Connected', m.n==='work-mbp'?'—':'Up to date', 'Owner')}); }).join('') + extra +
+  mrow({lead:lead('vault'), t:'herder-vault-0 <span class="tag">vault</span>', s:'Backs up 4 machines · keeps secrets', cols:cols('<span style="color:var(--on)">●</span> Connected','—','Owner')}) +
+  mrow({t:`<span style="display:flex;gap:8px;align-items:center">${ic('plus',15,2.2)}Add a machine…</span>`, add:true, to:'3:1'});
+}
+function peopleRowsM(){
+  return PEOPLE.map(p=>mrow({lead:av(p.l,p.c), t:`${p.n}${p.you?' <span class="tag">You</span>':''}`, s:p.s,
+    tr:`<span class="pbtn raised" style="height:26px;font-weight:550">${p.r} ${ic('down',12,2.2)}</span>${ic('chev',13,2.2)}`, to:p.n==='Kim'?'5:5':p.you?'4:0':''})).join('') +
+    mrow({t:`<span style="display:flex;gap:8px;align-items:center">${ic('plus',15,2.2)}Invite a teammate…</span>`, add:true, to:'5:1'});
+}
+function setupMac({needs=[], ringAdd=false, ringMachine=false, unreach=[], over='', extraMachine='', badge}={}){
+  const n=needs.length;
+  const head = mhead('Setup', n?`<span style="color:var(--accent)">${n} need${n>1?'':'s'} you</span> · 5 machines · 3 devices`:'Everything is set up · 5 machines · 3 devices',
+    pbtn('Add a device','2:1','raised '+(ringAdd?'ring pulse':''),'qr') + pbtn('Add a machine','3:1','pri '+(ringMachine?'ring pulse':''),'plus'));
+  const body =
+    (n ? mh('Needs you', n) + needs.map(needM).join('') : '') +
+    mh('You') + `<div class="mlist">${mrow({lead:av('T','a0'), t:'Tomas', s:'Owner of every machine · passkeys in Apple Passwords and 1Password', tr:`<span>3 devices</span>${ic('chev',13,2.2)}`, to:'4:0'})}</div>` +
+    mh('Machines', 6) + `<div class="mlist">${machineRowsM(unreach, extraMachine)}</div>` +
+    mh('People', 3) + `<div class="mlist">${peopleRowsM()}</div>`;
+  return mac({on:'Setup', badge:badge??n, head, body, over});
+}
+
+/* You page */
+function youBody(P_){ // P_: 'p' or 'm'
+  const isP = P_==='p';
+  const R = isP ? row : mrow;
+  const L = isP ? lead : lead;
+  const devs = [
+    {i:'phone', t:'iPhone 17 Pro', s:'On 5 of 5 machines'+(isP?' · this iPhone':''), me:isP},
+    {i:'laptop', t:'MacBook Pro', s:'On 5 of 5 machines · the Mac app', me:!isP},
+    {i:'term', t:'Terminal on trash-can-01', s:'Signed in with <span class="mono">herder login</span> · 1 machine'},
+  ];
+  const keys =
+    R({lead:L('key'), t:`Tomas <span class="tag">Apple Passwords</span>`, s:`Added Oct 3 · on 5 machines${isP?' · <b style="color:var(--sec);font-weight:600">this iPhone uses it</b>':''}`, chev:isP, tr:isP?'':`<span class="tag blue">This Mac uses it</span>${ic('chev',13,2.2)}`, to:''}) +
+    R({lead:L('key'), t:`Tomas <span class="tag">1Password</span>`, s:'Added Nov 11 · on 5 machines · last used yesterday', chev:isP, tr:isP?'':ic('chev',13,2.2), to:'4:1'}) +
+    R({lead:isP?`<div class="lead" style="background:none;color:var(--action)">${ic('plus',20,2.2)}</div>`:'', t:isP?'Add a passkey':`<span style="display:flex;gap:8px;align-items:center">${ic('plus',15,2.2)}Add a passkey…</span>`, add:true, to:'4:2'});
+  const devices = devs.map(d=>R({lead:L(d.i), t:`${d.t}${d.me?' <span class="tag">This device</span>':''}`, s:d.s, chev:isP, tr:isP?'':`${d.me?'':`<span class="pbtn" style="height:26px">Sign out…</span>`}`})).join('') +
+    R({lead:isP?`<div class="lead" style="background:none;color:var(--action)">${ic('plus',20,2.2)}</div>`:'', t:isP?'Add a device':`<span style="display:flex;gap:8px;align-items:center">${ic('plus',15,2.2)}Add a device…</span>`, add:true, to:'2:1'});
+  const rec = R({lead:L('shield'), t:'If you lose your devices', s:'How to get back in', chev:true, tr:isP?'':ic('chev',13,2.2), to:'4:4'});
+  if (isP) return grp('Passkeys', keys, 'A passkey is how machines know it’s you. Each one is a copy you can sign in with.') + grp('Devices', devices) + grp('', rec);
+  return mh('Passkeys', 2) + `<div class="mlist">${keys}</div><div style="font-size:12px;color:var(--ter);margin:7px 2px 0">A passkey is how machines know it’s you. Each one is a copy you can sign in with.</div>` +
+    mh('Devices', 3) + `<div class="mlist">${devices}</div>` + mh('Recovery') + `<div class="mlist">${rec}</div>`;
+}
+const youHeadP = `<div class="center" style="padding:4px 0 18px">${av('T','a0','big')}<div style="font-size:26px;font-weight:700;margin-top:10px;letter-spacing:-.01em">Tomas</div><div style="color:var(--ter);font-size:15px">Owner of 5 machines</div></div>`;
+const youPhone = (over='') => inav(back('Setup','6:0'),'','<span class="glass">Edit</span>') + scroll(youHeadP + youBody('p')) + over;
+const youMac = (over='') => mac({on:'Setup', head:mhead('Tomas','You · owner of 5 machines','', 'Setup ›&nbsp;'), body:youBody('m'), over});
+
+/* ===== screens ===== */
+const LOGO = `<svg width="52" height="52" viewBox="0 0 1024 1024" shape-rendering="crispEdges"><path fill="#9ece6a" d="M312 252H472V292H512V532H552V492H712V532H752V772H672V572H512V772H432V332H352V452H272V292H312Z M112 112H472V160H160V652H112Z M552 112H912V912H652V864H864V160H552Z M112 712H160V864H572V912H112Z"/></svg>`;
+const oh = (t, p='') => `<div style="font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1.15;margin:0 4px 8px">${t}</div>${p?`<div style="color:var(--ter);font-size:16px;margin:0 4px 20px;line-height:1.4">${p}</div>`:''}`;
+const moh = (t, p='') => `<div style="font-size:24px;font-weight:700;letter-spacing:-.02em;margin:0 0 6px">${t}</div>${p?`<div style="color:var(--ter);font-size:14px;margin:0 0 18px;line-height:1.45">${p}</div>`:''}`;
+const macBare = (inner, over='') => `<div class="mac"><div class="mwel"><div class="lights"><i></i><i></i><i></i></div><div class="in">${inner}</div></div>${over}</div>`;
+const NEWSTEPS = ['You','Machine','Approve'];
+const JOINSTEPS = ['Scan','Sign in','Done'];
+const MACHSTEPS = ['Install','Approve','Done'];
+const termOut = (name, code) => `<span class="g">$</span> curl -fsSL https://herder.sh/install | sh
+<span class="d">installed herder 0.21.0 to ~/.local/bin</span>
+<span class="g">$</span> herder service install
+<span class="d">herder daemon is running as a user service</span>
+
+  ${name} needs an owner. Scan this code in herder,
+  or open the link below on a device that has it.
+
+QR
+
+  herder://own/${name}?k=9f2c…   code <span class="y">${code}</span>`;
+const camera = (title, foundT, foundS, to='next', termHtml) => `<div class="cam"><div class="term">${termHtml}</div><div class="reticle"><i></i><i></i><i></i><i></i></div>
+  <div class="found"${go(to)}><div class="lead" style="background:var(--action);color:#fff">${ic('check',17,2.6)}</div><div class="k" style="flex:1"><b style="font-size:15.5px">${foundT}</b><div style="color:var(--ter);font-size:13px">${foundS}</div></div><span class="chip pri">Continue</span></div></div>
+  <div style="position:relative;z-index:5">${inav(gbtn('x',''), `<span style="color:#fff">${title}</span>`, '')}</div>
+  <div style="position:absolute;bottom:60px;left:0;right:0;text-align:center;z-index:5;color:var(--sec);font-size:14px">Or <span style="color:var(--link)">paste a link</span></div>`;
+const termFor = (name, code) => termOut(name, code).replace('QR', `<div style="background:#fff;display:inline-block;padding:5px;margin:4px 0 0 14px;line-height:0">${qr(name,92)}</div>`);
+const macScreenFor = () => `<div style="font:12px var(--sans);color:#ddd"><div style="font-weight:700;font-size:14px;margin-bottom:6px">Add a device</div><div style="background:#fff;display:inline-block;padding:6px;line-height:0">${qr('fleet-tomas',110)}</div><div style="color:#999;margin-top:6px">5 machines · Tomas</div></div>`;
+const machineCard = (m, code, cls='') => `<div class="card ${cls}" style="padding:4px 0">${row({lead:lead(m.ic||'server'), t:m.n, s:`${m.k} · <span class="mono">${m.a}</span>`})}<div class="row" style="padding-top:6px"><div class="k"><div class="ss" style="margin:0">Check the terminal shows</div></div><div class="mono" style="font-size:17px;font-weight:700;letter-spacing:.08em;color:var(--text)">${code}</div></div></div>`;
+
+const GPU = {n:'gpu-box', k:'Linux server', a:'192.168.1.80', ic:'server'};
+const TRASH = M[0];
+
+const FLOWS = [
+/* ---------- 1 first launch ---------- */
+{ name:'First launch', steps:[
+ { t:'Welcome: two doors, nothing else',
+   n:'The first screen asks one question. <b>I’m new</b> walks through name → machine → approve. <b>I already use herder</b> goes straight to scanning a code from another device, so a returning person never creates a second passkey or a second “you”.',
+   phone:()=> scroll(`<div style="height:120px"></div><div class="logo">${LOGO}</div><div class="hero"><h2>Run your coding agents on your own machines</h2><p>Start, watch and answer them from anywhere.</p></div>`) +
+     dock(`<div class="choice hl" data-go="next"><div class="ci">${ic('plus',24,2)}</div><div class="k"><b>I’m new to herder</b><span>Set up your first machine. About 3 minutes.</span></div>${ic('chev',16,2.2)}</div>`,
+          `<div class="choice" data-go="2:0"><div class="ci">${ic('qr',24,1.9)}</div><div class="k"><b>I already use herder</b><span>Add this iPhone from your Mac or another device.</span></div>${ic('chev',16,2.2)}</div>`,
+          fine('Got an invite from a teammate? <span style="color:var(--link)" data-go="5:3">Open it</span>')),
+   mac:()=> macBare(`<div class="center"><div class="logo">${LOGO}</div><div style="font-size:30px;font-weight:700;letter-spacing:-.02em;margin:22px 0 8px">Welcome to herder</div><div style="color:var(--ter);font-size:15px;margin-bottom:28px">Run your coding agents on your own machines, and drive them from here.</div></div>
+     <div class="choice hl" data-go="next" style="background:var(--card)"><div class="ci">${ic('plus',24,2)}</div><div class="k"><b>I’m new to herder</b><span>Set up your first machine. It can be this Mac.</span></div>${ic('chev',16,2.2)}</div>
+     <div class="choice" data-go="2:0" style="background:var(--card)"><div class="ci">${ic('qr',24,1.9)}</div><div class="k"><b>I already use herder</b><span>Add this Mac from your iPhone or another computer.</span></div>${ic('chev',16,2.2)}</div>
+     <div class="center" style="color:var(--ter);font-size:13px;margin-top:14px">Got an invite from a teammate? <span style="color:var(--link)" data-go="5:3">Open it</span></div>`) },
+ { t:'1 of 3 · Your name',
+   n:'herder asks for the name <b>once</b>. It becomes the person on every machine and the label of the passkey in Apple Passwords or 1Password, so later pickers show “Tomas”, not “Owner” or “Mobile User”. The passkey itself is made at the Approve step, with one Face ID.',
+   phone:()=> inav(back('','1:0')) + scroll(prog(0,NEWSTEPS) + oh('What should we call you?','Your machines and teammates will know you by this name.') +
+     `<div class="field">Tomas<span class="caret"></span></div>` +
+     `<div class="mt16">${note('Your passkey is saved under this name. herder makes it when you approve your first machine, and uses the same one everywhere after.','key')}</div>` +
+     `<div class="mt8">${note('Already have a herder passkey? <span style="color:var(--link)" data-go="2:0">Use it instead</span>, so you stay one person.','person')}</div>`) +
+     dock(btn('Continue','next')),
+   mac:()=> macBare(mprog(0,NEWSTEPS) + moh('What should we call you?','Your machines and teammates will know you by this name.') +
+     `<div class="field" style="background:var(--card);padding:11px 13px;font-size:15px">Tomas<span class="caret"></span></div>` +
+     `<div class="mt16">${note('Your passkey is saved under this name. herder makes it when you approve your first machine, and uses the same one everywhere after.','key')}</div>${note('Already have a herder passkey? <span style="color:var(--link)" data-go="2:0">Use it instead</span>, so you stay one person.','person')}` +
+     `<div style="display:flex;justify-content:space-between;margin-top:26px">${pbtn('Back','1:0','raised')}${pbtn('Continue','next','blue')}</div>`) },
+ { t:'2 of 3 · Install herder on a machine',
+   n:'One command, copy-ready, with the other cases one tap away instead of in a doc. On the Mac the first machine can simply be <b>this Mac</b>. The app watches for the code the terminal prints: the iPhone scans it, the Mac picks up a pasted or copied link by itself.',
+   phone:()=> inav(back('','1:1')) + scroll(prog(1,NEWSTEPS) + oh('Install herder on a machine','The machine runs your agents: a server, a desktop, or a Mac. Run this there:') +
+     cmd('curl -fsSL https://herder.sh/install | sh\nherder service install') +
+     `<div class="mt12">${note('When it’s running, it prints a QR code. Keep it on screen.','qr')}</div>` +
+     `<div class="mt16">${grp('Other ways', row({lead:lead('server'), t:'Kubernetes or Docker', s:'Use the herder chart; it prints the same code', chev:true}) + row({lead:lead('term'), t:'It already runs herder', s:'Run <span class="mono">herder claim</span> there for a code', chev:true}))}</div>`) +
+     dock(btn('Scan the Code','next','pri','camera'), btn('Paste a link instead','next','plain')),
+   mac:()=> macBare(mprog(1,NEWSTEPS) + moh('Where will your agents run?') +
+     `<div style="display:flex;gap:10px;margin-bottom:16px"><div class="choice" style="flex:1;margin:0;padding:14px;background:var(--card)"><div class="k"><b style="font-size:14.5px">${ic('laptop',16)} This Mac</b><span style="font-size:12.5px">Installs herder here. Simplest start.</span></div></div><div class="choice hl" style="flex:1;margin:0;padding:14px;background:var(--card)"><div class="k"><b style="font-size:14.5px">${ic('server',16)} Another machine</b><span style="font-size:12.5px">A server or desktop you can reach.</span></div></div></div>` +
+     mstep(1,'On that machine, run', cmd('curl -fsSL https://herder.sh/install | sh\nherder service install'),'now') +
+     mstep(2,'Copy the link it prints', `<div class="field" style="color:var(--ter);display:flex;gap:10px"><span class="spin" style="width:15px;height:15px"></span>Watching the clipboard for a herder link…</div>`) +
+     `<div style="display:flex;justify-content:space-between;margin-top:12px">${pbtn('Back','1:1','raised')}${pbtn('Continue','next','raised')}</div>`) },
+ { t:'2 of 3 · Scan the code',
+   n:'The scan result names the machine before anything else happens. A Kubernetes or Tailscale-only machine gets the same code; nothing here says “claim”.',
+   phone:()=> camera('Scan the code', 'trash-can-01', 'Wants an owner · herder 0.21.0', 'next', termFor('trash-can-01','ROSE 7342')),
+   mac:()=> macBare(mprog(1,NEWSTEPS) + moh('Where will your agents run?') +
+     mstep(1,'On that machine, run', cmd('curl -fsSL https://herder.sh/install | sh\nherder service install'),'done') +
+     mstep(2,'Found it', `<div class="card" style="background:var(--card);padding:2px 0;border-radius:12px">${mrow({lead:lead('server'), t:'trash-can-01', s:'Linux server · <span class="mono">192.168.1.20</span> · wants an owner', tr:st('ok')})}</div>`,'done') +
+     `<div style="display:flex;justify-content:space-between;margin-top:12px">${pbtn('Back','1:2','raised')}${pbtn('Continue','next','blue ring')}</div>`) },
+ { t:'3 of 3 · Approve: one passkey, one Face ID',
+   n:'This is where today’s confusion ends: the screen says <b>which passkey</b> it will use and <b>where it is stored</b>. For a new person it creates “Tomas”, for a returning one it names the existing passkey. The code match is there, but small.',
+   phone:()=> inav(back('','1:2')) + scroll(prog(2,NEWSTEPS) + oh('Make trash-can-01 yours') +
+     machineCard(TRASH,'ROSE 7342') + `<div class="fl mt22">You’ll sign in as</div>` + pkcard('Tomas','New passkey','saved in Apple Passwords') +
+     `<div class="mt12">${note('Owners can do everything there, terminals included. You can add teammates later.','shield')}</div>`) +
+     dock(btn('Create Passkey and Approve','next','pri','face'), fine('Uses Face ID once. The passkey syncs to your Apple devices.')),
+   mac:()=> macBare(mprog(2,NEWSTEPS) + moh('Make trash-can-01 yours') +
+     `<div style="background:var(--card);border-radius:12px">${mrow({lead:lead('server'), t:'trash-can-01', s:'Linux server · <span class="mono">192.168.1.20</span>', tr:`<span style="color:var(--ter)">Terminal shows</span> <b class="mono" style="color:var(--text);letter-spacing:.06em">ROSE 7342</b>`})}</div>` +
+     `<div class="fl mt16">You’ll sign in as</div><div class="card pk" style="background:var(--card);border-radius:12px"><div class="key">${ic('key',20,2)}</div><div class="k"><b>Tomas</b><span>New passkey · saved in Apple Passwords</span></div></div>` +
+     `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px">${pbtn('Back','1:3','raised')}<span style="display:flex;gap:10px;align-items:center"><span style="color:var(--ter);font-size:12px">Touch ID once</span>${pbtn('Create Passkey and Approve','next','blue','finger')}</span></div>`) },
+ { t:'3 of 3 · The system saves the passkey',
+   n:'The only system prompt in the whole setup. It shows the name chosen in step 1, so the entry in Passwords is recognisable later.',
+   phone:()=> inav(back('')) + scroll(prog(2,NEWSTEPS) + oh('Make trash-can-01 yours') + machineCard(TRASH,'ROSE 7342')) +
+     `<div class="dim"></div><div class="sysalert"><div class="hd">${ic('key',18)} Passwords<span class="x">${ic('x',13,2.6)}</span></div><h4>Save a passkey for “Tomas”?</h4><p>A passkey for herder.sh will be saved in Passwords and available on all your devices signed in with your Apple Account.</p>${btn('Continue','next')}</div>`,
+   mac:()=> macBare(mprog(2,NEWSTEPS) + moh('Make trash-can-01 yours'), touchid('herder wants to save a passkey for “Tomas”','Touch ID or enter your password to allow this.')) },
+ { t:'Done: one clear next step',
+   n:'Success says what happened in plain words, then offers <b>one</b> primary next step. Adding more machines and devices is listed, not pushed. The same screen closes Add a machine.',
+   phone:()=> scroll(`<div style="height:20px"></div>` + prog(3,NEWSTEPS).replace('<div class="prog-l">','<div class="prog-l" style="visibility:hidden">') + `<div class="big-ok">${ic('check',44,2.6)}</div><div class="hero" style="padding-bottom:18px"><h2>trash-can-01 is yours</h2><p>Your passkey “Tomas” is in Apple Passwords.</p></div>` +
+     grp('When you’re ready', row({lead:lead('server'), t:'Add another machine', s:'Same three steps', chev:true, to:'3:1'}) + row({lead:lead('laptop'), t:'Use herder on your Mac', s:'Scan a code from this iPhone', chev:true, to:'2:1'}) + row({lead:lead('people'), t:'Invite a teammate', chev:true, to:'5:1'}))) +
+     dock(btn('Start a Session','6:1')),
+   mac:()=> macBare(`<div class="center"><div class="big-ok">${ic('check',44,2.6)}</div><div style="font-size:26px;font-weight:700;margin:16px 0 6px">trash-can-01 is yours</div><div style="color:var(--ter);font-size:14px;margin-bottom:22px">Your passkey “Tomas” is in Apple Passwords.</div></div>` +
+     `<div class="mlist">${mrow({lead:lead('server'), t:'Add another machine', s:'Same three steps', tr:ic('chev',13,2.2), to:'3:1'})}${mrow({lead:lead('phone'), t:'Use herder on your iPhone', s:'Scan a code from this Mac', tr:ic('chev',13,2.2), to:'2:1'})}${mrow({lead:lead('people'), t:'Invite a teammate', tr:ic('chev',13,2.2), to:'5:1'})}</div>` +
+     `<div style="display:flex;justify-content:flex-end;margin-top:22px">${pbtn('Start a Session','6:1','blue')}</div>`) },
+]},
+/* ---------- 2 add a device ---------- */
+{ name:'Add a device', steps:[
+ { t:'The new device says exactly where to look',
+   n:'The receiving iPhone (right path from Welcome) names the button on the other device. On the Mac, <b>Add a device</b> is a header action on Setup, not hidden at the foot of Fleet or under People › You.',
+   phone:()=> inav(back('','1:0')) + scroll(prog(0,JOINSTEPS) + oh('Scan a code from your other device','On your Mac, open herder and choose <b style="color:var(--text)">Setup › Add a device</b>.') +
+     `<div class="card" style="padding:14px;display:flex;gap:12px;align-items:center"><div style="width:120px;height:78px;border-radius:8px;background:#0e0e10;border:1px solid #3a3a40;position:relative;flex:none"><div style="position:absolute;left:6px;top:8px;width:26px;bottom:8px;border-radius:3px;background:#26262a"></div><div style="position:absolute;right:8px;top:8px;height:13px;width:54px;border-radius:4px;background:var(--action)" class="pulse"></div><div style="position:absolute;left:40px;right:8px;top:30px;height:4px;border-radius:2px;background:#333"></div><div style="position:absolute;left:40px;right:20px;top:40px;height:4px;border-radius:2px;background:#333"></div></div><div style="font-size:14px;color:var(--ter)">On iPhone it’s the ${ic('qr',14)} button in Setup.</div></div>` +
+     `<div class="mt16">${note('The code lists your machines. Your passkey stays in Passwords and signs you in here.','key')}</div>`) +
+     dock(btn('Scan the Code','next','pri','camera'), btn('I have no other device','4:4','plain')),
+   mac:()=> setupMac({ringAdd:true}) },
+ { t:'One code that names your machines',
+   n:'The giving device shows a big code and, under it, <b>what it shares by name</b>. It says plainly that the code grants nothing; the passkey does. The link carries the person and passkey id, so the receiver can ask for exactly that passkey.',
+   phone:()=> camera('Scan the code', 'Tomas’s machines', '5 machines · from MacBook Pro', 'next', macScreenFor()),
+   mac:()=> setupMac({over: msheet({t:'Add a device', s:'Scan this with your iPhone’s camera, or in herder › I already use herder.',
+     body:`<div class="center" style="padding:6px 0 16px"><div class="qrbox">${qr('fleet-tomas',220)}</div></div>` +
+       `<div class="mh" style="margin-top:0">Shares your 5 machines</div><div style="display:flex;flex-wrap:wrap;gap:6px">${M.map(m=>`<span class="tag" style="font-size:12px;padding:4px 10px">${m.n}</span>`).join('')}</div>` +
+       `<div class="mt16">${note('The code holds names and addresses, not keys. The new device signs in with your passkey <b>Tomas</b>.','shield')}</div>`,
+     foot: pbtn('Copy Link','', 'raised','copy') + pbtn('Done','6:1','blue'), hint:'Works for 10 minutes'})}) },
+ { t:'Check before signing in: names, reachability, the passkey',
+   n:'Rows are machine <b>names</b>; addresses are secondary. Reachability is checked <b>before</b> Face ID, so “Tailscale is off” shows with its fix instead of a late “Can’t reach it”. The passkey card says which passkey will be used.',
+   phone:()=> inav(back('')) + scroll(prog(1,JOINSTEPS) + oh('Sign in to your 5 machines') +
+     `<div class="fl">As</div>` + pkcard('Tomas','Your passkey in Apple Passwords') +
+     `<div class="mt16"></div>` + grp('', M.map(m=> m.n==='mini-k8s'
+       ? row({lead:st('amb'), t:m.n, s:`Can’t reach it: Tailscale is off on this iPhone<div class="act" style="margin-top:8px">${chip('Open Tailscale','','pri','net')}</div>`})
+       : row({lead:st('dot'), t:m.n, s:`Ready · ${m.via}`})).join(''), '', 'noicons')) +
+     dock(btn('Sign In with Face ID','next','pri','face'), fine('One Face ID for every machine it can reach. mini-k8s can wait.')),
+   mac:()=> setupMac({over: msheet({t:'Add a device', s:'Your iPhone scanned the code.',
+     body:`<div class="card" style="display:flex;gap:12px;align-items:center;margin-bottom:14px">${lead('phone')}<div style="flex:1"><b>iPhone 17 Pro</b><div style="color:var(--ter);font-size:12px">Waiting for you to approve on the iPhone…</div></div><span class="spin"></span></div>` +
+       `<div class="mlist">${M.map(m=>mrow({lead:st(m.n==='mini-k8s'?'amb':'wait'), t:m.n, s:m.n==='mini-k8s'?'The iPhone can’t reach it: Tailscale is off there':'Waiting'})).join('')}</div>`,
+     foot: pbtn('Done','6:1','raised'), hint:'You can close this; the iPhone finishes on its own.'})}) },
+ { t:'One system prompt, with the right passkey',
+   n:'The fleet link carries the passkey’s credential id, so iOS offers <b>only</b> “Tomas”, not a picker of stale entries. One assertion covers every reachable machine (see README: needs a protocol change). User verification is required, so 1Password can’t silently skip Face ID.',
+   phone:()=> inav(back('')) + scroll(prog(1,JOINSTEPS) + oh('Sign in to your 5 machines')) +
+     `<div class="dim"></div><div class="sysalert"><div class="hd">${ic('key',18)} Passwords<span class="x">${ic('x',13,2.6)}</span></div><h4>Sign in to herder.sh?</h4><p>Use your saved passkey.</p><div class="who"><div class="key" style="width:36px;height:36px;border-radius:10px;background:rgba(91,140,255,.18);color:var(--action);display:grid;place-items:center">${ic('key',18,2)}</div><div><b>Tomas</b><div style="color:var(--ter);font-size:13px">herder.sh · Passwords</div></div></div>${btn('Continue','next')}</div>`,
+   mac:()=> setupMac({over: msheet({t:'Add a device', s:'Your iPhone scanned the code.',
+     body:`<div class="card" style="display:flex;gap:12px;align-items:center;margin-bottom:14px">${lead('phone')}<div style="flex:1"><b>iPhone 17 Pro</b><div style="color:var(--ter);font-size:12px">Signing in as Tomas…</div></div><span class="spin"></span></div>` +
+       `<div class="mlist">${M.map(m=>mrow({lead:st(m.n==='mini-k8s'?'amb':'spin'), t:m.n, s:m.n==='mini-k8s'?'The iPhone can’t reach it: Tailscale is off there':'Signing in…'})).join('')}</div>`,
+     foot: pbtn('Done','6:1','raised'), hint:'You can close this; the iPhone finishes on its own.'})}) },
+ { t:'Results: every problem names its cause and its fix',
+   n:'No “doesn’t know this passkey” dead end. herder says what it actually knows: the machine knows <b>you</b> by another passkey (fix: use it once, and this one is added), it can’t be reached (fix: Tailscale), or it doesn’t know you at all (fix: ask its owner, by name). What’s left moves to Setup › Needs you.',
+   phone:()=> inav(back('')) + scroll(prog(1,JOINSTEPS) + oh('Signed in to 3 of 5','Two need you. Fix them now or later from Setup.') +
+     grp('', [M[0],M[1],M[2]].map(m=>row({lead:st('ok'), t:m.n, s:'Signed in'})).join('') +
+       row({lead:st('amb'), t:'studio', s:`Knows you by another passkey: Tomas in 1Password<div class="act" style="margin-top:8px">${chip('Use 1Password Passkey','next','pri','key')}</div>`}) +
+       row({lead:st('amb'), t:'mini-k8s', s:`Can’t reach it: Tailscale is off on this iPhone<div class="act" style="margin-top:8px">${chip('Open Tailscale','next','pri','net')}${chip('Try Again','next')}</div>`}), '', 'noicons')) +
+     dock(btn('Done for Now','6:0','sec'), fine('What’s left waits in Setup › Needs you.')),
+   mac:()=> setupMac({over: msheet({t:'Add a device', s:'iPhone 17 Pro is on 3 of your 5 machines.',
+     body:`<div class="mlist">${[M[0],M[1],M[2]].map(m=>mrow({lead:st('ok'), t:m.n, s:'Signed in'})).join('')}${mrow({lead:st('amb'), t:'studio', s:'Knows Tomas by the 1Password passkey. The iPhone is offering it.'})}${mrow({lead:st('amb'), t:'mini-k8s', s:'The iPhone can’t reach it: Tailscale is off there.'})}</div>`,
+     foot: pbtn('Done','6:0','blue'), hint:'Nothing to do on this Mac.'})}) },
+ { t:'Done: on every machine',
+   n:'The end state is one sentence. Back on the Mac, Setup confirms with a toast and the device appears under You › Devices with “5 of 5 machines”.',
+   phone:()=> scroll(`<div style="height:20px"></div>` + prog(2,JOINSTEPS) + `<div class="big-ok">${ic('check',44,2.6)}</div><div class="hero" style="padding-bottom:18px"><h2>This iPhone is on all 5 machines</h2><p>Signed in as Tomas.</p></div>` +
+     grp('', M.map(m=>row({lead:st('ok'), t:m.n, s:m.k.replace(' · this Mac','')})).join(''),'','noicons')) + dock(btn('Open herder','6:1')),
+   mac:()=> setupMac({over: toast('iPhone 17 Pro is on all 5 machines')}) },
+]},
+/* ---------- 3 add a machine ---------- */
+{ name:'Add a machine', steps:[
+ { t:'Add a machine is a top-level action',
+   n:'Setup’s primary action. One sheet replaces “Add to Fleet › A new machine”, “Claim your machines” and the separate claim banner.',
+   phone:()=> setupPhone({}).replace(`${gbtn('plus','3:1')}`, gbtn('plus','3:1','ring pulse')),
+   mac:()=> setupMac({ringMachine:true}) },
+ { t:'Install: copy, run, wait for the code',
+   n:'Three tabs cover how a machine starts: the one-line install, Kubernetes, or a machine that already runs herder (where the command is <span class="mono">herder claim</span>). The Mac watches the clipboard so pasting is automatic; the iPhone scans.',
+   phone:()=> setupPhone({}) + isheet(inav(gbtn('x','3:0'),'Add a Machine','') + scroll(prog(0,MACHSTEPS) +
+       `<div class="seg2 mb12"><div class="on">Linux or Mac</div><div>Kubernetes</div><div>Has herder</div></div>` +
+       `<div class="fl">On the new machine, run</div>` + cmd('curl -fsSL https://herder.sh/install | sh\nherder service install') +
+       `<div class="mt12">${note('It prints a QR code. Scan it here.','qr')}</div>${note('Only reachable over Tailscale? Turn Tailscale on here first.','net')}`) +
+     dock(btn('Scan the Code','next','pri','camera'), btn('Paste a link','next','plain'))),
+   mac:()=> setupMac({over: msheet({t:'Add a machine', body: mprog(0,MACHSTEPS) +
+       `<div class="seg2 mb12" style="max-width:420px"><div class="on">Linux or Mac</div><div>Kubernetes</div><div>Has herder</div></div>` +
+       mstep(1,'On the new machine, run', cmd('curl -fsSL https://herder.sh/install | sh\nherder service install'),'now') +
+       mstep(2,'Copy the link it prints', `<div class="field" style="color:var(--ter);display:flex;gap:10px"><span class="spin" style="width:15px;height:15px"></span>Watching the clipboard for a herder link…</div>`),
+     foot: pbtn('Continue','next','raised'), hint:'Machines on Tailscale need Tailscale on this Mac too.'})}) },
+ { t:'The code is recognised by name',
+   n:'The scanned or pasted link turns into the machine’s name and kind straight away. The short code to match the terminal is still there, as secondary text.',
+   phone:()=> camera('Scan the code', 'gpu-box', 'Wants an owner · herder 0.21.0', 'next', termFor('gpu-box','MOSS 1186')),
+   mac:()=> setupMac({over: msheet({t:'Add a machine', body: mprog(1,MACHSTEPS) +
+       mstep(1,'On the new machine, run', `<span>Done</span>`,'done') +
+       mstep(2,'Found it', `<div class="mlist">${mrow({lead:lead('server'), t:'gpu-box', s:'Linux server · <span class="mono">192.168.1.80</span>', tr:`<span>Terminal shows</span> <b class="mono" style="color:var(--text);letter-spacing:.06em">MOSS 1186</b>`})}</div>`,'done') +
+       mstep(3,'Approve as', `<div class="card pk"><div class="key">${ic('key',20,2)}</div><div class="k"><b>Tomas</b><span>Your passkey in Apple Passwords</span></div></div>`,'now'),
+     foot: pbtn('Approve with Touch ID','next','blue ring','finger'), hint:'You become its owner.'})}) },
+ { t:'Approve with the passkey you already have',
+   n:'Same card as first launch: which passkey, where it lives. One Touch ID / Face ID.',
+   phone:()=> setupPhone({}) + isheet(inav(gbtn('x','3:0'),'Add a Machine','') + scroll(prog(1,MACHSTEPS) + oh('Make gpu-box yours') + machineCard(GPU,'MOSS 1186') + `<div class="fl mt16">As</div>` + pkcard('Tomas','Your passkey in Apple Passwords')) +
+     dock(btn('Approve with Face ID','next','pri','face'))) + `<div class="faceid">${ic('face',72,1.4)}</div>`,
+   mac:()=> setupMac({over: msheet({t:'Add a machine', body: mprog(1,MACHSTEPS) + mstep(3,'Approve as', `<div class="card pk"><div class="key">${ic('key',20,2)}</div><div class="k"><b>Tomas</b><span>Your passkey in Apple Passwords</span></div></div>`,'now'),
+     foot: pbtn('Approve with Touch ID','next','blue','finger')}) + touchid('herder wants to sign in as “Tomas”','Approve gpu-box with your passkey.')}) },
+ { t:'Done: it’s on your other devices too',
+   n:'The finish screen answers “and my iPhone?”. Devices already signed in as Tomas get a one-tap sign-in for the new machine; backup is on by default when you own a vault.',
+   phone:()=> setupPhone({}) + isheet(inav('', 'Add a Machine', '<span class="glass" data-go="next">Done</span>') + scroll(prog(2,MACHSTEPS) + `<div class="big-ok">${ic('check',40,2.6)}</div><div class="hero" style="padding-bottom:18px"><h2>gpu-box is yours</h2></div>` +
+       grp('Your devices', row({lead:st('ok'), t:'This iPhone', s:'Signed in'}) + row({lead:st('wait'), t:'MacBook Pro', s:'Asks once, next time it opens'}) + row({lead:`<span class="st" style="color:var(--quiet)">–</span>`, t:'Terminal on trash-can-01', s:'Not needed'}),'','noicons') +
+       grp('', row({lead:lead('vault'), t:'Back up to herder-vault-0', s:'Sessions and secrets', tr:'<span class="sw"></span>'})))),
+   mac:()=> setupMac({over: msheet({t:'gpu-box is yours', s:'You’re its owner.', body: mprog(3,MACHSTEPS) +
+       `<div class="mh" style="margin-top:0">Your devices</div><div class="mlist">${mrow({lead:st('ok'), t:'This Mac', s:'Signed in'})}${mrow({lead:st('wait'), t:'iPhone 17 Pro', s:'Asks once, next time it opens'})}${mrow({lead:`<span class="st" style="color:var(--quiet)">–</span>`, t:'Terminal on trash-can-01', s:'Not needed'})}</div>` +
+       `<div class="mh">Backup</div><div class="mlist">${mrow({lead:lead('vault'), t:'Back up to herder-vault-0', s:'Sessions and secrets', tr:'<span class="sw"></span>'})}</div>`,
+     foot: pbtn('Start a Session on It','', 'raised') + pbtn('Done','next','blue')})}) },
+ { t:'On the iPhone: one tap',
+   n:'The other device sees the new machine as a single item under Needs you, fixed with one Face ID. The same mechanism covers every “device not on all machines” case.',
+   phone:()=> setupPhone({needs:['newm']}),
+   mac:()=> setupMac({extraMachine: mrow({lead:lead('server'), t:'gpu-box <span class="tag ok">New</span>', s:'Linux server<span class="mono" style="color:var(--quiet)"> · 192.168.1.80</span>', cols:`<div class="col"><span style="color:var(--on)">●</span> Connected</div><div class="col">Up to date</div><div class="col" style="width:80px">Owner</div>`})}) },
+ { t:'Signed in',
+   n:'Done on both. Nothing about “claim”, fingerprints or addresses was needed.',
+   phone:()=> setupPhone({extraMachine: row({lead:lead('server'), t:'gpu-box <span class="tag ok">New</span>', s:'Linux server · Connected', chev:true}), over: toast('Signed in to gpu-box')}),
+   mac:()=> setupMac({extraMachine: mrow({lead:lead('server'), t:'gpu-box', s:'Linux server<span class="mono" style="color:var(--quiet)"> · 192.168.1.80</span>', cols:`<div class="col"><span style="color:var(--on)">●</span> Connected</div><div class="col">Up to date</div><div class="col" style="width:80px">Owner</div>`}), over: toast('iPhone 17 Pro signed in to gpu-box')}) },
+]},
+/* ---------- 4 you and your passkeys ---------- */
+{ name:'You & passkeys', steps:[
+ { t:'You: passkeys, devices, recovery on one page',
+   n:'Replaces People › You and the Passkeys sub-page. Each passkey shows <b>where it is stored</b>, when it was added, how many machines know it and <b>which one this device uses</b>. Each device shows how many machines it is on.',
+   phone:()=> youPhone(), mac:()=> youMac() },
+ { t:'A passkey’s page',
+   n:'Everything about one passkey, with names first and the credential id last. Removing it says what still works afterwards; the last passkey can’t be removed.',
+   phone:()=> youPhone(isheet(inav(gbtn('x','4:0'),'Passkey','<span class="glass" data-go="4:0">Done</span>') + scroll(
+       `<div class="center" style="padding:6px 0 16px"><div class="key" style="width:64px;height:64px;border-radius:18px;margin:0 auto;background:rgba(91,140,255,.15);color:var(--action);display:grid;place-items:center">${ic('key',32,1.9)}</div><div style="font-size:22px;font-weight:700;margin-top:10px">Tomas</div><div style="color:var(--ter)">Saved in 1Password</div></div>` +
+       grp('', row({t:'Added', tr:'Nov 11 on MacBook Pro'}) + row({t:'Last used', tr:'Yesterday on studio'}), '', 'noicons') +
+       grp('Known by', M.map(m=>row({lead:st('ok'), t:m.n})).join(''), '', 'noicons') +
+       grp('', row({t:'Credential', tr:'<span class="mono">7Q2F…K9F9</span>'}),'','noicons') +
+       btn('Remove This Passkey','','danger') + `<div class="foot" style="color:var(--ter);font-size:13px;margin:8px 16px 0">You’ll still sign in with your Apple Passwords passkey. Every machine forgets this one.</div>`))),
+   mac:()=> youMac(msheet({t:'Tomas · 1Password', s:'Added Nov 11 on MacBook Pro · last used yesterday on studio',
+     body:`<div class="mh" style="margin-top:0">Known by 5 machines</div><div class="mlist">${M.map(m=>mrow({lead:st('ok'), t:m.n})).join('')}</div><div style="color:var(--ter);font-size:12px;margin-top:10px">Credential <span class="mono">7Q2F…K9F9</span></div>`,
+     foot: pbtn('Done','4:0','blue'), hint: pbtn('Remove Passkey…','', 'danger')})) },
+ { t:'Add a passkey',
+   n:'One sheet, two choices in plain words. The new passkey is added to <b>every</b> machine you own with one approval from the passkey this device already uses.',
+   phone:()=> youPhone(isheet(inav(gbtn('x','4:0'),'Add a Passkey','') + scroll(oh('Keep a second passkey','So losing one never locks you out. Save it somewhere other than Apple Passwords.') +
+       `<div class="choice"><div class="ci">${ic('key',22)}</div><div class="k"><b>In another password manager</b><span>1Password, Bitwarden… you pick it next.</span></div><span class="check off"></span></div>` +
+       `<div class="choice hl"><div class="ci">${ic('shield',22)}</div><div class="k"><b>On a security key</b><span>A YubiKey or similar.</span></div><span class="check">${ic('check',14,3)}</span></div>` +
+       note('herder adds it to your 5 machines. Approve once with Face ID.','info')) + dock(btn('Create Passkey','next','pri','key')))),
+   mac:()=> youMac(msheet({t:'Add a passkey', s:'So losing one never locks you out.',
+     body:`<div class="choice" style="background:var(--cis)"><div class="ci">${ic('key',22)}</div><div class="k"><b>In another password manager</b><span>1Password, Bitwarden… you pick it next.</span></div><span class="check off"></span></div><div class="choice hl" style="background:var(--cis)"><div class="ci">${ic('shield',22)}</div><div class="k"><b>On a security key</b><span>A YubiKey or similar.</span></div><span class="check">${ic('check',14,3)}</span></div>`,
+     foot: pbtn('Create Passkey','next','blue','key'), hint:'Added to your 5 machines with one Touch ID.'})) },
+ { t:'Adding it everywhere',
+   n:'Live status per machine, by name. An unreachable machine is retried later and shows in Needs you; nothing is half-done silently.',
+   phone:()=> youPhone(isheet(inav('', 'Add a Passkey', '<span class="glass" data-go="4:0">Done</span>') + scroll(pkcard('Tomas','Security key','new') + `<div class="mt16"></div>` +
+       grp('Adding to your machines', [['ok','Added'],['ok','Added'],['ok','Added'],['spin','Adding…'],['wait','Next']].map(([s,l],i)=>row({lead:st(s), t:M[i].n, s:l})).join(''),'','noicons')))),
+   mac:()=> youMac(msheet({t:'Add a passkey', s:'Tomas · security key',
+     body:`<div class="mlist">${[['ok','Added'],['ok','Added'],['ok','Added'],['spin','Adding…'],['wait','Next']].map(([s,l],i)=>mrow({lead:st(s), t:M[i].n, s:l})).join('')}</div>`,
+     foot: pbtn('Done','4:0','blue'), hint:'You can close this; it carries on.'})) },
+ { t:'If you lose your devices',
+   n:'Recovery is written down in the app, before it is needed, using only what exists: synced passkeys, the other device, and <span class="mono">herder claim</span> on a machine you have a shell on. A green line says whether you are covered.',
+   phone:()=> inav(back('You','4:0')) + scroll(oh('If you lose your devices') +
+       `<div class="attn"><div class="ic" style="background:rgba(62,207,142,.13);color:var(--on)">${ic('check',17,2.6)}</div><div class="k"><b>You’re covered</b><span>2 passkeys in 2 places, and 3 devices.</span></div></div>` +
+       grp('', row({lead:lead('phone'), t:'Lost one device', s:'Sign it out from any other: You › Devices. Its keys stop working everywhere.'}) +
+         row({lead:lead('key'), t:'Lost every device', s:'Your passkey is synced. On a new device choose <b style="color:var(--sec)">I already use herder › I have no other device</b>, then run <span class="mono">herder claim</span> on any machine and scan it. herder finds the rest.'}) +
+         row({lead:lead('term'), t:'Lost your passkeys too', s:'Anyone with a shell on a machine can run <span class="mono">herder claim</span> to become its owner. Do it on each, then remove the old you.'}))),
+   mac:()=> mac({on:'Setup', head:mhead('If you lose your devices','','', 'Setup › Tomas ›&nbsp;'), body:
+       mattn({kind:'info', icon:'check', t:'You’re covered', s:'2 passkeys in 2 places, and 3 devices.'}).replace('class="ic info"','class="ic" style="background:rgba(62,207,142,.13);color:var(--on)"') +
+       `<div class="mlist">${mrow({lead:lead('phone'), t:'Lost one device', s:'Sign it out from any other: You › Devices. Its keys stop working everywhere.'})}${mrow({lead:lead('key'), t:'Lost every device', s:'Your passkey is synced. On a new device choose I already use herder › I have no other device, then run <span class="mono">herder claim</span> on any machine and scan it.'})}${mrow({lead:lead('term'), t:'Lost your passkeys too', s:'Anyone with a shell on a machine can run <span class="mono">herder claim</span> to become its owner. Do it on each, then remove the old you.'})}</div>`}) },
+]},
+/* ---------- 5 people ---------- */
+{ name:'People & access', steps:[
+ { t:'People: one role per person, not a matrix',
+   n:'Each person has one line: their role and where it applies (“Owner · all machines”). The per-machine matrix is gone from the page; per-machine roles live behind “Different per machine” in the person’s sheet. Duplicate people from old setups are flagged with a one-tap merge.',
+   phone:()=> inav(back('Setup','6:0'),'','<span class="glass icon" data-go="5:1">'+ic('plus',20,2)+'</span>') + scroll(`<div class="ltitle">People</div><div class="lsub">3 people · 5 machines</div>` + needP('dup') + `<div class="mt16"></div>` +
+       grp('', peopleRowsP(), 'Owners can do everything, terminals included. Members drive sessions and never get a terminal.')) + tabbar('Setup',1),
+   mac:()=> mac({on:'Setup', badge:1, head:mhead('People','3 people · 5 machines', pbtn('Invite','5:1','pri','plus'), 'Setup ›&nbsp;'),
+     body: needM('dup') + `<div class="mt16"></div><div class="mlist">${peopleRowsM()}</div><div style="color:var(--ter);font-size:12px;margin-top:8px">Owners can do everything, terminals included. Members drive sessions and never get a terminal.</div>`}) },
+ { t:'Invite: role and scope, then a link',
+   n:'The common case is the default: Member on all my machines, including ones added later. The name is optional and only labels the link.',
+   phone:()=> setupPhone({}) + isheet(inav(gbtn('x','5:0'),'Invite a Teammate','') + scroll(
+       `<div class="fl">Name, optional</div><div class="field">Lina<span class="caret"></span></div><div class="mt22"></div>` +
+       `<div class="fl">Role</div><div class="seg2"><div class="on">Member</div><div>Owner</div></div><div class="foot" style="font-size:13px;color:var(--ter);margin:8px 6px 22px">Drives sessions. Never gets a terminal.</div>` +
+       grp('Machines', row({t:'All my machines', s:'Including ones you add later', tr:'<span class="sw"></span>'}),'','noicons')) + dock(btn('Create Invite Link','next','pri','link'))),
+   mac:()=> setupMac({over: msheet({t:'Invite a teammate', body:
+       `<div class="fl">Name, optional</div><div class="field">Lina<span class="caret"></span></div>` +
+       `<div class="fl mt16">Role</div><div class="seg2" style="max-width:260px"><div class="on">Member</div><div>Owner</div></div><div style="font-size:12px;color:var(--ter);margin:6px 2px 0">Drives sessions. Never gets a terminal.</div>` +
+       `<div class="fl mt16">Machines</div><div class="mlist">${mrow({t:'All my machines', s:'Including ones you add later', tr:'<span class="sw"></span>'})}</div>`,
+     foot: pbtn('Create Invite Link','next','blue','link'), hint:'Works once, for 24 hours.'})}) },
+ { t:'The invite link',
+   n:'A code to scan in person and a share sheet for everything else, with what it grants spelled out under it.',
+   phone:()=> setupPhone({}) + isheet(inav(gbtn('x','5:0'),'Invite for Lina','<span class="glass" data-go="next">Done</span>') + scroll(
+       `<div class="center" style="padding:6px 0 14px"><div class="qrbox">${qr('invite-lina',210)}</div><div style="margin-top:14px;font-size:16px;font-weight:600">Member on all 5 machines</div><div style="color:var(--ter);font-size:14px">Works once · expires in 24 hours</div><div class="mono" style="color:var(--quiet);font-size:12px;margin-top:6px">herder://invite/8KQ2-…</div></div>`) +
+     dock(btn('Share…','next','pri','share'), btn('Copy Link','next','sec','copy'))),
+   mac:()=> setupMac({over: msheet({t:'Invite for Lina', s:'Member on all 5 machines · works once · expires in 24 hours',
+     body:`<div class="center" style="padding:6px 0 10px"><div class="qrbox">${qr('invite-lina',200)}</div><div class="mono" style="color:var(--quiet);font-size:12px;margin-top:10px">herder://invite/8KQ2-…</div></div>`,
+     foot: pbtn('Copy Link','', 'raised','copy') + pbtn('Share…','next','blue','share')})}) },
+ { t:'Lina’s iPhone: joining from the invite',
+   n:'The teammate’s first launch skips the choice: the invite already says who invited them and what they get. They name themselves and create their own passkey.',
+   phone:()=> scroll(`<div style="height:60px"></div><div class="center">${av('T','a0','big')}</div><div class="hero"><h2>Tomas invited you to herder</h2><p>As a member on 5 machines.</p></div><div class="mt22"></div>` +
+       `<div class="fl">Your name</div><div class="field">Lina<span class="caret"></span></div><div class="mt16">${note('herder creates a passkey named “Lina” in Apple Passwords. You’ll use it on every machine.','key')}</div>`) +
+     dock(btn('Create Passkey and Join','next','pri','face')),
+   mac:()=> mac({on:'Setup', head:mhead('People','4 people · 5 machines', pbtn('Invite','5:1','pri','plus'), 'Setup ›&nbsp;'),
+     body:`<div class="mlist">${peopleRowsM().replace(/<div class="mrow add[\s\S]*$/,'')}${mrow({lead:av('L','a3'), t:'Lina <span class="tag blue">Joining</span>', s:'Opened your invite a moment ago', tr:`<span class="pbtn raised" style="height:26px">Member ${ic('down',12,2.2)}</span>`})}</div>`}) },
+ { t:'A machine that doesn’t know you: ask, don’t guess',
+   n:'For a teammate, an unknown machine reads “Not in your invite” with <b>Ask Tomas to add you</b>. The request lands in Tomas’s Needs you with an Add button. No orange error, no matrix.',
+   phone:()=> scroll(prog(2,['Join','Sign in','Done']) + oh('You’re on 4 of 5 machines') +
+       grp('', [M[0],M[1],M[2],M[3]].map(m=>row({lead:st('ok'), t:m.n, s:'Member'})).join('') +
+         row({lead:st('amb'), t:'studio', s:`Not in your invite<div class="act" style="margin-top:8px">${chip('Ask Tomas to Add You','next','pri','people')}</div>`}),'','noicons')) + dock(btn('Start Using herder','')),
+   mac:()=> setupMac({needs:['ask']}) },
+ { t:'A person’s sheet: one-tap roles',
+   n:'Three choices cover nearly everything: Owner on all my machines, Member on all my machines, or Different per machine (which reveals the per-machine list). Their devices and Remove sit in the same sheet.',
+   phone:()=> setupPhone({}) + isheet(inav(gbtn('x','5:0'),'Kim','<span class="glass" data-go="5:0">Done</span>') + scroll(
+       grp('Role', row({t:'Owner on all my machines', tr:''}) + row({t:'Member on all my machines'}) + row({t:'Different per machine', tr:`<span style="color:var(--action)">${ic('check',18,2.6)}</span>`}),'','noicons') +
+       grp('Per machine', M.map(m=>row({t:m.n, tr:`<span style="color:var(--action)">${m.n==='draugelis'?'Owner':'Member'}</span>${ic('down',13,2.2)}`})).join(''),'','noicons') +
+       grp('Kim’s devices', row({lead:lead('phone'), t:'iPhone', s:'On 5 machines', tr:'<span style="color:var(--danger);font-size:15px">Sign out</span>'}) + row({lead:lead('term'), t:'Terminal on draugelis', s:'herder login', tr:'<span style="color:var(--danger);font-size:15px">Sign out</span>'})) +
+       btn('Remove Kim from All Machines','','danger'))),
+   mac:()=> setupMac({over: msheet({t:'Kim', s:'Different per machine · 2 devices',
+     body:`<div class="seg2" style="margin-bottom:14px"><div>Owner on all</div><div>Member on all</div><div class="on">Per machine</div></div>` +
+       `<div class="mlist">${M.map(m=>mrow({t:m.n, tr:`<span class="pbtn raised" style="height:26px">${m.n==='draugelis'?'Owner':'Member'} ${ic('down',12,2.2)}</span>`})).join('')}</div>` +
+       `<div class="mh">Devices</div><div class="mlist">${mrow({lead:lead('phone'), t:'iPhone', s:'On 5 machines', tr:pbtn('Sign Out…')})}${mrow({lead:lead('term'), t:'Terminal on draugelis', s:'herder login', tr:pbtn('Sign Out…')})}</div>`,
+     foot: pbtn('Done','5:0','blue'), hint: pbtn('Remove Kim…','', 'danger')})}) },
+ { t:'Merge people who are really you',
+   n:'Earlier setups left “Owner” and “Mobile User”. herder shows why it thinks they’re you, and merging moves their devices and roles to Tomas.',
+   phone:()=> setupPhone({needs:['dup']}) + isheet(inav(gbtn('x','5:0'),'','') + scroll(oh('Are these you?','Earlier setups on your iPhone made them before herder knew your passkey.') +
+       grp('', row({lead:av('O','a4'), t:'Owner', s:'on mini-k8s · made Nov 10 · 1 device'}) + row({lead:av('M','a2'), t:'Mobile User', s:'on studio · made Nov 10 · 1 device'})) +
+       note('Merging moves their devices and roles to Tomas and removes the extra people. Nothing else changes.','merge')) +
+     dock(btn('Merge into Tomas','6:1'), btn('They’re not me','5:0','plain')), 'med'),
+   mac:()=> setupMac({needs:['dup'], over: msheet({t:'Are these you?', s:'Earlier setups on your iPhone made them before herder knew your passkey.',
+     body:`<div class="mlist">${mrow({lead:av('O','a4'), t:'Owner', s:'on mini-k8s · made Nov 10 · 1 device'})}${mrow({lead:av('M','a2'), t:'Mobile User', s:'on studio · made Nov 10 · 1 device'})}</div><div class="mt12">${note('Merging moves their devices and roles to Tomas and removes the extra people.','merge')}</div>`,
+     foot: pbtn('They’re Not Me','5:0','raised') + pbtn('Merge into Tomas','6:1','blue')})}) },
+]},
+/* ---------- 6 needs you ---------- */
+{ name:'Needs you', steps:[
+ { t:'Setup: one place that says what needs you',
+   n:'Setup replaces Fleet and People. Its top section lists every problem across machines, devices and people, <b>each with the button that fixes it</b>. The tab and sidebar carry the count in amber, which is reserved for “needs you”. Suggestions (an update, a backup passkey) are blue, not amber.',
+   phone:()=> setupPhone({needs:['tail','unknown','dup','update']}),
+   mac:()=> setupMac({needs:['devmac','dup','update'], unreach:[]}) },
+ { t:'All set',
+   n:'When nothing needs you the section collapses to the status line (“Everything is set up”) and the badge disappears. No empty card, no zeros.',
+   phone:()=> setupPhone({over: toast('Everything is set up')}),
+   mac:()=> setupMac({over: toast('Everything is set up')}) },
+]},
+];
+
+/* ===== app ===== */
+const state = { f:0, s:0, d: innerWidth < 760 ? 'phone' : 'both' };
+function readHash(){
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.has('f')) state.f = Math.max(0, Math.min(FLOWS.length-1, +h.get('f')-1));
+  if (h.has('s')) state.s = Math.max(0, Math.min(FLOWS[state.f].steps.length-1, +h.get('s')-1));
+  if (h.has('d')) state.d = h.get('d');
+}
+function writeHash(){ history.replaceState(null,'',`#f=${state.f+1}&s=${state.s+1}&d=${state.d}`); }
+function fit(el, w){
+  const avail = Math.min(document.documentElement.clientWidth - 24, 1400);
+  let z = 1;
+  if (state.d === 'both' && avail >= 402*0.7 + 1280*0.5 + 28) {
+    const total = 402 + 1280 + 28; z = Math.min(1, avail / total);
+  } else z = Math.min(1, avail / w);
+  el.style.zoom = z;
+}
+function render(){
+  const flow = FLOWS[state.f], step = flow.steps[state.s];
+  document.getElementById('flows').innerHTML = FLOWS.map((f,i)=>`<button class="${i===state.f?'on':''}" data-f="${i}"><b>${i+1}</b>${f.name}</button>`).join('');
+  document.querySelectorAll('#dev button').forEach(b=>b.classList.toggle('on', b.dataset.d===state.d));
+  document.getElementById('st-title').textContent = `${state.f+1}.${state.s+1} · ${step.t}`;
+  document.getElementById('st-note').innerHTML = step.n;
+  document.getElementById('pos').textContent = `${state.s+1} / ${flow.steps.length}`;
+  document.getElementById('prev').disabled = state.f===0 && state.s===0;
+  document.getElementById('next').disabled = state.f===FLOWS.length-1 && state.s===flow.steps.length-1;
+  document.getElementById('dots').innerHTML = flow.steps.map((_,i)=>`<i class="${i===state.s?'on':''}" data-s="${i}"></i>`).join('');
+  const stage = document.getElementById('stage');
+  const parts = [];
+  if (state.d !== 'mac') parts.push(`<div class="frame-wrap" data-w="402"><div class="frame-label">iPhone</div>${phone(step.phone())}</div>`);
+  if (state.d !== 'phone') parts.push(`<div class="frame-wrap" data-w="1280"><div class="frame-label">Mac</div>${step.mac()}</div>`);
+  stage.innerHTML = parts.join('');
+  stage.querySelectorAll('.frame-wrap').forEach(w=>fit(w, +w.dataset.w));
+  writeHash();
+}
+function move(d){
+  let {f,s} = state; s += d;
+  if (s < 0) { if (f===0) return; f--; s = FLOWS[f].steps.length-1; }
+  if (s >= FLOWS[f].steps.length) { if (f===FLOWS.length-1) return; f++; s = 0; }
+  state.f=f; state.s=s; render(); scrollTo({top:0});
+}
+document.addEventListener('click', e=>{
+  const fb = e.target.closest('[data-f]'); if (fb) { state.f=+fb.dataset.f; state.s=0; render(); return; }
+  const sb = e.target.closest('#dots [data-s]'); if (sb) { state.s=+sb.dataset.s; render(); return; }
+  const db = e.target.closest('#dev [data-d]'); if (db) { state.d=db.dataset.d; render(); return; }
+  if (e.target.closest('#prev')) return move(-1);
+  if (e.target.closest('#next')) return move(1);
+  const g = e.target.closest('[data-go]'); if (!g) return;
+  const t = g.dataset.go; if (!t) return;
+  if (t==='next') return move(1);
+  const [f,s] = t.split(':').map(Number); state.f=f-1; state.s=s; render(); scrollTo({top:0});
+});
+document.addEventListener('keydown', e=>{ if (e.key==='ArrowRight') move(1); if (e.key==='ArrowLeft') move(-1); });
+addEventListener('resize', render);
+addEventListener('hashchange', ()=>{ readHash(); render(); });
+readHash(); render();
+</script>
+</body>
+</html>
