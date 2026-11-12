@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the Mac app in Release, signed by the team, and installs it as /Applications/herder.app.
-# Unlike the ad-hoc release zip (build-mac-release.sh), this build has an application identifier
-# and the herder.sh associated domains, which macOS requires before it lets the app use your
-# passkey: an ad-hoc copy fails every approval (creating a secret set, inviting, claiming) with
+# Unlike the ad-hoc zip build-mac-release.sh makes without the signing secrets, this build has an
+# application identifier and the herder.sh associated domains, which macOS requires before it
+# lets the app use your passkey: an ad-hoc copy fails every approval (creating a secret set, inviting, claiming) with
 # "The calling process does not have an application identifier".
 #
 #   apple/scripts/install-mac.sh

@@ -1,16 +1,21 @@
 name: release
 
-# A `v*` tag builds static musl binaries, an Apple silicon macOS binary and the macOS app, and publishes them as a GitHub
-# Release; it also uploads the iOS app to TestFlight. workflow_dispatch runs the same, without
-# publishing the GitHub Release. PRs that change this file or the app's release script run the
-# builds only, without the TestFlight upload, which needs the App Store Connect secrets.
+# A `v*` tag builds static musl binaries, an Apple silicon macOS binary and the macOS app, signed
+# with the Developer ID and notarized, and publishes them as a GitHub Release; it also uploads
+# the iOS app to TestFlight. workflow_dispatch runs the same, without publishing the GitHub
+# Release. PRs that change this file or the app's release script run the builds only, without
+# the TestFlight upload; from a fork, which gets no secrets, the macOS app is signed ad hoc.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
   pull_request:
-    paths: [".github/workflows/release.yml", "apple/scripts/build-mac-release.sh"]
+    paths:
+      - ".github/workflows/release.yml"
+      - "apple/scripts/build-mac-release.sh"
+      - "apple/scripts/import-mac-cert.sh"
+      - "apple/scripts/developer-id-profile.py"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -121,8 +126,28 @@ jobs:
         run: apple/scripts/build-ffi.sh
       - name: Record the demo fleet
         run: apple/scripts/record-demo.sh
-      - name: Build, ad-hoc sign and zip the app
-        run: apple/scripts/build-mac-release.sh
+      - name: Build, sign with the Developer ID, notarize and zip the app
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY: ${{ secrets.ASC_KEY }}
+          MAC_P12_BASE64: ${{ secrets.MAC_P12_BASE64 }}
+          MAC_P12_PASSWORD: ${{ secrets.MAC_P12_PASSWORD }}
+        run: |
+          # Without the certificate, as from a fork, the script signs ad hoc.
+          if [ -n "$MAC_P12_BASE64" ]; then
+            keychain=$(apple/scripts/import-mac-cert.sh)
+            echo "HERDER_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+            export ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
+            printf '%s' "$ASC_KEY" > "$ASC_KEY_PATH"
+          else
+            unset APPLE_TEAM_ID
+          fi
+          apple/scripts/build-mac-release.sh
+      - name: Delete the signing keychain
+        if: always() && env.HERDER_KEYCHAIN != ''
+        run: security delete-keychain "$HERDER_KEYCHAIN"
       - uses: actions/upload-artifact@v7
         with:
           name: herder-app-macos-arm64

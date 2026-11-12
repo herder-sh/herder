@@ -266,11 +266,30 @@ jobs:
         env:
           HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
         run: swift test --disable-index-store --package-path apple/HerderKit
-      - name: Build, ad-hoc sign and zip the macOS app
+      - name: Build, sign with the Developer ID, notarize and zip the macOS app
         if: github.event_name == 'push'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY: ${{ secrets.ASC_KEY }}
+          MAC_P12_BASE64: ${{ secrets.MAC_P12_BASE64 }}
+          MAC_P12_PASSWORD: ${{ secrets.MAC_P12_PASSWORD }}
         run: |
           brew install xcodegen
+          # Without the certificate, as from a fork, the script signs ad hoc.
+          if [ -n "$MAC_P12_BASE64" ]; then
+            keychain=$(apple/scripts/import-mac-cert.sh)
+            echo "HERDER_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+            export ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
+            printf '%s' "$ASC_KEY" > "$ASC_KEY_PATH"
+          else
+            unset APPLE_TEAM_ID
+          fi
           apple/scripts/build-mac-release.sh
+      - name: Delete the signing keychain
+        if: always() && github.event_name == 'push' && env.HERDER_KEYCHAIN != ''
+        run: security delete-keychain "$HERDER_KEYCHAIN"
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'push'
         with:
