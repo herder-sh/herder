@@ -210,7 +210,7 @@ Activity with `Fleet.install`. The daemon checks the CLI's version again before 
 install's terminal, so the machine's versions are current when the job ends.
 
 **Adding a device** (`AddDevice.swift`). A device with machines offers **Add a device…** under
-People › You and at the foot of Fleet. Its sheet (`AddDeviceSheet`) shows the `herder://fleet`
+the You page's Devices (§8.9) and at the foot of Fleet. Its sheet (`AddDeviceSheet`) shows the `herder://fleet`
 link of `Client::share()` as a QR code with Copy, and three steps: install herder on the other
 device, scan this code with it (Add to Fleet › From another device), approve with your passkey,
 the same one, synced by iCloud Keychain or a password manager. The link grants nothing by
@@ -782,6 +782,51 @@ disclosure. `CreateSheetScreenshotTests` draws it
 The session's **Switch** sheet is gone: the composer's account menu (`FooterMenu`) lists every
 account on the machine, the session's provider's first; another provider's account moves the
 session onto its default model, and the model menu picks the model.
+
+### 8.9 You page (P22.7)
+
+`YouPage` replaces People › You: People keeps one row for you (your role across the fleet and
+how many devices), which opens it (`Page.you`). Setup will link it the same way. Top to bottom:
+
+- **Header** (`YouHeader`): your avatar, name and what you are on the machines ("Owner of 5
+  machines", "Owner of 3 machines · member of 2").
+- **Passkeys**: one row per passkey of yours across the machines (`You`, merged by credential
+  id): your name with where it is kept as a tag (Apple Passwords, 1Password…, from the AAGUID
+  the machines keep, `PasskeyStore`; no tag when unknown), "Added Oct 3 · on 5 machines" ("on 3
+  of 5" when some do not know it), and the one this device signs with (`ThisDevicePasskey`, the
+  credential of its last assertion): a blue "This Mac uses it" tag on the Mac, "this iPhone uses
+  it" in the summary on the iPhone. A row opens the passkey's sheet; **Add a passkey…** ends the
+  group, with a caption saying what a passkey is.
+- **Devices**: your Mac, iPhone and terminals, "On 5 of 5 machines · the Mac app" (the machines
+  that list it among your devices, of those you are on) or "Signed in with `herder login` · 1
+  machine", a "This device" tag on this one and **Sign out…** on the others, asked about first.
+  **Add a device…** opens `AddDeviceSheet` while this device has machines to share.
+- **Recovery**: one row, "If you lose your devices", opening the Recovery page.
+
+**A passkey's sheet** (`PasskeySheet`, a `DetailSheet`): "Tomas · 1Password", where it is saved,
+when it was added, the machines that know it (each ✓), the credential id short and monospaced
+last, and what still works once it is gone ("You'll still sign in with your Apple Passwords
+passkey. Every machine forgets this one."). **Remove Passkey…** asks first, then removes it from
+each machine with an assertion by a passkey that stays; a machine that knows you by it alone
+keeps it, and the sheet says so. The last passkey has no Remove.
+
+**Add a passkey** (`AddPasskeySheet`): two choices, in another password manager (the system's
+passkey sheet, where you pick it) or on a security key, then **Create Passkey**. It adds the
+passkey to every machine you are on, connected ones first, each row live: ✓ added, a spinner
+while adding, a dashed ring for next, `!` with the reason where it failed. The first machine
+makes it (your passkey approves, then the new one is created from that machine's registration);
+the rest learn it from the first's listing, with an assertion by each passkey over their own
+challenge. Until one assertion can cover many machines (a `[CONTRACT]` todo), Face ID asks per
+machine. A failed machine is left for **Try Again**; closing Face ID stops; a failure after the
+passkey was made stops too, rather than make another.
+
+**Recovery** (`RecoveryPage`, `Page.recovery`): "You're covered" in green with "2 passkeys in 2
+places, and 3 devices." once you have two passkeys, else a blue suggestion to add a second with
+its **Add a passkey…** button; then the three cases: lost one device (sign it out from another),
+lost every device (your passkey is synced: I already use herder › I have no other device, then
+`herder claim`), and lost your passkeys too (`herder claim` on each machine, then remove the old
+you). `YouScreenshotTests` draws the page, both sheets and Recovery, at the Mac's and the
+iPhone's widths.
 
 ---
 

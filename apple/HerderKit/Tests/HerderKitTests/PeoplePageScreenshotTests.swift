@@ -19,8 +19,8 @@ import Testing
             PageHeader(title: "People", status: directory.status) {
                 PaneButton(title: "Invite", symbol: "plus") {}
             }
-            PeopleView(directory: directory, grid: width.name == "mac", now: now,
-                       setRole: { _, _, _ in }, revoke: { _ in }, itsMe: { _ in }, invite: {})
+            PeopleView(directory: directory, grid: width.name == "mac",
+                       setRole: { _, _, _ in }, itsMe: { _ in }, invite: {}, openYou: {})
                 .padding(.horizontal, Theme.margin)
                 .padding(.vertical, 8)
         }

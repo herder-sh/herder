@@ -1,7 +1,7 @@
 import Herder
 import SwiftUI
 
-/// The People page: one for the whole fleet. You, with your passkey and your devices; your
+/// The People page: one for the whole fleet. You, as a row that opens the You page; your
 /// teammates, each with a fleet-wide role; then who can do what on each machine, as a grid of
 /// menus on the Mac and a list of machines under each person on the iPhone. Machines never show
 /// as people.
@@ -9,32 +9,21 @@ struct PeopleView: View {
     let directory: Directory
     /// The grid, or on narrow screens a list of machines under each person.
     var grid = true
-    var now = Date.now
     /// Sets a person's role on one machine, or on every machine for nil; a nil role takes
     /// their access away.
     let setRole: (Directory.Person, Role?, HostId?) -> Void
-    let revoke: (Directory.Device) -> Void
     /// Folds a teammate who is really you into you, signed with their passkey.
     let itsMe: (Directory.Person) -> Void
     let invite: () -> Void
-    /// Opens Add a Device, while this device has machines to share.
-    var addDevice: (() -> Void)?
+    /// Opens the You page: your passkeys, devices and recovery.
+    let openYou: () -> Void
     /// Opens Claim your machines, while a machine you own is not claimed yet.
     var claim: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             section("You") {
-                personRow(directory.me, mine: true)
-                ForEach(directory.devices) { device in
-                    RowDivider()
-                    deviceRow(device)
-                }
-                if let addDevice {
-                    RowDivider()
-                    AddRow(title: "Add a device…", action: addDevice)
-                        .accessibilityIdentifier("people-add-device")
-                }
+                youRow
                 if let claim {
                     RowDivider()
                     AddRow(title: "Claim your machines…", action: claim)
@@ -43,7 +32,7 @@ struct PeopleView: View {
             }
             section("Teammates") {
                 ForEach(directory.teammates) { person in
-                    personRow(person, mine: false)
+                    personRow(person)
                     RowDivider()
                 }
                 AddRow(title: "Invite a teammate…", action: invite)
@@ -79,88 +68,53 @@ struct PeopleView: View {
         }
     }
 
-    private func personRow(_ person: Directory.Person, mine: Bool) -> some View {
+    /// You, with your role across the fleet and your devices; it opens the You page.
+    private var youRow: some View {
+        let me = directory.me
+        let devices = directory.devices.count == 1 ? "1 device" : "\(directory.devices.count) devices"
+        return Button(action: openYou) {
+            HStack(spacing: 12) {
+                Avatar(name: me.name, id: me.id, size: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(me.name).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
+                    Text("\(directory.scope(me)) · passkeys, devices and recovery")
+                        .font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                Text(devices).font(.caption).foregroundStyle(Theme.secondary)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+            }
+            .padding(.horizontal, Theme.cellPadding)
+            .padding(.vertical, 11)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("people-you")
+    }
+
+    private func personRow(_ person: Directory.Person) -> some View {
         HStack(spacing: 12) {
             Avatar(name: person.name, id: person.id, size: 30)
             VStack(alignment: .leading, spacing: 2) {
-                // The passkey's pill follows the name, or takes the line under it on a narrow screen.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { name(person, mine: mine) }
-                    VStack(alignment: .leading, spacing: 4) { name(person, mine: mine) }
-                }
+                Text(person.name).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
                 Text(directory.scope(person)).font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
             }
             Spacer(minLength: 8)
-            let role = directory.fleetRole(person)
-            if mine {
-                RoleBox(title: role.title)
-            } else {
-                Menu {
-                    Button("Owner of every machine") { setRole(person, .owner, nil) }
-                    Button("Member of every machine") { setRole(person, .member, nil) }
-                    Divider()
-                    Button("It's me") { itsMe(person) }
-                    Button("Remove from the fleet", role: .destructive) { setRole(person, nil, nil) }
-                } label: {
-                    RoleBox(title: role.title, menu: true)
-                }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                .accessibilityLabel("Role of \(person.name)")
+            Menu {
+                Button("Owner of every machine") { setRole(person, .owner, nil) }
+                Button("Member of every machine") { setRole(person, .member, nil) }
+                Divider()
+                Button("It's me") { itsMe(person) }
+                Button("Remove from the fleet", role: .destructive) { setRole(person, nil, nil) }
+            } label: {
+                RoleBox(title: directory.fleetRole(person).title, menu: true)
             }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            .accessibilityLabel("Role of \(person.name)")
         }
         .padding(.horizontal, Theme.cellPadding)
         .padding(.vertical, 11)
         .accessibilityIdentifier("person-\(person.id)")
-    }
-
-    @ViewBuilder private func name(_ person: Directory.Person, mine: Bool) -> some View {
-        Text(person.name).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
-        if mine, case .stored(let keychain) = directory.passkey {
-            Pill(text: (["● passkey"] + [keychain].compactMap(\.self)).joined(separator: " · "), tint: Theme.switchOn)
-                .fixedSize()
-        }
-    }
-
-    private func deviceRow(_ device: Directory.Device) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: device.symbol).font(.body).foregroundStyle(Theme.secondary).frame(width: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(device.title).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
-                Group {
-                    if device.kind == .terminal {
-                        Text("Signed in with \(Text("herder login").font(Theme.monoSmall)) · \(device.seen(now: now))")
-                    } else {
-                        Text("Signed in · \(device.seen(now: now))")
-                    }
-                }
-                .font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            if device.current {
-                Pill(text: "this device", tint: Theme.secondary)
-            } else {
-                Menu {
-                    Button("Sign out this device", role: .destructive) { revoke(device) }
-                } label: {
-                    Image(systemName: "ellipsis").font(.subheadline).foregroundStyle(Theme.tertiary)
-                        .frame(width: 28, height: 24).contentShape(.rect)
-                }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                .accessibilityLabel("\(device.title) options")
-            }
-        }
-        .padding(.horizontal, Theme.cellPadding)
-        .padding(.vertical, 11)
-    }
-}
-
-private extension Directory.Device {
-    var symbol: String {
-        switch kind {
-        case .mac: "laptopcomputer"
-        case .phone: "iphone"
-        case .terminal: "terminal"
-        }
     }
 }
 
