@@ -179,9 +179,7 @@ struct DesktopShell: View {
             Pane(fleet: fleet, title: "People", switcher: switcher) {
                 PeoplePage(fleet: fleet, sheet: $sheet)
             } actions: {
-                PaneButton(title: "Invite", symbol: "plus") {
-                    if let host = PeoplePage.inviteHost(fleet.machines, shown: nil) { sheet = .invite(host) }
-                }
+                PaneButton(title: "Invite", symbol: "plus") { sheet = .invite(nil) }
             }
         case .integrations:
             Pane(fleet: fleet, title: "Integrations", status: fleet.bots.status, switcher: switcher) {

@@ -43,10 +43,10 @@ final class FleetPeople {
         #endif
     }
 
-    /// A one-time link that lets someone join a machine with a passkey of their own.
+    /// A machine's one-time invite that lets someone join it with a passkey of their own.
     struct Invite: Equatable {
         let role: Role
-        let link: String
+        let machine: InviteLink.Machine
         let expiresAt: Date?
     }
 
@@ -161,26 +161,17 @@ final class FleetPeople {
         await reload(machines)
     }
 
-    /// Mints a link that lets someone join `hostId` as `role`.
-    func invite(_ role: Role, on hostId: HostId, sign: PasskeySigner) async throws -> Invite {
+    /// Mints an invite that lets someone join `hostId` as `role`; `name` is what the link calls
+    /// the machine.
+    func invite(_ role: Role, on hostId: HostId, name: String? = nil, sign: PasskeySigner) async throws -> Invite {
         let assertion = try await assertion(on: hostId, sign: sign)
         guard case .invite(let invite, let role, let fingerprint, let addresses, let expiresAt) =
             try await send(hostId, .invite(role: role, assertion: assertion))
         else {
             throw HerderError.Local(detail: "the machine did not mint an invite")
         }
-        return Invite(role: role, link: Self.inviteLink(addresses: addresses, fingerprint: fingerprint, invite: invite),
+        return Invite(role: role, machine: InviteLink.Machine(hosts: addresses, fingerprint: fingerprint, invite: invite, name: name),
                       expiresAt: Timestamp.date(expiresAt))
-    }
-
-    /// `herder://invite?host=…&fp=…&invite=…`.
-    nonisolated static func inviteLink(addresses: [String], fingerprint: String, invite: String) -> String {
-        var link = URLComponents()
-        link.scheme = "herder"
-        link.host = "invite"
-        link.queryItems = addresses.map { URLQueryItem(name: "host", value: $0) }
-            + [URLQueryItem(name: "fp", value: fingerprint), URLQueryItem(name: "invite", value: invite)]
-        return link.string ?? ""
     }
 
     /// Who `personId` is, as a machine that knows them lists them, to introduce them to another.
@@ -273,13 +264,9 @@ struct PeoplePage: View {
         #endif
     }
 
-    /// Invites someone to the machine shown, else the first machine you own.
+    /// Invites someone to every machine you own, or to the machine shown.
     private func invite() {
-        if let host = PeoplePage.inviteHost(fleet.machines, shown: hostId) { sheet = .invite(host) }
-    }
-
-    nonisolated static func inviteHost(_ machines: [Machine], shown: HostId?) -> HostId? {
-        shown ?? machines.first { $0.role == .owner && $0.connection == .connected && $0.hosts.isEmpty && $0.vault == nil }?.hostId
+        sheet = .invite(hostId)
     }
 
     private func run(_ action: @escaping () async throws -> Void) {
