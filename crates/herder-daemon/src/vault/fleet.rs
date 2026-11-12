@@ -502,6 +502,8 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::SetPersonRole { .. }
         | CommandBody::RevokePerson { .. }
         | CommandBody::ApproveLogin { .. }
+        | CommandBody::AddPasskey { .. }
+        | CommandBody::RemovePasskey { .. }
         | CommandBody::ClaimUsers { .. }
         | CommandBody::DecideLeftover { .. }
         | CommandBody::MergePerson { .. }

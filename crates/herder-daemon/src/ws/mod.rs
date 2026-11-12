@@ -339,6 +339,18 @@ impl<B: Backend> Shared<B> {
                 self.assert(identity, &assertion)?;
                 self.auth.revoke_person(&person_id)?;
             }
+            CommandBody::AddPasskey { passkey, assertion } => {
+                let person_id = self.caller(identity)?;
+                self.auth.add_passkey(&person_id, &passkey, &assertion)?;
+            }
+            CommandBody::RemovePasskey {
+                credential_id,
+                assertion,
+            } => {
+                let person_id = self.caller(identity)?;
+                self.auth
+                    .remove_passkey(&person_id, &credential_id, &assertion)?;
+            }
             CommandBody::ApproveLogin { code, assertion } => {
                 self.assert(identity, &assertion)?;
                 let (device_id, client) = self.auth.approve_login(identity, &code)?;
@@ -457,21 +469,28 @@ impl<B: Backend> Shared<B> {
 
     /// Refuses unless `assertion`, over a fresh challenge, is by `identity`'s person.
     fn assert(&self, identity: &Identity, assertion: &PasskeyAssertion) -> Result<(), ErrorInfo> {
-        let Some(person_id) = self.auth.person_of(&identity.user_id) else {
-            return Err(ErrorInfo {
-                code: ErrorCode::Forbidden,
-                message: "this needs a person's passkey; sign in to this daemon with yours"
-                    .to_owned(),
-            });
-        };
+        let person_id = self.caller(identity)?;
         self.auth.verify_assertion(&person_id, assertion)
     }
 
-    /// A challenge for the caller's passkey; a per-daemon owner also gets what to create one
-    /// from, to become a person.
+    /// The person `identity` acts as; refused for a per-daemon user, who has no passkey.
+    fn caller(&self, identity: &Identity) -> Result<PersonId, ErrorInfo> {
+        self.auth
+            .person_of(&identity.user_id)
+            .ok_or_else(|| ErrorInfo {
+                code: ErrorCode::Forbidden,
+                message: "this needs a person's passkey; sign in to this daemon with yours"
+                    .to_owned(),
+            })
+    }
+
+    /// A challenge for the caller's passkey, with what to create another one from: for a
+    /// person, another of theirs; for a per-daemon owner, their first, to become a person.
     fn passkey_challenge(&self, identity: &Identity) -> Result<CommandResult, ErrorInfo> {
-        let registration = match (&identity.person_id, identity.role) {
-            (Some(_), _) => None,
+        // A connection opened before its claim acts as the person all the same.
+        let person_id = self.auth.person_of(&identity.user_id);
+        let registration = match (person_id, identity.role) {
+            (Some(person_id), _) => Some(self.auth.creation_of(&person_id)?),
             (None, Role::Owner) => Some(self.auth.creation()?),
             (None, Role::Member) => {
                 return Err(ErrorInfo {
@@ -854,6 +873,8 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::SetPersonRole { .. }
                     | CommandBody::RevokePerson { .. }
                     | CommandBody::ApproveLogin { .. }
+                    | CommandBody::AddPasskey { .. }
+                    | CommandBody::RemovePasskey { .. }
                     | CommandBody::ClaimUsers { .. }
                     | CommandBody::DecideLeftover { .. }
                     | CommandBody::MergePerson { .. }

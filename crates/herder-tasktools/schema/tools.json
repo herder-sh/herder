@@ -1346,6 +1346,8 @@
                   "invite",
                   "set_person_role",
                   "revoke_person",
+                  "add_passkey",
+                  "remove_passkey",
                   "claim_users",
                   "decide_leftover",
                   "merge_person",

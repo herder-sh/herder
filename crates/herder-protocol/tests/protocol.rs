@@ -125,6 +125,8 @@ fn passkey_key() -> PasskeyKey {
     PasskeyKey {
         credential_id: "Y3JlZA".into(),
         public_key: "pQECAyYgASFYIA".into(),
+        aaguid: Some("bada5566-a7aa-401f-bd96-45619a55120d".into()),
+        added_at: Some("2026-10-03T12:00:00Z".parse().unwrap()),
     }
 }
 
@@ -419,6 +421,32 @@ fn client_fixtures() -> Vec<ClientMessage> {
         }),
         command(CommandBody::RevokePerson {
             person_id: person_id(),
+            assertion: Box::new(assertion()),
+        }),
+        command(CommandBody::AddPasskey {
+            passkey: Box::new(PersonPasskey::Register {
+                registration: PasskeyRegistration {
+                    id: "bmV3".into(),
+                    raw_id: "bmV3".into(),
+                    response: RegistrationResponse {
+                        client_data_json: "e30".into(),
+                        attestation_object: "o2NmbXQ".into(),
+                    },
+                    kind: "public-key".into(),
+                },
+            }),
+            assertion: Box::new(assertion()),
+        }),
+        command(CommandBody::AddPasskey {
+            passkey: Box::new(PersonPasskey::Existing {
+                person_id: person_id(),
+                key: passkey_key(),
+                assertion: assertion(),
+            }),
+            assertion: Box::new(assertion()),
+        }),
+        command(CommandBody::RemovePasskey {
+            credential_id: "Y3JlZA".into(),
             assertion: Box::new(assertion()),
         }),
         command(CommandBody::ClaimUsers {

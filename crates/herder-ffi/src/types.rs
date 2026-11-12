@@ -738,6 +738,14 @@ pub enum CommandBody {
         person_id: PersonId,
         assertion: Box<PasskeyAssertion>,
     },
+    AddPasskey {
+        passkey: Box<PersonPasskey>,
+        assertion: Box<PasskeyAssertion>,
+    },
+    RemovePasskey {
+        credential_id: String,
+        assertion: Box<PasskeyAssertion>,
+    },
     ClaimUsers {
         person: Box<NewPerson>,
         also: Vec<UserId>,
@@ -1244,6 +1252,10 @@ pub struct PersonCard {
 pub struct PasskeyKey {
     pub credential_id: String,
     pub public_key: String,
+    #[uniffi(default = None)]
+    pub aaguid: Option<String>,
+    #[uniffi(default = None)]
+    pub added_at: Option<Timestamp>,
 }
 
 #[uniffi::remote(Record)]

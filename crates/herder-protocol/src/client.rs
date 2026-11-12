@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AccountId, Answer, ApprovalDecision, ApprovalId, Attachment, AttachmentId, BotId, Bytes,
     CommandId, DaemonSettings, DeviceId, Event, HostId, Image, LeftoverDecision, NewPerson,
-    PasskeyAssertion, PermissionMode, PersonCard, PersonId, ProjectId, PromptFile, PromptId,
-    Provider, QuestionId, Role, SecretRef, SecretValue, Seq, SessionId, SignIn, TerminalId,
-    UpdateWhen, UsagePeriod, UserId,
+    PasskeyAssertion, PermissionMode, PersonCard, PersonId, PersonPasskey, ProjectId, PromptFile,
+    PromptId, Provider, QuestionId, Role, SecretRef, SecretValue, Seq, SessionId, SignIn,
+    TerminalId, UpdateWhen, UsagePeriod, UserId,
 };
 
 /// A client-to-daemon message.
@@ -737,8 +737,9 @@ pub enum CommandBody {
     },
     /// Mint a challenge for the caller's passkey to sign, which the people commands, the
     /// terminal commands that open or attach one, and the secret changes carry an assertion
-    /// over. It works once, for [`crate::PASSKEY_CHALLENGE_SECS`]. A per-daemon owner, moving to a person
-    /// with `claim_users`, also gets what to create a passkey from. Answered with
+    /// over. It works once, for [`crate::PASSKEY_CHALLENGE_SECS`]. A person also gets what to
+    /// create another passkey of theirs from, for `add_passkey`; a per-daemon owner, moving to
+    /// a person with `claim_users`, what to create their first from. Answered with
     /// `passkey_challenge`. Refused with `forbidden` for a per-daemon member.
     PasskeyChallenge,
     /// List the people of this daemon, each with their role, passkeys and devices; owners and
@@ -778,6 +779,30 @@ pub enum CommandBody {
         /// The person.
         person_id: PersonId,
         /// An assertion over a fresh `passkey_challenge`.
+        assertion: Box<PasskeyAssertion>,
+    },
+    /// Add a passkey to the caller's own person; owners and members alike. `assertion`, by one
+    /// of the caller's passkeys over a fresh `passkey_challenge`, authorizes it. `passkey` is
+    /// either one created just now from that challenge's `registration`, or one the caller
+    /// registered on another daemon, as its `list_people` lists it, with an assertion by it
+    /// over the same challenge: how an app spreads a new passkey to every daemon its person is
+    /// on. Answered with `applied`. Refused with `forbidden` for a caller who is no person or
+    /// a bad assertion, `bad_request` for a passkey of another person, and `conflict` for a
+    /// passkey this daemon has already.
+    AddPasskey {
+        /// The passkey to add.
+        passkey: Box<PersonPasskey>,
+        /// An assertion by one of the caller's passkeys over a fresh `passkey_challenge`.
+        assertion: Box<PasskeyAssertion>,
+    },
+    /// Remove one of the caller's own passkeys; owners and members alike. The assertion must
+    /// be by another of their passkeys, one that stays. Answered with `applied`. Refused with
+    /// `not_found` for a passkey the caller does not have, `conflict` for their last one, and
+    /// `forbidden` for an assertion by the passkey being removed.
+    RemovePasskey {
+        /// The passkey's credential id, base64url, as `list_people` lists it.
+        credential_id: String,
+        /// An assertion by another of the caller's passkeys over a fresh `passkey_challenge`.
         assertion: Box<PasskeyAssertion>,
     },
     /// Make the caller's per-daemon user, an owner, the person `person`, with the users in
