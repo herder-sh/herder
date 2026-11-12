@@ -26,3 +26,103 @@ struct PlatformPasskeyTests {
         #expect(key.userVerificationPreference == .required)
     }
 }
+
+/// Passkey prompts run one at a time, each once the one before has gone: AuthenticationServices
+/// refuses a second request while one is up, and shows one made as the last sheet goes away as
+/// a sheet nobody sees, which hangs for two minutes.
+@MainActor
+struct PasskeyPromptsTests {
+    /// What each prompt and settle did, in order.
+    @MainActor final class Log {
+        var lines: [String] = []
+        var firstEnds: CheckedContinuation<Void, Never>?
+        var settled: CheckedContinuation<Void, Never>?
+    }
+
+    @Test func aSecondPromptWaitsForTheFirstToGo() async throws {
+        let log = Log()
+        let prompts = PasskeyPrompts(settle: {
+            log.lines.append("settling")
+            await withCheckedContinuation { log.settled = $0 }
+            log.lines.append("gone")
+        })
+        let first = Task {
+            try await prompts.run {
+                log.lines.append("first up")
+                await withCheckedContinuation { log.firstEnds = $0 }
+                log.lines.append("first ends")
+                return 1
+            }
+        }
+        try await Self.until { log.firstEnds != nil }
+        let second = Task {
+            try await prompts.run {
+                log.lines.append("second up")
+                return 2
+            }
+        }
+        for _ in 0..<20 { await Task.yield() }
+        #expect(log.lines == ["first up"])
+
+        log.firstEnds?.resume()
+        #expect(try await first.value == 1)
+        try await Self.until { log.settled != nil }
+        for _ in 0..<20 { await Task.yield() }
+        // The first's result is back at once, but the second waits for its sheet to go.
+        #expect(log.lines == ["first up", "first ends", "settling"])
+
+        let firstGoes = log.settled
+        log.settled = nil
+        firstGoes?.resume()
+        try await Self.until { log.settled != nil }
+        // The second's sheet goes the same way, before any third.
+        #expect(log.lines == ["first up", "first ends", "settling", "gone", "second up", "settling"])
+        log.settled?.resume()
+        #expect(try await second.value == 2)
+    }
+
+    /// Lets the other tasks run until `done`, failing rather than hanging when they never get there.
+    static func until(_ done: () -> Bool) async throws {
+        for _ in 0..<1000 where !done() { await Task.yield() }
+        try #require(done())
+    }
+
+    @Test func aFailedPromptStillLetsTheNextOneRun() async throws {
+        let prompts = PasskeyPrompts(settle: {})
+        await #expect(throws: ASAuthorizationError.self) {
+            try await prompts.run { throw ASAuthorizationError(.canceled) }
+        }
+        #expect(try await prompts.run { "next" } == "next")
+    }
+
+    @Test func promptsTakeTheirTurnsInOrder() async throws {
+        var order: [Int] = []
+        let prompts = PasskeyPrompts(settle: {})
+        let tasks = (1...3).map { n in Task { try await prompts.run { order.append(n) } } }
+        for task in tasks { try await task.value }
+        #expect(order == [1, 2, 3])
+    }
+}
+
+/// The window a prompt shows over, and what a prompt that timed out says.
+@MainActor
+struct PasskeyPromptWindowTests {
+    @Test func showsOverTheKeyWindowElseTheMainElseAVisibleOne() {
+        #expect(PlatformAuthenticator.anchor(key: "key", main: "main", visible: ["a"]) == "key")
+        // Right after another prompt closes, no window is key yet.
+        #expect(PlatformAuthenticator.anchor(key: nil, main: "main", visible: ["a"]) == "main")
+        #expect(PlatformAuthenticator.anchor(key: nil, main: nil, visible: ["a", "b"]) == "a")
+        #expect(PlatformAuthenticator.anchor(key: String?.none, main: nil, visible: []) == nil)
+    }
+
+    @Test func aPromptTheSystemTimedOutSaysSo() {
+        let cancelled = ASAuthorizationError(.canceled)
+        let timedOut = PlatformAuthenticator.failure(cancelled, after: .seconds(120))
+        #expect(describe(timedOut) == "the \(Biometry.name) prompt timed out; try again")
+        #expect(!isCancelled(timedOut))
+        // The person closing it is still a cancel, which nobody reports.
+        #expect(isCancelled(PlatformAuthenticator.failure(cancelled, after: .seconds(4))))
+        let refused = ASAuthorizationError(.failed)
+        #expect((PlatformAuthenticator.failure(refused, after: .seconds(120)) as? ASAuthorizationError)?.code == .failed)
+    }
+}
