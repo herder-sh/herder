@@ -3,12 +3,13 @@
 # with a .sha256 beside it. The version is the herder crate's, as for the CLI release.
 #
 # With APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH (the App Store Connect key's
-# .p8 file) set, as in the release workflow, the app is signed with the team's Developer ID
-# through Xcode's cloud-managed certificates, with a Developer ID provisioning profile that
-# grants it the herder.sh associated domains passkeys need, then notarized and stapled. The
-# build fails unless the app carries its application identifier and associated domains, and
-# Gatekeeper accepts it. Without them, as on pushes to main, the app is ad-hoc signed, without
-# associated domains, and cannot use a passkey (see apple/README.md).
+# .p8 file) set, and the team's Developer ID Application certificate in a keychain
+# (import-mac-cert.sh), as in the release workflow, the app is signed with that certificate and
+# a Developer ID provisioning profile, which Xcode fetches or creates through the key and which
+# grants the herder.sh associated domains passkeys need, then notarized and stapled. The build
+# fails unless the app carries the team, its application identifier and associated domains,
+# and Gatekeeper accepts it as notarized. Without APPLE_TEAM_ID, as from a fork, the app is
+# ad-hoc signed, without associated domains, and cannot use a passkey (see apple/README.md).
 # Needs what build-ffi.sh builds, XcodeGen, and Xcode with its Metal toolchain.
 set -euo pipefail
 
@@ -56,6 +57,7 @@ else
   <key>method</key><string>developer-id</string>
   <key>teamID</key><string>$APPLE_TEAM_ID</string>
   <key>signingStyle</key><string>automatic</string>
+  <key>signingCertificate</key><string>Developer ID Application</string>
 </dict>
 </plist>
 PLIST
@@ -94,7 +96,11 @@ PLIST
   fi
   xcrun stapler staple "$app"
   xcrun stapler validate "$app"
-  spctl -a -vv -t exec "$app"
+  spctl -a -vv -t exec "$app" 2>&1 | tee "$work/gatekeeper"
+  grep -q "source=Notarized Developer ID" "$work/gatekeeper" || {
+    echo "Gatekeeper does not accept the app as notarized" >&2
+    exit 1
+  }
 fi
 
 mkdir -p dist

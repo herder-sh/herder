@@ -29,29 +29,33 @@ much faster.
 
 `apple/scripts/build-mac-release.sh` (after `build-ffi.sh`) builds the macOS app in Release
 and zips it into `dist/herder-app-<version>-macos-arm64.zip`, with its `.sha256`. The `release`
-workflow attaches it to the GitHub Release of each `v*` tag, next to the CLI. There the script
-has the App Store Connect secrets below: Xcode signs the app with the team's Developer ID
-through cloud-managed certificates, with a Developer ID provisioning profile that grants it the
-herder.sh associated domains passkeys need, and the script notarizes and staples it. It fails
-the build unless the app carries its application identifier and associated domains and
-Gatekeeper accepts it. Download the zip, unzip it and move `herder.app` to `/Applications`.
+workflow attaches it to the GitHub Release of each `v*` tag, next to the CLI, and the `apple`
+workflow uploads it on each push to main as the `herder-app-macos-arm64` artifact. Both sign it
+with the team's Developer ID Application certificate, which `apple/scripts/import-mac-cert.sh`
+puts in a temporary keychain, and a Developer ID provisioning profile, which Xcode fetches or
+creates through the App Store Connect key and which grants the herder.sh associated domains
+passkeys need. The script then notarizes and staples the app, and fails the build unless it
+carries the team, its application identifier and associated domains, and Gatekeeper accepts
+it as notarized. Download the zip, unzip it and move `herder.app` to `/Applications`.
 
-Without those secrets, as in the `apple` workflow on each push to main (its
-`herder-app-macos-arm64` artifact), the script signs the app ad hoc, without associated
-domains. Such a copy opens only through **System Settings › Privacy & Security › Open Anyway**
-and cannot use your passkey. On a Mac the team's development profile lists,
-`apple/scripts/install-mac.sh` builds and installs a team-signed copy instead.
+Without the secrets, as on a PR from a fork, the script signs the app ad hoc, without
+associated domains: such a copy opens only through **System Settings › Privacy & Security ›
+Open Anyway** and cannot use your passkey. On a Mac the team's development profile lists,
+`apple/scripts/install-mac.sh` builds and installs a team-signed copy.
 
 The iOS app goes out through TestFlight. The `release` workflow's `testflight` job runs
 `apple/scripts/upload-testflight.sh` on each `v*` tag, and on workflow_dispatch: it archives the
 app in Release with the herder version and the run number as its build, and uploads it to App
-Store Connect. Xcode signs it, like the Mac app, with cloud-managed certificates through an App
+Store Connect. Xcode signs it with cloud-managed certificates through an App
 Store Connect API key, so the repo keeps no certificate or profile, only these secrets:
 
 - `APPLE_TEAM_ID`: the Apple Developer team the app belongs to.
 - `ASC_KEY_ID`, `ASC_ISSUER_ID`: the App Store Connect API key (Users and Access › Integrations),
-  with the Admin role, which cloud signing needs. It also notarizes the Mac app.
+  with the Admin role, which cloud signing needs. It also gets the Mac app its Developer ID profile and notarizes it.
 - `ASC_KEY`: the contents of the key's `.p8` file.
+- `MAC_P12_BASE64`, `MAC_P12_PASSWORD`: the Mac app's Developer ID Application certificate with
+  its private key, as a base64 `.p12`, and its password. Cloud-managed signing cannot make a
+  Developer ID certificate for this team.
 
 App Store Connect needs an app record for `sh.herder.Herder` before the first upload. Once a
 build has processed, the testers in the app's internal TestFlight group get it in the TestFlight
