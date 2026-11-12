@@ -43,6 +43,7 @@ import Testing
         defer { UserDefaults.standard.removeObject(forKey: "sidebarCollapsed") }
         let view = DesktopShell(fleet: fleet, sheet: .constant(nil), item: .constant(.board), pages: .constant(PageStack()),
                                 session: .constant(SessionKey(hostId: "studio", sessionId: ids[0])), draft: .constant(nil),
+                                people: FleetPeople(fleet: fleet),
                                 opened: { _ in })
         try await snap(view, size: CGSize(width: 1280, height: 720), named: "elevation-board.png")
     }

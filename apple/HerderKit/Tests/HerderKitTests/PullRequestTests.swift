@@ -371,13 +371,13 @@ struct ProjectIconLookupTests {
 
 struct CompactTabTests {
     @Test func compactWidthReachesEverySidebarSection() {
-        #expect(CompactTab.allCases.map(\.title) == ["Board", "Chats", "Projects", "Fleet"])
+        #expect(CompactTab.allCases.map(\.title) == ["Board", "Chats", "Projects", "Setup"])
         #expect(CompactTab(.project("p")) == .projects)
         #expect(CompactTab(.chats) == .chats)
         #expect(CompactTab(.board) == .board)
-        #expect(CompactTab(.skills) == .machines)
-        // Usage shows on Providers, inside Machines.
-        #expect(CompactTab(.providers) == .machines)
-        #expect(CompactTab(.machines) == .machines)
+        #expect(CompactTab(.skills) == .setup)
+        // Usage shows on Providers, inside Setup.
+        #expect(CompactTab(.providers) == .setup)
+        #expect(CompactTab(.setup) == .setup)
     }
 }

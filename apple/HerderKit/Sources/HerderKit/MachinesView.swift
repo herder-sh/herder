@@ -11,6 +11,8 @@ struct MachineRow: Hashable, Identifiable {
     let role: String?
     /// Whether the daemon runs on this Mac.
     let local: Bool
+    /// Where this device reaches it, "host:port".
+    var address: String?
     let connection: ConnectionState
     /// The latest ping's round trip.
     let latencyMs: UInt32?
@@ -38,6 +40,7 @@ struct MachineRow: Hashable, Identifiable {
                 hostId: machine.hostId, name: machine.name,
                 role: machine.role.map { $0 == .owner ? "owner" : "member" },
                 local: machine.hostId == local,
+                address: machine.address,
                 connection: machine.connection,
                 latencyMs: machine.connection == .connected ? machine.quality.lastRttMs : nil,
                 running: summary?.running ?? 0, cpu: summary?.cpu, memory: summary?.memory,
@@ -85,7 +88,9 @@ struct MachineRow: Hashable, Identifiable {
     static let loopback: Set<String> = ["localhost", "127.0.0.1", "::1"]
 
     /// Connected first, then by round trip.
-    var statusRank: Double {
+    var statusRank: Double { Self.rank(connection, latencyMs: latencyMs) }
+
+    static func rank(_ connection: ConnectionState, latencyMs: UInt32?) -> Double {
         switch connection {
         case .connected: Double(latencyMs ?? 0)
         case .connecting: 1_000_000
@@ -94,13 +99,54 @@ struct MachineRow: Hashable, Identifiable {
     }
 }
 
-/// The machines as a table, each row opening its page, then the vaults they back up to in a
-/// table of the same style; on compact width also the way to Skills and Providers.
+/// A row of Setup's machine table: a machine that runs sessions, or a vault.
+enum MachineLine: Hashable, Identifiable {
+    case machine(MachineRow)
+    case vault(VaultLine)
+
+    var id: String {
+        switch self {
+        case .machine(let row): "\(row.hostId)"
+        case .vault(let line): line.id
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .machine(let row): row.name
+        case .vault(let line): line.name
+        }
+    }
+
+    /// Connected first, then by round trip; a vault this device is not paired with last.
+    var statusRank: Double {
+        switch self {
+        case .machine(let row): row.statusRank
+        case .vault(.paired(let vault)): MachineRow.rank(vault.connection, latencyMs: nil)
+        case .vault(.unpaired): 3_000_000
+        }
+    }
+
+    var running: Int {
+        if case .machine(let row) = self { row.running } else { -1 }
+    }
+
+    /// "owner", "member", for the You column.
+    var role: String {
+        switch self {
+        case .machine(let row): row.role ?? ""
+        case .vault(.paired(let vault)): vault.owned ? "owner" : "member"
+        case .vault(.unpaired): ""
+        }
+    }
+}
+
+/// Setup's machines as one table, the vaults among them, each row opening its page; a vault
+/// this device is not paired with offers Add. It says what it means in plain words:
+/// "Connected", "Up to date"; an address goes in secondary text.
 struct MachinesView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
-    /// Leads to Skills and Providers, where they have no section of their own.
-    var showsSections = false
     @State private var unpaired: [UnpairedVault] = []
     @Environment(\.pages) private var pages
     #if os(iOS)
@@ -108,61 +154,21 @@ struct MachinesView: View {
     #endif
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                if showsSections {
-                    VStack(spacing: 10) {
-                        skillsLink
-                        providersLink
-                        peopleLink
-                        integrationsLink
-                    }
-                }
-                let rows = MachineRow.rows(fleet.machines, summaries: fleet.lists.machines)
-                let vaults = fleet.vaults.map(VaultLine.paired) + unpaired.map(VaultLine.unpaired)
-                // A device with no machines shows Welcome instead.
-                if !rows.isEmpty || !vaults.isEmpty {
-                    SortableTable("machines", rows: rows, sortedBy: TableSort(column: "Machine"),
-                                  columns: columns) { pages.open(.machine($0.hostId)) }
-                }
-                if !vaults.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        SectionHeading(title: "Vault")
-                        SortableTable("vaults", rows: vaults, sortedBy: TableSort(column: "Vault"),
-                                      columns: vaultColumns) { line in
-                            switch line {
-                            case .paired(let vault): pages.open(.vault(vault.hostId))
-                            case .unpaired(let vault): sheet = .addMachine(vault: vault)
-                            }
-                        }
-                    }
-                }
-                if fleet.shareLink != nil {
-                    SettingsGroup {
-                        AddRow(title: "Add a device…") { sheet = .addDevice }
-                            .accessibilityIdentifier("add-device")
-                    }
-                }
+        let rows = MachineRow.rows(fleet.machines, summaries: fleet.lists.machines)
+        let vaults = fleet.vaults
+        let lines = rows.map(MachineLine.machine)
+            + (vaults.map(VaultLine.paired) + unpaired.map(VaultLine.unpaired)).map(MachineLine.vault)
+        SortableTable("machines", rows: lines, sortedBy: TableSort(column: "Machine"),
+                      columns: columns(backups: Self.backups(vaults))) { line in
+            switch line {
+            case .machine(let row): pages.open(.machine(row.hostId))
+            case .vault(.paired(let vault)): pages.open(.vault(vault.hostId))
+            case .vault(.unpaired(let vault)): sheet = .addMachine(vault: vault)
             }
-            .pageColumn(width: .infinity)
         }
-        .background(.ground)
-        .refreshable { fleet.wake() }
         // Asked again as machines connect, and as a vault gets paired.
         .task(id: fleet.machines.filter { $0.connection == .connected }.map(\.hostId)) {
             unpaired = await fleet.unpairedVaults()
-        }
-        .navigationTitle("Fleet")
-        .toolbar {
-            #if os(iOS)
-            ActivityToolbarButton(fleet: fleet) { sheet = .activity }
-            Button("Reconnect", systemImage: "arrow.clockwise") { fleet.wake() }
-            if !AwsSignIn.machines(fleet.machines).isEmpty {
-                Button("AWS Sign-in", systemImage: "key") { sheet = .awsSignIn }
-            }
-            Button("Add a Machine", systemImage: "plus") { sheet = .addMachine() }
-                .accessibilityIdentifier("add-machine")
-            #endif
         }
     }
 
@@ -174,39 +180,47 @@ struct MachinesView: View {
         #endif
     }
 
-    /// The widths both tables share, so their first columns line up.
-    private enum Width {
-        static let name: CGFloat = 160
-        static let status: CGFloat = 80
-        static let count: CGFloat = 64
+    /// How current each host's backup is, by host: "Up to date", "6 h behind".
+    static func backups(_ vaults: [VaultStats]) -> [HostId: String] {
+        var backups: [HostId: String] = [:]
+        for vault in vaults {
+            for host in vault.hosts {
+                let behind = host.freshness.behind(now: vault.now)
+                backups[host.id] = behind == 0 ? "Up to date" : "\(Freshness.span(behind)) behind"
+            }
+        }
+        return backups
     }
 
-    private var columns: [SortableColumn<MachineRow>] {
-        var columns: [SortableColumn<MachineRow>] = [
-            SortableColumn("Machine", width: compact ? nil : Width.name, value: \.name) { row in
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(row.name).fontWeight(.semibold).lineLimit(1)
-                    let detail = [row.local ? "this Mac" : nil, row.role].compactMap(\.self).joined(separator: " · ")
-                    if !detail.isEmpty {
-                        Text(detail).font(Theme.meta).foregroundStyle(Theme.tertiary).lineLimit(1)
-                    }
-                }
+    private func columns(backups: [HostId: String]) -> [SortableColumn<MachineLine>] {
+        var columns: [SortableColumn<MachineLine>] = [
+            SortableColumn("Machine", width: compact ? nil : 260, value: \.name) { line in
+                MachineCell(line: line)
             },
-            SortableColumn("Status", width: Width.status, value: \.statusRank) { row in
-                StatusCell(connection: row.connection, text: Self.status(row))
-            },
-            SortableColumn("Running", width: Width.count, alignment: .trailing, value: \.running) { row in
-                HStack(spacing: 5) {
-                    if row.running > 0 { Circle().fill(Theme.running).frame(width: 6, height: 6) }
-                    Text("\(row.running)").monospacedDigit()
-                        .foregroundStyle(row.running > 0 ? Theme.text : Theme.tertiary)
+            SortableColumn("Status", width: 120, value: \.statusRank) { line in
+                switch line {
+                case .machine(let row):
+                    StatusCell(connection: row.connection, text: Self.status(row.connection),
+                               help: row.latencyMs.map { "\($0) ms" })
+                case .vault(.paired(let vault)):
+                    StatusCell(connection: vault.connection, text: Self.status(vault.connection))
+                case .vault(.unpaired):
+                    Text("–").foregroundStyle(Theme.tertiary)
                 }
             },
         ]
-        guard !compact else { return columns }
+        guard !compact else {
+            columns.append(SortableColumn("Running", width: 64, alignment: .trailing, value: \.running) { line in
+                RunningCell(line: line)
+            })
+            return columns
+        }
         columns += [
-            SortableColumn("Load", width: 96, alignment: .trailing, value: { $0.cpu ?? -1 }) { row in
-                if let cpu = row.cpu {
+            SortableColumn("Running", width: 64, alignment: .trailing, value: \.running) { line in
+                RunningCell(line: line)
+            },
+            SortableColumn("Load", width: 96, alignment: .trailing) { line in
+                if case .machine(let row) = line, let cpu = row.cpu {
                     HStack(spacing: 8) {
                         UsageBar(percent: cpu, height: 5).frame(width: 48)
                         Text("\(Int(cpu.rounded()))%").monospacedDigit().foregroundStyle(Theme.secondary)
@@ -215,86 +229,52 @@ struct MachinesView: View {
                     .help("CPU \(Int(cpu.rounded()))%" + (row.memory.map { " · memory \(Int($0.rounded()))%" } ?? ""))
                 } else {
                     Text("–").foregroundStyle(Theme.tertiary)
-                        .help(row.connection == .connected ? "This machine does not report its load." : "Offline")
                 }
             },
-            SortableColumn("CLIs", width: 88, value: { $0.updates ?? -1 }) { row in
-                switch row.updates {
-                case nil: Text("–").foregroundStyle(Theme.tertiary)
-                case 0?: Text("current").foregroundStyle(Theme.tertiary)
-                case let updates?:
-                    Button { pages.open(.machine(row.hostId)) } label: {
-                        Chip(text: updates == 1 ? "1 update" : "\(updates) updates")
+            SortableColumn("CLIs", width: 96) { line in
+                if case .machine(let row) = line, let updates = row.updates {
+                    if updates == 0 {
+                        Text("Up to date").foregroundStyle(Theme.secondary).lineLimit(1)
+                    } else {
+                        Button { pages.open(.machine(row.hostId)) } label: {
+                            Chip(text: updates == 1 ? "1 update" : "\(updates) updates")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Update on its page")
                     }
-                    .buttonStyle(.plain)
-                    .help("Update on its page")
+                } else {
+                    Text("–").foregroundStyle(Theme.tertiary)
                 }
             },
-            SortableColumn("Accounts", width: Width.count, alignment: .trailing, value: \.accounts) { row in
-                // Signed out needs you: an amber dot, as Running marks its count with a blue one.
-                HStack(spacing: 5) {
-                    if row.signedOut > 0 { Circle().fill(Theme.accent).frame(width: 6, height: 6) }
-                    Text("\(row.accounts)").monospacedDigit()
+            SortableColumn("Accounts", width: 72, alignment: .trailing) { line in
+                if case .machine(let row) = line {
+                    // Signed out needs you: an amber dot, as Running marks its count with a blue one.
+                    HStack(spacing: 5) {
+                        if row.signedOut > 0 { Circle().fill(Theme.accent).frame(width: 6, height: 6) }
+                        Text("\(row.accounts)").monospacedDigit()
+                    }
+                    .help(row.signedOut > 0 ? "\(row.signedOut) signed out" : "")
+                } else {
+                    Text("–").foregroundStyle(Theme.tertiary)
                 }
-                .help(row.signedOut > 0 ? "\(row.signedOut) signed out" : "")
             },
-            SortableColumn("Backs up to", value: { $0.backsUpTo ?? "" }) { row in
-                Text(row.backsUpTo ?? "–").foregroundStyle(row.backsUpTo == nil ? Theme.tertiary : Theme.secondary)
-                    .lineLimit(1)
+            SortableColumn("Backup", width: 150) { line in
+                switch line {
+                case .machine(let row):
+                    let backup = backups[row.hostId]
+                    Text(backup ?? "–").foregroundStyle(backup == nil ? Theme.tertiary : Theme.secondary).lineLimit(1)
+                        .help(row.backsUpTo.map { "Backs up to \($0)" } ?? "Not backed up")
+                case .vault(let vaultLine):
+                    BackupCell(line: vaultLine) {
+                        if case .unpaired(let vault) = vaultLine { sheet = .addMachine(vault: vault) }
+                    }
+                }
+            },
+            SortableColumn("You", value: \.role) { line in
+                Text(line.role.capitalized).foregroundStyle(Theme.secondary).lineLimit(1)
             },
         ]
         return columns
-    }
-
-    private var vaultColumns: [SortableColumn<VaultLine>] {
-        var columns: [SortableColumn<VaultLine>] = [
-            SortableColumn("Vault", width: compact ? nil : Width.name, value: \.name) { line in
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(line.name).fontWeight(.semibold).lineLimit(1)
-                    if case .unpaired = line {
-                        Text("Pair to manage its secrets").font(Theme.meta).foregroundStyle(Theme.tertiary).lineLimit(1)
-                    }
-                }
-            },
-        ]
-        if !compact {
-            columns += [
-                SortableColumn("Status", width: Width.status) { line in
-                    switch line {
-                    case .paired(let vault):
-                        StatusCell(connection: vault.connection, text: Self.status(vault.connection, latencyMs: nil))
-                    case .unpaired:
-                        Text("–").foregroundStyle(Theme.tertiary)
-                    }
-                },
-                SortableColumn("Hosts", width: Width.count, alignment: .trailing, value: \.hosts) { line in
-                    Text("\(line.hosts)").monospacedDigit()
-                },
-                SortableColumn("Sessions", width: 96, alignment: .trailing, value: { $0.sessions ?? -1 }) { line in
-                    Text(line.sessions.map(String.init) ?? "–").monospacedDigit()
-                        .foregroundStyle(line.sessions == nil ? Theme.tertiary : Theme.text)
-                },
-                SortableColumn("Size", width: 88, alignment: .trailing, value: { $0.bytes ?? 0 }) { line in
-                    Text(line.size ?? "–").monospacedDigit().foregroundStyle(line.size == nil ? Theme.tertiary : Theme.text)
-                },
-            ]
-        }
-        columns.append(SortableColumn("Backup", value: { $0.behind ?? -1 }) { line in
-            BackupCell(line: line) { if case .unpaired(let vault) = line { sheet = .addMachine(vault: vault) } }
-        })
-        return columns
-    }
-
-    /// The page's status, counting as the page shows: "All 3 machines connected · vault
-    /// caught up", or the vault furthest behind and by how much.
-    static func status(_ machines: [MachineSummary], vaults: [VaultStats]) -> String {
-        let backup: [String] = vaults.map { vault in
-            let name = vaults.count == 1 ? "vault" : vault.name
-            if vault.connection != .connected { return "\(name) offline" }
-            guard let host = vault.furthestBehind else { return "\(name) caught up" }
-            return "\(name) \(host.freshness.label(now: vault.now))"
-        }
-        return ([connections(machines)] + backup).joined(separator: " · ")
     }
 
     /// How many of the machines that run sessions are connected: "2 of 3 machines connected".
@@ -306,102 +286,68 @@ struct MachinesView: View {
         return hosts.count == 1 ? "1 machine connected" : "All \(hosts.count) machines connected"
     }
 
-    /// "12 ms" while connected, else the connection's state in a word or two.
-    static func status(_ row: MachineRow) -> String {
-        status(row.connection, latencyMs: row.latencyMs)
-    }
-
-    static func status(_ connection: ConnectionState, latencyMs: UInt32?) -> String {
+    /// A connection's state in a word or two: "Connected", "Connecting…", "Offline".
+    static func status(_ connection: ConnectionState) -> String {
         switch connection {
-        case .connected: latencyMs.map { "\($0) ms" } ?? "Connected"
+        case .connected: "Connected"
         case .connecting: "Connecting…"
         case .disconnected: "Offline"
         }
     }
+}
 
-    private var providersLink: some View {
-        NavigationLink { ProvidersView(fleet: fleet, sheet: $sheet) } label: {
-            Card(padding: 12) {
-                HStack(spacing: 10) {
-                    Image(systemName: "person.2").foregroundStyle(Theme.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Providers").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                        let gaps = SetUpGaps(ProviderAccounts(machines: fleet.machines))
-                        Text(gaps.isEmpty ? "Accounts, plan limits, usage and CLIs" : gaps.title)
-                            .font(.caption).foregroundStyle(Theme.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                }
+/// A row's first cell: its name, a vault marked as one, then what it is and where, the
+/// address in monospace.
+private struct MachineCell: View {
+    let line: MachineLine
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text(line.name).fontWeight(.semibold).lineLimit(1)
+                if case .vault = line { Pill(text: "vault").fixedSize() }
             }
-            .contentShape(.rect)
+            detail.font(Theme.meta).foregroundStyle(Theme.tertiary).lineLimit(1)
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("providers-link")
     }
 
-    private var peopleLink: some View {
-        Button { pages.open(.people(nil)) } label: {
-            Card(padding: 12) {
-                HStack(spacing: 10) {
-                    Image(systemName: "person.2.circle").foregroundStyle(Theme.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("People").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                        Text("Who can use each machine").font(.caption).foregroundStyle(Theme.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                }
+    @ViewBuilder private var detail: some View {
+        switch line {
+        case .machine(let row):
+            let address = row.address.map(MachineRow.host(of:))
+            switch (row.local, address) {
+            case (true, let address?): Text("this Mac · \(Text(address).font(Theme.monoSmall))")
+            case (true, nil): Text("this Mac")
+            case (false, let address?): Text(address).font(Theme.monoSmall)
+            case (false, nil): EmptyView()
             }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("people-link")
-    }
-
-    private var integrationsLink: some View {
-        // A page on the stack, so the bot pages it opens push over it rather than replace it.
-        Button { pages.open(.integrations) } label: {
-            Card(padding: 12) {
-                HStack(spacing: 10) {
-                    Image(systemName: Switcher.integrationsSymbol).foregroundStyle(Theme.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Integrations").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                        Text("Slack bots on your machines").font(.caption).foregroundStyle(Theme.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                }
+        case .vault(let vault):
+            switch vault {
+            case .paired: Text(vault.hosts == 1 ? "Backs up 1 machine" : "Backs up \(vault.hosts) machines")
+            case .unpaired: Text("Not on this device yet")
             }
-            .contentShape(.rect)
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("integrations-link")
-    }
-
-    private var skillsLink: some View {
-        NavigationLink { SkillsView(fleet: fleet, sheet: $sheet) } label: {
-            Card(padding: 12) {
-                HStack(spacing: 10) {
-                    Image(systemName: "book.closed").foregroundStyle(Theme.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Skills").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                        let count = SkillLibrary(fleet.machines).skills.count
-                        Text(count == 1 ? "1 skill in the library" : "\(count) skills in the library")
-                            .font(.caption).foregroundStyle(Theme.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                }
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("skills-link")
     }
 }
 
-/// A vault as a row of the Machines screen's vault table: one this device is paired with,
+/// How many sessions run on a machine, a blue dot by a count above none; a dash for a vault.
+private struct RunningCell: View {
+    let line: MachineLine
+
+    var body: some View {
+        if case .machine(let row) = line {
+            HStack(spacing: 5) {
+                if row.running > 0 { Circle().fill(Theme.running).frame(width: 6, height: 6) }
+                Text("\(row.running)").monospacedDigit()
+                    .foregroundStyle(row.running > 0 ? Theme.text : Theme.tertiary)
+            }
+        } else {
+            Text("–").foregroundStyle(Theme.tertiary)
+        }
+    }
+}
+
+/// A vault as a row of Setup's machine table: one this device is paired with,
 /// opening its page, or one its machines back up to that it is not, which it can pair with.
 enum VaultLine: Hashable, Identifiable {
     case paired(VaultStats)
@@ -451,10 +397,10 @@ enum VaultLine: Hashable, Identifiable {
         return vault.furthestBehind?.freshness.behind(now: vault.now) ?? 0
     }
 
-    /// "✓ caught up", or "work-mbp 6 h behind" for the host furthest behind; nil while unknown.
+    /// "Up to date", or "work-mbp 6 h behind" for the host furthest behind; nil while unknown.
     var freshness: String? {
         guard case .paired(let vault) = self, !vault.hosts.isEmpty else { return nil }
-        guard let host = vault.furthestBehind else { return "✓ caught up" }
+        guard let host = vault.furthestBehind else { return "Up to date" }
         return "\(host.name) \(host.freshness.label(now: vault.now))"
     }
 
@@ -472,13 +418,15 @@ enum VaultLine: Hashable, Identifiable {
 private struct StatusCell: View {
     let connection: ConnectionState
     let text: String
+    /// The latest ping's round trip, on hover.
+    var help: String?
 
     var body: some View {
         HStack(spacing: 6) {
             ConnectionMark(state: connection)
-            Text(text).foregroundStyle(Theme.secondary).monospacedDigit().lineLimit(1)
+            Text(text).foregroundStyle(Theme.secondary).lineLimit(1)
         }
-        .help(connection.label)
+        .help(help ?? connection.label)
     }
 }
 

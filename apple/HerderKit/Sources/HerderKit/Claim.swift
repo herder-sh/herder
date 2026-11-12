@@ -156,7 +156,7 @@ extension ClaimPlan {
 }
 
 extension Fleet {
-    /// Some machine you own is not claimed yet, so People offers Claim your machines.
+    /// Some machine you own is not claimed yet, so Setup offers Claim your machines.
     var hasUnclaimed: Bool { !ClaimPlan.unclaimed(machines).isEmpty }
 
     /// Opens Claim your machines in `sheet`, when a machine is left to claim.

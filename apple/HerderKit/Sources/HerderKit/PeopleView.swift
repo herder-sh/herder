@@ -1,120 +1,215 @@
 import Herder
 import SwiftUI
 
-/// The People page: one for the whole fleet. You, as a row that opens the You page; your
-/// teammates, each with a fleet-wide role; then who can do what on each machine, as a grid of
-/// menus on the Mac and a list of machines under each person on the iPhone. Machines never show
-/// as people.
+/// The People section of Setup: one row per person, you first, each with the line that says
+/// where they can do what and a menu of their role across your machines. A row opens the
+/// person's sheet (`PersonSheet`), or You for you. Machines never show as people.
 struct PeopleView: View {
     let directory: Directory
-    /// The grid, or on narrow screens a list of machines under each person.
-    var grid = true
     /// Sets a person's role on one machine, or on every machine for nil; a nil role takes
     /// their access away.
     let setRole: (Directory.Person, Role?, HostId?) -> Void
-    /// Folds a teammate who is really you into you, signed with their passkey.
-    let itsMe: (Directory.Person) -> Void
+    /// Shows a person: their sheet, or You for you.
+    let show: (Directory.Person) -> Void
     let invite: () -> Void
-    /// Opens the You page: your passkeys, devices and recovery.
-    let openYou: () -> Void
-    /// Opens Claim your machines, while a machine you own is not claimed yet.
-    var claim: (() -> Void)?
+
+    static let legend = "Owners can do everything, terminals included. Members drive sessions and never get a terminal."
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            section("You") {
-                youRow
-                if let claim {
-                    RowDivider()
-                    AddRow(title: "Claim your machines…", action: claim)
-                        .accessibilityIdentifier("people-claim")
-                }
-            }
-            section("Teammates") {
-                ForEach(directory.teammates) { person in
-                    personRow(person)
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeading(title: "People", count: directory.everyone.count)
+            SettingsGroup {
+                ForEach(directory.everyone) { person in
+                    row(person, mine: person.id == directory.me.id)
                     RowDivider()
                 }
                 AddRow(title: "Invite a teammate…", action: invite)
                     .accessibilityIdentifier("people-invite")
             }
-            if grid {
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionHeading(title: "Who can do what", tint: Theme.tertiary)
-                    AccessGrid(directory: directory, setRole: setRole)
-                    Text(Self.legend).font(Theme.body).foregroundStyle(Theme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 2)
-                }
-            } else {
-                ForEach(directory.everyone) { person in
-                    section(person.name) { AccessList(directory: directory, person: person, setRole: setRole) }
-                }
-                Text(Self.legend.replacingOccurrences(of: "Each cell", with: "Each machine's role")
-                    .replacingOccurrences(of: "an owner cell", with: "an owner"))
-                    .font(.footnote).foregroundStyle(Theme.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text(Self.legend).font(.footnote).foregroundStyle(Theme.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    static let legend = "Each cell is a menu. Owner gets everything, including terminals and secrets. Member drives "
-        + "sessions but never gets a terminal. — means no access. Changing an owner cell asks for Face ID."
-
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading(title: title, tint: Theme.tertiary)
-            SettingsGroup { content() }
-        }
-    }
-
-    /// You, with your role across the fleet and your devices; it opens the You page.
-    private var youRow: some View {
-        let me = directory.me
-        let devices = directory.devices.count == 1 ? "1 device" : "\(directory.devices.count) devices"
-        return Button(action: openYou) {
-            HStack(spacing: 12) {
-                Avatar(name: me.name, id: me.id, size: 30)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(me.name).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
-                    Text("\(directory.scope(me)) · passkeys, devices and recovery")
-                        .font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
-                }
-                Spacer(minLength: 8)
-                Text(devices).font(.caption).foregroundStyle(Theme.secondary)
-                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-            }
-            .padding(.horizontal, Theme.cellPadding)
-            .padding(.vertical, 11)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("people-you")
-    }
-
-    private func personRow(_ person: Directory.Person) -> some View {
+    private func row(_ person: Directory.Person, mine: Bool) -> some View {
         HStack(spacing: 12) {
-            Avatar(name: person.name, id: person.id, size: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(person.name).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
-                Text(directory.scope(person)).font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
+            Button { show(person) } label: {
+                HStack(spacing: 12) {
+                    Avatar(name: person.name, id: person.id, size: 30)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 8) {
+                            Text(person.name).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text).lineLimit(1)
+                            if mine { Pill(text: "You").fixedSize() }
+                        }
+                        Text(directory.scope(person)).font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
+                    }
+                    Spacer(minLength: 8)
+                }
+                .contentShape(.rect)
             }
-            Spacer(minLength: 8)
-            Menu {
-                Button("Owner of every machine") { setRole(person, .owner, nil) }
-                Button("Member of every machine") { setRole(person, .member, nil) }
-                Divider()
-                Button("It's me") { itsMe(person) }
-                Button("Remove from the fleet", role: .destructive) { setRole(person, nil, nil) }
-            } label: {
-                RoleBox(title: directory.fleetRole(person).title, menu: true)
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(person.name), \(directory.scope(person))")
+            let role = directory.fleetRole(person)
+            if mine {
+                RoleBox(title: role.title)
+            } else {
+                Menu {
+                    Button("Owner on all my machines") { setRole(person, .owner, nil) }
+                    Button("Member on all my machines") { setRole(person, .member, nil) }
+                    Button("Different per machine…") { show(person) }
+                } label: {
+                    RoleBox(title: role.title, menu: true)
+                }
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                .accessibilityLabel("Role of \(person.name)")
             }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .accessibilityLabel("Role of \(person.name)")
+            Button { show(person) } label: {
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                    .frame(width: 16, height: 28).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHidden(true)
         }
         .padding(.horizontal, Theme.cellPadding)
         .padding(.vertical, 11)
         .accessibilityIdentifier("person-\(person.id)")
+    }
+}
+
+/// A teammate's sheet: their role on all your machines or on each one, their devices, each
+/// signed out on its own, and Remove, which takes them off every machine you own.
+struct PersonSheet: View {
+    let directory: Directory
+    let person: Directory.Person
+    /// Why the last change failed.
+    var error: String?
+    /// Sets their role on one machine, or on every machine for nil; nil takes their access away.
+    let setRole: (Role?, HostId?) -> Void
+    let signOut: (Directory.Device) -> Void
+    /// Folds them into you, when they are really you.
+    let itsMe: () -> Void
+    @State private var perMachine = false
+    @State private var removing = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let devices = directory.devices(of: person)
+        DetailSheet(title: person.name, destructive: "Remove \(person.name)…", onDestructive: { removing = true }) {
+            Text(Self.summary(directory, person))
+                .font(.subheadline).foregroundStyle(Theme.secondary)
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(Theme.failure).accessibilityIdentifier("people-error")
+            }
+            Picker("Role", selection: role) {
+                Text("Owner on all").tag(Directory.FleetRole.owner)
+                Text("Member on all").tag(Directory.FleetRole.member)
+                Text("Per machine").tag(Directory.FleetRole.custom)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            if role.wrappedValue == .custom {
+                SettingsList(title: "Per machine") {
+                    ForEach(Array(directory.columns.enumerated()), id: \.element.id) { index, machine in
+                        if index > 0 { RowDivider() }
+                        machineRow(machine)
+                    }
+                }
+            }
+            if !devices.isEmpty {
+                SettingsList(title: "Devices") {
+                    ForEach(Array(devices.enumerated()), id: \.element.id) { index, device in
+                        if index > 0 { RowDivider() }
+                        deviceRow(device)
+                    }
+                }
+            }
+            SettingsList(title: "Same person?",
+                         caption: "If \(person.name) is you from an earlier setup, fold them into you. "
+                             + "Approve with the passkey \(person.name) was made with.") {
+                Button("This is me…", action: itsMe)
+                    .buttonStyle(.plain)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Theme.action)
+                    .padding(.horizontal, Theme.cellPadding)
+                    .frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
+                    .contentShape(.rect)
+            }
+        }
+        .confirmationDialog("Remove \(person.name) from all your machines?", isPresented: $removing,
+                            titleVisibility: .visible) {
+            Button("Remove \(person.name)", role: .destructive) {
+                setRole(nil, nil)
+                dismiss()
+            }
+        } message: {
+            Text("They can no longer use any machine you own, and their devices are signed out of them.")
+        }
+    }
+
+    /// "Different per machine · 2 devices".
+    nonisolated static func summary(_ directory: Directory, _ person: Directory.Person) -> String {
+        let role = switch directory.fleetRole(person) {
+        case .owner: "Owner on all your machines"
+        case .member: "Member on all your machines"
+        case .custom: "Different per machine"
+        }
+        let devices = directory.devices(of: person).count
+        return devices == 0 ? role : "\(role) · \(devices == 1 ? "1 device" : "\(devices) devices")"
+    }
+
+    /// Owner or Member on every machine sets it at once; Per machine shows each machine's.
+    private var role: Binding<Directory.FleetRole> {
+        Binding(get: { perMachine ? .custom : directory.fleetRole(person) }, set: { role in
+            perMachine = role == .custom
+            switch role {
+            case .owner: setRole(.owner, nil)
+            case .member: setRole(.member, nil)
+            case .custom: break
+            }
+        })
+    }
+
+    private func machineRow(_ machine: Directory.Column) -> some View {
+        HStack {
+            Text(machine.name).font(Theme.body).foregroundStyle(Theme.text).lineLimit(1)
+            Spacer()
+            Menu {
+                Button("Owner") { setRole(.owner, machine.id) }
+                Button("Member") { setRole(.member, machine.id) }
+                Button("No access") { setRole(nil, machine.id) }
+            } label: {
+                HStack(spacing: 4) {
+                    AccessLabel(role: person.roles[machine.id])
+                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                }
+                .contentShape(.rect)
+            }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            .accessibilityLabel("\(person.name) on \(machine.name)")
+        }
+        .padding(.horizontal, Theme.cellPadding)
+        .frame(minHeight: Theme.rowHeight)
+    }
+
+    private func deviceRow(_ device: Directory.Device) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: device.symbol).font(.body).foregroundStyle(Theme.secondary).frame(width: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(device.title).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
+                Group {
+                    if device.kind == .terminal {
+                        Text("Signed in with \(Text("herder login").font(Theme.monoSmall))")
+                    } else {
+                        Text(device.reach)
+                    }
+                }
+                .font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            SettingsButton(title: "Sign Out…", style: .quiet) { signOut(device) }
+        }
+        .padding(.horizontal, Theme.cellPadding)
+        .padding(.vertical, 9)
     }
 }
 
@@ -150,7 +245,7 @@ struct Pill: View {
     }
 }
 
-/// A role as a cell of the grid says it: Owner green, Member blue, no access a dash.
+/// A role on one machine: Owner green, Member blue, no access a dash.
 struct AccessLabel: View {
     let role: Role?
 
@@ -158,85 +253,5 @@ struct AccessLabel: View {
         Text(role == .owner ? "Owner" : role == .member ? "Member" : "—")
             .font(Theme.body)
             .foregroundStyle(role == .owner ? Theme.switchOn : role == .member ? Theme.action : Theme.tertiary)
-    }
-}
-
-/// The menu a cell opens: owner, member or no access on one machine.
-private struct AccessMenu<Label: View>: View {
-    let person: Directory.Person
-    let machine: Directory.Column
-    let setRole: (Directory.Person, Role?, HostId?) -> Void
-    @ViewBuilder var label: Label
-
-    var body: some View {
-        Menu {
-            Button("Owner") { setRole(person, .owner, machine.id) }
-            Button("Member") { setRole(person, .member, machine.id) }
-            Button("No access") { setRole(person, nil, machine.id) }
-        } label: {
-            label
-        }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-        .accessibilityLabel("\(person.name) on \(machine.name)")
-    }
-}
-
-/// People × machines: each cell a menu of the person's role there.
-struct AccessGrid: View {
-    let directory: Directory
-    let setRole: (Directory.Person, Role?, HostId?) -> Void
-
-    var body: some View {
-        Grid(horizontalSpacing: 0, verticalSpacing: 0) {
-            GridRow {
-                Text("Person").padding(.leading, Theme.cellPadding).frame(maxWidth: .infinity, alignment: .leading)
-                ForEach(directory.columns) { Text($0.name).lineLimit(1).frame(maxWidth: .infinity) }
-            }
-            .font(.caption)
-            .foregroundStyle(Theme.tertiary)
-            .frame(minHeight: 34)
-            ForEach(directory.everyone) { person in
-                Rectangle().fill(Theme.stroke).frame(height: 1).gridCellUnsizedAxes(.horizontal)
-                GridRow {
-                    Text(person.name).font(Theme.body).foregroundStyle(Theme.text)
-                        .padding(.leading, Theme.cellPadding)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    ForEach(directory.columns) { machine in
-                        AccessMenu(person: person, machine: machine, setRole: setRole) {
-                            AccessLabel(role: person.roles[machine.id])
-                                .frame(maxWidth: .infinity, minHeight: 36)
-                                .contentShape(.rect)
-                        }
-                    }
-                }
-                .frame(minHeight: 36)
-            }
-        }
-        .background(.card, in: .rect(cornerRadius: Theme.corner))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
-    }
-}
-
-/// One person's machines on the iPhone, the grid's row turned on its side.
-struct AccessList: View {
-    let directory: Directory
-    let person: Directory.Person
-    let setRole: (Directory.Person, Role?, HostId?) -> Void
-
-    var body: some View {
-        ForEach(Array(directory.columns.enumerated()), id: \.element.id) { index, machine in
-            if index > 0 { RowDivider() }
-            AccessMenu(person: person, machine: machine, setRole: setRole) {
-                HStack {
-                    Text(machine.name).font(Theme.body).foregroundStyle(Theme.text)
-                    Spacer()
-                    AccessLabel(role: person.roles[machine.id])
-                    Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(Theme.tertiary)
-                }
-                .padding(.horizontal, Theme.cellPadding)
-                .frame(minHeight: Theme.rowHeight)
-                .contentShape(.rect)
-            }
-        }
     }
 }
