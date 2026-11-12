@@ -359,7 +359,7 @@ struct YouPage: View {
                                 open: { shown = .passkey($0.id) },
                                 addPasskey: { shown = .add },
                                 signOut: { signingOut = $0 },
-                                addDevice: fleet.shareLink != nil ? { sheet = .addDevice } : nil,
+                                addDevice: fleet.canShare ? { sheet = .addDevice } : nil,
                                 recovery: { pages.open(.recovery) })
                 } else if people.failures.isEmpty {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 120)

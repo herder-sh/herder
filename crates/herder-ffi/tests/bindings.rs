@@ -56,7 +56,10 @@ async fn sign_in(daemon: &FakeDaemon, client: &Client, name: &str, role: Role) -
         .unwrap()
         .machines
         .remove(0);
-    let pending = client.sign_in(at.hosts, at.fingerprint).await.unwrap();
+    let pending = client
+        .sign_in(at.hosts, at.fingerprint, Vec::new())
+        .await
+        .unwrap();
     let (_, sign_in) = join.sign_in(name, &pending.registration().unwrap());
     pending.finish(sign_in).await.unwrap()
 }

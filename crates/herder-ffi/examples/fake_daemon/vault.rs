@@ -44,6 +44,7 @@ impl Vault {
         }
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let link = FleetLink {
+            person: super::support::person(super::support::OWNER),
             machines: vec![FleetMachine {
                 hosts: vec![listener.local_addr()?.to_string()],
                 fingerprint: tls.fingerprint().to_owned(),

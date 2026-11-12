@@ -162,7 +162,8 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<(String, SessionId)> {
             },
         )
         .await?;
-    let shared = demo::shared_link(&client).context("the sharing device has no machines")?;
+    let shared =
+        demo::shared_link(&client, support::OWNER).context("the sharing device has no machines")?;
     Ok((shared.to_string(), session_id))
 }
 

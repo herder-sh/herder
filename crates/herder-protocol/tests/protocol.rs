@@ -899,6 +899,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 rp_id: PASSKEY_RP_ID.into(),
                 challenge: "Y2hhbGxlbmdl".into(),
                 expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
+                allow_credentials: Vec::new(),
             },
             registration: Some(PasskeyCreation {
                 rp_id: PASSKEY_RP_ID.into(),
@@ -913,6 +914,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 rp_id: PASSKEY_RP_ID.into(),
                 challenge: "Y2hhbGxlbmdl".into(),
                 expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
+                allow_credentials: vec!["Y3JlZC0x".into(), "Y3JlZC0y".into()],
             },
             registration: None,
         },
@@ -1247,6 +1249,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     rp_id: PASSKEY_RP_ID.into(),
                     challenge: "Y2hhbGxlbmdl".into(),
                     expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
+                    allow_credentials: Vec::new(),
                 },
                 registration: None,
             },
@@ -1258,6 +1261,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     rp_id: PASSKEY_RP_ID.into(),
                     challenge: "Y2hhbGxlbmdl".into(),
                     expires_at: "2026-10-03T12:01:00Z".parse().unwrap(),
+                    allow_credentials: Vec::new(),
                 },
                 registration: Some(PasskeyCreation {
                     rp_id: PASSKEY_RP_ID.into(),

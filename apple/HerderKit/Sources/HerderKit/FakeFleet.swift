@@ -16,7 +16,8 @@ extension Fleet {
         for link in links.split(whereSeparator: \.isWhitespace).map(String.init) {
             guard let parsed = try? parseFleetLink(link: link) else { continue }
             for machine in parsed.machines where !known.contains(machine.fingerprint) {
-                _ = try? await signIn(hosts: machine.hosts, fingerprint: machine.fingerprint, with: passkey)
+                _ = try? await signIn(hosts: machine.hosts, fingerprint: machine.fingerprint,
+                                     passkeys: parsed.person.passkeys, with: passkey)
             }
         }
     }
@@ -44,7 +45,8 @@ struct RecordedPasskey: Authenticator {
         throw HerderError.Local(detail: "a recorded passkey creates no other")
     }
 
-    func assert(challenge: Data) async throws -> PasskeyAssertion {
-        try SoftwareSigning.assertion(key: key, credentialId: credentialId, userHandle: userHandle, challenge: challenge)
+    func assert(challenge: Data, allowing credentials: [Data]) async throws -> PasskeyAssertion {
+        if let error = notAllowed(credentialId, credentials) { throw error }
+        return try SoftwareSigning.assertion(key: key, credentialId: credentialId, userHandle: userHandle, challenge: challenge)
     }
 }

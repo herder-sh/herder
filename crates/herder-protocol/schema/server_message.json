@@ -4004,6 +4004,13 @@
       "description": "What a passkey signs: the arguments of the platform's assertion request.",
       "type": "object",
       "properties": {
+        "allow_credentials": {
+          "description": "The passkeys the assertion may come from, as credential ids, base64url: the\nplatform's `allowCredentials`. Empty for any passkey for [`PASSKEY_RP_ID`]. A daemon\nsends it empty; a client signing in from a shared fleet link fills it with the sharing\nperson's passkeys, so the device offers only theirs.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "challenge": {
           "description": "The challenge, base64url.",
           "type": "string"

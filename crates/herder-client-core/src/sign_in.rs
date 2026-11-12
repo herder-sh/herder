@@ -43,6 +43,7 @@ pub(crate) async fn start(
     client: &Client,
     hosts: &[String],
     fingerprint: &str,
+    passkeys: Vec<String>,
 ) -> Result<PendingSignIn, Error> {
     let (saved, device) =
         unsaved(hosts, fingerprint).map_err(|message| Error::Local { message })?;
@@ -58,7 +59,7 @@ pub(crate) async fn start(
         .await
         .map_err(|message| Error::Unreachable { message })?;
     let Opened::SignIn {
-        challenge,
+        mut challenge,
         registration,
     } = opened
     else {
@@ -67,6 +68,7 @@ pub(crate) async fn start(
             message: "the machine knew a device key made just now".to_owned(),
         });
     };
+    challenge.allow_credentials = passkeys;
     Ok(PendingSignIn {
         client: client.clone(),
         challenge,
@@ -82,7 +84,7 @@ pub(crate) async fn log_in(
     fingerprint: &str,
     shown: impl FnOnce(&str, Timestamp) + Send,
 ) -> Result<Machine, Error> {
-    let pending = start(client, hosts, fingerprint).await?;
+    let pending = start(client, hosts, fingerprint, Vec::new()).await?;
     let Some(mut connection) = pending.connection.into_inner() else {
         return Err(Error::Closed);
     };
@@ -99,7 +101,8 @@ pub(crate) async fn log_in(
 }
 
 impl PendingSignIn {
-    /// What an existing passkey signs, for every way of signing in but a login.
+    /// What an existing passkey signs, for every way of signing in but a login; its
+    /// `allow_credentials` are the passkeys [`Client::sign_in`] was given.
     pub fn challenge(&self) -> PasskeyChallenge {
         self.challenge.clone()
     }

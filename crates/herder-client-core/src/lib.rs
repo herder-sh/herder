@@ -24,9 +24,10 @@
 //! the file within a second of a change and starts, updates or stops machines to match.
 //! The offline cache is shared too; whichever client saves last wins, as it is only a cache.
 //!
-//! [`Client::share`] makes the `herder://fleet` link of every machine, which another device of
-//! the person signs in to each with its own passkey: it carries no code and grants nothing by
-//! itself. The new device gets its own key on each, revocable on its own.
+//! [`Client::share`] makes the `herder://fleet` link of every machine and of the person, by
+//! name and passkeys, which another device of theirs signs in to each with one of those
+//! passkeys: it carries no code and grants nothing by itself. The new device gets its own key on
+//! each, revocable on its own.
 //!
 //! # Connections
 //!
@@ -169,7 +170,7 @@ pub use catalog::{
     provider_catalog, provider_hints,
 };
 pub use demo::{Demo, DemoAnswer, DemoMachine};
-pub use link::{FleetLink, FleetMachine, LoginUri, OwnUri};
+pub use link::{FleetLink, FleetMachine, FleetPerson, LoginUri, OwnUri};
 use profile::SavedMachine;
 pub use sign_in::PendingSignIn;
 use supervisor::{Subscription, Supervisor};
@@ -178,7 +179,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 19;
+pub const CLIENT_API_VERSION: u32 = 20;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -508,16 +509,19 @@ impl Client {
     }
 
     /// Connects to the machine at `hosts` with certificate `fingerprint` under a new device
-    /// key, to sign in as a person: the machine answers with what the person's passkey signs.
-    /// Finish with [`PendingSignIn::finish`]. Fails with `Unreachable` when no address
-    /// answers, and `Rejected` when the machine refuses to let devices sign in.
+    /// key, to sign in as a person: the machine answers with what the person's passkey signs,
+    /// restricted to the credential ids `passkeys` (its `allow_credentials`), as a
+    /// [`FleetLink`]'s person names them; empty for any passkey. Finish with
+    /// [`PendingSignIn::finish`]. Fails with `Unreachable` when no address answers, and
+    /// `Rejected` when the machine refuses to let devices sign in.
     pub async fn sign_in(
         &self,
         hosts: Vec<String>,
         fingerprint: String,
+        passkeys: Vec<String>,
     ) -> Result<PendingSignIn, Error> {
         self.live()?;
-        sign_in::start(self, &hosts, &fingerprint).await
+        sign_in::start(self, &hosts, &fingerprint, passkeys).await
     }
 
     /// Signs this device in to the machine at `hosts` with certificate `fingerprint` without
@@ -556,15 +560,23 @@ impl Client {
         .map_err(|err| (addresses, err.to_string()))
     }
 
-    /// The link that shares this device's machines with another device of the person's: each
-    /// machine's name, addresses and fingerprint, which that device signs in to with its
-    /// passkey ([`Client::sign_in`]). It carries no code, so it grants nothing by itself. It
-    /// leaves out loopback addresses, and so a machine with no other, as no other device
-    /// reaches them. `None` while no machine is left, and in a demo.
-    pub fn share(&self) -> Option<FleetLink> {
+    /// The link that shares this device's machines with another device of the person's: the
+    /// person's name and passkeys, and each machine's name, addresses and fingerprint, which
+    /// that device signs in to with one of those passkeys ([`Client::sign_in`]). It carries no
+    /// code, so it grants nothing by itself. It leaves out loopback addresses, and so a
+    /// machine with no other, as no other device reaches them.
+    ///
+    /// The person is the one this device acts for on its first connected machine that has
+    /// one, as `list_people` there and on every other connected machine of the same person
+    /// lists them: the name from the first that answers, and every passkey any of them has.
+    /// Fails with `Local` while no machine is left, in a demo, and while no connected machine
+    /// knows this device as a person, and with the last machine's error when none answers.
+    pub async fn share(&self) -> Result<FleetLink, Error> {
         // A demo's machines are nowhere another device could reach.
         if self.inner.demo {
-            return None;
+            return Err(Error::Local {
+                message: "a demo has no machines to share".to_owned(),
+            });
         }
         let machines: Vec<FleetMachine> = self
             .lock()
@@ -583,7 +595,69 @@ impl Client {
                 })
             })
             .collect();
-        (!machines.is_empty()).then_some(FleetLink { machines })
+        if machines.is_empty() {
+            return Err(Error::Local {
+                message: "this device has no machine another device can reach".to_owned(),
+            });
+        }
+        let person = self.person().await?;
+        Ok(FleetLink { person, machines })
+    }
+
+    /// The person this device acts for, for [`Client::share`].
+    async fn person(&self) -> Result<FleetPerson, Error> {
+        let connected: Vec<(HostId, PersonId)> = self
+            .machines()
+            .into_iter()
+            .filter(|machine| machine.connection == ConnectionState::Connected)
+            .filter_map(|machine| Some((machine.host_id, machine.person_id?)))
+            .collect();
+        let Some((_, me)) = connected.first().cloned() else {
+            return Err(Error::Local {
+                message: "no connected machine knows this device as a person".to_owned(),
+            });
+        };
+        let mut person: Option<FleetPerson> = None;
+        let mut failure = None;
+        for (host_id, _) in connected.into_iter().filter(|(_, id)| *id == me) {
+            let listed =
+                tokio::time::timeout(SHARE_TIMEOUT, self.send(host_id, CommandBody::ListPeople))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(Error::Unreachable {
+                            message: format!(
+                                "the machine did not list its people within {SHARE_TIMEOUT:?}"
+                            ),
+                        })
+                    });
+            let info = match listed {
+                Ok(CommandResult::People { people }) => {
+                    people.into_iter().find(|info| info.person_id == me)
+                }
+                Ok(_) => None,
+                Err(err) => {
+                    failure = Some(err);
+                    None
+                }
+            };
+            let Some(info) = info else { continue };
+            let person = person.get_or_insert_with(|| FleetPerson {
+                name: info.name,
+                passkeys: Vec::new(),
+            });
+            for key in info.passkeys {
+                if !person.passkeys.contains(&key.credential_id) {
+                    person.passkeys.push(key.credential_id);
+                }
+            }
+        }
+        match person {
+            Some(person) if !person.passkeys.is_empty() => Ok(person),
+            _ => Err(failure.unwrap_or_else(|| Error::Local {
+                message: "no connected machine lists this device's person with a passkey"
+                    .to_owned(),
+            })),
+        }
     }
 
     /// Shows a machine as `name` on this device from now on, and saves that.
@@ -1023,6 +1097,9 @@ impl Client {
 
 /// How often a client checks whether another client sharing its config dir changed the profile.
 const PROFILE_POLL: Duration = Duration::from_secs(1);
+
+/// Time a connected machine gets to list its people for [`Client::share`].
+const SHARE_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl Inner {
     fn lock(&self) -> MutexGuard<'_, Vec<Arc<Supervisor>>> {
