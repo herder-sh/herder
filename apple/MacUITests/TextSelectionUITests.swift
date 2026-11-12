@@ -59,9 +59,9 @@ final class TextSelectionUITests: XCTestCase {
     func testDraggingAcrossAPromptCopiesAllOfIt() throws {
         open(Self.session)
         let prompt = message(Self.prompt)
-        // The transcript opens at its end, where this first message can sit under the session's
+        // The transcript opens at its end, where this prompt's top can sit under the session's
         // header, which then takes the press.
-        scrollToStart(showing: prompt)
+        reveal(prompt)
         drag(across: prompt)
         XCTAssertEqual(copied(), Self.prompt)
     }
@@ -135,16 +135,20 @@ final class TextSelectionUITests: XCTestCase {
         return element
     }
 
-    /// Scrolls the transcript back to its start, where `element`, a message there, sits clear
-    /// of the session's header. Scrolls the other way when the first try left it where it was,
-    /// as one way is already the end.
-    private func scrollToStart(showing element: XCUIElement) {
+    /// Scrolls the transcript back, a little at a time, until `element`'s top is a third of the
+    /// way down it: clear of the session's header, which the transcript scrolls under, with room
+    /// below for a message of a few lines. Turns around when a step does not move it down, as at
+    /// the transcript's end.
+    private func reveal(_ element: XCUIElement) {
         let transcript = app.descendants(matching: .any)["transcript"].firstMatch
-        let before = element.frame.minY
-        transcript.scroll(byDeltaX: 0, deltaY: 2000)
-        if element.frame.minY <= before {
-            transcript.scroll(byDeltaX: 0, deltaY: -2000)
+        let clear = transcript.frame.minY + transcript.frame.height / 3
+        var step: CGFloat = 40
+        for _ in 0..<40 where element.frame.minY < clear {
+            let before = element.frame.minY
+            transcript.scroll(byDeltaX: 0, deltaY: step)
+            if element.frame.minY <= before { step = -step }
         }
+        XCTAssertGreaterThanOrEqual(element.frame.minY, clear, "the transcript did not scroll back to the message")
     }
 
     /// Presses just left of `element`'s first letter and drags to just past its last one, as a
