@@ -3,16 +3,16 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case board, chats, skills, providers, machines, people, integrations
+    case board, chats, skills, providers, setup, integrations
     case project(String)
     /// The bots' conversations: one bot's, by its `BotGroup.id`, or every bot's for `nil`.
     case bots(String?)
 }
 
 /// The tab bar's tabs on compact width: the sidebar's sections, with the projects as one tab,
-/// and Skills, Providers, Integrations and a vault inside Machines.
+/// and Skills, Providers and Integrations inside Setup.
 enum CompactTab: Hashable, CaseIterable {
-    case board, chats, projects, machines
+    case board, chats, projects, setup
 
     /// The tab that shows a sidebar entry.
     init(_ item: SidebarItem) {
@@ -20,7 +20,7 @@ enum CompactTab: Hashable, CaseIterable {
         case .project: self = .projects
         case .chats, .bots: self = .chats
         case .board: self = .board
-        case .skills, .providers, .machines, .people, .integrations: self = .machines
+        case .skills, .providers, .setup, .integrations: self = .setup
         }
     }
 
@@ -29,7 +29,7 @@ enum CompactTab: Hashable, CaseIterable {
         case .board: "Board"
         case .chats: "Chats"
         case .projects: "Projects"
-        case .machines: "Fleet"
+        case .setup: "Setup"
         }
     }
 
@@ -38,7 +38,7 @@ enum CompactTab: Hashable, CaseIterable {
         case .board: "checklist"
         case .chats: Switcher.chatSymbol
         case .projects: "square.stack.3d.up"
-        case .machines: "server.rack"
+        case .setup: Switcher.setupSymbol
         }
     }
 }
@@ -46,6 +46,8 @@ enum CompactTab: Hashable, CaseIterable {
 /// The fleet: tabs on iPhone; herder's own sidebar and panes on iPad and the Mac.
 struct FleetView: View {
     let fleet: Fleet
+    /// Everyone on the machines: Setup lists them, and what needs you there counts on them.
+    @State private var people: FleetPeople
     @State private var sheet: AppSheet?
     @State private var item: SidebarItem = .board
     /// The pages open over the section, on the Mac and iPad.
@@ -56,7 +58,7 @@ struct FleetView: View {
     @State private var projectsPath: [NavRoute] = []
     @State private var boardPath: [NavRoute] = []
     @State private var chatsPath: [NavRoute] = []
-    @State private var machinesPath: [NavRoute] = []
+    @State private var setupPath: [NavRoute] = []
     @State private var boardQuery = ""
     /// The session a `herder://session` link asked for, until its machine says whether it has it.
     @State private var linked: SessionKey?
@@ -77,6 +79,15 @@ struct FleetView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
+    init(fleet: Fleet) {
+        self.fleet = fleet
+        _people = State(initialValue: FleetPeople(fleet: fleet))
+        #if os(iOS)
+        // A tab's badge counts what needs you, in the colour that means it.
+        UITabBarItem.appearance().badgeColor = UIColor(Urgency.needsYou.color)
+        #endif
+    }
+
     var body: some View {
         screens
             .environment(\.signPasskey, signPasskey)
@@ -86,6 +97,11 @@ struct FleetView: View {
             .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
             #endif
             .onChange(observing: { fleet.machines }) { _, _ in resolveLink() }
+            // Who is on each machine, asked again as machines connect and as a sheet closes.
+            .task(observing: { fleet.machines.filter { $0.connection == .connected }.map(\.hostId) }) {
+                await people.reload(fleet.machines)
+            }
+            .onChange(of: sheet) { if sheet == nil { Task { await people.reload(fleet.machines) } } }
             // A TUI's terminal or secret request comes up as soon as its machine has it, and
             // goes once the machine closes it.
             .onChange(observing: { fleet.actionRequests }, initial: true) { _, requests in
@@ -135,7 +151,7 @@ struct FleetView: View {
                    presenting: linkProblem) { problem in
                 switch problem {
                 case .unpaired:
-                    Button("Add to Fleet") { sheet = .pair(.machine) }
+                    Button("Add a Machine") { sheet = .pair(.machine) }
                     Button("Cancel", role: .cancel) {}
                 default:
                     Button("OK", role: .cancel) {}
@@ -244,7 +260,7 @@ struct FleetView: View {
 
     private var shell: some View {
         DesktopShell(fleet: fleet, sheet: $sheet, item: $item, pages: $pages, session: $session, draft: $draft,
-                     opened: opened)
+                     people: people, opened: opened)
     }
 
     /// Shows a session just created from a draft: beside the Board or Chats it
@@ -284,12 +300,12 @@ struct FleetView: View {
         }
     }
 
-    /// Shows a machine's page: over the section on the Mac and iPad, on the Fleet tab on iPhone.
+    /// Shows a machine's page: over the section on the Mac and iPad, on the Setup tab on iPhone.
     private func openMachine(_ hostId: HostId) {
         #if os(iOS)
         if sizeClass == .compact {
-            tab = .machines
-            machinesPath = [.page(.machine(hostId))]
+            tab = .setup
+            setupPath = [.page(.machine(hostId))]
             return
         }
         #endif
@@ -326,7 +342,7 @@ struct FleetView: View {
     /// Closes a session's pane, and pops it and what was pushed over it on every tab.
     private func close(_ key: SessionKey) {
         if session == key { session = nil }
-        for path in [$projectsPath, $boardPath, $chatsPath, $machinesPath] {
+        for path in [$projectsPath, $boardPath, $chatsPath, $setupPath] {
             if let index = path.wrappedValue.firstIndex(of: .session(key)) { path.wrappedValue.removeSubrange(index...) }
         }
     }
@@ -337,7 +353,7 @@ struct FleetView: View {
             ForEach(CompactTab.allCases, id: \.self) { tab in
                 self.tab(tab)
                     .tabItem { Label(tab.title, systemImage: tab.symbol) }
-                    .modifier(BoardBadge(fleet: fleet, shown: tab == .board))
+                    .modifier(TabBadge(fleet: fleet, people: people, tab: tab))
                     .tag(tab)
                     // A page pushes onto the tab it opens from.
                     .environment(\.pages, PageNavigator(scope: "tab.\(tab)",
@@ -352,7 +368,7 @@ struct FleetView: View {
         case .board: $boardPath
         case .chats: $chatsPath
         case .projects: $projectsPath
-        case .machines: $machinesPath
+        case .setup: $setupPath
         }
     }
 
@@ -391,12 +407,12 @@ struct FleetView: View {
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $boardPath)
-        case .machines:
-            NavigationStack(path: $machinesPath) {
-                MachinesView(fleet: fleet, sheet: $sheet, showsSections: true)
+        case .setup:
+            NavigationStack(path: $setupPath) {
+                SetupView(fleet: fleet, people: people, sheet: $sheet, showsSections: true)
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
-            .environment(\.sessionPath, $machinesPath)
+            .environment(\.sessionPath, $setupPath)
         }
     }
 
@@ -438,15 +454,15 @@ struct ConnectionLine: View {
 /// A device with no machines: the two ways to get some. The common one first, herder on
 /// another device of yours, whose Add a Device shows a code; then a new machine, claimed.
 struct EmptyFleet: View {
-    /// Opens Add to Fleet on what it adds.
+    /// Opens Add a Machine on what it adds.
     let add: (PairKind) -> Void
 
     #if os(iOS)
     static let deviceAction = "Scan Its Code"
-    static let deviceDetail = "On it, open People › You › Add a device, and scan the code it shows."
+    static let deviceDetail = "On it, open Setup › Add a device, and scan the code it shows."
     #else
     static let deviceAction = "Paste Its Link"
-    static let deviceDetail = "On it, open People › You › Add a device, and paste the link it shows."
+    static let deviceDetail = "On it, open Setup › Add a device, and paste the link it shows."
     #endif
 
     var body: some View {
@@ -694,13 +710,20 @@ private struct NewChatButton: View {
     }
 }
 
-/// The Board tab's badge: how many requests wait for you.
-private struct BoardBadge: ViewModifier {
+/// A tab's badge: on the Board, how many requests wait for you; on Setup, how many things
+/// there need you.
+private struct TabBadge: ViewModifier {
     let fleet: Fleet
-    let shown: Bool
+    let people: FleetPeople
+    let tab: CompactTab
 
     func body(content: Content) -> some View {
-        content.badge(shown ? fleet.lists.requests.count : 0)
+        let count = switch tab {
+        case .board: fleet.lists.requests.count
+        case .setup: SetupProblem.found(fleet: fleet, directory: people.directory(fleet.machines)).count
+        case .chats, .projects: 0
+        }
+        return content.badge(count)
     }
 }
 #endif

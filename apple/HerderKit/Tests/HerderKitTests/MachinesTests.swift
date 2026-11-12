@@ -83,13 +83,13 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
         let machines = sampleFleetMachines()
         let lists = Lists(machines: machines, sessions: [:])
         let rows = MachineRow.rows(machines, summaries: lists.machines, localNames: ["127.0.0.1"])
-        // The vault shows in its own section.
+        // The vault is a line of its own (`MachineLine.vault`).
         #expect(rows.map(\.name) == ["work-mbp", "trash-can-01", "draugelis"])
         let mbp = rows[0], can = rows[1], draugelis = rows[2]
         #expect(mbp.local && !can.local)
         #expect(mbp.role == "owner" && draugelis.role == "member")
         #expect(mbp.latencyMs == 12)
-        #expect(MachinesView.status(can) == "38 ms")
+        #expect(MachinesView.status(can.connection) == "Connected")
         #expect(can.cpu == 78)
         #expect(mbp.updates == 0)
         #expect(can.updates == 2)
@@ -103,7 +103,7 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
         machines[1].connection = .disconnected(error: "refused")
         let row = try #require(MachineRow.rows(machines, summaries: []).first { $0.name == "trash-can-01" })
         #expect(row.latencyMs == nil)
-        #expect(MachinesView.status(row) == "Offline")
+        #expect(MachinesView.status(row.connection) == "Offline")
         #expect(row.statusRank > MachineRow.rows(machines, summaries: [])[0].statusRank)
     }
 
@@ -128,7 +128,7 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
 
         machines[3].hosts[0].online = true
         let caughtUp = VaultLine.paired(try #require(VaultStats(machine: machines[3], sessions: [:], now: now)))
-        #expect(caughtUp.freshness == "✓ caught up" && caughtUp.behind == 0 && caughtUp.why == nil)
+        #expect(caughtUp.freshness == "Up to date" && caughtUp.behind == 0 && caughtUp.why == nil)
     }
 
     @Test func anUnpairedVaultRowKnowsOnlyWhoBacksUpToIt() {
@@ -152,18 +152,6 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
         #expect(MachineRow.thisMac(machines, names: ["studio"]) == nil)
     }
 
-    @Test func thePageCountsItsMachinesApartFromTheVault() throws {
-        let now = Date.now
-        var machines = sampleFleetMachines(now: now)
-        let summaries = Lists(machines: machines, sessions: [:]).machines
-        let behind = try #require(VaultStats(machine: machines[3], sessions: [:], now: now))
-        #expect(MachinesView.status(summaries, vaults: [behind]) == "All 3 machines connected · vault 6 h behind")
-        machines[3].hosts[0].online = true
-        let caughtUp = try #require(VaultStats(machine: machines[3], sessions: [:], now: now))
-        #expect(MachinesView.status(summaries, vaults: [caughtUp]) == "All 3 machines connected · vault caught up")
-        #expect(MachinesView.status([], vaults: []) == "No machines yet")
-    }
-
     @Test func thisMacIsTheOneItsAddressNames() {
         let names: Set<String> = ["localhost", "127.0.0.1", "::1", "studio"]
         #expect(MachineRow.isLocal("127.0.0.1:7447", names: names))
@@ -178,7 +166,7 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
 import AppKit
 import SwiftUI
 
-/// Draws the Machines screen with its vault section, and the vault's page, and attaches them;
+/// Draws Setup's machine table, the vault a row among the machines, and the vault's page, and attaches them;
 /// with `HERDER_SCREENSHOT_DIR` set, also writes them there as `machines.png` and
 /// `vault-page.png`.
 @MainActor struct MachinesScreenshotTests {
@@ -192,7 +180,8 @@ import SwiftUI
 
     @Test func drawsTheMachinesTableAndItsVault() async throws {
         let fleet = try fleet()
-        try await shoot(MachinesView(fleet: fleet, sheet: .constant(nil)), named: "machines.png", height: 420)
+        try await shoot(MachinesView(fleet: fleet, sheet: .constant(nil)).padding(.horizontal, 20), named: "machines.png",
+                        height: 420)
     }
 
     @Test func drawsTheVaultPage() async throws {

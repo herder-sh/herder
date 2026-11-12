@@ -134,8 +134,8 @@ final class ScreenshotTests: XCTestCase {
             }
         }
 
-        // The fleet.
-        if section("Fleet") {
+        // Setup: what needs you, you, the machines with the vault among them, and the people.
+        if section("Setup") {
             settle()
             #if os(macOS)
             shoot("mac-machines")
@@ -148,6 +148,17 @@ final class ScreenshotTests: XCTestCase {
             #else
             shoot("ios-machines")
             #endif
+            // A teammate's sheet: their role on all your machines or on each, and their devices.
+            let teammate = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Kim, '")).firstMatch
+            if wait(teammate, "Kim in People") {
+                reveal(teammate)
+                press(teammate)
+                settle()
+                shoot(platform("person-sheet"))
+                let done = app.buttons["Done"].firstMatch
+                if wait(done, "the person sheet's Done") { press(done) }
+                settle()
+            }
             // Add a Device: the code another device of yours scans to sign in to these machines.
             let add = app.buttons["add-device"].firstMatch
             if wait(add, "Add a device") {
@@ -395,10 +406,11 @@ final class ScreenshotTests: XCTestCase {
         #if os(macOS)
         guard section("Integrations") else { return }
         #else
-        // On the iPhone, Integrations is a link at the top of Fleet, not a tab.
-        guard section("Fleet") else { return }
+        // On the iPhone, Integrations is a link at the foot of Setup, not a tab.
+        guard section("Setup") else { return }
         let link = app.descendants(matching: .any)["integrations-link"].firstMatch
         guard wait(link, "Integrations link") else { return }
+        reveal(link)
         press(link)
         #endif
         // The Mac's table names a row after its machine and bot.
@@ -447,10 +459,11 @@ final class ScreenshotTests: XCTestCase {
         #if os(macOS)
         guard section("Skills") else { return }
         #else
-        // On the iPhone, Skills is a link at the top of Fleet, not a tab.
-        guard section("Fleet") else { return }
+        // On the iPhone, Skills is a link at the foot of Setup, not a tab.
+        guard section("Setup") else { return }
         let link = app.descendants(matching: .any)["skills-link"].firstMatch
         guard wait(link, "Skills link") else { return }
+        reveal(link)
         press(link)
         #endif
         guard wait(app.staticTexts["review-pr"].firstMatch, "the skill library") else { return }
@@ -488,10 +501,11 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot("mac-providers")
         #else
-        // On the iPhone, Providers is a link at the top of Fleet, not a tab.
-        guard section("Fleet") else { return }
+        // On the iPhone, Providers is a link at the foot of Setup, not a tab.
+        guard section("Setup") else { return }
         let link = app.descendants(matching: .any)["providers-link"].firstMatch
         guard wait(link, "Providers link") else { return }
+        reveal(link)
         press(link)
         settle()
         shoot("ios-providers")

@@ -86,17 +86,8 @@ final class ScrollPerfTests: XCTestCase {
         measureScrolling()
     }
 
-    func testFleet() {
-        section("Fleet")
-        measureScrolling()
-    }
-
-    func testPeople() {
-        #if os(macOS)
-        section("People")
-        #else
-        link("people-link")
-        #endif
+    func testSetup() {
+        section("Setup")
         measureScrolling()
     }
 
@@ -119,7 +110,7 @@ final class ScrollPerfTests: XCTestCase {
         XCTAssertTrue(devbox.waitForExistence(timeout: 10))
         press(devbox)
         #else
-        section("Fleet")
+        section("Setup")
         let devbox = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'devbox'")).firstMatch
         XCTAssertTrue(devbox.waitForExistence(timeout: 10))
         reveal(devbox)
@@ -177,9 +168,9 @@ final class ScrollPerfTests: XCTestCase {
     }
 
     #if os(iOS)
-    /// Opens one of the Fleet tab's links, such as Providers.
+    /// Opens one of the Setup tab's links, such as Providers.
     private func link(_ id: String) {
-        section("Fleet")
+        section("Setup")
         let link = app.descendants(matching: .any)[id].firstMatch
         XCTAssertTrue(link.waitForExistence(timeout: 10), "no \(id)")
         reveal(link)
