@@ -74,7 +74,7 @@ struct InviteTests {
         #expect(link.machines.map(\.name) == ["devbox", "studio"])
         #expect(link.role == .owner && link.label == "Lina" && link.by == "Tomas")
         #expect(maker.expiresAt == Date(timeIntervalSince1970: 100))
-        #expect(maker.failures == ["nas: timed out"])
+        #expect(maker.failures == ["nas: No address answered: timed out"])
         maker.reset()
         #expect(maker.link == nil && maker.failures.isEmpty)
     }
