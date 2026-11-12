@@ -239,27 +239,41 @@ Providers › **Update All**, a CLI's Install or Update, and **Install & Set Up*
 Activity with `Fleet.install`. The daemon checks the CLI's version again before it closes an
 install's terminal, so the machine's versions are current when the job ends.
 
-**Adding a device** (`AddDevice.swift`). A device with machines offers **Add a Device** in
+**Adding a device** (`AddDevice.swift`, P22.5). Two halves of one flow, sharing the
+per-machine rows and their marks. A device with machines offers **Add a Device** in
 Setup's header and on the You page's Devices (§8.9), once a machine knows it as a person
-(`Fleet.canShare`). Its sheet (`AddDeviceSheet`) shows the `herder://fleet` link of
-`Client::share()`, which names you and your passkeys as your connected machines list them, as a
-QR code with Copy (or why it could not make one), and three steps: install herder on the other
-device, scan this code with it (I already use herder, or Add a machine), approve with your passkey,
-the same one, synced by iCloud Keychain or a password manager. The link grants nothing by
-itself. The other device takes it from the scanner, a paste or an opened link, and
-`JoinFleetSheet` lists every machine in it, "Sign in to 5 machines as you": one passkey
-assertion per machine, restricted to the passkeys the link names (`allowCredentials`), so Face
-ID offers only the sharing person's (`FleetJoin.person` has their name and credential ids for
-the sheet to show) (each asks its own challenge, so Face ID asks once per machine), each row
-ending signed in, already on this device (never signed in again), can't reach it (on Tailscale?),
-or refused with the reason the machine gives (`SignInRefusal`): "Knows you by another
+(`Fleet.canShare`). Its sheet (`AddDeviceSheet`, "Add a device") shows the `herder://fleet` link
+of `Client::share()`, which names you and your passkeys as your connected machines list them, as
+a large QR code (or why it could not make one), then **Shares your 5 machines** with each machine's name as a chip, and one line:
+the code grants nothing by itself, it holds names and addresses, not keys, and each machine lets
+in only a device with your passkey. The footer has the hint (on a Mac, copy the link and paste
+it), **Copy Link** and **Done**.
+
+The other device takes the link from the camera, the scanner, a paste or an opened link, and
+`JoinFleetSheet` (`FleetJoin`) opens on a progress bar, **Scan · Sign in · Done**, and "Sign in
+to your 5 machines". Under **As**, a card names the person the link is from (`FleetJoin.person`):
+only their passkeys may sign (`allowCredentials`), so Face ID offers only those. Rows are machine **names**,
+the address only in secondary monospace text. Every machine is reached first, before any Face
+ID (`Fleet.reach` opens a sign-in connection and drops it): a green dot reads Ready, and one no
+address answers says why at once, "Can't reach it: Tailscale may be off on this iPhone" for a
+Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48, `*.ts.net`) or "may be on another
+network" otherwise, with its fix and **Try Again**. One button, **Sign In with Face ID**, signs
+in to every machine reached; Face ID still asks once per machine, as each asks its own challenge,
+and the hint says so ("mini-k8s can wait"). Afterwards the title reads "Signed in to 3 of 5" and
+each row that needs you gives its cause and fix inline, with **Try Again** on the row: can't
+reach it; or refused with the reason the machine gives (`SignInRefusal`): "Knows you by another
 passkey: Tomas in 1Password" (pick that one; the place comes from the passkey's AAGUID,
 `passkeyStore`), "Ask Tomas to add you" (it knows nobody by this passkey; it names its owners,
 or says to run `herder claim` when it has none to name), or "Face ID was skipped, try again"
 (the password manager signed without user verification, which machines require). Any other
-refusal shows the machine's error. Amber marks what needs you; red only the unexplained.
-Closing Face ID stops; **Try Again** retries what is left. A device with no machines shows
-Welcome instead (§4.10). `AddDeviceScreenshotTests` draws both sheets.
+refusal shows the machine's error under a red ✗; amber `!` marks only what has a known fix. **Done for Now** closes with what is left named in the hint; once nothing
+is left the title reads "This iPhone is on all 5 machines" and the bar reaches Done. Marks:
+✓ green on it, `!` amber needs you, ✗ red unexplained, a spinner while reached or signing in,
+a green dot ready.
+Closing Face ID stops; **Sign In** again signs in to what is left. A machine this device has
+already shows "Already on this iPhone" and is never signed in again. A device with no machines
+shows Welcome instead (§4.10). `AddDeviceScreenshotTests` draws Add a device, and the receiving
+side before Face ID, with what is left, and done.
 
 **Inviting a teammate** (`InviteSheet.swift`, P22.8). People's **Invite a teammate…** opens Invite a
 Teammate: an optional name (it only labels the link), Member or Owner as a segmented control with
