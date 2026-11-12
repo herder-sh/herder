@@ -30,6 +30,10 @@ enum AppSheet: Identifiable, Hashable {
     case invite(HostId)
     /// Approving a new machine's `herder://own` link or a terminal's `herder://login` one.
     case approve(ApprovalRequest)
+    /// Add a Device: the link of this device's machines, for another device of yours.
+    case addDevice
+    /// Signing in to the machines of another device's `herder://fleet` link.
+    case join(FleetLink)
     /// Claim your machines: offered once on launch, and from People and Fleet, while a machine
     /// you own is not claimed.
     case claim(ClaimPlan)
@@ -43,7 +47,7 @@ extension AppSheet {
               present: @escaping (AppSheet) -> Void) -> some View {
         switch self {
         case .pair(let kind, let vault):
-            AddMachineSheet(fleet: fleet, kind: kind, vault: vault) { present(.approve($0)) }
+            AddMachineSheet(fleet: fleet, kind: kind, vault: vault) { present($0.sheet) }
         case .newSession: ProjectPicker(fleet: fleet, newProject: false, picked: drafted)
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
         case .addAccount: AddAccountSheet(fleet: fleet)
@@ -58,6 +62,10 @@ extension AppSheet {
             ApproveSheet(fleet: fleet, request: request, open: openMachine) { present(.pair(.vault)) }
         case .claim(let plan):
             ClaimSheet(fleet: fleet, plan: plan)
+        case .addDevice:
+            AddDeviceSheet(link: fleet.shareLink)
+        case .join(let link):
+            JoinFleetSheet(fleet: fleet, link: link)
         }
     }
 }

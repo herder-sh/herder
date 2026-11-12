@@ -3,6 +3,8 @@ import SwiftUI
 
 /// What Add to Fleet adds: the first choice its sheet asks for.
 enum PairKind: CaseIterable, Hashable {
+    /// Every machine another device of yours has, which its Add a Device shows as a QR code.
+    case device
     /// A machine running herder, which `herder claim` on it offers to you.
     case machine
     /// A vault: backups and secrets for the machines that link to it.
@@ -10,13 +12,15 @@ enum PairKind: CaseIterable, Hashable {
 
     var title: String {
         switch self {
-        case .machine: "A machine running herder"
+        case .device: "From another device"
+        case .machine: "A new machine"
         case .vault: "A vault"
         }
     }
 
     var detail: String {
         switch self {
+        case .device: "Where you use herder already"
         case .machine: "Runs your sessions"
         case .vault: "Backs up and keeps secrets"
         }
@@ -24,6 +28,7 @@ enum PairKind: CaseIterable, Hashable {
 
     var symbol: String {
         switch self {
+        case .device: "laptopcomputer.and.iphone"
         case .machine: "desktopcomputer"
         case .vault: "lock.shield"
         }
@@ -34,14 +39,15 @@ enum PairKind: CaseIterable, Hashable {
     static let command = "herder claim"
 }
 
-/// Adds to the fleet: a machine or a vault, which `herder claim` on it offers to you, or a
-/// vault this device knows of, signed in to with your passkey. Opens on `kind`, with `vault`
-/// chosen.
+/// Adds to the fleet: the machines another device of yours shares, a machine or a vault, which
+/// `herder claim` on it offers to you, or a vault this device knows of, signed in to with your
+/// passkey. Opens on `kind`, with `vault` chosen; on another device's machines, with the camera
+/// on, where there is one.
 struct AddMachineSheet: View {
     let fleet: Fleet
-    /// Hands the `herder://own` or `herder://login` link pasted or scanned to the approval, which
-    /// takes the sheet's place.
-    let approve: (ApprovalRequest) -> Void
+    /// Hands the link pasted or scanned to its sheet, the approval or signing in to another
+    /// device's machines, which takes this one's place.
+    let approve: (PairLink) -> Void
     @State private var kind: PairKind
     @State private var vault: UnpairedVault?
     @State private var text: String
@@ -51,10 +57,13 @@ struct AddMachineSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     init(fleet: Fleet, kind: PairKind, vault: UnpairedVault?, text: String = "",
-         approve: @escaping (ApprovalRequest) -> Void) {
+         approve: @escaping (PairLink) -> Void) {
         self.fleet = fleet
         self.approve = approve
         _kind = State(initialValue: kind)
+        #if os(iOS)
+        _scanning = State(initialValue: kind == .device && text.isEmpty)
+        #endif
         _vault = State(initialValue: vault)
         _text = State(initialValue: text)
     }
@@ -74,7 +83,7 @@ struct AddMachineSheet: View {
         #endif
     }
 
-    private var input: ApprovalRequest? { approvalRequest(in: text) }
+    private var input: PairLink? { pairLink(in: text) }
     /// The known vault chosen, which you sign in to rather than claim.
     private var chosen: UnpairedVault? { kind == .vault ? vault : nil }
 
@@ -102,7 +111,11 @@ struct AddMachineSheet: View {
     }
 
     private var hint: String {
-        input != nil && chosen == nil ? "Next, check the code matches the terminal’s." : ""
+        switch (input, chosen) {
+        case (.approve?, nil): "Next, check the code matches the terminal’s."
+        case (.fleet?, nil): "Next, sign in to them with your passkey."
+        default: ""
+        }
     }
 
     private var scan: (() -> Void)? {
@@ -140,11 +153,19 @@ struct AddMachineForm: View {
     /// Opens the camera, where there is one.
     var scan: (() -> Void)?
 
-    private var input: ApprovalRequest? { approvalRequest(in: text) }
+    private var input: PairLink? { pairLink(in: text) }
 
     var body: some View {
         KindPicker(kind: $kind)
         switch kind {
+        case .device:
+            NumberedStep(number: 1, title: "On your other device, open Add a Device") {
+                Text("It is under People › You, and on the Mac under Fleet too.")
+                    .font(.footnote).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            NumberedStep(number: 2, title: deviceTitle) { inputField }
+            linkStep(3)
         case .machine:
             claimSteps(from: 1, on: "the machine")
         case .vault:
@@ -171,24 +192,39 @@ struct AddMachineForm: View {
 
     #if os(iOS)
     private let pasteTitle = "Scan the QR code it prints, or paste the link"
+    private let deviceTitle = "Scan the code it shows, or paste its link"
     #else
     private let pasteTitle = "Paste the link it prints"
+    private let deviceTitle = "Copy its link, and paste it here"
     #endif
 
     /// Run `herder claim` on `machine`, paste or scan its link, check what it names.
     @ViewBuilder private func claimSteps(from number: Int, on machine: String) -> some View {
         NumberedStep(number: number, title: "On \(machine), run") { CommandBox(command: PairKind.command) }
         NumberedStep(number: number + 1, title: pasteTitle) { inputField }
-        if let input {
-            NumberedStep(number: number + 2, title: "Check, then approve with your passkey") {
-                LinkCard(request: input, paired: paired)
+        linkStep(number + 2)
+    }
+
+    /// What the link pasted names, to check before going on.
+    @ViewBuilder private func linkStep(_ number: Int) -> some View {
+        switch input {
+        case .approve(let request)?:
+            NumberedStep(number: number, title: "Check, then approve with your passkey") {
+                LinkCard(request: request, paired: paired)
             }
+        case .fleet(let link)?:
+            NumberedStep(number: number, title: "Then sign in with your passkey") {
+                FleetLinkCard(link: link, paired: paired)
+            }
+        case nil:
+            EmptyView()
         }
     }
 
     private var inputField: some View {
         VStack(alignment: .leading, spacing: 8) {
-            InputBox(placeholder: "herder://own?host=…&fp=…&code=…", text: $text, mono: true, lines: 1...4)
+            InputBox(placeholder: kind == .device ? "herder://fleet?host=…&fp=…" : "herder://own?host=…&fp=…&code=…",
+                     text: $text, mono: true, lines: 1...4)
                 .accessibilityIdentifier("pairing-link")
             HStack(spacing: 8) {
                 if let scan {
@@ -198,7 +234,7 @@ struct AddMachineForm: View {
                 PillButton(title: "Paste", symbol: "doc.on.clipboard") { text = Clipboard.string ?? text }
             }
             if input == nil && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("That is not the link `\(PairKind.command)` prints.")
+                Text(kind == .device ? "That is not the link Add a Device shows." : "That is not the link `\(PairKind.command)` prints.")
                     .font(.footnote).foregroundStyle(Theme.failure)
             }
         }
@@ -344,6 +380,40 @@ private struct LinkCard: View {
         case .machine: "Full control: sessions, terminals and secrets. Nobody else gets in until you add them."
         case .login: "It gets its own sign-in under you, listed with your devices."
         }
+    }
+}
+
+/// The machines another device's link lists, to sign in to next: how many, where, and which
+/// this device has already.
+private struct FleetLinkCard: View {
+    let link: FleetLink
+    let paired: (String) -> String?
+
+    var body: some View {
+        let added = link.machines.filter { paired($0.fingerprint) != nil }.count
+        let new = link.machines.count - added
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: PairKind.device.symbol)
+                    .foregroundStyle(Theme.text)
+                    .frame(width: 22, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(new == 1 ? "1 machine to sign in to as you" : "\(new) machines to sign in to as you")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                        .accessibilityIdentifier("pair-grant")
+                    Text(added == 0 ? "Each lets you in with your passkey." : "\(added) on this device already.")
+                        .font(.footnote).foregroundStyle(Theme.secondary)
+                }
+            }
+            Text(link.machines.map { FleetJoin.address($0) }.joined(separator: " · "))
+                .font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
+                .lineLimit(3)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(.card, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }
 

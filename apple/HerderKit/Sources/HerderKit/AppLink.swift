@@ -1,13 +1,16 @@
 import Foundation
 import Herder
 
-/// What a `herder://` link opens: a session, as the bots' "Open in herder" button links it, or
-/// the approval a new machine's or a terminal's link asks for.
+/// What a `herder://` link opens: a session, as the bots' "Open in herder" button links it, the
+/// approval a new machine's or a terminal's link asks for, or the machines another device of
+/// yours shares.
 enum AppLink: Equatable {
     /// `herder://session?host=…&session=…`.
     case session(SessionKey)
     /// `herder://own?…` of `herder claim`, or `herder://login?…` of `herder login`.
     case approve(ApprovalRequest)
+    /// `herder://fleet?…` of Add a Device on another device of yours.
+    case join(FleetLink)
 
     /// Nil for a link of another scheme or kind, or one missing what it needs.
     init?(url: URL) {
@@ -22,9 +25,12 @@ enum AppLink: Equatable {
             }
             guard let host = value("host"), let session = value("session") else { return nil }
             self = .session(SessionKey(hostId: host, sessionId: session))
-        case "own", "login":
-            guard let request = ApprovalRequest(url: url) else { return nil }
-            self = .approve(request)
+        case "own", "login", "fleet":
+            switch PairLink(url: url) {
+            case .approve(let request)?: self = .approve(request)
+            case .fleet(let link)?: self = .join(link)
+            case nil: return nil
+            }
         default:
             return nil
         }
