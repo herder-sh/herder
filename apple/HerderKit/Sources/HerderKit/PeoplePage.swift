@@ -207,6 +207,7 @@ struct PeoplePage: View {
     @State private var people: FleetPeople
     @State private var error: String?
     @Environment(\.signPasskey) private var sign
+    @Environment(\.pages) private var pages
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -232,12 +233,11 @@ struct PeoplePage: View {
                                        ?? directory.columns.filter { !$0.vault || role != .member }
                                    run { try await people.setRole(role, of: person, on: hosts, machines: machines, sign: sign) }
                                },
-                               revoke: { device in run { try await people.signOut(device, machines: machines, sign: sign) } },
                                itsMe: { person in
                                    run { try await people.itsMe(person, me: directory.me.id, machines: machines, sign: sign) }
                                },
                                invite: invite,
-                               addDevice: fleet.shareLink != nil ? { sheet = .addDevice } : nil,
+                               openYou: { pages.open(.you) },
                                claim: fleet.hasUnclaimed ? { fleet.offerClaim(in: $sheet) } : nil)
                 } else if people.failures.isEmpty {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 120)
