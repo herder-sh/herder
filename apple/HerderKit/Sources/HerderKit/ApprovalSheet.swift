@@ -15,6 +15,10 @@ struct ApprovalSheet: View {
     var open: () -> Void = {}
     var linkVault: () -> Void = {}
     var biometry = Biometry.name
+    /// Offers a new passkey, for someone new to herder: on a device with none of your machines.
+    var offersNewPasskey = false
+    @State private var newName = Fleet.deviceUserName
+    @State private var naming = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -80,6 +84,31 @@ struct ApprovalSheet: View {
         }
         .padding(.top, 8)
         .accessibilityIdentifier("decline")
+        if offersNewPasskey, request.kind == .machine { newPasskey }
+    }
+
+    /// New to herder: your name, then a passkey made now. Anyone with a passkey uses it instead,
+    /// or each of their devices would become a person of its own.
+    @ViewBuilder private var newPasskey: some View {
+        if naming {
+            TextField("Your name", text: $newName)
+                .textFieldStyle(.roundedBorder)
+                .padding(.top, 14)
+                .accessibilityIdentifier("new-passkey-name")
+            let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+            WideButton(title: "Create Passkey as \(name.isEmpty ? "…" : name)") {
+                Task { await approval.approve(newPasskey: name) }
+            }
+            .disabled(name.isEmpty || approval.state == .signing)
+            .padding(.top, 8)
+        } else {
+            Button("New to herder? Create a passkey") { naming = true }
+                .font(.footnote)
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 14)
+        }
     }
 
     @ViewBuilder private var approved: some View {
@@ -183,7 +212,7 @@ struct ApproveSheet: View {
         self.open = open
         self.linkVault = linkVault
         _approval = State(initialValue: Approval(request, authenticator: passkeyAuthenticator()) {
-            try await fleet.approve(request, with: $0)
+            try await fleet.approve(request, with: $0, newPasskey: $1)
         })
     }
 
@@ -191,7 +220,8 @@ struct ApproveSheet: View {
         ApprovalSheet(approval: approval,
                       vaults: fleet.machines.filter { !$0.hosts.isEmpty }.map(\.name),
                       open: { if let machine = approval.machine { open(machine) } },
-                      linkVault: linkVault)
+                      linkVault: linkVault,
+                      offersNewPasskey: fleet.machines.isEmpty)
             // A vault setup waiting on it fails once it closes unapproved; approved, it went on.
             .onDisappear { fleet.settleClaim(approval.request, .failure(CancellationError())) }
     }
