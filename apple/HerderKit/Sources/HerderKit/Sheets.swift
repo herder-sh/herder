@@ -68,7 +68,7 @@ extension AppSheet {
         case .claim(let plan):
             ClaimSheet(fleet: fleet, plan: plan)
         case .addDevice:
-            AddDeviceSheet(link: fleet.shareLink)
+            AddDeviceSheet(link: fleet.client.share())
         case .join(let link):
             JoinFleetSheet(fleet: fleet, link: link)
         case .acceptInvite(let link):
