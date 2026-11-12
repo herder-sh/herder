@@ -111,8 +111,9 @@ impl PendingSignIn {
     }
 
     /// Signs in with `sign_in` and saves the machine once it accepts, replacing it if paired
-    /// before. Fails with `Rejected` when the machine refuses, e.g. `forbidden` for an
-    /// assertion it cannot verify or a wrong code. A login, which waits for an app's
+    /// before. Fails with `SignInRefused` when the machine says why it refused the passkey,
+    /// and `Rejected` when it refuses otherwise, e.g. `forbidden` for an assertion it cannot
+    /// verify or a wrong code. A login, which waits for an app's
     /// approval, goes through [`Client::log_in`] instead. A sign-in finishes once: calling
     /// this again fails with `Closed`.
     pub async fn finish(&self, sign_in: SignIn) -> Result<Machine, Error> {
@@ -175,7 +176,16 @@ impl Connection {
 /// The error for `answer`, which is not what the sign-in waited for.
 fn unexpected(answer: ServerMessage) -> Error {
     let info = match answer {
-        ServerMessage::Error { error } => error,
+        ServerMessage::Error {
+            error,
+            refusal: Some(refusal),
+        } => {
+            return Error::SignInRefused {
+                refusal,
+                message: error.message,
+            };
+        }
+        ServerMessage::Error { error, .. } => error,
         _ => ErrorInfo {
             code: ErrorCode::Internal,
             message: "the machine answered the sign-in with something else".to_owned(),

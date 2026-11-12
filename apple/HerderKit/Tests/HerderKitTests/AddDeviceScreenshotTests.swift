@@ -14,7 +14,8 @@ import Testing
     nonisolated static let widths = [(560.0, "mac"), (390.0, "ios")]
 
     /// The names the sharing device gives the machines, as its link carries them.
-    nonisolated static let names = [1: "devbox", 2: "nas", 3: "build-01", 4: "alice’s vault", 5: "mac-mini"]
+    nonisolated static let names = [1: "devbox", 2: "nas", 3: "build-01", 4: "alice’s vault", 5: "mac-mini",
+                                    6: "studio", 7: "mini-k8s"]
 
     static func machine(_ n: Int, port: Int = 7447) -> FleetMachine {
         FleetMachine(hosts: ["100.64.0.\(n):\(port)"], fingerprint: String(repeating: String(format: "%02x", n), count: 32),
@@ -33,20 +34,26 @@ import Testing
 
     @Test(arguments: widths)
     func drawsSigningInToAnotherDevicesMachines(width: Double, platform: String) async throws {
-        let join = FleetJoin(FleetLink(machines: (1...5).map { Self.machine($0) }),
+        let join = FleetJoin(FleetLink(machines: (1...7).map { Self.machine($0) }),
                              known: { $0 == Self.machine(5).fingerprint ? "mac-mini" : nil }) { machine in
             switch machine.hosts[0] {
             case "100.64.0.2:7447": throw HerderError.Unreachable(detail: "timed out")
-            case "100.64.0.4:7447": throw HerderError.Rejected(info: ErrorInfo(code: .forbidden, message: "unknown"))
+            case "100.64.0.4:7447":
+                throw HerderError.SignInRefused(refusal: .unknownPerson(owners: ["Alice"]), detail: "unknown")
+            case "100.64.0.6:7447":
+                throw HerderError.SignInRefused(refusal: .otherPasskey(passkeys: [
+                    RefusedPasskey(label: "Tomas", aaguid: "bada5566-a7aa-401f-bd96-45619a55120d"),
+                ]), detail: "another passkey")
+            case "100.64.0.7:7447": throw HerderError.SignInRefused(refusal: .userNotVerified, detail: "not verified")
             default: return machine.name ?? "?"
             }
         }
         await join.run()
         try shoot(SheetPreview(title: join.title, subtitle: JoinFleetView.subtitle, hint: join.summary(biometry: "Face ID")) {
-            JoinFleetRows(join: join)
+            JoinFleetRows(join: join, biometry: "Face ID")
         } footer: {
             JoinFleetButtons(join: join, biometry: "Face ID")
-        }, width: width, height: 900, named: "\(platform)-join-fleet.png")
+        }, width: width, height: 1180, named: "\(platform)-join-fleet.png")
     }
 
     @Test(arguments: widths)

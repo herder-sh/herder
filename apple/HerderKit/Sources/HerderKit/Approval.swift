@@ -210,8 +210,15 @@ extension Fleet {
         }
         do {
             return try await pending.finish(signIn: .passkey(assertion: assertion)).hostId
-        } catch HerderError.Rejected(let info) where info.code == .forbidden {
-            throw HerderError.Local(detail: "\(request.name) does not know this passkey yet. Approve a machine that knows you first, then this one.")
+        } catch HerderError.SignInRefused(let refusal, _) {
+            switch refusal {
+            case .otherPasskey(let passkeys):
+                throw HerderError.Local(detail: "\(request.name) knows you by another passkey: \(FleetJoin.passkeyPlaces(passkeys)). Approve with that one.")
+            case .unknownPerson:
+                throw HerderError.Local(detail: "\(request.name) does not know you yet. Approve a machine that knows you first, then this one.")
+            case .userNotVerified:
+                throw HerderError.Local(detail: "\(Biometry.name) was skipped. Approve again, and confirm with \(Biometry.name).")
+            }
         }
     }
 

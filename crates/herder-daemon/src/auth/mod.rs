@@ -46,8 +46,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use herder_protocol::{
     CommandBody, DeviceId, ErrorCode, ErrorInfo, NewPerson, PasskeyAssertion, PasskeyChallenge,
-    PasskeyCreation, PersonCard, PersonId, PersonInfo, PersonPasskey, Role, SignIn, Timestamp,
-    UserDevice, UserId, UserInfo,
+    PasskeyCreation, PersonCard, PersonId, PersonInfo, PersonPasskey, RefusedPasskey, Role, SignIn,
+    SignInRefusal, Timestamp, UserDevice, UserId, UserInfo,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use webauthn_rs::prelude::AuthenticationResult;
 
-use passkeys::{Key, Passkeys};
+use passkeys::{Key, Passkeys, Reason, Refused};
 
 use crate::data_dir::write_private;
 use crate::ws::Identity;
@@ -179,6 +179,24 @@ impl Person {
     }
 }
 
+/// A sign-in this daemon refused, with why when the passkey is the reason.
+#[derive(Debug)]
+pub struct SignInRefused {
+    /// The error to answer with.
+    pub error: ErrorInfo,
+    /// Why the passkey was refused, for the device to say.
+    pub refusal: Option<SignInRefusal>,
+}
+
+impl From<ErrorInfo> for SignInRefused {
+    fn from(error: ErrorInfo) -> Self {
+        Self {
+            error,
+            refusal: None,
+        }
+    }
+}
+
 /// A person a passkey proved, not yet on this daemon: [`Auth::verify_new_person`].
 pub struct ProvenPerson {
     /// Who they are.
@@ -268,6 +286,45 @@ impl Users {
                     .find(|person| person.person_id.as_str() == user_id.as_str())
                     .map(|person| person.name.as_str())
             })
+    }
+
+    /// What a device refused for `reason` is told, from who is on this daemon.
+    fn refusal(&self, reason: Reason) -> SignInRefusal {
+        match reason {
+            Reason::UnknownPerson => {
+                let users = self
+                    .users
+                    .iter()
+                    .filter(|user| user.role == Role::Owner)
+                    .map(|user| (user.created_at, user.name.clone()));
+                let people = self
+                    .people
+                    .iter()
+                    .filter(|person| person.role == Role::Owner)
+                    .map(|person| (person.created_at, person.name.clone()));
+                let mut owners: Vec<_> = users.chain(people).collect();
+                owners.sort_by_key(|(created_at, _)| *created_at);
+                SignInRefusal::UnknownPerson {
+                    owners: owners.into_iter().map(|(_, name)| name).collect(),
+                }
+            }
+            Reason::OtherPasskey(person_id) => SignInRefusal::OtherPasskey {
+                passkeys: self
+                    .person(&person_id)
+                    .map(|person| {
+                        person
+                            .passkeys
+                            .iter()
+                            .map(|key| RefusedPasskey {
+                                label: person.name.clone(),
+                                aaguid: key.aaguid.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            },
+            Reason::UserNotVerified => SignInRefusal::UserNotVerified,
+        }
     }
 
     fn has_owner(&self) -> bool {
@@ -802,16 +859,16 @@ impl Auth {
     /// Verifies the passkey `person` holds, by its registration or by an assertion over a
     /// fresh challenge, without adding them to this daemon.
     pub fn verify_new_person(&self, person: &NewPerson) -> Result<ProvenPerson, ErrorInfo> {
-        self.prove(person, false)
+        Ok(self.prove(person, false)?)
     }
 
     /// [`Auth::verify_new_person`] for a claim, whose assertion may sign a batch of daemons'
     /// challenges, this daemon's among them: one Face ID claims every machine.
     pub fn verify_claimer(&self, person: &NewPerson) -> Result<ProvenPerson, ErrorInfo> {
-        self.prove(person, true)
+        Ok(self.prove(person, true)?)
     }
 
-    fn prove(&self, person: &NewPerson, batch: bool) -> Result<ProvenPerson, ErrorInfo> {
+    fn prove(&self, person: &NewPerson, batch: bool) -> Result<ProvenPerson, Refused> {
         let name = user_name(&person.name)
             .map_err(|err| bad_request(&err.to_string()))?
             .to_owned();
@@ -871,16 +928,31 @@ impl Auth {
         client: &str,
         method: SignIn,
         connection: &CancellationToken,
-    ) -> Result<Identity, ErrorInfo> {
+    ) -> Result<Identity, SignInRefused> {
         let mut state = self.lock();
         if state.users.device(fingerprint).is_some() {
-            return Err(bad_request("this device is paired already"));
+            return Err(bad_request("this device is paired already").into());
         }
         let mut users = state.users.clone();
         let now = Instant::now();
+        // A new person is not on this daemon, nor known by another passkey, by definition;
+        // only their verification can be at fault.
+        let unverified = |refused: Refused| match refused.reason {
+            Some(Reason::UserNotVerified) => SignInRefused {
+                error: refused.error,
+                refusal: Some(SignInRefusal::UserNotVerified),
+            },
+            _ => refused.error.into(),
+        };
         let person_id = match method {
             SignIn::Passkey { assertion } => {
-                let asserted = self.passkeys.verify(&assertion, |id| users.keys(id))?;
+                let asserted = self
+                    .passkeys
+                    .verify(&assertion, |id| users.keys(id))
+                    .map_err(|refused| SignInRefused {
+                        refusal: refused.reason.map(|reason| users.refusal(reason)),
+                        error: refused.error,
+                    })?;
                 note(&mut users, &asserted.person_id, &asserted.result);
                 asserted.person_id
             }
@@ -892,9 +964,10 @@ impl Auth {
                     return Err(forbidden(
                         "the code is wrong or expired, or this daemon has an owner already; \
                          run `herder claim` on it for a new code",
-                    ));
+                    )
+                    .into());
                 }
-                let proven = self.verify_new_person(&person)?;
+                let proven = self.prove(&person, false).map_err(unverified)?;
                 let person_id = proven.person_id.clone();
                 add_person(&mut users, proven, Role::Owner);
                 person_id
@@ -903,13 +976,18 @@ impl Auth {
                 let key = normalize(&invite);
                 let role = match state.invites.get(&key) {
                     Some((role, expires)) if *expires > now => *role,
-                    _ => return Err(forbidden("the invite is invalid, expired or already used")),
+                    _ => {
+                        return Err(
+                            forbidden("the invite is invalid, expired or already used").into()
+                        );
+                    }
                 };
-                let proven = self.verify_new_person(&person)?;
+                let proven = self.prove(&person, false).map_err(unverified)?;
                 if users.person(&proven.person_id).is_some() {
                     return Err(conflict(
                         "you are on this daemon already; sign in with your passkey",
-                    ));
+                    )
+                    .into());
                 }
                 let person_id = proven.person_id.clone();
                 add_person(&mut users, proven, role);
@@ -917,11 +995,11 @@ impl Auth {
                 person_id
             }
             SignIn::StartLogin => {
-                return Err(bad_request("a login waits for an approval instead"));
+                return Err(bad_request("a login waits for an approval instead").into());
             }
         };
         let Some(person) = users.person(&person_id).cloned() else {
-            return Err(forbidden("this passkey's person is not on this daemon"));
+            return Err(forbidden("this passkey's person is not on this daemon").into());
         };
         let device = new_device(&person.user_id(), fingerprint, client);
         users.devices.push(device.clone());
@@ -2050,7 +2128,10 @@ mod tests {
 mod people_tests {
     use std::time::Duration;
 
-    use herder_protocol::{ErrorCode, NewPerson, PersonCard, PersonPasskey, Role, SignIn, UserId};
+    use herder_protocol::{
+        ErrorCode, NewPerson, PersonCard, PersonPasskey, RefusedPasskey, Role, SignIn,
+        SignInRefusal, UserId,
+    };
     use tokio_util::sync::CancellationToken;
 
     use herder_protocol::CommandBody;
@@ -2066,6 +2147,14 @@ mod people_tests {
     }
 
     fn sign_in(auth: &Auth, fingerprint: &str, method: SignIn) -> Result<Identity, ErrorInfo> {
+        refused(auth, fingerprint, method).map_err(|refused| refused.error)
+    }
+
+    fn refused(
+        auth: &Auth,
+        fingerprint: &str,
+        method: SignIn,
+    ) -> Result<Identity, super::SignInRefused> {
         auth.sign_in(fingerprint, "test", method, &CancellationToken::new())
     }
 
@@ -2442,6 +2531,86 @@ mod people_tests {
         // It survives a restart.
         let reopened = Auth::open(_tmp.path()).unwrap();
         assert_eq!(reopened.people()[0].passkeys, auth.people()[0].passkeys);
+    }
+
+    #[test]
+    fn a_refused_passkey_sign_in_says_why() {
+        let (_tmp, auth) = open();
+        let (tomas, first) = claim(&auth);
+        let tomas_id = tomas.person_id.unwrap();
+        let by_passkey = |assertion| {
+            refused(&auth, "fp-phone", SignIn::Passkey { assertion })
+                .map(|_| ())
+                .unwrap_err()
+        };
+
+        // A passkey of nobody here: the device is told whom to ask.
+        let stranger = Authenticator::new("sam", &uuid::Uuid::now_v7().into_bytes());
+        let unknown = by_passkey(fresh(&auth, &stranger));
+        assert_eq!(unknown.error.code, ErrorCode::Forbidden);
+        assert_eq!(
+            unknown.refusal,
+            Some(SignInRefusal::UnknownPerson {
+                owners: vec!["Tomas".into()]
+            })
+        );
+
+        // A passkey of Tomas's this daemon was never given: it names the one it knows him by,
+        // and where that one lives.
+        let (other, _) = second_passkey(&auth, &tomas_id);
+        let other_passkey = by_passkey(fresh(&auth, &other));
+        assert_eq!(other_passkey.error.code, ErrorCode::Forbidden);
+        assert_eq!(
+            other_passkey.refusal,
+            Some(SignInRefusal::OtherPasskey {
+                passkeys: vec![RefusedPasskey {
+                    label: "Tomas".into(),
+                    aaguid: Some(authenticator::AAGUID.into()),
+                }]
+            })
+        );
+
+        // His own passkey, signed without Face ID.
+        let skipped = by_passkey(first.assert_unverified(&auth.challenge().unwrap()));
+        assert_eq!(skipped.error.code, ErrorCode::Forbidden);
+        assert_eq!(skipped.refusal, Some(SignInRefusal::UserNotVerified));
+
+        // A bad signature by his passkey is refused with no reason to give.
+        let mut forged = fresh(&auth, &first);
+        forged.response.signature = fresh(&auth, &other).response.signature;
+        let forged = by_passkey(forged);
+        assert_eq!(forged.error.code, ErrorCode::Forbidden);
+        assert_eq!(forged.refusal, None);
+
+        // An invite taken with a passkey that skipped Face ID says so too; the rest of its
+        // refusals are of a person who is new here by definition.
+        let (invite, _) = auth.invite(Role::Member).unwrap();
+        let handle = uuid::Uuid::now_v7();
+        let newcomer = Authenticator::new("sam", handle.as_bytes());
+        let accept = |assertion| SignIn::AcceptInvite {
+            invite: invite.clone(),
+            person: NewPerson {
+                name: "Sam".into(),
+                passkey: PersonPasskey::Existing {
+                    person_id: super::passkeys::person_of(handle),
+                    key: newcomer.key(),
+                    assertion,
+                },
+            },
+        };
+        let skipped = refused(
+            &auth,
+            "fp-sam",
+            accept(newcomer.assert_unverified(&auth.challenge().unwrap())),
+        )
+        .map(|_| ())
+        .unwrap_err();
+        assert_eq!(skipped.refusal, Some(SignInRefusal::UserNotVerified));
+
+        // None of it signed a device in; his verified passkey does.
+        assert_eq!(auth.people().len(), 1);
+        assert_eq!(auth.people()[0].devices.len(), 1);
+        assert_eq!(first.sign_in(&auth, "fp-phone").person_id, Some(tomas_id));
     }
 
     #[test]

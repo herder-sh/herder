@@ -51,7 +51,8 @@ import Testing
             switch machine.hosts[0] {
             case "10.0.4.2:7447": throw HerderError.Unreachable(detail: "10.0.4.2:7447: timed out")
             case "10.0.4.3:7447":
-                throw HerderError.Rejected(info: ErrorInfo(code: .forbidden, message: "this passkey's person is not on this daemon"))
+                throw HerderError.SignInRefused(refusal: .unknownPerson(owners: ["Tomas"]),
+                                                detail: "this passkey's person is not on this daemon")
             case "10.0.4.4:7447": throw HerderError.Rejected(info: ErrorInfo(code: .badRequest, message: "this device is paired already"))
             default: return "ok"
             }
@@ -59,11 +60,45 @@ import Testing
         #expect(join.summary(biometry: "Face ID") == "Face ID asks once for each machine.")
         await join.run()
         #expect(join.rows.map(\.state) == [
-            .signedIn("ok"), .unreachable, .unknownPasskey, .failed("this device is paired already"), .signedIn("ok"),
+            .signedIn("ok"), .unreachable, .unknownPerson(owners: ["Tomas"]), .failed("this device is paired already"),
+            .signedIn("ok"),
         ])
         #expect(join.summary(biometry: "Face ID") == "Signed in to 2 of 5. 3 need you.")
-        #expect(FleetJoin.State.unreachable.help.contains("Tailscale"))
-        #expect(FleetJoin.State.unknownPasskey.help.contains("herder claim"))
+        #expect(FleetJoin.State.unreachable.help(biometry: "Face ID").contains("Tailscale"))
+    }
+
+    /// Each reason a machine gives for refusing the passkey reads as what to do about it.
+    @Test func saysWhyAMachineRefusedThePasskey() {
+        func state(_ refusal: SignInRefusal) -> FleetJoin.State {
+            FleetJoin.state(of: HerderError.SignInRefused(refusal: refusal, detail: "refused"))
+        }
+        let other = state(.otherPasskey(passkeys: [
+            RefusedPasskey(label: "Tomas", aaguid: "bada5566-a7aa-401f-bd96-45619a55120d"),
+            RefusedPasskey(label: "Tomas", aaguid: "BADA5566-A7AA-401F-BD96-45619A55120D"),
+            RefusedPasskey(label: "Tomas", aaguid: nil),
+        ]))
+        #expect(other == .otherPasskey("Tomas in 1Password"))
+        #expect(other.title(biometry: "Face ID") == "Knows you by another passkey: Tomas in 1Password")
+        #expect(FleetJoin.passkeyPlaces([RefusedPasskey(label: "Tomas", aaguid: nil)]) == "Tomas")
+        #expect(FleetJoin.passkeyPlaces([]) == "another passkey")
+
+        let stranger = state(.unknownPerson(owners: ["Tomas", "Ada"]))
+        #expect(stranger.title(biometry: "Face ID") == "Ask Tomas to add you")
+        #expect(stranger.help(biometry: "Face ID").contains("Ada"))
+        let nobody = state(.unknownPerson(owners: []))
+        #expect(nobody.title(biometry: "Face ID") == "Ask its owner to add you")
+        #expect(nobody.help(biometry: "Face ID").contains("herder claim"))
+
+        let skipped = state(.userNotVerified)
+        #expect(skipped == .notVerified)
+        #expect(skipped.title(biometry: "Face ID") == "Face ID was skipped, try again")
+        #expect(skipped.title(biometry: "Touch ID") == "Touch ID was skipped, try again")
+        #expect([other, stranger, skipped].allSatisfy(\.pending))
+
+        // Any other refusal says what the machine said.
+        let forbidden = HerderError.Rejected(info: ErrorInfo(code: .forbidden, message: "the passkey's signature does not verify"))
+        #expect(FleetJoin.state(of: forbidden) == .failed("the passkey's signature does not verify"))
+        #expect(passkeyStore(aaguid: "00000000-0000-0000-0000-000000000000") == nil)
     }
 
     @Test func closingFaceIDStopsAndTryAgainSignsInToTheRest() async {
@@ -122,7 +157,13 @@ import Testing
         }
         #expect(join.title == "Sign in to 3 machines as you")
         await join.run()
-        #expect(join.rows.map(\.state) == [.signedIn("devbox"), .unknownPasskey, .unreachable, .added("laptop")])
+        #expect(join.rows[0].state == .signedIn("devbox"))
+        guard case .unknownPerson(let owners) = join.rows[1].state else {
+            Issue.record("expected their-box not to know the passkey, got \(join.rows[1].state)")
+            return
+        }
+        #expect(!owners.isEmpty)
+        #expect(join.rows[2...].map(\.state) == [.unreachable, .added("laptop")])
         #expect(Set(fleet.client.machines().map(\.name)) == ["devbox", "laptop"])
     }
 }

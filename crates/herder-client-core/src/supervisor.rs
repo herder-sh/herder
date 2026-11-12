@@ -1103,7 +1103,7 @@ impl Supervisor {
                 }
                 log
             }
-            ServerMessage::Error { error } => {
+            ServerMessage::Error { error, .. } => {
                 let machine = &self.saved.name;
                 return warn!(%machine, "the daemon reported an error: {}", error.message);
             }
@@ -1827,7 +1827,7 @@ async fn connect_to(
                 registration,
             },
         )),
-        ServerMessage::Error { error } => Err(anyhow!(error.message)),
+        ServerMessage::Error { error, .. } => Err(anyhow!(error.message)),
         _ => Err(anyhow!("the daemon did not say hello")),
     }
 }

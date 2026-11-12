@@ -53,6 +53,38 @@ pub enum SignIn {
     StartLogin,
 }
 
+/// Why a daemon refused a sign-in by passkey, so the device can say what to do. It comes
+/// with the `forbidden` error of the refused sign-in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum SignInRefusal {
+    /// The daemon knows the person the passkey names, by other passkeys than this one: sign
+    /// in with one of those.
+    OtherPasskey {
+        /// The passkeys it knows them by, oldest first; at least one.
+        passkeys: Vec<RefusedPasskey>,
+    },
+    /// The daemon knows no person by this passkey: one of its owners has to add them.
+    UnknownPerson {
+        /// The names of the daemon's owners, to ask.
+        owners: Vec<String>,
+    },
+    /// The passkey signed without user verification (Face ID, Touch ID or a PIN), which the
+    /// daemon requires: try again, and verify.
+    UserNotVerified,
+}
+
+/// A passkey a daemon knows a person by, as a [`SignInRefusal::OtherPasskey`] names it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RefusedPasskey {
+    /// Its label: the name of the person it belongs to, as the password manager shows it.
+    pub label: String,
+    /// The AAGUID of the authenticator that made it, hyphenated, naming the password manager
+    /// it lives in; absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aaguid: Option<String>,
+}
+
 /// A person introduced to a daemon by a sign-in.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NewPerson {

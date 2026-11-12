@@ -510,6 +510,17 @@
           "description": "What went wrong.",
           "$ref": "#/$defs/ErrorInfo"
         },
+        "refusal": {
+          "description": "Why a sign-in was refused, when its passkey is the reason; the error is then\n`forbidden`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignInRefusal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "type": {
           "type": "string",
           "const": "error"
@@ -4649,6 +4660,26 @@
         "images"
       ]
     },
+    "RefusedPasskey": {
+      "description": "A passkey a daemon knows a person by, as a [`SignInRefusal::OtherPasskey`] names it.",
+      "type": "object",
+      "properties": {
+        "aaguid": {
+          "description": "The AAGUID of the authenticator that made it, hyphenated, naming the password manager\nit lives in; absent when unknown.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "Its label: the name of the person it belongs to, as the password manager shows it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ]
+    },
     "ResourceSettings": {
       "description": "The `[resources]` table.",
       "type": "object",
@@ -5298,6 +5329,66 @@
         "memory_bytes",
         "processes",
         "containers"
+      ]
+    },
+    "SignInRefusal": {
+      "description": "Why a daemon refused a sign-in by passkey, so the device can say what to do. It comes\nwith the `forbidden` error of the refused sign-in.",
+      "oneOf": [
+        {
+          "description": "The daemon knows the person the passkey names, by other passkeys than this one: sign\nin with one of those.",
+          "type": "object",
+          "properties": {
+            "passkeys": {
+              "description": "The passkeys it knows them by, oldest first; at least one.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RefusedPasskey"
+              }
+            },
+            "reason": {
+              "type": "string",
+              "const": "other_passkey"
+            }
+          },
+          "required": [
+            "reason",
+            "passkeys"
+          ]
+        },
+        {
+          "description": "The daemon knows no person by this passkey: one of its owners has to add them.",
+          "type": "object",
+          "properties": {
+            "owners": {
+              "description": "The names of the daemon's owners, to ask.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string",
+              "const": "unknown_person"
+            }
+          },
+          "required": [
+            "reason",
+            "owners"
+          ]
+        },
+        {
+          "description": "The passkey signed without user verification (Face ID, Touch ID or a PIN), which the\ndaemon requires: try again, and verify.",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "const": "user_not_verified"
+            }
+          },
+          "required": [
+            "reason"
+          ]
+        }
       ]
     },
     "SkillReload": {
