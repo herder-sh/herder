@@ -148,18 +148,14 @@ final class ScreenshotTests: XCTestCase {
             #else
             shoot("ios-machines")
             #endif
-            // Add to Fleet's third choice: a link that pairs another device of yours.
-            let add = app.buttons["add-to-fleet"].firstMatch
-            if wait(add, "Add to Fleet") {
+            // Add a Device: the code another device of yours scans to sign in to these machines.
+            let add = app.buttons["add-device"].firstMatch
+            if wait(add, "Add a device") {
                 press(add)
-                let device = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'A device to this fleet'")).firstMatch
-                if wait(device, "Add to Fleet's device choice") {
-                    press(device)
-                    settle()
-                    shoot(platform("add-device"))
-                }
+                settle()
+                shoot(platform("add-device"))
                 let done = app.buttons["Done"].firstMatch
-                if wait(done, "Add to Fleet's Done") { press(done) }
+                if wait(done, "Add a Device's Done") { press(done) }
             }
         }
         #if os(macOS)

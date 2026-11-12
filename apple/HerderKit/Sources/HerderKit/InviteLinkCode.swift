@@ -2,7 +2,8 @@ import CoreImage.CIFilterBuiltins
 import Herder
 import SwiftUI
 
-/// An invite link as a QR code to scan, with how long it still works, and as text to copy.
+/// A link as a QR code to scan, with how long it still works where it expires, and as text to
+/// copy: an invite's, or Add a Device's.
 struct InviteLinkCode: View {
     let link: String
     let expiresAt: Date?
@@ -25,9 +26,11 @@ struct InviteLinkCode: View {
                         .opacity(expired ? 0.15 : 1)
                         .accessibilityLabel("QR code of the link")
                 }
-                Text(expiry(expiresAt, now: at))
-                    .font(.subheadline.weight(.medium).monospacedDigit())
-                    .foregroundStyle(expired ? Theme.failure : Theme.secondary)
+                if expiresAt != nil {
+                    Text(expiry(expiresAt, now: at))
+                        .font(.subheadline.weight(.medium).monospacedDigit())
+                        .foregroundStyle(expired ? Theme.failure : Theme.secondary)
+                }
             }
             .frame(maxWidth: .infinity)
         }

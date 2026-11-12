@@ -23,6 +23,15 @@ struct AppLinkTests {
         #expect(terminal.kind == .login)
     }
 
+    @Test func readsAnotherDevicesFleetLink() throws {
+        let shared = FleetLink(machines: [
+            FleetMachine(hosts: ["10.0.4.17:7447"], fingerprint: String(repeating: "ab", count: 32)),
+            FleetMachine(hosts: ["10.0.4.18:7447"], fingerprint: String(repeating: "cd", count: 32)),
+        ])
+        #expect(link(fleetLinkToString(link: shared)) == .join(shared))
+        #expect(link("herder://fleet") == nil)
+    }
+
     @Test func noLongerReadsAPairLink() {
         let pair = "herder://pair?host=127.0.0.1%3A7420&fp=" + String(repeating: "ab", count: 32) + "&code=ABCD2345"
         #expect(link(pair) == nil)

@@ -17,6 +17,8 @@ struct PeopleView: View {
     /// Folds a teammate who is really you into you, signed with their passkey.
     let itsMe: (Directory.Person) -> Void
     let invite: () -> Void
+    /// Opens Add a Device, while this device has machines to share.
+    var addDevice: (() -> Void)?
     /// Opens Claim your machines, while a machine you own is not claimed yet.
     var claim: (() -> Void)?
 
@@ -27,6 +29,11 @@ struct PeopleView: View {
                 ForEach(directory.devices) { device in
                     RowDivider()
                     deviceRow(device)
+                }
+                if let addDevice {
+                    RowDivider()
+                    AddRow(title: "Add a device…", action: addDevice)
+                        .accessibilityIdentifier("people-add-device")
                 }
                 if let claim {
                     RowDivider()
