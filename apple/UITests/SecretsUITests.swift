@@ -41,9 +41,17 @@ final class SecretsUITests: XCTestCase {
         description.typeText("Publishes packages to npm")
         let value = app.secureTextFields["secret-value"]
         XCTAssertTrue(value.exists, "the value is not typed into a secure field")
-        value.tap()
-        value.typeText("npm_s3cr3t")
-        app.buttons["secret-save"].tap()
+        // A secure field can drop what is typed before it has taken focus, leaving Save disabled:
+        // type again until Save takes the value, rather than tap a disabled Save.
+        let save = app.buttons["secret-save"]
+        let saveable = NSPredicate(format: "isEnabled == true")
+        for _ in 1...3 where !save.isEnabled {
+            value.tap()
+            value.typeText("npm_s3cr3t")
+            _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: saveable, object: save)], timeout: 3)
+        }
+        XCTAssertTrue(save.isEnabled, "Save stayed disabled: the value never reached the secure field")
+        save.tap()
         let secret = app.descendants(matching: .any)["secret-\(set)-NPM_TOKEN"].firstMatch
         XCTAssertTrue(secret.waitForExistence(timeout: 10), "the secret did not show in its set")
         XCTAssertTrue(app.staticTexts["Publishes packages to npm"].exists)
