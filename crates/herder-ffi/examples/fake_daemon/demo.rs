@@ -51,7 +51,7 @@ use anyhow::{Context, Result, bail, ensure};
 use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
-use herder_client_core::{Client, ConnectionState};
+use herder_client_core::{Client, ConnectionState, FleetLink, FleetMachine};
 use herder_daemon::auth::authenticator::{self, Authenticator};
 use herder_daemon::auth::{Auth, User};
 use herder_daemon::bots::{Bots, Runtime as BotsRuntime, runner};
@@ -522,7 +522,7 @@ impl Demo {
         }
         let vault = DemoVault::start(&tmp.path().join(VAULT)).await?;
         demo.back_up(&vault).await?;
-        let shared = client.share().context("the demo device has no machines")?;
+        let shared = shared_link(&client).context("the demo device has no machines")?;
         Ok(Self {
             link: shared.to_string(),
             passkey: Authenticator::known(USER).export(),
@@ -1942,4 +1942,20 @@ impl GitHub for DemoGitHub {
             Ok(json!({"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}))
         })
     }
+}
+
+/// The link `client` shares, as [`Client::share`] makes it but with loopback addresses: every
+/// fake machine is on loopback, which `share` leaves out as no other device reaches it, while
+/// the device under test runs on this host. `None` while `client` has no machine.
+pub fn shared_link(client: &Client) -> Option<FleetLink> {
+    let machines: Vec<FleetMachine> = client
+        .machines()
+        .into_iter()
+        .map(|machine| FleetMachine {
+            hosts: machine.addresses,
+            fingerprint: machine.fingerprint,
+            name: Some(machine.name),
+        })
+        .collect();
+    (!machines.is_empty()).then_some(FleetLink { machines })
 }

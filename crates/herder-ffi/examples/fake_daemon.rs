@@ -8,7 +8,8 @@
 //!
 //! `fake_daemon [NAME]` names the host (`fake-host` by default), to run several side by side.
 //! `fake_daemon --share` runs two, `fake-host-1` and `fake-host-2`, with the same owner, and
-//! prints instead the link a device signed in to both shares (`Client::share`); the repository
+//! prints instead the link a device signed in to both shares (as `Client::share` makes it, but
+//! with the loopback addresses it leaves out: [`demo::shared_link`]); the repository
 //! is the first's, and the first has a session waiting on an approval, whose id it prints last.
 //! `fake_daemon --demo` runs the demo fleet of the site's screenshots ([`demo`]) and prints only
 //! the link a device signed in to all of it shares and the user's passkey; `fake_daemon --busy`
@@ -161,9 +162,7 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<(String, SessionId)> {
             },
         )
         .await?;
-    let shared = client
-        .share()
-        .context("the sharing device has no machines")?;
+    let shared = demo::shared_link(&client).context("the sharing device has no machines")?;
     Ok((shared.to_string(), session_id))
 }
 

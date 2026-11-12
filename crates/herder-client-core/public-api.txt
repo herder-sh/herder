@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 18;
+pub const CLIENT_API_VERSION: u32 = 19;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -381,6 +381,7 @@ pub struct FleetLink {
 pub struct FleetMachine {
     pub hosts: Vec<String>,
     pub fingerprint: String,
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

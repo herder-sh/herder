@@ -176,6 +176,7 @@ impl Form {
         Ok(FleetMachine {
             hosts: vec![with_port(host)],
             fingerprint,
+            name: None,
         })
     }
 }
@@ -586,6 +587,7 @@ mod tests {
         FleetMachine {
             hosts: vec!["127.0.0.1:7447".into()],
             fingerprint: FP.into(),
+            name: None,
         }
     }
 
@@ -692,6 +694,7 @@ mod tests {
             Step::Confirm(FleetMachine {
                 hosts: vec!["box.lan:7447".into()],
                 fingerprint: FP.into(),
+                name: None,
             })
         );
     }

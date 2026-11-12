@@ -52,12 +52,25 @@ pub(crate) fn default_order(addresses: Vec<String>) -> Vec<String> {
     unique
 }
 
-/// 0 for a private network address, 1 for any other, 2 for a Tailscale one.
-fn rank(address: &str) -> u8 {
-    let host = address
+/// Whether `address`, as `host:port`, is this device itself (`localhost`, `127.0.0.0/8`,
+/// `::1`), which no other device reaches it at.
+pub(crate) fn is_loopback(address: &str) -> bool {
+    let host = host(address);
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// The host of `address`, as `host:port`, without the brackets of an IPv6 address.
+fn host(address: &str) -> &str {
+    address
         .rsplit_once(':')
         .map_or(address, |(host, _)| host)
-        .trim_matches(['[', ']']);
+        .trim_matches(['[', ']'])
+}
+
+/// 0 for a private network address, 1 for any other, 2 for a Tailscale one.
+fn rank(address: &str) -> u8 {
+    let host = host(address);
     let Ok(ip) = host.parse::<IpAddr>() else {
         return if host.ends_with(".ts.net") {
             2
@@ -154,5 +167,27 @@ mod tests {
         );
         // 100.128.0.0 is past the CGNAT range.
         assert_eq!(rank("100.128.0.1:7447"), 1);
+    }
+
+    #[test]
+    fn loopback_addresses_are_this_device_only() {
+        for address in [
+            "127.0.0.1:7447",
+            "127.1.2.3:9000",
+            "[::1]:7447",
+            "localhost:7447",
+            "LocalHost:7447",
+        ] {
+            assert!(is_loopback(address), "{address}");
+        }
+        for address in [
+            "192.168.1.5:7447",
+            "[fd00::1]:7447",
+            "100.101.102.103:7447",
+            "box.local:7447",
+            "localhost.example.com:7447",
+        ] {
+            assert!(!is_loopback(address), "{address}");
+        }
     }
 }
