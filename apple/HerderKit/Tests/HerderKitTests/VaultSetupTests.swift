@@ -67,7 +67,7 @@ struct VaultSetupTests {
         await setup(recorder, answer: { answer }, claim: { throw CancellationError() })
             .run(machine: "devbox") { recorder.steps.append($0) }
         guard case .failed(let why) = recorder.steps.last else { Issue.record("not failed"); return }
-        #expect(why.contains(PairKind.command))
+        #expect(why.contains(MachineSource.claimCommand))
         #expect(recorder.renamed.isEmpty)
     }
 

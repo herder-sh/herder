@@ -214,3 +214,24 @@ extension Data {
         self.init(base64Encoded: text)
     }
 }
+
+/// Where a passkey is kept, by the AAGUID of the authenticator that made it: "Apple Passwords",
+/// "1Password". Nil for one that gave none, or one of a password manager not listed here.
+enum PasskeyHome {
+    /// The AAGUIDs password managers register their passkeys with, as the community list
+    /// (passkeydeveloper/passkey-authenticator-aaguids) names them.
+    static let names: [String: String] = [
+        "fbfc3007-154e-4ecc-8c0b-6e020557d7bd": "Apple Passwords",
+        "dd4ec289-e01d-41c9-bb89-70fa845d4bf2": "Apple Passwords",
+        "bada5566-a7aa-401f-bd96-45619a55120d": "1Password",
+        "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4": "Google Password Manager",
+        "d548826e-79b4-db40-a3d8-11116f7e8349": "Bitwarden",
+        "531126d6-e717-415c-9320-3d9aa6981239": "Dashlane",
+        "50726f74-6f6e-5061-7373-50726f746f6e": "Proton Pass",
+        "08987058-cadc-4b81-b6e1-30de50dcbe96": "Windows Hello",
+    ]
+
+    static func name(aaguid: String?) -> String? {
+        aaguid.flatMap { names[$0.lowercased()] }
+    }
+}

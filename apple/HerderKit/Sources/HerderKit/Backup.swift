@@ -230,7 +230,7 @@ struct VaultChoices: View {
         if vaults.isEmpty {
             RowDivider()
             SettingRow(label: "Use a vault you have", hint: "Add it to your fleet as its owner") {
-                PillButton(title: "Add Vault…") { sheet = .pair(.vault) }
+                PillButton(title: "Add Vault…") { sheet = .addMachine(.hasHerder) }
             }
         }
         RowDivider()
@@ -245,8 +245,8 @@ struct VaultChoices: View {
         let progress = fleet.activity[key] == nil ? nil : fleet.progress(key)
         if fleet.backupLinks[machine.hostId] == .nowhere(localVault: true) && progress == nil {
             SettingRow(label: "A vault is installed on \(machine.name)",
-                       hint: "Run \(PairKind.command) there to own it, then use it here") {
-                PillButton(title: "Add Vault…") { sheet = .pair(.vault) }
+                       hint: "Run \(MachineSource.claimCommand) there to own it, then use it here") {
+                PillButton(title: "Add Vault…") { sheet = .addMachine(.hasHerder) }
             }
         } else {
             SettingRow(label: "Run a vault on \(machine.name)",
@@ -269,7 +269,7 @@ struct VaultChoices: View {
                 .padding(.bottom, 10)
             RowDivider()
             SettingRow(label: "Then add the vault to your fleet", hint: "With the link it prints") {
-                PillButton(title: "Add Vault…") { sheet = .pair(.vault) }
+                PillButton(title: "Add Vault…") { sheet = .addMachine(.hasHerder) }
             }
         }
     }

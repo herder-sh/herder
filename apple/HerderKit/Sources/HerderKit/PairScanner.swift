@@ -5,7 +5,7 @@ import SwiftUI
 #if os(iOS)
 import AVFoundation
 
-/// The camera, filling Add to Fleet's sheet in its form's place, looking for the QR code
+/// The camera, filling Add a machine's sheet in its form's place, looking for the QR code
 /// `herder claim` or `herder login` prints, or Add a Device shows; hands over the link in it.
 struct PairScanner: View {
     let scanned: (PairLink) -> Void
@@ -50,7 +50,7 @@ struct PairScanner: View {
     }
 }
 
-/// A capture session that reads QR codes until one holds a link Add to Fleet takes.
+/// A capture session that reads QR codes until one holds a link Add a machine takes.
 @MainActor
 @Observable
 private final class QRCamera: NSObject, AVCaptureMetadataOutputObjectsDelegate {
