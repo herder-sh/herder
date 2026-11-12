@@ -11,48 +11,50 @@ import Testing
 /// approve and done. With `HERDER_SCREENSHOT_DIR` set, also writes them there, as
 /// `welcome-<step>-<mac|iphone>.png`.
 @MainActor struct WelcomeScreenshotTests {
-    nonisolated static let devices = [("mac", 960.0, 680.0), ("iphone", 402.0, 874.0)]
+    nonisolated static let devices = ["mac", "iphone"]
 
     static let own = "herder://own?host=192.168.1.20%3A7447&fp=\(String(repeating: "ab", count: 32))&code=ROS-734&name=trash-can-01"
 
     @Test(arguments: devices)
-    func drawsTheChoice(device: String, width: Double, height: Double) throws {
-        try shoot(WelcomeFlow(), device: device, width: width, height: height, named: "choice")
+    func drawsTheChoice(device: String) throws {
+        try shoot(WelcomeFlow(), device: device, named: "choice")
     }
 
     @Test(arguments: devices)
-    func drawsYourName(device: String, width: Double, height: Double) throws {
+    func drawsYourName(device: String) throws {
         let flow = WelcomeFlow(name: "Tomas")
         flow.begin()
-        try shoot(flow, device: device, width: width, height: height, named: "1-name")
+        try shoot(flow, device: device, named: "1-name")
     }
 
     @Test(arguments: devices)
-    func drawsInstallingOnAMachine(device: String, width: Double, height: Double) throws {
+    func drawsInstallingOnAMachine(device: String) throws {
         let flow = WelcomeFlow(name: "Tomas")
         flow.step = .machine
-        try shoot(flow, device: device, width: width, height: height, named: "2-machine")
+        try shoot(flow, device: device, named: "2-machine")
     }
 
     @Test(arguments: devices)
-    func drawsApproving(device: String, width: Double, height: Double) throws {
+    func drawsApproving(device: String) throws {
         let flow = WelcomeFlow(name: "Tomas")
         flow.step = .machine
         flow.take(Self.own)
-        try shoot(flow, device: device, width: width, height: height, named: "3-approve")
+        try shoot(flow, device: device, named: "3-approve")
     }
 
     @Test(arguments: devices)
-    func drawsDone(device: String, width: Double, height: Double) async throws {
+    func drawsDone(device: String) async throws {
         let flow = WelcomeFlow(name: "Tomas")
         flow.step = .machine
         flow.take(Self.own)
         await flow.approve { _, _ in "trash-can-host" }
-        try shoot(flow, device: device, width: width, height: height, named: "4-done")
+        try shoot(flow, device: device, named: "4-done")
     }
 
-    private func shoot(_ flow: WelcomeFlow, device: String, width: Double, height: Double, named step: String) throws {
+    private func shoot(_ flow: WelcomeFlow, device: String, named step: String) throws {
         let phone = device == "iphone"
+        // The Mac's window at its smallest comfortable size; an iPhone 17 Pro's screen in points.
+        let (width, height) = phone ? (402.0, 874.0) : (960.0, 680.0)
         let screen = WelcomeScreen(flow: flow, existing: {}, scan: phone ? {} : nil, paste: {}, approve: {},
                                    finish: { _ in }, biometry: phone ? "Face ID" : "Touch ID")
             .environment(\.welcomeCompact, phone)
