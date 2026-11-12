@@ -30,6 +30,10 @@ use crate::ui::glyphs::Glyphs;
 use crate::ui::theme::Theme;
 
 /// An input to the app.
+// `Sent` carries a daemon's answer, as large as its largest result (a passkey challenge with
+// what a new passkey is created from). Messages pass one at a time through the app's channel,
+// so the size costs nothing worth a box at every one of the many places that make one.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum Msg {
     /// A key was pressed.
