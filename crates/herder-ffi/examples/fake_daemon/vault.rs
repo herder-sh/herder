@@ -47,6 +47,7 @@ impl Vault {
             machines: vec![FleetMachine {
                 hosts: vec![listener.local_addr()?.to_string()],
                 fingerprint: tls.fingerprint().to_owned(),
+                name: Some("fake-vault".into()),
             }],
         }
         .to_string();

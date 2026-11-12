@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 18`
+`CLIENT_API_VERSION = 19`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -152,7 +152,7 @@ everything stops once the last clone is dropped.
 | `open_demo(demo: Demo) -> Client` | Opens a recorded fleet with no profile and no connection; see [Demo](#demo). |
 | `machines() -> Vec<Machine>` | Every paired machine, in pairing order. |
 | `changes() -> Changes` | Notifications that `machines()` changed. |
-| `share() -> Option<FleetLink>` | The `herder://fleet` link of every saved machine, connected or not, for another device of the person to sign in to each with its passkey. It carries no code. `None` while no machine is saved. See [Fleet links](#fleet-links). |
+| `share() -> Option<FleetLink>` | The `herder://fleet` link of every saved machine, connected or not, by the name this device gives it, for another device of the person to sign in to each with its passkey. It carries no code, and no loopback address (`localhost`, `127.0.0.0/8`, `::1`): a machine with only those is left out. `None` while no machine is left. See [Fleet links](#fleet-links). |
 | `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
 | `set_addresses(host_id: HostId, addresses: Vec<String>) -> Result<(), Error>` | Connects to a machine at `addresses`, in this order of preference, from now on; each a host or IP with an optional port (7447 by default). Fails with `Error::Local` on an invalid address or an empty list. |
 | `async reconnect(host_id: HostId) -> Result<String, Error>` | Drops a machine's connection, if up, and connects again at once, racing its addresses in order: the address the new connection uses, or `Unreachable` when none answered. |
@@ -213,7 +213,8 @@ everything stops once the last clone is dropped.
 - `SessionUpdate` — `events: Vec<Event>` (new durable events, in seq order) and
   `streaming: Vec<Item>` (every item streaming now; replaces the previous list).
 - `NewAccount` — `account_id`, `provider`, `label: Option<String>`, `config_dir: Option<String>`.
-- `FleetMachine` — one machine of a fleet link: `hosts: Vec<String>`, `fingerprint: String`.
+- `FleetMachine` — one machine of a fleet link: `hosts: Vec<String>`, `fingerprint: String`,
+  `name: Option<String>` (its name on the sharing device, to show before signing in).
 - `FleetLink` — `machines: Vec<FleetMachine>`, never empty; `FromStr` (fails with
   `Error::InvalidLink`, also for a link with a code) and `Display` (`herder://fleet?…`). See
   [Fleet links](#fleet-links).
@@ -302,14 +303,16 @@ connected machine.
 
 A `herder://fleet` link names one or more machines. Each is a group of query parameters: one
 or more `host` (`host:port`, tried in order), then `fp` (SHA-256 of the daemon's certificate,
-lowercase hex). A group is complete once it has both, and the next parameter after a
-complete group starts the next machine:
+lowercase hex), then an optional `name` to show for it. A group is complete once it has hosts
+and `fp`, and the next `host` or `fp` after a complete group starts the next machine; a `name`
+belongs to the group it follows:
 
 ```
-herder://fleet?host=192.168.1.5%3A7447&fp=<hex>&host=10.0.0.9%3A7447&host=%5Bfd00%3A%3A9%5D%3A7447&fp=<hex>
+herder://fleet?host=192.168.1.5%3A7447&fp=<hex>&name=devbox&host=10.0.0.9%3A7447&host=%5Bfd00%3A%3A9%5D%3A7447&fp=<hex>&name=alice%27s+vault
 ```
 
-`Client::share` makes one of every machine the device has saved. It holds no code and grants
+`Client::share` makes one of every machine the device has saved, named as this device names
+it, without the loopback addresses no other device reaches it at. It holds no code and grants
 nothing: another device of the same person signs in to each machine with its own passkey
 (`sign_in`, then `finish(SignIn::Passkey)`), synced to it with the person's other passkeys,
 and gets a key of its own on each, revocable on its own. A machine that does not know the

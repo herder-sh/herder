@@ -1784,20 +1784,71 @@ async fn a_shared_link_names_every_machine_for_another_device_to_sign_in_to() {
     for daemon in [&first, &second, &gone] {
         daemon.sign_in(&mac, "alice", daemon.addr).await.unwrap();
     }
+    let gone_addr = gone.addr.to_string();
     gone.kill().await;
+    // Every machine here is on loopback, which no other device reaches, so each gets an
+    // address another device would use, after its loopback one.
+    let readdress = |host: &str, addresses: &[String]| {
+        mac.set_addresses(HostId::new(host), addresses.to_vec())
+            .unwrap();
+    };
+    readdress("host-1", &[first.addr.to_string(), "192.0.2.1:7447".into()]);
+    readdress(
+        "host-2",
+        &[
+            "localhost:7447".into(),
+            second.addr.to_string(),
+            "[2001:db8::2]:7447".into(),
+        ],
+    );
+    readdress("host-3", &["192.0.2.3:7447".into(), gone_addr.clone()]);
 
-    // Every saved machine, connected or not, by its addresses and certificate, with no code.
+    // The name this device gives a machine is the one it shares.
+    mac.rename(HostId::new("host-2"), "alice's vault".into())
+        .unwrap();
+
+    // Every saved machine, connected or not, by its name, its addresses but loopback ones,
+    // and its certificate, with no code.
     let link = mac.share().unwrap();
     let hosts: Vec<_> = link.machines.iter().map(|m| m.hosts.clone()).collect();
-    assert_eq!(hosts.len(), 3);
-    assert_eq!(hosts[0], [first.addr.to_string()]);
+    assert_eq!(
+        hosts,
+        [
+            ["192.0.2.1:7447"],
+            ["[2001:db8::2]:7447"],
+            ["192.0.2.3:7447"]
+        ]
+    );
+    let names: Vec<_> = link.machines.iter().map(|m| m.name.as_deref()).collect();
+    assert_eq!(
+        names,
+        [
+            Some("test-host-1"),
+            Some("alice's vault"),
+            Some("test-host-3")
+        ]
+    );
     assert_eq!(link.machines[1].fingerprint, second.fingerprint);
     let text = link.to_string();
     assert!(!text.contains("code"), "{text}");
     assert_eq!(text.parse::<FleetLink>().unwrap(), link);
 
+    // A machine at loopback addresses only is left out.
+    readdress("host-3", &[gone_addr, "[::1]:7447".into()]);
+    let fingerprints: Vec<_> = mac
+        .share()
+        .unwrap()
+        .machines
+        .into_iter()
+        .map(|m| m.fingerprint)
+        .collect();
+    assert_eq!(
+        fingerprints,
+        [first.fingerprint.clone(), second.fingerprint.clone()]
+    );
+
     // Another device of alice's signs in to each that is up with her passkey, under a key of
-    // its own, with her role on each.
+    // its own, with her role on each. It is on this host, so it takes the loopback address.
     let phone = Client::open(
         tmp.path().join("phone").display().to_string(),
         "herder-test/0".into(),
@@ -1806,7 +1857,7 @@ async fn a_shared_link_names_every_machine_for_another_device_to_sign_in_to() {
     for (daemon, machine) in [(&first, &link.machines[0]), (&second, &link.machines[1])] {
         let passkey = Authenticator::of(&daemon.auth, "alice").unwrap();
         let pending = phone
-            .sign_in(machine.hosts.clone(), machine.fingerprint.clone())
+            .sign_in(vec![daemon.addr.to_string()], machine.fingerprint.clone())
             .await
             .unwrap();
         let assertion = passkey.assert(&pending.challenge());

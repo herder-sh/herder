@@ -8,7 +8,8 @@
 //!
 //! `fake_daemon [NAME]` names the host (`fake-host` by default), to run several side by side.
 //! `fake_daemon --share` runs two, `fake-host-1` and `fake-host-2`, with the same owner, and
-//! prints instead the link a device signed in to both shares (`Client::share`); the repository
+//! prints instead the link a device signed in to both shares (as `Client::share` makes it, but
+//! with the loopback addresses it leaves out: [`shared_link`]); the repository
 //! is the first's, and the first has a session waiting on an approval, whose id it prints last.
 //! `fake_daemon --demo` runs the demo fleet of the site's screenshots ([`demo`]) and prints only
 //! the link a device signed in to all of it shares and the user's passkey; `fake_daemon --busy`
@@ -32,7 +33,7 @@ mod vault;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use herder_client_core::{Client, ConnectionState, FleetLink, OwnUri};
+use herder_client_core::{Client, ConnectionState, FleetLink, FleetMachine, OwnUri};
 use herder_daemon::auth::authenticator;
 use herder_protocol::{AccountId, CommandBody, CommandResult, HostId, SessionId};
 use tokio::io::AsyncReadExt;
@@ -161,10 +162,24 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<(String, SessionId)> {
             },
         )
         .await?;
-    let shared = client
-        .share()
-        .context("the sharing device has no machines")?;
+    let shared = shared_link(&client).context("the sharing device has no machines")?;
     Ok((shared.to_string(), session_id))
+}
+
+/// The link `client` shares, as [`Client::share`] makes it but with loopback addresses: every
+/// fake machine is on loopback, which `share` leaves out as no other device reaches it, while
+/// the device under test runs on this host. `None` while `client` has no machine.
+fn shared_link(client: &Client) -> Option<FleetLink> {
+    let machines: Vec<FleetMachine> = client
+        .machines()
+        .into_iter()
+        .map(|machine| FleetMachine {
+            hosts: machine.addresses,
+            fingerprint: machine.fingerprint,
+            name: Some(machine.name),
+        })
+        .collect();
+    (!machines.is_empty()).then_some(FleetLink { machines })
 }
 
 /// Opens `daemon` to a new owner, as `herder claim` does, and returns the link it prints.

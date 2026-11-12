@@ -13,8 +13,12 @@ import Testing
 @MainActor struct AddDeviceScreenshotTests {
     nonisolated static let widths = [(560.0, "mac"), (390.0, "ios")]
 
+    /// The names the sharing device gives the machines, as its link carries them.
+    nonisolated static let names = [1: "devbox", 2: "nas", 3: "build-01", 4: "alice’s vault", 5: "mac-mini"]
+
     static func machine(_ n: Int, port: Int = 7447) -> FleetMachine {
-        FleetMachine(hosts: ["100.64.0.\(n):\(port)"], fingerprint: String(repeating: String(format: "%02x", n), count: 32))
+        FleetMachine(hosts: ["100.64.0.\(n):\(port)"], fingerprint: String(repeating: String(format: "%02x", n), count: 32),
+                     name: names[n])
     }
 
     @Test(arguments: widths)
@@ -29,13 +33,12 @@ import Testing
 
     @Test(arguments: widths)
     func drawsSigningInToAnotherDevicesMachines(width: Double, platform: String) async throws {
-        let names = [1: "devbox", 3: "build-01", 5: "mac-mini"]
         let join = FleetJoin(FleetLink(machines: (1...5).map { Self.machine($0) }),
                              known: { $0 == Self.machine(5).fingerprint ? "mac-mini" : nil }) { machine in
             switch machine.hosts[0] {
             case "100.64.0.2:7447": throw HerderError.Unreachable(detail: "timed out")
             case "100.64.0.4:7447": throw HerderError.Rejected(info: ErrorInfo(code: .forbidden, message: "unknown"))
-            default: return names[Int(machine.hosts[0].split(separator: ".")[3].prefix(1)) ?? 0] ?? "?"
+            default: return machine.name ?? "?"
             }
         }
         await join.run()

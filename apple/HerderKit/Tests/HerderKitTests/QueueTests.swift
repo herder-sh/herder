@@ -61,9 +61,10 @@ struct QueueTests {
         #expect(await eventually { texts() == ["C.", "A."] })
         #expect(fleet.refusals[key] == nil)
 
-        // Another device of the same person, signed in from the link this one shares, moves it
-        // back; this tray follows.
-        let shared = try #require(fleet.client.share())
+        // Another device of the same person, signed in to the machine with the same passkey,
+        // moves it back; this tray follows. (`share` leaves the fake daemon out: it is on
+        // loopback, which no other device reaches.)
+        let shared = try parseFleetLink(link: daemon.link)
         let other = try Client.open(configDir: temporaryProfile().path, client: "other")
         let passkey = try #require(RecordedPasskey(daemon.passkey))
         for at in shared.machines {

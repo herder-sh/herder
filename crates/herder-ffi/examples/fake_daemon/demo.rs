@@ -522,7 +522,7 @@ impl Demo {
         }
         let vault = DemoVault::start(&tmp.path().join(VAULT)).await?;
         demo.back_up(&vault).await?;
-        let shared = client.share().context("the demo device has no machines")?;
+        let shared = super::shared_link(&client).context("the demo device has no machines")?;
         Ok(Self {
             link: shared.to_string(),
             passkey: Authenticator::known(USER).export(),
