@@ -3,7 +3,7 @@ import Herder
 import Observation
 import SwiftUI
 
-/// A link Add to Fleet takes, scanned, pasted or opened: a request to approve, or the machines
+/// A link Add a machine takes, scanned, pasted or opened: a request to approve, or the machines
 /// another device of yours shares.
 enum PairLink: Hashable {
     /// `herder://own` of `herder claim`, or `herder://login` of `herder login`.
@@ -34,7 +34,7 @@ enum PairLink: Hashable {
     }
 }
 
-/// The link Add to Fleet takes in text from a QR code or the clipboard: alone, or somewhere in
+/// The link Add a machine takes in text from a QR code or the clipboard: alone, or somewhere in
 /// a copy of the command's output. Nil when there is none.
 func pairLink(in text: String) -> PairLink? {
     text.split(whereSeparator: \.isWhitespace)
@@ -233,10 +233,10 @@ struct AddDeviceSteps: View {
     var body: some View {
         if let link {
             NumberedStep(number: 1, title: "Install herder on the other device") {
-                note(Text("Then open it and choose Add to Fleet."))
+                note(Text("Then open it."))
             }
             NumberedStep(number: 2, title: "Scan this code with it") {
-                note(Text("Choose \(Text("From another device").bold()), then Scan QR Code. On a Mac, copy the link and paste it there."))
+                note(Text("Choose \(Text("I already use herder").bold()), then scan this code. On a Mac, copy the link instead: Add a Machine picks it up."))
                 InviteLinkCode(link: link, expiresAt: nil,
                                hint: "It lists where your machines are and how to recognise them (their fingerprints).")
             }

@@ -177,7 +177,7 @@ extension WelcomeFlow.Install {
         switch self {
         case .linuxOrMac: "curl -fsSL https://herder.sh/install | sh\nherder service install"
         case .container: "kubectl exec -it <pod> -- /herder claim"
-        case .hasHerder: PairKind.command
+        case .hasHerder: MachineSource.claimCommand
         }
     }
 }
@@ -480,7 +480,7 @@ struct WelcomeScreen: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
             SettingsList(title: "When you’re ready") {
-                next("Add another machine", "Same three steps", symbol: "server.rack", .pair(.machine))
+                next("Add another machine", "Same three steps", symbol: "server.rack", .addMachine())
                 RowDivider()
                 next("Use herder on your \(other)", "Show a code it scans", symbol: other == "Mac" ? "laptopcomputer" : "iphone",
                      .addDevice)

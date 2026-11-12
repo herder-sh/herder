@@ -5,8 +5,8 @@ import SwiftUI
 
 /// The one-time move to one identity: on each machine you own, your old user (or users) become
 /// your passkey. Machines that show up as users move to the vault's Machines list, and users
-/// nobody can place wait for your decision. Offered once on launch while a machine you own is
-/// not claimed yet.
+/// nobody can place wait for your decision. Reached from People (Setup's Needs you) while a
+/// machine you own is not claimed yet.
 struct ClaimPlan: Hashable {
     /// A machine that becomes yours.
     struct Machine: Hashable, Identifiable {
@@ -156,7 +156,7 @@ extension ClaimPlan {
 }
 
 extension Fleet {
-    /// Some machine you own is not claimed yet, so People and Fleet offer Claim your machines.
+    /// Some machine you own is not claimed yet, so People offers Claim your machines.
     var hasUnclaimed: Bool { !ClaimPlan.unclaimed(machines).isEmpty }
 
     /// Opens Claim your machines in `sheet`, when a machine is left to claim.

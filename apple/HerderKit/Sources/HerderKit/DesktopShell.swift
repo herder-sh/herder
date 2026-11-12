@@ -172,8 +172,8 @@ struct DesktopShell: View {
                 if !AwsSignIn.machines(fleet.machines).isEmpty {
                     PaneButton(title: "AWS Sign-in", symbol: "key") { sheet = .awsSignIn }
                 }
-                PaneButton(title: "Add to Fleet", symbol: "plus", prominent: true) { sheet = .pair(.machine) }
-                    .accessibilityIdentifier("add-to-fleet")
+                PaneButton(title: "Add a Machine", symbol: "plus", prominent: true) { sheet = .addMachine() }
+                    .accessibilityIdentifier("add-machine")
             }
         case .people:
             Pane(fleet: fleet, title: "People", switcher: switcher) {

@@ -180,7 +180,7 @@ Under the table, the **Vault** section has a `VaultRow` per paired vault: its ho
 size, and the host furthest behind ("work-mbp 6 h behind", or "✓ caught up"); it opens the
 vault's page. A vault that connected machines back up to (`get_vault_link`, asked of the
 machines this device owns) but this device is not paired with gets an `UnpairedVaultRow`: who
-backs up to it, and Add to Fleet to pair with it. Vault has no sidebar section of its own.
+backs up to it, and Add a machine to sign in to it. Vault has no sidebar section of its own.
 
 The vault's page (`VaultPage`) reads "Connected · backing up 2 hosts · last batch 3 min. ago".
 Its owners get two tabs: **Overview** and **Secrets** (the sets, their grants and secrets, and the
@@ -212,7 +212,7 @@ install's terminal, so the machine's versions are current when the job ends.
 **Adding a device** (`AddDevice.swift`). A device with machines offers **Add a device…** under
 the You page's Devices (§8.9) and at the foot of Fleet. Its sheet (`AddDeviceSheet`) shows the `herder://fleet`
 link of `Client::share()` as a QR code with Copy, and three steps: install herder on the other
-device, scan this code with it (Add to Fleet › From another device), approve with your passkey,
+device, scan this code with it (I already use herder, or Add a machine), approve with your passkey,
 the same one, synced by iCloud Keychain or a password manager. The link grants nothing by
 itself. The other device takes it from the scanner, a paste or an opened link, and
 `JoinFleetSheet` lists every machine in it, "Sign in to 5 machines as you": one passkey
@@ -247,6 +247,42 @@ person. Rows end Member/Owner ✓, already on this device, can't reach it (on Ta
 invite was used or has expired (ask Tomas for a new link), or the machine's error; **Try
 Again** retries what is left, and **Start Using herder** closes it. `InviteScreenshotTests`
 draws the form, the link, and joining before and after.
+
+**Adding a machine** (`AddMachine.swift`, flow 3 of the onboarding design). Fleet's header
+action, and Welcome's "Add another machine", open **Add a machine**: one sheet that runs
+Install · Approve · Done under a `FlowProgress` bar (numbered circles joined by lines on the
+Mac, a bar per step on the iPhone). It replaces Add to Fleet's device / machine / vault chooser,
+the Claim your machines sheet that came up on launch and Fleet's claim banner.
+
+- **Install** has three tabs (`MachineSource`): **Linux or Mac** (`curl -fsSL
+  https://herder.sh/install | sh` then `herder service install`), **Kubernetes** (the vault of
+  `deploy/vault.yaml`, then `herder claim` in its pod) and **Has herder** (`herder claim`).
+  Each command prints the machine's `herder://own` link and its QR code. The Mac watches the
+  clipboard and goes on as soon as a herder link is copied; the link can be pasted into the
+  field too, and the hint says machines on Tailscale need Tailscale on this Mac. The iPhone's
+  footer is **Scan the Code** (the camera takes the sheet's place) and **Paste a Link**. Below,
+  "Or a vault your machines use" lists the vaults your machines back up to that this device has
+  not signed in to (`UnpairedVault`), each with **Sign In**: a vault is added the way a machine
+  is. A `herder://login` or `herder://fleet` link hands over to its own sheet, in this one's place.
+- **Approve** names the machine ("Make gpu-box yours"), with its address and short fingerprint in
+  secondary monospace and the code its terminal shows to compare. **As** shows the passkey that
+  approves: your name as your machines list you, and where your passkeys are kept, by their
+  AAGUID (`PasskeyHome`: "Your passkey in Apple Passwords"). **Approve with Face ID** (or Touch
+  ID) is the one forward button, blue; **Not Mine** goes back to Install. On a device with no
+  machines, "New to herder? Create a passkey" asks a name and makes the passkey as it approves.
+- **Done** reads "gpu-box is yours · You’re its owner." It lists your devices: this one signed
+  in, your other Macs and iPhones not on it yet with **Add a Device** to bring it over, terminals
+  not needed. When you own a connected vault and the machine backs up nowhere, **Back up to
+  herder-vault-0** is on, and links the machine at once (`pair_vault_host`, then `link_vault`);
+  turning it off sets the link's backup and secrets off. The footer is **Start a Session on It**
+  and **Done**.
+
+Claim your machines (`ClaimSheet`), which moves machines that still know you by an old
+per-machine user to your passkey and asks about the users nobody can place, no longer comes up
+on launch and has no Fleet banner: it opens from People (`fleet.offerClaim`), the entry Setup's
+Needs you takes over. A `herder://own` link opened from outside the app, and a vault set up from
+a machine's Backup, still approve in `ApproveSheet`. `AddMachineScreenshotTests` draws Install,
+Kubernetes, Approve, Done and a vault to sign in to (`mac-add-machine-*.png`, `mac-add-vault.png`).
 
 ### 4.5 Usage (`UsageView`)
 
@@ -385,7 +421,8 @@ A device with no machines shows Welcome full screen, in place of the tabs or the
 
 - **I’m new to herder**: three steps, under a progress bar (`WelcomeProgress`: You · Machine ·
   Approve), each with one forward button.
-- **I already use herder**: Add to Fleet › From another device, the camera on iPhone (§4.4), so
+- **I already use herder**: Add a machine, which takes the other device's link, the camera on
+  iPhone (§4.4), so
   a returning person signs in with the passkey they have and never becomes a second person.
 - **Explore a demo**, quietly under the two. A teammate's invite line ("Got an invite from a
   teammate? Open it") shows once the app can open `herder://invite` links; `WelcomeView(invite:)`
@@ -569,7 +606,7 @@ Screenshots: `mac-session.png`, `mac-session-approval.png`, `mac-session-running
 | Permission mode, ⋯ | menu | menu | SwiftUI `Menu` |
 | New Session | sheet | sheet, full width | `ProjectPicker` |
 | Machine, account, project settings, vault, sub-agent | page in the main area (§8.5) | pushed | `DetailPage`, `Page` |
-| Add to Fleet, Add Account, Add Secret, New Skill, Import Skill, Add MCP Server, Fork | sheet, 560 pt (`SheetScaffold`) | system sheet, full width | `SheetScaffold` |
+| Add a machine, Add Account, Add Secret, New Skill, Import Skill, Add MCP Server, Fork | sheet, 560 pt (`SheetScaffold`) | system sheet, full width | `SheetScaffold` |
 | Draft session | session pane | full screen | `DraftSessionView` |
 | Activity (installs, logins, sign-ins) | popover (560 pt) from the header chip | sheet from the toolbar | `ActivityPanel` |
 | Toasts (archived, undo) | bottom, centred capsule | same | `ToastView` |
@@ -585,7 +622,7 @@ Rules:
   right (§8.8).
 - **Sheets never open sheets.** A sheet is a short create flow or a confirmation. What it leads
   to replaces it (Set Up on Other Machines hands its login to Add Account in its place; the
-  QR scanner takes Add to Fleet's place), or is a page. `NoNestedSheetsTests` fails on any view
+  QR scanner takes Add a machine's place), or is a page. `NoNestedSheetsTests` fails on any view
   that draws a `SheetScaffold` and presents a sheet or a full-screen cover.
 
 Screenshots: `mac-session-inspector.png`, `ios-session-inspector.png` (today's side pane on a
@@ -673,6 +710,7 @@ blindness. No view uses a literal colour; new colours are added to `Theme` first
 | `Pane`, `PaneButton`, `IconButton`, `Sidebar` | `DesktopShell.swift` | the regular-width frame; `PaneButton(prominent:)` is a page's main action |
 | `HeaderButton`, `HeaderLabel`, `headerControl`, `HeaderMenuStyle`, `titleLine` | `Design/HeaderButton.swift` | every page, pane and session header's controls (§8.4) |
 | `SessionColumn` | `SessionView.swift` | the column the header, banner, transcript and composer share |
+| `FlowProgress` | `Design/FlowProgress.swift` | a guided flow's steps (Add a machine): numbered circles on the Mac, bars on the iPhone |
 
 ### 8.4 Design system (P14.2)
 
@@ -835,7 +873,8 @@ A create sheet is one sheet deep and short: its fields, each a label and a contr
 under it (an example goes in the placeholder), at most one line of hint beside the footer's one
 primary button (`SheetScaffold(hint:)`), and no terminal. What it starts runs in Activity, and
 the sheet closes. Add Account, Add Secret, New Skill, Import Skill, Add MCP Server, Import MCP
-Servers and Add to Fleet follow it.
+Servers and Add a machine follow it; Add a machine is a guided flow, with its progress and
+one blue forward button per step.
 
 **Add Account** (`AddAccountSheet`, `AddAccountForm`) adds one login on several machines at
 once: the provider as tiles, a checklist of the machines (`AccountTarget`; every one it can be
