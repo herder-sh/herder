@@ -251,7 +251,6 @@ extension Lists {
 /// A task opens beside the list, or is pushed.
 struct BoardView: View {
     let fleet: Fleet
-    @Binding var sheet: AppSheet?
     /// Where an opened task opens on iPad and the Mac; `nil` pushes it.
     var selection: Binding<SessionKey?>?
     var query = ""
@@ -269,9 +268,7 @@ struct BoardView: View {
             // On the phone; iPad's shell says it under the Board's title.
             if selection == nil { ConnectionLine(machines: lists.machines).taskListRow() }
             #endif
-            if lists.machines.isEmpty {
-                EmptyFleet { sheet = .pair($0) }.taskListRow()
-            } else if sections.isEmpty {
+            if sections.isEmpty {
                 Text(query.isEmpty ? "Nothing open." : "No tasks match.")
                     .foregroundStyle(Theme.tertiary)
                     .padding(.vertical, 24)

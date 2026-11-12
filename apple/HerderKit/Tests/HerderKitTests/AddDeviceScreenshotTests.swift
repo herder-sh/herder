@@ -8,8 +8,7 @@ import Testing
 
 /// Draws getting a second device onto your machines, at the Mac sheet's width and the
 /// iPhone's: Add a Device with its QR code, signing in to the machines it shares with some
-/// failing, and the Board of a device with no machines yet. With `HERDER_SCREENSHOT_DIR` set,
-/// also writes them there.
+/// failing. With `HERDER_SCREENSHOT_DIR` set, also writes them there.
 @MainActor struct AddDeviceScreenshotTests {
     nonisolated static let widths = [(560.0, "mac"), (390.0, "ios")]
 
@@ -47,12 +46,6 @@ import Testing
         } footer: {
             JoinFleetButtons(join: join, biometry: "Face ID")
         }, width: width, height: 900, named: "\(platform)-join-fleet.png")
-    }
-
-    @Test(arguments: widths)
-    func drawsTheEmptyFleet(width: Double, platform: String) throws {
-        try shoot(EmptyFleet { _ in }.padding(20).frame(maxHeight: .infinity, alignment: .top).background(.ground),
-                  width: width, height: 460, named: "\(platform)-empty-fleet.png")
     }
 
     private func shoot(_ preview: some View, width: Double, height: Double, named name: String) throws {

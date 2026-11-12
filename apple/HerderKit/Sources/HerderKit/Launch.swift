@@ -3,7 +3,7 @@ import Foundation
 import OSLog
 
 /// The app's launch, timed from the process starting: signposts Instruments shows under
-/// `sh.herder` › `launch`, and once the Board shows content, one line that says when each step
+/// `sh.herder` › `launch`, and once the Board or Welcome shows, one line that says when each step
 /// came. With `HERDER_LAUNCH_REPORT` set, that line also goes to standard output, for
 /// apple/scripts/launch-ios.sh to read through `devicectl --console`.
 @MainActor
@@ -13,7 +13,7 @@ enum Launch {
         case profile
         /// The fleet's first frame is on screen, under the splash.
         case frame
-        /// The Board lists sessions.
+        /// The Board lists sessions, or Welcome shows on a device with no machines.
         case content
         /// The splash has gone: the Board is what you see.
         case shown

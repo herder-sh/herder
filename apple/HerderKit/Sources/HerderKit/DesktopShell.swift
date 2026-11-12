@@ -141,7 +141,7 @@ struct DesktopShell: View {
         case .board:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
                 Pane(fleet: fleet, title: "Board", status: boardStatus(lists), switcher: switcher, query: $query) {
-                    drafting { BoardView(fleet: fleet, sheet: $sheet, selection: $session, query: query) }
+                    drafting { BoardView(fleet: fleet, selection: $session, query: query) }
                 } actions: {
                     BoardSortMenu(inHeader: true)
                     PaneButton(title: "New Session", symbol: "plus", prominent: true) { sheet = .newSession }
