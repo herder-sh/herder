@@ -22,13 +22,13 @@ use herder_protocol::{
     PasskeyKey, PasskeyRegistration, PermissionMode, PersonCard, PersonId, PersonInfo,
     PersonPasskey, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId,
     Provider, ProviderBinary, ProviderLogin, ProviderLoginState, ProviderReload, ProviderStatus,
-    PullRequest, QuestionId, QueuedPrompt, RegistrationResponse, Relay, ResourceSettings,
-    ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef, SecretRequest, SecretSet,
-    SecretStoreRequest, SecretValue, SessionHead, SessionId, SessionOrigin, SessionSkill,
-    SessionStatus, SessionUsage, SignIn, SkillFile, SkillReload, SkillSource, SkillsStatus,
-    Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource,
-    TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow,
-    UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
+    PullRequest, QuestionId, QueuedPrompt, RefusedPasskey, RegistrationResponse, Relay,
+    ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef,
+    SecretRequest, SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId,
+    SessionOrigin, SessionSkill, SessionStatus, SessionUsage, SignIn, SignInRefusal, SkillFile,
+    SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink,
+    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen,
+    UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -1444,6 +1444,20 @@ pub struct DirectoryEntry {
 pub struct ErrorInfo {
     pub code: ErrorCode,
     pub message: String,
+}
+
+#[uniffi::remote(Enum)]
+pub enum SignInRefusal {
+    OtherPasskey { passkeys: Vec<RefusedPasskey> },
+    UnknownPerson { owners: Vec<String> },
+    UserNotVerified,
+}
+
+#[uniffi::remote(Record)]
+pub struct RefusedPasskey {
+    pub label: String,
+    #[uniffi(default = None)]
+    pub aaguid: Option<String>,
 }
 
 #[uniffi::remote(Enum)]

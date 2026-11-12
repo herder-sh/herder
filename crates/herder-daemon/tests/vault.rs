@@ -958,7 +958,7 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
     let [only] = sent.as_slice() else {
         panic!("the vault sent more than a refusal: {sent:?}");
     };
-    let ServerMessage::Error { error } = serde_json::from_str(only).unwrap() else {
+    let ServerMessage::Error { error, .. } = serde_json::from_str(only).unwrap() else {
         panic!("expected a refusal: {only}");
     };
     assert_eq!(error.code, ErrorCode::Forbidden);

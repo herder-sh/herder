@@ -5,7 +5,7 @@ extension HerderError {
     /// The error as a sentence for the UI. The generated `errorDescription` is a debug dump.
     public var message: String {
         switch self {
-        case .InvalidLink(let detail), .Local(let detail): detail
+        case .InvalidLink(let detail), .Local(let detail), .SignInRefused(_, let detail): detail
         case .Unreachable(let detail): "No address answered: \(detail)"
         case .UnknownMachine(let hostId): "No paired machine \(hostId)."
         case .Rejected(let info): needsNewerHerder ? Self.newerHerder : info.message

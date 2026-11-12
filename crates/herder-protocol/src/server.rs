@@ -184,6 +184,10 @@ pub enum ServerMessage {
     Error {
         /// What went wrong.
         error: ErrorInfo,
+        /// Why a sign-in was refused, when its passkey is the reason; the error is then
+        /// `forbidden`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refusal: Option<crate::SignInRefusal>,
     },
     /// Answers a [`crate::ClientMessage::Sync`] once everything the daemon sent before it on
     /// this connection is out.

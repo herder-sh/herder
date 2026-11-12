@@ -26,8 +26,11 @@ use crate::ws::Identity;
 
 const FIXTURES: &str = include_str!("fixtures/passkeys.json");
 
+/// User verified, in the authenticator data's flags.
+const VERIFIED: u8 = 0x04;
+
 /// User present, user verified, backup eligible and backed up: a synced passkey.
-const FLAGS: u8 = 0x01 | 0x04 | 0x08 | 0x10;
+const FLAGS: u8 = 0x01 | VERIFIED | 0x08 | 0x10;
 
 /// Attested credential data follows.
 const ATTESTED: u8 = 0x40;
@@ -157,8 +160,18 @@ impl Authenticator {
         self.assert_raw(&challenge.challenge, "https://herder.sh")
     }
 
+    /// Signs `challenge` without user verification, as a password manager that is unlocked
+    /// may when not asked to verify.
+    pub fn assert_unverified(&self, challenge: &PasskeyChallenge) -> PasskeyAssertion {
+        self.sign(&challenge.challenge, "https://herder.sh", FLAGS & !VERIFIED)
+    }
+
     /// Signs the base64url `challenge` as if for `origin`.
     pub fn assert_raw(&self, challenge: &str, origin: &str) -> PasskeyAssertion {
+        self.sign(challenge, origin, FLAGS)
+    }
+
+    fn sign(&self, challenge: &str, origin: &str, flags: u8) -> PasskeyAssertion {
         let client_data = serde_json::to_vec(&serde_json::json!({
             "type": "webauthn.get",
             "challenge": challenge,
@@ -166,7 +179,7 @@ impl Authenticator {
             "crossOrigin": false,
         }))
         .unwrap();
-        let auth_data = self.auth_data(FLAGS);
+        let auth_data = self.auth_data(flags);
         let mut signed = auth_data.clone();
         signed.extend(digest(&SHA256, &client_data).as_ref());
         let signature = self.key.sign(&SystemRandom::new(), &signed).unwrap();

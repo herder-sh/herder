@@ -689,7 +689,7 @@ async fn a_wrong_protocol_version_is_refused() {
             passkey: false,
         }))
         .await;
-    let ServerMessage::Error { error } = client.recv().await else {
+    let ServerMessage::Error { error, .. } = client.recv().await else {
         panic!("expected an error");
     };
     assert_eq!(error.code, ErrorCode::BadRequest);
@@ -713,7 +713,7 @@ async fn a_command_this_build_cannot_read_is_refused_as_that_command() {
     client.ws.send(Message::text("{}")).await.unwrap();
     assert!(matches!(
         client.recv().await,
-        ServerMessage::Error { error } if error.code == ErrorCode::BadRequest
+        ServerMessage::Error { error, .. } if error.code == ErrorCode::BadRequest
     ));
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
 }
@@ -768,7 +768,7 @@ async fn commands_are_answered_by_the_backend() {
     client.subscribe(&SessionId::new("nope"), 0).await;
     assert!(matches!(
         client.recv().await,
-        ServerMessage::Error { error } if error.code == ErrorCode::NotFound
+        ServerMessage::Error { error, .. } if error.code == ErrorCode::NotFound
     ));
 }
 
@@ -964,7 +964,7 @@ async fn refused(mut client: Client) -> ErrorInfo {
             passkey: false,
         }))
         .await;
-    let ServerMessage::Error { error } = client.recv().await else {
+    let ServerMessage::Error { error, .. } = client.recv().await else {
         panic!("expected the device to be refused");
     };
     assert!(

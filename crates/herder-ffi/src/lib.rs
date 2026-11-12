@@ -28,7 +28,7 @@ use herder_client_core::{
 };
 use herder_protocol::{
     AccountId, AwsProfile, CommandBody, CommandResult, ErrorInfo, HostId, PasskeyAssertion,
-    PasskeyChallenge, PasskeyCreation, SessionId, SignIn, TerminalId,
+    PasskeyChallenge, PasskeyCreation, SessionId, SignIn, SignInRefusal, TerminalId,
 };
 use tokio::runtime::{Handle, Runtime};
 use tokio_util::task::AbortOnDropHandle;
@@ -56,6 +56,15 @@ pub enum HerderError {
         /// The daemon's error; `info.code` says why.
         info: ErrorInfo,
     },
+    /// The machine refused a sign-in by passkey and says why; its error is `forbidden`.
+    #[error("{detail}")]
+    SignInRefused {
+        /// Why: another passkey it knows the person by, an unknown person, or no user
+        /// verification.
+        refusal: SignInRefusal,
+        /// The machine's words for it.
+        detail: String,
+    },
     /// No address of the machine answered.
     #[error("no address answered: {detail}")]
     Unreachable {
@@ -82,6 +91,10 @@ impl From<client_core::Error> for HerderError {
             client_core::Error::InvalidLink { message } => Self::InvalidLink { detail: message },
             client_core::Error::UnknownMachine { host_id } => Self::UnknownMachine { host_id },
             client_core::Error::Rejected { info } => Self::Rejected { info },
+            client_core::Error::SignInRefused { refusal, message } => Self::SignInRefused {
+                refusal,
+                detail: message,
+            },
             client_core::Error::Unreachable { message } => Self::Unreachable { detail: message },
             client_core::Error::Local { message } => Self::Local { detail: message },
             client_core::Error::Closed => Self::Closed,

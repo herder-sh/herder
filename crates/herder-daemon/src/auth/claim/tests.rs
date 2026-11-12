@@ -317,7 +317,8 @@ fn herder_claim_opens_the_owner_window_on_a_daemon_with_an_owner() {
             },
             &CancellationToken::new(),
         )
-        .unwrap_err();
+        .unwrap_err()
+        .error;
     assert_eq!(refused.code, ErrorCode::Forbidden);
     assert!(refused.message.contains("herder claim"), "{refused:?}");
 }

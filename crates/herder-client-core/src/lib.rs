@@ -155,8 +155,8 @@ use herder_protocol::{
     Account, AccountId, ApprovalRequest, AwsProfile, Command, CommandBody, CommandId,
     CommandResult, ErrorCode, ErrorInfo, Event, FailoverSettings, FleetHost, HostId, HostResources,
     Item, PasskeyAssertion, PasskeyChallenge, PersonId, Project, Provider, Role, SessionHead,
-    SessionId, SessionSkill, SessionUsage, SkillsStatus, Terminal, TerminalId, Timestamp,
-    UpdateStage, UserId, VaultStatus,
+    SessionId, SessionSkill, SessionUsage, SignInRefusal, SkillsStatus, Terminal, TerminalId,
+    Timestamp, UpdateStage, UserId, VaultStatus,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -214,6 +214,15 @@ pub enum Error {
     Rejected {
         /// The daemon's error; `info.code` says why.
         info: ErrorInfo,
+    },
+    /// The machine refused a sign-in by passkey, for `refusal`: its error is `forbidden`.
+    #[error("{message}")]
+    SignInRefused {
+        /// Why: another passkey it knows the person by, an unknown person, or no user
+        /// verification.
+        refusal: SignInRefusal,
+        /// The machine's words for it.
+        message: String,
     },
     /// No address of the machine answered; see [`Client::reconnect`].
     #[error("no address answered: {message}")]

@@ -28,8 +28,8 @@ use herder_daemon::{Hub, session};
 use herder_protocol::{
     AccountId, AwsDeviceCode, AwsProfile, CommandBody, CommandResult, Constraint, Container,
     ContainerState, ErrorCode, Event, EventBody, FailoverSettings, HostId, HostResources, ItemBody,
-    NewPerson, PasskeyChallenge, PermissionMode, PersonPasskey, Provider, Role, SessionId,
-    SessionStatus, SessionUsage, SignIn, TerminalPurpose, TurnId,
+    NewPerson, PasskeyAssertion, PasskeyChallenge, PermissionMode, PersonPasskey, Provider, Role,
+    SessionId, SessionStatus, SessionUsage, SignIn, SignInRefusal, TerminalPurpose, TurnId,
 };
 use herder_store::Store;
 use tokio::net::{TcpListener, TcpStream};
@@ -2315,4 +2315,71 @@ async fn the_app_signs_with_face_id_and_approves_what_a_terminal_asks() {
         2,
         "refusing needs no Face ID"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_passkey_sign_in_says_why() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let owner = Client::open(
+        tmp.path().join("owner").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    daemon.sign_in(&owner, "alice", daemon.addr).await.unwrap();
+    let alice = Authenticator::of(&daemon.auth, "alice").unwrap();
+
+    let phone = Client::open(
+        tmp.path().join("phone").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let hosts = vec![daemon.addr.to_string()];
+    let refused = |sign: Box<dyn FnOnce(&PasskeyChallenge) -> PasskeyAssertion + Send>| {
+        let (phone, hosts, fingerprint) =
+            (phone.clone(), hosts.clone(), daemon.fingerprint.clone());
+        async move {
+            let pending = phone.sign_in(hosts, fingerprint).await.unwrap();
+            let assertion = sign(&pending.challenge());
+            pending
+                .finish(SignIn::Passkey { assertion })
+                .await
+                .unwrap_err()
+        }
+    };
+
+    // Nobody on the machine has this passkey: ask its owner.
+    let stranger = Authenticator::new("sam", &[7; 16]);
+    let unknown = refused(Box::new(move |challenge| stranger.assert(challenge))).await;
+    assert!(
+        matches!(
+            &unknown,
+            Error::SignInRefused { refusal: SignInRefusal::UnknownPerson { owners }, .. }
+                if owners == &["alice".to_owned()]
+        ),
+        "{unknown:?}"
+    );
+
+    // Alice's passkey, but Face ID was skipped.
+    let skipped = refused(Box::new(move |challenge| {
+        alice.assert_unverified(challenge)
+    }))
+    .await;
+    assert!(
+        matches!(
+            &skipped,
+            Error::SignInRefused {
+                refusal: SignInRefusal::UserNotVerified,
+                ..
+            }
+        ),
+        "{skipped:?}"
+    );
+    assert!(phone.machines().is_empty());
 }
