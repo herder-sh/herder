@@ -93,8 +93,9 @@ final class Approval {
         case failed(String)
     }
 
-    /// Approves with the passkey: the machine to open after, for a new one.
-    typealias Run = @MainActor (Authenticator) async throws -> HostId?
+    /// Approves with the passkey you have, or with one made now under the name given: the
+    /// machine to open after, for a new one.
+    typealias Run = @MainActor (Authenticator, _ newPasskey: String?) async throws -> HostId?
 
     let request: ApprovalRequest
     private(set) var state = State.asking
@@ -109,10 +110,11 @@ final class Approval {
         self.run = run
     }
 
-    func approve() async {
+    /// Approves with the passkey you have; with `newPasskey`, a name, with one made now instead.
+    func approve(newPasskey: String? = nil) async {
         state = .signing
         do {
-            machine = try await run(authenticator)
+            machine = try await run(authenticator, newPasskey)
             state = .approved
         } catch {
             state = isCancelled(error) ? .asking : .failed(describe(error))
@@ -150,13 +152,14 @@ extension Fleet {
     }
 
     /// Approves `request` with your passkey: a new machine takes you as its owner and is saved,
-    /// its host id returned; a terminal is signed in as you.
-    func approve(_ request: ApprovalRequest, with authenticator: Authenticator) async throws -> HostId? {
+    /// its host id returned; a terminal is signed in as you. With `newPasskey`, a name, a machine
+    /// takes a new person of that name, with a passkey made now.
+    func approve(_ request: ApprovalRequest, with authenticator: Authenticator,
+                 newPasskey: String? = nil) async throws -> HostId? {
         switch request.kind {
         case .machine:
             let pending = try await client.signIn(hosts: request.hosts, fingerprint: request.fingerprint)
-            let person = try await owner(pending, authenticator: authenticator)
-            let hostId = try await pending.finish(signIn: .claimOwnership(code: request.code, person: person)).hostId
+            let hostId = try await claim(request, pending, authenticator: authenticator, newPasskey: newPasskey)
             settleClaim(request, .success(hostId))
             return hostId
         case .login:
@@ -179,35 +182,41 @@ extension Fleet {
         return try await pending.finish(signIn: .passkey(assertion: assertion)).hostId
     }
 
-    /// You, as a new machine's owner: with the passkey your machines know, else with one made now.
-    private func owner(_ pending: PendingSignIn, authenticator: Authenticator) async throws -> NewPerson {
+    /// Takes the machine of `pending` as yours: with the passkey your machines know you by; on a
+    /// device with none of your machines yet, with the passkey you have, as the person the
+    /// machine already knows by it, never as a new one; with `newPasskey`, a name, as a new
+    /// person with a passkey made now.
+    private func claim(_ request: ApprovalRequest, _ pending: PendingSignIn, authenticator: Authenticator,
+                       newPasskey: String?) async throws -> HostId {
+        if let name = newPasskey {
+            guard let creation = pending.registration(),
+                  let userId = Data(base64URL: creation.userHandle), let challenge = Data(base64URL: creation.challenge)
+            else { throw HerderError.Local(detail: "the machine did not offer to make a passkey") }
+            let registration = try await authenticator.register(name: name, userId: userId, challenge: challenge)
+            let person = NewPerson(name: name, passkey: .register(registration: registration))
+            return try await pending.finish(signIn: .claimOwnership(code: request.code, person: person)).hostId
+        }
         let people = FleetPeople(fleet: self)
         await people.reload(machines)
-        let me = FleetPeople.me(machines)
-        let known = Self.yours(me, in: people.people)
+        let known = Self.yours(FleetPeople.me(machines), in: people.people)
+        let assertion = try await authenticator.sign(pending.challenge())
         if !known.isEmpty {
-            let assertion = try await authenticator.sign(pending.challenge())
             guard let person = known.first(where: { $0.passkeys.contains { $0.credentialId == assertion.id } }),
                   let key = person.passkeys.first(where: { $0.credentialId == assertion.id })
             else { throw HerderError.Local(detail: "that passkey is not the one your machines know") }
-            return NewPerson(name: person.name, passkey: .existing(personId: person.personId, key: key, assertion: assertion))
+            let owner = NewPerson(name: person.name,
+                                  passkey: .existing(personId: person.personId, key: key, assertion: assertion))
+            return try await pending.finish(signIn: .claimOwnership(code: request.code, person: owner)).hostId
         }
-        guard let creation = pending.registration(),
-              let userId = Data(base64URL: creation.userHandle), let challenge = Data(base64URL: creation.challenge)
-        else { throw HerderError.Local(detail: "the machine did not offer to make a passkey") }
-        let name = Self.ownerName(people.people.values.joined().first { $0.personId == me }?.name,
-                                  fullName: Self.deviceUserName)
-        let registration = try await authenticator.register(name: name, userId: userId, challenge: challenge)
-        return NewPerson(name: name, passkey: .register(registration: registration))
+        do {
+            return try await pending.finish(signIn: .passkey(assertion: assertion)).hostId
+        } catch HerderError.Rejected(let info) where info.code == .forbidden {
+            throw HerderError.Local(detail: "\(request.name) does not know this passkey yet. Approve a machine that knows you first, then this one.")
+        }
     }
 
-    /// Your name for a new passkey: as your machines know you, else the device's user's, else
-    /// "Owner", as a machine takes no empty name.
-    nonisolated static func ownerName(_ known: String?, fullName: String) -> String {
-        known ?? (fullName.isEmpty ? "Owner" : fullName)
-    }
-
-    /// The device's user's full name; empty on iOS, whose user is always "Mobile User".
+    /// The device's user's full name, to suggest for a new passkey; empty on iOS, whose user is
+    /// always "Mobile User".
     nonisolated static var deviceUserName: String {
         #if os(macOS)
         NSFullUserName()

@@ -79,7 +79,8 @@ struct ApprovalTests {
 
     @Test func approvingRunsWithThePasskeyAndKeepsTheNewMachine() async {
         let authenticator = FakeAuthenticator()
-        let approval = Approval(Self.machine, authenticator: authenticator) { passkey in
+        let approval = Approval(Self.machine, authenticator: authenticator) { passkey, newPasskey in
+            #expect(newPasskey == nil)
             _ = try await passkey.sign(Self.challenge)
             return "new-server-host"
         }
@@ -101,21 +102,23 @@ struct ApprovalTests {
         #expect(Fleet.keyed(nil, in: people) == nil)
     }
 
-    @Test func aNewPasskeyIsNamedAsYourMachinesKnowYouElseNeverEmpty() {
-        #expect(Fleet.ownerName("Tomas", fullName: "Tomas A") == "Tomas")
-        #expect(Fleet.ownerName(nil, fullName: "Tomas A") == "Tomas A")
-        // iOS has no user name.
-        #expect(Fleet.ownerName(nil, fullName: "") == "Owner")
+    @Test func aNewPasskeyIsMadeOnlyWhenAskedForUnderTheNameGiven() async {
+        let approval = Approval(Self.machine, authenticator: FakeAuthenticator()) { _, newPasskey in
+            #expect(newPasskey == "Tomas")
+            return "new-server-host"
+        }
+        await approval.approve(newPasskey: "Tomas")
+        #expect(approval.state == .approved)
     }
 
     @Test func closingFaceIDAsksAgainButARefusalSaysWhy() async {
         let authenticator = FakeAuthenticator()
         authenticator.failure = ASAuthorizationError(.canceled)
-        let approval = Approval(Self.machine, authenticator: authenticator) { try await $0.sign(Self.challenge); return nil }
+        let approval = Approval(Self.machine, authenticator: authenticator) { passkey, _ in try await passkey.sign(Self.challenge); return nil }
         await approval.approve()
         #expect(approval.state == .asking)
         authenticator.failure = nil
-        let refused = Approval(Self.machine, authenticator: authenticator) { _ in
+        let refused = Approval(Self.machine, authenticator: authenticator) { _, _ in
             throw HerderError.Local(detail: "the code expired")
         }
         await refused.approve()
