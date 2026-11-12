@@ -141,7 +141,7 @@ struct MachinesView: View {
                         }
                     }
                 }
-                if fleet.shareLink != nil {
+                if fleet.canShare {
                     SettingsGroup {
                         AddRow(title: "Add a device…") { sheet = .addDevice }
                             .accessibilityIdentifier("add-device")

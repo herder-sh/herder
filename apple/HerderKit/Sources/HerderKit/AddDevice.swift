@@ -90,6 +90,8 @@ final class FleetJoin {
     /// Signs this device in to a machine with your passkey: its name.
     typealias SignIn = @MainActor (FleetMachine) async throws -> String
 
+    /// Who shared the machines, and the passkeys of theirs that sign in.
+    let person: FleetPerson
     private(set) var rows: [Row]
     private(set) var running = false
     /// Whether signing in started at least once.
@@ -98,6 +100,7 @@ final class FleetJoin {
 
     /// `known` names a machine this device has already, by its fingerprint.
     init(_ link: FleetLink, known: (String) -> String?, signIn: @escaping SignIn) {
+        person = link.person
         rows = link.machines.map { Row(machine: $0, state: known($0.fingerprint).map(State.added) ?? .waiting) }
         self.signIn = signIn
     }
@@ -183,15 +186,23 @@ extension FleetJoin.State {
 }
 
 extension Fleet {
-    /// Signs this device in to `machine` of a shared fleet with your passkey: its name.
-    func join(_ machine: FleetMachine, with authenticator: Authenticator) async throws -> String {
-        let hostId = try await signIn(hosts: machine.hosts, fingerprint: machine.fingerprint, with: authenticator)
+    /// Signs this device in to `machine` of a shared fleet with one of `person`'s passkeys: its
+    /// name.
+    func join(_ machine: FleetMachine, as person: FleetPerson, with authenticator: Authenticator) async throws -> String {
+        let hostId = try await signIn(hosts: machine.hosts, fingerprint: machine.fingerprint, passkeys: person.passkeys,
+                                      with: authenticator)
         return client.machines().first { $0.hostId == hostId }?.name ?? FleetJoin.name(machine)
     }
 
-    /// The link that adds another device of yours to every machine this one has: nil while it
-    /// has none.
-    var shareLink: String? { client.share().map(fleetLinkToString) }
+    /// Whether this device may share its machines: one of them knows it as a person.
+    var canShare: Bool { client.machines().contains { $0.personId != nil } }
+
+    /// The link that adds another device of yours to every machine this one has, naming you
+    /// and your passkeys, as your connected machines list them.
+    func shareLink() async throws -> String {
+        let link = try await client.share()
+        return fleetLinkToString(link: link)
+    }
 }
 
 extension FleetJoin {
@@ -209,19 +220,29 @@ extension FleetJoin {
 /// Add a Device: the link of every machine this device has, as a QR code for your other device
 /// to scan, with the steps.
 struct AddDeviceSheet: View {
-    let link: String?
+    let fleet: Fleet
+    @State private var link: Result<String, Error>?
     @Environment(\.dismiss) private var dismiss
 
     static let subtitle = "Use your machines on your iPhone, iPad or another Mac too."
 
     var body: some View {
         SheetScaffold(title: "Add a Device", subtitle: Self.subtitle, height: 820) {
-            AddDeviceSteps(link: link)
+            switch link {
+            case .success(let link)?: AddDeviceSteps(link: link)
+            case .failure(let error)?:
+                Text(describe(error)).font(.footnote).foregroundStyle(Theme.failure)
+                    .fixedSize(horizontal: false, vertical: true)
+            case nil: ProgressView().frame(maxWidth: .infinity, minHeight: 120)
+            }
         } footer: {
             Spacer()
             ActionButton(title: "Done", style: .primary) { dismiss() }
                 .frame(maxWidth: 160)
                 .keyboardShortcut(.defaultAction)
+        }
+        .task {
+            do { link = .success(try await fleet.shareLink()) } catch { link = .failure(error) }
         }
     }
 }
@@ -267,7 +288,7 @@ struct JoinFleetSheet: View {
 
     init(fleet: Fleet, link: FleetLink, authenticator: Authenticator = passkeyAuthenticator()) {
         _join = State(initialValue: FleetJoin(link, known: { fleet.machine(fingerprint: $0)?.name }) {
-            try await fleet.join($0, with: authenticator)
+            try await fleet.join($0, as: link.person, with: authenticator)
         })
     }
 

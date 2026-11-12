@@ -16,6 +16,9 @@ import Testing
     /// The names the sharing device gives the machines, as its link carries them.
     nonisolated static let names = [1: "devbox", 2: "nas", 3: "build-01", 4: "alice’s vault", 5: "mac-mini"]
 
+    /// The person sharing them, with her one passkey.
+    nonisolated static let person = FleetPerson(name: "alice", passkeys: ["Y3JlZC0x"])
+
     static func machine(_ n: Int, port: Int = 7447) -> FleetMachine {
         FleetMachine(hosts: ["100.64.0.\(n):\(port)"], fingerprint: String(repeating: String(format: "%02x", n), count: 32),
                      name: names[n])
@@ -23,7 +26,7 @@ import Testing
 
     @Test(arguments: widths)
     func drawsAddADevice(width: Double, platform: String) throws {
-        let link = fleetLinkToString(link: FleetLink(machines: (1...5).map { Self.machine($0) }))
+        let link = fleetLinkToString(link: FleetLink(person: Self.person, machines: (1...5).map { Self.machine($0) }))
         try shoot(SheetPreview(title: "Add a Device", subtitle: AddDeviceSheet.subtitle, hint: "") {
             AddDeviceSteps(link: link)
         } footer: {
@@ -33,7 +36,7 @@ import Testing
 
     @Test(arguments: widths)
     func drawsSigningInToAnotherDevicesMachines(width: Double, platform: String) async throws {
-        let join = FleetJoin(FleetLink(machines: (1...5).map { Self.machine($0) }),
+        let join = FleetJoin(FleetLink(person: Self.person, machines: (1...5).map { Self.machine($0) }),
                              known: { $0 == Self.machine(5).fingerprint ? "mac-mini" : nil }) { machine in
             switch machine.hosts[0] {
             case "100.64.0.2:7447": throw HerderError.Unreachable(detail: "timed out")

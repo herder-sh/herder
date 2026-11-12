@@ -69,8 +69,9 @@ fn the_objects_and_their_futures_are_send() {
              terminal: TerminalStream,
              changes: Changes| {
         let host = HostId::new("h");
-        future(client.sign_in(Vec::new(), String::new()));
+        future(client.sign_in(Vec::new(), String::new(), Vec::new()));
         future(client.log_in(Vec::new(), String::new(), |_, _| {}));
+        future(client.share());
         future(client.synced(host.clone()));
         future(client.send(
             host.clone(),
@@ -97,7 +98,9 @@ fn the_objects_and_their_futures_are_send() {
         future(client.aws_sso_login(host.clone(), "prod".into(), 80, 24));
         future(client.attach_terminal(host, TerminalId::new("t")));
         future(async move {
-            let pending = client.sign_in(Vec::new(), String::new()).await?;
+            let pending = client
+                .sign_in(Vec::new(), String::new(), Vec::new())
+                .await?;
             pending.finish(herder_protocol::SignIn::StartLogin).await
         });
         future(session.next());
