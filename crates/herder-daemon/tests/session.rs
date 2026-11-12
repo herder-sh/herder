@@ -10,6 +10,7 @@ use herder_adapters::acp::{AcpAdapter, AgentProfile};
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{AccountUsage, Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::Config;
+use herder_daemon::auth::Auth;
 use herder_daemon::handoff;
 use herder_daemon::projects::{Overrides, ProjectEntry, ProjectsConfig};
 use herder_daemon::resources::{
@@ -29,10 +30,10 @@ use herder_protocol::{
     Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult, Constraint, ErrorClass,
     ErrorCode, ErrorInfo, Event, EventBody, FILE_MEDIA_TYPE, FailoverTotal, HostId, Image, Item,
     ItemBody, ItemId, MAX_FILE_BYTES, MAX_TITLE_CHARS, PermissionMode, Project, ProjectId,
-    PromptFile, PromptId, Provider, QuestionId, SessionHead, SessionId, SessionStatus, Timestamp,
-    TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageWindow, UserId,
+    PromptFile, PromptId, Provider, QuestionId, Role, SessionHead, SessionId, SessionStatus,
+    Timestamp, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageWindow, UserId,
 };
-use herder_store::{NativeSession, Store};
+use herder_store::{NativeSession, QueuedPrompt, Store};
 use jiff::SignedDuration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -5761,9 +5762,17 @@ async fn a_session_created_by_provider_starts_on_its_account_with_most_room() {
 }
 
 #[tokio::test]
-async fn a_session_starts_in_its_projects_default_permission_mode_unless_given_one() {
+async fn project_permissions_and_existing_full_access_sessions_require_an_owner() {
     let dir = tempfile::tempdir().unwrap();
-    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let auth = Arc::new(Auth::open(dir.path()).unwrap());
+    let owner = auth
+        .legacy_user("alice", Role::Owner, "owner-device")
+        .user_id;
+    let member = auth
+        .legacy_user("bob", Role::Member, "member-device")
+        .user_id;
+    daemon.manager.authorize_with(auth).unwrap();
     let repo = daemon.repo.to_str().unwrap().to_owned();
     daemon
         .manager
@@ -5781,35 +5790,153 @@ async fn a_session_starts_in_its_projects_default_permission_mode_unless_given_o
             private_artifacts: false,
         }])
         .await;
-    for (given, started) in [
-        (None, PermissionMode::FullAccess),
-        (Some(PermissionMode::ReadOnly), PermissionMode::ReadOnly),
-    ] {
-        let create = CommandBody::CreateSession {
-            repo: None,
-            project_id: Some(ProjectId::new("github.com/org/app")),
-            branch: None,
-            account_id: None,
-            provider: None,
-            model: None,
-            permission_mode: given,
-            failover_pin: None,
-            chat: false,
-        };
-        let Ok(CommandResult::SessionCreated { session_id }) =
-            daemon.manager.handle(alice(), create).await
-        else {
-            panic!("expected a session");
-        };
-        let journal = daemon.journal(&session_id).await;
-        let EventBody::SessionCreated {
-            permission_mode, ..
-        } = &journal[0].body
-        else {
-            panic!("expected session_created");
-        };
-        assert_eq!(*permission_mode, started);
+    let create = |permission_mode| CommandBody::CreateSession {
+        repo: None,
+        project_id: Some(ProjectId::new("github.com/org/app")),
+        branch: None,
+        account_id: None,
+        provider: None,
+        model: None,
+        permission_mode,
+        failover_pin: None,
+        chat: false,
+    };
+    let forbidden = |result: Result<CommandResult, ErrorInfo>| {
+        assert_eq!(result.unwrap_err().code, ErrorCode::Forbidden);
+    };
+    forbidden(daemon.manager.handle(member.clone(), create(None)).await);
+    let mut arbitrary_folder = create(Some(PermissionMode::AutoEdit));
+    if let CommandBody::CreateSession {
+        repo, project_id, ..
+    } = &mut arbitrary_folder
+    {
+        *repo = Some(dir.path().to_str().unwrap().to_owned());
+        *project_id = None;
     }
+    forbidden(
+        daemon
+            .manager
+            .handle(member.clone(), arbitrary_folder)
+            .await,
+    );
+    forbidden(
+        daemon
+            .manager
+            .handle(member.clone(), create(Some(PermissionMode::FullAccess)))
+            .await,
+    );
+    let CommandResult::SessionCreated { session_id: full } = daemon
+        .manager
+        .handle(owner.clone(), create(None))
+        .await
+        .unwrap()
+    else {
+        panic!("expected the owner to inherit the project mode");
+    };
+    assert!(matches!(
+        &daemon.journal(&full).await[0].body,
+        EventBody::SessionCreated {
+            permission_mode: PermissionMode::FullAccess,
+            ..
+        }
+    ));
+    forbidden(
+        daemon
+            .manager
+            .handle(member.clone(), prompt_with(&full, "First.", Vec::new()))
+            .await,
+    );
+    let CommandResult::SessionCreated { session_id: normal } = daemon
+        .manager
+        .handle(member.clone(), create(Some(PermissionMode::Ask)))
+        .await
+        .unwrap()
+    else {
+        panic!("expected a normal member session");
+    };
+    let full_access = CommandBody::SetPermissionMode {
+        session_id: normal.clone(),
+        mode: PermissionMode::FullAccess,
+    };
+    forbidden(
+        daemon
+            .manager
+            .handle(member.clone(), full_access.clone())
+            .await,
+    );
+    forbidden(
+        daemon
+            .manager
+            .handle(
+                member.clone(),
+                CommandBody::AnswerApproval {
+                    session_id: normal.clone(),
+                    approval_id: ApprovalId::new("approval"),
+                    decision: ApprovalDecision::Allow,
+                },
+            )
+            .await,
+    );
+    let gate = daemon.hold().await;
+    daemon.prompt(member, &normal, "First.").await;
+    let result = daemon.manager.handle(owner, full_access).await;
+    assert_eq!(result.unwrap_err().code, ErrorCode::Conflict);
+    drop(gate);
+    daemon.until_status(SessionStatus::Idle).await;
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_persisted_member_prompt_cannot_run_in_full_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session_id = daemon.create().await;
+    daemon.stop().await;
+    let auth = Arc::new(Auth::open(dir.path()).unwrap());
+    let owner = auth
+        .legacy_user("alice", Role::Owner, "owner-device")
+        .user_id;
+    let member = auth
+        .legacy_user("bob", Role::Member, "member-device")
+        .user_id;
+    let mut store = Store::open(dir.path().join("herder.db")).unwrap();
+    store
+        .set_queued_prompts(
+            &session_id,
+            &[QueuedPrompt {
+                prompt_id: PromptId::new("queued-by-member"),
+                by: Some(member),
+                text: "First.".into(),
+                attachments: Vec::new(),
+                retry: false,
+                retry_at: None,
+                agent_message: None,
+            }],
+        )
+        .unwrap();
+    store
+        .append(herder_store::NewEvent {
+            session_id: session_id.clone(),
+            at: Timestamp::now(),
+            by: Some(owner),
+            body: EventBody::PermissionModeChanged {
+                mode: PermissionMode::FullAccess,
+            },
+        })
+        .unwrap();
+    drop(store);
+
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    daemon.manager.authorize_with(auth).unwrap();
+    daemon.manager.resume().await.unwrap();
+    let failed = daemon
+        .events_until(|body| matches!(body, EventBody::TurnFailed { .. }))
+        .await;
+    assert!(matches!(
+        &failed.last().unwrap().body,
+        EventBody::TurnFailed { error, .. } if error.message.contains("owners only")
+    ));
+    assert!(daemon.starts.lock().unwrap().is_empty());
     daemon.stop().await;
 }
 

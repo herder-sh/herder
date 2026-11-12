@@ -2300,7 +2300,7 @@ async fn agents_act_for_whoever_prompted_their_current_turn() {
     child_tools.ok("command", list.clone()).await;
     assert_eq!(last(), bob);
 
-    // Another agent's message starts a turn for no one: the turn still acts for bob.
+    // Another agent's message cannot act as the previous user of the recipient.
     let other = daemon.primary(PermissionMode::Ask).await;
     let mut other_tools = daemon.connect(&other);
     let message = json!({ "session_id": primary, "text": "Plan.", "message_id": "m-1" });
@@ -2310,7 +2310,11 @@ async fn agents_act_for_whoever_prompted_their_current_turn() {
             matches!(event, EventBody::TurnCompleted { .. })
         })
         .await;
-    tools.ok("command", list.clone()).await;
+    assert_eq!(tools.fails("command", list.clone()).await, "not_allowed");
+    assert_eq!(
+        child_tools.fails("command", list.clone()).await,
+        "not_allowed"
+    );
     assert_eq!(last(), bob);
 
     // Alice prompts again: the agents act for her again.

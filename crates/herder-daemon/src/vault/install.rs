@@ -83,7 +83,7 @@ impl LocalVault {
         } else {
             let port = self.port.unwrap_or(PORT);
             // The daemon would only find out once it runs as a service, restarting over and over.
-            std::net::TcpListener::bind(("0.0.0.0", port))
+            std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
                 .with_context(|| format!("port {port} is taken; pick another with --port"))?;
             write_new(&config, &config_file(&self.dir, port)?)?;
             report(format!("wrote {}", config.display()));
@@ -209,7 +209,7 @@ fn key_path(dir: &Path) -> PathBuf {
     dir.join("vault.env")
 }
 
-/// The vault's `daemon.toml`: a vault on every interface at `port`, keeping its data in `dir`.
+/// The vault's `daemon.toml`: a loopback listener at `port`, keeping its data in `dir`.
 fn config_file(dir: &Path, port: u16) -> Result<String> {
     #[derive(serde::Serialize)]
     struct File<'a> {
@@ -219,7 +219,7 @@ fn config_file(dir: &Path, port: u16) -> Result<String> {
     }
     let file = toml::to_string(&File {
         mode: "vault",
-        listen: format!("0.0.0.0:{port}"),
+        listen: format!("127.0.0.1:{port}"),
         data_dir: dir,
     })
     .context("writing the vault's config")?;
@@ -270,7 +270,7 @@ mod tests {
         std::fs::write(&path, config_file(dir.path(), 7448).unwrap()).unwrap();
         let config = crate::Config::load_file(&path).unwrap();
         assert_eq!(config.mode, crate::config::Mode::Vault);
-        assert_eq!(config.listen, ["0.0.0.0:7448".parse().unwrap()]);
+        assert_eq!(config.listen, ["127.0.0.1:7448".parse().unwrap()]);
         assert_eq!(config.data_dir, dir.path());
     }
 

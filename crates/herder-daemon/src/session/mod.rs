@@ -268,7 +268,7 @@ use herder_protocol::{
     Account, AccountId, Attachment, AttachmentId, Bot, BotFact, BotId, Bytes, CommandBody,
     CommandId, CommandResult, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, FactId, FollowUp,
     HostId, Image, Item, ItemId, JournalRecord, MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS,
-    PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project, ProjectId, Provider, ProviderLogin,
+    PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project, ProjectId, Provider, ProviderLogin, Role,
     SecretRef, SecretValue, Seq, SessionHead, SessionId, SessionOrigin, SessionStatus,
     SessionSummary, ThreadLink, Timestamp, TitleSource, TurnError, TurnId, UsageWindow, UserId,
     clean_title,
@@ -287,6 +287,7 @@ use tasks::{TaskTools, Tasks};
 use titles::Titler;
 pub use titles::{TitleCli, TitleClis, TitlesConfig};
 
+use crate::auth::{self, Auth};
 use crate::bots::memory;
 use crate::config::ProjectSettings;
 use crate::mcp::servers::UserServers;
@@ -434,6 +435,14 @@ impl Inner {
         self.accounts_lock().get(account_id).cloned()
     }
 
+    /// A standalone manager has only trusted callers. Once served by a daemon, a missing
+    /// identity (including an unlinked bot user) has member permissions.
+    fn role(&self, user: &UserId) -> Role {
+        self.auth
+            .get()
+            .map_or(Role::Owner, |auth| auth.role(user).unwrap_or(Role::Member))
+    }
+
     fn accounts_lock(&self) -> std::sync::RwLockReadGuard<'_, Accounts> {
         // Every update is one insert, so a poisoned map is consistent.
         self.accounts.read().unwrap_or_else(PoisonError::into_inner)
@@ -448,6 +457,7 @@ pub struct SessionManager {
 
 struct Inner {
     journal: Journal,
+    auth: OnceLock<Arc<Auth>>,
     adapters: Adapters,
     /// Grows as accounts are added ([`SessionManager::add_account`]), and follows the vault's
     /// logins ([`SessionManager::use_vault_logins`]): only those ever leave it.
@@ -555,11 +565,13 @@ impl Inner {
     /// Every account, with `usage`, as clients see them.
     fn account_list(&self, usage: &crate::usage::Known) -> Vec<Account> {
         let needs_login = self.limits.logins().borrow().clone();
+        // Take these locks in the same order as set_vault_logins.
+        let accounts = self.accounts_lock();
         let vault_logins = self
             .vault_logins
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        crate::accounts::list(&self.accounts_lock(), usage, &needs_login, &vault_logins)
+        crate::accounts::list(&accounts, usage, &needs_login, &vault_logins)
     }
 
     /// Notes that `account_id` hit its limit just now; failover passes it over until it resets.
@@ -728,6 +740,7 @@ impl SessionManager {
         Ok(Self {
             inner: Arc::new(Inner {
                 journal,
+                auth: OnceLock::new(),
                 adapters: setup.adapters,
                 accounts: RwLock::new(setup.accounts),
                 vault_logins: RwLock::default(),
@@ -785,6 +798,8 @@ impl SessionManager {
         command: CommandBody,
         origin: Option<SessionOrigin>,
     ) -> Result<CommandResult, ErrorInfo> {
+        let role = self.inner.role(&by);
+        auth::authorize(role, &command)?;
         // Restoring an archived session must not race a login-directory edit.
         let _settings = if matches!(&command, CommandBody::UnarchiveSession { .. }) {
             Some(self.inner.account_settings.lock().await)
@@ -815,10 +830,17 @@ impl SessionManager {
                 } else {
                     self.resolve_repo(repo, project_id)?
                 };
+                if role == Role::Member && !chat && project.is_none() {
+                    return Err(error(
+                        ErrorCode::Forbidden,
+                        "members start sessions in a project on this daemon, or as a chat",
+                    ));
+                }
                 let account_id = self.pick_account(account_id, provider, project.as_ref())?;
                 let permission_mode = permission_mode
                     .or(project.and_then(|project| project.default_permission_mode))
                     .unwrap_or(PermissionMode::Ask);
+                auth::authorize_session_mode(role, permission_mode)?;
                 let request = CreateRequest {
                     repo,
                     branch,
@@ -1292,6 +1314,15 @@ impl SessionManager {
             .mcp
             .set(Mcp::start(config, tools, inner.shutdown.clone())?);
         Ok(())
+    }
+
+    /// Checks session commands and queued prompts against the daemon's current roles.
+    /// Install this before serving clients or resuming queued prompts.
+    pub fn authorize_with(&self, auth: Arc<Auth>) -> anyhow::Result<()> {
+        self.inner
+            .auth
+            .set(auth)
+            .map_err(|_| anyhow::anyhow!("sessions already check user roles"))
     }
 
     /// Lets agents drive the daemon through `control` with the `overview` and `command`

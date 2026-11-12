@@ -29,8 +29,8 @@ user unit (`herder-vault.service`) on Linux, which starts with the machine and r
 stops, apart from the daemon's `herder service`. Everything the vault keeps is in its own dir,
 `~/.local/share/herder-vault` (`$XDG_DATA_HOME/herder-vault`):
 
-- `vault.toml`: its config, `mode = "vault"` on every interface at its port; edit it and run
-  `herder vault install` again to apply.
+- `vault.toml`: its config, `mode = "vault"` on loopback at its port by default. To serve other
+  hosts, set `listen` to an address they can reach and run `herder vault install` again to apply.
 - `vault.env`: the secrets key (see [Secrets](#secrets)), generated at the first install and
   readable by you only. Only the vault's service gets it; on macOS it is copied into the
   LaunchAgent's plist, also readable by you only. Back it up with the dir.

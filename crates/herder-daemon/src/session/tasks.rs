@@ -35,8 +35,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use herder_protocol::{
-    CommandResult, ErrorInfo, Event, EventBody, PermissionMode, SecretError, SecretErrorCode,
-    SecretRef, SessionId, SessionStatus, UserId,
+    ApprovalDecision, CommandResult, ErrorInfo, Event, EventBody, PermissionMode, Role,
+    SecretError, SecretErrorCode, SecretRef, SessionId, SessionStatus, UserId,
 };
 use herder_store::Session;
 use herder_tasktools::{
@@ -51,6 +51,7 @@ use tokio::time::Instant;
 
 use super::actor::{self, PrimaryAct};
 use super::{CreateRequest, Inner, SessionManager};
+use crate::auth;
 use crate::mcp::{BriefFuture, Control, SecretsFuture, ToolFuture, ToolHandler};
 use crate::resources::admission::RETRY_AFTER_SECS;
 
@@ -314,10 +315,15 @@ fn prompter(events: &[Event]) -> Option<UserId> {
     for event in events.iter().rev() {
         match &event.body {
             EventBody::ItemAdded { item }
-                if matches!(item.body, herder_protocol::ItemBody::UserMessage { .. })
-                    && event.by.is_some() =>
+                if matches!(item.body, herder_protocol::ItemBody::UserMessage { .. }) =>
             {
-                return event.by.clone();
+                // A relayed or automatic prompt cannot borrow an earlier human's authority.
+                if item.agent_message.is_some() || item.follow_up.is_some() {
+                    return None;
+                }
+                if event.by.is_some() {
+                    return event.by.clone();
+                }
             }
             EventBody::SessionForked { .. } => return event.by.clone(),
             _ => {}
@@ -477,6 +483,26 @@ impl SessionManager {
         }
     }
 
+    async fn agent_role(&self, caller: &SessionId) -> Result<Role, ToolError> {
+        if self.inner.auth.get().is_none() {
+            return Ok(Role::Owner);
+        }
+        let user = self.acts_for(caller.clone()).await?;
+        Ok(self.inner.role(&user))
+    }
+
+    pub(super) async fn authorize_agent_mode(
+        &self,
+        caller: &SessionId,
+        mode: PermissionMode,
+    ) -> Result<(), ToolError> {
+        if mode == PermissionMode::FullAccess {
+            auth::authorize_session_mode(self.agent_role(caller).await?, mode)
+                .map_err(tool_error)?;
+        }
+        Ok(())
+    }
+
     async fn spawn(&self, caller: SessionId, input: SpawnInput) -> Result<SpawnOutput, ToolError> {
         let primary = self.caller(&caller).await?;
         // Refuse before creating a child if automated relay depth is exhausted.
@@ -513,6 +539,7 @@ impl SessionManager {
                 ),
             ));
         }
+        self.authorize_agent_mode(&caller, permission_mode).await?;
         // Admission, after every check on the arguments and before anything is created: the
         // host's capacity.
         let settings = self
@@ -668,6 +695,8 @@ impl SessionManager {
             .agent_message(&caller, input.message_id)
             .await
             .map_err(tool_error)?;
+        self.authorize_agent_mode(&caller, message.permission_ceiling)
+            .await?;
         self.deliver_agent_message(&input.session_id, input.text, message)
             .await
             .map_err(tool_error)
@@ -679,6 +708,8 @@ impl SessionManager {
         input: SendInput,
     ) -> Result<SendOutput, ToolError> {
         let child = self.child(&caller, &input.child).await?;
+        self.authorize_agent_mode(&caller, child.permission_mode)
+            .await?;
         // A finished child was archived; the follow-up brings it back on its branch.
         if child.status == SessionStatus::Archived {
             self.send(input.child.clone(), None, actor::Request::Unarchive)
@@ -766,6 +797,14 @@ impl SessionManager {
         caller: SessionId,
         input: AnswerInput,
     ) -> Result<AnswerOutput, ToolError> {
+        if let AnswerInput::Approval {
+            decision: ApprovalDecision::Allow,
+            ..
+        } = &input
+        {
+            auth::authorize_tool_approval(self.agent_role(&caller).await?, ApprovalDecision::Allow)
+                .map_err(tool_error)?;
+        }
         let child = match &input {
             AnswerInput::Question { child, .. } | AnswerInput::Approval { child, .. } => {
                 child.clone()
@@ -894,12 +933,27 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_message_cannot_act_for_the_previous_user() {
+        let mut relayed = prompt(None);
+        let EventBody::ItemAdded { item } = &mut relayed.body else {
+            unreachable!()
+        };
+        item.agent_message = Some(herder_protocol::AgentMessage {
+            sender_session_id: SessionId::new("sender"),
+            message_id: "relay".into(),
+            hop_count: 1,
+            permission_ceiling: PermissionMode::Ask,
+        });
+        assert_eq!(prompter(&[prompt(Some("owner")), relayed]), None);
+    }
+
+    #[test]
     fn a_fork_acts_for_who_forked_it_not_for_who_prompted_its_original() {
         // The original was prompted on host A by A's user; this host's user forked it.
         let mut events = vec![prompt(Some("a-user")), forked(Some("b-user"))];
         assert_eq!(prompter(&events), Some(UserId::new("b-user")));
 
-        // An agent's message or a follow-up prompts for no one.
+        // A provider-generated message without a new prompt keeps the current user.
         events.push(prompt(None));
         assert_eq!(prompter(&events), Some(UserId::new("b-user")));
 

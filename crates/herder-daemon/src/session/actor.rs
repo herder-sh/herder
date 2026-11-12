@@ -33,12 +33,12 @@ use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
 use super::setup::{self, Outcome};
 use super::tasks::Tasks;
 use super::titles;
-use super::{AccountConfig, Inner, error};
-use crate::handoff;
+use super::{AccountConfig, Inner, SessionManager, error};
 use crate::mcp::SecretsFuture;
 use crate::mcp::servers::{Launch, LeftOut};
 use crate::resources::{OomKill, Permit, Ticket, processes};
 use crate::worktree::{self, checkpoint};
+use crate::{auth, handoff};
 
 /// How long a stopping session waits for its CLI to exit.
 const EXIT_GRACE: Duration = Duration::from_secs(5);
@@ -571,11 +571,40 @@ impl Actor {
         }
     }
 
+    /// A child's uncredited prompts come from its primary. Check that authority where the
+    /// child's mode is current, including when an old queued prompt is restored.
+    async fn authorize_primary_prompt(&self) -> Result<(), ErrorInfo> {
+        if self.session.permission_mode == PermissionMode::FullAccess
+            && self.session.parent_host.is_none()
+            && let Some(primary) = &self.session.parent
+        {
+            let manager = SessionManager {
+                inner: Arc::clone(&self.inner),
+            };
+            manager
+                .authorize_agent_mode(primary, self.session.permission_mode)
+                .await
+                .map_err(|problem| error(ErrorCode::Forbidden, problem.message))?;
+        }
+        Ok(())
+    }
+
     async fn apply(
         &mut self,
         by: Option<UserId>,
         request: Request,
     ) -> Result<CommandResult, ErrorInfo> {
+        if let Some(by) = &by {
+            let role = self.inner.role(by);
+            auth::authorize_session_mode(role, self.session.permission_mode)?;
+            match &request {
+                Request::SetPermissionMode { mode } => auth::authorize_session_mode(role, *mode)?,
+                Request::AnswerApproval { decision, .. } => {
+                    auth::authorize_tool_approval(role, *decision)?;
+                }
+                _ => {}
+            }
+        }
         // Before the archive check: an archived child's requests are all resolved, which the
         // primary should hear as such.
         if let Request::FromPrimary { primary, act, done } = request {
@@ -725,6 +754,9 @@ impl Actor {
                 files,
                 queued,
             } => {
+                if by.is_none() {
+                    self.authorize_primary_prompt().await?;
+                }
                 let attachments = self.keep(images, files).await?;
                 self.cancel_retry(false).await;
                 let busy =
@@ -804,6 +836,14 @@ impl Actor {
             }
             Request::SetPermissionMode { mode } => {
                 if mode != self.session.permission_mode {
+                    if mode == PermissionMode::FullAccess
+                        && (self.turn.is_some() || self.background > 0 || !self.queue.is_empty())
+                    {
+                        return Err(error(
+                            ErrorCode::Conflict,
+                            "wait for the session's work to finish before switching to full access",
+                        ));
+                    }
                     let command = AdapterCommand::SetPermissionMode { mode };
                     self.change(|caps| caps.native_permission_mode_switch, command)
                         .await?;
@@ -1868,28 +1908,51 @@ impl Actor {
     /// when it is not running; `waiting_for_capacity` while the host has no room, and
     /// `needs_login`, holding them, while the session's account needs logging in again.
     async fn start_next(&mut self) {
-        while self.turn.is_none() && self.setup.is_none() && !self.queue.is_empty() {
-            if self.retry_deadline.is_some() {
+        while self.turn.is_none() && self.setup.is_none() {
+            let Some(next) = self.queue.front() else {
                 return;
-            }
-            if self.needs_login().is_some() {
-                self.set_status(SessionStatus::NeedsLogin).await;
-                return;
-            }
-            if self.needs_setup && self.adapter.is_none() {
-                match self
-                    .inner
-                    .setup_command(Path::new(&self.session.repo))
+            };
+            // A queued prompt can outlive a permission change, role change or restart.
+            let refusal = if next.agent_message.as_ref().is_some_and(|message| {
+                super::tasks::rank(self.session.permission_mode)
+                    > super::tasks::rank(message.permission_ceiling)
+            }) {
+                Some("Recipient permissions now exceed the sending agent's authority.".into())
+            } else if let Some(user) = next.by.as_ref() {
+                auth::authorize_session_mode(self.inner.role(user), self.session.permission_mode)
+                    .err()
+                    .map(|error| error.message)
+            } else if next.agent_message.is_none() && next.follow_up.is_none() {
+                self.authorize_primary_prompt()
                     .await
-                {
-                    Some((command, timeout)) => return self.set_up(command, timeout).await,
-                    // The project has no setup command any more.
-                    None => self.needs_setup = false,
+                    .err()
+                    .map(|error| error.message)
+            } else {
+                None
+            };
+            if refusal.is_none() {
+                if self.retry_deadline.is_some() {
+                    return;
                 }
-            }
-            if !self.admitted() {
-                self.set_status(SessionStatus::WaitingForCapacity).await;
-                return;
+                if self.needs_login().is_some() {
+                    self.set_status(SessionStatus::NeedsLogin).await;
+                    return;
+                }
+                if self.needs_setup && self.adapter.is_none() {
+                    match self
+                        .inner
+                        .setup_command(Path::new(&self.session.repo))
+                        .await
+                    {
+                        Some((command, timeout)) => return self.set_up(command, timeout).await,
+                        // The project has no setup command any more.
+                        None => self.needs_setup = false,
+                    }
+                }
+                if !self.admitted() {
+                    self.set_status(SessionStatus::WaitingForCapacity).await;
+                    return;
+                }
             }
             let Some(prompt) = self.queue.pop_front() else {
                 return;
@@ -1910,12 +1973,9 @@ impl Actor {
             } = prompt;
             self.set_status(SessionStatus::Running).await;
             let turn_id = (self.inner.turn_ids)();
-            if agent_message.as_ref().is_some_and(|message| {
-                super::tasks::rank(self.session.permission_mode)
-                    > super::tasks::rank(message.permission_ceiling)
-            }) {
+            if let Some(refusal) = refusal {
                 if let Err(err) = self.user_message(&turn_id, &original).await {
-                    warn!("cannot journal rejected agent message: {err:#}");
+                    warn!("cannot journal rejected prompt: {err:#}");
                     self.queue.push_front(original);
                     self.set_status(SessionStatus::Error).await;
                     return;
@@ -1925,8 +1985,7 @@ impl Actor {
                     turn_id: turn_id.clone(),
                 })
                 .await;
-                let error =
-                    fatal("Recipient permissions now exceed the sending agent's authority.".into());
+                let error = fatal(refusal);
                 let summary = failed(&error);
                 self.log(EventBody::TurnFailed {
                     turn_id: turn_id.clone(),
