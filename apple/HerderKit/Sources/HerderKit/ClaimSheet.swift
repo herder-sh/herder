@@ -196,24 +196,3 @@ struct ClaimSheet: View {
         .padding(.vertical, 11)
     }
 }
-
-/// Fleet's way back to Claim your machines once put off, while a machine you own is not claimed.
-struct ClaimBanner: View {
-    let open: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "key.fill").font(.title3).foregroundStyle(Theme.action)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Claim your machines").font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
-                Text("Some machines you own still know you by an old user.").font(.caption).foregroundStyle(Theme.secondary)
-            }
-            Spacer(minLength: 8)
-            PillButton(title: "Claim…", prominent: true, action: open).accessibilityIdentifier("fleet-claim")
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(Theme.action.opacity(0.12), in: .rect(cornerRadius: Theme.corner))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.action.opacity(0.4)))
-    }
-}

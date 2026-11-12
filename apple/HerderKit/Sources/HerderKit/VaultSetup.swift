@@ -44,7 +44,7 @@ struct VaultSetup {
         } catch let error as HerderError where error.needsNewerHerder {
             report(.needsNewerHerder)
         } catch is CancellationError {
-            report(.failed("\(name) runs, but nobody owns it yet: run \(PairKind.command) on \(machine) to claim it."))
+            report(.failed("\(name) runs, but nobody owns it yet: run \(MachineSource.claimCommand) on \(machine) to claim it."))
         } catch {
             report(.failed(describe(error)))
         }

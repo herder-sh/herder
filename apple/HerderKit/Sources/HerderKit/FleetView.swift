@@ -71,8 +71,6 @@ struct FleetView: View {
     /// The request of a device without a passkey on show, and those put off by closing the sheet.
     @State private var actionRequest: ActionRequest?
     @State private var putOff: Set<ActionRequest.ID> = []
-    /// Whether Claim your machines came up this launch; Later puts it off until the next.
-    @State private var claimOffered = false
     /// Welcome, on a device with no machines, until its new path is done.
     @State private var welcome: WelcomeFlow?
     #if os(iOS)
@@ -112,15 +110,6 @@ struct FleetView: View {
                 fleet.claiming = nil
                 sheet = .approve(request)
             }
-            // Claim your machines comes up once a launch, when the machines you own that connect
-            // within a moment of each other still know you by a per-daemon user.
-            .task(observing: { ClaimPlan.unclaimed(fleet.machines).map(\.hostId) }) {
-                guard !claimOffered, fleet.hasUnclaimed else { return }
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled, !claimOffered, sheet == nil, let plan = await fleet.claimPlan() else { return }
-                claimOffered = true
-                sheet = .claim(plan)
-            }
             // As a link does: the new session shows once its machine lists it.
             .onChange(of: fleet.revealed) {
                 guard let key = fleet.revealed else { return }
@@ -142,7 +131,7 @@ struct FleetView: View {
                    presenting: linkProblem) { problem in
                 switch problem {
                 case .unpaired:
-                    Button("Add to Fleet") { sheet = .pair(.machine) }
+                    Button("Add a Machine") { sheet = .addMachine() }
                     Button("Cancel", role: .cancel) {}
                 default:
                     Button("OK", role: .cancel) {}
@@ -155,7 +144,7 @@ struct FleetView: View {
     private var screens: some View {
         Group {
             if let welcome {
-                WelcomeView(flow: welcome, fleet: fleet, existing: { sheet = .pair(.device) },
+                WelcomeView(flow: welcome, fleet: fleet, existing: { sheet = .addMachine(scanning: true) },
                             join: { sheet = .join($0) }, finish: { next in
                     self.welcome = nil
                     sheet = next
