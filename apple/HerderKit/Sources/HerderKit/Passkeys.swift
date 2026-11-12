@@ -65,8 +65,13 @@ func notAllowed(_ credentialId: Data, _ credentials: [Data]) -> HerderError? {
 @MainActor final class PlatformAuthenticator: NSObject, Authenticator {
     static let relyingParty = "herder.sh"
 
+    /// Every passkey prompt of the app, one at a time: see `PasskeyPrompts`.
+    static let prompts = PasskeyPrompts()
+
     private let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: relyingParty)
     private var pending: CheckedContinuation<ASAuthorization, Error>?
+    /// The controller of the pending request, which AuthenticationServices does not retain.
+    private var controller: ASAuthorizationController?
 
     private let securityKeys = ASAuthorizationSecurityKeyPublicKeyCredentialProvider(relyingPartyIdentifier: relyingParty)
 
@@ -184,12 +189,86 @@ func notAllowed(_ credentialId: Data, _ credentials: [Data]) -> HerderError? {
                 """)
         }
         #endif
-        return try await withCheckedThrowingContinuation { continuation in
-            pending = continuation
-            let controller = ASAuthorizationController(authorizationRequests: [request])
-            controller.delegate = self
-            controller.presentationContextProvider = self
-            controller.performRequests()
+        return try await Self.prompts.run {
+            let start = ContinuousClock.now
+            do {
+                return try await withCheckedThrowingContinuation { continuation in
+                    pending = continuation
+                    let controller = ASAuthorizationController(authorizationRequests: [request])
+                    self.controller = controller
+                    controller.delegate = self
+                    controller.presentationContextProvider = self
+                    controller.performRequests()
+                }
+            } catch {
+                throw Self.failure(error, after: ContinuousClock.now - start)
+            }
+        }
+    }
+
+    /// How long the system leaves a passkey prompt up before it gives up on it: two minutes, as
+    /// WebAuthn's default timeout. It then ends the request as cancelled, as if the person had
+    /// closed it.
+    static let systemTimeout = Duration.seconds(120)
+
+    /// `error`, the request's after `elapsed`: one cancelled by the system's timeout rather
+    /// than by the person says so, as nobody cancelled anything, and the prompt may never have
+    /// shown.
+    static func failure(_ error: Error, after elapsed: Duration) -> Error {
+        // Nobody closes a prompt within a few seconds of its timeout by chance, so a cancel that
+        // close to it is the timeout's; AuthenticationServices names no cause to tell them apart.
+        guard isCancelled(error), elapsed >= systemTimeout - .seconds(10) else { return error }
+        return HerderError.Local(detail: "the \(Biometry.name) prompt timed out; try again")
+    }
+
+    /// The window a passkey prompt shows over: the key one, else the main one, else any
+    /// visible one. Right after another prompt closes, the app has no key window yet.
+    static func anchor<Window>(key: Window?, main: Window?, visible: [Window]) -> Window? {
+        key ?? main ?? visible.first
+    }
+}
+
+/// The app's passkey prompts, run one at a time, each after the one before has gone.
+///
+/// AuthenticationServices refuses a request while another is up (`ASAuthorizationError.failed`),
+/// and presents one made as the previous sheet is still going away as a sheet nobody sees,
+/// which waits until the system times it out two minutes later. Two commands that each need a
+/// fresh assertion, as storing a requested secret sends, ask for one right after the other.
+@MainActor final class PasskeyPrompts {
+    /// How long a prompt's sheet takes to go once its request has ended. The request ends as
+    /// the sheet starts going away, in another process that tells the app nothing more, so no
+    /// event marks it gone: waiting for the window to be key again misses the app not being
+    /// frontmost. A second request 12 to 26 ms after the first got the invisible sheet; the
+    /// dismissal animation takes about a third of a second, and this leaves margin over it.
+    static let sheetGoes = Duration.milliseconds(600)
+
+    private let settle: @MainActor () async -> Void
+    private var busy = false
+    /// The prompts waiting their turn, in the order they asked.
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    /// `settle` waits for an ended prompt's sheet to go; tests pass their own.
+    init(settle: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: PasskeyPrompts.sheetGoes) }) {
+        self.settle = settle
+    }
+
+    /// Runs `prompt` once no other prompt is up nor still going away.
+    func run<T>(_ prompt: () async throws -> T) async throws -> T {
+        if busy {
+            // `next` hands the turn over with `busy` still set, so no newcomer slips in.
+            await withCheckedContinuation { waiting.append($0) }
+        } else {
+            busy = true
+        }
+        defer { Task { await settle(); next() } }
+        return try await prompt()
+    }
+
+    private func next() {
+        if waiting.isEmpty {
+            busy = false
+        } else {
+            waiting.removeFirst().resume()
         }
     }
 }
@@ -200,6 +279,7 @@ extension PlatformAuthenticator: ASAuthorizationControllerDelegate, ASAuthorizat
         MainActor.assumeIsolated {
             pending?.resume(returning: authorization)
             pending = nil
+            self.controller = nil
         }
     }
 
@@ -207,6 +287,7 @@ extension PlatformAuthenticator: ASAuthorizationControllerDelegate, ASAuthorizat
         MainActor.assumeIsolated {
             pending?.resume(throwing: error)
             pending = nil
+            self.controller = nil
         }
     }
 
@@ -214,9 +295,14 @@ extension PlatformAuthenticator: ASAuthorizationControllerDelegate, ASAuthorizat
         MainActor.assumeIsolated {
             #if os(iOS)
             let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            return scenes.flatMap(\.windows).first(where: \.isKeyWindow) ?? ASPresentationAnchor()
+            let windows = scenes.sorted { $0.activationState == .foregroundActive && $1.activationState != .foregroundActive }
+                .flatMap(\.windows)
+            return PlatformAuthenticator.anchor(key: windows.first(where: \.isKeyWindow), main: nil,
+                                                visible: windows.filter { !$0.isHidden }) ?? ASPresentationAnchor()
             #else
-            return NSApplication.shared.keyWindow ?? ASPresentationAnchor()
+            let app = NSApplication.shared
+            return PlatformAuthenticator.anchor(key: app.keyWindow, main: app.mainWindow,
+                                                visible: app.orderedWindows.filter(\.isVisible)) ?? ASPresentationAnchor()
             #endif
         }
     }
