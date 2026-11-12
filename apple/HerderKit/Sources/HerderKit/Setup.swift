@@ -152,7 +152,7 @@ struct SetupPane: View {
                 PaneButton(title: "AWS Sign-in", symbol: "key") { sheet = .awsSignIn }
             }
             PaneButton(title: "Add a Device", symbol: "qrcode") { sheet = .addDevice }
-                .disabled(fleet.shareLink == nil)
+                .disabled(!fleet.canShare)
                 .accessibilityIdentifier("add-device")
             PaneButton(title: "Add a Machine", symbol: "plus", prominent: true) { sheet = .addMachine() }
                 .accessibilityIdentifier("add-machine")
@@ -219,7 +219,7 @@ struct SetupView: View {
                 Button("AWS Sign-in", systemImage: "key") { sheet = .awsSignIn }
             }
             Button("Add a Device", systemImage: "qrcode") { sheet = .addDevice }
-                .disabled(fleet.shareLink == nil)
+                .disabled(!fleet.canShare)
                 .accessibilityIdentifier("add-device")
             Button("Add a Machine", systemImage: "plus") { sheet = .addMachine() }
                 .accessibilityIdentifier("add-machine")
