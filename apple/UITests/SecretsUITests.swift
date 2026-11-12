@@ -2,8 +2,8 @@ import XCTest
 
 /// Manages a vault's secrets: against the fake vault (`fake_daemon --vault` prints its link; pass
 /// it to `xcodebuild test` as `TEST_RUNNER_HERDER_VAULT_LINK`), whose hosts are `devbox` and
-/// `laptop`, opens its page from Fleet and its Secrets tab, adds a set, adds a secret to it and grants the set
-/// to a host, then goes back to Fleet.
+/// `laptop`, opens its page from Setup and its Secrets tab, adds a set, adds a secret to it and grants the set
+/// to a host, then goes back to Setup.
 final class SecretsUITests: XCTestCase {
     @MainActor
     func testAddingASetAndASecretAndGrantingIt() throws {
@@ -11,9 +11,9 @@ final class SecretsUITests: XCTestCase {
         let app = XCUIApplication()
         try app.launchOnFakeFleet([link])
 
-        app.tabBars.buttons["Fleet"].tap()
-        let open = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'vaults.paired.'")).firstMatch
-        XCTAssertTrue(open.waitForExistence(timeout: 30), "Fleet shows no vault")
+        app.tabBars.buttons["Setup"].tap()
+        let open = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'machines.paired.'")).firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 30), "Setup shows no vault")
         for _ in 0..<5 where !open.isHittable { app.swipeUp() }
         open.tap()
         let secrets = app.buttons["Secrets"].firstMatch
@@ -63,9 +63,9 @@ final class SecretsUITests: XCTestCase {
         wait(for: [granted], timeout: 10)
         XCTAssertFalse(app.staticTexts.matching(identifier: "secrets-error").firstMatch.exists)
 
-        // The page was pushed on Fleet: Back returns there.
+        // The page was pushed on Setup: Back returns there.
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(open.waitForExistence(timeout: 5), "Back did not return to Fleet")
+        XCTAssertTrue(open.waitForExistence(timeout: 5), "Back did not return to Setup")
     }
 
     /// Types `text` into `field` until it holds exactly that: the simulator can drop keystrokes

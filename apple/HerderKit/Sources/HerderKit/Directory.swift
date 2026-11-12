@@ -44,8 +44,15 @@ struct Directory: Equatable {
     var passkey = Passkey.none
     var devices: [Device] = []
     var teammates: [Person] = []
+    /// Each teammate's devices, by their person id.
+    var theirDevices: [String: [Device]] = [:]
 
     var everyone: [Person] { [me] + teammates }
+
+    /// `person`'s devices: yours, or a teammate's.
+    func devices(of person: Person) -> [Device] {
+        person.id == me.id ? devices : theirDevices[person.id] ?? []
+    }
 
     /// The directory of one machine: its column, and the people who can use it.
     func only(_ hostId: HostId) -> Directory {
@@ -127,6 +134,11 @@ extension Directory.Device {
         }
     }
 
+    /// "On 1 machine", "On 5 machines".
+    var reach: String {
+        paired.count == 1 ? "On 1 machine" : "On \(paired.count) machines"
+    }
+
     /// "today", "2 hours ago", "Oct 27".
     func seen(now: Date, calendar: Calendar = .current) -> String {
         guard let lastSeen else { return "not yet" }
@@ -158,12 +170,18 @@ extension Directory {
             }
         }
         let mine = me.flatMap { found[$0] } ?? Person(id: me ?? "", name: "You", roles: [:])
-        let devices = columns.flatMap { column in
-            (people[column.id] ?? []).filter { $0.personId == mine.id }.flatMap(\.devices).map { (column.id, $0) }
+        let devices = { (personId: String) in
+            columns.flatMap { column in
+                (people[column.id] ?? []).filter { $0.personId == personId }.flatMap(\.devices).map { (column.id, $0) }
+            }
         }
+        let teammates = order.filter { $0 != mine.id }.compactMap { found[$0] }
+        // A teammate's device is never the one showing this.
+        let theirs = teammates.map { ($0.id, Self.devices(devices($0.id), thisClient: "")) }
         return Directory(columns: columns, me: mine, passkey: keyed ? .stored(in: nil) : .none,
-                         devices: Self.devices(devices, thisClient: thisClient),
-                         teammates: order.filter { $0 != mine.id }.compactMap { found[$0] })
+                         devices: Self.devices(devices(mine.id), thisClient: thisClient),
+                         teammates: teammates,
+                         theirDevices: Dictionary(theirs) { first, _ in first })
     }
 
     /// Your devices, one per kind of client: each machine pairs a device of its own.
@@ -196,14 +214,24 @@ extension Directory {
             me: Person(id: "tomas-1", name: "Tomas", roles: Dictionary(uniqueKeysWithValues: columns.map { ($0.id, .owner) })),
             passkey: .stored(in: "iCloud Keychain"),
             devices: [
-                Device(id: "mac", kind: .mac, lastSeen: now, current: true),
-                Device(id: "phone", kind: .phone, lastSeen: now.addingTimeInterval(-2 * 3600)),
-                Device(id: "terminal", kind: .terminal, host: "trash-can-01", lastSeen: Timestamp.date("2026-10-27T10:00:00Z")),
+                Device(id: "mac", kind: .mac, lastSeen: now, current: true,
+                       paired: ["mac": ["d1"], "trash": ["d2"], "draugelis": ["d3"]]),
+                // Not on draugelis yet, which Setup says needs you.
+                Device(id: "phone", kind: .phone, lastSeen: now.addingTimeInterval(-2 * 3600),
+                       paired: ["mac": ["d4"], "trash": ["d5"]]),
+                Device(id: "terminal", kind: .terminal, host: "trash-can-01", lastSeen: Timestamp.date("2026-10-27T10:00:00Z"),
+                       paired: ["trash": ["d6"]]),
             ],
             teammates: [
                 Person(id: "sam-13", name: "Sam", roles: ["mac": .member, "trash": .member, "draugelis": .member]),
                 Person(id: "kim-6", name: "Kim", roles: ["mac": .member, "trash": .member, "draugelis": .owner,
                                                        "draugelis-vault": .owner]),
+            ],
+            theirDevices: [
+                "kim-6": [
+                    Device(id: "herder-ios", kind: .phone, lastSeen: now, paired: ["mac": ["k1"], "trash": ["k2"], "draugelis": ["k3"]]),
+                    Device(id: "herder-tui", kind: .terminal, host: "draugelis", lastSeen: now, paired: ["draugelis": ["k4"]]),
+                ],
             ])
     }
 }
