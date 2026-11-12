@@ -26,14 +26,17 @@ enum AppSheet: Identifiable, Hashable {
     case importSkill
     /// A new chat bot: pick its machine first.
     case addBot
-    /// A one-time code that pairs someone new with a machine.
-    case invite(HostId)
+    /// A one-time link that lets someone new join your machines: every one you can invite to,
+    /// or only this one.
+    case invite(HostId?)
     /// Approving a new machine's `herder://own` link or a terminal's `herder://login` one.
     case approve(ApprovalRequest)
     /// Add a Device: the link of this device's machines, for another device of yours.
     case addDevice
     /// Signing in to the machines of another device's `herder://fleet` link.
     case join(FleetLink)
+    /// Joining the machines of a teammate's `herder://invite` link, with a passkey of your own.
+    case acceptInvite(InviteLink)
     /// Claim your machines: offered once on launch, and from People and Fleet, while a machine
     /// you own is not claimed.
     case claim(ClaimPlan)
@@ -57,7 +60,7 @@ extension AppSheet {
         case .importSkill: SkillImportSheet(fleet: fleet)
         case .addBot: AddBotSheet(fleet: fleet)
         case .invite(let hostId):
-            InviteSheet(fleet: fleet, hostId: hostId)
+            InviteSheet(fleet: fleet, only: hostId)
         case .approve(let request):
             ApproveSheet(fleet: fleet, request: request, open: openMachine) { present(.pair(.vault)) }
         case .claim(let plan):
@@ -66,6 +69,8 @@ extension AppSheet {
             AddDeviceSheet(link: fleet.shareLink)
         case .join(let link):
             JoinFleetSheet(fleet: fleet, link: link)
+        case .acceptInvite(let link):
+            JoinInviteSheet(fleet: fleet, link: link)
         }
     }
 }

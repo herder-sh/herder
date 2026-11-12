@@ -222,6 +222,32 @@ it doesn't know this passkey (pick yours, or ask its owner / run `herder claim` 
 machine's error. Closing Face ID stops; **Try Again** retries what is left. A device with no
 machines shows Welcome instead (§4.10). `AddDeviceScreenshotTests` draws both sheets.
 
+**Inviting a teammate** (`InviteSheet.swift`, P22.8). People's **Invite** opens Invite a
+Teammate: an optional name (it only labels the link), Member or Owner as a segmented control with
+its meaning in one line under it ("Drives sessions. Never gets a terminal."), and the machines as
+a checklist under **All my machines**, every machine you own and is connected ticked, or only the
+one whose People page it was opened from. Each daemon mints its own one-time invite (`invite`),
+so the link covers the machines ticked now; the caption says a machine added later needs its own
+invite. **Create Invite Link** asks each machine in turn, one Face ID each, and folds their
+invites into one `herder://invite` link (`InviteLink`): `by` (you), `for`, `role`, then each
+machine's `host`s, `fp`, `invite` and `name`. The link screen shows the QR code, "Member on 5
+machines", "Works once · expires in 9:41" (the earliest machine's expiry) and the link in short
+monospace, with **Copy Link** and **Share…** in the footer. A machine that did not mint is listed
+under it in amber.
+
+**Joining from an invite** (`JoinInvite.swift`). An opened `herder://invite` link
+(`AppLink.invite`) opens `JoinInviteSheet` on any launch, the first included, skipping the
+new-or-existing choice: Tomas's avatar, "Tomas invited you to herder", "As a member on 5
+machines.", **Your name** (prefilled from `for`), a note that herder creates a passkey of that
+name in Apple Passwords, the machines, and **Create Passkey and Join**. The first machine that
+answers makes the passkey from its offer and takes it (`accept_invite` with `register`); each
+other machine takes the same person by that passkey (`existing`), one Face ID each. A device
+that already knows you joins with your passkey instead (**Join with Face ID**), so you stay one
+person. Rows end Member/Owner ✓, already on this device, can't reach it (on Tailscale?), the
+invite was used or has expired (ask Tomas for a new link), or the machine's error; **Try
+Again** retries what is left, and **Start Using herder** closes it. `InviteScreenshotTests`
+draws the form, the link, and joining before and after.
+
 ### 4.5 Usage (`UsageView`)
 
 Modelled on T3 Code's Usage page. A period picker (24h, 7d, 30d, month to date) and a machine

@@ -147,11 +147,11 @@ struct FleetPeopleTests {
         #expect(sent().last == .revokePerson(personId: "p-sam", assertion: try await assertion("devbox")))
     }
 
-    @Test func anInviteIsALinkToTheMachine() async throws {
+    @Test func anInviteNamesTheMachineAndItsToken() async throws {
         let (people, _) = model()
-        let invite = try await people.invite(.owner, on: "devbox", sign: sign)
+        let invite = try await people.invite(.owner, on: "devbox", name: "devbox", sign: sign)
         #expect(invite.role == .owner)
-        #expect(invite.link == "herder://invite?host=devbox.lan:7447&fp=ab12&invite=tok")
+        #expect(invite.machine == InviteLink.Machine(hosts: ["devbox.lan:7447"], fingerprint: "ab12", invite: "tok", name: "devbox"))
         #expect(invite.expiresAt == Timestamp.date("2026-10-29T12:10:00Z"))
     }
 
