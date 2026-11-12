@@ -179,7 +179,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 20;
+pub const CLIENT_API_VERSION: u32 = 21;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]

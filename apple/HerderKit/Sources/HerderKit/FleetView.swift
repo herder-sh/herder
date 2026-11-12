@@ -89,7 +89,28 @@ struct FleetView: View {
         #endif
     }
 
+    // The body is split in stages: one long modifier chain is more than the type checker
+    // finishes in reasonable time.
     var body: some View {
+        followingLinks
+            .alert(linkProblem.map(\.title) ?? "", isPresented: linkProblemShown, presenting: linkProblem) { problem in
+                switch problem {
+                case .unpaired:
+                    Button("Add a Machine") { sheet = .addMachine() }
+                    Button("Cancel", role: .cancel) {}
+                default:
+                    Button("OK", role: .cancel) {}
+                }
+            } message: { problem in
+                Text(problem.message)
+            }
+    }
+
+    private var linkProblemShown: Binding<Bool> {
+        Binding(get: { linkProblem != nil }, set: { if !$0 { linkProblem = nil } })
+    }
+
+    private var reloading: some View {
         screens
             .environment(\.signPasskey, signPasskey)
             .onOpenURL(perform: open)
@@ -102,7 +123,13 @@ struct FleetView: View {
             .task(observing: { fleet.machines.filter { $0.connection == .connected }.map(\.hostId) }) {
                 await people.reload(fleet.machines)
             }
-            .onChange(of: sheet) { if sheet == nil { Task { await people.reload(fleet.machines) } } }
+            .onChange(of: sheet == nil) { _, closed in
+                if closed { Task { await people.reload(fleet.machines) } }
+            }
+    }
+
+    private var followingLinks: some View {
+        reloading
             // A TUI's terminal or secret request comes up as soon as its machine has it, and
             // goes once the machine closes it.
             .onChange(observing: { fleet.actionRequests }, initial: true) { _, requests in
@@ -139,21 +166,9 @@ struct FleetView: View {
                     linkProblem = .connecting
                 }
             }
-            .alert(linkProblem.map(\.title) ?? "", isPresented: Binding(get: { linkProblem != nil }, set: { if !$0 { linkProblem = nil } }),
-                   presenting: linkProblem) { problem in
-                switch problem {
-                case .unpaired:
-                    Button("Add a Machine") { sheet = .addMachine() }
-                    Button("Cancel", role: .cancel) {}
-                default:
-                    Button("OK", role: .cancel) {}
-                }
-            } message: { problem in
-                Text(problem.message)
-            }
     }
 
-    private var screens: some View {
+    private var content: some View {
         Group {
             if let welcome {
                 WelcomeView(flow: welcome, fleet: fleet, existing: { sheet = .addMachine(scanning: true) },
@@ -183,6 +198,10 @@ struct FleetView: View {
         // An iPad going compact keeps the section it showed.
         .onChange(of: sizeClass) { if sizeClass == .compact { tab = CompactTab(item) } }
         #endif
+    }
+
+    private var presenting: some View {
+        content
         .sheet(item: $sheet) { sheet in
             sheet.view(fleet: fleet) { selection in
                 if sheet == .newProject, let projectId = selection.projectId {
@@ -209,6 +228,10 @@ struct FleetView: View {
             }
         }
         #endif
+    }
+
+    private var screens: some View {
+        presenting
         .onAppear { Launch.mark(.frame) }
         .task { await fleet.follow() }
         .overlay(alignment: .bottom) { ToastView(fleet: fleet) }
