@@ -1929,7 +1929,9 @@ async fn a_device_shares_nothing_while_no_machine_says_who_it_is() {
         )
         .unwrap();
     daemon.kill().await;
-    wait_host(&client, "host-1", false).await;
+    // Down is enough: it keeps dialling the address that never answers, `CONNECT_TIMEOUT` a
+    // round, and a wait for it to rest between rounds could miss the moment.
+    wait_connection(&client, |state| !connected(state)).await;
     // The machine is saved, but only a connected one lists who this device's person is.
     let err = client.share().await.unwrap_err();
     assert!(matches!(err, Error::Local { .. }), "{err}");

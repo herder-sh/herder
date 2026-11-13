@@ -59,6 +59,9 @@ final class TextSelectionUITests: XCTestCase {
     func testDraggingAcrossAPromptCopiesAllOfIt() throws {
         open(Self.session)
         let prompt = message(Self.prompt)
+        // The transcript opens at its end, where this prompt's top can sit under the session's
+        // header, which then takes the press.
+        reveal(prompt)
         drag(across: prompt)
         XCTAssertEqual(copied(), Self.prompt)
     }
@@ -86,12 +89,31 @@ final class TextSelectionUITests: XCTestCase {
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", \(session),")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 30), "\(session) is not on the Board")
         let transcript = app.descendants(matching: .any)["transcript"].firstMatch
-        // A click while the Board still settles can be lost; the transcript says it opened.
-        for _ in 0..<3 where !transcript.exists {
+        // The session's header titles it; the Board's row may name it too, so count those first.
+        let titles = app.staticTexts.matching(NSPredicate(format: "label == %@", session))
+        let onBoard = titles.count
+        // The Board reorders its rows as the machines report each session's state: a click
+        // while it settles can be lost, or land on the row that moved into this one's place and
+        // open another session. Click once the row stays put, until this session's title shows.
+        for _ in 0..<3 where titles.count <= onBoard {
+            settle(row)
             row.click()
             _ = transcript.waitForExistence(timeout: 5)
+            for _ in 0..<20 where titles.count <= onBoard { Thread.sleep(forTimeInterval: 0.25) }
         }
+        XCTAssertGreaterThan(titles.count, onBoard, "\(session) did not open")
         XCTAssertTrue(transcript.waitForExistence(timeout: 15))
+    }
+
+    /// Waits, up to five seconds, until `element` stays where it is for half a second.
+    private func settle(_ element: XCUIElement) {
+        var last = element.frame
+        for _ in 0..<10 {
+            Thread.sleep(forTimeInterval: 0.5)
+            let now = element.frame
+            if now == last { return }
+            last = now
+        }
     }
 
     /// Pastes a picture into a finished session's composer, types the owner's prompt after it
@@ -130,6 +152,22 @@ final class TextSelectionUITests: XCTestCase {
         let element = app.textViews.matching(NSPredicate(format: "value BEGINSWITH %@", text)).firstMatch
         XCTAssertTrue(element.waitForExistence(timeout: 15), "no message begins \(text)")
         return element
+    }
+
+    /// Scrolls the transcript back, a little at a time, until `element`'s top is a third of the
+    /// way down it: clear of the session's header, which the transcript scrolls under, with room
+    /// below for a message of a few lines. Turns around when a step does not move it down, as at
+    /// the transcript's end.
+    private func reveal(_ element: XCUIElement) {
+        let transcript = app.descendants(matching: .any)["transcript"].firstMatch
+        let clear = transcript.frame.minY + transcript.frame.height / 3
+        var step: CGFloat = 40
+        for _ in 0..<40 where element.frame.minY < clear {
+            let before = element.frame.minY
+            transcript.scroll(byDeltaX: 0, deltaY: step)
+            if element.frame.minY <= before { step = -step }
+        }
+        XCTAssertGreaterThanOrEqual(element.frame.minY, clear, "the transcript did not scroll back to the message")
     }
 
     /// Presses just left of `element`'s first letter and drags to just past its last one, as a
