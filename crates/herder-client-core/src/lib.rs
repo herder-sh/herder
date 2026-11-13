@@ -34,9 +34,11 @@
 //! Each machine has one supervisor task, the only thing that connects or retries. It races
 //! the machine's addresses in their order of preference, each with a 300 ms head start over the
 //! next, and keeps the first that answers. Pairing saves the link's addresses private network
-//! ones first and Tailscale ones last; after that the user's order holds. A wake, as on a
-//! network change, also moves a connection that is up to an address that comes before its own,
-//! once one answers. After a failure or a lost connection it waits a capped,
+//! ones first and Tailscale ones last; after that the user's order holds. The address that
+//! answered last goes first in the next race, so a dead address listed before it costs later
+//! connections nothing, until the user orders the addresses or asks to reconnect. A
+//! connection that works is kept: only new addresses move it, to one that comes before its
+//! own, once that answers. After a failure or a lost connection it waits a capped,
 //! jittered exponential backoff (250 ms doubling to 30 s) and tries again, forever.
 //! [`Machine::connection`] says where it stands, and [`Client::synced`] waits until a
 //! connection is up and the daemon has sent its lists and the replay of every subscription.
@@ -256,7 +258,8 @@ pub struct Machine {
     /// The name it was given with [`Client::rename`], else the daemon's host name.
     pub name: String,
     /// Addresses as `host:port`, in order of preference: connecting races them, each with a
-    /// head start over the next. Set with [`Client::set_addresses`].
+    /// head start over the next, the one that answered last first. Set with
+    /// [`Client::set_addresses`].
     pub addresses: Vec<String>,
     /// The address the current connection uses; `None` while not connected.
     pub address: Option<String>,
@@ -697,7 +700,7 @@ impl Client {
     }
 
     /// Drops a machine's connection, if up, and connects again at once, racing its addresses
-    /// in their order as always: the address the new connection uses, or
+    /// in their order, whichever answered last: the address the new connection uses, or
     /// [`Error::Unreachable`] when none answered (the supervisor then retries after its
     /// backoff, as after any failure). To connect through an address, put it first with
     /// [`Client::set_addresses`] and then reconnect.

@@ -207,8 +207,8 @@ enum Op {
     Wake,
     /// The machine's addresses changed: reconnect now, or move to one that comes first.
     Readdress,
-    /// Drop the connection and race the addresses again now; report the address that
-    /// answered, or why none did.
+    /// Drop the connection and race the addresses again now, in their order; report the
+    /// address that answered, or why none did.
     Reconnect(oneshot::Sender<Result<String, String>>),
 }
 
@@ -246,6 +246,10 @@ struct State {
     addresses: Vec<String>,
     /// The address the current connection uses.
     address: Option<String>,
+    /// The address that answered last, which the next connection tries first: it most likely
+    /// answers again, whatever became of the ones before it. Forgotten when the user orders
+    /// the addresses or asks to reconnect, which both start from their order.
+    answered: Option<String>,
     connection: Option<ConnectionState>,
     quality: Quality,
     role: Option<Role>,
@@ -619,13 +623,16 @@ impl Supervisor {
 
     /// Connects to `addresses`, in this order of preference, from now on.
     pub(crate) fn set_addresses(&self, addresses: Vec<String>) {
-        self.lock().addresses = addresses;
+        let mut state = self.lock();
+        state.addresses = addresses;
+        state.answered = None;
+        drop(state);
         self.notify();
         let _ = self.ops.send(Op::Readdress);
     }
 
-    /// Drops the connection, if up, and races the addresses again at once: the address the
-    /// new connection uses, or [`Error::Unreachable`] when none answered.
+    /// Drops the connection, if up, and races the addresses again at once, in their order:
+    /// the address the new connection uses, or [`Error::Unreachable`] when none answered.
     pub(crate) async fn reconnect(&self) -> Result<String, Error> {
         if self.demo.is_some() {
             return Err(Error::Demo);
@@ -1053,6 +1060,18 @@ impl Supervisor {
         self.changed.send_modify(|version| *version += 1);
     }
 
+    /// The machine's addresses in the order to dial them: the one that answered last, then
+    /// the rest in their order.
+    fn dial_order(&self) -> Vec<String> {
+        let state = self.lock();
+        let mut addresses = state.addresses.clone();
+        let answered = state.answered.as_ref();
+        if let Some(index) = answered.and_then(|a| addresses.iter().position(|b| a == b)) {
+            addresses[..=index].rotate_right(1);
+        }
+        addresses
+    }
+
     /// A connection to the first of the addresses before the current connection's that
     /// answers, which proves it reachable and is then dropped; `None` when the current
     /// connection uses the first address.
@@ -1343,7 +1362,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
     supervisor.restore(cached);
     loop {
         supervisor.set_connection(ConnectionState::Connecting);
-        let addresses = supervisor.lock().addresses.clone();
+        let addresses = supervisor.dial_order();
         let hello = ClientHello {
             protocol_version: PROTOCOL_VERSION,
             client: supervisor.client.clone(),
@@ -1367,6 +1386,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
                     state.person_id = hello.person_id;
                     state.herder_version = hello.herder_version;
                     state.address = Some(address.clone());
+                    state.answered = Some(address.clone());
                     state.dirty = true;
                 }
                 supervisor.set_connection(ConnectionState::Connected);
@@ -1389,6 +1409,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
                     Ended::Replaced(error) => (error, true),
                     Ended::Reconnect(reply) => {
                         reconnects.push(reply);
+                        supervisor.lock().answered = None;
                         ("reconnecting, as asked".to_owned(), true)
                     }
                 }
@@ -1426,6 +1447,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
                     }
                     Some(Op::Reconnect(reply)) => {
                         reconnects.push(reply);
+                        supervisor.lock().answered = None;
                         attempt = 0;
                         break;
                     }
@@ -1504,8 +1526,8 @@ async fn serve(
     save.reset();
     // The payload of the ping a wake sent, and when it went out, until its pong comes back.
     let mut probe: Option<(String, Instant)> = None;
-    // A connection to an address before this one's, which a wake or new addresses start;
-    // once one answers, this connection is replaced to move there.
+    // A connection to an address before this one's, which new addresses start; once one
+    // answers, this connection is replaced to move there.
     let mut better: Option<BoxFuture<'static, Result<String, String>>> = None;
     loop {
         // When the connection counts as dead: each ping gives the daemon its time to show it
@@ -1575,9 +1597,6 @@ async fn serve(
                             return Ended::Replaced(
                                 "the connection was silent through a suspension".to_owned(),
                             );
-                        }
-                        if better.is_none() {
-                            better = supervisor.better();
                         }
                         if probe.is_none() {
                             probe = Some(send_ping(&outgoing));
@@ -1883,10 +1902,10 @@ fn once(body: CommandBody) -> ClientMessage {
 /// Connects to the first of `addresses` that answers, pinned to `fingerprint`, as `device`,
 /// and exchanges hellos; returns the address it connected to.
 ///
-/// The addresses race in order: each starts [`HEAD_START`] after the one before, or as soon as
-/// every attempt so far failed, and the first to finish its hello wins. An address that comes
-/// first wins whenever it answers about as fast as the rest, and a dead one delays the next by
-/// [`HEAD_START`], not [`CONNECT_TIMEOUT`].
+/// The addresses race in the order given: each starts [`HEAD_START`] after the one before,
+/// or as soon as every attempt so far failed, and the first to finish its hello wins. An
+/// address that comes first wins whenever it answers about as fast as the rest, and a dead
+/// one delays the next by [`HEAD_START`], not [`CONNECT_TIMEOUT`].
 pub(crate) async fn connect(
     addresses: &[String],
     fingerprint: &str,
