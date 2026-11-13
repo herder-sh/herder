@@ -115,7 +115,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/ios.xcresult"
       - name: Screenshot the macOS app
         if: success() || failure()
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           (sleep 3600 | target/debug/examples/fake_daemon --demo > "$RUNNER_TEMP/mac-demo.out" &)
           for _ in $(seq 120); do [ "$(wc -l < "$RUNNER_TEMP/mac-demo.out")" -ge 2 ] && break; sleep 1; done
