@@ -1,0 +1,32 @@
+# A merged or closed PR's checks can only hold runners another PR or a release needs, so
+# stop the ones still queued or running. pull_request_target gives the token actions: write
+# for PRs from forks too; it checks out nothing, so it runs no code from the PR.
+name: cancel closed PR runs
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel the PR's runs still queued or running
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD: ${{ github.event.pull_request.head.ref }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # The PR's own workflows run on its branch; CodeQL's on refs/pull/<n>/head.
+          for branch in "$HEAD" "refs/pull/$NUMBER/head"; do
+            gh run list --branch "$branch" --limit 100 --json databaseId,status,event \
+              --jq '.[] | select(.status != "completed" and .event != "push") | .databaseId' |
+              while read -r run; do
+                [ "$run" = "$GITHUB_RUN_ID" ] && continue
+                gh run cancel "$run" && echo "cancelled $run" || true
+              done
+          done
