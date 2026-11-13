@@ -256,17 +256,30 @@ public final class Fleet {
         let network = Task { await self.wakeOnNetworkChanges() }
         defer { network.cancel() }
         update(client.machines())
-        while await changes.next() {
-            // A machine connecting or going away shows at once, scroll or not.
-            let machines = client.machines()
-            if reconnects(machines) {
-                update(machines)
-                refreshLists()
-                continue
-            }
-            await scrollEnded()
-            update(client.machines())
+        while await changes.next() { await changed() }
+    }
+
+    /// Takes in the client's lists after a change to them. They are read away from the main
+    /// actor: a read copies every session every machine lists out of the client core, and they
+    /// change with every list, resource report and ping answer of every machine.
+    func changed() async {
+        var machines = await Self.machines(of: client)
+        // A machine connecting or going away shows at once, scroll or not.
+        if reconnects(machines) {
+            update(machines)
+            refreshLists()
+            return
         }
+        // What a scroll held back is stale by its end.
+        if isScrolling() {
+            await scrollEnded()
+            machines = await Self.machines(of: client)
+        }
+        update(machines)
+    }
+
+    @concurrent private nonisolated static func machines(of client: Client) async -> [Machine] {
+        client.machines()
     }
 
     /// Whether `machines` connect or disconnect one of the machines shown.
