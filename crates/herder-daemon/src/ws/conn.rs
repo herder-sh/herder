@@ -2,16 +2,16 @@
 //! draining the connection's [`Outbox`].
 
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
-    ClientMessage, Command, CommandId, CommandResult, Cursor, ErrorCode, ErrorInfo, EventBody,
-    MAX_MESSAGE_BYTES, PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello, ServerMessage,
-    SignIn,
+    ClientMessage, Command, CommandId, CommandResult, Cursor, DeviceId, ErrorCode, ErrorInfo,
+    EventBody, MAX_MESSAGE_BYTES, PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello,
+    ServerMessage, SignIn,
 };
 use serde::Deserialize;
 use tokio::net::TcpStream;
@@ -57,19 +57,25 @@ pub(super) async fn run<B: Backend>(
     let (ws, device) = match ws {
         Ok(Ok(ws)) => ws,
         Ok(Err(err)) => {
-            debug!(%peer, "handshake failed: {err:#}");
+            info!(%peer, "handshake failed: {err:#}");
             return;
         }
         Err(_) => {
-            debug!(%peer, "handshake timed out");
+            info!(%peer, "handshake timed out");
             return;
         }
     };
     serve(ws, device, None, peer, shared, cancel).await;
 }
 
+/// The client a connection serves, known once its hello is accepted.
+struct Who {
+    client: String,
+    device_id: DeviceId,
+}
+
 /// Serves a connection whose handshakes are done; `first` is its first text frame when the
-/// caller already read it.
+/// caller already read it. Logs why the connection ended.
 pub(super) async fn serve<B: Backend>(
     ws: Ws,
     device: String,
@@ -78,6 +84,7 @@ pub(super) async fn serve<B: Backend>(
     shared: Arc<Shared<B>>,
     cancel: CancellationToken,
 ) {
+    let started = Instant::now();
     let (sink, stream) = ws.split();
     let outbox = Arc::new(Outbox::default());
     let writer = tokio::spawn(write(
@@ -86,35 +93,45 @@ pub(super) async fn serve<B: Backend>(
         Arc::clone(&shared.auth),
         cancel.clone(),
     ));
-    let result = tokio::select! {
-        () = cancel.cancelled() => Ok(()),
-        result = read(stream, first, &shared, &outbox, &device, &cancel) => result,
+    let who = OnceLock::new();
+    // `None` when the writer or a shutdown ended the connection under the reader.
+    let ended = tokio::select! {
+        () = cancel.cancelled() => None,
+        result = read(stream, first, &shared, &outbox, &device, &cancel, &who) => Some(result),
     };
-    match &result {
-        Ok(()) => {}
-        // Nothing of the message was read, so there is no command to refuse: the client is
-        // told why before the connection closes.
-        Err(err)
-            if matches!(
-                err.downcast_ref::<tungstenite::Error>(),
-                Some(tungstenite::Error::Capacity(_))
-            ) =>
-        {
-            warn!(%peer, "closing a connection for a message over the read limit: {err:#}");
-            error(
-                &outbox,
-                ErrorCode::BadRequest,
-                &format!("message too large: at most {MAX_MESSAGE_BYTES} bytes"),
-            );
-        }
-        Err(err) => debug!(%peer, "connection failed: {err:#}"),
+    // Nothing of the message was read, so there is no command to refuse: the client is told
+    // why before the connection closes.
+    if let Some(Err(err)) = &ended
+        && matches!(
+            err.downcast_ref::<tungstenite::Error>(),
+            Some(tungstenite::Error::Capacity(_))
+        )
+    {
+        warn!(%peer, "closing a connection for a message over the read limit: {err:#}");
+        error(
+            &outbox,
+            ErrorCode::BadRequest,
+            &format!("message too large: at most {MAX_MESSAGE_BYTES} bytes"),
+        );
     }
     shared.hub.disconnect(&outbox);
     shared.approvals.disconnect(&outbox);
     shared.terminals.disconnect(&outbox);
     outbox.finish();
-    let _ = writer.await;
-    debug!(%peer, "connection closed");
+    let wrote = writer.await.ok().flatten();
+    let reason = match ended {
+        Some(Ok(())) => "the client closed the connection".to_owned(),
+        Some(Err(err)) => format!("{err:#}"),
+        None => wrote.unwrap_or_else(|| "the daemon is shutting down".to_owned()),
+    };
+    let lasted = started.elapsed();
+    // At info, with the connects: a client that keeps reconnecting shows here why.
+    match who.get() {
+        Some(Who { client, device_id }) => {
+            info!(%peer, %client, %device_id, "client disconnected after {lasted:.1?}: {reason}");
+        }
+        None => info!(%peer, "connection closed before its hello was accepted: {reason}"),
+    }
 }
 
 /// The TLS and WebSocket handshakes; returns the fingerprint of the peer's device certificate.
@@ -143,6 +160,7 @@ async fn read<B: Backend>(
     outbox: &Arc<Outbox>,
     device: &str,
     cancel: &CancellationToken,
+    who: &OnceLock<Who>,
 ) -> Result<()> {
     let first = match first {
         Some(text) => Some(decode(&text)),
@@ -192,6 +210,11 @@ async fn read<B: Backend>(
         device_id = %identity.device_id,
         "client connected"
     );
+    // Set once: this is the connection's only accepted hello.
+    let _ = who.set(Who {
+        client: hello.client.clone(),
+        device_id: identity.device_id.clone(),
+    });
     outbox.push(ServerMessage::Hello(ServerHello {
         protocol_version: PROTOCOL_VERSION,
         host_id: shared.host.id.clone(),
@@ -529,13 +552,14 @@ fn reject(outbox: &Outbox, message: &str) -> Result<()> {
 }
 
 /// Writes queued messages, attributed as `auth` resolves ids, until the outbox stops, the
-/// socket fails, or `cancel`.
+/// socket fails, or `cancel`. Returns why it ended the connection, when it was not the outbox
+/// finishing.
 async fn write(
     mut sink: SplitSink<Ws, Message>,
     outbox: Arc<Outbox>,
     auth: Arc<Auth>,
     cancel: CancellationToken,
-) {
+) -> Option<String> {
     let close = loop {
         while let Some(mut message) = outbox.pop() {
             auth.attribute(&mut message);
@@ -554,23 +578,27 @@ async fn write(
                 None => break,
                 Some(Ok(())) => {}
                 Some(Err(err)) => {
-                    debug!("cannot write to a client: {err}");
                     cancel.cancel();
-                    return;
+                    return Some(format!("writing to the client: {err}"));
                 }
             }
         }
         if cancel.is_cancelled() {
-            break (CloseCode::Away, "herder daemon is shutting down");
+            break (
+                CloseCode::Away,
+                "herder daemon is shutting down",
+                Some("the daemon is shutting down"),
+            );
         }
         match outbox.state() {
             OutboxState::Open => {}
-            OutboxState::Finished if outbox.is_empty() => break (CloseCode::Normal, ""),
+            OutboxState::Finished if outbox.is_empty() => break (CloseCode::Normal, "", None),
             OutboxState::Finished => continue,
             OutboxState::Overflowed => {
                 break (
                     CloseCode::Again,
                     "too far behind; reconnect and resume from your cursor",
+                    Some("the client fell too far behind what it was sent"),
                 );
             }
         }
@@ -585,4 +613,5 @@ async fn write(
     };
     let _ = tokio::time::timeout(CLOSE_TIMEOUT, sink.send(Message::Close(Some(frame)))).await;
     cancel.cancel();
+    close.2.map(str::to_owned)
 }
