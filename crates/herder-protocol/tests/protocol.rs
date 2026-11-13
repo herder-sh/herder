@@ -3826,6 +3826,25 @@ fn file_attachments_carry_their_name_and_images_none() {
     assert_eq!(serde_json::to_value(&body).unwrap(), prompt);
 }
 
+/// A prompt carrying as many attachment bytes as one may still has a megabyte for its text.
+#[test]
+fn a_prompt_with_every_attachment_byte_fits_in_a_message() {
+    let prompt = ClientMessage::Command(Command {
+        id: CommandId::new("c1"),
+        body: CommandBody::SendPrompt {
+            session_id: SessionId::new("s"),
+            text: String::new(),
+            images: Vec::new(),
+            files: vec![PromptFile {
+                name: "a.bin".into(),
+                data: Bytes(vec![0; MAX_PROMPT_ATTACHMENT_BYTES]),
+            }],
+        },
+    });
+    let encoded = serde_json::to_vec(&prompt).unwrap().len();
+    assert!(encoded + 1024 * 1024 < MAX_MESSAGE_BYTES, "{encoded}");
+}
+
 #[test]
 fn terminal_purpose_is_tagged() {
     let terminal = Terminal {
