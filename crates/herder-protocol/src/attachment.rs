@@ -32,7 +32,7 @@ pub const MAX_FILE_NAME_BYTES: usize = 255;
 pub const IMAGE_NOT_BACKED_UP: &str = "image not backed up";
 
 /// Most bytes all images and files of one prompt may have together; keeps a `send_prompt`
-/// well within a WebSocket frame.
+/// well within [`crate::MAX_MESSAGE_BYTES`].
 pub const MAX_PROMPT_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 
 /// An image file a client sends: with a prompt, or as a project's icon.

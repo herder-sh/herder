@@ -12,8 +12,8 @@ use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Account, AccountId, AwsDeviceCode, AwsProfile, ClientHello, ClientMessage, Command,
     CommandBody, CommandId, CommandResult, Cursor, DaemonSettings, DeviceId, ErrorCode, ErrorInfo,
-    Event, EventBody, HostId, Item, ItemBody, ItemId, LeftoverDecision, NewPerson,
-    PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey,
+    Event, EventBody, HostId, Item, ItemBody, ItemId, LeftoverDecision, MAX_MESSAGE_BYTES,
+    NewPerson, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey,
     PermissionMode, PersonId, PersonPasskey, Provider, Role, Seq, ServerHello, ServerMessage,
     SessionHead, SessionId, SignIn, Terminal, TerminalPurpose, TurnId, UserId,
 };
@@ -716,6 +716,52 @@ async fn a_command_this_build_cannot_read_is_refused_as_that_command() {
         ServerMessage::Error { error, .. } if error.code == ErrorCode::BadRequest
     ));
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_of_max_message_bytes_is_read_and_a_larger_one_closes_the_connection() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    // A `send_prompt` whose text makes it exactly `len` bytes on the wire.
+    let prompt = |id: &str, len: usize| {
+        let message = |text: String| {
+            ClientMessage::Command(Command {
+                id: CommandId::new(id),
+                body: CommandBody::SendPrompt {
+                    session_id: session.clone(),
+                    text,
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
+            })
+        };
+        let empty = serde_json::to_string(&message(String::new()))
+            .unwrap()
+            .len();
+        let text = serde_json::to_string(&message("x".repeat(len - empty))).unwrap();
+        assert_eq!(text.len(), len);
+        text
+    };
+
+    client
+        .ws
+        .send(Message::text(prompt("c1", MAX_MESSAGE_BYTES)))
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.recv().await,
+        ServerMessage::CommandAccepted { command_id, .. } if command_id == CommandId::new("c1")
+    ));
+
+    // The daemon stops reading at the frame's header, so the write itself may fail.
+    let _ = client
+        .ws
+        .send(Message::text(prompt("c2", MAX_MESSAGE_BYTES + 1)))
+        .await;
+    while client.try_recv().await.is_some() {}
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -10,13 +10,14 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ClientMessage, Command, CommandId, CommandResult, Cursor, ErrorCode, ErrorInfo, EventBody,
-    PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello, ServerMessage, SignIn,
+    MAX_MESSAGE_BYTES, PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello, ServerMessage,
+    SignIn,
 };
 use serde::Deserialize;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -106,7 +107,10 @@ pub(crate) async fn handshake(tls: &Tls, stream: TcpStream) -> Result<(Ws, Strin
         .and_then(|certs| certs.first())
         .map(|cert| fingerprint(cert))
         .context("the peer sent no device certificate")?;
-    let ws = tokio_tungstenite::accept_async(tls).await?;
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_MESSAGE_BYTES));
+    let ws = tokio_tungstenite::accept_async_with_config(tls, Some(config)).await?;
     Ok((ws, device))
 }
 

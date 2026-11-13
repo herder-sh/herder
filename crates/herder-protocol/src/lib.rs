@@ -89,6 +89,10 @@ pub use usage::{FailoverTotal, TurnUsage, UsagePeriod, UsageTotal};
 /// Wire protocol version, exchanged in both hellos; peers with different versions disconnect.
 pub const PROTOCOL_VERSION: u32 = 5;
 
+/// Most bytes one WebSocket message may have, sent as one frame: a daemon closes the
+/// connection of a client that sends a larger one, so a client must not send one.
+pub const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
 /// Most characters a session title may have.
 pub const MAX_TITLE_CHARS: usize = 80;
 
