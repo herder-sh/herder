@@ -29,7 +29,7 @@ jobs:
   screenshots:
     name: screenshots
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
       # The bindings, the xcframework and the fake daemon, as the `apple` workflow builds and
@@ -99,7 +99,7 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
             HERDER_MAC_ENTITLEMENTS="$(apple/scripts/adhoc-entitlements.sh)"
       - name: Screenshot the iOS app
-        timeout-minutes: 20
+        timeout-minutes: 35
         run: |
           xcrun simctl bootstatus "$device"
           xcrun simctl status_bar "$device" override --time 9:41 --dataNetwork wifi --wifiBars 3 \
