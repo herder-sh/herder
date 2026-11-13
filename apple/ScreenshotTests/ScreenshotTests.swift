@@ -149,7 +149,7 @@ final class ScreenshotTests: XCTestCase {
             shoot("ios-machines")
             #endif
             // A teammate's sheet: their role on all your machines or on each, and their devices.
-            let teammate = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Kim, '")).firstMatch
+            let teammate = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'kim, '")).firstMatch
             if wait(teammate, "Kim in People") {
                 reveal(teammate)
                 press(teammate)
@@ -249,7 +249,7 @@ final class ScreenshotTests: XCTestCase {
         let title = "Roll out 30-day log retention"
         guard section("Board") else { return }
         let task = row(title)
-        guard wait(task, "\(title) on the Board") else { return }
+        guard listed(task, "\(title) on the Board") else { return }
         reveal(task)
         let fold = app.buttons["Agents of \(title)"].firstMatch
         guard wait(fold, "\(title)'s agents") else { return }
@@ -270,7 +270,7 @@ final class ScreenshotTests: XCTestCase {
         let title = "Tidy the README badges"
         guard section("Board") else { return }
         let task = row(title)
-        guard wait(task, "\(title) on the Board") else { return }
+        guard listed(task, "\(title) on the Board") else { return }
         reveal(task)
         #if os(macOS)
         guard archiveFromMenu(task, "Archive in the menu") else { return }
@@ -284,11 +284,14 @@ final class ScreenshotTests: XCTestCase {
         let first = row("Pin the Terraform providers")
         guard wait(first, "Pin the Terraform providers on the Board") else { return }
         reveal(first)
-        // Opening the task puts its cursor on it, and its composer takes the keyboard; a click in
-        // the Board below its rows gives the keyboard back to the Board.
+        // Opening the task puts its cursor on it, and its composer takes the keyboard; a click on
+        // the Board's first row, a day's heading, which opens nothing, gives the keyboard back to
+        // the Board. The Board is the list with the key legend under its tasks.
         press(first)
         settle()
-        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.29, dy: 0.95)).click()
+        let board = app.outlines.containing(NSPredicate(format: "value == 'archive ·'")).firstMatch
+        guard wait(board, "the Board's key legend") else { return }
+        board.outlineRows.firstMatch.click()
         var archived = first
         for step in 1...3 {
             guard let next = rowAfter(archived) else { return }
@@ -829,7 +832,7 @@ final class ScreenshotTests: XCTestCase {
     private func open(_ title: String) -> Bool {
         _ = section("Board")
         let row = row(title)
-        guard wait(row, title) else { return false }
+        guard listed(row, title) else { return false }
         reveal(row)
         press(row)
         #if os(iOS)
@@ -839,6 +842,20 @@ final class ScreenshotTests: XCTestCase {
         #endif
         settle()
         return true
+    }
+
+    /// Whether the Board lists `row`; when it does not, records `what` as missed. The iPhone's
+    /// list holds only the rows near the screen, so the walk scrolls to find one further off: down
+    /// first, then back up.
+    private func listed(_ row: XCUIElement, _ what: String) -> Bool {
+        #if os(iOS)
+        for step in 0..<10 where !row.waitForExistence(timeout: 3) {
+            if step < 4 { app.swipeUp(velocity: .slow) } else { app.swipeDown(velocity: .slow) }
+        }
+        return wait(row, what, timeout: 3)
+        #else
+        return wait(row, what)
+        #endif
     }
 
     /// Scrolls the list on screen until `element` can be pressed: down first, then back up.

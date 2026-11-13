@@ -22,5 +22,13 @@
   "guest": {
     "credential_id": "motfa-XBjRSd_mua-eQ8sA",
     "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg6B9p76Fe_hOux0qh_n7gif_7ZnUTUhT2PvlWd-fDgC6hRANCAAQK7IMhnD4Mpjjq4vgqToCCqJ8NNhCMyt5I_dIdYBqx0CXq5X7ke1ROtH_hPPF6nvpdIh3hhaGg1Va9rzGMLT-f"
+  },
+  "kim": {
+    "credential_id": "jmp1-htFF9pM528gtRjtKg",
+    "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgzarWe6hCnNy5IQH2lphQMp5zQHXCCtnNGmTjfymH5lqhRANCAAQM2ruEfWtDI7fAnReIdmUcdzklCnHD0zS7oFsIRHfp4GFc38uLbe64e5CgkSI2JouMRYS7cMOcFspKeOazc1z8"
+  },
+  "pat": {
+    "credential_id": "4WbqUtMvdQPKiqy1bLrYCg",
+    "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgEDTLAOZhwMZNkXGWP24WOlD3TCLLPphyvVqu4h35ib2hRANCAASRUMmMCaSSJ2lYo8YVejZJoRBz50CrKiF0aN4JNxkvdY7w7oTRvw3nF92w8LDyX_e_I5PHSxB_i-H4zH_EgnoL"
   }
 }
