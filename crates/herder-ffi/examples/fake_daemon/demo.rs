@@ -30,7 +30,7 @@
 //! skill library is one repository ([`SKILLS`]), with one skill turned off on `studio`.
 //!
 //! The user, Tomas, owns `devbox` and `studio` and is a member on `laptop`, which Pat and Kim
-//! own. Their teammates Sam and Kim are users of the machines too ([`TEAMMATES`]).
+//! own. Their teammates Sam and Kim are people on the machines too ([`TEAMMATES`]).
 //! `devbox` backs up to a vault, `vault`, which the user owns too.
 //!
 //! [`Demo::start`] returns once all of it is in place, with the link a device signed in to every
@@ -52,8 +52,8 @@ use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
 use herder_client_core::{Client, ConnectionState, FleetLink, FleetMachine, FleetPerson};
+use herder_daemon::auth::Auth;
 use herder_daemon::auth::authenticator::{self, Authenticator};
-use herder_daemon::auth::{Auth, User};
 use herder_daemon::bots::{Bots, Runtime as BotsRuntime, runner};
 use herder_daemon::config::Retention;
 use herder_daemon::login::{self, Logins};
@@ -450,7 +450,8 @@ const MACHINES: &[(&str, u32, u64, &[Account])] = &[
 const MEMBER_ON: &str = "laptop";
 /// The demo's user, a person with the recorded passkey of that name.
 const USER: &str = "tomas";
-/// Who else uses each machine: Pat and Kim own `laptop`, where the user is a member.
+/// Who else uses each machine, each a person with the recorded passkey of their name: Pat and
+/// Kim own `laptop`, where the user is a member.
 const TEAMMATES: &[(&str, &str, Role)] = &[
     ("devbox", "sam", Role::Member),
     ("devbox", "kim", Role::Member),
@@ -589,19 +590,15 @@ impl Demo {
         Ok(scenes)
     }
 
-    /// Who is on the machine `host`, people and the users from before them, by name and role,
-    /// as its People list shows them.
+    /// The people on the machine `host`, by name and role, as its People list shows them.
     pub fn team(&self, host: &str) -> Result<Vec<(String, Role)>> {
         let daemon = self
             .daemons
             .iter()
             .find(|daemon| daemon.id.as_str() == host)
             .with_context(|| format!("no machine {host}"))?;
-        let auth = Auth::open(&daemon.data_dir)?;
-        let people = auth.people().into_iter().map(|p| (p.name, p.role));
-        Ok(people
-            .chain(auth.users().into_iter().map(|u| (u.name, u.role)))
-            .collect())
+        let people = daemon.auth.people();
+        Ok(people.into_iter().map(|p| (p.name, p.role)).collect())
     }
 }
 
@@ -1070,24 +1067,22 @@ impl DemoVault {
     }
 }
 
-/// Writes the users file a daemon opens with, as though the machine's [`TEAMMATES`] had
-/// paired, so the People page has a team to show. With no owner among them, the demo's user
-/// becomes the owner when they sign in.
-fn teammates(dir: &Path, machine: &str) -> Result<()> {
-    let users: Vec<User> = TEAMMATES
-        .iter()
-        .filter(|(on, _, _)| *on == machine)
-        .map(|(_, name, role)| User {
-            user_id: UserId::new(*name),
-            name: (*name).into(),
-            role: *role,
-            created_at: Timestamp::now(),
-            host: false,
-        })
-        .collect();
-    let users = json!({ "version": 1, "users": users, "devices": [] });
-    std::fs::write(dir.join("auth.json"), serde_json::to_vec(&users)?)?;
-    Ok(())
+/// Puts the demo's user and `machine`'s [`TEAMMATES`] on `auth`, each a person with a device
+/// signed in, so the People page has a team to show. The owners go first: a machine's first
+/// owner claims it, and the rest join by an invite.
+fn enroll_team(auth: &Auth, machine: &str) {
+    let role = if machine == MEMBER_ON {
+        Role::Member
+    } else {
+        Role::Owner
+    };
+    let teammates = TEAMMATES.iter().filter(|(on, _, _)| *on == machine);
+    let mut team = vec![(USER, role)];
+    team.extend(teammates.map(|(_, name, role)| (*name, *role)));
+    team.sort_by_key(|(_, role)| *role != Role::Owner);
+    for (name, role) in team {
+        authenticator::enroll_known(auth, name, role, &format!("{machine}-{name}"));
+    }
 }
 
 /// A running machine.
@@ -1122,7 +1117,6 @@ impl Daemon {
             repos.insert(*repo, clone(origins, repo, &dir.join("src"))?);
         }
         let tls = Tls::load_or_create(&dir.join("tls"), name)?;
-        teammates(dir, name)?;
         let auth = Arc::new(Auth::open(dir)?);
         let hub = Arc::new(Hub::default());
         let scripted = Arc::new(Scripted {
@@ -1289,12 +1283,7 @@ impl Daemon {
             None,
         )?);
         let listener = listen().await?;
-        let role = if name == MEMBER_ON {
-            Role::Member
-        } else {
-            Role::Owner
-        };
-        authenticator::enroll_known(&auth, USER, role, &format!("{name}-{USER}"));
+        enroll_team(&auth, name);
         let (address, fingerprint) = (
             listener.local_addr()?.to_string(),
             tls.fingerprint().to_owned(),
@@ -1487,7 +1476,8 @@ fn clis(dir: &Path, name: &str) -> Result<(HashMap<Provider, PathBuf>, Vec<Recip
         .context("a machine without CLIs")?;
     // Writes the version and the CLI's binary, as a vendor installer would. Claude's warns of a
     // second, npm-installed copy, as its real updater does, for the apps to explain. It takes
-    // long enough that a machine's second update is still queued once Activity opens.
+    // long enough that a machine's second update is still queued once the screenshot test has
+    // opened Activity, which took it 18 seconds on a slow CI runner.
     let install = bin.join("install.sh");
     std::fs::write(
         &install,
@@ -1498,7 +1488,7 @@ fn clis(dir: &Path, name: &str) -> Result<(HashMap<Provider, PathBuf>, Vec<Recip
          echo '- npm-global at /opt/homebrew/bin/claude'\n\
          echo '- native at ~/.local/bin/claude (currently running)'\n\
          fi\n\
-         sleep 8\n\
+         sleep 30\n\
          printf '%s\\n' \"$2\" > \"$bin/$1.version\"\n\
          printf '#!/bin/sh\\nexec /bin/sh \"%s\" \"$@\"\\n' \"$bin/$1.sh\" > \"$bin/$1\"\n\
          chmod +x \"$bin/$1\"\n\

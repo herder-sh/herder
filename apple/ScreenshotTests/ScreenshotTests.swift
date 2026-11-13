@@ -149,7 +149,7 @@ final class ScreenshotTests: XCTestCase {
             shoot("ios-machines")
             #endif
             // A teammate's sheet: their role on all your machines or on each, and their devices.
-            let teammate = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Kim, '")).firstMatch
+            let teammate = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'kim, '")).firstMatch
             if wait(teammate, "Kim in People") {
                 reveal(teammate)
                 press(teammate)
@@ -249,7 +249,7 @@ final class ScreenshotTests: XCTestCase {
         let title = "Roll out 30-day log retention"
         guard section("Board") else { return }
         let task = row(title)
-        guard wait(task, "\(title) on the Board") else { return }
+        guard listed(task, "\(title) on the Board") else { return }
         reveal(task)
         let fold = app.buttons["Agents of \(title)"].firstMatch
         guard wait(fold, "\(title)'s agents") else { return }
@@ -270,7 +270,7 @@ final class ScreenshotTests: XCTestCase {
         let title = "Tidy the README badges"
         guard section("Board") else { return }
         let task = row(title)
-        guard wait(task, "\(title) on the Board") else { return }
+        guard listed(task, "\(title) on the Board") else { return }
         reveal(task)
         #if os(macOS)
         guard archiveFromMenu(task, "Archive in the menu") else { return }
@@ -284,11 +284,14 @@ final class ScreenshotTests: XCTestCase {
         let first = row("Pin the Terraform providers")
         guard wait(first, "Pin the Terraform providers on the Board") else { return }
         reveal(first)
-        // Opening the task puts its cursor on it, and its composer takes the keyboard; a click in
-        // the Board below its rows gives the keyboard back to the Board.
+        // Opening the task puts its cursor on it, and its composer takes the keyboard; a click on
+        // the Board's first row, a day's heading, which opens nothing, gives the keyboard back to
+        // the Board. The Board is the list with the key legend under its tasks.
         press(first)
         settle()
-        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.29, dy: 0.95)).click()
+        let board = app.outlines.containing(NSPredicate(format: "value == 'archive ·'")).firstMatch
+        guard wait(board, "the Board's key legend") else { return }
+        board.outlineRows.firstMatch.click()
         var archived = first
         for step in 1...3 {
             guard let next = rowAfter(archived) else { return }
@@ -303,11 +306,9 @@ final class ScreenshotTests: XCTestCase {
         let archive = app.buttons["Archive"].firstMatch
         guard wait(archive, "swipe's Archive") else { return }
         archive.tap()
-        guard gone(task, "archived with a swipe") else { return }
-        let undo = app.buttons["Undo"].firstMatch
-        guard wait(undo, "toast's Undo") else { return }
-        press(undo)
-        _ = wait(task, "back with Undo")
+        guard undoFromToast("toast's Undo") else { return }
+        // Back as the newest task, at the top of the list, which is off the screen from here.
+        _ = listed(task, "back with Undo")
         #endif
     }
 
@@ -369,11 +370,18 @@ final class ScreenshotTests: XCTestCase {
         guard wait(archive, "swipe's Archive in api") else { return }
         archive.tap()
         #endif
-        guard gone(task, "archived from api") else { return }
-        let undo = app.buttons["Undo"].firstMatch
-        guard wait(undo, "toast's Undo in api") else { return }
-        press(undo)
+        guard undoFromToast("toast's Undo in api") else { return }
         _ = wait(task, "back in api with Undo")
+    }
+
+    /// Presses the Undo of the toast an archive just put up. The toast is up for five seconds and
+    /// each step of the test takes one or two of them, so nothing is checked before it: the
+    /// toast says the task was archived.
+    private func undoFromToast(_ what: String) -> Bool {
+        let undo = app.buttons["Undo"].firstMatch
+        guard undo.exists || wait(undo, what) else { return false }
+        press(undo)
+        return true
     }
 
     #if os(macOS)
@@ -610,11 +618,11 @@ final class ScreenshotTests: XCTestCase {
         let queued = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier == 'job-install-codex-studio' AND label ENDSWITH ', Queued'")).firstMatch
         if wait(queued, "studio's Codex queued") { shoot("mac-activity-queued", screen: true) }
-        // The demo's installers take eight seconds, so the three end within about 16; Activity's
-        // chip stops counting once they have. A popover open that long drops out of the view
-        // tree, though it stays on screen, so the chip, in the window, says when they are done,
-        // and Activity opens afresh to be used.
-        guard wait(activityIdle(), "updates done", timeout: 40) else { return closeActivity() }
+        // The demo's installers take 30 seconds, so the three end within about a minute;
+        // Activity's chip stops counting once they have. A popover open that long drops out of
+        // the view tree, though it stays on screen, so the chip, in the window, says when they
+        // are done, and Activity opens afresh to be used.
+        guard wait(activityIdle(), "updates done", timeout: 120) else { return closeActivity() }
         let chip = app.descendants(matching: .any)["activity"].firstMatch
         if chip.isSelected {
             press(chip)
@@ -829,7 +837,7 @@ final class ScreenshotTests: XCTestCase {
     private func open(_ title: String) -> Bool {
         _ = section("Board")
         let row = row(title)
-        guard wait(row, title) else { return false }
+        guard listed(row, title) else { return false }
         reveal(row)
         press(row)
         #if os(iOS)
@@ -839,6 +847,26 @@ final class ScreenshotTests: XCTestCase {
         #endif
         settle()
         return true
+    }
+
+    /// Whether the Board lists `row`; when it does not, records `what` as missed. The iPhone's
+    /// list holds only the rows near the screen, so the walk scrolls to find one further off: down
+    /// first, then back up. A row it holds under the navigation bar or the tab bar counts as
+    /// hittable, yet a tap on it goes to the bar: the walk scrolls that one out from under it.
+    private func listed(_ row: XCUIElement, _ what: String) -> Bool {
+        #if os(iOS)
+        for step in 0..<10 {
+            let middle = row.waitForExistence(timeout: 3) ? row.frame.midY : nil
+            let bar = app.navigationBars.firstMatch, tabs = app.tabBars.firstMatch
+            let top = bar.exists ? bar.frame.maxY : 0, bottom = tabs.exists ? tabs.frame.minY : .infinity
+            if let middle, middle > top, middle < bottom { break }
+            let down = middle.map { $0 > bottom } ?? (step < 4)
+            if down { app.swipeUp(velocity: .slow) } else { app.swipeDown(velocity: .slow) }
+        }
+        return wait(row, what, timeout: 3)
+        #else
+        return wait(row, what)
+        #endif
     }
 
     /// Scrolls the list on screen until `element` can be pressed: down first, then back up.

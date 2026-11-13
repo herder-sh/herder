@@ -48,8 +48,8 @@ pub struct Authenticator {
 }
 
 impl Authenticator {
-    /// The recorded passkey `name` (`tomas`, `sam`, `alice`, `bob`, `carol` or `guest`), for
-    /// the person `user_handle` names.
+    /// The recorded passkey `name` (`tomas`, `sam`, `kim`, `pat`, `alice`, `bob`, `carol` or
+    /// `guest`), for the person `user_handle` names.
     pub fn new(name: &str, user_handle: &[u8]) -> Self {
         let fixtures: serde_json::Value = serde_json::from_str(FIXTURES).unwrap();
         let fixture = &fixtures[name];
