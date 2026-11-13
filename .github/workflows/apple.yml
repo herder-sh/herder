@@ -10,6 +10,8 @@ name: apple
 
 on:
   pull_request:
+    # labeled: adding `full-ci` runs mac-ui and perf on a PR.
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - "apple/**"
       - "crates/herder-ffi/**"
@@ -17,6 +19,7 @@ on:
       - "crates/herder-protocol/**"
       - "rust-toolchain.toml"
       - ".github/workflows/apple.yml"
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -205,7 +208,11 @@ jobs:
     name: mac-ui
     needs: [key, bindings]
     # Also when the bindings job is skipped on a cache hit.
-    if: ${{ !failure() && !cancelled() }}
+    # The slow UI and perf jobs hold macOS runners PRs queue for: they run on main, by hand,
+    # and on a PR labelled `full-ci`.
+    if: >-
+      ${{ !failure() && !cancelled() && (github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -313,7 +320,11 @@ jobs:
   perf:
     name: perf (${{ matrix.platform }})
     needs: [key, bindings]
-    if: ${{ !failure() && !cancelled() }}
+    # The slow UI and perf jobs hold macOS runners PRs queue for: they run on main, by hand,
+    # and on a PR labelled `full-ci`.
+    if: >-
+      ${{ !failure() && !cancelled() && (github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     runs-on: macos-latest
     strategy:
       fail-fast: false
