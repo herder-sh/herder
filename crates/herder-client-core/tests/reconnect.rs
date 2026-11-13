@@ -2,7 +2,7 @@
 //! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, an
 //! account login, an AWS sign-in, resource figures, the sync barrier, renaming and forgetting a machine, a
 //! reconnect through a chosen address, the app lifecycle: suspension, wake probes and the offline cache,
-//! and a new device asked to sign in as a person.
+//! a connection gone dead, a slow upload, and a new device asked to sign in as a person.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -33,7 +33,8 @@ use herder_protocol::{
     TerminalPurpose, TurnId,
 };
 use herder_store::Store;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio_util::sync::CancellationToken;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -860,6 +861,21 @@ struct Relay {
 impl Relay {
     async fn start(target: SocketAddr) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        Self::relaying(listener, target, None)
+    }
+
+    /// A relay that passes on what a client sends at no more than `rate` bytes a second, as
+    /// a slow uplink would.
+    fn slow(target: SocketAddr, rate: u64) -> Self {
+        let socket = TcpSocket::new_v4().unwrap();
+        // What is not passed on yet waits in the client's socket, as on a slow uplink, not
+        // in the relay's.
+        socket.set_recv_buffer_size(64 * 1024).unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        Self::relaying(socket.listen(64).unwrap(), target, Some(rate))
+    }
+
+    fn relaying(listener: TcpListener, target: SocketAddr, rate: Option<u64>) -> Self {
         let addr = listener.local_addr().unwrap();
         let cut = tokio::sync::watch::Sender::new(0);
         let stall = tokio::sync::watch::Sender::new(0);
@@ -872,8 +888,21 @@ impl Relay {
                 let mut stall = stalls.subscribe();
                 tokio::spawn(async move {
                     let mut outbound = TcpStream::connect(target).await.unwrap();
+                    let relayed = async {
+                        let Some(rate) = rate else {
+                            let _ =
+                                tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                            return;
+                        };
+                        let (mut from_client, mut to_client) = inbound.split();
+                        let (mut from_daemon, mut to_daemon) = outbound.split();
+                        tokio::select! {
+                            () = trickle(&mut from_client, &mut to_daemon, rate) => {}
+                            _ = tokio::io::copy(&mut from_daemon, &mut to_client) => {}
+                        }
+                    };
                     tokio::select! {
-                        _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound) => {}
+                        () = relayed => {}
                         _ = cut.changed() => {}
                         // Both ends stay open, and nothing goes through any more.
                         _ = stall.changed() => std::future::pending::<()>().await,
@@ -902,6 +931,25 @@ impl Relay {
     /// How many connections the relay accepted.
     fn accepted(&self) -> u64 {
         self.accepted.load(Ordering::SeqCst)
+    }
+}
+
+/// Copies `from` to `to` at no more than `rate` bytes a second.
+async fn trickle(
+    from: &mut (impl AsyncRead + Unpin),
+    to: &mut (impl AsyncWrite + Unpin),
+    rate: u64,
+) {
+    let mut chunk = vec![0; 64 * 1024];
+    loop {
+        let read = match from.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(read) => read,
+        };
+        if to.write_all(&chunk[..read]).await.is_err() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_micros(read as u64 * 1_000_000 / rate)).await;
     }
 }
 
@@ -1709,6 +1757,123 @@ async fn wake_keeps_a_healthy_connection_and_replaces_a_dead_one() {
     .await
     .expect("the dead connection was not replaced in time");
     client.synced(host).await.unwrap();
+}
+
+/// A connection that goes silently dead while the app is in use is noticed by its pings, with
+/// no wake to prompt a check, and replaced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dead_connection_is_noticed_by_its_pings_and_replaced() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let relay = Relay::start(daemon.addr).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", relay.addr)
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+    assert_eq!(relay.accepted(), 2);
+
+    relay.stall();
+    // The next ping goes out within 15 s, and gets 10 s.
+    let changes = client.changes();
+    tokio::time::timeout(Duration::from_secs(35), async {
+        while relay.accepted() < 3 || client.machines()[0].connection != ConnectionState::Connected
+        {
+            assert!(changes.next().await);
+        }
+    })
+    .await
+    .expect("the dead connection was not replaced in time");
+    client.synced(host).await.unwrap();
+}
+
+/// A prompt that a slow uplink takes seconds to carry holds up nothing else: what the daemon
+/// sends meanwhile is read as it comes, and a wake's probe, whose pong waits behind the
+/// prompt, does not make the connection look dead while the daemon keeps taking bytes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_upload_holds_up_neither_reading_nor_a_wake() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    // 1.5 MB a second: the prompt below takes over nine seconds.
+    let relay = Relay::slow(daemon.addr, 1_500_000);
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", relay.addr)
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+    assert_eq!(relay.accepted(), 2);
+
+    // Two images, each as large as one may be: close to 14 MB as base64.
+    let prompt = CommandBody::SendPrompt {
+        session_id: SessionId::new("nope"),
+        text: "look".into(),
+        images: (0..2)
+            .map(|_| Image {
+                media_type: "image/png".into(),
+                data: Bytes(vec![0; MAX_IMAGE_BYTES]),
+            })
+            .collect(),
+        files: Vec::new(),
+    };
+    let started = std::time::Instant::now();
+    let sending = client.send(host.clone(), prompt);
+    tokio::pin!(sending);
+    tokio::select! {
+        sent = &mut sending => panic!("the prompt was through at once: {sent:?}"),
+        () = tokio::time::sleep(Duration::from_millis(500)) => {}
+    }
+
+    // What the daemon sends now arrives while the prompt is still on its way.
+    daemon.hub.host_resources(host_resources(4));
+    tokio::select! {
+        sent = &mut sending => panic!("the prompt was through too soon to tell: {sent:?}"),
+        () = wait_machine(&client, |m| m.resources == Some(host_resources(4))) => {}
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+
+    // The probe gets five seconds, and its pong comes only once the prompt is through.
+    client.wake();
+    let sent = tokio::time::timeout(Duration::from_secs(60), &mut sending)
+        .await
+        .expect("the prompt got no answer");
+    assert!(matches!(sent, Err(Error::Rejected { .. })), "{sent:?}");
+    assert!(
+        started.elapsed() > Duration::from_secs(8),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(relay.accepted(), 2);
+    let machine = &client.machines()[0];
+    assert!(connected(&machine.connection));
+    assert_eq!(machine.quality.reconnects, 0);
 }
 
 /// A client opens on its offline cache, with no daemon to talk to, then live data takes over
