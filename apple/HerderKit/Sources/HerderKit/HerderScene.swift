@@ -8,7 +8,9 @@ public struct HerderScene: Scene {
     @State private var demo: Fleet?
     @Environment(\.scenePhase) private var scenePhase
 
-    public init() {}
+    public init() {
+        Hangs.watch()
+    }
 
     public var body: some Scene {
         WindowGroup {
