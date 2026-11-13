@@ -222,6 +222,44 @@ struct SessionModelTests {
         #expect(model.activity == "Done.")
     }
 
+    /// A launch folds every session's journal, hundreds of thousands of events, and a file
+    /// written or quoted runs to a megabyte: the fold reads of an event what its line shows, the
+    /// first line of a reply and the last tool call's input, not each one through. It parsed
+    /// every call's input twice and split every reply into its lines, most of a fold's time.
+    @Test func foldingAJournalReadsNoMoreOfAnEventThanItsLineShows() throws {
+        var script = Script()
+        let file = String(repeating: "let delay = base * 2u32.pow(attempt.min(8)) + jitter();\n", count: 20_000)
+        let input = String(
+            decoding: try JSONSerialization.data(withJSONObject: ["file_path": "src/jobs/retry.rs", "content": file]),
+            as: UTF8.self)
+        func item(_ id: String, _ body: ItemBody) -> Event {
+            script.event(.itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: id, turnId: "t1", body: body)))
+        }
+        var events = [script.event(created()), script.event(.turnStarted(turnId: "t1"))]
+        for round in 0..<100 {
+            events.append(item("c\(round)", .toolCall(name: "Write", input: input)))
+            events.append(item("m\(round)", .assistantMessage(text: "Wrote the retry worker:\n\n\(file)")))
+        }
+        var model = SessionModel(key: script.key)
+        let start = ContinuousClock.now
+        model.apply(SessionUpdate(events: events, streaming: []))
+        // Read through, these take seconds.
+        #expect(ContinuousClock.now - start < .seconds(1))
+        // What it shows is what it showed.
+        #expect(model.lastTool == "Editing retry.rs")
+        #expect(model.timeline.suffix(2).map(\.text) == ["Tool: Write src/jobs/retry.rs", "Reply: Wrote the retry worker:"])
+    }
+
+    @Test func theFirstLineIsTheFirstThatIsNotEmpty() {
+        #expect(firstLine("Done.\nMore detail.") == "Done.")
+        #expect(firstLine("\n\r\n  Done.  \r\nMore detail.") == "Done.")
+        #expect(firstLine("Done.\u{2028}More detail.") == "Done.")
+        #expect(firstLine("Fait\u{301}.\nMore detail.") == "Fait\u{301}.")
+        #expect(firstLine("  \nDone.") == "")
+        #expect(firstLine("\n\n") == "")
+        #expect(firstLine("") == "")
+    }
+
     @Test func aToolCallsActivityIsWordsNotItsIdentifier() {
         #expect(toolActivity(name: "Bash", input: #"{"command":"cargo test --workspace"}"#) == "Running cargo")
         #expect(toolActivity(name: "Bash", input: "{}") == "Running a command")
