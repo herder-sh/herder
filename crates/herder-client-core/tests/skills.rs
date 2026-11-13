@@ -229,6 +229,7 @@ impl Fake {
             role: self.role,
             person_id: None,
             herder_version: None,
+            addresses: Vec::new(),
         });
         let mut changed = self.changed.subscribe();
         changed.mark_changed();

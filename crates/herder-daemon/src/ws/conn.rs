@@ -229,6 +229,7 @@ async fn read<B: Backend>(
         role: identity.role,
         person_id: identity.person_id.clone(),
         herder_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+        addresses: Vec::new(),
     }));
     shared.hub.connect(outbox, identity.role);
     let person = shared.auth.resolve(&identity.user_id);
