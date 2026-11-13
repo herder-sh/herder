@@ -37,14 +37,17 @@
 //! ones first and Tailscale ones last; after that the user's order holds. A wake, as on a
 //! network change, also moves a connection that is up to an address that comes before its own,
 //! once one answers. After a failure or a lost connection it waits a capped,
-//! jittered exponential backoff (250 ms doubling to 30 s) and tries again, forever. A
-//! connection silent for 45 s, despite pings, counts as lost. [`Machine::connection`] says
-//! where it stands, and [`Client::synced`] waits until a connection is up and the daemon has
-//! sent its lists and the replay of every subscription.
+//! jittered exponential backoff (250 ms doubling to 30 s) and tries again, forever.
+//! [`Machine::connection`] says where it stands, and [`Client::synced`] waits until a
+//! connection is up and the daemon has sent its lists and the replay of every subscription.
 //!
 //! A connection is pinged as soon as it is up and every 15 s after; [`Machine::quality`]
 //! holds the round trips of the last 20 pongs, how many pongs did not come back before the
-//! next ping, when the connection was established and how often it was re-established.
+//! next ping, when the connection was established and how often it was re-established. A
+//! connection whose daemon shows no sign of life for 10 s after a ping counts as lost. Any
+//! byte the daemon sends or takes is such a sign, not only the pong: a connection busy with
+//! a long replay or a large upload is not mistaken for a dead one, and what it sends never
+//! keeps it from reading.
 //!
 //! # App lifecycle
 //!
@@ -52,10 +55,10 @@
 //! it returns. Suspended, the client saves its offline cache and stops retrying lost
 //! connections; connections that are up stay up for as long as the OS lets the process run.
 //! Waking reconnects every disconnected machine at once and checks every connected one: a
-//! connection silent for longer than 45 s, as after a long suspension in which the OS may
+//! connection silent for longer than 25 s, as after a long suspension in which the OS may
 //! have killed the socket without either end noticing, is replaced right away; any other is
-//! pinged and replaced if the pong does not come back within 5 s. Subscriptions resume from
-//! the last seq held, so a suspension of any length shows no gap.
+//! pinged and replaced if the daemon shows no sign of life for 5 s. Subscriptions resume
+//! from the last seq held, so a suspension of any length shows no gap.
 //!
 //! # Resources
 //!
@@ -735,7 +738,7 @@ impl Client {
     /// The app is in the foreground: reconnects every disconnected machine now instead of
     /// after its backoff, and resumes retrying after [`Client::suspend`]. Every connected
     /// machine is checked: its connection is replaced at once if it was silent for longer than
-    /// 45 s, else pinged and replaced if the pong does not come back within 5 s.
+    /// 25 s, else pinged and replaced if the daemon shows no sign of life for 5 s.
     pub fn wake(&self) {
         for machine in self.lock().iter() {
             machine.wake();

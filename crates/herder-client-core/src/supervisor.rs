@@ -5,13 +5,20 @@
 //! While the app is in the background ([`Supervisor::suspend`]) the task keeps a connection
 //! that is up but does not retry a lost one. Back in the foreground ([`Supervisor::wake`]) it
 //! reconnects at once, and checks a connection that is up before trusting it: one silent for
-//! longer than [`SILENCE_LIMIT`] (a suspension the OS may have killed it in, unnoticed) is
-//! replaced right away, any other is pinged and replaced if nothing comes back within
-//! [`PROBE_TIMEOUT`].
+//! longer than a running task would have let it be (a suspension the OS may have killed it
+//! in, unnoticed) is replaced right away, any other is pinged and replaced if the daemon
+//! shows no sign of life within [`PROBE_TIMEOUT`].
 //!
 //! A connection is pinged as soon as it is up and every [`PING_INTERVAL`] after; each ping
 //! carries a fresh payload, so its pong gives the round trip, and a ping still unanswered when
-//! the next one is due counts as a missed pong.
+//! the next one is due counts as a missed pong. A connection whose daemon shows no sign of
+//! life within [`SILENCE_LIMIT`] of a ping is lost.
+//!
+//! A sign of life is anything that only a daemon that is there brings about ([`Watched`]),
+//! not just the pong: a connection busy with a long replay or a large upload, whose pong
+//! waits behind megabytes, is as alive as an idle one. What the connection sends is written
+//! beside its reading, so a write the network is slow to take, or never takes, holds up
+//! neither what the daemon sends nor these checks.
 //!
 //! Terminal attachments belong to a connection on the daemon, so the task re-attaches every
 //! terminal this client holds a stream for on each new connection, with fresh command ids (a
@@ -20,7 +27,9 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::{self, Poll};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
@@ -35,6 +44,7 @@ use herder_protocol::{
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Instant, MissedTickBehavior};
@@ -73,16 +83,100 @@ const RECENT_PONGS: usize = 20;
 /// How often a connection is pinged.
 const PING_INTERVAL: Duration = Duration::from_secs(15);
 
-/// Silence after which a connection is considered dead, though TCP has not noticed yet.
-const SILENCE_LIMIT: Duration = Duration::from_secs(45);
+/// Silence after a ping after which a connection is considered dead, though TCP has not
+/// noticed yet.
+const SILENCE_LIMIT: Duration = Duration::from_secs(10);
 
-/// Time a connection gets to answer the probe a wake sends before it is replaced.
+/// Silence after the probe a wake sends after which a connection is replaced.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How often a connection saves what changed to the offline cache.
 const SAVE_INTERVAL: Duration = Duration::from_secs(30);
 
-pub(crate) type Ws = WebSocketStream<TlsStream<TcpStream>>;
+pub(crate) type Ws = WebSocketStream<TlsStream<Watched>>;
+
+/// When a daemon last showed that it is there, as its stream saw it.
+#[derive(Clone)]
+struct Alive(Arc<Mutex<Instant>>);
+
+impl Alive {
+    fn mark(&self) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
+    }
+
+    fn at(&self) -> Instant {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A daemon's TCP stream that notes each sign that the daemon is there: bytes read from it,
+/// and a write taken after one the socket refused, since a full socket takes more only once
+/// the daemon acknowledged what it was sent. A write into a socket with room shows nothing:
+/// the kernel takes it for a daemon that is long gone too.
+pub(crate) struct Watched {
+    tcp: TcpStream,
+    alive: Alive,
+    /// Whether the socket refused the last write.
+    blocked: bool,
+}
+
+impl Watched {
+    fn new(tcp: TcpStream) -> Self {
+        Self {
+            tcp,
+            alive: Alive(Arc::new(Mutex::new(Instant::now()))),
+            blocked: false,
+        }
+    }
+}
+
+impl AsyncRead for Watched {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let poll = Pin::new(&mut self.tcp).poll_read(cx, buf);
+        if buf.filled().len() > before {
+            self.alive.mark();
+        }
+        poll
+    }
+}
+
+impl AsyncWrite for Watched {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let poll = Pin::new(&mut self.tcp).poll_write(cx, buf);
+        match &poll {
+            Poll::Pending => self.blocked = true,
+            Poll::Ready(Ok(_)) if self.blocked => {
+                self.blocked = false;
+                self.alive.mark();
+            }
+            Poll::Ready(_) => {}
+        }
+        poll
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.tcp).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.tcp).poll_shutdown(cx)
+    }
+}
 
 /// Answer to a command, as the daemon gave it.
 type Answer = Result<CommandResult, ErrorInfo>;
@@ -1374,7 +1468,12 @@ async fn serve(
     syncs: &mut HashMap<String, oneshot::Sender<()>>,
     suspended: &mut bool,
 ) -> Ended {
-    let (mut sink, mut stream) = ws.split();
+    let alive = ws.get_ref().get_ref().0.alive.clone();
+    let (sink, mut stream) = ws.split();
+    // What the connection sends is queued here and written beside the loop below.
+    let (outgoing, queued) = mpsc::unbounded_channel();
+    let writing = write(sink, queued);
+    tokio::pin!(writing);
     // Attaches in flight on this connection, by command id.
     let mut attaching = HashMap::new();
     // Terminal events with no stream yet, kept while an open is in flight.
@@ -1394,9 +1493,7 @@ async fn serve(
         .chain(synced)
         .collect();
     for message in messages {
-        if let Err(error) = send(&mut sink, &message).await {
-            return Ended::Lost(error);
-        }
+        send(&outgoing, &message);
     }
     // Its first tick is now: the first round trip is known as soon as the connection is up.
     let mut ping = tokio::time::interval(PING_INTERVAL);
@@ -1405,63 +1502,30 @@ async fn serve(
     let mut pinged: Option<(String, Instant)> = None;
     let mut save = tokio::time::interval(SAVE_INTERVAL);
     save.reset();
-    let mut heard = Instant::now();
-    // The payload of the ping a wake sent, and when it went out; its pong must come back within
-    // PROBE_TIMEOUT. Only that pong clears it: frames read before it may have been buffered
-    // before a suspension.
+    // The payload of the ping a wake sent, and when it went out, until its pong comes back.
     let mut probe: Option<(String, Instant)> = None;
     // A connection to an address before this one's, which a wake or new addresses start;
     // once one answers, this connection is replaced to move there.
     let mut better: Option<BoxFuture<'static, Result<String, String>>> = None;
     loop {
-        let deadline = probe.as_ref().map(|(_, sent)| *sent + PROBE_TIMEOUT);
-        let probed = async {
-            match deadline {
-                Some(deadline) => tokio::time::sleep_until(deadline).await,
-                None => std::future::pending().await,
-            }
+        // When the connection counts as dead: each ping gives the daemon its time to show it
+        // is there, counted from the ping or from its last sign of life, whichever is later.
+        let heard = alive.at();
+        let due = |ping: &Option<(String, Instant)>, limit: Duration| {
+            ping.as_ref().map(|(_, sent)| heard.max(*sent) + limit)
         };
+        let probe_due = due(&probe, PROBE_TIMEOUT);
+        let dead = [probe_due, due(&pinged, SILENCE_LIMIT)]
+            .into_iter()
+            .flatten()
+            .min();
+        // In this order, so that a connection is found dead only with nothing left to read:
+        // after a suspension, what the daemon sent meanwhile is read before the deadlines
+        // that passed meanwhile are looked at.
         let message = tokio::select! {
+            biased;
             () = supervisor.stop.cancelled() => return Ended::Stopped,
-            () = probed => {
-                return Ended::Replaced("the daemon did not answer the wake probe".to_owned());
-            }
-            reached = async {
-                match better.as_mut() {
-                    Some(reaching) => reaching.await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                match reached {
-                    Ok(address) => {
-                        return Ended::Replaced(format!("moving to {address}, which comes first"));
-                    }
-                    Err(error) => {
-                        debug!(machine = %supervisor.saved.name, "no better address: {error}");
-                        better = None;
-                        continue;
-                    }
-                }
-            }
-            _ = save.tick() => {
-                save_in_background(supervisor);
-                continue;
-            }
-            _ = ping.tick() => {
-                if heard.elapsed() > SILENCE_LIMIT {
-                    return Ended::Lost("the daemon stopped answering".to_owned());
-                }
-                if pinged.is_some() {
-                    supervisor.missed_pong();
-                }
-                let payload = ulid::Ulid::generate().to_string();
-                let message = Message::Ping(payload.clone().into_bytes().into());
-                pinged = Some((payload, Instant::now()));
-                if let Err(error) = write(&mut sink, message).await {
-                    return Ended::Lost(error);
-                }
-                continue;
-            }
+            error = &mut writing => return Ended::Lost(error),
             op = ops.recv() => {
                 let message = match op {
                     None => return Ended::Stopped,
@@ -1506,7 +1570,8 @@ async fn serve(
                     }
                     Some(Op::Wake) => {
                         *suspended = false;
-                        if heard.elapsed() > SILENCE_LIMIT {
+                        // A running task would have found it dead by now.
+                        if alive.at().elapsed() > PING_INTERVAL + SILENCE_LIMIT {
                             return Ended::Replaced(
                                 "the connection was silent through a suspension".to_owned(),
                             );
@@ -1515,12 +1580,7 @@ async fn serve(
                             better = supervisor.better();
                         }
                         if probe.is_none() {
-                            let payload = ulid::Ulid::generate().to_string();
-                            let ping = Message::Ping(payload.clone().into_bytes().into());
-                            probe = Some((payload, Instant::now()));
-                            if let Err(error) = write(&mut sink, ping).await {
-                                return Ended::Lost(error);
-                            }
+                            probe = Some(send_ping(&outgoing));
                         }
                         continue;
                     }
@@ -1539,14 +1599,55 @@ async fn serve(
                     }
                     Some(Op::Reconnect(reply)) => return Ended::Reconnect(reply),
                 };
-                if let Err(error) = send(&mut sink, &message).await {
-                    return Ended::Lost(error);
+                send(&outgoing, &message);
+                continue;
+            }
+            reached = async {
+                match better.as_mut() {
+                    Some(reaching) => reaching.await,
+                    None => std::future::pending().await,
                 }
+            } => {
+                match reached {
+                    Ok(address) => {
+                        return Ended::Replaced(format!("moving to {address}, which comes first"));
+                    }
+                    Err(error) => {
+                        debug!(machine = %supervisor.saved.name, "no better address: {error}");
+                        better = None;
+                        continue;
+                    }
+                }
+            }
+            _ = save.tick() => {
+                save_in_background(supervisor);
+                continue;
+            }
+            _ = ping.tick() => {
+                if pinged.is_some() {
+                    supervisor.missed_pong();
+                }
+                pinged = Some(send_ping(&outgoing));
                 continue;
             }
             frame = stream.next() => frame,
+            () = async {
+                match dead {
+                    Some(dead) => tokio::time::sleep_until(dead).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Bytes that came or went while this waited show the daemon is there.
+                if alive.at() != heard {
+                    continue;
+                }
+                return if probe_due == dead {
+                    Ended::Replaced("the daemon did not answer the wake probe".to_owned())
+                } else {
+                    Ended::Lost("the daemon stopped answering".to_owned())
+                };
+            }
         };
-        heard = Instant::now();
         let text = match message {
             None => return Ended::Lost("the daemon closed the connection".to_owned()),
             Some(Err(err)) => return Ended::Lost(format!("reading from the daemon: {err}")),
@@ -1633,25 +1734,32 @@ async fn serve(
         if !pending.iter().any(|command| command.open.is_some()) {
             early.clear();
         }
-        if let Some(message) = reply
-            && let Err(error) = send(&mut sink, &message).await
-        {
-            return Ended::Lost(error);
+        if let Some(message) = reply {
+            send(&outgoing, &message);
         }
     }
 }
 
-/// Writes `message` to the daemon, unless it is over [`MAX_MESSAGE_BYTES`]. A command that
+/// Queues `message` for the daemon, unless it is over [`MAX_MESSAGE_BYTES`]. A command that
 /// waits for its answer never is (see [`too_large`]); that leaves what is sent unanswered,
 /// such as a terminal's input, which is dropped.
-async fn send(sink: &mut SplitSink<Ws, Message>, message: &ClientMessage) -> Result<(), String> {
+fn send(outgoing: &mpsc::UnboundedSender<Message>, message: &ClientMessage) {
     // Client messages are plain data with string keys: encoding cannot fail.
     let text = serde_json::to_string(message).unwrap_or_default();
     if text.len() > MAX_MESSAGE_BYTES {
         warn!(bytes = text.len(), "dropped a message too large to send");
-        return Ok(());
+        return;
     }
-    write(sink, Message::text(text)).await
+    // The queue closes only once writing failed, which ends the connection.
+    let _ = outgoing.send(Message::text(text));
+}
+
+/// Queues a ping with a fresh payload: the payload, and when it went out.
+fn send_ping(outgoing: &mpsc::UnboundedSender<Message>) -> (String, Instant) {
+    let payload = ulid::Ulid::generate().to_string();
+    // As in `send`.
+    let _ = outgoing.send(Message::Ping(payload.clone().into_bytes().into()));
+    (payload, Instant::now())
 }
 
 /// Why `command` cannot be sent, if its message would be over [`MAX_MESSAGE_BYTES`]. The
@@ -1693,10 +1801,19 @@ fn message_bytes(command: &Command) -> usize {
     count.0
 }
 
-async fn write(sink: &mut SplitSink<Ws, Message>, message: Message) -> Result<(), String> {
-    sink.send(message)
-        .await
-        .map_err(|err| format!("writing to the daemon: {err}"))
+/// Writes what is `queued` to the daemon, for as long as the connection's task polls it;
+/// ends only with why a write failed.
+async fn write(
+    mut sink: SplitSink<Ws, Message>,
+    mut queued: mpsc::UnboundedReceiver<Message>,
+) -> String {
+    while let Some(message) = queued.recv().await {
+        if let Err(err) = sink.send(message).await {
+            return format!("writing to the daemon: {err}");
+        }
+    }
+    // The task that polls this holds the queue's other end.
+    std::future::pending().await
 }
 
 /// Hands the daemon's answer to the command waiting for it. An answered terminal open gets its
@@ -1856,7 +1973,10 @@ async fn connect_to(
     tcp.set_nodelay(true)?;
     // The certificate is pinned by fingerprint, so the name is never checked.
     let name = ServerName::try_from("herder").context("the TLS server name")?;
-    let tls = connector.connect(name, tcp).await.context("TLS")?;
+    let tls = connector
+        .connect(name, Watched::new(tcp))
+        .await
+        .context("TLS")?;
     let request = format!("wss://{address}/").into_client_request()?;
     let (mut ws, _) = tokio_tungstenite::client_async(request, tls)
         .await
