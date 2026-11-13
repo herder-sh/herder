@@ -236,6 +236,45 @@ struct FleetTests {
         #expect(fleet.archived(since: [missing]).isEmpty)
     }
 
+    /// ⌘Z right after an archive comes while the machine still works on it, and before the
+    /// session here says it is archived.
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func undoingAnArchiveTheMachineStillWorksOnBringsTheTaskBack() async throws {
+        let (daemon, fleet, following, key) = try await pairedSession()
+        defer { following.cancel(); _ = daemon }
+        #expect(await eventually { fleet.lists.board().contains { $0.id == key } })
+        let task = try #require(fleet.lists.board().first { $0.id == key })
+        // Every status the machine journals: the session's state here may pass over one.
+        let journal = try fleet.client.subscribeSession(hostId: key.hostId, sessionId: key.sessionId)
+        let statuses = Mutex<[SessionStatus]>([])
+        let reading = Task {
+            while let update = await journal.next() {
+                for event in update.events {
+                    if case .sessionStatusChanged(let status, _) = event.body { statuses.withLock { $0.append(status) } }
+                }
+            }
+        }
+        defer { reading.cancel() }
+
+        let undoManager = UndoManager()
+        task.toggleArchived(fleet: fleet, undoManager: undoManager)
+        // The archive's toast is up as soon as its command is on its way.
+        for _ in 0..<1000 where fleet.toast?.undo != key { await Task.yield() }
+        #expect(fleet.toast?.undo == key)
+        #expect(undoManager.canUndo)
+        undoManager.undo()
+
+        try #require(await eventually {
+            statuses.withLock { $0.contains(.archived) && $0.last != .archived }
+        })
+        #expect(await eventually { fleet.sessions[key]?.state != .archived })
+        #expect(fleet.archiveRefusal == nil)
+        #expect(fleet.toast == nil)
+        // The toast's Undo and a second ⌘Z have nothing left to undo.
+        await fleet.undoArchive(key)
+        #expect(fleet.toast == nil)
+    }
+
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
     func archivingAWorktreeWithChangesKeepsThem() async throws {
         let (daemon, fleet, following, key) = try await pairedSession()
