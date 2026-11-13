@@ -67,11 +67,6 @@ public final class Fleet {
     /// Each session's open shells, kept while the app runs; see `SessionTerminals`.
     @ObservationIgnored var sessionTerminals: [SessionKey: SessionTerminals] = [:]
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
-    /// How far each followed session's journal went, by its machine's listing, when this device
-    /// began to follow it, until what it holds of it reaches there. What arrives up to there is
-    /// history, in however many updates: this device holds the journals of a machine's newest
-    /// sessions only, and the machine sends every other one from its start on each launch.
-    @ObservationIgnored private var history: [SessionKey: UInt64] = [:]
     /// Images of user messages, fetched once: by attachment id.
     private(set) var attachments: [String: Data] = [:]
     /// Project icons the machines list, read into pictures, by the icon's hash.
@@ -308,18 +303,15 @@ public final class Fleet {
         }
         // A copy another copy stands for is not followed: a vault's copy of every session would
         // stream each one twice.
-        let heads = Dictionary(machines.flatMap { machine in
-            machine.sessions.map { (SessionKey(hostId: machine.hostId, sessionId: $0.sessionId), $0.headSeq) }
-        }) { first, _ in first }
-        let listed = Set(heads.keys).subtracting(Lists.shadowed(machines))
+        let listed = Set(machines.flatMap { machine in
+            machine.sessions.map { SessionKey(hostId: machine.hostId, sessionId: $0.sessionId) }
+        }).subtracting(Lists.shadowed(machines))
         for key in listed where subscriptions[key] == nil {
-            history[key] = heads[key]
             subscriptions[key] = Task { await self.stream(key) }
         }
         for (key, task) in subscriptions where !listed.contains(key) {
             task.cancel()
             subscriptions[key] = nil
-            history[key] = nil
             boxes[key] = nil
             listsChanged()
             done.remove(key)
@@ -385,18 +377,8 @@ public final class Fleet {
 
     /// Notes what an update did to `key`'s status, from its status and load before it.
     func observe(_ key: SessionKey, before: SessionStatus, wasLoaded: Bool) {
-        guard let box = boxes[key] else { return }
-        var news = wasLoaded
-        if let head = history[key] {
-            // An update that ends within the journal's history leaves the session where it once
-            // stood: a turn it starts or ends says nothing of whether the session is done now.
-            guard (box.model.timeline.last?.seq ?? 0) >= head else { return }
-            // The one that ends the history shows where the session stands, as no news.
-            history[key] = nil
-            news = false
-        }
-        let after = box.model.status
-        done.observe(key, before: before, after: after, wasLoaded: news, open: watching.contains(key))
+        guard let after = session(key)?.status else { return }
+        done.observe(key, before: before, after: after, wasLoaded: wasLoaded, open: watching.contains(key))
         // Brought back, from here or elsewhere: its archive is no longer there to undo.
         if before == .archived, after != .archived { archives[key] = nil }
     }
