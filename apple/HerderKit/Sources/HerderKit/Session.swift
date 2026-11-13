@@ -35,15 +35,7 @@ struct Pending: Hashable {
 @MainActor
 @Observable
 final class SessionBox {
-    var model: SessionModel {
-        didSet {
-            transcript = nil
-            revision &+= 1
-        }
-    }
-    /// Counts the changes to `model`: a fold that ran away from the main actor tells by it
-    /// whether the session changed here meanwhile.
-    @ObservationIgnored private(set) var revision = 0
+    var model: SessionModel { didSet { transcript = nil } }
     /// The transcript as the session view shows it, for the queue it was built with: built once
     /// per change to the session, not on each redraw of the view.
     @ObservationIgnored private var transcript: (queue: [QueuedPrompt], blocks: [TranscriptBlock])?

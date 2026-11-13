@@ -329,50 +329,19 @@ public final class Fleet {
         }
     }
 
-    /// The events from which an update is long: it folds away from the main actor. A session's
-    /// first update is its whole cached journal, and a machine sends what a session did while
-    /// the app was away at once: thousands of events, for hundreds of sessions on a launch.
-    /// Folded here, they held the main thread for seconds, in the first moments the app shows.
-    /// A turn streaming arrives an event or a few at a time, which fold here faster than they
-    /// would get away and back.
-    static let longUpdate = 64
-
     /// Folds `update` into `key`'s state once no scroll holds it back, at once when it needs the
     /// user; false once the session is no longer followed.
     func receive(_ update: SessionUpdate, for key: SessionKey) async -> Bool {
         let urgent = update.needsUser
         if !urgent { await scrollEnded() }
-        guard let box = boxes[key] else { return false }
         // Only what `observe` needs: holding the whole session would copy its transcript on
         // every update.
-        let before = (status: box.model.status, loaded: box.model.loaded)
-        if update.events.count >= Self.longUpdate {
-            let revision = box.revision
-            let folded = await Self.fold(update, into: box.model)
-            guard boxes[key] === box else { return false }
-            if box.revision == revision {
-                box.model = folded
-                listsChanged()
-            } else {
-                // The session changed here meanwhile, by a prompt sent or a card closed, which
-                // what was folded lacks: the update folds over that instead.
-                change(key) { $0.apply(update) }
-            }
-        } else {
-            change(key) { $0.apply(update) }
-        }
+        guard let before = session(key).map({ (status: $0.status, loaded: $0.loaded) }) else { return false }
+        change(key) { $0.apply(update) }
         observe(key, before: before.status, wasLoaded: before.loaded)
         // The request lists show it at once too.
         if urgent { refreshLists() }
         return true
-    }
-
-    /// `model` with `update` folded in, away from the main actor.
-    @concurrent
-    private nonisolated static func fold(_ update: SessionUpdate, into model: SessionModel) async -> SessionModel {
-        var model = model
-        model.apply(update)
-        return model
     }
 
     /// Notes what an update did to `key`'s status, from its status and load before it.
