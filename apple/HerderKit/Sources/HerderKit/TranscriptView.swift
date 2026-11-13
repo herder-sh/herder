@@ -71,7 +71,7 @@ struct TranscriptBlockView: View {
                     .background(Theme.bubble.opacity(outgoing == nil ? 1 : 0.6), in: .rect(cornerRadius: 18))
                     .messageCopy(text, alignment: .trailing)
                 if let outgoing {
-                    DeliveryLine(outgoing: outgoing) {
+                    DeliveryLine(outgoing: outgoing, fleet: fleet, hostId: hostId) {
                         fleet.discard(outgoing, from: key)
                         Task { await fleet.submit(outgoing.text, to: key) }
                     }
@@ -658,17 +658,31 @@ private struct ToolRow: View {
     }
 }
 
-/// Where a message from this device is: on its way, with the daemon, or refused.
+/// Where a message from this device is: on its way, waiting for its machine to connect, with
+/// the daemon, or refused.
 private struct DeliveryLine: View {
     let outgoing: Outgoing
+    /// Where the message goes: its machine's connection is read only while it is on its way.
+    let fleet: Fleet
+    let hostId: HostId
     let retry: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
             switch outgoing.state {
             case .sending:
-                ProgressView().controlSize(.mini).tint(Theme.tertiary)
-                Text("Sending…")
+                let machine = fleet.machines.first { $0.hostId == hostId }
+                if let machine, let holdUp = machine.connection.holdUp(addresses: machine.addresses.count) {
+                    if machine.connection == .connecting {
+                        ProgressView().controlSize(.mini).tint(Theme.tertiary)
+                    } else {
+                        Image(systemName: "wifi.slash")
+                    }
+                    Text(holdUp).lineLimit(2)
+                } else {
+                    ProgressView().controlSize(.mini).tint(Theme.tertiary)
+                    Text("Sending…")
+                }
             case .delivered:
                 EmptyView()
             case .failed(let reason):

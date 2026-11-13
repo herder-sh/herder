@@ -502,6 +502,23 @@ extension ConnectionState {
         }
     }
 
+    /// The state, with how many addresses a connection under way tries: "Connecting… (trying
+    /// 3 addresses)".
+    func labelCounting(addresses: Int) -> String {
+        self == .connecting && addresses > 1 ? "Connecting… (trying \(addresses) addresses)" : label
+    }
+
+    /// What a message sent to a machine in this state waits for, as the machine takes it only
+    /// once connected; `nil` while connected, when it is on its way.
+    func holdUp(addresses: Int) -> String? {
+        switch self {
+        case .connected: nil
+        case .connecting:
+            addresses > 1 ? "Connecting to the machine (trying \(addresses) addresses)…" : "Connecting to the machine…"
+        case .disconnected(let error): "The machine is offline (\(Self.explain(error))). Sends once it connects."
+        }
+    }
+
     /// A disconnection as the user can act on it: a daemon on another protocol version needs
     /// updating, which the raw error buries among unreachable addresses.
     static func explain(_ error: String) -> String {
