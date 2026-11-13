@@ -14,7 +14,7 @@ struct ToastView: View {
                         .foregroundStyle(toast.failed ? Theme.failure : Theme.success)
                     Text(toast.text).foregroundStyle(Theme.text).lineLimit(1)
                     if let key = toast.undo {
-                        Button("Undo") { Task { await fleet.unarchive(key) } }
+                        Button("Undo") { Task { await fleet.undoArchive(key) } }
                             .buttonStyle(.plain)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.text)
