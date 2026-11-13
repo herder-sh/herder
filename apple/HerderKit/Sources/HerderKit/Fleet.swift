@@ -901,8 +901,8 @@ public final class Fleet {
 
     /// Wakes the client whenever the network changes, as when the Wi-Fi changes or a VPN such
     /// as UniFi Teleport or Tailscale comes up or goes down: a lost connection is retried at
-    /// once instead of after its backoff, and one that is up moves to an address that comes
-    /// before its own once that answers.
+    /// once instead of after its backoff, and one that is up is checked and replaced if it
+    /// died with the network it used.
     private func wakeOnNetworkChanges() async {
         var previous: NWPath?
         for await path in NWPathMonitor() {

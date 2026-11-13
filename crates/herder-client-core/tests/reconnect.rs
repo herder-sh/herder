@@ -1,7 +1,7 @@
 //! The client against a real daemon, with the fake adapter, over TLS on localhost: pairing, a
 //! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, an
 //! account login, an AWS sign-in, resource figures, the sync barrier, renaming and forgetting a machine, a
-//! reconnect through a chosen address, the app lifecycle: suspension, wake probes and the offline cache,
+//! reconnect through a chosen address, the address that answered last, the app lifecycle: suspension, wake probes and the offline cache,
 //! a connection gone dead, a slow upload, and a new device asked to sign in as a person.
 
 use std::collections::HashMap;
@@ -793,6 +793,57 @@ async fn reconnect_dials_the_first_address_and_falls_back_when_it_is_dead() {
             host_id: HostId::new("nope")
         })
     );
+}
+
+/// A connection that works is kept: a wake, as every network change sends one, does not move
+/// it to an address listed before its own, though that one answers again. Lost, it comes back
+/// through the address that answered last, and a reconnect the user asks for starts from the
+/// order of the addresses again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_address_that_answered_last_is_kept_and_tried_first() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    // The first address answers nothing yet, as a home network's does from elsewhere.
+    let away = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let first = away.local_addr().unwrap().to_string();
+    let second = Relay::start(daemon.addr).await;
+    let via_second = second.addr.to_string();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let hosts = vec![first.clone(), via_second.clone()];
+    let host = authenticator::sign_in(&daemon.auth, &client, hosts, &daemon.fingerprint, "alice")
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+    let address = || client.machines()[0].address.clone();
+    assert_eq!(address(), Some(via_second.clone()));
+
+    // The first address answers from now on.
+    let _home = Relay::relaying(away, daemon.addr, None);
+    client.wake();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(address(), Some(via_second.clone()));
+    assert_eq!(client.machines()[0].quality.reconnects, 0);
+
+    second.cut();
+    wait_machine(&client, |m| {
+        m.quality.reconnects == 1 && connected(&m.connection)
+    })
+    .await;
+    assert_eq!(address(), Some(via_second.clone()));
+
+    assert_eq!(client.reconnect(host.clone()).await, Ok(first));
+    client.synced(host).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
