@@ -718,6 +718,73 @@ async fn a_command_this_build_cannot_read_is_refused_as_that_command() {
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
 }
 
+/// What the daemon logs at info and above, as it does by default.
+#[derive(Clone, Default)]
+struct Logged(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Logged {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Logged {
+    /// The first `count` lines holding `text`, once they are logged.
+    async fn lines(&self, text: &str, count: usize) -> Vec<String> {
+        let logged = async {
+            loop {
+                let all = String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned();
+                let lines: Vec<_> = all.lines().filter(|line| line.contains(text)).collect();
+                if lines.len() >= count {
+                    return lines.into_iter().map(str::to_owned).collect();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        tokio::time::timeout(TIMEOUT, logged)
+            .await
+            .unwrap_or_else(|_| panic!("fewer than {count} lines logged with {text:?}"))
+    }
+}
+
+// On one thread, so that the subscriber set for it sees what the server's tasks log.
+#[tokio::test]
+async fn a_closed_connection_is_logged_at_info_with_why_it_closed() {
+    let logged = Logged::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_ansi(false)
+        .with_writer({
+            let logged = logged.clone();
+            move || logged.clone()
+        })
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let daemon = Daemon::start().await;
+    let mut client = daemon.client().await;
+    let hello = client.hello(Vec::new()).await;
+    client.ws.close(None).await.unwrap();
+    let line = logged.lines("client disconnected", 1).await.remove(0);
+    assert!(line.contains("the client closed the connection"), "{line}");
+    assert!(line.contains("client=test"), "{line}");
+    assert!(
+        line.contains(&format!("device_id={}", hello.device_id)),
+        "{line}"
+    );
+
+    // A client that goes away without a word is told apart from one that closed.
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    drop(client);
+    let line = logged.lines("client disconnected", 2).await.remove(1);
+    assert!(!line.contains("the client closed the connection"), "{line}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_over_the_limit_is_refused_and_the_connection_stays() {
     let daemon = Daemon::start().await;

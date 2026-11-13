@@ -42,8 +42,8 @@ pub(super) async fn run(
     };
     let (mut ws, device) = match ws {
         Ok(Ok(ws)) => ws,
-        Ok(Err(err)) => return debug!(%peer, "handshake failed: {err:#}"),
-        Err(_) => return debug!(%peer, "handshake timed out"),
+        Ok(Err(err)) => return info!(%peer, "handshake failed: {err:#}"),
+        Err(_) => return info!(%peer, "handshake timed out"),
     };
     let first = tokio::select! {
         () = cancel.cancelled() => return,
@@ -52,8 +52,8 @@ pub(super) async fn run(
     let first = match first {
         Ok(Ok(Some(first))) => first,
         Ok(Ok(None)) => return,
-        Ok(Err(err)) => return debug!(%peer, "no hello: {err:#}"),
-        Err(_) => return debug!(%peer, "no hello within {HANDSHAKE_TIMEOUT:?}"),
+        Ok(Err(err)) => return info!(%peer, "no hello: {err:#}"),
+        Err(_) => return info!(%peer, "no hello within {HANDSHAKE_TIMEOUT:?}"),
     };
     if !is_host(&first) {
         return shared.clients.serve(ws, device, first, peer, cancel).await;
@@ -63,7 +63,7 @@ pub(super) async fn run(
         result = serve(&mut ws, &first, &shared, &device, &cancel) => result,
     };
     if let Err(err) = result {
-        debug!(%peer, "host connection failed: {err:#}");
+        info!(%peer, "host connection failed: {err:#}");
     }
     let _ = tokio::time::timeout(Duration::from_secs(1), ws.close(None)).await;
 }
