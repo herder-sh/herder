@@ -310,7 +310,8 @@ final class ScreenshotTests: XCTestCase {
         let undo = app.buttons["Undo"].firstMatch
         guard wait(undo, "toast's Undo") else { return }
         press(undo)
-        _ = wait(task, "back with Undo")
+        // Back as the newest task, at the top of the list, which is off the screen from here.
+        _ = listed(task, "back with Undo")
         #endif
     }
 
@@ -846,11 +847,17 @@ final class ScreenshotTests: XCTestCase {
 
     /// Whether the Board lists `row`; when it does not, records `what` as missed. The iPhone's
     /// list holds only the rows near the screen, so the walk scrolls to find one further off: down
-    /// first, then back up.
+    /// first, then back up. A row it holds under the navigation bar or the tab bar counts as
+    /// hittable, yet a tap on it goes to the bar: the walk scrolls that one out from under it.
     private func listed(_ row: XCUIElement, _ what: String) -> Bool {
         #if os(iOS)
-        for step in 0..<10 where !row.waitForExistence(timeout: 3) {
-            if step < 4 { app.swipeUp(velocity: .slow) } else { app.swipeDown(velocity: .slow) }
+        for step in 0..<10 {
+            let middle = row.waitForExistence(timeout: 3) ? row.frame.midY : nil
+            let bar = app.navigationBars.firstMatch, tabs = app.tabBars.firstMatch
+            let top = bar.exists ? bar.frame.maxY : 0, bottom = tabs.exists ? tabs.frame.minY : .infinity
+            if let middle, middle > top, middle < bottom { break }
+            let down = middle.map { $0 > bottom } ?? (step < 4)
+            if down { app.swipeUp(velocity: .slow) } else { app.swipeDown(velocity: .slow) }
         }
         return wait(row, what, timeout: 3)
         #else
