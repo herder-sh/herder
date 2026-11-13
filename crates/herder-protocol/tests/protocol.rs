@@ -893,6 +893,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             role: Role::Owner,
             person_id: Some(person_id()),
             herder_version: Some("0.14.0".into()),
+            addresses: vec!["10.0.4.17:7447".into(), "[fd00::17]:7447".into()],
         }),
         ServerMessage::SignInChallenge {
             challenge: PasskeyChallenge {
@@ -2132,6 +2133,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         role: Role::Member,
         person_id: None,
         herder_version: None,
+        addresses: Vec::new(),
     }));
     messages
 }
@@ -3001,6 +3003,25 @@ fn optional_fields_may_be_absent() {
         panic!("expected a hello");
     };
     assert_eq!(hello.pairing_code, None);
+
+    let message: ServerMessage = serde_json::from_value(json!({
+        "type": "hello",
+        "protocol_version": PROTOCOL_VERSION,
+        "host_id": "h",
+        "host_name": "build-box",
+        "user_id": "u",
+        "device_id": "d",
+        "role": "owner"
+    }))
+    .unwrap();
+    let ServerMessage::Hello(hello) = message else {
+        panic!("expected a hello");
+    };
+    assert_eq!(hello.addresses, Vec::<String>::new());
+    assert_eq!(
+        serde_json::to_value(ServerMessage::Hello(hello)).unwrap()["addresses"],
+        serde_json::Value::Null
+    );
 
     let message: ServerMessage = serde_json::from_value(json!({
         "type": "terminal_closed",

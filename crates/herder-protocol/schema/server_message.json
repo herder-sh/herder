@@ -5017,6 +5017,13 @@
       "description": "Opening message of the daemon on a connection.",
       "type": "object",
       "properties": {
+        "addresses": {
+          "description": "Addresses the daemon listens on, as `host:port`, most likely reachable first, as its\ninvite links name them; a client saves them, so it follows the daemon to a new address.\nEmpty from a daemon that does not say.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "device_id": {
           "description": "The paired device this connection comes from.",
           "$ref": "#/$defs/DeviceId"

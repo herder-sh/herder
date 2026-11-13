@@ -224,6 +224,11 @@ pub struct ServerHello {
     /// before `update_daemon`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herder_version: Option<String>,
+    /// Addresses the daemon listens on, as `host:port`, most likely reachable first, as its
+    /// invite links name them; a client saves them, so it follows the daemon to a new address.
+    /// Empty from a daemon that does not say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<String>,
 }
 
 /// A host that replicates to a vault, as the vault lists it.
