@@ -155,23 +155,51 @@ Or watch it live before it happens:
   --predicate 'subsystem == "sh.herder.Herder" AND category == "transcript"'
 ```
 
-## Scrolling smoothness
+## A hang
 
-Each long screen has to scroll with a hitch time ratio under 5 ms/s, Apple's "good":
+The apps log every turn of the main thread of 100 ms or longer, during which nothing on screen
+moves or answers: `herder-hang ms=<how long it took> cpu=<how long of it the thread ran>`. One
+that ran for most of its time computed too much on the main thread; one that mostly waited was
+held up by a lock, the disk or another thread. A launch logs when its first frame and the Board
+showed. When the app hangs, read what it logged, on the Mac it ran on:
+
+```sh
+/usr/bin/log show --last 10m --style compact \
+  --predicate 'subsystem == "sh.herder" AND category IN {"hang", "launch"}'
+```
+
+An iPhone's lines show in Console.app on a Mac it is connected to, as they come.
+
+## Launch, resume and scrolling
+
+`perf.sh` measures how the app launches, resumes, opens a long session and scrolls:
 
 ```sh
 apple/scripts/perf.sh                 # this Mac
-apple/scripts/perf.sh mac iphone      # and the iPhone whose UDID is in HERDER_PERF_DEVICE
+apple/scripts/perf.sh simulator       # the iOS app's launches and resume, on an iPhone simulator
+apple/scripts/perf.sh mac iphone      # and the scrolling on the iPhone whose UDID is in HERDER_PERF_DEVICE
 ```
 
-The `herder-macOS-Perf` and `herder-iOS-Perf` UI tests (apple/PerfTests) open each screen on
-`fake_daemon --busy` and fling it to its end and back five times while XCTest measures the
-scroll's hitches. The script builds both apps for Release, runs the tests, writes the table to
-`target/perf/perf.md` and fails when a screen is over the budget. The iPhone build is
-`sh.herder.Herder.Perf`, beside the installed app; signing it needs the App Store Connect key
+The `herder-macOS-Perf` and `herder-iOS-Perf` UI tests (apple/PerfTests) drive a Release build
+of the app, signed in to `fake_daemon --busy` and, for the launches, to a machine with a used
+journal too, `fake_daemon --load big 335 16000`:
+
+- each long screen, flung to its end and back five times while XCTest measures the scroll's
+  hitches. It has to scroll with a hitch time ratio under 5 ms/s, Apple's "good";
+- the app's second launch on that fleet, from what the first left on disk; the same launch with
+  the fake daemons stopped, so that no machine answers; opening the session of 16,000 events;
+  and on iOS, coming back after half a minute in the background.
+
+The script writes the table to `target/perf/perf.md`: per test, the hitch time ratio, when the
+launch showed the Board, and the main thread's hangs while the test measured, which it reads
+from the app's log. It fails when a screen is over the budget or a test failed. The iPhone build
+is `sh.herder.Herder.Perf`, beside the installed app; signing it needs the App Store Connect key
 (`herder secret run apple-herder/ASC_KEY_ID apple-herder/ASC_ISSUER_ID
-apple-herder/ASC_PRIVATE_KEY -- apple/scripts/perf.sh iphone`). The `apple` workflow's `perf`
-job runs the Mac's on every change, with a tolerance for the runner.
+apple-herder/ASC_PRIVATE_KEY -- apple/scripts/perf.sh iphone`).
+
+The `apple` workflow's `perf` jobs run the Mac's and the simulator's on every change. Their
+runner is a virtual machine, where XCTest measures no frames: the table says so there, and the
+launches and the hangs are what it has to tell.
 
 Measure on a quiet machine: other apps' load, and other UI tests taking the screen, show up as
-hitches.
+hitches and as hangs.

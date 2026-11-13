@@ -2,34 +2,13 @@ import XCTest
 
 /// Measures how smoothly each long surface of the app scrolls, for `scripts/perf.sh` to read
 /// out of the result bundle and hold to the budget: on the demo fleet under load
-/// (`fake_daemon --busy`, whose link and passkey pass to `xcodebuild test` as
-/// `TEST_RUNNER_HERDER_PAIR_LINK` and `TEST_RUNNER_HERDER_PASSKEY`), each test opens one screen
-/// and scrolls it to its end and back with `XCTOSSignpostMetric.scrollingAndDecelerationMetric`,
-/// whose hitch time ratio is the number that counts.
-///
-/// On the Mac it drives the Release copy of the app at `HERDER_PERF_APP`, which has a bundle
-/// id of its own so the installed app keeps running; on the iPhone, the app under test, which
-/// the scheme builds for Release. `HERDER_PERF_PROFILE` names the profile every test of a run
-/// shares, so only the first signs in.
-@MainActor
-final class ScrollPerfTests: XCTestCase {
-    private var app: XCUIApplication!
-
+/// (`fake_daemon --busy`, whose link is in `HERDER_PAIR_LINK`), each test opens one screen and
+/// scrolls it to its end and back with `XCTOSSignpostMetric.scrollingAndDecelerationMetric`,
+/// whose hitch time ratio is the number that counts. Where no frames are measured, as on a
+/// virtual machine, the main thread's hangs while it scrolled are what the script has to tell.
+final class ScrollPerfTests: PerfTestCase {
     override func setUp() async throws {
-        continueAfterFailure = false
-        let environment = ProcessInfo.processInfo.environment
-        let link = try XCTUnwrap(environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
-        let passkey = try XCTUnwrap(environment["HERDER_PASSKEY"], "needs HERDER_PASSKEY")
-        #if os(macOS)
-        let path = try XCTUnwrap(environment["HERDER_PERF_APP"], "needs HERDER_PERF_APP")
-        app = XCUIApplication(url: URL(fileURLWithPath: path))
-        #else
-        app = XCUIApplication()
-        #endif
-        app.launchEnvironment["HERDER_PROFILE"] = environment["HERDER_PERF_PROFILE"] ?? "perf-\(UUID().uuidString)"
-        // The app joins the fake daemons at launch (`Fleet.joinFakeFleet`).
-        app.launchEnvironment["HERDER_FAKE_FLEET"] = link
-        app.launchEnvironment["HERDER_FAKE_PASSKEY"] = passkey
+        try prepare(links: ["HERDER_PAIR_LINK"])
         app.launch()
         let board = row("Upgrade date-fns to v4")
         #if os(iOS)
@@ -138,9 +117,11 @@ final class ScrollPerfTests: XCTestCase {
         #endif
         let options = XCTMeasureOptions()
         options.iterationCount = 5
-        measure(metrics: [XCTOSSignpostMetric.scrollingAndDecelerationMetric], options: options) {
-            for _ in 0..<Self.flings { fling(target, up: up) }
-            for _ in 0..<Self.flings { fling(target, up: !up) }
+        measured {
+            measure(metrics: [XCTOSSignpostMetric.scrollingAndDecelerationMetric], options: options) {
+                for _ in 0..<Self.flings { fling(target, up: up) }
+                for _ in 0..<Self.flings { fling(target, up: !up) }
+            }
         }
     }
 
@@ -178,35 +159,4 @@ final class ScrollPerfTests: XCTestCase {
         settle()
     }
     #endif
-
-    /// A session's row: one button labelled with its state, title, age and activity.
-    private func row(_ title: String) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", \(title),")).firstMatch
-    }
-
-    /// Scrolls the list on screen until `element` can be pressed: down first, then back up.
-    private func reveal(_ element: XCUIElement) {
-        for step in 0..<12 where !element.isHittable {
-            let down = step < 4
-            #if os(iOS)
-            if down { app.swipeUp(velocity: .slow) } else { app.swipeDown(velocity: .slow) }
-            #else
-            app.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: down ? -250 : 250)
-            #endif
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-    }
-
-    private func press(_ element: XCUIElement) {
-        #if os(macOS)
-        element.click()
-        #else
-        element.tap()
-        #endif
-    }
-
-    /// Lets animations finish, and the screen's first layout, so the measurement sees it steady.
-    private func settle() {
-        Thread.sleep(forTimeInterval: 2)
-    }
 }

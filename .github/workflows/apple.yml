@@ -305,17 +305,23 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # The scroll gate: the Mac app's scroll measurements (apple/scripts/perf.sh) on the demo fleet
-  # under load, which fail when a screen hitches past the budget. A hosted runner has no GPU and
-  # renders slower than a Mac on a desk, hence the tolerance; the table is in the job summary.
+  # The measurements (apple/scripts/perf.sh) on the demo fleet under load and a machine with a
+  # used journal: how the Mac app launches, opens a long session and scrolls, and how the iOS app
+  # launches and resumes on a simulator. A hosted runner is a virtual machine, where XCTest
+  # measures no frames, so what the table in the job summary tells there is when each launch
+  # showed the Board, and the main thread's hangs; the scrolling budget holds on a Mac on a desk.
   perf:
-    name: perf
+    name: perf (${{ matrix.platform }})
     needs: [key, bindings]
     if: ${{ !failure() && !cancelled() }}
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [mac, simulator]
     # Reports until every screen meets the scrolling budget (P19.1); then it gates.
     continue-on-error: true
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
       - uses: actions/cache/restore@v6
@@ -327,8 +333,8 @@ jobs:
           fail-on-cache-miss: true
       - name: Install the Metal toolchain (SwiftTerm's renderer needs it)
         run: xcodebuild -downloadComponent MetalToolchain
-      - name: Measure scrolling on the macOS app
-        timeout-minutes: 40
+      - name: Measure the app
+        timeout-minutes: 60
         env:
           HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
           PERF_TOLERANCE: "3"
@@ -336,19 +342,31 @@ jobs:
           brew install xcodegen
           export PERF_MAC_SETTINGS="CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO"
           status=0
-          apple/scripts/perf.sh mac || status=$?
-          cat target/perf/perf.md >> "$GITHUB_STEP_SUMMARY"
+          apple/scripts/perf.sh ${{ matrix.platform }} || status=$?
+          [ ! -f target/perf/perf.md ] || cat target/perf/perf.md >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
       - name: Print the failing tests
         if: failure()
         run: |
-          bundle=target/perf/mac.xcresult
-          [ -d "$bundle" ] || exit 0
-          xcrun xcresulttool get test-results summary --path "$bundle" |
-            jq -r '.testFailures[]? | "\(.testIdentifierString): \(.failureText)"'
+          for bundle in target/perf/*.xcresult; do
+            [ -d "$bundle" ] || continue
+            xcrun xcresulttool get test-results summary --path "$bundle" |
+              jq -r '.testFailures[]? | "\(.testIdentifierString): \(.failureText)"'
+          done
+          # And where xcodebuild stopped, when it ran no test at all.
+          tail -n 40 target/perf/*-test.log || true
+      # The table, the tests' output and the app's log lines the table was read from.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: perf-${{ matrix.platform }}
+          path: |
+            target/perf/perf.md
+            target/perf/*.log
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
-          name: perf-xcresult
-          path: target/perf/mac.xcresult
+          name: perf-${{ matrix.platform }}-xcresult
+          path: target/perf/*.xcresult
           if-no-files-found: ignore
