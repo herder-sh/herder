@@ -62,6 +62,10 @@
 //! pinged and replaced if the daemon shows no sign of life for 5 s. Subscriptions resume
 //! from the last seq held, so a suspension of any length shows no gap.
 //!
+//! An app also calls [`Client::wake`] when the device's network changes. A machine that is
+//! connecting then races its addresses again, beside the attempt under way: that one may be
+//! stuck on the network there was before, and is not waited for.
+//!
 //! # Resources
 //!
 //! [`Machine::resources`] and [`Machine::session_usage`] hold the latest figures the daemon
@@ -738,10 +742,12 @@ impl Client {
         }
     }
 
-    /// The app is in the foreground: reconnects every disconnected machine now instead of
-    /// after its backoff, and resumes retrying after [`Client::suspend`]. Every connected
-    /// machine is checked: its connection is replaced at once if it was silent for longer than
-    /// 25 s, else pinged and replaced if the daemon shows no sign of life for 5 s.
+    /// The app is in the foreground, or its network changed: reconnects every disconnected
+    /// machine now instead of after its backoff, and resumes retrying after
+    /// [`Client::suspend`]. A machine that is connecting races its addresses again beside
+    /// the attempt under way. Every connected machine is checked: its connection is replaced
+    /// at once if it was silent for longer than 25 s, else pinged and replaced if the daemon
+    /// shows no sign of life for 5 s.
     pub fn wake(&self) {
         for machine in self.lock().iter() {
             machine.wake();

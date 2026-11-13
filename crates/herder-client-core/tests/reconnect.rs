@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
@@ -846,6 +846,59 @@ async fn the_address_that_answered_last_is_kept_and_tried_first() {
     client.synced(host).await.unwrap();
 }
 
+/// A network change while the machine is connecting: the attempt under way is stuck on the
+/// network there was before, and the wake the change sends races the addresses again at
+/// once instead of after that attempt's timeout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wake_while_connecting_does_not_wait_for_a_stuck_attempt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let relay = Relay::start(daemon.addr).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", relay.addr)
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+
+    // The network goes: the connection drops, and the next attempt is never answered.
+    let before = relay.accepted();
+    relay.swallow(true);
+    relay.cut();
+    tokio::time::timeout(TIMEOUT, async {
+        while relay.accepted() == before {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the client did not try to reconnect");
+    assert_eq!(client.machines()[0].connection, ConnectionState::Connecting);
+
+    // Another network is there, and the app wakes the client as it sees the change.
+    relay.swallow(false);
+    let woken = std::time::Instant::now();
+    client.wake();
+    wait_machine(&client, |m| connected(&m.connection)).await;
+    // Far sooner than the 10 s the stuck attempt has before it gives up.
+    assert!(
+        woken.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        woken.elapsed()
+    );
+    client.synced(host).await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn signing_in_fails_on_a_wrong_fingerprint_and_saves_nothing() {
     let tmp = tempfile::tempdir().unwrap();
@@ -906,6 +959,7 @@ struct Relay {
     addr: SocketAddr,
     cut: tokio::sync::watch::Sender<u64>,
     stall: tokio::sync::watch::Sender<u64>,
+    swallowing: Arc<AtomicBool>,
     accepted: Arc<AtomicU64>,
 }
 
@@ -930,16 +984,22 @@ impl Relay {
         let addr = listener.local_addr().unwrap();
         let cut = tokio::sync::watch::Sender::new(0);
         let stall = tokio::sync::watch::Sender::new(0);
+        let swallowing = Arc::new(AtomicBool::new(false));
         let accepted = Arc::new(AtomicU64::new(0));
         let (cuts, stalls, count) = (cut.clone(), stall.clone(), Arc::clone(&accepted));
+        let swallows = Arc::clone(&swallowing);
         tokio::spawn(async move {
             while let Ok((mut inbound, _)) = listener.accept().await {
                 count.fetch_add(1, Ordering::SeqCst);
                 let mut cut = cuts.subscribe();
                 let mut stall = stalls.subscribe();
+                let swallowed = swallows.load(Ordering::SeqCst);
                 tokio::spawn(async move {
-                    let mut outbound = TcpStream::connect(target).await.unwrap();
                     let relayed = async {
+                        if swallowed {
+                            std::future::pending::<()>().await;
+                        }
+                        let mut outbound = TcpStream::connect(target).await.unwrap();
                         let Some(rate) = rate else {
                             let _ =
                                 tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
@@ -965,8 +1025,15 @@ impl Relay {
             addr,
             cut,
             stall,
+            swallowing,
             accepted,
         }
+    }
+
+    /// Whether connections made from now on are taken and never answered, as on a network
+    /// that swallows what is sent.
+    fn swallow(&self, swallowing: bool) {
+        self.swallowing.store(swallowing, Ordering::SeqCst);
     }
 
     /// Drops every connection through the relay now.

@@ -9,6 +9,10 @@
 //! in, unnoticed) is replaced right away, any other is pinged and replaced if the daemon
 //! shows no sign of life within [`PROBE_TIMEOUT`].
 //!
+//! An app wakes the task on every network change too. A wake that finds it connecting races
+//! the addresses again beside the race under way, which may be stuck on the network there
+//! was before, or about to succeed: neither waits for the other.
+//!
 //! A connection is pinged as soon as it is up and every [`PING_INTERVAL`] after; each ping
 //! carries a fresh payload, so its pong gives the round trip, and a ping still unanswered when
 //! the next one is due counts as a missed pong. A connection whose daemon shows no sign of
@@ -70,6 +74,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Head start each address gets over the next one when connecting; one that fails sooner
 /// starts the next at once.
 const HEAD_START: Duration = Duration::from_millis(300);
+
+/// How soon after one race of the addresses a wake may start another beside it: a burst of
+/// wakes, as one network change sends, starts few.
+const REDIAL_SPACING: Duration = Duration::from_secs(1);
 
 /// First retry delay; each failed attempt doubles it, up to [`BACKOFF_CAP`].
 const BACKOFF_BASE: Duration = Duration::from_millis(250);
@@ -576,8 +584,9 @@ impl Supervisor {
         let _ = self.ops.send(Op::Suspend);
     }
 
-    /// The app is in the foreground: reconnects now if disconnected, else probes the
-    /// connection and replaces it if it is dead.
+    /// The app is in the foreground, or its network changed: reconnects now if disconnected,
+    /// races the addresses again if connecting, else probes the connection and replaces it
+    /// if it is dead.
     pub(crate) fn wake(&self) {
         let _ = self.ops.send(Op::Wake);
     }
@@ -1335,6 +1344,24 @@ struct Pending {
     open: Option<mpsc::UnboundedSender<TerminalEvent>>,
 }
 
+/// What the machine's task is asked, in the order asked.
+struct Ops {
+    asked: mpsc::UnboundedReceiver<Op>,
+    /// What a connection attempt read and left for the connection, or for the wait for the
+    /// next attempt.
+    kept: VecDeque<Op>,
+}
+
+impl Ops {
+    /// The next thing asked, or `None` once nobody can ask any more.
+    async fn recv(&mut self) -> Option<Op> {
+        match self.kept.pop_front() {
+            Some(op) => Some(op),
+            None => self.asked.recv().await,
+        }
+    }
+}
+
 /// Why a connection ended.
 enum Ended {
     Stopped,
@@ -1346,7 +1373,11 @@ enum Ended {
     Reconnect(oneshot::Sender<Result<String, String>>),
 }
 
-async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::UnboundedReceiver<Op>) {
+async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::UnboundedReceiver<Op>) {
+    let mut ops = Ops {
+        asked: ops,
+        kept: VecDeque::new(),
+    };
     let mut pending: Vec<Pending> = Vec::new();
     // Syncs waiting for their answer, by token, sent again on each new connection.
     let mut syncs: HashMap<String, oneshot::Sender<()>> = HashMap::new();
@@ -1360,8 +1391,9 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
         cached = supervisor.load() => cached,
     };
     supervisor.restore(cached);
-    loop {
-        supervisor.set_connection(ConnectionState::Connecting);
+    let device = &device;
+    // One race of the machine's addresses, as they and the sessions wanted are now.
+    let dial = || {
         let addresses = supervisor.dial_order();
         let hello = ClientHello {
             protocol_version: PROTOCOL_VERSION,
@@ -1371,9 +1403,61 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
             sign_in: false,
             passkey: supervisor.passkey,
         };
-        let connected = tokio::select! {
-            () = supervisor.stop.cancelled() => return,
-            connected = connect(&addresses, &saved.fingerprint, &device, hello) => connected,
+        async move { connect(&addresses, &saved.fingerprint, device, hello).await }
+    };
+    'connection: loop {
+        supervisor.set_connection(ConnectionState::Connecting);
+        let connected = {
+            // The races under way; the first connection any of them makes is taken.
+            let mut races = FuturesUnordered::new();
+            races.push(dial());
+            let mut dialled = Instant::now();
+            // When the next race starts, once one is asked for.
+            let mut redial: Option<Instant> = None;
+            loop {
+                tokio::select! {
+                    () = supervisor.stop.cancelled() => return,
+                    Some(connected) = races.next() => match connected {
+                        Ok(connected) => break Ok(connected),
+                        Err(error) if races.is_empty() && redial.is_none() => break Err(error),
+                        // Another race is under way, or about to start.
+                        Err(_) => {}
+                    },
+                    () = async {
+                        match redial {
+                            Some(at) => tokio::time::sleep_until(at).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        races.push(dial());
+                        dialled = Instant::now();
+                        redial = None;
+                    }
+                    op = ops.asked.recv() => match op {
+                        // The network may have changed under the races so far: they are
+                        // left to end as they will, and the addresses raced again.
+                        Some(Op::Wake) => {
+                            suspended = false;
+                            attempt = 0;
+                            redial = Some(dialled + REDIAL_SPACING);
+                        }
+                        Some(Op::Suspend) => suspended = true,
+                        // What is raced changed: the races so far are dropped.
+                        Some(Op::Readdress) => {
+                            attempt = 0;
+                            continue 'connection;
+                        }
+                        Some(Op::Reconnect(reply)) => {
+                            reconnects.push(reply);
+                            supervisor.lock().answered = None;
+                            attempt = 0;
+                            continue 'connection;
+                        }
+                        Some(op) => ops.kept.push_back(op),
+                        None => return,
+                    },
+                }
+            }
         };
         let failed = connected.is_err();
         let (error, now) = match connected {
@@ -1485,7 +1569,7 @@ fn save_in_background(supervisor: &Arc<Supervisor>) {
 async fn serve(
     supervisor: &Arc<Supervisor>,
     ws: Ws,
-    ops: &mut mpsc::UnboundedReceiver<Op>,
+    ops: &mut Ops,
     pending: &mut Vec<Pending>,
     syncs: &mut HashMap<String, oneshot::Sender<()>>,
     suspended: &mut bool,
