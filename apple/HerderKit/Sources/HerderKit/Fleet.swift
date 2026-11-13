@@ -45,6 +45,9 @@ public final class Fleet {
     private(set) var refusals: [SessionKey: String] = [:]
     /// Sessions whose archive the machine is working on; the lists show them archived already.
     private(set) var archiving: Set<SessionKey> = [] { didSet { refreshLists() } }
+    /// The archives made from this app that an undo can still take back, each with its command:
+    /// an undo can come before the machine has answered it.
+    @ObservationIgnored private var archives: [SessionKey: Task<Void, any Error>] = [:]
     /// An archive the machine refused, for the user to decide on.
     var archiveRefusal: ArchiveRefusal?
     /// The session the user is typing a new title for.
@@ -345,6 +348,8 @@ public final class Fleet {
     func observe(_ key: SessionKey, before: SessionStatus, wasLoaded: Bool) {
         guard let after = session(key)?.status else { return }
         done.observe(key, before: before, after: after, wasLoaded: wasLoaded, open: watching.contains(key))
+        // Brought back, from here or elsewhere: its archive is no longer there to undo.
+        if before == .archived, after != .archived { archives[key] = nil }
     }
 
     /// Sends a command about a session; a refusal is kept to show with it.
@@ -746,10 +751,15 @@ public final class Fleet {
         defer { archiving.remove(key) }
         let archived = Toast(text: text ?? "Archived “\(title)”", undo: key)
         toast = archived
-        do {
+        let command = Task {
             _ = try await client.send(hostId: key.hostId, command: .archiveSession(sessionId: key.sessionId))
+        }
+        archives[key] = command
+        do {
+            try await command.value
             refusals[key] = nil
         } catch {
+            archives[key] = nil
             if toast == archived { toast = nil }
             archiveRefusal = ArchiveRefusal(key: key, title: title, reason: describe(error))
         }
@@ -772,8 +782,20 @@ public final class Fleet {
         before.subtracting(archiving).filter { archiveRefusal?.key != $0 }
     }
 
-    /// Brings an archived session back, from a toast's Undo.
+    /// Undoes an archive made from this app, from its toast's Undo or ⌘Z, once the machine has
+    /// made it: an undo can come while the machine still works on it, and before the session
+    /// here says it is archived. Nothing is undone twice, nor an archive the machine refused,
+    /// nor one of a session that has come back since.
+    func undoArchive(_ key: SessionKey) async {
+        guard let archive = archives.removeValue(forKey: key) else { return }
+        if toast?.undo == key { toast = nil }
+        do { try await archive.value } catch { return }
+        await unarchive(key)
+    }
+
+    /// Brings an archived session back.
     func unarchive(_ key: SessionKey) async {
+        archives[key] = nil
         toast = nil
         do {
             _ = try await client.send(hostId: key.hostId, command: .unarchiveSession(sessionId: key.sessionId))

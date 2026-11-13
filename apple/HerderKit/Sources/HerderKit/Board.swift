@@ -354,10 +354,9 @@ extension TaskTree {
             Task { await fleet.unarchive(key) }
             return
         }
+        // The toast's Undo may have brought it back already; `undoArchive` then does nothing.
         undoManager?.registerUndo(withTarget: fleet) { fleet in
-            // The toast's Undo may have brought it back already.
-            guard fleet.session(key)?.status == .archived else { return }
-            Task { await fleet.unarchive(key) }
+            Task { await fleet.undoArchive(key) }
         }
         undoManager?.setActionName("Archive")
         Task { await fleet.archive(key) }
