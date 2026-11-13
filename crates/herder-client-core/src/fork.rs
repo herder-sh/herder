@@ -16,7 +16,8 @@ use crate::{ConnectionState, Error, new_command_id};
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Most bytes of events one `upload_history` part carries, as JSON; an event larger than
-/// this goes in a part of its own. Well under a daemon's 16 MiB WebSocket frame limit.
+/// this goes in a part of its own. Well under [`herder_protocol::MAX_MESSAGE_BYTES`]: a part
+/// over it, an event too large to relay, fails the fork with `bad_request`, unsent.
 const PART_BYTES: usize = 4 * 1024 * 1024;
 
 /// Forks `session_id`, listed by the machine `source_id`, onto `destination`; `machines` are

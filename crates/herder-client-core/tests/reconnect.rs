@@ -2,7 +2,7 @@
 //! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, an
 //! account login, an AWS sign-in, resource figures, the sync barrier, renaming and forgetting a machine, a
 //! reconnect through a chosen address, the app lifecycle: suspension, wake probes and the offline cache,
-//! and a new device asked to sign in as a person.
+//! a new device asked to sign in as a person, and a command too large to send.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -26,10 +26,11 @@ use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Hub, session};
 use herder_protocol::{
-    AccountId, AwsDeviceCode, AwsProfile, CommandBody, CommandResult, Constraint, Container,
+    AccountId, AwsDeviceCode, AwsProfile, Bytes, CommandBody, CommandResult, Constraint, Container,
     ContainerState, ErrorCode, Event, EventBody, FailoverSettings, HostId, HostResources, ItemBody,
-    NewPerson, PasskeyAssertion, PasskeyChallenge, PermissionMode, PersonPasskey, Provider, Role,
-    SessionId, SessionStatus, SessionUsage, SignIn, SignInRefusal, TerminalPurpose, TurnId,
+    MAX_MESSAGE_BYTES, NewPerson, PasskeyAssertion, PasskeyChallenge, PermissionMode,
+    PersonPasskey, PromptFile, Provider, Role, SessionId, SessionStatus, SessionUsage, SignIn,
+    SignInRefusal, TerminalPurpose, TurnId,
 };
 use herder_store::Store;
 use tokio::net::{TcpListener, TcpStream};
@@ -1478,6 +1479,69 @@ async fn connection_quality_reports_round_trips_and_reconnects() {
             && m.quality.last_rtt_ms.is_some()
     })
     .await;
+}
+
+/// A prompt with a file too large for the daemon to read fails at once with `bad_request`, and
+/// is never sent: the connection stays up, and nothing of it goes out after a reconnect. Sent,
+/// the daemon would close the connection, and the client would send it again on every new one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_command_too_large_to_send_fails_once_and_keeps_the_connection() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp.path().join("app"));
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
+        .await
+        .unwrap()
+        .host_id;
+    let session_id = create_session(&client, &host, repo).await;
+
+    // Its bytes alone fill the limit; base64 makes them a third larger on the wire.
+    let prompt = CommandBody::SendPrompt {
+        session_id: session_id.clone(),
+        text: "look at this".into(),
+        images: Vec::new(),
+        files: vec![PromptFile {
+            name: "big.bin".into(),
+            data: Bytes(vec![0; MAX_MESSAGE_BYTES]),
+        }],
+    };
+    let sent = tokio::time::timeout(TIMEOUT, client.send(host.clone(), prompt))
+        .await
+        .expect("the prompt waits to be sent again");
+    let Err(Error::Rejected { info }) = sent else {
+        panic!("expected the prompt refused, got {sent:?}");
+    };
+    assert_eq!(info.code, ErrorCode::BadRequest);
+    assert_eq!(
+        info.message,
+        "this prompt's images and files are too large to send (21.3 MB, the limit is 16 MB)"
+    );
+
+    // The connection it was refused on still serves.
+    client.synced(host.clone()).await.unwrap();
+    let machine = client.machines().remove(0);
+    assert_eq!(machine.connection, ConnectionState::Connected);
+    assert_eq!(machine.quality.reconnects, 0);
+
+    // A new connection resends what waits for an answer before the sync; the prompt is not
+    // among it, so the sync is answered and that connection stays the only new one.
+    client.reconnect(host.clone()).await.unwrap();
+    client.synced(host.clone()).await.unwrap();
+    let machine = client.machines().remove(0);
+    assert_eq!(machine.connection, ConnectionState::Connected);
+    assert_eq!(machine.quality.reconnects, 1);
 }
 
 async fn create_session(client: &Client, host: &HostId, repo: String) -> SessionId {

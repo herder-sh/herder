@@ -763,7 +763,9 @@ impl Client {
     }
 
     /// Sends a command to a machine and waits for the daemon's answer, however long it takes
-    /// to connect. Dropping the future gives up; a command already sent may still apply.
+    /// to connect. Dropping the future gives up; a command already sent may still apply. One
+    /// over [`herder_protocol::MAX_MESSAGE_BYTES`] as JSON is not sent: it fails with
+    /// [`Error::Rejected`], `bad_request`, saying what is too large.
     ///
     /// An accepted `set_skills_repo` makes its URL the skill library of every machine where
     /// this device's user is owner, and an accepted skill write (`put_skill`, `delete_skill`,

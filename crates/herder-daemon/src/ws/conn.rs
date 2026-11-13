@@ -15,9 +15,9 @@ use herder_protocol::{
 };
 use serde::Deserialize;
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -85,8 +85,13 @@ pub(super) async fn serve<B: Backend>(
         () = cancel.cancelled() => Ok(()),
         result = read(stream, first, &shared, &outbox, &device, &cancel) => result,
     };
-    if let Err(err) = result {
-        debug!(%peer, "connection failed: {err:#}");
+    match result {
+        Ok(()) => {}
+        // A client sending more than the protocol allows has a bug worth seeing.
+        Err(err) if matches!(err.downcast_ref::<WsError>(), Some(WsError::Capacity(_))) => {
+            warn!(%peer, "connection failed: {err:#}");
+        }
+        Err(err) => debug!(%peer, "connection failed: {err:#}"),
     }
     shared.hub.disconnect(&outbox);
     shared.approvals.disconnect(&outbox);

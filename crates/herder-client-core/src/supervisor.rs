@@ -29,9 +29,9 @@ use futures_util::stream::{FuturesUnordered, SplitSink};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ApprovalRequest, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
-    Cursor, ErrorInfo, FailoverSettings, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge,
-    PasskeyCreation, PersonId, Project, Role, ServerHello, ServerMessage, SessionId, TerminalId,
-    Timestamp, UserId,
+    Cursor, ErrorCode, ErrorInfo, FailoverSettings, HistoryPart, MAX_MESSAGE_BYTES,
+    PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PersonId, Project, Role,
+    ServerHello, ServerMessage, SessionId, TerminalId, Timestamp, UserId,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
@@ -624,7 +624,8 @@ impl Supervisor {
     }
 
     /// Sends `command` once a connection is up, resending it with the same id after each
-    /// reconnect until the daemon answers.
+    /// reconnect until the daemon answers. One too large for the daemon to read is answered
+    /// with `bad_request` instead, and never sent.
     pub(crate) async fn send(&self, command: Command) -> Result<Answer, Error> {
         if self.demo.is_some() {
             return self.demo_answer(&command.body).map(Ok);
@@ -1372,22 +1373,24 @@ async fn serve(
     let mut attaching = HashMap::new();
     // Terminal events with no stream yet, kept while an open is in flight.
     let mut early = HashMap::new();
-    pending.retain(|command| !command.reply.is_closed());
-    let resent = pending
-        .iter()
-        .map(|command| ClientMessage::Command(command.command.clone()));
-    syncs.retain(|_, reply| !reply.is_closed());
-    let synced = syncs.keys().map(|token| ClientMessage::Sync {
-        token: token.clone(),
-    });
-    let messages: Vec<_> = supervisor
+    let mut messages: Vec<_> = supervisor
         .reattach(&mut attaching)
-        .into_iter()
-        .chain(resent)
-        .chain(synced)
+        .iter()
+        .map(encode)
         .collect();
+    for command in std::mem::take(pending) {
+        if !command.reply.is_closed() {
+            messages.extend(dispatch(pending, command));
+        }
+    }
+    syncs.retain(|_, reply| !reply.is_closed());
+    messages.extend(syncs.keys().map(|token| {
+        encode(&ClientMessage::Sync {
+            token: token.clone(),
+        })
+    }));
     for message in messages {
-        if let Err(error) = write(&mut sink, encode(&message)).await {
+        if let Err(error) = write(&mut sink, message).await {
             return Ended::Lost(error);
         }
     }
@@ -1463,35 +1466,45 @@ async fn serve(
                         if !state.wanted.contains_key(&session_id) {
                             continue;
                         }
-                        ClientMessage::Subscribe(cursor(&state, &session_id))
+                        encode(&ClientMessage::Subscribe(cursor(&state, &session_id)))
                     }
                     Some(Op::Unsubscribe(session_id)) => {
                         if supervisor.lock().wanted.contains_key(&session_id) {
                             continue;
                         }
-                        ClientMessage::Unsubscribe { session_id }
+                        encode(&ClientMessage::Unsubscribe { session_id })
                     }
                     Some(Op::Command(command, reply)) => {
-                        let message = ClientMessage::Command(command.clone());
-                        pending.push(Pending { command, reply, open: None });
-                        message
-                    }
-                    Some(Op::Open(command, reply, events)) => {
-                        let message = ClientMessage::Command(command.clone());
-                        pending.push(Pending { command, reply, open: Some(events) });
-                        message
-                    }
-                    Some(Op::Attach(terminal_id)) => {
-                        match supervisor.first_attach(&terminal_id, &mut attaching) {
+                        match dispatch(pending, Pending { command, reply, open: None }) {
                             Some(message) => message,
                             None => continue,
                         }
                     }
-                    Some(Op::Once(body)) => once(body),
+                    Some(Op::Open(command, reply, events)) => {
+                        match dispatch(pending, Pending { command, reply, open: Some(events) }) {
+                            Some(message) => message,
+                            None => continue,
+                        }
+                    }
+                    Some(Op::Attach(terminal_id)) => {
+                        match supervisor.first_attach(&terminal_id, &mut attaching) {
+                            Some(message) => encode(&message),
+                            None => continue,
+                        }
+                    }
+                    Some(Op::Once(body)) => {
+                        let message = encode(&once(body));
+                        if message.len() > MAX_MESSAGE_BYTES {
+                            let (machine, size) = (&supervisor.saved.name, message.len());
+                            warn!(%machine, "not sending a terminal command of {size} bytes");
+                            continue;
+                        }
+                        message
+                    }
                     Some(Op::Sync(reply)) => {
                         let token = ulid::Ulid::generate().to_string();
                         syncs.insert(token.clone(), reply);
-                        ClientMessage::Sync { token }
+                        encode(&ClientMessage::Sync { token })
                     }
                     Some(Op::Suspend) => {
                         *suspended = true;
@@ -1532,7 +1545,7 @@ async fn serve(
                     }
                     Some(Op::Reconnect(reply)) => return Ended::Reconnect(reply),
                 };
-                if let Err(error) = write(&mut sink, encode(&message)).await {
+                if let Err(error) = write(&mut sink, message).await {
                     return Ended::Lost(error);
                 }
                 continue;
@@ -1637,6 +1650,58 @@ async fn serve(
 fn encode(message: &ClientMessage) -> Message {
     // Client messages are plain data with string keys: encoding cannot fail.
     Message::text(serde_json::to_string(message).unwrap_or_default())
+}
+
+/// Adds `command` to `pending` and returns the frame that sends it; or, when that frame is over
+/// [`MAX_MESSAGE_BYTES`], answers it with `bad_request` and returns `None`. Sent, such a frame
+/// would make the daemon close the connection, and go again after every reconnect.
+fn dispatch(pending: &mut Vec<Pending>, command: Pending) -> Option<Message> {
+    let message = encode(&ClientMessage::Command(command.command.clone()));
+    if message.len() > MAX_MESSAGE_BYTES {
+        let error = too_large(&command.command.body, message.len());
+        let _ = command.reply.send(Err(error));
+        return None;
+    }
+    pending.push(command);
+    Some(message)
+}
+
+/// The error for a command whose frame has `size` bytes, over [`MAX_MESSAGE_BYTES`].
+fn too_large(body: &CommandBody, size: usize) -> ErrorInfo {
+    let what = match body {
+        CommandBody::SendPrompt { images, files, .. }
+        | CommandBody::AnswerQuestion { images, files, .. } => {
+            if images.is_empty() && files.is_empty() {
+                "this prompt is"
+            } else {
+                "this prompt's images and files are"
+            }
+        }
+        CommandBody::PutSkill { .. } => "this skill's files are",
+        CommandBody::UploadHistory {
+            part: HistoryPart::Events { .. },
+            ..
+        } => "an event of this session is",
+        CommandBody::UploadHistory { .. } => "an image or file of this session is",
+        _ => "this command is",
+    };
+    ErrorInfo {
+        code: ErrorCode::BadRequest,
+        message: format!(
+            "{what} too large to send ({}, the limit is {})",
+            megabytes(size),
+            megabytes(MAX_MESSAGE_BYTES)
+        ),
+    }
+}
+
+/// `bytes` in MB of 1024 * 1024 bytes: whole when it is, else to one decimal.
+fn megabytes(bytes: usize) -> String {
+    const MB: usize = 1024 * 1024;
+    if bytes.is_multiple_of(MB) {
+        return format!("{} MB", bytes / MB);
+    }
+    format!("{:.1} MB", bytes as f64 / MB as f64)
 }
 
 async fn write(sink: &mut SplitSink<Ws, Message>, message: Message) -> Result<(), String> {
@@ -1860,6 +1925,20 @@ fn backoff(attempt: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_too_large_says_what_is_and_by_how_much() {
+        let upload = CommandBody::UploadHistory {
+            session_id: SessionId::new("s1"),
+            part: HistoryPart::Events { events: Vec::new() },
+        };
+        let error = too_large(&upload, 19_320_140);
+        assert_eq!(error.code, ErrorCode::BadRequest);
+        assert_eq!(
+            error.message,
+            "an event of this session is too large to send (18.4 MB, the limit is 16 MB)"
+        );
+    }
 
     #[test]
     fn backoff_doubles_up_to_the_cap_with_jitter() {
