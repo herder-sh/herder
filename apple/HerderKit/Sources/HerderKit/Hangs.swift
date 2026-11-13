@@ -14,8 +14,11 @@ enum Hangs {
     /// A moment on the main thread, in nanoseconds: the time, and the CPU time the thread has
     /// used.
     struct Moment {
-        /// The shortest turn the log tells of: a delay a person notices.
-        static let shortest: UInt64 = 100_000_000
+        /// The shortest turn the log tells of: a tenth of a second, a delay a person notices.
+        /// The measurements (apple/PerfTests) set `HERDER_HANG_MS` to the milliseconds of a
+        /// frame, to count every turn that cost one.
+        static let shortest: UInt64 =
+            (ProcessInfo.processInfo.environment["HERDER_HANG_MS"].flatMap { UInt64($0) } ?? 100) * 1_000_000
 
         var time: UInt64
         var cpu: UInt64
