@@ -153,16 +153,29 @@ struct SessionModel {
 
     mutating func apply(_ update: SessionUpdate) {
         loaded = true
-        for event in update.events { apply(event) }
+        apply(update.events)
         streaming = update.streaming
     }
 
-    mutating func apply(_ event: Event) {
+    mutating func apply(_ event: Event) { apply([event]) }
+
+    /// Folds `events`, wording the last tool call once they are all in: its activity line
+    /// takes parsing its input, and a journal replays thousands of calls of which only the
+    /// last one's line can show.
+    private mutating func apply(_ events: [Event]) {
+        var call: (name: String, input: Json)?
+        for event in events { fold(event, lastCall: &call) }
+        if let call { lastTool = toolActivity(name: call.name, input: call.input, spawned: spawned) }
+    }
+
+    /// Folds one event; `lastCall` is the running turn's last tool call among those folded
+    /// with it.
+    private mutating func fold(_ event: Event, lastCall: inout (name: String, input: Json)?) {
         record(event)
         let at = Timestamp.date(event.at) ?? updatedAt ?? .now
         note(event, at: at)
         count(event, at: at)
-        timeline.append(TimelineEntry(seq: event.seq, at: at, text: Self.describe(event.body), by: event.by))
+        timeline.append(TimelineEntry(seq: event.seq, at: at, line: TimelineEntry.Line(event.body), by: event.by))
         updatedAt = at
         if case .itemAdded(let item) = event.body { itemTimes["\(item.turnId)/\(item.id)"] = at }
         switch event.body {
@@ -191,6 +204,7 @@ struct SessionModel {
             turnStartedAt = at
             turnTimes[turnId] = TurnTime(started: at)
             lastTool = nil
+            lastCall = nil
             spawned = 0
             failure = nil
         case .turnCompleted(let turnId, _):
@@ -208,7 +222,7 @@ struct SessionModel {
             case .assistantMessage(let text): lastMessage = text
             case .toolCall(let name, let input):
                 spawned = name == "mcp__herder__spawn" ? spawned + 1 : 0
-                lastTool = toolActivity(name: name, input: input, spawned: spawned)
+                lastCall = (name, input)
             default: break
             }
         case .approvalRequested(let id, let turnId, _, let summary, let routedTo, let reason, let secret, let secretRequest):
@@ -794,9 +808,19 @@ func toolActivity(name: String, input: Json, spawned: Int = 1) -> String {
     }
 }
 
+/// The first line of `text` that is not empty, without the space around it. It reads no
+/// further than that line, and by scalars, which need no grouping into characters: a reply
+/// runs to megabytes, and folding a journal asks for the first line of every one.
 func firstLine(_ text: String) -> String {
-    text.split(whereSeparator: \.isNewline).first.map(String.init)?
-        .trimmingCharacters(in: .whitespaces) ?? ""
+    // The scalars `Character.isNewline` holds for; none of them joins a character but CR LF.
+    let isNewline = { (scalar: Unicode.Scalar) in
+        switch scalar.value {
+        case 0x0A...0x0D, 0x85, 0x2028, 0x2029: true
+        default: false
+        }
+    }
+    let line = text.unicodeScalars.drop(while: isNewline).prefix { !isNewline($0) }
+    return String(Substring(line)).trimmingCharacters(in: .whitespaces)
 }
 
 enum Timestamp {
@@ -995,9 +1019,32 @@ struct TimelineEntry: Hashable, Identifiable {
     var id: UInt64 { seq }
     let seq: UInt64
     let at: Date
-    let text: String
+    let line: Line
     /// Who caused it, when someone did.
     let by: UserId?
+
+    var text: String {
+        switch line {
+        case .worded(let text): text
+        case .toolCall(let item): SessionModel.describe(.itemAdded(item: item))
+        }
+    }
+
+    /// An event's line. A tool call's is worded when it is read: it takes parsing the call's
+    /// input, a journal replays thousands of calls, and only the inspector's full log reads
+    /// their lines.
+    enum Line: Hashable {
+        case worded(String)
+        indirect case toolCall(Item)
+
+        init(_ body: EventBody) {
+            if case .itemAdded(let item) = body, item.parentCallId == nil, case .toolCall = item.body {
+                self = .toolCall(item)
+            } else {
+                self = .worded(SessionModel.describe(body))
+            }
+        }
+    }
 }
 
 /// Counts over a session's life.
