@@ -26,10 +26,11 @@ use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Hub, session};
 use herder_protocol::{
-    AccountId, AwsDeviceCode, AwsProfile, CommandBody, CommandResult, Constraint, Container,
-    ContainerState, ErrorCode, Event, EventBody, FailoverSettings, HostId, HostResources, ItemBody,
-    NewPerson, PasskeyAssertion, PasskeyChallenge, PermissionMode, PersonPasskey, Provider, Role,
-    SessionId, SessionStatus, SessionUsage, SignIn, SignInRefusal, TerminalPurpose, TurnId,
+    AccountId, AwsDeviceCode, AwsProfile, Bytes, CommandBody, CommandResult, Constraint, Container,
+    ContainerState, ErrorCode, Event, EventBody, FailoverSettings, HostId, HostResources, Image,
+    ItemBody, MAX_IMAGE_BYTES, NewPerson, PasskeyAssertion, PasskeyChallenge, PermissionMode,
+    PersonPasskey, Provider, Role, SessionId, SessionStatus, SessionUsage, SignIn, SignInRefusal,
+    TerminalPurpose, TurnId,
 };
 use herder_store::Store;
 use tokio::net::{TcpListener, TcpStream};
@@ -1478,6 +1479,56 @@ async fn connection_quality_reports_round_trips_and_reconnects() {
             && m.quality.last_rtt_ms.is_some()
     })
     .await;
+}
+
+/// A prompt whose message the daemon would not read fails at once on this device: it is not
+/// sent, so it is not resent either, and the connection stays up for what comes next.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_prompt_too_large_to_send_fails_at_once_and_keeps_the_connection() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    daemon.sign_in(&client, "alice", daemon.addr).await.unwrap();
+    wait_machine(&client, |m| m.quality.last_rtt_ms.is_some()).await;
+    let host = client.machines()[0].host_id.clone();
+    let prompt = |images: usize| CommandBody::SendPrompt {
+        session_id: SessionId::new("nope"),
+        text: "look".into(),
+        images: (0..images)
+            .map(|_| Image {
+                media_type: "image/png".into(),
+                data: Bytes(vec![0; MAX_IMAGE_BYTES]),
+            })
+            .collect(),
+        files: Vec::new(),
+    };
+
+    // Five images, each as large as one may be: over a message's limit as base64.
+    let sent = client.send(host.clone(), prompt(5)).await;
+    let Err(Error::Local { message }) = sent else {
+        panic!("expected the prompt refused on this device, got {sent:?}");
+    };
+    assert!(message.starts_with("too large to send: "), "{message}");
+
+    // The daemon answers the next command, on the connection that was up all along.
+    let sent = client.send(host, prompt(0)).await;
+    assert!(
+        matches!(&sent, Err(Error::Rejected { info }) if info.code == ErrorCode::NotFound),
+        "{sent:?}"
+    );
+    let machine = &client.machines()[0];
+    assert!(connected(&machine.connection));
+    assert_eq!(machine.quality.reconnects, 0);
 }
 
 async fn create_session(client: &Client, host: &HostId, repo: String) -> SessionId {

@@ -10,13 +10,14 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ClientMessage, Command, CommandId, CommandResult, Cursor, ErrorCode, ErrorInfo, EventBody,
-    PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello, ServerMessage, SignIn,
+    MAX_MESSAGE_BYTES, PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello, ServerMessage,
+    SignIn,
 };
 use serde::Deserialize;
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
+use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -34,6 +35,11 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Events read from the journal per query during replay; replay also waits for the queue to
 /// drain below this before each query, so a long journal never piles up in memory.
 const REPLAY_PAGE: usize = 256;
+
+/// Most bytes of one message the daemon reads off a socket. It is well over
+/// [`MAX_MESSAGE_BYTES`], so that a client sending a message over that limit is told which
+/// command was refused and keeps its connection; a message over this one closes it.
+const READ_LIMIT: usize = 4 * MAX_MESSAGE_BYTES;
 
 pub(super) async fn run<B: Backend>(
     stream: TcpStream,
@@ -84,8 +90,24 @@ pub(super) async fn serve<B: Backend>(
         () = cancel.cancelled() => Ok(()),
         result = read(stream, first, &shared, &outbox, &device, &cancel) => result,
     };
-    if let Err(err) = result {
-        debug!(%peer, "connection failed: {err:#}");
+    match &result {
+        Ok(()) => {}
+        // Nothing of the message was read, so there is no command to refuse: the client is
+        // told why before the connection closes.
+        Err(err)
+            if matches!(
+                err.downcast_ref::<tungstenite::Error>(),
+                Some(tungstenite::Error::Capacity(_))
+            ) =>
+        {
+            warn!(%peer, "closing a connection for a message over the read limit: {err:#}");
+            error(
+                &outbox,
+                ErrorCode::BadRequest,
+                &format!("message too large: at most {MAX_MESSAGE_BYTES} bytes"),
+            );
+        }
+        Err(err) => debug!(%peer, "connection failed: {err:#}"),
     }
     shared.hub.disconnect(&outbox);
     shared.approvals.disconnect(&outbox);
@@ -106,7 +128,10 @@ pub(crate) async fn handshake(tls: &Tls, stream: TcpStream) -> Result<(Ws, Strin
         .and_then(|certs| certs.first())
         .map(|cert| fingerprint(cert))
         .context("the peer sent no device certificate")?;
-    let ws = tokio_tungstenite::accept_async(tls).await?;
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(READ_LIMIT))
+        .max_frame_size(Some(READ_LIMIT));
+    let ws = tokio_tungstenite::accept_async_with_config(tls, Some(config)).await?;
     Ok((ws, device))
 }
 
@@ -268,19 +293,33 @@ async fn read<B: Backend>(
                 };
                 outbox.push(answered(id, answer));
             }
-            // A command this build cannot read, such as one from a newer client, is refused
-            // as that command, so the client does not wait for an answer forever.
             Err(Undecodable {
-                command_id: Some(command_id),
-                message,
-            }) => outbox.push(ServerMessage::CommandRejected {
                 command_id,
-                error: ErrorInfo {
-                    code: ErrorCode::BadRequest,
-                    message,
-                },
-            }),
-            Err(Undecodable { message, .. }) => error(outbox, ErrorCode::BadRequest, &message),
+                message,
+                too_large,
+            }) => {
+                if too_large {
+                    warn!(
+                        client = %hello.client,
+                        device_id = %identity.device_id,
+                        command_id = ?command_id,
+                        "refused a client message: {message}"
+                    );
+                }
+                match command_id {
+                    // A command this build cannot read, such as one from a newer client, or
+                    // will not, is refused as that command, so the client does not wait for
+                    // an answer forever.
+                    Some(command_id) => outbox.push(ServerMessage::CommandRejected {
+                        command_id,
+                        error: ErrorInfo {
+                            code: ErrorCode::BadRequest,
+                            message,
+                        },
+                    }),
+                    None => error(outbox, ErrorCode::BadRequest, &message),
+                }
+            }
         }
     }
     Ok(())
@@ -291,6 +330,8 @@ async fn read<B: Backend>(
 struct Undecodable {
     command_id: Option<CommandId>,
     message: String,
+    /// Whether it is a frame over [`MAX_MESSAGE_BYTES`], refused whatever it holds.
+    too_large: bool,
 }
 
 impl Undecodable {
@@ -298,6 +339,7 @@ impl Undecodable {
         Self {
             command_id: None,
             message,
+            too_large: false,
         }
     }
 }
@@ -309,6 +351,14 @@ async fn next(stream: &mut SplitStream<Ws>) -> Result<Option<Result<ClientMessag
             return Ok(None);
         };
         return Ok(Some(match frame.context("reading from the client")? {
+            Message::Text(text) if text.len() > MAX_MESSAGE_BYTES => Err(Undecodable {
+                command_id: command_id(&text),
+                message: format!(
+                    "message too large: {} bytes, and one may have at most {MAX_MESSAGE_BYTES}",
+                    text.len()
+                ),
+                too_large: true,
+            }),
             Message::Text(text) => decode(&text),
             Message::Binary(_) => Err(Undecodable::new(
                 "messages must be JSON text frames".to_owned(),
@@ -323,6 +373,7 @@ fn decode(text: &str) -> Result<ClientMessage, Undecodable> {
     serde_json::from_str(text).map_err(|err| Undecodable {
         command_id: command_id(text),
         message: format!("invalid message: {err}"),
+        too_large: false,
     })
 }
 

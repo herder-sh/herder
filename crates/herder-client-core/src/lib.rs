@@ -764,6 +764,8 @@ impl Client {
 
     /// Sends a command to a machine and waits for the daemon's answer, however long it takes
     /// to connect. Dropping the future gives up; a command already sent may still apply.
+    /// Fails with `Local`, sending nothing, for a command whose message would be over
+    /// [`herder_protocol::MAX_MESSAGE_BYTES`].
     ///
     /// An accepted `set_skills_repo` makes its URL the skill library of every machine where
     /// this device's user is owner, and an accepted skill write (`put_skill`, `delete_skill`,

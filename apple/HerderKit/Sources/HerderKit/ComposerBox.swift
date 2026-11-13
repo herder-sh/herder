@@ -296,10 +296,18 @@ struct ComposerBox<Footer: View>: View {
         PromptText.remove(.image, at: index, items: &images, text: &text)
     }
 
-    /// Adds images; returns a `[Image #N]` marker for each, numbered in the order they go to
-    /// the agent, so the prompt can refer to them.
+    /// The bytes of the images and files the prompt carries.
+    private var carried: Int {
+        images.reduce(0) { $0 + $1.data.count } + files.reduce(0) { $0 + $1.data.count }
+    }
+
+    /// Adds the images that fit in the prompt, and says so when one does not; returns a
+    /// `[Image #N]` marker for each, numbered in the order they go to the agent, so the prompt
+    /// can refer to them.
     private func add(_ added: [Herder.Image]) -> String {
-        added.map { image in
+        let fitting = ImageAttachment.fitting(added, carried: carried)
+        if let refused = fitting.refused { imageError = refused }
+        return fitting.images.map { image in
             images.append(image)
             return PromptText.marker(.image, images.count)
         }
@@ -314,12 +322,11 @@ struct ComposerBox<Footer: View>: View {
         let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
         defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
         let sorted = FileAttachment.sort(urls)
-        let carried = images.reduce(0) { $0 + $1.data.count } + files.reduce(0) { $0 + $1.data.count }
-            + sorted.images.reduce(0) { $0 + $1.data.count }
-        let fitting = FileAttachment.fitting(sorted.files, carried: carried)
+        imageError = sorted.refused
         text += add(sorted.images)
+        let fitting = FileAttachment.fitting(sorted.files, carried: carried)
         files += fitting.files
-        imageError = fitting.refused ?? sorted.refused
+        if let refused = fitting.refused { imageError = refused }
     }
 
     /// Keeps a long paste; returns its `[Pasted text #N]` marker.

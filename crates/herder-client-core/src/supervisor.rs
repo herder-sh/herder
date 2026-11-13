@@ -29,9 +29,9 @@ use futures_util::stream::{FuturesUnordered, SplitSink};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ApprovalRequest, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
-    Cursor, ErrorInfo, FailoverSettings, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge,
-    PasskeyCreation, PersonId, Project, Role, ServerHello, ServerMessage, SessionId, TerminalId,
-    Timestamp, UserId,
+    Cursor, ErrorInfo, FailoverSettings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, PasskeyAssertion,
+    PasskeyChallenge, PasskeyCreation, PersonId, Project, Role, ServerHello, ServerMessage,
+    SessionId, TerminalId, Timestamp, UserId,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
@@ -624,10 +624,14 @@ impl Supervisor {
     }
 
     /// Sends `command` once a connection is up, resending it with the same id after each
-    /// reconnect until the daemon answers.
+    /// reconnect until the daemon answers. Fails at once with `Local` for a command too large
+    /// to send.
     pub(crate) async fn send(&self, command: Command) -> Result<Answer, Error> {
         if self.demo.is_some() {
             return self.demo_answer(&command.body).map(Ok);
+        }
+        if let Some(error) = too_large(&command) {
+            return Err(error);
         }
         let (reply, answer) = oneshot::channel();
         self.ops
@@ -655,6 +659,9 @@ impl Supervisor {
             id: new_command_id(),
             body,
         };
+        if let Some(error) = too_large(&command) {
+            return Err(error);
+        }
         self.ops
             .send(Op::Open(command, reply, events))
             .map_err(|_| Error::Closed)?;
@@ -1387,7 +1394,7 @@ async fn serve(
         .chain(synced)
         .collect();
     for message in messages {
-        if let Err(error) = write(&mut sink, encode(&message)).await {
+        if let Err(error) = send(&mut sink, &message).await {
             return Ended::Lost(error);
         }
     }
@@ -1532,7 +1539,7 @@ async fn serve(
                     }
                     Some(Op::Reconnect(reply)) => return Ended::Reconnect(reply),
                 };
-                if let Err(error) = write(&mut sink, encode(&message)).await {
+                if let Err(error) = send(&mut sink, &message).await {
                     return Ended::Lost(error);
                 }
                 continue;
@@ -1627,16 +1634,63 @@ async fn serve(
             early.clear();
         }
         if let Some(message) = reply
-            && let Err(error) = write(&mut sink, encode(&message)).await
+            && let Err(error) = send(&mut sink, &message).await
         {
             return Ended::Lost(error);
         }
     }
 }
 
-fn encode(message: &ClientMessage) -> Message {
+/// Writes `message` to the daemon, unless it is over [`MAX_MESSAGE_BYTES`]. A command that
+/// waits for its answer never is (see [`too_large`]); that leaves what is sent unanswered,
+/// such as a terminal's input, which is dropped.
+async fn send(sink: &mut SplitSink<Ws, Message>, message: &ClientMessage) -> Result<(), String> {
     // Client messages are plain data with string keys: encoding cannot fail.
-    Message::text(serde_json::to_string(message).unwrap_or_default())
+    let text = serde_json::to_string(message).unwrap_or_default();
+    if text.len() > MAX_MESSAGE_BYTES {
+        warn!(bytes = text.len(), "dropped a message too large to send");
+        return Ok(());
+    }
+    write(sink, Message::text(text)).await
+}
+
+/// Why `command` cannot be sent, if its message would be over [`MAX_MESSAGE_BYTES`]. The
+/// daemon reads no larger one, and a command is resent on every new connection until it is
+/// answered: one never answered would take down each connection in turn.
+fn too_large(command: &Command) -> Option<Error> {
+    const MB: usize = 1024 * 1024;
+    let bytes = message_bytes(command);
+    (bytes > MAX_MESSAGE_BYTES).then(|| Error::Local {
+        message: format!(
+            "too large to send: {} MB, and one message may have at most {} MB; \
+             attach fewer or smaller images and files",
+            bytes.div_ceil(MB),
+            MAX_MESSAGE_BYTES / MB
+        ),
+    })
+}
+
+/// How many bytes the message `command` is sent as has.
+fn message_bytes(command: &Command) -> usize {
+    /// Counts the bytes written to it.
+    struct Count(usize);
+
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // A command's message is the command with its tag as a `ClientMessage` ahead of its fields.
+    let mut count = Count(r#""type":"command","#.len());
+    // Neither can fail: a command is plain data with string keys, and counting always works.
+    let _ = serde_json::to_writer(&mut count, command);
+    count.0
 }
 
 async fn write(sink: &mut SplitSink<Ws, Message>, message: Message) -> Result<(), String> {
@@ -1859,7 +1913,55 @@ fn backoff(attempt: u32) -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use herder_protocol::{Bytes, Image};
+
     use super::*;
+
+    /// A prompt whose message has exactly `bytes` bytes.
+    fn prompt(bytes: usize) -> Command {
+        let command = |text: String| Command {
+            id: CommandId::new("c1"),
+            body: CommandBody::SendPrompt {
+                session_id: SessionId::new("s1"),
+                text,
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+        };
+        let empty = message_bytes(&command(String::new()));
+        command("x".repeat(bytes - empty))
+    }
+
+    #[test]
+    fn a_command_is_measured_as_the_message_it_is_sent_as() {
+        let command = Command {
+            id: CommandId::new("c1"),
+            body: CommandBody::SendPrompt {
+                session_id: SessionId::new("s1"),
+                text: "see \"this\"\n".to_owned(),
+                images: vec![Image {
+                    media_type: "image/png".to_owned(),
+                    data: Bytes(vec![7; 1000]),
+                }],
+                files: Vec::new(),
+            },
+        };
+        let sent = serde_json::to_string(&ClientMessage::Command(command.clone())).unwrap();
+        assert_eq!(message_bytes(&command), sent.len());
+    }
+
+    #[test]
+    fn only_a_command_over_the_message_limit_is_too_large_to_send() {
+        assert_eq!(too_large(&prompt(MAX_MESSAGE_BYTES)), None);
+        let Some(Error::Local { message }) = too_large(&prompt(MAX_MESSAGE_BYTES + 1)) else {
+            panic!("expected the command refused");
+        };
+        assert_eq!(
+            message,
+            "too large to send: 17 MB, and one message may have at most 16 MB; \
+             attach fewer or smaller images and files"
+        );
+    }
 
     #[test]
     fn backoff_doubles_up_to_the_cap_with_jitter() {

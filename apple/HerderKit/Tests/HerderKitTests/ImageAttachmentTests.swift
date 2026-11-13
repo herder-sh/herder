@@ -63,6 +63,24 @@ struct ImageAttachmentTests {
         #expect(ImageAttachment.images(in: [["public.png": jpeg]]).first?.mediaType == "image/jpeg")
     }
 
+    /// Images count toward what a prompt may carry: a PNG that would take it over goes as a
+    /// JPEG, and an image that still does not fit is refused.
+    @Test func imagesFitWithinWhatThePromptCarriesAlready() throws {
+        let limit = Int(maxPromptAttachmentBytes())
+        let png = Herder.Image(mediaType: "image/png", data: try picture(width: 400, height: 300, as: .png, noise: true))
+        let asItIs = ImageAttachment.fitting([png], carried: limit - png.data.count)
+        #expect(asItIs.images == [png])
+        #expect(asItIs.refused == nil)
+        let smaller = ImageAttachment.fitting([png], carried: limit - png.data.count + 1)
+        let jpeg = try #require(smaller.images.first)
+        #expect(jpeg.mediaType == "image/jpeg")
+        #expect(try size(jpeg.data) == (400, 300))
+        #expect(smaller.refused == nil)
+        let full = ImageAttachment.fitting([png, png], carried: limit - png.data.count)
+        #expect(full.images == [png])
+        #expect(full.refused?.hasSuffix("of attachments.") == true)
+    }
+
     /// A picture of this size in this type: a gradient, or noise, which compresses badly.
     private func picture(width: Int, height: Int, as type: UTType, noise: Bool = false,
                          orientation: CGImagePropertyOrientation = .up) throws -> Data {
