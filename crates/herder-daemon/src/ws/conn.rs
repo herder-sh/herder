@@ -1,16 +1,17 @@
 //! One client connection: handshake, then a reader handling client messages and a writer
 //! draining the connection's [`Outbox`].
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use herder_protocol::{
-    ClientMessage, Command, CommandId, CommandResult, Cursor, DeviceId, ErrorCode, ErrorInfo,
-    EventBody, MAX_MESSAGE_BYTES, PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello,
+    ClientHello, ClientMessage, Command, CommandId, CommandResult, Cursor, DeviceId, ErrorCode,
+    ErrorInfo, EventBody, MAX_MESSAGE_BYTES, PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello,
     ServerMessage, SignIn,
 };
 use serde::Deserialize;
@@ -35,6 +36,10 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Events read from the journal per query during replay; replay also waits for the queue to
 /// drain below this before each query, so a long journal never piles up in memory.
 const REPLAY_PAGE: usize = 256;
+
+/// Messages read from a client ahead of the one being handled; with that many waiting, its
+/// socket is left unread until the daemon catches up.
+const WAITING: usize = 16;
 
 /// Most bytes of one message the daemon reads off a socket. It is well over
 /// [`MAX_MESSAGE_BYTES`], so that a client sending a message over that limit is told which
@@ -252,100 +257,140 @@ async fn read<B: Backend>(
         .hub
         .initial_terminals(outbox, shared.terminals.list());
     shared.hub.initial_projects(outbox);
-    for cursor in hello.resume {
-        subscribe(shared, outbox, cursor).await;
-    }
-
-    while let Some(message) = next(&mut stream).await? {
-        match message {
-            Ok(ClientMessage::Hello(_)) => {
-                error(outbox, ErrorCode::BadRequest, "already said hello")
-            }
-            Ok(ClientMessage::SignIn(_)) => {
-                error(outbox, ErrorCode::BadRequest, "already signed in")
-            }
-            Ok(ClientMessage::Subscribe(cursor)) => subscribe(shared, outbox, cursor).await,
-            Ok(ClientMessage::Unsubscribe { session_id }) => {
-                shared.hub.unsubscribe(outbox, &session_id);
-            }
-            Ok(ClientMessage::Sync { token }) => outbox.push(ServerMessage::Synced { token }),
-            Ok(ClientMessage::Command(Command { id, body })) => {
-                if let Err(error) = auth::authorize(identity.role, &body) {
-                    outbox.push(ServerMessage::CommandRejected {
-                        command_id: id,
-                        error,
-                    });
-                    continue;
+    // The client's messages wait here for their turn while the one before them is handled:
+    // the socket is read, and so a ping answered, whatever the daemon is busy with. A client
+    // takes a connection that does not answer its ping for dead and replaces it.
+    let mut resume = hello
+        .resume
+        .iter()
+        .cloned()
+        .map(|cursor| Ok(ClientMessage::Subscribe(cursor)));
+    let mut waiting = VecDeque::new();
+    let mut handling = None;
+    // How reading ended, once it did; what was read by then is still handled.
+    let mut ended = None;
+    loop {
+        if handling.is_none() {
+            match resume.next().or_else(|| waiting.pop_front()) {
+                Some(message) => {
+                    handling = Some(handle(shared, outbox, &identity, &hello, message).boxed());
                 }
-                let waiting = match shared.approval(&identity, &hello.client, hello.passkey, &body)
-                {
-                    Ok(waiting) => waiting,
-                    Err(error) => {
-                        outbox.push(answered(id, Err(error)));
-                        continue;
+                None => {
+                    if let Some(ended) = ended.take() {
+                        return ended;
                     }
-                };
-                let key = (identity.user_id.clone(), id.clone());
-                let query = session::changes_nothing(&body);
-                let apply = {
-                    let shared = Arc::clone(shared);
-                    let identity = identity.clone();
-                    let outbox = Arc::clone(outbox);
-                    let id = id.clone();
-                    let approved = waiting.is_some();
-                    async move { shared.apply(&identity, &outbox, &id, body, approved).await }
-                };
-                if let Some(waiting) = waiting {
-                    // The device waits for its person without holding up its other messages.
-                    let shared = Arc::clone(shared);
-                    let outbox = Arc::clone(outbox);
-                    tokio::spawn(async move {
-                        let answer = match shared.approvals.wait(waiting).await {
-                            Ok(()) => shared.commands.apply(key, apply).await,
-                            Err(error) => Err(error),
-                        };
-                        outbox.push(answered(id, answer));
-                    });
-                    continue;
                 }
-                // A query's answer is not kept: it may be large, and asking again is harmless.
-                let answer = if query {
-                    apply.await
-                } else {
-                    shared.commands.apply(key, apply).await
-                };
-                outbox.push(answered(id, answer));
             }
-            Err(Undecodable {
-                command_id,
-                message,
-                too_large,
-            }) => {
-                if too_large {
-                    warn!(
-                        client = %hello.client,
-                        device_id = %identity.device_id,
-                        command_id = ?command_id,
-                        "refused a client message: {message}"
-                    );
-                }
-                match command_id {
-                    // A command this build cannot read, such as one from a newer client, or
-                    // will not, is refused as that command, so the client does not wait for
-                    // an answer forever.
-                    Some(command_id) => outbox.push(ServerMessage::CommandRejected {
-                        command_id,
-                        error: ErrorInfo {
-                            code: ErrorCode::BadRequest,
-                            message,
-                        },
-                    }),
-                    None => error(outbox, ErrorCode::BadRequest, &message),
+        }
+        let handled = async {
+            match handling.as_mut() {
+                Some(handling) => handling.await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            () = handled => handling = None,
+            message = next(&mut stream), if ended.is_none() && waiting.len() < WAITING => {
+                match message {
+                    Ok(Some(message)) => waiting.push_back(message),
+                    Ok(None) => ended = Some(Ok(())),
+                    Err(err) => ended = Some(Err(err)),
                 }
             }
         }
     }
-    Ok(())
+}
+
+/// Handles one message of a client that said hello.
+async fn handle<B: Backend>(
+    shared: &Arc<Shared<B>>,
+    outbox: &Arc<Outbox>,
+    identity: &Identity,
+    hello: &ClientHello,
+    message: Result<ClientMessage, Undecodable>,
+) {
+    match message {
+        Ok(ClientMessage::Hello(_)) => error(outbox, ErrorCode::BadRequest, "already said hello"),
+        Ok(ClientMessage::SignIn(_)) => error(outbox, ErrorCode::BadRequest, "already signed in"),
+        Ok(ClientMessage::Subscribe(cursor)) => subscribe(shared, outbox, cursor).await,
+        Ok(ClientMessage::Unsubscribe { session_id }) => {
+            shared.hub.unsubscribe(outbox, &session_id);
+        }
+        Ok(ClientMessage::Sync { token }) => outbox.push(ServerMessage::Synced { token }),
+        Ok(ClientMessage::Command(Command { id, body })) => {
+            if let Err(error) = auth::authorize(identity.role, &body) {
+                outbox.push(ServerMessage::CommandRejected {
+                    command_id: id,
+                    error,
+                });
+                return;
+            }
+            let waiting = match shared.approval(identity, &hello.client, hello.passkey, &body) {
+                Ok(waiting) => waiting,
+                Err(error) => {
+                    outbox.push(answered(id, Err(error)));
+                    return;
+                }
+            };
+            let key = (identity.user_id.clone(), id.clone());
+            let query = session::changes_nothing(&body);
+            let apply = {
+                let shared = Arc::clone(shared);
+                let identity = identity.clone();
+                let outbox = Arc::clone(outbox);
+                let id = id.clone();
+                let approved = waiting.is_some();
+                async move { shared.apply(&identity, &outbox, &id, body, approved).await }
+            };
+            if let Some(waiting) = waiting {
+                // The device waits for its person without holding up its other messages.
+                let shared = Arc::clone(shared);
+                let outbox = Arc::clone(outbox);
+                tokio::spawn(async move {
+                    let answer = match shared.approvals.wait(waiting).await {
+                        Ok(()) => shared.commands.apply(key, apply).await,
+                        Err(error) => Err(error),
+                    };
+                    outbox.push(answered(id, answer));
+                });
+                return;
+            }
+            // A query's answer is not kept: it may be large, and asking again is harmless.
+            let answer = if query {
+                apply.await
+            } else {
+                shared.commands.apply(key, apply).await
+            };
+            outbox.push(answered(id, answer));
+        }
+        Err(Undecodable {
+            command_id,
+            message,
+            too_large,
+        }) => {
+            if too_large {
+                warn!(
+                    client = %hello.client,
+                    device_id = %identity.device_id,
+                    command_id = ?command_id,
+                    "refused a client message: {message}"
+                );
+            }
+            match command_id {
+                // A command this build cannot read, such as one from a newer client, or
+                // will not, is refused as that command, so the client does not wait for
+                // an answer forever.
+                Some(command_id) => outbox.push(ServerMessage::CommandRejected {
+                    command_id,
+                    error: ErrorInfo {
+                        code: ErrorCode::BadRequest,
+                        message,
+                    },
+                }),
+                None => error(outbox, ErrorCode::BadRequest, &message),
+            }
+        }
+    }
 }
 
 /// A frame that is not a client message: why, and the id of the command it carries when it

@@ -55,6 +55,8 @@ struct TestBackend {
     worktree: PathBuf,
     /// The devices hosts replicate from, as a vault knows them.
     replicated: Arc<Mutex<Vec<DeviceId>>>,
+    /// Held for writing by a test, it keeps every command from being applied until released.
+    busy: Arc<tokio::sync::RwLock<()>>,
 }
 
 impl Backend for TestBackend {
@@ -119,6 +121,7 @@ impl Backend for TestBackend {
         _: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
+        let _free = self.busy.read().await;
         self.commands.fetch_add(1, Ordering::SeqCst);
         match command {
             CommandBody::SendPrompt { .. }
@@ -178,6 +181,8 @@ struct Daemon {
     commands: Arc<AtomicUsize>,
     /// The devices hosts replicate from, when the daemon plays a vault.
     replicated: Arc<Mutex<Vec<DeviceId>>>,
+    /// Held for writing, it keeps the backend from applying any command.
+    busy: Arc<tokio::sync::RwLock<()>>,
     shutdown: CancellationToken,
     /// The daemon's config file, which the settings commands change.
     config: PathBuf,
@@ -213,11 +218,13 @@ impl Daemon {
         ));
         let commands = Arc::new(AtomicUsize::new(0));
         let replicated = Arc::new(Mutex::new(Vec::new()));
+        let busy = Arc::new(tokio::sync::RwLock::new(()));
         let backend = TestBackend {
             store: Arc::clone(&store),
             commands: Arc::clone(&commands),
             worktree: tmp.path().to_owned(),
             replicated: Arc::clone(&replicated),
+            busy: Arc::clone(&busy),
         };
         let hub = Arc::new(Hub::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -282,6 +289,7 @@ impl Daemon {
             store,
             commands,
             replicated,
+            busy,
             shutdown,
             config,
             control,
@@ -783,6 +791,81 @@ async fn a_closed_connection_is_logged_at_info_with_why_it_closed() {
     drop(client);
     let line = logged.lines("client disconnected", 2).await.remove(1);
     assert!(!line.contains("the client closed the connection"), "{line}");
+}
+
+/// A client pings to learn whether its connection is alive, and replaces one that does not
+/// answer: the daemon answers while it is busy with what the client sent before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_ping_is_answered_while_a_command_is_applied() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    let busy = daemon.busy.write().await;
+    let command = |id: &str, body| {
+        ClientMessage::Command(Command {
+            id: CommandId::new(id),
+            body,
+        })
+    };
+    let prompt = CommandBody::SendPrompt {
+        session_id: session,
+        text: "hi".into(),
+        images: Vec::new(),
+        files: Vec::new(),
+    };
+    client.send(&command("c1", prompt)).await;
+    let list = CommandBody::ListDirectory { path: "/".into() };
+    client.send(&command("c2", list)).await;
+    client
+        .send(&ClientMessage::Sync { token: "t".into() })
+        .await;
+    client
+        .ws
+        .send(Message::Ping("still there?".into()))
+        .await
+        .unwrap();
+    loop {
+        let frame = tokio::time::timeout(TIMEOUT, client.ws.next())
+            .await
+            .expect("no pong while a command is applied");
+        match frame {
+            Some(Ok(Message::Pong(payload))) => {
+                assert_eq!(&payload[..], b"still there?");
+                break;
+            }
+            // Whatever the hello still had to say.
+            Some(Ok(Message::Text(text))) => {
+                assert!(!text.contains("command_accepted"), "{text}");
+            }
+            frame => panic!("expected a pong, got {frame:?}"),
+        }
+    }
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+
+    // What the client sent meanwhile is handled in the order it was sent.
+    drop(busy);
+    loop {
+        match client.recv().await {
+            ServerMessage::CommandAccepted { command_id, result } => {
+                assert_eq!(command_id, CommandId::new("c1"));
+                assert_eq!(result, CommandResult::Applied);
+                break;
+            }
+            ServerMessage::CommandRejected { error, .. } => panic!("{error:?}"),
+            ServerMessage::Synced { .. } => panic!("synced before the commands were answered"),
+            _ => {}
+        }
+    }
+    let ServerMessage::CommandAccepted { command_id, result } = client.recv().await else {
+        panic!("expected the second command's answer");
+    };
+    assert_eq!(command_id, CommandId::new("c2"));
+    assert!(matches!(result, CommandResult::Directory { .. }));
+    assert_eq!(
+        client.recv().await,
+        ServerMessage::Synced { token: "t".into() }
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
