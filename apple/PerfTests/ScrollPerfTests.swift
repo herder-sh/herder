@@ -9,17 +9,7 @@ import XCTest
 final class ScrollPerfTests: PerfTestCase {
     override func setUp() async throws {
         try prepare(links: ["HERDER_PAIR_LINK"])
-        app.launch()
-        let board = row("Upgrade date-fns to v4")
-        #if os(iOS)
-        // The fake daemons are on the Mac, across the network: iOS asks the first time.
-        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow"].firstMatch
-        for _ in 0..<30 where !board.exists {
-            if allow.exists { allow.tap() }
-            try await Task.sleep(for: .seconds(1))
-        }
-        #endif
-        XCTAssertTrue(board.waitForExistence(timeout: 60), "the Board did not load")
+        try await launchOnDemoFleet()
     }
 
     func testBoard() {
@@ -116,7 +106,12 @@ final class ScrollPerfTests: PerfTestCase {
         let target: XCUIElement = app
         #endif
         let options = XCTMeasureOptions()
+        // A simulator measures no frames to average: one pass tells the main thread's turns.
+        #if targetEnvironment(simulator)
+        options.iterationCount = 1
+        #else
         options.iterationCount = 5
+        #endif
         measured {
             measure(metrics: [XCTOSSignpostMetric.scrollingAndDecelerationMetric], options: options) {
                 for _ in 0..<Self.flings { fling(target, up: up) }
