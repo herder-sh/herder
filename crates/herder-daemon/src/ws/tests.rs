@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -726,9 +726,29 @@ async fn a_command_this_build_cannot_read_is_refused_as_that_command() {
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
 }
 
-/// What the daemon logs at info and above, as it does by default.
+/// What the daemons of this test process log at info and above, as a daemon does by default.
 #[derive(Clone, Default)]
 struct Logged(Arc<Mutex<Vec<u8>>>);
+
+/// The log of this test process.
+///
+/// Its subscriber is the process's, not one test's: whether anyone listens to a log statement
+/// is settled once, on the thread that reaches it first, and a subscriber of one test's
+/// thread is unknown on another test's, which may reach it first.
+static LOGGED: LazyLock<Logged> = LazyLock::new(|| {
+    let logged = Logged::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_ansi(false)
+        .with_writer({
+            let logged = logged.clone();
+            move || logged.clone()
+        })
+        .finish();
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("no other test sets the process's subscriber");
+    logged
+});
 
 impl std::io::Write for Logged {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -742,12 +762,15 @@ impl std::io::Write for Logged {
 }
 
 impl Logged {
-    /// The first `count` lines holding `text`, once they are logged.
-    async fn lines(&self, text: &str, count: usize) -> Vec<String> {
+    /// The first `count` lines holding `text` and `field`, once they are logged.
+    async fn lines(&self, text: &str, field: &str, count: usize) -> Vec<String> {
         let logged = async {
             loop {
                 let all = String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned();
-                let lines: Vec<_> = all.lines().filter(|line| line.contains(text)).collect();
+                let lines: Vec<_> = all
+                    .lines()
+                    .filter(|line| line.contains(text) && line.contains(field))
+                    .collect();
                 if lines.len() >= count {
                     return lines.into_iter().map(str::to_owned).collect();
                 }
@@ -756,40 +779,31 @@ impl Logged {
         };
         tokio::time::timeout(TIMEOUT, logged)
             .await
-            .unwrap_or_else(|_| panic!("fewer than {count} lines logged with {text:?}"))
+            .unwrap_or_else(|_| {
+                panic!("fewer than {count} lines logged with {text:?} and {field:?}")
+            })
     }
 }
 
-// On one thread, so that the subscriber set for it sees what the server's tasks log.
 #[tokio::test]
 async fn a_closed_connection_is_logged_at_info_with_why_it_closed() {
-    let logged = Logged::default();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_ansi(false)
-        .with_writer({
-            let logged = logged.clone();
-            move || logged.clone()
-        })
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let logged = &*LOGGED;
     let daemon = Daemon::start().await;
     let mut client = daemon.client().await;
     let hello = client.hello(Vec::new()).await;
     client.ws.close(None).await.unwrap();
-    let line = logged.lines("client disconnected", 1).await.remove(0);
+    // Every test's daemon logs here: this one's lines are those of its device.
+    let device = format!("device_id={}", hello.device_id);
+    let closed = "client disconnected";
+    let line = logged.lines(closed, &device, 1).await.remove(0);
     assert!(line.contains("the client closed the connection"), "{line}");
     assert!(line.contains("client=test"), "{line}");
-    assert!(
-        line.contains(&format!("device_id={}", hello.device_id)),
-        "{line}"
-    );
 
     // A client that goes away without a word is told apart from one that closed.
     let mut client = daemon.client().await;
     client.hello(Vec::new()).await;
     drop(client);
-    let line = logged.lines("client disconnected", 2).await.remove(1);
+    let line = logged.lines(closed, &device, 2).await.remove(1);
     assert!(!line.contains("the client closed the connection"), "{line}");
 }
 
