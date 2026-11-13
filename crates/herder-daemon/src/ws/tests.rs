@@ -12,8 +12,8 @@ use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Account, AccountId, AwsDeviceCode, AwsProfile, ClientHello, ClientMessage, Command,
     CommandBody, CommandId, CommandResult, Cursor, DaemonSettings, DeviceId, ErrorCode, ErrorInfo,
-    Event, EventBody, HostId, Item, ItemBody, ItemId, LeftoverDecision, NewPerson,
-    PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey,
+    Event, EventBody, HostId, Item, ItemBody, ItemId, LeftoverDecision, MAX_MESSAGE_BYTES,
+    NewPerson, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey,
     PermissionMode, PersonId, PersonPasskey, Provider, Role, Seq, ServerHello, ServerMessage,
     SessionHead, SessionId, SignIn, Terminal, TerminalPurpose, TurnId, UserId,
 };
@@ -716,6 +716,67 @@ async fn a_command_this_build_cannot_read_is_refused_as_that_command() {
         ServerMessage::Error { error, .. } if error.code == ErrorCode::BadRequest
     ));
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_over_the_limit_is_refused_and_the_connection_stays() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    // A prompt whose message has exactly `len` bytes.
+    let prompt = |id: &str, len: usize| {
+        let message = |text: String| {
+            serde_json::to_string(&ClientMessage::Command(Command {
+                id: CommandId::new(id),
+                body: CommandBody::SendPrompt {
+                    session_id: session.clone(),
+                    text,
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
+            }))
+            .unwrap()
+        };
+        let empty = message(String::new()).len();
+        let text = message("x".repeat(len - empty));
+        assert_eq!(text.len(), len);
+        Message::text(text)
+    };
+    // The largest message a client may send is read.
+    client
+        .ws
+        .send(prompt("c1", MAX_MESSAGE_BYTES))
+        .await
+        .unwrap();
+    assert_eq!(
+        client.recv().await,
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("c1"),
+            result: CommandResult::Applied,
+        }
+    );
+    // One byte more is refused as that command, as an older client may send it ...
+    client
+        .ws
+        .send(prompt("c2", MAX_MESSAGE_BYTES + 1))
+        .await
+        .unwrap();
+    let ServerMessage::CommandRejected { command_id, error } = client.recv().await else {
+        panic!("expected the command refused");
+    };
+    assert_eq!(command_id, CommandId::new("c2"));
+    assert_eq!(error.code, ErrorCode::BadRequest);
+    assert!(error.message.contains("too large"), "{}", error.message);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
+    // ... and the connection lives on.
+    client
+        .send(&ClientMessage::Sync { token: "t".into() })
+        .await;
+    assert_eq!(
+        client.recv().await,
+        ServerMessage::Synced { token: "t".into() }
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

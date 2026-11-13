@@ -9,7 +9,8 @@ import UIKit
 #endif
 
 /// Images for a prompt: in a type and size the daemon takes (`imageMediaTypes()`,
-/// `maxImageBytes()`), and no larger than `longEdge` pixels on their long edge. Others are
+/// `maxImageBytes()`, `maxPromptAttachmentBytes()`), and no larger than `longEdge` pixels on
+/// their long edge. Others are
 /// scaled down first, as JPEG, or as PNG if they were one and still fit, so a screenshot's text
 /// stays sharp. No provider looks at more pixels, so the upload is smaller and nothing is lost.
 enum ImageAttachment {
@@ -50,8 +51,40 @@ enum ImageAttachment {
         return max(width, height)
     }
 
-    /// The image within `longEdge` and `limit` bytes, upright, halving it until it fits.
-    private static func scaled(_ source: CGImageSource, from edge: Int, limit: Int, png: Bool) -> Herder.Image? {
+    /// Of `added`, those that fit in a prompt already carrying `carried` bytes of images and
+    /// files, in order, and why the rest do not. A PNG that does not fit goes as a JPEG of the
+    /// same size in pixels when that does: a screenshot's is several times smaller.
+    static func fitting(_ added: [Herder.Image], carried: Int) -> (images: [Herder.Image], refused: String?) {
+        let limit = Int(maxPromptAttachmentBytes())
+        var total = carried
+        var kept: [Herder.Image] = []
+        var refused: String?
+        for var image in added {
+            if total < limit, total + image.data.count > limit, let smaller = jpeg(image, limit: limit - total) {
+                image = smaller
+            }
+            guard total + image.data.count <= limit else {
+                refused = "That image would take the prompt over \(FileAttachment.size(Int64(limit))) of attachments."
+                continue
+            }
+            total += image.data.count
+            kept.append(image)
+        }
+        return (kept, refused)
+    }
+
+    /// A PNG as a JPEG of the same size in pixels, if that is within `limit` bytes.
+    private static func jpeg(_ image: Herder.Image, limit: Int) -> Herder.Image? {
+        guard image.mediaType == "image/png", let source = CGImageSourceCreateWithData(image.data as CFData, nil) else {
+            return nil
+        }
+        return scaled(source, from: longestEdge(source), limit: limit, png: false, halving: false)
+    }
+
+    /// The image within `longEdge` and `limit` bytes, upright, halving it until it fits unless
+    /// `halving` is off.
+    private static func scaled(_ source: CGImageSource, from edge: Int, limit: Int, png: Bool,
+                               halving: Bool = true) -> Herder.Image? {
         var size = edge > 0 ? min(edge, longEdge) : longEdge
         repeat {
             let options: [CFString: Any] = [
@@ -67,7 +100,7 @@ enum ImageAttachment {
                 return Herder.Image(mediaType: "image/jpeg", data: out)
             }
             size /= 2
-        } while size >= 64
+        } while halving && size >= 64
         return nil
     }
 
