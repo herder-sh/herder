@@ -98,6 +98,18 @@ with your passkey. To add another device of yours to every machine one already h
 device choose **I already use herder** (or **Add a Machine**) and scan or copy the
 link it shows.
 
+To measure how the app opens and resumes against a fleet of a real one's size, run machines
+with a used journal, `fake_daemon --load NAME SESSIONS EVENTS` (`SESSIONS` sessions, five in six
+archived, the longest of `EVENTS` events), and launch the app with their links, separated by
+spaces, in `HERDER_FAKE_FLEET`; it logs when its first frame and the Board showed (`log show
+--predicate 'subsystem == "sh.herder" AND category == "launch"'`). What the client core does on
+such a launch, `launch_load` measures without the app:
+
+```sh
+cargo run --release -p herder-ffi --example fake_daemon -- --load big 335 16000
+LOAD_SESSIONS=335 LOAD_EVENTS=16000 cargo test --release -p herder-ffi --test launch_load -- --ignored --nocapture
+```
+
 The `apple` workflow runs the tests and builds both apps on every change to `apple/` or to what
 it builds on.
 
