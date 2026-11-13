@@ -147,7 +147,7 @@ struct MachinePage: View {
     }
 
     /// The connection in the title's chip, coloured by how it is, with the last round trip
-    /// while connected: "Connected · 38 ms".
+    /// while connected, "Connected · 38 ms", or the addresses tried while connecting.
     static func chip(_ machine: Machine) -> StatusChip {
         let urgency: Urgency = switch machine.connection {
         case .connected: .done
@@ -155,7 +155,8 @@ struct MachinePage: View {
         default: .failing
         }
         let rtt = machine.connection == .connected ? machine.quality.lastRttMs.map { "\($0) ms" } : nil
-        return StatusChip(text: [machine.connection.label, rtt].compactMap(\.self).joined(separator: " · "),
+        let label = machine.connection.labelCounting(addresses: machine.addresses.count)
+        return StatusChip(text: [label, rtt].compactMap(\.self).joined(separator: " · "),
                           urgency: urgency)
     }
 

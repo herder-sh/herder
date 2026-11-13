@@ -20,6 +20,20 @@ struct AddressTests {
         #expect(AddressStatus(address: "b:7447", inUse: "b:7447", connecting: nil, failure: failure) == .inUse)
     }
 
+    /// A connection under way says how many addresses it tries, and a message says what it
+    /// waits for instead of "Sending…" while its machine is not connected.
+    @Test func aConnectionSaysWhatItTriesAndWhatAMessageWaitsFor() {
+        #expect(ConnectionState.connecting.labelCounting(addresses: 3) == "Connecting… (trying 3 addresses)")
+        #expect(ConnectionState.connecting.labelCounting(addresses: 1) == "Connecting…")
+        #expect(ConnectionState.connected.labelCounting(addresses: 3) == "Connected")
+        #expect(ConnectionState.disconnected(error: "refused").labelCounting(addresses: 3) == "refused")
+        #expect(ConnectionState.connected.holdUp(addresses: 3) == nil)
+        #expect(ConnectionState.connecting.holdUp(addresses: 3) == "Connecting to the machine (trying 3 addresses)…")
+        #expect(ConnectionState.connecting.holdUp(addresses: 1) == "Connecting to the machine…")
+        #expect(ConnectionState.disconnected(error: "refused").holdUp(addresses: 1)
+            == "The machine is offline (refused). Sends once it connects.")
+    }
+
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
     func connectingThroughAnAddressPutsItFirstAndSaysWhenItDidNotAnswer() async throws {
         let daemon = try FakeDaemon()
