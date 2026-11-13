@@ -96,9 +96,7 @@ struct QueueTests {
             }
             return users == ["Hold.", "A.", "C.", "D.\n\nE."] && model.turn == nil
         })
-        // The tray empties with the machine's list, which comes on its own, after the journal
-        // or before it.
-        #expect(await eventually { texts().isEmpty })
+        #expect(texts().isEmpty)
 
         // Once it started, it can no longer be edited.
         await fleet.removeQueued(first, from: key)
