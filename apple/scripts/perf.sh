@@ -6,15 +6,17 @@
 # Runs the measurements (apple/PerfTests) against fake daemons: `--busy`, the demo fleet plus a
 # long transcript that keeps streaming, and `--load big 335 16000`, a machine with a used
 # journal. On this Mac, all of them, against a Release copy of the app with its own bundle id
-# (mac-release-copy.sh). On an iPhone simulator, the launches alone: its frames say nothing of
-# a phone's. On the iPhone whose UDID is in `HERDER_PERF_DEVICE`, the scrolling alone: the
-# machine with the journal listens on this Mac only. Both build the app for Release as
-# sh.herder.Herder.Perf, so the installed app stays.
+# (mac-release-copy.sh). On an iPhone simulator, all of them and the iPhone's everyday use: it
+# draws no frames to measure, but its main thread's turns tell what holds a phone's up. On the
+# iPhone whose UDID is in `HERDER_PERF_DEVICE`, the scrolling alone: the machine with the
+# journal listens on this Mac only. Both build the app for Release as sh.herder.Herder.Perf, so
+# the installed app stays.
 #
 # Writes target/perf/perf.md: each screen's hitch time ratio, when each launch showed the
-# Board, and the main thread's hangs while each test measured, which the app logs
-# (Hangs.swift) and the Mac and the simulator let the script read. Fails when a test failed, or
-# a screen is over the budget, 5 ms/s, by more than `PERF_TOLERANCE` ms/s (0 by default).
+# Board, and the main thread's turns of a frame or longer while each test measured, its hangs
+# among them, which the app logs (Hangs.swift) and the Mac and the simulator let the script
+# read. Fails when a test failed, or a screen is over the budget, 5 ms/s, by more than
+# `PERF_TOLERANCE` ms/s (0 by default).
 #
 # The iPhone build signs with `DEVELOPMENT_TEAM` (WE8DRASDBR by default), through the App Store
 # Connect key in ASC_KEY_ID, ASC_ISSUER_ID and ASC_PRIVATE_KEY when they are set, as `herder
@@ -73,6 +75,7 @@ if [ -n "${PERF_ONLY:-}" ]; then
     LaunchUnreachable) unreachable=yes launch=yes ;;
     Launch) launch=yes ;;
     OpenLongSession | Resume) tests+=("LaunchPerfTests/test$name") ;;
+    OpenSession | Stream | Type | TypeIdle | SwitchTabs) tests+=("UsePerfTests/test$name") ;;
     *) tests+=("ScrollPerfTests/test$name") ;;
     esac
   done
@@ -153,7 +156,7 @@ for platform in "${platforms[@]}"; do
     export TEST_RUNNER_HERDER_PAIR_LINK=$link TEST_RUNNER_HERDER_LOAD_LINK=$load_link
     export TEST_RUNNER_HERDER_PASSKEY=$passkey
     since=$(date '+%Y-%m-%d %H:%M:%S')
-    measure simulator iOS-Perf LaunchPerfTests -configuration Release \
+    measure simulator iOS-Perf "" -configuration Release \
       -destination "platform=iOS Simulator,id=$device" -derivedDataPath "$out/DerivedData-simulator"
     xcrun simctl spawn "$device" log show --start "$since" --style ndjson \
       --predicate 'subsystem == "sh.herder"' > "$out/simulator.log" || true
