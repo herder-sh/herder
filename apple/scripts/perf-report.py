@@ -10,9 +10,10 @@ Prints, per test and platform:
   worst one, in ms of hitches per s of scrolling, with the frame rate. A simulator and a virtual
   machine measure no frames, which it says in place of a ratio of 0;
 - when a launch showed the Board, since its process started (the app's `herder-launch` line);
-- the main thread's hangs while the test measured: its turns of 100 ms or longer (the app's
-  `herder-hang` lines between the test's `herder-perf begin` and `end`), their sum, how much of
-  it the thread ran rather than waited, and the longest.
+- the main thread's slow turns while the test measured: those of a frame, 16 ms, or longer
+  (the app's `herder-hang` lines between the test's `herder-perf begin` and `end`), their sum
+  and the share of the measured time it is, how much of it the thread ran rather than waited,
+  how many were hangs, of 100 ms or longer, and the longest.
 
 A platform takes several result bundles, and its log as `log show --style ndjson` wrote it. A
 screen whose test passed with no scrolling recorded is too short to scroll. Exits 1 when a mean
@@ -20,6 +21,7 @@ is over the budget by more than the tolerance, a test failed, or a platform ran 
 """
 
 import argparse
+import datetime
 import json
 import subprocess
 import sys
@@ -77,23 +79,40 @@ def find(measured, name):
     return next((values for key, values in measured.items() if name in key), None)
 
 
+def moment(entry):
+    """When a log entry was written, in seconds; None when it does not say."""
+    try:
+        return datetime.datetime.strptime(entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S.%f%z").timestamp()
+    except ValueError:
+        return None
+
+
 def measured_lines(log):
-    """{test: [(line's name, {its numbers})]}: the app's lines while each test measured."""
-    tests, current = {}, None
+    """{test: (seconds it measured for, [(line's name, {its numbers})])}: the app's lines while
+    each test measured."""
+    tests, current, began = {}, None, None
     with open(log, errors="replace") as lines:
         for line in lines:
             try:
                 entry = json.loads(line)
             except ValueError:
                 continue
-            words = (entry.get("eventMessage") or "").split() if isinstance(entry, dict) else []
+            if not isinstance(entry, dict):
+                continue
+            words = (entry.get("eventMessage") or "").split()
             if words[:2] == ["herder-perf", "begin"] and len(words) == 3:
-                current = tests.setdefault(words[2], [])
+                current, began = words[2], moment(entry)
+                tests[current] = (0, [])
             elif words[:2] == ["herder-perf", "end"]:
+                if current is not None:
+                    ended = moment(entry)
+                    seconds = ended - began if began is not None and ended is not None else 0
+                    tests[current] = (seconds, tests[current][1])
                 current = None
             elif current is not None and words and words[0] in ("herder-hang", "herder-launch"):
                 numbers = dict(word.split("=", 1) for word in words[1:] if "=" in word)
-                current.append((words[0], {key: int(value) for key, value in numbers.items() if value.isdigit()}))
+                tests[current][1].append(
+                    (words[0], {key: int(value) for key, value in numbers.items() if value.isdigit()}))
     return tests
 
 
@@ -121,14 +140,18 @@ def launch(lines):
     return None
 
 
-def hangs(lines):
-    turns = [numbers for name, numbers in lines if name == "herder-hang" and "ms" in numbers]
-    if not turns:
-        return "no hangs"
-    total = sum(turn["ms"] for turn in turns)
-    ran = sum(turn.get("cpu", 0) for turn in turns)
-    count = "1 hang" if len(turns) == 1 else f"{len(turns)} hangs"
-    return f"{count}, {total} ms ({ran} ms on the CPU), longest {max(turn['ms'] for turn in turns)} ms"
+def turns(lines, seconds):
+    """The main thread's slow turns among a test's lines, which measured for `seconds`."""
+    slow = [numbers for name, numbers in lines if name == "herder-hang" and "ms" in numbers]
+    if not slow:
+        return "no slow turns"
+    total = sum(turn["ms"] for turn in slow)
+    ran = sum(turn.get("cpu", 0) for turn in slow)
+    hangs = sum(1 for turn in slow if turn["ms"] >= 100)
+    count = "1 slow turn" if len(slow) == 1 else f"{len(slow)} slow turns"
+    share = f", {total / (seconds * 10):.0f}% of {seconds:.0f} s" if seconds > 0 else ""
+    return (f"{count}, {total} ms{share} ({ran} ms on the CPU), "
+            f"{hangs} of 100 ms or longer, longest {max(turn['ms'] for turn in slow)} ms")
 
 
 def main():
@@ -152,8 +175,8 @@ def main():
     over = [f"no test ran on {platform}" for platform in platforms if not tests[platform]]
     print(f"Per test: the hitch time ratio while scrolling, ms/s, mean (worst), at the frame rate measured, "
           f"budget {args.budget:g} ms/s" + (f" + {args.tolerance:g} tolerance" if args.tolerance else "")
-          + "; when a launch showed the Board; and the main thread's hangs while the test measured, "
-          "its turns of 100 ms or longer.\n")
+          + "; when a launch showed the Board; and the main thread's slow turns while the test "
+          "measured, of a frame (16 ms) or longer.\n")
     print("| Test | " + " | ".join(platforms) + " |")
     print("|---|" + "---|" * len(platforms))
     for test in names:
@@ -174,11 +197,11 @@ def main():
             if mean is not None:
                 over.append(f"{test} on {platform}: {mean:.1f} ms/s")
             if platform in logs:
-                lines = logs[platform].get(test)
-                if lines is None:
+                if test not in logs[platform]:
                     parts.append("nothing in the log")
                 else:
-                    parts += [part for part in (launch(lines), hangs(lines)) if part]
+                    seconds, lines = logs[platform][test]
+                    parts += [part for part in (launch(lines), turns(lines, seconds)) if part]
             cells.append("; ".join(parts))
         print(f"| {test} | " + " | ".join(cells) + " |")
 
