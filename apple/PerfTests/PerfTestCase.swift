@@ -32,6 +32,23 @@ class PerfTestCase: XCTestCase {
         app.launchEnvironment["HERDER_PROFILE"] = "\(run)-\(String(describing: type(of: self)))"
         app.launchEnvironment["HERDER_FAKE_FLEET"] = fleet.joined(separator: " ")
         app.launchEnvironment["HERDER_FAKE_PASSKEY"] = passkey
+        // Every turn of the main thread that cost a frame at 60 a second, not the hangs alone.
+        app.launchEnvironment["HERDER_HANG_MS"] = "16"
+    }
+
+    /// Launches the app and waits for the Board to show the demo fleet.
+    func launchOnDemoFleet() async throws {
+        app.launch()
+        let board = row("Upgrade date-fns to v4")
+        #if os(iOS)
+        // The fake daemons are on the Mac, across the network: iOS asks the first time.
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow"].firstMatch
+        for _ in 0..<30 where !board.exists {
+            if allow.exists { allow.tap() }
+            try await Task.sleep(for: .seconds(1))
+        }
+        #endif
+        XCTAssertTrue(board.waitForExistence(timeout: 60), "the Board did not load")
     }
 
     /// Runs `body` as what the test measures. The app's log between the two lines this writes
