@@ -67,7 +67,7 @@ final class SessionBox {
 /// status comes from `session_status_changed`, approvals and questions are pending until
 /// resolved or answered, and a turn's questions go when the turn ends.
 struct SessionModel {
-    let key: SessionKey
+    private(set) var key: SessionKey
     /// Whether the first update, with every cached event, has arrived.
     var loaded = false
     var repo: String?
@@ -149,6 +149,32 @@ struct SessionModel {
             shown.remove(at: index)
             return false
         }
+    }
+
+    /// How far the journal is folded: the last event's number, 0 before any.
+    var lastSeq: UInt64 { timeline.last?.seq ?? 0 }
+
+    /// Whether it shows more of the session than `other`, another copy's fold or none: loaded
+    /// where that is not, or folded further.
+    func showsMore(than other: SessionModel?) -> Bool {
+        guard loaded else { return false }
+        guard let other, other.loaded else { return true }
+        return lastSeq > other.lastSeq
+    }
+
+    /// The same state as another copy of the session: a vault's of its host's, or the reverse.
+    /// Both fold the one journal.
+    func keyed(_ key: SessionKey) -> SessionModel {
+        var model = self
+        model.key = key
+        return model
+    }
+
+    /// Takes from `kept`, the same journal folded as far, what only this device knows: the
+    /// prompts it sent that the journal has yet to show, and a failure card closed here.
+    mutating func keepLocal(of kept: SessionModel) {
+        outbox = kept.outbox
+        if !kept.log.contains(where: { $0.openFailure != nil }) { dismissFailure() }
     }
 
     mutating func apply(_ update: SessionUpdate) {

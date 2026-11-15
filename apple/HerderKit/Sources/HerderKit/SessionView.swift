@@ -8,6 +8,24 @@ struct SessionView: View {
     let key: SessionKey
     /// Opens another session (a child); `nil` pushes it.
     var open: ((SessionKey) -> Void)?
+
+    var body: some View {
+        // A session a vault replicates is listed from its host or from the vault as they
+        // connect and drop. The view stays as it is, and shows the copy that has the most of
+        // the session: nothing it shows goes away for a connection.
+        SessionPane(fleet: fleet, key: fleet.source(for: key), opened: key, open: open)
+    }
+}
+
+/// The session `opened`, shown from `key`: itself, or another copy of it; see
+/// `Fleet.source(for:)`. What the view keeps (its scroll, the draft, the terminal) goes by
+/// `opened`, so it stays when `key` moves to another copy.
+private struct SessionPane: View {
+    let fleet: Fleet
+    let key: SessionKey
+    let opened: SessionKey
+    /// Opens another session (a child); `nil` pushes it.
+    var open: ((SessionKey) -> Void)?
     @State private var pushedFork: SessionKey?
     @State private var showsTerminal = false
     @State private var showsPRs = false
@@ -33,7 +51,8 @@ struct SessionView: View {
 
     var body: some View {
         let model = fleet.session(key)
-        let summary = fleet.lists.projects.lazy.flatMap(\.sessions).first { $0.key == key }
+        let listed = fleet.listed(key)
+        let summary = fleet.lists.projects.lazy.flatMap(\.sessions).first { $0.key == listed }
         let blocks = fleet.transcript(key)
         let matches = find.shown ? find.matches(blocks) : []
         VStack(spacing: 0) {
@@ -50,7 +69,7 @@ struct SessionView: View {
                 }
             Rectangle().fill(Theme.stroke).frame(height: 1)
             if showsTerminal {
-                TerminalPane(fleet: fleet, key: key)
+                TerminalPane(fleet: fleet, key: opened)
             } else {
             // The transcript takes the height the header and the controls leave. Asked how tall
             // it would be, a scroll view lays its whole content out to answer, at each size the
@@ -87,8 +106,8 @@ struct SessionView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("transcript")
-            .modifier(FollowsEnd(key: key, blocks: blocks, top: top))
-            .id(key)
+            .modifier(FollowsEnd(key: opened, blocks: blocks, top: top))
+            .id(opened)
             .environment(\.transcriptScroll) { id, anchor in proxy.scrollTo(id, anchor: anchor) }
             .onChange(of: find.current) {
                 guard let id = find.current else { return }
@@ -128,17 +147,17 @@ struct SessionView: View {
                 }
             }
         }
-        .onChange(of: key) { old, _ in
+        .onChange(of: opened) { old, _ in
             showsTerminal = false
             find = TranscriptFind()
             expanded = []
             pageHeights = PageHeights()
             showsPRs = false
             fleet.unwatch(old)
-            fleet.watch(key)
+            fleet.watch(opened)
         }
-        .onAppear { fleet.watch(key) }
-        .onDisappear { fleet.unwatch(key) }
+        .onAppear { fleet.watch(opened) }
+        .onDisappear { fleet.unwatch(opened) }
         .navigationDestination(isPresented: Binding(
             get: { pushedFork != nil }, set: { if !$0 { pushedFork = nil } }
         )) {
@@ -277,7 +296,7 @@ struct SessionView: View {
     }
 
     private var ownsTerminal: Bool {
-        fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner
+        fleet.machines.first(where: { $0.hostId == opened.hostId })?.role == .owner
     }
 
     private func toggleFind() { find.shown.toggle() }
@@ -395,14 +414,14 @@ struct SessionView: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(.card, in: .rect(cornerRadius: Theme.corner))
             } else {
-                Composer(fleet: fleet, key: key, model: model) { host, account in
+                Composer(fleet: fleet, key: key, draft: opened, model: model) { host, account in
                     Task {
                         guard let fork = await fleet.handOff(key, to: host, account: account) else { return }
                         if let open { open(fork) } else { pushedFork = fork }
                     }
                 }
                 // Its own box per session: switching sessions keeps what each had typed.
-                .id(key)
+                .id(opened)
             }
         }
         .animation(.smooth(duration: 0.25), value: pinned(model, summary)?.requestId)
@@ -504,6 +523,8 @@ private struct FollowsEnd: ViewModifier {
 private struct Composer: View {
     let fleet: Fleet
     let key: SessionKey
+    /// The session as it was opened, which its draft is kept by: `key` may be another copy.
+    let draft: SessionKey
     let model: SessionModel
     /// Hands the session off to a machine, on an account or the machine's default.
     let handOff: (HostId, AccountId?) -> Void
@@ -563,7 +584,7 @@ private struct Composer: View {
             }
         }
         .onAppear {
-            if let kept = PromptDrafts.shared.load(PromptDrafts.key(key)) {
+            if let kept = PromptDrafts.shared.load(PromptDrafts.key(draft)) {
                 text = kept.text
                 images = kept.herderImages
                 files = kept.promptFiles
@@ -572,10 +593,10 @@ private struct Composer: View {
         // Kept a moment after the last keystroke, and at once on leaving.
         .task(id: draftContent) {
             guard (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
-            PromptDrafts.shared.save(draftContent, for: PromptDrafts.key(key))
+            PromptDrafts.shared.save(draftContent, for: PromptDrafts.key(draft))
         }
         .onDisappear {
-            PromptDrafts.shared.save(draftContent, for: PromptDrafts.key(key))
+            PromptDrafts.shared.save(draftContent, for: PromptDrafts.key(draft))
         }
     }
 
@@ -630,7 +651,7 @@ private struct Composer: View {
         self.text = ""
         self.images = []
         self.files = []
-        PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: PromptDrafts.key(key))
+        PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: PromptDrafts.key(draft))
         if model.state == .archived {
             Task { await fleet.unarchiveAndSubmit(text, images: images, files: files, to: key) }
         } else {

@@ -583,7 +583,8 @@ struct TaskListRow: View {
         self.selection = selection
         self.context = context
         self.toggle = toggle
-        opened = selection?.wrappedValue
+        // The open session's row is the copy the lists show of it.
+        opened = selection?.wrappedValue.map { fleet.listed($0) }
     }
 
     var body: some View {
