@@ -5,8 +5,6 @@ import SwiftUI
 /// needs you (amber); a suggestion, such as an update, does not stop anything (blue).
 struct SetupProblem: Identifiable, Equatable {
     enum Fix: Equatable {
-        /// Connect to every machine again.
-        case reconnect
         /// Add a Device's code, which another device of yours scans.
         case addDevice
         /// Update herder on these machines when they are idle.
@@ -31,20 +29,15 @@ struct SetupProblem: Identifiable, Equatable {
 }
 
 extension SetupProblem {
-    /// Everything that needs you across `machines`, problems first, then suggestions: a machine
-    /// not connected, machines that know you by an earlier setup, a device of yours missing from
+    /// Everything that needs you across `machines`, problems first, then suggestions: machines
+    /// that know you by an earlier setup, a device of yours missing from
     /// a machine you own, a signed-out account, then herder and CLI updates. `directory` is nil
     /// until the machines list their people.
     static func found(machines: [Machine], overview: ProvidersOverview, unclaimed: Bool,
                       directory: Directory?) -> [SetupProblem] {
+        // A machine that isn't connected needs nothing from you: a laptop asleep or away is
+        // expected, and the machine list already shows it offline.
         var found: [SetupProblem] = []
-        for machine in machines {
-            guard case .disconnected(let error) = machine.connection else { continue }
-            let name = UnpairedVault.name(of: machine)
-            found.append(SetupProblem(id: "offline.\(machine.hostId)", symbol: "bolt.horizontal.circle",
-                                      title: "\(name) isn’t connected", detail: ConnectionState.explain(error),
-                                      action: "Reconnect", fix: .reconnect))
-        }
         if unclaimed {
             found.append(SetupProblem(id: "claim", symbol: "person.badge.key",
                                       title: "Some machines know you by an earlier setup",
@@ -257,7 +250,6 @@ struct SetupView: View {
 
     private func fix(_ fix: SetupProblem.Fix) {
         switch fix {
-        case .reconnect: fleet.wake()
         case .addDevice: sheet = .addDevice
         case .updateHerder(let hosts): for host in hosts { fleet.updateHerder(on: host, when: .idle) }
         case .updateCLIs: fleet.update(ProvidersOverview(fleet: fleet).updatable)

@@ -24,15 +24,26 @@ struct SetupTests {
     @Test func problemsComeFirstEachWithItsFixThenSuggestions() {
         let machines = machines()
         let found = SetupProblem.found(machines: machines, overview: overview(machines), unclaimed: true, directory: nil)
-        #expect(found.map(\.id) == ["offline.h-dr", "claim", "signed-out.h-can/ops", "herder-update", "cli-updates"])
-        #expect(found.map(\.suggestion) == [false, false, false, true, true])
-        #expect(found[0].title == "draugelis isn’t connected" && found[0].fix == .reconnect)
-        #expect(found[2].title == "Claude · ops is signed out on trash-can-01")
-        #expect(found[3].title == "herder 0.21.0 is out" && found[3].detail == "trash-can-01 runs 0.20.0.")
-        #expect(found[3].fix == .updateHerder(["h-can"]) && found[3].action == "Update")
-        #expect(found[4].title.hasSuffix("CLI updates") && found[4].detail.hasSuffix("on trash-can-01."))
+        #expect(found.map(\.id) == ["claim", "signed-out.h-can/ops", "herder-update", "cli-updates"])
+        #expect(found.map(\.suggestion) == [false, false, true, true])
+        #expect(found[1].title == "Claude · ops is signed out on trash-can-01")
+        #expect(found[2].title == "herder 0.21.0 is out" && found[2].detail == "trash-can-01 runs 0.20.0.")
+        #expect(found[2].fix == .updateHerder(["h-can"]) && found[2].action == "Update")
+        #expect(found[3].title.hasSuffix("CLI updates") && found[3].detail.hasSuffix("on trash-can-01."))
         // Nothing in the UI says "claim".
         #expect(found.allSatisfy { !"\($0.title) \($0.detail) \($0.action)".lowercased().contains("claim") })
+    }
+
+    /// A laptop asleep or away is expected: an offline machine never needs you.
+    @Test func anOfflineMachineNeedsNothing() {
+        var machines = sampleFleetMachines(now: now)
+        machines[1].accounts = machines[1].accounts.map { var account = $0; account.needsLogin = nil; return account }
+        machines[1].providers = machines[0].providers
+        for index in machines.indices {
+            machines[index].connection = .disconnected(error: "192.168.1.147:7447: no answer in 10s")
+        }
+        let found = SetupProblem.found(machines: machines, overview: overview(machines), unclaimed: false, directory: nil)
+        #expect(found.isEmpty)
     }
 
     @Test func nothingNeedsYouWhenAllIsWell() {
