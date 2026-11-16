@@ -40,6 +40,7 @@ serde_json.workspace = true
 serde_cbor_2.workspace = true
 sha2.workspace = true
 slack-morphism.workspace = true
+socket2.workspace = true
 tar.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true

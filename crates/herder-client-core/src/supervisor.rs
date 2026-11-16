@@ -13,6 +13,19 @@
 //! the addresses again beside the race under way, which may be stuck on the network there
 //! was before, or about to succeed: neither waits for the other.
 //!
+//! However many addresses and races there are, one connection says hello: the daemon lists
+//! everything and replays every session wanted for each hello it takes, so an address that
+//! lost the race is dropped before it said one.
+//!
+//! A connection that ends sooner than [`STEADY`] after it was made did not work. The first
+//! such is replaced as any other; from the second in a row on, the task waits longer before
+//! each next one, as it does between failed attempts: on a network that lets a connection be
+//! made and then carries nothing, connecting over and over only adds to what it has to carry.
+//! A wake still connects at once, and going to the background starts the count afresh.
+//!
+//! A connection the task gives up tells the daemon why as it closes, so the daemon's log
+//! shows what a client that keeps reconnecting saw.
+//!
 //! A connection is pinged as soon as it is up and every [`PING_INTERVAL`] after; each ping
 //! carries a fresh payload, so its pong gives the round trip, and a ping still unanswered when
 //! the next one is due counts as a missed pong. A connection whose daemon shows no sign of
@@ -46,7 +59,7 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use futures_util::future::BoxFuture;
-use futures_util::stream::{FuturesUnordered, SplitSink};
+use futures_util::stream::{FuturesUnordered, SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ApprovalRequest, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
@@ -65,6 +78,8 @@ use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -76,8 +91,12 @@ use crate::profile::SavedMachine;
 use crate::terminal::{TerminalEvent, TerminalStream};
 use crate::{ConnectionQuality, ConnectionState, Error, Machine, SessionUpdate, new_command_id};
 
-/// Time one address gets for TCP, TLS, the WebSocket upgrade and the hellos.
+/// Time one address gets for TCP, TLS and the WebSocket upgrade.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Time a daemon that was reached gets to answer a hello, which it does at once. The other
+/// addresses that were reached wait for it, so it is short.
+const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Head start each address gets over the next one when connecting; one that fails sooner
 /// starts the next at once.
@@ -115,6 +134,19 @@ const QUIET: Duration = Duration::from_secs(5);
 
 /// How often a connection saves what changed to the offline cache.
 const SAVE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How long a connection has to last to count as one that worked.
+const STEADY: Duration = Duration::from_secs(30);
+
+/// Time a connection given up gets to tell the daemon why before its socket is dropped.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Most bytes of the reason a close frame carries: a control frame holds 125, two of them
+/// the close code.
+const CLOSE_REASON_BYTES: usize = 123;
+
+/// Whose turn it is to say hello, among every attempt under way to connect to one machine.
+type Turn = Arc<tokio::sync::Mutex<()>>;
 
 pub(crate) type Ws = WebSocketStream<TlsStream<Watched>>;
 
@@ -1184,8 +1216,8 @@ impl Supervisor {
     }
 
     /// A connection to the first of the addresses before the current connection's that
-    /// answers, which proves it reachable and is then dropped; `None` when the current
-    /// connection uses the first address.
+    /// answers, which proves it reachable and is then dropped, before it said hello; `None`
+    /// when the current connection uses the first address.
     fn better(&self) -> Option<BoxFuture<'static, Result<String, String>>> {
         let better = {
             let state = self.lock();
@@ -1199,18 +1231,14 @@ impl Supervisor {
         // It loaded when the supervisor started.
         let device = DeviceKey::from_pem(&self.saved.device_key).ok()?;
         let fingerprint = self.saved.fingerprint.clone();
-        let hello = ClientHello {
-            protocol_version: PROTOCOL_VERSION,
-            client: self.client.clone(),
-            resume: Vec::new(),
-            pairing_code: None,
-            sign_in: false,
-            passkey: self.passkey,
-        };
         Some(Box::pin(async move {
-            connect(&better, &fingerprint, &device, hello)
-                .await
-                .map(|(_, _, address)| address)
+            let config = client_config(&fingerprint, &device).map_err(|err| format!("{err:#}"))?;
+            let connector = TlsConnector::from(Arc::new(config));
+            let reaching = |address: String| {
+                let connector = connector.clone();
+                async move { reach(&address, &connector).await.map(drop) }
+            };
+            race(&better, reaching).await.map(|((), address)| address)
         }))
     }
 
@@ -1438,11 +1466,41 @@ impl Ops {
 enum Ended {
     Stopped,
     Lost(String),
-    /// A wake found it dead; reconnect without a backoff.
+    /// A probe found it dead; reconnect without a backoff, unless connections keep ending
+    /// young.
     Replaced(String),
+    /// Given up for a reason that says nothing of how the connection worked, as for an
+    /// address that comes first or a suspension it was silent through; reconnect without a
+    /// backoff.
+    Dropped(String),
     /// The client asked for a new connection; reconnect without a backoff and report how
     /// that went.
     Reconnect(oneshot::Sender<Result<String, String>>),
+}
+
+impl Ended {
+    /// What the daemon is told as the connection closes.
+    fn said(&self) -> &str {
+        match self {
+            Self::Stopped => "the client stopped",
+            Self::Lost(error) | Self::Replaced(error) | Self::Dropped(error) => error,
+            Self::Reconnect(_) => "reconnecting, as asked",
+        }
+    }
+}
+
+/// How long to wait before the next connection, after one that was lost (`replaced`: found
+/// dead by a probe) as the latest of `flaps` in a row that ended young; zero for none.
+///
+/// A connection that worked, and the first that did not, are replaced as fast as ever: at
+/// once after a probe, else after the shortest backoff. From the second in a row on, the
+/// wait doubles from a second or two up to [`BACKOFF_CAP`].
+fn flap_wait(flaps: u32, replaced: bool) -> Duration {
+    match flaps {
+        0 | 1 if replaced => Duration::ZERO,
+        0 | 1 => backoff(0),
+        flaps => backoff(flaps.saturating_add(1)),
+    }
 }
 
 async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::UnboundedReceiver<Op>) {
@@ -1456,6 +1514,8 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
     // Reconnects asked for, answered once the next attempt connects or fails.
     let mut reconnects: Vec<oneshot::Sender<Result<String, String>>> = Vec::new();
     let mut attempt = 0;
+    // Connections in a row that ended sooner than `STEADY` after they were made.
+    let mut flaps: u32 = 0;
     let mut suspended = false;
     // Until when the machine shows a connection that was lost, once one was.
     let mut quiet: Option<Instant> = None;
@@ -1466,8 +1526,10 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
     };
     supervisor.restore(cached);
     let device = &device;
-    // One race of the machine's addresses, as they and the sessions wanted are now.
-    let dial = || {
+    // One race of the machine's addresses, as they and the sessions wanted are now; of the
+    // races that share `turn`, one connection says hello.
+    let dial = |turn: &Turn| {
+        let turn = Arc::clone(turn);
         let addresses = supervisor.dial_order();
         let hello = ClientHello {
             protocol_version: PROTOCOL_VERSION,
@@ -1477,14 +1539,15 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
             sign_in: false,
             passkey: supervisor.passkey,
         };
-        async move { connect(&addresses, &saved.fingerprint, device, hello).await }
+        async move { connect(&addresses, &saved.fingerprint, device, hello, &turn).await }
     };
     'connection: loop {
         supervisor.set_connection(ConnectionState::Connecting);
         let connected = {
             // The races under way; the first connection any of them makes is taken.
             let mut races = FuturesUnordered::new();
-            races.push(dial());
+            let turn = Turn::default();
+            races.push(dial(&turn));
             let mut dialled = Instant::now();
             // When the next race starts, once one is asked for.
             let mut redial: Option<Instant> = None;
@@ -1507,7 +1570,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                             None => std::future::pending().await,
                         }
                     } => {
-                        races.push(dial());
+                        races.push(dial(&turn));
                         dialled = Instant::now();
                         redial = None;
                     }
@@ -1519,7 +1582,10 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                             attempt = 0;
                             redial = Some(dialled + REDIAL_SPACING);
                         }
-                        Some(Op::Suspend) => suspended = true,
+                        Some(Op::Suspend) => {
+                            suspended = true;
+                            flaps = 0;
+                        }
                         // What is raced changed: the races so far are dropped.
                         Some(Op::Readdress) => {
                             attempt = 0;
@@ -1538,9 +1604,10 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
             }
         };
         let failed = connected.is_err();
-        let (error, now) = match connected {
+        let (error, wait) = match connected {
             Ok((ws, hello, address)) => {
                 attempt = 0;
+                let made = Instant::now();
                 {
                     let mut state = supervisor.lock();
                     state.role = Some(hello.role);
@@ -1565,28 +1632,44 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                 )
                 .await;
                 save_in_background(&supervisor);
-                let (error, now) = match ended {
+                let error = ended.said().to_owned();
+                let wait = match ended {
                     Ended::Stopped => return,
-                    Ended::Lost(error) => (error, false),
-                    Ended::Replaced(error) => (error, true),
+                    Ended::Lost(_) | Ended::Replaced(_) => {
+                        // What ends in the background says little of the network the app
+                        // comes back to.
+                        flaps = if !suspended && made.elapsed() < STEADY {
+                            flaps.saturating_add(1)
+                        } else {
+                            0
+                        };
+                        let wait = flap_wait(flaps, matches!(ended, Ended::Replaced(_)));
+                        if !wait.is_zero() {
+                            attempt = 1;
+                        }
+                        wait
+                    }
+                    Ended::Dropped(_) => Duration::ZERO,
                     Ended::Reconnect(reply) => {
                         reconnects.push(reply);
                         supervisor.lock().answered = None;
-                        ("reconnecting, as asked".to_owned(), true)
+                        Duration::ZERO
                     }
                 };
                 quiet = Some(Instant::now() + QUIET);
                 supervisor.lost(error.clone());
-                (error, now)
+                (error, wait)
             }
             Err(error) => {
                 supervisor.set_connection(ConnectionState::Disconnected {
                     error: error.clone(),
                 });
-                (error, false)
+                let wait = backoff(attempt);
+                attempt = attempt.saturating_add(1);
+                (error, wait)
             }
         };
-        debug!(machine = %saved.name, "disconnected: {error}");
+        debug!(machine = %saved.name, flaps, "disconnected: {error}; next attempt in {wait:?}");
         if failed && !reconnects.is_empty() {
             // Whoever asked to reconnect is told it failed, so the machine shows it too.
             quiet = None;
@@ -1595,11 +1678,10 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                 let _ = reply.send(Err(error.clone()));
             }
         }
-        if now {
+        if wait.is_zero() {
             continue;
         }
-        let wait = tokio::time::sleep(backoff(attempt));
-        attempt = attempt.saturating_add(1);
+        let wait = tokio::time::sleep(wait);
         tokio::pin!(wait);
         loop {
             tokio::select! {
@@ -1625,7 +1707,10 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                         attempt = 0;
                         break;
                     }
-                    Some(Op::Suspend) => suspended = true,
+                    Some(Op::Suspend) => {
+                        suspended = true;
+                        flaps = 0;
+                    }
                     Some(Op::Command(command, reply)) => pending.push(Pending {
                         command,
                         reply,
@@ -1663,7 +1748,7 @@ fn save_in_background(supervisor: &Arc<Supervisor>) {
     tokio::task::spawn_blocking(move || supervisor.save());
 }
 
-/// Runs a connection until it fails or `stop`.
+/// Runs a connection until it fails or `stop`, then tells the daemon why it ended.
 async fn serve(
     supervisor: &Arc<Supervisor>,
     ws: Ws,
@@ -1673,11 +1758,71 @@ async fn serve(
     suspended: &mut bool,
 ) -> Ended {
     let alive = ws.get_ref().get_ref().0.alive.clone();
-    let (sink, mut stream) = ws.split();
-    // What the connection sends is queued here and written beside the loop below.
+    let (sink, stream) = ws.split();
+    // What the connection sends is queued here and written beside its reading.
     let (outgoing, queued) = mpsc::unbounded_channel();
-    let writing = write(sink, queued);
-    tokio::pin!(writing);
+    let mut writing = Box::pin(write(sink, queued));
+    let mut link = Link {
+        alive,
+        stream,
+        outgoing,
+    };
+    let ended = converse(
+        supervisor,
+        &mut link,
+        writing.as_mut(),
+        ops,
+        pending,
+        syncs,
+        suspended,
+    )
+    .await;
+    // Said beside whatever comes next: a connection that is dead takes no close frame, and
+    // its replacement does not wait for it.
+    let mut reason = ended.said();
+    if let Some((cut, _)) = reason
+        .char_indices()
+        .find(|(at, c)| at + c.len_utf8() > CLOSE_REASON_BYTES)
+    {
+        reason = &reason[..cut];
+    }
+    let frame = CloseFrame {
+        code: CloseCode::Normal,
+        reason: reason.into(),
+    };
+    if link.outgoing.send(Message::Close(Some(frame))).is_ok() {
+        // The queue closes behind the frame, which ends the writing once it is written.
+        drop(link);
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(CLOSE_TIMEOUT, writing).await;
+        });
+    }
+    ended
+}
+
+/// A connection's two ways: what the daemon sends, and the queue of what it is sent.
+struct Link {
+    alive: Alive,
+    stream: SplitStream<Ws>,
+    outgoing: mpsc::UnboundedSender<Message>,
+}
+
+/// Runs a connection until it fails or `stop`.
+async fn converse(
+    supervisor: &Arc<Supervisor>,
+    link: &mut Link,
+    mut writing: Pin<&mut impl Future<Output = String>>,
+    ops: &mut Ops,
+    pending: &mut Vec<Pending>,
+    syncs: &mut HashMap<String, oneshot::Sender<()>>,
+    suspended: &mut bool,
+) -> Ended {
+    let Link {
+        alive,
+        stream,
+        outgoing,
+    } = link;
+    let outgoing = &*outgoing;
     // Attaches in flight on this connection, by command id.
     let mut attaching = HashMap::new();
     // Terminal events with no stream yet, kept while an open is in flight.
@@ -1702,7 +1847,7 @@ async fn serve(
         .chain(synced)
         .collect();
     for message in messages {
-        send(&outgoing, &message);
+        send(outgoing, &message);
     }
     // Its first tick is now: the first round trip is known as soon as the connection is up.
     let mut ping = tokio::time::interval(PING_INTERVAL);
@@ -1740,7 +1885,7 @@ async fn serve(
                 if matches!(op, Some(Op::Subscribe(_) | Op::Command(..) | Op::Open(..)))
                     && probe.is_none()
                 {
-                    probe = Some(send_ping(&outgoing));
+                    probe = Some(send_ping(outgoing));
                 }
                 let message = match op {
                     None => return Ended::Stopped,
@@ -1787,12 +1932,12 @@ async fn serve(
                         *suspended = false;
                         // A running task would have found it dead by now.
                         if alive.at().elapsed() > PING_INTERVAL + SILENCE_LIMIT {
-                            return Ended::Replaced(
+                            return Ended::Dropped(
                                 "the connection was silent through a suspension".to_owned(),
                             );
                         }
                         if probe.is_none() {
-                            probe = Some(send_ping(&outgoing));
+                            probe = Some(send_ping(outgoing));
                         }
                         continue;
                     }
@@ -1801,7 +1946,7 @@ async fn serve(
                         if let Some(address) = &state.address
                             && !state.addresses.contains(address)
                         {
-                            return Ended::Replaced(format!(
+                            return Ended::Dropped(format!(
                                 "{address} is no longer one of the machine's addresses"
                             ));
                         }
@@ -1811,7 +1956,7 @@ async fn serve(
                     }
                     Some(Op::Reconnect(reply)) => return Ended::Reconnect(reply),
                 };
-                send(&outgoing, &message);
+                send(outgoing, &message);
                 continue;
             }
             reached = async {
@@ -1822,7 +1967,7 @@ async fn serve(
             } => {
                 match reached {
                     Ok(address) => {
-                        return Ended::Replaced(format!("moving to {address}, which comes first"));
+                        return Ended::Dropped(format!("moving to {address}, which comes first"));
                     }
                     Err(error) => {
                         debug!(machine = %supervisor.saved.name, "no better address: {error}");
@@ -1839,7 +1984,7 @@ async fn serve(
                 if pinged.is_some() {
                     supervisor.missed_pong();
                 }
-                pinged = Some(send_ping(&outgoing));
+                pinged = Some(send_ping(outgoing));
                 continue;
             }
             frame = stream.next() => frame,
@@ -1958,7 +2103,7 @@ async fn serve(
             early.clear();
         }
         if let Some(message) = reply {
-            send(&outgoing, &message);
+            send(outgoing, &message);
         }
     }
 }
@@ -2024,8 +2169,8 @@ fn message_bytes(command: &Command) -> usize {
     count.0
 }
 
-/// Writes what is `queued` to the daemon, for as long as the connection's task polls it;
-/// ends only with why a write failed.
+/// Writes what is `queued` to the daemon, for as long as it is polled; ends with why a write
+/// failed, or once the queue closed and all of it is written.
 async fn write(
     mut sink: SplitSink<Ws, Message>,
     mut queued: mpsc::UnboundedReceiver<Message>,
@@ -2035,8 +2180,7 @@ async fn write(
             return format!("writing to the daemon: {err}");
         }
     }
-    // The task that polls this holds the queue's other end.
-    std::future::pending().await
+    "the connection was given up".to_owned()
 }
 
 /// Hands the daemon's answer to the command waiting for it. An answered terminal open gets its
@@ -2104,7 +2248,8 @@ fn once(body: CommandBody) -> ClientMessage {
 }
 
 /// Connects to the first of `addresses` that answers, pinned to `fingerprint`, as `device`,
-/// and exchanges hellos; returns the address it connected to.
+/// and exchanges hellos; returns the address it connected to. Of the calls that share `turn`,
+/// one connection says hello at a time, and none after one was answered.
 ///
 /// The addresses race in the order given: each starts [`HEAD_START`] after the one before,
 /// or as soon as every attempt so far failed, and the first to finish its hello wins. An
@@ -2115,8 +2260,9 @@ pub(crate) async fn connect(
     fingerprint: &str,
     device: &DeviceKey,
     hello: ClientHello,
+    turn: &Turn,
 ) -> Result<(Ws, ServerHello, String), String> {
-    match open(addresses, fingerprint, device, hello).await? {
+    match open_in_turn(addresses, fingerprint, device, hello, turn).await? {
         (ws, Opened::Hello(hello), address) => Ok((ws, *hello, address)),
         (_, Opened::SignIn { .. }, address) => Err(format!(
             "{address}: the daemon asked this device to sign in"
@@ -2137,24 +2283,62 @@ pub(crate) enum Opened {
     },
 }
 
-/// [`connect`], also taking a daemon's request to sign in as an answer.
+/// [`connect`] by itself, also taking a daemon's request to sign in as an answer.
 pub(crate) async fn open(
     addresses: &[String],
     fingerprint: &str,
     device: &DeviceKey,
     hello: ClientHello,
 ) -> Result<(Ws, Opened, String), String> {
+    open_in_turn(addresses, fingerprint, device, hello, &Turn::default()).await
+}
+
+/// [`open`] among the calls that share `turn`.
+///
+/// An address races up to its WebSocket upgrade, then waits for its turn to say hello: the
+/// one that got there first says it, and the rest only if that hello fails. A daemon does a
+/// connection's work, the lists and every replay asked for, for each hello it takes, so one
+/// that lost the race must not have said one.
+async fn open_in_turn(
+    addresses: &[String],
+    fingerprint: &str,
+    device: &DeviceKey,
+    hello: ClientHello,
+    turn: &Turn,
+) -> Result<(Ws, Opened, String), String> {
     let config = client_config(fingerprint, device).map_err(|err| format!("{err:#}"))?;
     let connector = TlsConnector::from(Arc::new(config));
-    let attempt = |address: &String| {
-        let (address, connector, hello) = (address.clone(), connector.clone(), hello.clone());
+    let attempt = |address: String| {
+        let (connector, hello, turn) = (connector.clone(), hello.clone(), Arc::clone(turn));
         async move {
-            let result =
-                tokio::time::timeout(CONNECT_TIMEOUT, connect_to(&address, &connector, &hello))
-                    .await
-                    .unwrap_or_else(|_| Err(anyhow!("no answer in {CONNECT_TIMEOUT:?}")));
-            (address, result)
+            let mut ws = reach(&address, &connector).await?;
+            // Held until this attempt is dropped: with its hello answered, that is once
+            // every other attempt is gone.
+            let _turn = turn.lock().await;
+            let opened = tokio::time::timeout(HELLO_TIMEOUT, greet(&mut ws, &hello))
+                .await
+                .unwrap_or_else(|_| Err(anyhow!("no hello in {HELLO_TIMEOUT:?}")))?;
+            Ok((ws, opened))
         }
+    };
+    race(addresses, attempt)
+        .await
+        .map(|((ws, opened), address)| (ws, opened, address))
+}
+
+/// What the first `attempt` on one of `addresses` to succeed made, and its address; else why
+/// each failed. Each starts [`HEAD_START`] after the one before, or as soon as every attempt
+/// so far failed.
+async fn race<T, A>(
+    addresses: &[String],
+    attempt: impl Fn(String) -> A,
+) -> Result<(T, String), String>
+where
+    A: Future<Output = anyhow::Result<T>>,
+{
+    let attempt = |address: &String| {
+        let (address, attempting) = (address.clone(), attempt(address.clone()));
+        async move { (address, attempting.await) }
     };
     let mut queue = addresses.iter();
     let mut running = FuturesUnordered::new();
@@ -2170,7 +2354,7 @@ pub(crate) async fn open(
         let waiting = !queue.as_slice().is_empty();
         tokio::select! {
             Some((address, result)) = running.next() => match result {
-                Ok((ws, opened)) => return Ok((ws, opened, address)),
+                Ok(made) => return Ok((made, address)),
                 Err(err) => errors.push(format!("{address}: {err:#}")),
             },
             () = &mut next_start, if waiting => {
@@ -2187,28 +2371,36 @@ pub(crate) async fn open(
     Err(errors.join("; "))
 }
 
-async fn connect_to(
-    address: &str,
-    connector: &TlsConnector,
-    hello: &ClientHello,
-) -> anyhow::Result<(Ws, Opened)> {
-    let tcp = TcpStream::connect(address).await.context("connecting")?;
-    tcp.set_nodelay(true)?;
-    // The certificate is pinned by fingerprint, so the name is never checked.
-    let name = ServerName::try_from("herder").context("the TLS server name")?;
-    let tls = connector
-        .connect(name, Watched::new(tcp))
+/// A connection to the daemon at `address`, up to its WebSocket upgrade: the daemon is
+/// there, and was told nothing yet.
+async fn reach(address: &str, connector: &TlsConnector) -> anyhow::Result<Ws> {
+    let reaching = async {
+        let tcp = TcpStream::connect(address).await.context("connecting")?;
+        tcp.set_nodelay(true)?;
+        // The certificate is pinned by fingerprint, so the name is never checked.
+        let name = ServerName::try_from("herder").context("the TLS server name")?;
+        let tls = connector
+            .connect(name, Watched::new(tcp))
+            .await
+            .context("TLS")?;
+        let request = format!("wss://{address}/").into_client_request()?;
+        let (ws, _) = tokio_tungstenite::client_async(request, tls)
+            .await
+            .context("the WebSocket upgrade")?;
+        Ok(ws)
+    };
+    tokio::time::timeout(CONNECT_TIMEOUT, reaching)
         .await
-        .context("TLS")?;
-    let request = format!("wss://{address}/").into_client_request()?;
-    let (mut ws, _) = tokio_tungstenite::client_async(request, tls)
-        .await
-        .context("the WebSocket upgrade")?;
+        .unwrap_or_else(|_| Err(anyhow!("no answer in {CONNECT_TIMEOUT:?}")))
+}
+
+/// Says `hello` on `ws`, and takes what the daemon answers.
+async fn greet(ws: &mut Ws, hello: &ClientHello) -> anyhow::Result<Opened> {
     let text = serde_json::to_string(&ClientMessage::Hello(hello.clone()))?;
     ws.send(Message::text(text)).await?;
-    match receive(&mut ws).await? {
+    match receive(ws).await? {
         ServerMessage::Hello(hello) if hello.protocol_version == PROTOCOL_VERSION => {
-            Ok((ws, Opened::Hello(Box::new(hello))))
+            Ok(Opened::Hello(Box::new(hello)))
         }
         ServerMessage::Hello(hello) => Err(anyhow!(
             "the daemon speaks protocol {}, this client {PROTOCOL_VERSION}",
@@ -2217,13 +2409,10 @@ async fn connect_to(
         ServerMessage::SignInChallenge {
             challenge,
             registration,
-        } if hello.sign_in => Ok((
-            ws,
-            Opened::SignIn {
-                challenge,
-                registration,
-            },
-        )),
+        } if hello.sign_in => Ok(Opened::SignIn {
+            challenge,
+            registration,
+        }),
         ServerMessage::Error { error, .. } => Err(anyhow!(error.message)),
         _ => Err(anyhow!("the daemon did not say hello")),
     }
@@ -2317,6 +2506,26 @@ mod tests {
         }
         assert!(backoff(0) <= BACKOFF_BASE);
         assert!(backoff(30) >= BACKOFF_CAP / 2);
+    }
+
+    #[test]
+    fn connections_that_keep_ending_young_wait_longer_each_time() {
+        // One that worked, and the first that did not, are replaced as fast as ever.
+        for flaps in [0, 1] {
+            assert_eq!(flap_wait(flaps, true), Duration::ZERO);
+            assert!(flap_wait(flaps, false) <= BACKOFF_BASE);
+        }
+        // From the second in a row on, however it was found dead.
+        for replaced in [true, false] {
+            let mut least = Duration::from_secs(1);
+            for flaps in 2..7 {
+                let wait = flap_wait(flaps, replaced);
+                assert!(wait >= least.min(BACKOFF_CAP / 2), "{flaps}: {wait:?}");
+                assert!(wait <= (least * 2).min(BACKOFF_CAP), "{flaps}: {wait:?}");
+                least *= 2;
+            }
+            assert!(flap_wait(u32::MAX, replaced) >= BACKOFF_CAP / 2);
+        }
     }
 
     #[test]

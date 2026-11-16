@@ -25,7 +25,8 @@ use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_util::sync::CancellationToken;
 
 use super::{Backend, Host, Server, Tls};
@@ -805,6 +806,57 @@ async fn a_closed_connection_is_logged_at_info_with_why_it_closed() {
     drop(client);
     let line = logged.lines(closed, &device, 2).await.remove(1);
     assert!(!line.contains("the client closed the connection"), "{line}");
+
+    // A client that gives its connection up says why, and the log shows it, with where the
+    // client was and how much it had not been sent.
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    let frame = CloseFrame {
+        code: CloseCode::Normal,
+        reason: "the daemon did not answer a probe".into(),
+    };
+    client.ws.close(Some(frame)).await.unwrap();
+    let line = logged.lines(closed, &device, 3).await.remove(2);
+    assert!(
+        line.contains(r#"the client closed the connection: "the daemon did not answer a probe""#),
+        "{line}"
+    );
+    assert!(line.contains("peer=127.0.0.1:"), "{line}");
+    assert!(line.contains("unsent=0"), "{line}");
+    let line = logged.lines("client connected", &device, 3).await.remove(2);
+    assert!(line.contains("peer=127.0.0.1:"), "{line}");
+    assert!(line.contains("resumes=0"), "{line}");
+}
+
+/// A client that left without a word, asleep or off its network, is not served for the
+/// quarter of an hour the kernel retransmits by default: its socket asks whether the peer is
+/// there, and gives up on what stays unacknowledged.
+#[tokio::test]
+async fn a_clients_socket_gives_up_on_a_peer_that_is_gone() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let _client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (stream, _) = listener.accept().await.unwrap();
+    let socket = socket2::SockRef::from(&stream);
+    assert!(!socket.keepalive().unwrap());
+
+    super::conn::notice_a_gone_peer(&stream).unwrap();
+    assert!(socket.keepalive().unwrap());
+    assert_eq!(
+        socket.tcp_keepalive_time().unwrap(),
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        socket.tcp_keepalive_interval().unwrap(),
+        Duration::from_secs(10)
+    );
+    assert_eq!(socket.tcp_keepalive_retries().unwrap(), 3);
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        socket.tcp_user_timeout().unwrap(),
+        Some(Duration::from_secs(60))
+    );
 }
 
 /// A client pings to learn whether its connection is alive, and replaces one that does not

@@ -1838,6 +1838,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "ulid",
  "url",
 ]
@@ -1876,6 +1877,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "slack-morphism",
+ "socket2",
  "tar",
  "tempfile",
  "thiserror 2.0.21",

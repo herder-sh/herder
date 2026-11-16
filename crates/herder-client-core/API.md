@@ -289,6 +289,14 @@ about:
   probe the connection they are sent on. A slow link that still carries bytes is kept.
 - Commands wait out a drop and are resent with the same id on the next connection; the daemon
   applies an id once.
+- A connection that ends within 30 s of being made did not work. The first such is replaced as
+  any other; from the second in a row on, the client waits before each next one, 1 to 2 s
+  doubling to 30 s, until a connection lasts: a network that lets a connection be made and
+  then carries nothing is not asked for a new one, and all a daemon sends each, every few
+  seconds. `wake()` still connects at once.
+- A connection the client gives up tells the daemon why in its close frame, and the daemon
+  logs it with the disconnect: a client that keeps reconnecting is diagnosed from the daemon's
+  log.
 
 An app needs no code for any of this. It should not add its own "reconnecting" state on top of
 `connection`, nor drop what it shows when `connection` changes: what the machine lists stays
@@ -307,7 +315,9 @@ ends, and on `suspend()`; `forget` deletes it.
 A machine's addresses are in order of preference. Connecting races them: each starts 300 ms
 after the one before, or as soon as every attempt so far failed, and the first to finish its
 hello wins. So the first address wins whenever it answers, and a dead one delays the next by
-300 ms, not by the 10 s connect timeout.
+300 ms, not by the 10 s connect timeout. One connection says hello, however many addresses
+got as far as their WebSocket upgrade: a daemon sends its lists and every replay asked for to
+each hello it takes, so the rest are dropped before they said one.
 
 `sign_in` completes each address it is given (the default port, brackets around IPv6) and saves
 them direct routes first: private network addresses (home, or a VPN into it such as UniFi

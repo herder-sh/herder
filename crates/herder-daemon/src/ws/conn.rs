@@ -41,6 +41,17 @@ const REPLAY_PAGE: usize = 256;
 /// socket is left unread until the daemon catches up.
 const WAITING: usize = 16;
 
+/// How long a client's socket may be idle before the kernel asks the peer whether it is
+/// still there, and how often it asks again; [`KEEPALIVE_PROBES`] unanswered close it.
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const KEEPALIVE_PROBES: u32 = 3;
+
+/// How long what the daemon sent may stay unacknowledged before the kernel closes the socket.
+/// Left to itself it retransmits for a quarter of an hour, and the daemon goes on serving a
+/// client that went to sleep or left its network for as long.
+const UNACKNOWLEDGED: Duration = Duration::from_secs(60);
+
 /// Most bytes of one message the daemon reads off a socket. It is well over
 /// [`MAX_MESSAGE_BYTES`], so that a client sending a message over that limit is told which
 /// command was refused and keeps its connection; a message over this one closes it.
@@ -54,6 +65,9 @@ pub(super) async fn run<B: Backend>(
 ) {
     if let Err(err) = stream.set_nodelay(true) {
         debug!(%peer, "cannot disable Nagle's algorithm: {err}");
+    }
+    if let Err(err) = notice_a_gone_peer(&stream) {
+        debug!(%peer, "cannot set the socket's keepalive: {err}");
     }
     let ws = tokio::select! {
         () = cancel.cancelled() => return,
@@ -71,6 +85,22 @@ pub(super) async fn run<B: Backend>(
         }
     };
     serve(ws, device, None, peer, shared, cancel).await;
+}
+
+/// Has the kernel close `stream` once its peer is gone: one that stopped answering, with
+/// the socket idle or with data on its way, without a word. The error then ends the
+/// connection's reader or writer, and with it what the daemon holds and sends for the client.
+pub(super) fn notice_a_gone_peer(stream: &TcpStream) -> std::io::Result<()> {
+    let socket = socket2::SockRef::from(stream);
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(KEEPALIVE_IDLE)
+        .with_interval(KEEPALIVE_INTERVAL)
+        .with_retries(KEEPALIVE_PROBES);
+    socket.set_tcp_keepalive(&keepalive)?;
+    // Where the kernel has no such limit, keepalive still finds the peer of an idle socket.
+    #[cfg(target_os = "linux")]
+    socket.set_tcp_user_timeout(Some(UNACKNOWLEDGED))?;
+    Ok(())
 }
 
 /// The client a connection serves, known once its hello is accepted.
@@ -102,7 +132,9 @@ pub(super) async fn serve<B: Backend>(
     // `None` when the writer or a shutdown ended the connection under the reader.
     let ended = tokio::select! {
         () = cancel.cancelled() => None,
-        result = read(stream, first, &shared, &outbox, &device, &cancel, &who) => Some(result),
+        result = read(stream, first, &shared, &outbox, (peer, &device), &cancel, &who) => {
+            Some(result)
+        }
     };
     // Nothing of the message was read, so there is no command to refuse: the client is told
     // why before the connection closes.
@@ -122,6 +154,9 @@ pub(super) async fn serve<B: Backend>(
     shared.hub.disconnect(&outbox);
     shared.approvals.disconnect(&outbox);
     shared.terminals.disconnect(&outbox);
+    // What the client had not been sent when its connection ended: a number that stays high
+    // across a client's reconnects is a link too slow for what it is sent.
+    let unsent = outbox.queued();
     outbox.finish();
     let wrote = writer.await.ok().flatten();
     let reason = match ended {
@@ -133,7 +168,13 @@ pub(super) async fn serve<B: Backend>(
     // At info, with the connects: a client that keeps reconnecting shows here why.
     match who.get() {
         Some(Who { client, device_id }) => {
-            info!(%peer, %client, %device_id, "client disconnected after {lasted:.1?}: {reason}");
+            info!(
+                %peer,
+                %client,
+                %device_id,
+                unsent,
+                "client disconnected after {lasted:.1?}: {reason}"
+            );
         }
         None => info!(%peer, "connection closed before its hello was accepted: {reason}"),
     }
@@ -157,13 +198,14 @@ pub(crate) async fn handshake(tls: &Tls, stream: TcpStream) -> Result<(Ws, Strin
     Ok((ws, device))
 }
 
-/// Handles the client's messages until it closes the connection.
+/// Handles the messages of the client at `peer`, whose certificate is `device`'s, until it
+/// closes the connection.
 async fn read<B: Backend>(
     mut stream: SplitStream<Ws>,
     first: Option<String>,
     shared: &Arc<Shared<B>>,
     outbox: &Arc<Outbox>,
-    device: &str,
+    (peer, device): (SocketAddr, &str),
     cancel: &CancellationToken,
     who: &OnceLock<Who>,
 ) -> Result<()> {
@@ -210,9 +252,11 @@ async fn read<B: Backend>(
         }
     };
     info!(
+        %peer,
         client = %hello.client,
         user_id = %identity.user_id,
         device_id = %identity.device_id,
+        resumes = hello.resume.len(),
         "client connected"
     );
     // Set once: this is the connection's only accepted hello.
@@ -432,6 +476,13 @@ async fn next(stream: &mut SplitStream<Ws>) -> Result<Option<Result<ClientMessag
             Message::Binary(_) => Err(Undecodable::new(
                 "messages must be JSON text frames".to_owned(),
             )),
+            // A client that gives its connection up says why, which the close log then shows.
+            Message::Close(Some(frame)) if !frame.reason.is_empty() => {
+                bail!(
+                    "the client closed the connection: {:?}",
+                    frame.reason.as_str()
+                )
+            }
             Message::Close(_) => return Ok(None),
             Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
         }));
