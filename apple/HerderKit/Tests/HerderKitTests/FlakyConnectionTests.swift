@@ -52,61 +52,12 @@ struct FlakyConnectionTests {
 
     private func rows(_ fleet: Fleet) -> [SessionSummary] { fleet.lists.projects.flatMap(\.sessions) }
 
-    // MARK: A short drop
-
-    @Test func aShortDropChangesNothingOnScreen() throws {
-        let fleet = try openFleet()
-        list([devbox(), vault()], on: fleet)
-        fleet.applyForTesting(SessionUpdate(events: journal(), streaming: []), to: direct)
-        list([devbox(), vault()], on: fleet)
-        fleet.watch(direct)
-        let (rowsBefore, machinesBefore) = (rows(fleet), fleet.lists.machines)
-        let transcript = fleet.transcript(direct).map(\.id)
-        #expect(rowsBefore.map(\.key) == [direct])
-        #expect(!transcript.isEmpty)
-
-        // The network goes and comes back twice, each time within the grace.
-        for connection in [.disconnected(error: "reset"), .connecting, .connected, .connecting, .connected] as [ConnectionState] {
-            list([devbox(connection), vault(connection)], on: fleet)
-            #expect(fleet.machines.map(\.connection) == [.connected, .connected])
-            #expect(rows(fleet) == rowsBefore)
-            #expect(fleet.lists.machines == machinesBefore)
-            #expect(fleet.source(for: direct) == direct)
-            #expect(fleet.session(direct)?.loaded == true)
-            #expect(fleet.transcript(direct).map(\.id) == transcript)
-        }
-    }
-
-    /// Only the session's host drops, as when it restarts: the vault's copy does not take its
-    /// place for that.
-    @Test func aHostsShortDropDoesNotMoveItsSessionsToTheVault() throws {
-        let fleet = try openFleet()
-        list([devbox(), vault()], on: fleet)
-        fleet.applyForTesting(SessionUpdate(events: journal(), streaming: []), to: direct)
-        list([devbox(.disconnected(error: "reset")), vault()], on: fleet)
-        #expect(rows(fleet).map(\.key) == [direct])
-        #expect(fleet.session(direct)?.loaded == true)
-        list([devbox(), vault()], on: fleet)
-        #expect(rows(fleet).map(\.key) == [direct])
-    }
-
-    @Test func aDropShowsOnceItsGraceIsOver() async throws {
-        let fleet = try openFleet()
-        fleet.steady.grace = .milliseconds(100)
-        list([devbox(), vault()], on: fleet)
-        list([devbox(.disconnected(error: "reset")), vault()], on: fleet)
-        #expect(fleet.machines.map(\.connection) == [.connected, .connected])
-        #expect(await eventually { fleet.machines.first?.connection == .disconnected(error: "reset") })
-        #expect(fleet.lists.machines.first?.connection == .disconnected(error: "reset"))
-    }
-
     // MARK: A long drop
 
-    /// The host stays away past the grace: the lists show the vault's copy, and neither the
+    /// The host stays away for longer than the client rides out: the lists show the vault's copy, and neither the
     /// row nor the open session loses anything while that copy loads, nor when the host is back.
     @Test func aLongDropKeepsTheOpenSessionAndItsRow() async throws {
         let fleet = try openFleet()
-        fleet.steady.grace = .zero
         list([devbox(), vault()], on: fleet)
         fleet.applyForTesting(SessionUpdate(events: journal(), streaming: []), to: direct)
         list([devbox(), vault()], on: fleet)
@@ -211,49 +162,54 @@ struct FlakyConnectionTests {
 
     // MARK: The connections shown
 
-    @Test func aDroppedConnectionShowsConnectedForItsGrace() {
-        var steady = SteadyConnections()
-        let start = ContinuousClock.now
-        func shown(_ connection: ConnectionState, after seconds: Int) -> ConnectionState? {
-            steady.steadied([devbox(connection)], now: start + .seconds(seconds)).first?.connection
+    /// The client lists a machine as connected through a short drop, and as disconnected, then
+    /// connecting, with each retry of a long one: the app shows it offline once, until it is
+    /// back, and nothing it lists moves meanwhile.
+    @Test func aMachineAwayShowsOfflineThroughItsRetries() throws {
+        let fleet = try openFleet()
+        list([devbox(), vault()], on: fleet)
+        fleet.applyForTesting(SessionUpdate(events: journal(), streaming: []), to: direct)
+        list([devbox(), vault()], on: fleet)
+        fleet.watch(direct)
+        let transcript = fleet.transcript(direct).map(\.id)
+        #expect(!transcript.isEmpty)
+
+        let down = ConnectionState.disconnected(error: "reset")
+        list([devbox(down), vault()], on: fleet)
+        let (rowsAway, machinesAway) = (rows(fleet), fleet.lists.machines)
+        #expect(rowsAway.map(\.key) == [replica])
+        for connection in [.connecting, down, .connecting, down, .connecting] as [ConnectionState] {
+            list([devbox(connection), vault()], on: fleet)
+            #expect(fleet.machines.map(\.connection) == [down, .connected])
+            #expect(rows(fleet) == rowsAway)
+            #expect(fleet.lists.machines == machinesAway)
+            #expect(fleet.transcript(direct).map(\.id) == transcript)
         }
-        let down = ConnectionState.disconnected(error: "reset")
-        #expect(shown(.connected, after: 0) == .connected)
-        #expect(shown(down, after: 1) == .connected)
-        #expect(steady.expires == start + .seconds(6))
-        #expect(shown(.connecting, after: 4) == .connected)
-        #expect(shown(.connected, after: 5) == .connected)
-        #expect(steady.expires == nil)
+        // The latest failure is the one shown.
+        let unreachable = ConnectionState.disconnected(error: "unreachable")
+        list([devbox(unreachable), vault()], on: fleet)
+        #expect(fleet.machines.first?.connection == unreachable)
+        list([devbox(.connecting), vault()], on: fleet)
+        #expect(fleet.machines.first?.connection == unreachable)
 
-        // A drop that lasts shows once the grace is over, and stays through the retries.
-        #expect(shown(down, after: 10) == .connected)
-        #expect(shown(down, after: 15) == down)
-        #expect(shown(.connecting, after: 16) == down)
-        #expect(shown(.connected, after: 17) == .connected)
+        list([devbox(), vault()], on: fleet)
+        #expect(fleet.machines.map(\.connection) == [.connected, .connected])
+        #expect(rows(fleet).map(\.key) == [direct])
+        #expect(fleet.transcript(direct).map(\.id) == transcript)
     }
 
-    @Test func aMachineNeverConnectedShowsAsItIs() {
-        var steady = SteadyConnections()
-        #expect(steady.steadied([devbox(.connecting)]).first?.connection == .connecting)
+    /// Only a machine shown offline keeps its mark: a first attempt shows, and so does the
+    /// attempt under way when the client stops riding out a drop.
+    @Test func anAttemptShowsUnlessTheMachineShowsOffline() throws {
+        let fleet = try openFleet()
+        list([devbox(.connecting)], on: fleet)
+        #expect(fleet.machines.first?.connection == .connecting)
+        list([devbox()], on: fleet)
+        list([devbox(.connecting)], on: fleet)
+        #expect(fleet.machines.first?.connection == .connecting)
         let down = ConnectionState.disconnected(error: "unreachable")
-        #expect(steady.steadied([devbox(down)]).first?.connection == down)
-        // Reconnect, or the app back in front: the attempt shows.
-        steady.restart()
-        #expect(steady.steadied([devbox(.connecting)]).first?.connection == .connecting)
-    }
-
-    @Test func noDropShowsWhileTheAppIsInTheBackground() {
-        var steady = SteadyConnections()
-        let start = ContinuousClock.now
-        let down = ConnectionState.disconnected(error: "reset")
-        _ = steady.steadied([devbox()], now: start)
-        steady.hold()
-        #expect(steady.steadied([devbox(down)], now: start + .seconds(1)).first?.connection == .connected)
-        #expect(steady.steadied([devbox(down)], now: start + .seconds(600)).first?.connection == .connected)
-        #expect(steady.expires == nil)
-        // Back in front, the connection has the whole grace to return in.
-        steady.restart(now: start + .seconds(600))
-        #expect(steady.steadied([devbox(down)], now: start + .seconds(604)).first?.connection == .connected)
-        #expect(steady.steadied([devbox(down)], now: start + .seconds(605)).first?.connection == down)
+        list([devbox(down)], on: fleet)
+        list([devbox(.connecting)], on: fleet)
+        #expect(fleet.machines.first?.connection == down)
     }
 }
