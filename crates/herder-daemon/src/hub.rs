@@ -288,7 +288,7 @@ impl Hub {
     }
 
     /// Sends a vault's new host list to every client, and to clients that connect later.
-    pub(crate) fn hosts_changed(&self, hosts: Vec<FleetHost>) {
+    pub fn hosts_changed(&self, hosts: Vec<FleetHost>) {
         let mut state = self.lock();
         let message = ServerMessage::Hosts {
             hosts: hosts.clone(),
@@ -348,7 +348,7 @@ impl Hub {
     }
 
     /// Sends the new project list to every client, and keeps it for clients that connect later.
-    pub(crate) fn projects_changed(&self, projects: Vec<Project>) {
+    pub fn projects_changed(&self, projects: Vec<Project>) {
         let mut state = self.lock();
         let message = ServerMessage::Projects {
             projects: projects.clone(),
