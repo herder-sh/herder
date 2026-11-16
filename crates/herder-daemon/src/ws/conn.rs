@@ -49,7 +49,8 @@ const KEEPALIVE_PROBES: u32 = 3;
 
 /// How long what the daemon sent may stay unacknowledged before the kernel closes the socket.
 /// Left to itself it retransmits for a quarter of an hour, and the daemon goes on serving a
-/// client that went to sleep or left its network for as long.
+/// client that went to sleep or left its network for as long. Only Linux has the limit.
+#[cfg(target_os = "linux")]
 const UNACKNOWLEDGED: Duration = Duration::from_secs(60);
 
 /// Most bytes of one message the daemon reads off a socket. It is well over
