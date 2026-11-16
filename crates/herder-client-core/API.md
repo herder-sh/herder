@@ -312,21 +312,24 @@ ends, and on `suspend()`; `forget` deletes it.
 
 ## Addresses
 
-A machine's addresses are in order of preference. Connecting races them: each starts 300 ms
-after the one before, or as soon as every attempt so far failed, and the first to finish its
-hello wins. So the first address wins whenever it answers, and a dead one delays the next by
-300 ms, not by the 10 s connect timeout. One connection says hello, however many addresses
-got as far as their WebSocket upgrade: a daemon sends its lists and every replay asked for to
-each hello it takes, so the rest are dropped before they said one.
+A machine's addresses are in order of preference. Connecting races them, the one that
+answered last first and then the rest in their order: each starts 300 ms after the one before,
+or as soon as every attempt so far failed, and the first to finish its hello wins. So a dead
+address delays the next by 300 ms, not by the 10 s connect timeout. While one address has not
+answered yet, one that failed is tried again, after 250 ms and then twice as long each time: an
+address whose packets are lost does not hold up the one that refused for a moment. One
+connection says hello, however many addresses got as far as their WebSocket upgrade: a daemon
+sends its lists and every replay asked for to each hello it takes, so the rest are dropped
+before they said one.
 
 `sign_in` completes each address it is given (the default port, brackets around IPv6) and saves
 them direct routes first: private network addresses (home, or a VPN into it such as UniFi
 Teleport), then other addresses, then Tailscale ones (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`,
 `*.ts.net`). After that `set_addresses` sets the order, and nothing re-sorts it.
 
-A connection that is up moves to an address that comes before its own once one answers: on
-`wake()`, which an app also calls when the network changes, and on `set_addresses`. One that
-uses an address `set_addresses` dropped is replaced at once.
+A connection that works is kept: `wake()`, which an app also calls when the network changes,
+only checks it. `set_addresses` moves it to an address that comes before its own once one
+answers, and replaces at once one that uses an address it dropped.
 
 `reconnect` replaces the connection now, whatever answers first: an app connects through a
 chosen address by putting it first with `set_addresses` and then calling `reconnect`. A
