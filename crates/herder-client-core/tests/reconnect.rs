@@ -883,13 +883,18 @@ async fn a_wake_while_connecting_does_not_wait_for_a_stuck_attempt() {
     })
     .await
     .expect("the client did not try to reconnect");
-    assert_eq!(client.machines()[0].connection, ConnectionState::Connecting);
+    // A drop this short does not show.
+    assert_eq!(client.machines()[0].connection, ConnectionState::Connected);
+    assert_eq!(client.machines()[0].quality.reconnects, 0);
 
     // Another network is there, and the app wakes the client as it sees the change.
     relay.swallow(false);
     let woken = std::time::Instant::now();
     client.wake();
-    wait_machine(&client, |m| connected(&m.connection)).await;
+    wait_machine(&client, |m| {
+        connected(&m.connection) && m.quality.reconnects == 1
+    })
+    .await;
     // Far sooner than the 10 s the stuck attempt has before it gives up.
     assert!(
         woken.elapsed() < Duration::from_secs(5),
@@ -1204,10 +1209,6 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
 
     // The connection drops; a resize made meanwhile lands once the stream re-attaches.
     relay.cut();
-    wait_connection(&client, |state| {
-        matches!(state, ConnectionState::Disconnected { .. })
-    })
-    .await;
     stream.resize(100, 30);
     // Output sent before the cut may still be queued; the replayed scrollback follows the mark.
     while next_event(&stream).await != Some(TerminalEvent::Reattached) {}
@@ -1904,9 +1905,9 @@ async fn a_dead_connection_is_noticed_by_its_pings_and_replaced() {
     assert_eq!(relay.accepted(), 2);
 
     relay.stall();
-    // The next ping goes out within 15 s, and gets 10 s.
+    // The next ping goes out within 10 s, and gets 5 s.
     let changes = client.changes();
-    tokio::time::timeout(Duration::from_secs(35), async {
+    tokio::time::timeout(Duration::from_secs(25), async {
         while relay.accepted() < 3 || client.machines()[0].connection != ConnectionState::Connected
         {
             assert!(changes.next().await);
@@ -2765,4 +2766,273 @@ async fn a_refused_passkey_sign_in_says_why() {
         "{skipped:?}"
     );
     assert!(phone.machines().is_empty());
+}
+
+fn skills_status(head: &str) -> herder_protocol::SkillsStatus {
+    herder_protocol::SkillsStatus {
+        repo: Some("https://github.com/you/herder-skills".into()),
+        head: Some(head.into()),
+        last_pull: None,
+        pull_error: None,
+        skills: Vec::new(),
+        reload: Vec::new(),
+        accounts: Vec::new(),
+    }
+}
+
+fn usage(processes: u32) -> SessionUsage {
+    SessionUsage {
+        cpu_percent: 12.0,
+        memory_bytes: 512 << 20,
+        processes,
+        containers: Vec::new(),
+    }
+}
+
+/// A flaky network drops the connection three times in the middle of a turn. Each time the
+/// client is back within moments, and nothing an app shows moves: the machine stays connected
+/// with its lists, its address and its live values, the streaming text stays where it was, and
+/// the session's events arrive once each. What the daemon dropped meanwhile is gone once the
+/// new connection has sent its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn short_drops_mid_stream_are_never_seen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("daemon");
+    let repo = repo(&tmp.path().join("app"));
+    let daemon = Daemon::start(&data, 0, "interrupted_turn.jsonl", Arc::default()).await;
+    let relay = Relay::start(daemon.addr).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", relay.addr)
+        .await
+        .unwrap()
+        .host_id;
+    let (kept, gone) = (SessionId::new("kept"), SessionId::new("gone"));
+    daemon.hub.host_resources(host_resources(3));
+    daemon.hub.skills_status(skills_status("a1"));
+    daemon.hub.session_resources(&kept, usage(3));
+    daemon.hub.session_resources(&gone, usage(1));
+    let session_id = create_session(&client, &host, repo).await;
+    let sub = client
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
+    let prompt = CommandBody::SendPrompt {
+        session_id: session_id.clone(),
+        text: "First.".into(),
+        images: Vec::new(),
+        files: Vec::new(),
+    };
+    client.send(host.clone(), prompt).await.unwrap();
+    let mut view = View::default();
+    view.read_until(&sub, |view| view.streaming_text() == ["Half"])
+        .await;
+    wait_machine(&client, |m| {
+        m.resources.is_some() && m.skills.is_some() && m.session_usage.len() == 2
+    })
+    .await;
+
+    // What an app would have seen go wrong, looked for on every change.
+    let wrong = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let watcher = tokio::spawn({
+        let (client, wrong, kept) = (client.clone(), Arc::clone(&wrong), kept.clone());
+        async move {
+            let changes = client.changes();
+            loop {
+                let machine = client.machines().remove(0);
+                let checks = [
+                    (connected(&machine.connection), "the connection"),
+                    (machine.address.is_some(), "the address"),
+                    (!machine.sessions.is_empty(), "the sessions"),
+                    (!machine.accounts.is_empty(), "the accounts"),
+                    (machine.resources.is_some(), "the resources"),
+                    (machine.skills.is_some(), "the skills"),
+                    (machine.session_usage.contains_key(&kept), "the usage"),
+                ];
+                for (held, what) in checks {
+                    if !held {
+                        wrong.lock().unwrap().push(format!("{what}: {machine:?}"));
+                    }
+                }
+                if !changes.next().await {
+                    break;
+                }
+            }
+        }
+    });
+
+    let idle = usage(0);
+    for round in 1..=3 {
+        relay.cut();
+        if round == 1 {
+            // Only the connection that is gone was told: the next one hears nothing of it.
+            daemon.hub.session_resources(&gone, idle.clone());
+        }
+        wait_machine(&client, |m| m.quality.reconnects == round).await;
+        client.synced(host.clone()).await.unwrap();
+        // Pairing took one connection, the supervisor's first another.
+        assert_eq!(relay.accepted(), 2 + u64::from(round));
+        let machine = client.machines().remove(0);
+        assert!(!machine.session_usage.contains_key(&gone), "{machine:?}");
+        assert_eq!(machine.resources, Some(host_resources(3)));
+    }
+
+    // The text that was streaming is there in every update until the turn's end takes it.
+    let interrupt = CommandBody::Interrupt {
+        session_id: session_id.clone(),
+    };
+    client.send(host.clone(), interrupt).await.unwrap();
+    view.read_until(&sub, |view| {
+        let ended = interrupted("turn-1")(view);
+        assert!(
+            ended || view.streaming_text() == ["Half"],
+            "{:?}",
+            view.latest
+        );
+        ended
+    })
+    .await;
+    assert!(view.latest.streaming.is_empty(), "{:?}", view.latest);
+
+    watcher.abort();
+    let wrong = wrong.lock().unwrap().clone();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+    daemon.kill().await;
+    let journal = Store::open(data.join("herder.db"))
+        .unwrap()
+        .read_since(&session_id, 0, usize::MAX)
+        .unwrap();
+    assert_eq!(view.events[..], journal[..view.events.len()]);
+}
+
+/// The network is gone for longer than a drop that is ridden out. A prompt sent meanwhile
+/// waits; the machine shows as connected at first and as lost after, with its lists but
+/// without its live values. Once the network is back the prompt is applied, once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_prompt_sent_through_an_outage_is_applied_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("daemon");
+    let repo = repo(&tmp.path().join("app"));
+    let daemon = Daemon::start(&data, 0, "interrupted_turn.jsonl", Arc::default()).await;
+    let relay = Relay::start(daemon.addr).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", relay.addr)
+        .await
+        .unwrap()
+        .host_id;
+    daemon.hub.host_resources(host_resources(3));
+    let session_id = create_session(&client, &host, repo).await;
+    let sub = client
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
+    wait_machine(&client, |m| m.resources.is_some()).await;
+    client.synced(host.clone()).await.unwrap();
+
+    relay.swallow(true);
+    relay.cut();
+    let sending = tokio::spawn({
+        let (client, host, session_id) = (client.clone(), host.clone(), session_id.clone());
+        async move {
+            let prompt = CommandBody::SendPrompt {
+                session_id,
+                text: "First.".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            };
+            client.send(host, prompt).await
+        }
+    });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let machine = client.machines().remove(0);
+    assert!(connected(&machine.connection), "{machine:?}");
+    assert_eq!(machine.resources, Some(host_resources(3)));
+
+    wait_machine(&client, |m| !connected(&m.connection)).await;
+    let machine = client.machines().remove(0);
+    assert_eq!(machine.resources, None);
+    assert_eq!(machine.sessions.len(), 1);
+    assert!(!sending.is_finished());
+
+    relay.swallow(false);
+    client.wake();
+    assert_eq!(sending.await.unwrap().unwrap(), CommandResult::Applied);
+    let mut view = View::default();
+    view.read_until(&sub, |view| view.streaming_text() == ["Half"])
+        .await;
+    wait_machine(&client, |m| {
+        connected(&m.connection) && m.resources == Some(host_resources(3))
+    })
+    .await;
+    let interrupt = CommandBody::Interrupt {
+        session_id: session_id.clone(),
+    };
+    client.send(host.clone(), interrupt).await.unwrap();
+    view.read_until(&sub, interrupted("turn-1")).await;
+
+    daemon.kill().await;
+    let journal = Store::open(data.join("herder.db"))
+        .unwrap()
+        .read_since(&session_id, 0, usize::MAX)
+        .unwrap();
+    assert_eq!(view.events[..], journal[..view.events.len()]);
+    let turns = journal
+        .iter()
+        .filter(|event| matches!(event.body, EventBody::TurnStarted { .. }))
+        .count();
+    assert_eq!(turns, 1, "{journal:#?}");
+}
+
+/// A command sent into a connection that went silently dead is not left waiting for the next
+/// ping: it probes the connection, which is replaced within the probe's five seconds, and is
+/// answered on the new one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_command_finds_a_dead_connection_and_is_answered_on_the_next() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let relay = Relay::start(daemon.addr).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", relay.addr)
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+    assert_eq!(relay.accepted(), 2);
+
+    relay.stall();
+    let prompt = CommandBody::SendPrompt {
+        session_id: SessionId::new("nope"),
+        text: "look".into(),
+        images: Vec::new(),
+        files: Vec::new(),
+    };
+    let sent = tokio::time::timeout(Duration::from_secs(9), client.send(host, prompt))
+        .await
+        .expect("the dead connection was not replaced in time");
+    assert!(
+        matches!(&sent, Err(Error::Rejected { info }) if info.code == ErrorCode::NotFound),
+        "{sent:?}"
+    );
+    assert_eq!(relay.accepted(), 3);
+    let machine = client.machines().remove(0);
+    assert!(connected(&machine.connection));
+    assert_eq!(machine.quality.reconnects, 1);
 }

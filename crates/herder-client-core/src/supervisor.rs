@@ -16,7 +16,15 @@
 //! A connection is pinged as soon as it is up and every [`PING_INTERVAL`] after; each ping
 //! carries a fresh payload, so its pong gives the round trip, and a ping still unanswered when
 //! the next one is due counts as a missed pong. A connection whose daemon shows no sign of
-//! life within [`SILENCE_LIMIT`] of a ping is lost.
+//! life within [`SILENCE_LIMIT`] of a ping is lost. What the user asks of a connection, a
+//! command or a session, probes it as a wake does: a dead one is found [`PROBE_TIMEOUT`]
+//! after it is asked, not only at its next ping.
+//!
+//! A lost connection is ridden out: for [`QUIET`] the machine still shows as connected, with
+//! what its connection brought, while the task reconnects. A connection made within that
+//! time takes over unseen, and what the one before brought of the live values (resources,
+//! skills, a vault's status, approvals) is held until the new one has sent its own. Only a
+//! connection still lost after [`QUIET`] shows as lost.
 //!
 //! A sign of life is anything that only a daemon that is there brings about ([`Watched`]),
 //! not just the pong: a connection busy with a long replay or a large upload, whose pong
@@ -89,14 +97,21 @@ const BACKOFF_CAP: Duration = Duration::from_secs(30);
 const RECENT_PONGS: usize = 20;
 
 /// How often a connection is pinged.
-const PING_INTERVAL: Duration = Duration::from_secs(15);
+const PING_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Silence after a ping after which a connection is considered dead, though TCP has not
-/// noticed yet.
-const SILENCE_LIMIT: Duration = Duration::from_secs(10);
+/// noticed yet. Any byte the daemon sends or takes ends the silence, so a slow link that
+/// carries something is kept; one that carries nothing for this long is quicker replaced
+/// than waited for, and replacing it shows nowhere ([`QUIET`]).
+const SILENCE_LIMIT: Duration = Duration::from_secs(5);
 
-/// Silence after the probe a wake sends after which a connection is replaced.
+/// Silence after a probe, which a wake and what the user asks for send, after which a
+/// connection is replaced.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a lost connection still shows as connected while it is being replaced: a drop
+/// shorter than this is never seen.
+const QUIET: Duration = Duration::from_secs(5);
 
 /// How often a connection saves what changed to the offline cache.
 const SAVE_INTERVAL: Duration = Duration::from_secs(30);
@@ -258,7 +273,11 @@ struct State {
     /// answers again, whatever became of the ones before it. Forgotten when the user orders
     /// the addresses or asks to reconnect, which both start from their order.
     answered: Option<String>,
+    /// The connection as the machine shows it.
     connection: Option<ConnectionState>,
+    /// Where the connection stands while the machine still shows the one just lost
+    /// ([`QUIET`]); `None` when it shows the connection as it is.
+    hidden: Option<ConnectionState>,
     quality: Quality,
     role: Option<Role>,
     user_id: Option<UserId>,
@@ -271,12 +290,12 @@ struct State {
     failover: FailoverSettings,
     providers: Vec<herder_protocol::ProviderStatus>,
     terminals: Vec<herder_protocol::Terminal>,
-    resources: Option<herder_protocol::HostResources>,
-    session_usage: HashMap<SessionId, herder_protocol::SessionUsage>,
-    vault: Option<herder_protocol::VaultStatus>,
-    skills: Option<herder_protocol::SkillsStatus>,
-    session_skills: HashMap<SessionId, Vec<herder_protocol::SessionSkill>>,
-    update: Option<herder_protocol::UpdateStage>,
+    /// The live values as the machine shows them.
+    live: Live,
+    /// On a connection that took over from a lost one unseen, the live values it sent so
+    /// far: `live` still holds the ones before too, until the daemon has sent all of its own
+    /// and these replace them.
+    fresh: Option<Live>,
     logs: HashMap<SessionId, Log>,
     /// Subscribers per session; the daemon streams the sessions with at least one.
     wanted: HashMap<SessionId, usize>,
@@ -284,8 +303,59 @@ struct State {
     streams: HashMap<TerminalId, Attached>,
     /// Whether something the offline cache holds changed since the last save.
     dirty: bool,
+}
+
+/// What a daemon sends of its state now, which only a connection keeps current: each
+/// connection brings its own, and none is cached.
+#[derive(Clone, Default)]
+struct Live {
+    resources: Option<herder_protocol::HostResources>,
+    session_usage: HashMap<SessionId, herder_protocol::SessionUsage>,
+    vault: Option<herder_protocol::VaultStatus>,
+    skills: Option<herder_protocol::SkillsStatus>,
+    session_skills: HashMap<SessionId, Vec<herder_protocol::SessionSkill>>,
+    update: Option<herder_protocol::UpdateStage>,
     /// Requests of this person's devices without a passkey, open on the machine.
     approvals: Vec<ApprovalRequest>,
+}
+
+impl Live {
+    /// Takes in `message` if it carries a live value; `false` for any other.
+    fn apply(&mut self, message: &ServerMessage) -> bool {
+        match message {
+            ServerMessage::HostResources(resources) => self.resources = Some(resources.clone()),
+            ServerMessage::DaemonUpdate { stage } => self.update = Some(stage.clone()),
+            ServerMessage::VaultStatus(status) => self.vault = Some(status.clone()),
+            ServerMessage::ApprovalRequest(request) => {
+                self.approvals
+                    .retain(|open| open.request_id != request.request_id);
+                self.approvals.push(request.clone());
+            }
+            ServerMessage::ApprovalClosed { request_id } => {
+                self.approvals.retain(|open| open.request_id != *request_id);
+            }
+            ServerMessage::SkillsStatus(status) => self.skills = Some(status.clone()),
+            ServerMessage::SessionSkills { session_id, skills } => {
+                // The daemon sends a session's empty list once, then nothing until it changes.
+                if skills.is_empty() {
+                    self.session_skills.remove(session_id);
+                } else {
+                    self.session_skills
+                        .insert(session_id.clone(), skills.clone());
+                }
+            }
+            ServerMessage::SessionResources { session_id, usage } => {
+                // The daemon sends a session's idle usage once, then nothing until it changes.
+                if usage.processes == 0 && usage.containers.is_empty() {
+                    self.session_usage.remove(session_id);
+                } else {
+                    self.session_usage.insert(session_id.clone(), usage.clone());
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
 }
 
 impl State {
@@ -494,13 +564,15 @@ impl Supervisor {
             failover: machine.failover,
             providers: machine.providers,
             terminals: machine.terminals,
-            resources: machine.resources,
-            session_usage: machine.session_usage,
-            vault: machine.vault,
-            skills: machine.skills,
-            session_skills: machine.session_skills,
-            update: machine.update,
-            approvals: machine.approvals,
+            live: Live {
+                resources: machine.resources,
+                session_usage: machine.session_usage,
+                vault: machine.vault,
+                skills: machine.skills,
+                session_skills: machine.session_skills,
+                update: machine.update,
+                approvals: machine.approvals,
+            },
             logs,
             ..State::default()
         };
@@ -691,13 +763,13 @@ impl Supervisor {
             failover: state.failover.clone(),
             providers: state.providers.clone(),
             terminals: state.terminals.clone(),
-            resources: state.resources.clone(),
-            session_usage: state.session_usage.clone(),
-            vault: state.vault.clone(),
-            skills: state.skills.clone(),
-            session_skills: state.session_skills.clone(),
-            update: state.update.clone(),
-            approvals: state.approvals.clone(),
+            resources: state.live.resources.clone(),
+            session_usage: state.live.session_usage.clone(),
+            vault: state.live.vault.clone(),
+            skills: state.live.skills.clone(),
+            session_skills: state.live.session_skills.clone(),
+            update: state.live.update.clone(),
+            approvals: state.live.approvals.clone(),
         }
     }
 
@@ -709,7 +781,10 @@ impl Supervisor {
         if state.connection != Some(ConnectionState::Connected) || state.role != Some(Role::Owner) {
             return None;
         }
-        let repo = state.skills.as_ref()?.repo.clone();
+        // On a connection that took over unseen, only what it sent itself: the status of
+        // the connection before is no report of this one.
+        let live = state.fresh.as_ref().unwrap_or(&state.live);
+        let repo = live.skills.as_ref()?.repo.clone();
         Some((state.quality.connections, repo))
     }
 
@@ -1029,26 +1104,53 @@ impl Supervisor {
         }
     }
 
+    /// Where the connection stands now. While the machine still shows a connection just
+    /// lost ([`Self::lost`]), only a new connection shows: it takes over unseen.
     fn set_connection(&self, connection: ConnectionState) {
         let mut state = self.lock();
-        // Resource figures, a vault's status and skills are live; a new connection sends them
-        // afresh.
         if connection == ConnectionState::Connected {
+            // The live values of the connection before are shown until this one sent its own.
+            if state.hidden.take().is_some() {
+                state.fresh = Some(Live::default());
+            }
             state.quality.connected();
+        } else if state.hidden.is_some() {
+            state.hidden = Some(connection);
+            return;
         } else {
-            state.resources = None;
-            state.session_usage.clear();
-            state.vault = None;
-            state.skills = None;
-            state.session_skills.clear();
-            state.update = None;
-            state.approvals.clear();
+            // The live values go with the connection; a new one sends them afresh.
+            state.live = Live::default();
+            state.fresh = None;
             state.address = None;
             state.quality.disconnected();
         }
         state.connection = Some(connection);
         drop(state);
         self.notify();
+    }
+
+    /// The connection ended with `error`. The machine goes on showing it, and what it
+    /// brought, until [`Self::reveal`] or a new connection.
+    fn lost(&self, error: String) {
+        self.lock().hidden = Some(ConnectionState::Disconnected { error });
+    }
+
+    /// Shows the connection as it is, if the machine still showed one that was lost.
+    fn reveal(&self) {
+        let hidden = self.lock().hidden.take();
+        if let Some(connection) = hidden {
+            self.set_connection(connection);
+        }
+    }
+
+    /// The daemon sent every live value it has on this connection: what the machine still
+    /// shows of the connection before goes.
+    fn settled(&self) {
+        let mut state = self.lock();
+        if let Some(fresh) = state.fresh.take() {
+            state.live = fresh;
+            self.notify_after(state);
+        }
     }
 
     /// Records a pong that came back `rtt` after its ping.
@@ -1136,6 +1238,12 @@ impl Supervisor {
         ) {
             state.dirty = true;
         }
+        if let Some(fresh) = &mut state.fresh {
+            fresh.apply(&message);
+        }
+        if state.live.apply(&message) {
+            return self.notify_after(state);
+        }
         let log = match message {
             ServerMessage::Sessions { sessions } => {
                 state.sessions = sessions;
@@ -1160,51 +1268,6 @@ impl Supervisor {
             }
             ServerMessage::Terminals { terminals } => {
                 state.terminals = terminals;
-                return self.notify_after(state);
-            }
-            ServerMessage::HostResources(resources) => {
-                state.resources = Some(resources);
-                return self.notify_after(state);
-            }
-            ServerMessage::DaemonUpdate { stage } => {
-                state.update = Some(stage);
-                return self.notify_after(state);
-            }
-            ServerMessage::VaultStatus(status) => {
-                state.vault = Some(status);
-                return self.notify_after(state);
-            }
-            ServerMessage::ApprovalRequest(request) => {
-                state
-                    .approvals
-                    .retain(|open| open.request_id != request.request_id);
-                state.approvals.push(request);
-                return self.notify_after(state);
-            }
-            ServerMessage::ApprovalClosed { request_id } => {
-                state.approvals.retain(|open| open.request_id != request_id);
-                return self.notify_after(state);
-            }
-            ServerMessage::SkillsStatus(status) => {
-                state.skills = Some(status);
-                return self.notify_after(state);
-            }
-            ServerMessage::SessionSkills { session_id, skills } => {
-                // The daemon sends a session's empty list once, then nothing until it changes.
-                if skills.is_empty() {
-                    state.session_skills.remove(&session_id);
-                } else {
-                    state.session_skills.insert(session_id, skills);
-                }
-                return self.notify_after(state);
-            }
-            ServerMessage::SessionResources { session_id, usage } => {
-                // The daemon sends a session's idle usage once, then nothing until it changes.
-                if usage.processes == 0 && usage.containers.is_empty() {
-                    state.session_usage.remove(&session_id);
-                } else {
-                    state.session_usage.insert(session_id, usage);
-                }
                 return self.notify_after(state);
             }
             ServerMessage::Event(event) => {
@@ -1236,8 +1299,17 @@ impl Supervisor {
                 let machine = &self.saved.name;
                 return warn!(%machine, "the daemon reported an error: {}", error.message);
             }
-            // Hellos, answers, syncs and terminal messages are handled by the connection.
-            ServerMessage::Synced { .. }
+            // Hellos, answers, syncs and terminal messages are handled by the connection, and
+            // the live values were taken in above.
+            ServerMessage::HostResources(_)
+            | ServerMessage::DaemonUpdate { .. }
+            | ServerMessage::VaultStatus(_)
+            | ServerMessage::ApprovalRequest(_)
+            | ServerMessage::ApprovalClosed { .. }
+            | ServerMessage::SkillsStatus(_)
+            | ServerMessage::SessionSkills { .. }
+            | ServerMessage::SessionResources { .. }
+            | ServerMessage::Synced { .. }
             | ServerMessage::TerminalOutput { .. }
             | ServerMessage::TerminalClosed { .. }
             | ServerMessage::Hello(_)
@@ -1385,6 +1457,8 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
     let mut reconnects: Vec<oneshot::Sender<Result<String, String>>> = Vec::new();
     let mut attempt = 0;
     let mut suspended = false;
+    // Until when the machine shows a connection that was lost, once one was.
+    let mut quiet: Option<Instant> = None;
     let saved = &supervisor.saved;
     let cached = tokio::select! {
         () = supervisor.stop.cancelled() => return,
@@ -1417,6 +1491,10 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
             loop {
                 tokio::select! {
                     () = supervisor.stop.cancelled() => return,
+                    () = until(quiet) => {
+                        quiet = None;
+                        supervisor.reveal();
+                    }
                     Some(connected) = races.next() => match connected {
                         Ok(connected) => break Ok(connected),
                         Err(error) if races.is_empty() && redial.is_none() => break Err(error),
@@ -1487,7 +1565,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                 )
                 .await;
                 save_in_background(&supervisor);
-                match ended {
+                let (error, now) = match ended {
                     Ended::Stopped => return,
                     Ended::Lost(error) => (error, false),
                     Ended::Replaced(error) => (error, true),
@@ -1496,15 +1574,23 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                         supervisor.lock().answered = None;
                         ("reconnecting, as asked".to_owned(), true)
                     }
-                }
+                };
+                quiet = Some(Instant::now() + QUIET);
+                supervisor.lost(error.clone());
+                (error, now)
             }
-            Err(error) => (error, false),
+            Err(error) => {
+                supervisor.set_connection(ConnectionState::Disconnected {
+                    error: error.clone(),
+                });
+                (error, false)
+            }
         };
         debug!(machine = %saved.name, "disconnected: {error}");
-        supervisor.set_connection(ConnectionState::Disconnected {
-            error: error.clone(),
-        });
-        if failed {
+        if failed && !reconnects.is_empty() {
+            // Whoever asked to reconnect is told it failed, so the machine shows it too.
+            quiet = None;
+            supervisor.reveal();
             for reply in reconnects.drain(..) {
                 let _ = reply.send(Err(error.clone()));
             }
@@ -1518,6 +1604,10 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
         loop {
             tokio::select! {
                 () = supervisor.stop.cancelled() => return,
+                () = until(quiet) => {
+                    quiet = None;
+                    supervisor.reveal();
+                }
                 () = &mut wait, if !suspended => break,
                 op = ops.recv() => match op {
                     Some(Op::Wake) => {
@@ -1559,6 +1649,14 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
     }
 }
 
+/// Waits until `at`; forever for `None`.
+async fn until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Saves to the offline cache off the async runtime.
 fn save_in_background(supervisor: &Arc<Supervisor>) {
     let supervisor = Arc::clone(supervisor);
@@ -1592,9 +1690,14 @@ async fn serve(
     let synced = syncs.keys().map(|token| ClientMessage::Sync {
         token: token.clone(),
     });
-    let messages: Vec<_> = supervisor
-        .reattach(&mut attaching)
-        .into_iter()
+    // Asked first, ahead of commands the daemon may take long over: its answer follows the
+    // live values the daemon sends a new connection, and the replays the hello asked for.
+    let settle = ulid::Ulid::generate().to_string();
+    let settling = ClientMessage::Sync {
+        token: settle.clone(),
+    };
+    let messages: Vec<_> = std::iter::once(settling)
+        .chain(supervisor.reattach(&mut attaching))
         .chain(resent)
         .chain(synced)
         .collect();
@@ -1608,7 +1711,7 @@ async fn serve(
     let mut pinged: Option<(String, Instant)> = None;
     let mut save = tokio::time::interval(SAVE_INTERVAL);
     save.reset();
-    // The payload of the ping a wake sent, and when it went out, until its pong comes back.
+    // The payload of the ping a probe sent, and when it went out, until its pong comes back.
     let mut probe: Option<(String, Instant)> = None;
     // A connection to an address before this one's, which new addresses start; once one
     // answers, this connection is replaced to move there.
@@ -1633,6 +1736,12 @@ async fn serve(
             () = supervisor.stop.cancelled() => return Ended::Stopped,
             error = &mut writing => return Ended::Lost(error),
             op = ops.recv() => {
+                // What the user asks for and waits to see probes the connection.
+                if matches!(op, Some(Op::Subscribe(_) | Op::Command(..) | Op::Open(..)))
+                    && probe.is_none()
+                {
+                    probe = Some(send_ping(&outgoing));
+                }
                 let message = match op {
                     None => return Ended::Stopped,
                     Some(Op::Subscribe(session_id)) => {
@@ -1745,7 +1854,7 @@ async fn serve(
                     continue;
                 }
                 return if probe_due == dead {
-                    Ended::Replaced("the daemon did not answer the wake probe".to_owned())
+                    Ended::Replaced("the daemon did not answer a probe".to_owned())
                 } else {
                     Ended::Lost("the daemon stopped answering".to_owned())
                 };
@@ -1762,10 +1871,18 @@ async fn serve(
             }
             Some(Ok(Message::Text(text))) => text,
             Some(Ok(Message::Pong(payload))) => {
-                for ping in [&mut pinged, &mut probe] {
-                    if let Some((_, sent)) = ping.take_if(|(sent, _)| *payload == *sent.as_bytes())
-                    {
-                        supervisor.pong(sent.elapsed());
+                let answered = [&pinged, &probe]
+                    .into_iter()
+                    .flatten()
+                    .find(|(sent, _)| *payload == *sent.as_bytes())
+                    .map(|(_, at)| *at);
+                if let Some(at) = answered {
+                    supervisor.pong(at.elapsed());
+                    // A daemon with two pings to answer may answer only the later one: its
+                    // pong answers the one sent before it too, which would else wait for a
+                    // pong that never comes and take a healthy, idle connection for dead.
+                    for ping in [&mut pinged, &mut probe] {
+                        ping.take_if(|(_, sent)| *sent <= at);
                     }
                 }
                 continue;
@@ -1809,6 +1926,9 @@ async fn serve(
                 )
             }
             ServerMessage::Synced { token } => {
+                if token == settle {
+                    supervisor.settled();
+                }
                 if let Some(reply) = syncs.remove(&token) {
                     let _ = reply.send(());
                 }

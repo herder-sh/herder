@@ -43,13 +43,24 @@
 //! [`Machine::connection`] says where it stands, and [`Client::synced`] waits until a
 //! connection is up and the daemon has sent its lists and the replay of every subscription.
 //!
-//! A connection is pinged as soon as it is up and every 15 s after; [`Machine::quality`]
+//! A connection is pinged as soon as it is up and every 10 s after; [`Machine::quality`]
 //! holds the round trips of the last 20 pongs, how many pongs did not come back before the
 //! next ping, when the connection was established and how often it was re-established. A
-//! connection whose daemon shows no sign of life for 10 s after a ping counts as lost. Any
+//! connection whose daemon shows no sign of life for 5 s after a ping counts as lost. Any
 //! byte the daemon sends or takes is such a sign, not only the pong: a connection busy with
 //! a long replay or a large upload is not mistaken for a dead one, and what it sends never
-//! keeps it from reading.
+//! keeps it from reading. A command and a subscription probe the connection they are sent
+//! on, so a dead one is found 5 s after the user asks something of it.
+//!
+//! # Flaky networks
+//!
+//! A lost connection is ridden out. For 5 s the machine still reads `Connected`, with its
+//! address, quality and live values as they were, while the supervisor reconnects; a
+//! connection made within that time takes over unseen, counted in
+//! [`ConnectionQuality::reconnects`]. Only a machine still without a connection after 5 s
+//! reads `Disconnected` or `Connecting`. A [`Client::reconnect`] that fails shows at once.
+//! The lists are never emptied by a drop, a subscription's updates only extend its events,
+//! and the items streaming stay as they were until the daemon's snapshots replace them.
 //!
 //! # App lifecycle
 //!
@@ -57,7 +68,7 @@
 //! it returns. Suspended, the client saves its offline cache and stops retrying lost
 //! connections; connections that are up stay up for as long as the OS lets the process run.
 //! Waking reconnects every disconnected machine at once and checks every connected one: a
-//! connection silent for longer than 25 s, as after a long suspension in which the OS may
+//! connection silent for longer than 15 s, as after a long suspension in which the OS may
 //! have killed the socket without either end noticing, is replaced right away; any other is
 //! pinged and replaced if the daemon shows no sign of life for 5 s. Subscriptions resume
 //! from the last seq held, so a suspension of any length shows no gap.
@@ -70,9 +81,12 @@
 //!
 //! [`Machine::resources`] and [`Machine::session_usage`] hold the latest figures the daemon
 //! pushed, at most every two seconds each, and a vault's [`Machine::vault`] its latest status;
-//! they are live only while connected, so they are cleared when the connection is not up. So
-//! are [`Machine::skills`] and [`Machine::session_skills`], the skill library and each
-//! session's skills as the daemon last sent them.
+//! they are live only while connected, so they are cleared when the machine no longer reads
+//! `Connected`. So are [`Machine::skills`] and [`Machine::session_skills`], the skill library
+//! and each session's skills as the daemon last sent them, [`Machine::update`] and
+//! [`Machine::approvals`]. A connection that took over from a lost one unseen shows the
+//! values of the one before until the daemon has sent all of its own, which then replace
+//! them: none blinks empty, and none stays stale.
 //!
 //! # Skills
 //!
@@ -351,7 +365,7 @@ pub enum ConnectionState {
 }
 
 /// How a machine's connection performs: round trips of the pings the client sends as soon as
-/// a connection is up and every 15 s after, and how stable the connection is.
+/// a connection is up and every 10 s after, and how stable the connection is.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionQuality {
     /// When the current connection was established; `None` while not connected.
@@ -746,7 +760,7 @@ impl Client {
     /// machine now instead of after its backoff, and resumes retrying after
     /// [`Client::suspend`]. A machine that is connecting races its addresses again beside
     /// the attempt under way. Every connected machine is checked: its connection is replaced
-    /// at once if it was silent for longer than 25 s, else pinged and replaced if the daemon
+    /// at once if it was silent for longer than 15 s, else pinged and replaced if the daemon
     /// shows no sign of life for 5 s.
     pub fn wake(&self) {
         for machine in self.lock().iter() {

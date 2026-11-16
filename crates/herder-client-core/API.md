@@ -259,10 +259,40 @@ calls `wake()` on its reconnect key).
 - Suspended, the client keeps connections that are up for as long as the OS lets the process
   run, but does not retry one it loses.
 - `wake()` reconnects disconnected machines at once. A connected one is checked: if it was
-  silent for longer than 45 s, as after a long suspension in which the OS may have killed the
+  silent for longer than 15 s, as after a long suspension in which the OS may have killed the
   socket without either end noticing, it is replaced right away; otherwise it is pinged and
-  replaced if the pong does not come back within 5 s. A healthy connection is kept.
+  replaced if the daemon shows no sign of life within 5 s. A healthy connection is kept.
 - Subscriptions resume from the last seq held, so a suspension of any length shows no gap.
+
+## Flaky networks
+
+A connection that drops is ridden out, so an app shows nothing of a drop it can do nothing
+about:
+
+- For 5 s after a connection is lost or replaced, the machine still reads `Connected`, with its
+  `address`, `quality` and live values (`resources`, `session_usage`, `vault`, `skills`,
+  `session_skills`, `update`, `approvals`) as they were, while the client reconnects. A
+  connection made within that time takes over unseen: `connection` never changes, and
+  `quality.reconnects` counts it. Only a machine still without a connection after 5 s reads
+  `Disconnected` or `Connecting`, and only then are its live values cleared. A `reconnect`
+  that fails shows at once.
+- On a connection that took over unseen, the live values of the one before are shown until the
+  daemon has sent all of its own, then replaced by exactly those: nothing blinks empty, and
+  nothing stale stays.
+- The lists (`sessions`, `hosts`, `projects`, `accounts`, `providers`) are never emptied by a
+  drop: each is replaced only by the daemon's next full list.
+- A subscription's updates only ever extend its events by seq, and the streaming items stay as
+  they were through a drop, until the daemon's snapshot of each replaces it or the event that
+  ends it arrives. No update resets a transcript.
+- A dead connection is found by its pings within 15 s (one every 10 s, 5 s for any sign of
+  life), and within 5 s of the user asking something of it: a command and a subscription
+  probe the connection they are sent on. A slow link that still carries bytes is kept.
+- Commands wait out a drop and are resent with the same id on the next connection; the daemon
+  applies an id once.
+
+An app needs no code for any of this. It should not add its own "reconnecting" state on top of
+`connection`, nor drop what it shows when `connection` changes: what the machine lists stays
+valid offline.
 
 The offline cache lives in `<config_dir>/cache/`, one private file per machine: the role, the
 session, host, project and account lists, and every event of the 20 listed sessions with the
@@ -295,13 +325,13 @@ which address the connection ended up on.
 
 ## Connection quality
 
-A connection is pinged as soon as it is up and every 15 s after. Each ping carries a fresh
+A connection is pinged as soon as it is up and every 10 s after. Each ping carries a fresh
 payload and only its own pong answers it, so `Machine::quality` holds true round trips: the
 latest, and the mean, shortest and longest of the last 20, all cleared when the connection
-ends. A ping still unanswered when the next is due counts in `missed_pongs`; the probe a
-`wake()` sends counts its round trip too. `connected_since` and `reconnects` say how stable
-the connection is. Each pong updates the machine, so `Changes` fires about every 15 s per
-connected machine.
+ends. A ping still unanswered when the next is due counts in `missed_pongs`; a probe, which a
+`wake()`, a command and a subscription send, counts its round trip too. `connected_since` and
+`reconnects` say how stable the connection is. Each pong updates the machine, so `Changes`
+fires about every 10 s per connected machine.
 
 ## Fleet links
 
