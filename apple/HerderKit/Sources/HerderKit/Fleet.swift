@@ -30,12 +30,6 @@ public final class Fleet {
         return current
     }
     @ObservationIgnored private var current: [Machine]
-    /// The machines as the client last listed them, each connection as it is: `current` holds
-    /// them as they show, a dropped connection still up for its grace. See `SteadyConnections`.
-    @ObservationIgnored private var reported: [Machine]
-    @ObservationIgnored var steady = SteadyConnections()
-    /// Shows the next drop still in its grace, once that is over.
-    @ObservationIgnored private var graceEnd: Task<Void, Never>?
     /// Which copy is listed of each session a host and a vault both list. It moves from one to
     /// the other as machines connect and drop, and nothing a session shows may go with it; see
     /// `source(for:)`.
@@ -120,7 +114,6 @@ public final class Fleet {
         self.client = client
         let machines = client.machines()
         current = machines
-        reported = machines
         done = DoneSessions(file: doneFile)
         copies = Lists.copies(machines)
         refreshLists()
@@ -128,25 +121,25 @@ public final class Fleet {
 
     /// Replaces the machines without a client change, for tests.
     func setMachinesForTesting(_ machines: [Machine]) {
-        set(steadied(machines))
+        set(shown(machines))
         refreshLists()
     }
 
-    /// `machines`, as the client lists them, with the connections to show; see
-    /// `SteadyConnections`. A drop it holds back shows once its grace is over.
-    private func steadied(_ machines: [Machine]) -> [Machine] {
-        reported = machines
-        let shown = steady.steadied(machines)
-        graceEnd?.cancel()
-        graceEnd = steady.expires.map { expires in
-            Task {
-                try? await Task.sleep(until: expires, clock: .continuous)
-                guard !Task.isCancelled else { return }
-                self.update(self.reported)
-                self.refreshLists()
-            }
+    /// `machines`, as the client lists them, with the connections to show. The client rides
+    /// out a short drop itself, so a machine it lists as disconnected has been away a while:
+    /// it shows offline through the retries that follow, until one connects, rather than turn
+    /// to "connecting" and back with each.
+    private func shown(_ machines: [Machine]) -> [Machine] {
+        var offline: [HostId: ConnectionState] = [:]
+        for machine in current {
+            if case .disconnected = machine.connection { offline[machine.hostId] = machine.connection }
         }
-        return shown
+        return machines.map { machine in
+            guard machine.connection == .connecting, let connection = offline[machine.hostId] else { return machine }
+            var machine = machine
+            machine.connection = connection
+            return machine
+        }
     }
 
     /// Takes the machines the client lists, telling the views that read them only what changed.
@@ -345,7 +338,7 @@ public final class Fleet {
     func changed() async {
         var machines = await Self.machines(of: client)
         // A machine connecting or going away shows at once, scroll or not.
-        if reconnects(steady.steadied(machines)) {
+        if reconnects(shown(machines)) {
             update(machines)
             refreshLists()
             return
@@ -372,7 +365,7 @@ public final class Fleet {
 
     func update(_ reported: [Machine]) {
         let listedNone = current.allSatisfy(\.sessions.isEmpty)
-        let machines = steadied(reported)
+        let machines = shown(reported)
         set(machines)
         // While nothing was listed, as on a launch, at once: the first sessions are the offline
         // cache's, which the Board shows in place of the splash. From then on, throttled, so a
@@ -1023,10 +1016,7 @@ public final class Fleet {
 
     /// The app is in the foreground: reconnects now and replaces dead connections.
     public func wake() {
-        steady.restart()
         client.wake()
-        // Each drop still in its grace gets the whole of it again.
-        update(reported)
     }
 
     /// Wakes the client whenever the network changes, as when the Wi-Fi changes or a VPN such
@@ -1059,9 +1049,6 @@ public final class Fleet {
 
     /// The app went to the background: saves the offline cache and stops retrying.
     public func suspend() {
-        steady.hold()
-        graceEnd?.cancel()
-        graceEnd = nil
         client.suspend()
     }
 }
