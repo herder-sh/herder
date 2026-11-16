@@ -50,7 +50,7 @@
 //! resent id would be answered from the daemon's memory without attaching anything).
 
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -2328,7 +2328,7 @@ async fn open_in_turn(
 
 /// What the first `attempt` on one of `addresses` to succeed made, and its address; else why
 /// each failed. Each starts [`HEAD_START`] after the one before, or as soon as every attempt
-/// so far failed.
+/// so far failed. While an address has not answered yet, one that failed is tried again.
 async fn race<T, A>(
     addresses: &[String],
     attempt: impl Fn(String) -> A,
@@ -2336,38 +2336,69 @@ async fn race<T, A>(
 where
     A: Future<Output = anyhow::Result<T>>,
 {
-    let attempt = |address: &String| {
+    let attempt = |address: &String, after: Duration| {
         let (address, attempting) = (address.clone(), attempt(address.clone()));
-        async move { (address, attempting.await) }
+        async move {
+            tokio::time::sleep(after).await;
+            (address, attempting.await)
+        }
     };
     let mut queue = addresses.iter();
+    let distinct = addresses.iter().collect::<HashSet<_>>().len();
     let mut running = FuturesUnordered::new();
-    let mut errors = Vec::new();
+    // Each address that failed, in the order they first did: its latest error, and how many
+    // times it failed.
+    let mut errors: Vec<(String, String, u32)> = Vec::new();
     let next_start = tokio::time::sleep(HEAD_START);
     tokio::pin!(next_start);
     loop {
         if running.is_empty() {
             let Some(address) = queue.next() else { break };
-            running.push(attempt(address));
+            running.push(attempt(address, Duration::ZERO));
             next_start.as_mut().reset(Instant::now() + HEAD_START);
         }
         let waiting = !queue.as_slice().is_empty();
         tokio::select! {
             Some((address, result)) = running.next() => match result {
                 Ok(made) => return Ok((made, address)),
-                Err(err) => errors.push(format!("{address}: {err:#}")),
+                Err(err) => {
+                    let error = format!("{address}: {err:#}");
+                    let failed = match errors.iter_mut().find(|(failed, ..)| *failed == address) {
+                        Some(known) => {
+                            known.1 = error;
+                            known.2 += 1;
+                            known.2
+                        }
+                        None => {
+                            errors.push((address.clone(), error, 1));
+                            1
+                        }
+                    };
+                    // Every address failed: the race is over, whatever is tried again.
+                    if errors.len() == distinct {
+                        break;
+                    }
+                    // An address that has not answered yet, as one whose packets are lost
+                    // does not for the whole connect timeout, keeps the race open. One that
+                    // failed meanwhile is tried again after the backoff's waits, not only
+                    // once that timeout is over: a daemon that restarts refuses for a
+                    // moment, and a connection cut while it is made fails once.
+                    let wait = BACKOFF_BASE.saturating_mul(2u32.saturating_pow(failed - 1));
+                    running.push(attempt(&address, wait));
+                }
             },
             () = &mut next_start, if waiting => {
                 if let Some(address) = queue.next() {
-                    running.push(attempt(address));
+                    running.push(attempt(address, Duration::ZERO));
                     next_start.as_mut().reset(Instant::now() + HEAD_START);
                 }
             }
         }
     }
     if errors.is_empty() {
-        errors.push("the machine has no address".to_owned());
+        return Err("the machine has no address".to_owned());
     }
+    let errors: Vec<String> = errors.into_iter().map(|(_, error, _)| error).collect();
     Err(errors.join("; "))
 }
 
