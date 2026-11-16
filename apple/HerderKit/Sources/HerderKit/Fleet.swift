@@ -30,6 +30,22 @@ public final class Fleet {
         return current
     }
     @ObservationIgnored private var current: [Machine]
+    /// The machines as the client last listed them, each connection as it is: `current` holds
+    /// them as they show, a dropped connection still up for its grace. See `SteadyConnections`.
+    @ObservationIgnored private var reported: [Machine]
+    @ObservationIgnored var steady = SteadyConnections()
+    /// Shows the next drop still in its grace, once that is over.
+    @ObservationIgnored private var graceEnd: Task<Void, Never>?
+    /// Which copy is listed of each session a host and a vault both list. It moves from one to
+    /// the other as machines connect and drop, and nothing a session shows may go with it; see
+    /// `source(for:)`.
+    private var copies = SessionCopies()
+    /// The copies no longer followed whose state is kept: one a view shows, and one another
+    /// copy stands for, until that copy shows as much. See `release(listing:)`.
+    @ObservationIgnored private var retained: Set<SessionKey> = []
+    /// The journals of copies followed again that are replayed beside what was kept of them;
+    /// see `replay(_:of:into:)`.
+    @ObservationIgnored private var replays: [SessionKey: SessionModel] = [:]
     /// Bumped when the machines' own state changes, and when only what moves with their
     /// sessions does; see `machines`.
     private var ownChanges = 0
@@ -102,15 +118,35 @@ public final class Fleet {
     /// `doneFile` keeps the done sessions across launches; `nil` keeps them in memory.
     public init(client: Client, doneFile: URL? = nil) {
         self.client = client
-        current = client.machines()
+        let machines = client.machines()
+        current = machines
+        reported = machines
         done = DoneSessions(file: doneFile)
+        copies = Lists.copies(machines)
         refreshLists()
     }
 
     /// Replaces the machines without a client change, for tests.
     func setMachinesForTesting(_ machines: [Machine]) {
-        set(machines)
+        set(steadied(machines))
         refreshLists()
+    }
+
+    /// `machines`, as the client lists them, with the connections to show; see
+    /// `SteadyConnections`. A drop it holds back shows once its grace is over.
+    private func steadied(_ machines: [Machine]) -> [Machine] {
+        reported = machines
+        let shown = steady.steadied(machines)
+        graceEnd?.cancel()
+        graceEnd = steady.expires.map { expires in
+            Task {
+                try? await Task.sleep(until: expires, clock: .continuous)
+                guard !Task.isCancelled else { return }
+                self.update(self.reported)
+                self.refreshLists()
+            }
+        }
+        return shown
     }
 
     /// Takes the machines the client lists, telling the views that read them only what changed.
@@ -118,6 +154,8 @@ public final class Fleet {
         guard machines != current else { return }
         let ownChanged = machines.map(Self.own) != current.map(Self.own)
         current = machines
+        let copies = Lists.copies(machines, keeping: self.copies.shown)
+        if copies != self.copies { self.copies = copies }
         // `liveMachines` reads both.
         if ownChanged { ownChanges += 1 } else { headChanges += 1 }
         listsChanged()
@@ -210,8 +248,36 @@ public final class Fleet {
     private func refreshLists() {
         listsRefresh?.cancel()
         listsRefresh = nil
-        lists.show(Lists(machines: current, sessions: sessions, done: done.keys, archiving: archiving))
+        // A copy listed since a moment ago shows what was kept of the one it stands for, until
+        // its own journal has come as far: a row keeps its title, state and place meanwhile.
+        var sessions = self.sessions
+        for kept in retained {
+            guard let standIn = copies.standIns[kept], let model = sessions[kept],
+                  model.showsMore(than: sessions[standIn]) else { continue }
+            sessions[standIn] = model.keyed(standIn)
+        }
+        // A session done on one copy is done on the copy listed.
+        var done = self.done.keys
+        for key in self.done.keys {
+            if let standIn = copies.standIns[key] { done.insert(standIn) }
+        }
+        lists.show(Lists(machines: current, sessions: sessions, done: done, archiving: archiving, copies: copies))
     }
+
+    /// The copy whose state a view of `key` shows. A session a vault replicates is listed from
+    /// its host or from the vault as they connect and drop, and an open session follows it
+    /// there: it shows the copy that has folded the most of the journal, so it never steps back
+    /// or empties while the other copy loads; of two as far along, the listed one.
+    func source(for key: SessionKey) -> SessionKey {
+        var source = copies.standIns[key] ?? key
+        for copy in [key] + (copies.others[key] ?? []) where copy != source {
+            if let model = boxes[copy]?.model, model.showsMore(than: boxes[source]?.model) { source = copy }
+        }
+        return source
+    }
+
+    /// The copy the lists show of `key`'s session: itself, unless another stands for it.
+    func listed(_ key: SessionKey) -> SessionKey { copies.standIns[key] ?? key }
 
     /// One session's state. A view that reads it redraws when that session changes only, not
     /// on every token another session streams.
@@ -246,6 +312,12 @@ public final class Fleet {
     func watch(_ key: SessionKey) {
         watching.insert(key)
         done.remove(key)
+        for copy in copies.others[key] ?? [] { done.remove(copy) }
+    }
+
+    /// Whether a session view shows `key` or another copy of its session.
+    private func isWatched(_ key: SessionKey) -> Bool {
+        watching.contains(key) || (copies.others[key] ?? []).contains { watching.contains($0) }
     }
 
     /// A session view stopped showing `key`.
@@ -273,7 +345,7 @@ public final class Fleet {
     func changed() async {
         var machines = await Self.machines(of: client)
         // A machine connecting or going away shows at once, scroll or not.
-        if reconnects(machines) {
+        if reconnects(steady.steadied(machines)) {
             update(machines)
             refreshLists()
             return
@@ -298,8 +370,9 @@ public final class Fleet {
         return connections(machines) != connections(current)
     }
 
-    func update(_ machines: [Machine]) {
+    func update(_ reported: [Machine]) {
         let listedNone = current.allSatisfy(\.sessions.isEmpty)
+        let machines = steadied(reported)
         set(machines)
         // While nothing was listed, as on a launch, at once: the first sessions are the offline
         // cache's, which the Board shows in place of the splash. From then on, throttled, so a
@@ -307,7 +380,8 @@ public final class Fleet {
         if listedNone { refreshLists() }
         settleUpdates()
         fetchProjectIcons(machines)
-        for machine in machines {
+        // The connections as they are: the machine's page shows each drop, however short.
+        for machine in reported {
             recordRoundTrip(machine)
             var log = connectionLog[machine.hostId] ?? []
             guard log.last?.state != machine.connection else { continue }
@@ -324,18 +398,37 @@ public final class Fleet {
         let heads = Dictionary(machines.flatMap { machine in
             machine.sessions.map { (SessionKey(hostId: machine.hostId, sessionId: $0.sessionId), $0.headSeq) }
         }) { first, _ in first }
-        let listed = Set(heads.keys).subtracting(Lists.shadowed(machines))
-        for key in listed where subscriptions[key] == nil {
+        let followed = Set(heads.keys).subtracting(copies.shadowed)
+        for key in followed where subscriptions[key] == nil {
             history[key] = heads[key]
+            // What is kept of a copy followed again stays as it is while its journal replays.
+            if retained.remove(key) != nil, boxes[key]?.model.loaded == true { replays[key] = SessionModel(key: key) }
             subscriptions[key] = Task { await self.stream(key) }
         }
-        for (key, task) in subscriptions where !listed.contains(key) {
+        for (key, task) in subscriptions where !followed.contains(key) {
             task.cancel()
             subscriptions[key] = nil
             history[key] = nil
+            replays[key] = nil
+            retained.insert(key)
+        }
+        release(listing: heads)
+    }
+
+    /// Drops the state of the copies no longer followed, each once nothing shows it. A session
+    /// its machine no longer lists is gone, unless a view still shows it: that keeps what it
+    /// shows. A copy another stands for goes once that copy shows as much: until then the lists
+    /// and an open session show the session from what is kept here. Dropping it as it left the
+    /// lists blanked the open session, and emptied its row, on every drop of a connection.
+    private func release(listing heads: [SessionKey: UInt64]) {
+        for key in retained where !isWatched(key) {
+            if heads[key] != nil, let standIn = copies.standIns[key], let kept = boxes[key]?.model,
+               kept.showsMore(than: boxes[standIn]?.model) { continue }
+            retained.remove(key)
             boxes[key] = nil
+            // A copy another stands for keeps its mark: the session is done on either.
+            if heads[key] == nil { done.remove(key) }
             listsChanged()
-            done.remove(key)
         }
     }
 
@@ -363,14 +456,21 @@ public final class Fleet {
     func receive(_ update: SessionUpdate, for key: SessionKey) async -> Bool {
         let urgent = update.needsUser
         if !urgent { await scrollEnded() }
-        guard let box = boxes[key] else { return false }
+        // A subscription cancelled meanwhile is of a copy no longer followed, whose state may
+        // be kept: nothing more folds into it.
+        guard !Task.isCancelled, let box = boxes[key] else { return false }
+        var update = update
+        if replays[key] != nil {
+            guard let rest = await replay(update, of: key, into: box) else { return !Task.isCancelled }
+            update = rest
+        }
         // Only what `observe` needs: holding the whole session would copy its transcript on
         // every update.
         let before = (status: box.model.status, loaded: box.model.loaded)
         if update.events.count >= Self.longUpdate {
             let revision = box.revision
             let folded = await Self.fold(update, into: box.model)
-            guard boxes[key] === box else { return false }
+            guard !Task.isCancelled, boxes[key] === box else { return false }
             if box.revision == revision {
                 box.model = folded
                 listsChanged()
@@ -386,6 +486,33 @@ public final class Fleet {
         // The request lists show it at once too.
         if urgent { refreshLists() }
         return true
+    }
+
+    /// Folds `update` into the journal `key` replays, up to where what is kept of it ends: a
+    /// copy followed again gets its journal from the start, which folded into what is kept
+    /// would show every turn twice, and folded into an empty session would empty the open
+    /// one until it had loaded. Once the replay is as far as what is kept it takes its place,
+    /// with nothing on screen changing, and the rest of `update` is returned to fold as any
+    /// other; `nil` while there is more to replay.
+    private func replay(_ update: SessionUpdate, of key: SessionKey, into box: SessionBox) async -> SessionUpdate? {
+        guard var replay = replays[key] else { return update }
+        let kept = box.model.lastSeq
+        let seen = Array(update.events.prefix { $0.seq <= kept })
+        if seen.count >= Self.longUpdate {
+            replay = await Self.fold(SessionUpdate(events: seen, streaming: []), into: replay)
+            guard !Task.isCancelled, boxes[key] === box, replays[key] != nil else { return nil }
+        } else {
+            replay.apply(SessionUpdate(events: seen, streaming: []))
+        }
+        // What is kept may have moved on meanwhile, by a prompt sent: it is read again.
+        guard replay.lastSeq >= box.model.lastSeq else {
+            replays[key] = replay
+            return nil
+        }
+        replays[key] = nil
+        replay.keepLocal(of: box.model)
+        box.model = replay
+        return SessionUpdate(events: Array(update.events.dropFirst(seen.count)), streaming: update.streaming)
     }
 
     /// `model` with `update` folded in, away from the main actor.
@@ -409,7 +536,7 @@ public final class Fleet {
             news = false
         }
         let after = box.model.status
-        done.observe(key, before: before, after: after, wasLoaded: news, open: watching.contains(key))
+        done.observe(key, before: before, after: after, wasLoaded: news, open: isWatched(key))
         // Brought back, from here or elsewhere: its archive is no longer there to undo.
         if before == .archived, after != .archived { archives[key] = nil }
     }
@@ -896,25 +1023,45 @@ public final class Fleet {
 
     /// The app is in the foreground: reconnects now and replaces dead connections.
     public func wake() {
+        steady.restart()
         client.wake()
+        // Each drop still in its grace gets the whole of it again.
+        update(reported)
     }
 
     /// Wakes the client whenever the network changes, as when the Wi-Fi changes or a VPN such
     /// as UniFi Teleport or Tailscale comes up or goes down: a lost connection is retried at
     /// once instead of after its backoff, and one that is up is checked and replaced if it
     /// died with the network it used.
+    ///
+    /// A network that comes and goes reports a burst of paths, an interface or a route at a
+    /// time, and each wake pings every connected machine and replaces the connections that do
+    /// not answer in time: one wake follows the burst, once it has settled.
     private func wakeOnNetworkChanges() async {
         var previous: NWPath?
+        var settling: Task<Void, Never>?
+        defer { settling?.cancel() }
         for await path in NWPathMonitor() {
             defer { previous = path }
             // The first path is the network as it is now, not a change.
-            guard let previous, path != previous, path.status == .satisfied else { continue }
-            client.wake()
+            guard let previous, path != previous else { continue }
+            settling?.cancel()
+            guard path.status == .satisfied else { continue }
+            settling = Task {
+                guard (try? await Task.sleep(for: Self.networkSettles)) != nil else { return }
+                self.wake()
+            }
         }
     }
 
+    /// How long the network's path has to stay as it is before the client is woken for it.
+    static let networkSettles = Duration.seconds(1)
+
     /// The app went to the background: saves the offline cache and stops retrying.
     public func suspend() {
+        steady.hold()
+        graceEnd?.cancel()
+        graceEnd = nil
         client.suspend()
     }
 }

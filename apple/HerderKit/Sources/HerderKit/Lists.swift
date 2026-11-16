@@ -112,10 +112,12 @@ struct Lists: Equatable {
 
     /// `done` holds the sessions that finished a turn since this device last opened them;
     /// `archiving` the ones a machine is archiving, shown archived already.
+    /// `copies` says which copy of each session is listed, when the caller keeps that; see
+    /// `copies(_:keeping:)`.
     init(machines: [Machine], sessions: [SessionKey: SessionModel], done: Set<SessionKey> = [],
-         archiving: Set<SessionKey> = [], now: Date = .now) {
+         archiving: Set<SessionKey> = [], copies: SessionCopies? = nil, now: Date = .now) {
         var entries: [Entry] = []
-        let shadowed = Self.shadowed(machines)
+        let shadowed = (copies ?? Self.copies(machines)).shadowed
         for machine in machines {
             for head in machine.sessions {
                 let key = SessionKey(hostId: machine.hostId, sessionId: head.sessionId)
@@ -310,33 +312,52 @@ struct Lists: Equatable {
     }
 
     /// The listed copies another copy of the same session stands for, so they are neither
-    /// listed nor followed. A session a vault replicates is listed once: from its own host while
-    /// that host is paired here and connected; else from the vault, read-only.
-    static func shadowed(_ machines: [Machine]) -> Set<SessionKey> {
-        // Each session by its own host: as a connected host lists it, and as a vault does.
-        var live: Set<SessionKey> = []
-        var replicated: Set<SessionKey> = []
+    /// listed nor followed; see `copies`.
+    static func shadowed(_ machines: [Machine]) -> Set<SessionKey> { copies(machines).shadowed }
+
+    /// Which copy of each session is listed, where its own host and the vaults that replicate
+    /// it each list one: its own host's while that host is connected; else a connected vault's,
+    /// read-only; and with none of them connected the copy in `previous`, an earlier answer's
+    /// `shown`, so that losing the network moves no session from one copy to another.
+    static func copies(_ machines: [Machine], keeping previous: [SessionKey: SessionKey] = [:]) -> SessionCopies {
+        var copies = SessionCopies()
+        // Without a vault's copy of another host's session every session is listed once.
+        guard machines.contains(where: { machine in
+            machine.sessions.contains { $0.hostId.map { $0 != machine.hostId } ?? false }
+        }) else { return copies }
+        struct Copy {
+            let key: SessionKey
+            let own: Bool
+            let connected: Bool
+        }
+        // Each session's copies, by the session on its own host.
+        var groups: [SessionKey: [Copy]] = [:]
         for machine in machines {
+            let connected = machine.connection == .connected
             for head in machine.sessions {
-                if let origin = head.hostId, origin != machine.hostId {
-                    replicated.insert(SessionKey(hostId: origin, sessionId: head.sessionId))
-                } else if machine.connection == .connected {
-                    live.insert(SessionKey(hostId: machine.hostId, sessionId: head.sessionId))
+                let origin = SessionKey(hostId: head.hostId ?? machine.hostId, sessionId: head.sessionId)
+                groups[origin, default: []].append(Copy(
+                    key: SessionKey(hostId: machine.hostId, sessionId: head.sessionId),
+                    own: origin.hostId == machine.hostId, connected: connected))
+            }
+        }
+        for (origin, group) in groups where group.count > 1 {
+            let kept = previous[origin]
+            let vaults = group.filter { !$0.own && $0.connected }
+            let own = group.first { $0.own && $0.connected }
+            let vault = vaults.first { $0.key == kept } ?? vaults.first
+            let before = group.first { $0.key == kept }
+            let shown = own ?? vault ?? before ?? group.first { !$0.own } ?? group[0]
+            copies.shown[origin] = shown.key
+            for copy in group {
+                copies.others[copy.key] = group.map(\.key).filter { $0 != copy.key }
+                if copy.key != shown.key {
+                    copies.shadowed.insert(copy.key)
+                    copies.standIns[copy.key] = shown.key
                 }
             }
         }
-        var shadowed: Set<SessionKey> = []
-        for machine in machines {
-            for head in machine.sessions {
-                let key = SessionKey(hostId: machine.hostId, sessionId: head.sessionId)
-                if let origin = head.hostId, origin != machine.hostId {
-                    if live.contains(SessionKey(hostId: origin, sessionId: head.sessionId)) { shadowed.insert(key) }
-                } else if machine.connection != .connected && replicated.contains(key) {
-                    shadowed.insert(key)
-                }
-            }
-        }
-        return shadowed
+        return copies
     }
 
     private static func summary(_ machine: Machine, entries: [Entry], now: Date) -> MachineSummary {
@@ -434,6 +455,19 @@ struct Lists: Equatable {
                 agents: NativeAgent.listed(in: model), threads: head.threads, origin: head.origin)
         }
     }
+}
+
+/// Which copy of each session is listed, of the sessions listed more than once: by their own
+/// host and by the vaults that replicate it. See `Lists.copies`.
+struct SessionCopies: Equatable {
+    /// The copy listed, by the session on its own host.
+    var shown: [SessionKey: SessionKey] = [:]
+    /// The copies another stands for: neither listed nor followed.
+    var shadowed: Set<SessionKey> = []
+    /// The copy listed in place of each shadowed one.
+    var standIns: [SessionKey: SessionKey] = [:]
+    /// Each copy's other copies.
+    var others: [SessionKey: [SessionKey]] = [:]
 }
 
 extension PendingRequest {
