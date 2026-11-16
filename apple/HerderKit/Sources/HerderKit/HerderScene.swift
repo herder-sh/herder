@@ -1,9 +1,19 @@
 import Herder
 import SwiftUI
 
-/// The app's scene: opens the profile once and ties the client to the app's lifecycle.
+/// The app's scene: shows the app's profile and ties its client to the app's lifecycle.
 public struct HerderScene: Scene {
-    @State private var profile = Profile.openDefault()
+    /// The app's profile, opened once for the process.
+    ///
+    /// Not with each scene: SwiftUI makes the scene again whenever it evaluates the app's body,
+    /// and a profile opened as a scene's initial state stays alive for as long as that scene
+    /// value does, though SwiftUI shows the first one's. Each profile opened is a client that
+    /// connects to every machine, so the app held two connections to each: the one it showed,
+    /// and one nobody saw, suspended or woke, which had every list sent to it too and
+    /// reconnected on its own.
+    @MainActor static let opened = Profile.openDefault()
+
+    let profile = HerderScene.opened
     /// The demo, while it is open in place of the profile's fleet.
     @State private var demo: Fleet?
     @Environment(\.scenePhase) private var scenePhase

@@ -39,7 +39,9 @@
 //! connections nothing, until the user orders the addresses or asks to reconnect. A
 //! connection that works is kept: only new addresses move it, to one that comes before its
 //! own, once that answers. After a failure or a lost connection it waits a capped,
-//! jittered exponential backoff (250 ms doubling to 30 s) and tries again, forever.
+//! jittered exponential backoff (250 ms doubling to 30 s) and tries again, forever. One
+//! connection of a race says hello, and connections that keep ending within 30 s of being
+//! made are made less and less often, as failed attempts are.
 //! [`Machine::connection`] says where it stands, and [`Client::synced`] waits until a
 //! connection is up and the daemon has sent its lists and the replay of every subscription.
 //!

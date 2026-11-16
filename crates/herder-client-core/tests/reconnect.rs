@@ -2,13 +2,16 @@
 //! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, an
 //! account login, an AWS sign-in, resource figures, the sync barrier, renaming and forgetting a machine, a
 //! reconnect through a chosen address, the address that answered last, the app lifecycle: suspension, wake probes and the offline cache,
-//! a connection gone dead, a slow upload, and a new device asked to sign in as a person.
+//! a connection gone dead, a slow upload, a new device asked to sign in as a person, and what
+//! keeps a client from reconnecting in storms: one hello however many addresses race,
+//! connections that die young made less and less often, a slow link kept through a long
+//! replay, and the daemon's log saying why a client let a connection go.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
@@ -3035,4 +3038,379 @@ async fn a_command_finds_a_dead_connection_and_is_answered_on_the_next() {
     let machine = client.machines().remove(0);
     assert!(connected(&machine.connection));
     assert_eq!(machine.quality.reconnects, 1);
+}
+
+/// What the daemons of this test process log at info and above, as a daemon does by default.
+#[derive(Clone, Default)]
+struct Logged(Arc<Mutex<Vec<u8>>>);
+
+/// The log of this test process: the subscriber is the process's, as whether anyone listens
+/// to a log statement is settled once, on whichever thread reaches it first.
+static LOGGED: LazyLock<Logged> = LazyLock::new(|| {
+    let logged = Logged::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing_subscriber::filter::LevelFilter::INFO)
+        .with_ansi(false)
+        .with_writer({
+            let logged = logged.clone();
+            move || logged.clone()
+        })
+        .finish();
+    // Nothing else in this test process sets one.
+    let _ = tracing::subscriber::set_global_default(subscriber);
+    logged
+});
+
+impl std::io::Write for Logged {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Logged {
+    /// The lines logged so far that hold `text` about the client named `client`.
+    fn lines(&self, text: &str, client: &str) -> Vec<String> {
+        let client = format!("client={client} ");
+        String::from_utf8_lossy(&self.0.lock().unwrap())
+            .lines()
+            .filter(|line| line.contains(text) && line.contains(&client))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// [`Logged::lines`], once there are `count` of them.
+    async fn wait_lines(&self, text: &str, client: &str, count: usize) -> Vec<String> {
+        let logged = async {
+            loop {
+                let lines = self.lines(text, client);
+                if lines.len() >= count {
+                    return lines;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        tokio::time::timeout(TIMEOUT, logged)
+            .await
+            .unwrap_or_else(|_| panic!("fewer than {count} lines with {text:?} for {client}"))
+    }
+}
+
+/// A relay to `target` on which everything arrives `lag` late, either way, as on a link with
+/// that much latency.
+async fn lagging(target: SocketAddr, lag: Duration) -> SocketAddr {
+    /// Passes on what `from` sends, each read `lag` after it was made.
+    async fn late(
+        mut from: impl AsyncRead + Unpin,
+        mut to: impl AsyncWrite + Unpin + Send + 'static,
+        lag: Duration,
+    ) {
+        let (read, mut due) =
+            tokio::sync::mpsc::unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
+        tokio::spawn(async move {
+            while let Some((at, bytes)) = due.recv().await {
+                tokio::time::sleep_until(at).await;
+                if to.write_all(&bytes).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let mut chunk = vec![0; 64 * 1024];
+        loop {
+            match from.read(&mut chunk).await {
+                Ok(0) | Err(_) => return,
+                Ok(count) => {
+                    let at = tokio::time::Instant::now() + lag;
+                    if read.send((at, chunk[..count].to_vec())).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((inbound, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                // The connect lags as what follows it does.
+                tokio::time::sleep(lag).await;
+                let Ok(outbound) = TcpStream::connect(target).await else {
+                    return;
+                };
+                let (from_client, to_client) = inbound.into_split();
+                let (from_daemon, to_daemon) = outbound.into_split();
+                // Either end closing drops both.
+                tokio::select! {
+                    () = late(from_client, to_daemon, lag) => {}
+                    () = late(from_daemon, to_client, lag) => {}
+                }
+            });
+        }
+    });
+    addr
+}
+
+/// The daemon lists everything and replays every session asked for to each connection that
+/// says hello. On a link slow enough that the first address is still at its hello when the
+/// second has its head start behind it, both got that far, and the daemon did all of it
+/// twice, for a connection the client dropped the moment the other answered: the log of a
+/// phone on a bad network showed its connects in pairs, 30 to 300 ms apart. One connection
+/// says hello, whichever addresses got how far; so does a connection that only finds out
+/// whether an address that comes first answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn racing_addresses_say_one_hello() {
+    let logged = &*LOGGED;
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    // A quarter of a second each way: an address says hello a second after it was dialled
+    // and has its answer half a second later, 200 ms after the next one said its own.
+    let lag = Duration::from_millis(250);
+    let first = lagging(daemon.addr, lag).await.to_string();
+    let second = lagging(daemon.addr, lag).await.to_string();
+    let name = "herder-one-hello/0";
+    let client =
+        Client::open(tmp.path().join("client").display().to_string(), name.into()).unwrap();
+    // Signing in says a hello of its own, on its own connection.
+    let hosts = vec![first.clone(), second.clone()];
+    let host = authenticator::sign_in(&daemon.auth, &client, hosts, &daemon.fingerprint, "alice")
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+    let said = logged.lines("client connected", name).len();
+
+    for reconnects in 1..=3 {
+        assert_eq!(client.reconnect(host.clone()).await, Ok(first.clone()));
+        client.synced(host.clone()).await.unwrap();
+        // Past the time the address that lost would have needed for its hello.
+        tokio::time::sleep(lag * 3).await;
+        let hellos = logged.lines("client connected", name);
+        assert_eq!(hellos.len(), said + reconnects, "{hellos:#?}");
+    }
+    let said = logged.lines("client connected", name).len();
+
+    // An address put first that answers moves the connection there: finding out that it
+    // answers says no hello, the connection that moves there says one.
+    let direct = daemon.addr.to_string();
+    client
+        .set_addresses(host.clone(), vec![direct.clone(), first, second])
+        .unwrap();
+    wait_machine(&client, |machine| {
+        machine.address.as_deref() == Some(direct.as_str()) && connected(&machine.connection)
+    })
+    .await;
+    client.synced(host).await.unwrap();
+    tokio::time::sleep(lag * 3).await;
+    let hellos = logged.lines("client connected", name);
+    assert_eq!(hellos.len(), said + 1, "{hellos:#?}");
+}
+
+/// A network that lets a connection be made and then drops it, or carries nothing on it,
+/// had the client connect again at once, each time: the log of a phone on such a network
+/// showed it every six seconds for minutes, each connection made at once after the one
+/// before was found dead. The daemon lists everything and replays to every one of them,
+/// which such a network carries no better. Connections that keep ending young are made less
+/// and less often.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connections_that_keep_dying_young_are_made_less_and_less_often() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let relay = Relay::start(daemon.addr).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", relay.addr)
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+    let before = relay.accepted();
+
+    // Every connection is dropped a moment after it was made, for six seconds.
+    let started = std::time::Instant::now();
+    let mut cut = 0;
+    while started.elapsed() < Duration::from_secs(6) {
+        if relay.accepted() > cut {
+            cut = relay.accepted();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            relay.cut();
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // At once, then after a second or two, then after two to four; not every 350 ms.
+    let made = relay.accepted() - before;
+    assert!((2..=4).contains(&made), "{made} connections in six seconds");
+
+    // The network is back: so is the connection, with nothing asked of the client.
+    wait_machine(&client, |machine| {
+        relay.accepted() > cut && connected(&machine.connection)
+    })
+    .await;
+    client.synced(host).await.unwrap();
+}
+
+/// A relay to `target` that passes on what the daemon sends at no more than `rate` bytes a
+/// second, as a slow downlink would; how many connections it accepted.
+async fn slow_down(target: SocketAddr, rate: u64) -> (SocketAddr, Arc<AtomicU64>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted = Arc::new(AtomicU64::new(0));
+    let count = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        while let Ok((mut inbound, _)) = listener.accept().await {
+            count.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let mut outbound = TcpStream::connect(target).await.unwrap();
+                let (mut from_client, mut to_client) = inbound.split();
+                let (mut from_daemon, mut to_daemon) = outbound.split();
+                tokio::select! {
+                    () = trickle(&mut from_daemon, &mut to_client, rate) => {}
+                    _ = tokio::io::copy(&mut from_client, &mut to_daemon) => {}
+                }
+            });
+        }
+    });
+    (addr, accepted)
+}
+
+/// A long replay on a slow link takes far longer than a dead connection is given to show a
+/// sign of life, and the pongs of the pings sent meanwhile wait behind all of it. Taken for
+/// dead, the connection would be replaced, the replay start over, and so on for as long as
+/// the link is slow. A connection that carries anything is alive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_link_carrying_a_long_replay_is_not_taken_for_dead() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp.path().join("app"));
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "interrupted_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let desktop = Client::open(
+        tmp.path().join("desktop").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&desktop, "alice", daemon.addr)
+        .await
+        .unwrap()
+        .host_id;
+    let session_id = create_session(&desktop, &host, repo).await;
+    // Three megabytes of journal, in one event.
+    let text = "replayed ".repeat(350_000);
+    let prompt = CommandBody::SendPrompt {
+        session_id: session_id.clone(),
+        text: text.clone(),
+        images: Vec::new(),
+        files: Vec::new(),
+    };
+    assert_eq!(
+        desktop.send(host.clone(), prompt).await.unwrap(),
+        CommandResult::Applied
+    );
+
+    // 250 kB a second: the replay takes over twelve seconds.
+    let (slow, accepted) = slow_down(daemon.addr, 250_000).await;
+    let phone = Client::open(
+        tmp.path().join("phone").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    daemon.sign_in(&phone, "alice", slow).await.unwrap();
+    phone.synced(host.clone()).await.unwrap();
+    assert_eq!(accepted.load(Ordering::SeqCst), 2);
+
+    let started = std::time::Instant::now();
+    let sub = phone.subscribe_session(host.clone(), session_id).unwrap();
+    // The app comes to the front and the network changes while it replays.
+    phone.wake();
+    let replayed = async {
+        loop {
+            let update = sub.next().await.expect("the subscription ended");
+            let prompted = |event: &Event| serde_json::to_string(event).unwrap().len() > text.len();
+            if update.events.iter().any(prompted) {
+                return;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(60), replayed)
+        .await
+        .expect("the replay did not arrive");
+    assert!(
+        started.elapsed() > Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(accepted.load(Ordering::SeqCst), 2);
+    let machine = &phone.machines()[0];
+    assert!(connected(&machine.connection));
+    assert_eq!(machine.quality.reconnects, 0);
+}
+
+/// A client that keeps reconnecting is diagnosed from the daemon's log: a connection the
+/// client gives up tells the daemon why as it closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connection_given_up_tells_the_daemon_why() {
+    let logged = &*LOGGED;
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let name = "herder-says-why/0";
+    let client =
+        Client::open(tmp.path().join("client").display().to_string(), name.into()).unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+
+    client.reconnect(host.clone()).await.unwrap();
+    // The connection that signed the device in was dropped without a word.
+    let closed = "the client closed the connection: ";
+    let line = logged.wait_lines(closed, name, 1).await.remove(0);
+    assert!(line.contains("client disconnected"), "{line}");
+    assert!(line.contains(r#""reconnecting, as asked""#), "{line}");
+
+    // So does one whose address is no longer one of the machine's.
+    let relay = Relay::start(daemon.addr).await;
+    client
+        .set_addresses(host.clone(), vec![relay.addr.to_string()])
+        .unwrap();
+    let line = logged.wait_lines(closed, name, 2).await.remove(1);
+    let reason = format!(
+        "{} is no longer one of the machine's addresses",
+        daemon.addr
+    );
+    assert!(line.contains(&reason), "{line}");
+    client.synced(host).await.unwrap();
 }

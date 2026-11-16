@@ -683,6 +683,11 @@ impl Outbox {
         self.lock().queue.is_empty()
     }
 
+    /// How many messages wait to be written.
+    pub(crate) fn queued(&self) -> usize {
+        self.lock().queue.len()
+    }
+
     pub(crate) fn state(&self) -> OutboxState {
         self.lock().state
     }
