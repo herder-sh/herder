@@ -698,6 +698,8 @@ struct DraftSessionView: View {
     @State private var error: String?
     /// The first message while the session is being created.
     @State private var starting: String?
+    /// The fleet's start of the session, followed while this view is open.
+    @State private var sent: Task<Result<SessionKey, any Error>, Never>?
     @State private var picking = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -765,7 +767,7 @@ struct DraftSessionView: View {
                 settings: [accountSection, machineSection],
                 skills: fleet.draftSkills(on: hostId, account: account?.accountId),
                 setMode: { mode = $0 },
-                send: { Task { await start() } },
+                send: start,
                 stop: {}
             ) {
                 FooterMenu(section: machineSection, text: machine?.name ?? "", help: "Where it runs")
@@ -812,6 +814,10 @@ struct DraftSessionView: View {
             PromptDrafts.shared.save(draftContent, for: draft.key)
         }
         .onChange(of: text, initial: true) { typed?.wrappedValue = text }
+        // Cancelled on leaving: the session then starts without pulling you back to it.
+        .task(id: sent) {
+            if let sent { await follow(sent) }
+        }
         .onDisappear {
             if starting == nil { PromptDrafts.shared.save(draftContent, for: draft.key) }
         }
@@ -904,7 +910,9 @@ struct DraftSessionView: View {
         }
     }
 
-    private func start() async {
+    /// Hands the prompt to the fleet, which starts the session in the background; this view
+    /// shows it starting while it stays open, and any other can be opened meanwhile.
+    private func start() {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !images.isEmpty || !files.isEmpty else { return }
         guard let account else {
@@ -913,7 +921,9 @@ struct DraftSessionView: View {
         }
         ModePreference.remember(mode, for: draft)
         if draft.projectId != nil || draft.isChat { MachinePreference.remember(hostId, for: draft.key) }
-        let (sent, sentFiles) = (images, files)
+        PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: draft.key)
+        sent = fleet.start(target, accountId: account.accountId, model: choice.model, mode: mode, prompt: prompt,
+                           images: images, files: files)
         withAnimation(.smooth(duration: 0.4)) {
             starting = prompt
             error = nil
@@ -921,22 +931,25 @@ struct DraftSessionView: View {
             images = []
             files = []
         }
-        PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: draft.key)
-        do {
-            created(try await fleet.createSession(
-                on: hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId,
-                chat: draft.isChat, accountId: account.accountId,
-                model: choice.model, mode: mode, prompt: prompt, images: sent, files: sentFiles))
-        } catch {
+    }
+
+    /// Opens the session once created, or takes the prompt back to send again, while this view
+    /// is still open; once left, the fleet has the prompt put back and says why.
+    private func follow(_ sent: Task<Result<SessionKey, any Error>, Never>) async {
+        let result = await sent.value
+        guard !Task.isCancelled else { return }
+        switch result {
+        case .success(let key):
+            created(key)
+        case .failure(let failure):
+            let kept = PromptDrafts.shared.load(draft.key)
             withAnimation(.smooth(duration: 0.4)) {
                 starting = nil
-                text = prompt
-                images = sent
-                files = sentFiles
-                self.error = describe(error)
+                text = kept?.text ?? ""
+                images = kept?.herderImages ?? []
+                files = kept?.promptFiles ?? []
+                error = describe(failure)
             }
-            PromptDrafts.shared.save(PromptDrafts.Content(text: prompt, images: sent, files: sentFiles, draft: target),
-                                     for: draft.key)
         }
     }
 }

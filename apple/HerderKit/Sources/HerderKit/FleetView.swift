@@ -224,7 +224,8 @@ struct FleetView: View {
         .fullScreenCover(item: Binding(get: { sizeClass == .compact ? draft : nil }, set: { draft = $0 })) { draft in
             NavigationStack {
                 DraftSessionView(fleet: fleet, draft: draft, created: opened) { self.draft = $0 }
-                    .toolbar { Button("Cancel") { self.draft = nil } }
+                    // Closing keeps what is typed, and a session sent from it starts all the same.
+                    .toolbar { Button("Close") { self.draft = nil } }
             }
         }
         #endif
@@ -579,7 +580,8 @@ struct ProjectView: View {
         let project = fleet.lists.projects.first { $0.id == id }
         Group {
             if let project {
-                ProjectSessions(fleet: fleet, live: project.live, archived: project.archived, query: query)
+                ProjectSessions(fleet: fleet, live: project.live, archived: project.archived, query: query,
+                                starting: fleet.starting.filter { $0.draft.projectId == id })
             }
         }
         .alwaysSearchable(text: $query, prompt: "Sessions")
@@ -609,7 +611,8 @@ struct ChatsView: View {
 
     var body: some View {
         let lists = fleet.lists
-        let empty = lists.chats.isEmpty && lists.archivedChats.isEmpty
+        let starting = fleet.starting.filter(\.draft.isChat)
+        let empty = lists.chats.isEmpty && lists.archivedChats.isEmpty && starting.isEmpty
         VStack(spacing: 0) {
             Picker("Chats", selection: $shown) {
                 Text("Mine").tag(Shown.mine)
@@ -628,7 +631,8 @@ struct ChatsView: View {
                     ContentUnavailableView("No chats", systemImage: Switcher.chatSymbol,
                                            description: Text("Ask anything, about no project."))
                 case .mine:
-                    ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, query: query)
+                    ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, query: query,
+                                    starting: starting)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

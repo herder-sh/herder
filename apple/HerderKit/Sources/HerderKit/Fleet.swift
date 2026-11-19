@@ -64,6 +64,8 @@ public final class Fleet {
     var renaming: SessionKey?
     /// A short note about something that just finished, shown briefly.
     var toast: Toast?
+    /// The sessions sent from a draft that their machine has not created yet; see `start`.
+    private(set) var starting: [StartingSession] = []
     /// A session started away from its list, as Fix with AI starts one, for the window to show.
     var revealed: SessionKey?
     /// A claim a vault setup asks you to approve, for the window to show its approval sheet.
@@ -662,6 +664,32 @@ public final class Fleet {
         return key
     }
 
+    /// Starts a session from a draft in the background, so the draft is free to close and
+    /// another to start meanwhile: it is listed in `starting` until its machine creates it. A
+    /// failure puts the prompt back in the draft, kept in `drafts`, and is toasted.
+    func start(
+        _ draft: Draft, accountId: AccountId, model: String, mode: PermissionMode, prompt: String,
+        images: [Herder.Image] = [], files: [PromptFile] = [], drafts: PromptDrafts = .shared
+    ) -> Task<Result<SessionKey, any Error>, Never> {
+        let pending = StartingSession(draft: draft, prompt: prompt)
+        starting.append(pending)
+        return Task {
+            defer { starting.removeAll { $0.id == pending.id } }
+            do {
+                return .success(try await createSession(
+                    on: draft.hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId,
+                    chat: draft.isChat, accountId: accountId, model: model, mode: mode, prompt: prompt,
+                    images: images, files: files))
+            } catch {
+                drafts.restore(PromptDrafts.Content(text: prompt, images: images, files: files, draft: draft),
+                               for: draft.key)
+                let name = machines.first { $0.hostId == draft.hostId }?.name ?? draft.hostId
+                toast = .failure("Could not start the session on \(name)", error)
+                return .failure(error)
+            }
+        }
+    }
+
     /// Sends what the user typed, with its attachments: the answer to the session's oldest
     /// question when one is pending, else a prompt, queued behind the turn when one runs, as
     /// the TUI does.
@@ -1142,6 +1170,13 @@ struct ArchiveRefusal: Identifiable {
 }
 
 /// A brief note, with Undo when the session it is about can be brought back.
+/// A session sent from a draft, while its machine creates it.
+struct StartingSession: Identifiable, Equatable {
+    let id = UUID()
+    let draft: Draft
+    let prompt: String
+}
+
 struct Toast: Identifiable, Equatable {
     let id = UUID()
     /// The headline, on one line in the toast.

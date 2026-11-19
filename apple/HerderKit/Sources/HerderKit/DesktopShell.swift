@@ -179,15 +179,21 @@ struct DesktopShell: View {
     }
 
     /// A list under the cards of the sessions being written, so they show among the rest until
-    /// started or dropped: the open draft, then those left unsent that `shows`, by default
-    /// every one but a chat.
+    /// started or dropped: those sent and starting, the open draft, then those left unsent;
+    /// each that `shows`, by default every one but a chat.
     private func drafting<List: View>(
         _ shows: (Draft) -> Bool = { !$0.isChat }, @ViewBuilder _ list: () -> List
     ) -> some View {
         let unsent = PromptDrafts.shared.unsent.compactMap { kept in kept.draft.map { (draft: $0, text: kept.text) } }
             .filter { $0.draft.key != draft?.key && shows($0.draft) }
         let cards = (draft.map { [(draft: $0, text: typed)] } ?? []) + unsent
+        let starting = fleet.starting.filter { shows($0.draft) }
         return VStack(spacing: 8) {
+            ForEach(starting) { start in
+                StartingCard(start: start, fleet: fleet)
+                    .frame(maxWidth: 760)
+                    .padding(.horizontal, 16)
+            }
             ForEach(cards, id: \.draft.key) { card in
                 DraftCard(draft: card.draft, fleet: fleet, text: card.text, open: card.draft.key == draft?.key) {
                     draft = card.draft
@@ -198,7 +204,7 @@ struct DesktopShell: View {
                 .frame(maxWidth: 760)
                 .padding(.horizontal, 16)
             }
-            list().padding(.top, cards.isEmpty ? 0 : 2)
+            list().padding(.top, cards.isEmpty && starting.isEmpty ? 0 : 2)
         }
     }
 
@@ -887,6 +893,9 @@ struct ProjectSessions: View {
     let query: String
     /// Where a tapped session opens beside the list; `nil` pushes it.
     var selection: Binding<SessionKey?>?
+    /// The sessions sent from a draft here that are still starting, on iPhone, which shows no
+    /// draft cards beside its lists.
+    var starting: [StartingSession] = []
     @AppStorage(BoardSort.sessionsKey) private var sort = BoardSort.recent
     @State private var showsArchived = false
     @Environment(\.undoManager) private var undoManager
@@ -898,7 +907,8 @@ struct ProjectSessions: View {
         let rows = sections.flatMap(\.trees) + (showsArchived ? archived : [])
         let machines = Self.spansMachines(live + self.archived)
         List {
-            if open.isEmpty && archived.isEmpty {
+            ForEach(starting) { StartingCard(start: $0, fleet: fleet).taskListRow() }
+            if open.isEmpty && archived.isEmpty && starting.isEmpty {
                 Text("No sessions match.")
                     .foregroundStyle(Theme.tertiary)
                     .padding(.vertical, 24)
