@@ -1,6 +1,7 @@
 //! The TLS WebSocket server clients connect to.
 //!
-//! Each connection runs: TLS with a device certificate, WebSocket upgrade, client hello,
+//! Each connection runs (directly, or inside a tunnel's frames: [`tunnel`]): TLS with a
+//! device certificate, WebSocket upgrade, client hello,
 //! authentication, server hello, list messages, then subscriptions and commands. A subscription replays the session's journal after the
 //! client's cursor, then streams live events from the [`Hub`] without gaps or duplicates.
 
@@ -10,6 +11,7 @@ mod conn;
 #[cfg(test)]
 mod tests;
 mod tls;
+mod tunnel;
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -28,10 +30,10 @@ use tracing::{debug, warn};
 
 pub(crate) use conn::handshake;
 pub use tls::{Tls, fingerprint};
+pub(crate) use tunnel::Transport;
 
 /// A connection after the TLS and WebSocket handshakes.
-pub(crate) type Ws =
-    tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>;
+pub(crate) type Ws = tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<Transport>>;
 
 use crate::auth::control::addresses;
 use crate::auth::{self, Auth};
@@ -1034,6 +1036,16 @@ impl<B: Backend> Server<B> {
     /// Accepts connections on every one of `listeners` until `shutdown`, which also closes
     /// every connection.
     pub async fn run(self, listeners: Vec<TcpListener>, shutdown: CancellationToken) {
+        self.run_tunneled(listeners, None, shutdown).await;
+    }
+
+    /// [`Server::run`], also accepting connections `cloudflared` delivers on `tunnel`.
+    pub async fn run_tunneled(
+        self,
+        listeners: Vec<TcpListener>,
+        tunnel: Option<TcpListener>,
+        shutdown: CancellationToken,
+    ) {
         match listen::local_addrs(&listeners) {
             Ok(listen) => self.listening_on(listen),
             Err(err) => warn!("cannot tell the addresses the server listens on: {err}"),
@@ -1045,15 +1057,22 @@ impl<B: Backend> Server<B> {
         });
         let mut acceptor = listen::Acceptor::default();
         loop {
-            let accepted = tokio::select! {
+            let (accepted, tunneled) = tokio::select! {
                 () = shutdown.cancelled() => break,
-                accepted = acceptor.accept(&listeners) => accepted,
+                accepted = acceptor.accept(&listeners) => (accepted, false),
+                accepted = accept_tunneled(tunnel.as_ref()) => (accepted, true),
             };
             match accepted {
                 Ok((stream, peer)) => {
-                    debug!(%peer, "connection accepted");
+                    debug!(%peer, tunneled, "connection accepted");
                     let shared = Arc::clone(&self.shared);
-                    tokio::spawn(conn::run(stream, peer, shared, shutdown.child_token()));
+                    tokio::spawn(conn::run(
+                        stream,
+                        peer,
+                        tunneled,
+                        shared,
+                        shutdown.child_token(),
+                    ));
                 }
                 Err(err) => {
                     // Usually out of file descriptors; back off instead of spinning.
@@ -1063,5 +1082,15 @@ impl<B: Backend> Server<B> {
             }
         }
         let _ = flusher.await;
+    }
+}
+
+/// The next connection on the tunnel listener; never ready without one.
+async fn accept_tunneled(
+    tunnel: Option<&TcpListener>,
+) -> std::io::Result<(tokio::net::TcpStream, SocketAddr)> {
+    match tunnel {
+        Some(tunnel) => tunnel.accept().await,
+        None => std::future::pending().await,
     }
 }

@@ -38,7 +38,7 @@ pub(super) async fn run(
     let _ = stream.set_nodelay(true);
     let ws = tokio::select! {
         () = cancel.cancelled() => return,
-        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, ws::handshake(&shared.tls, stream)) => ws,
+        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, ws::handshake(&shared.tls, stream.into())) => ws,
     };
     let (mut ws, device) = match ws {
         Ok(Ok(ws)) => ws,

@@ -22,7 +22,7 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::{Backend, Identity, Shared, Tls, Ws, fingerprint};
+use super::{Backend, Identity, Shared, Tls, Transport, Ws, fingerprint, tunnel};
 use crate::auth::{self, Auth};
 use crate::hub::{Outbox, OutboxState};
 use crate::session;
@@ -58,9 +58,12 @@ const UNACKNOWLEDGED: Duration = Duration::from_secs(60);
 /// command was refused and keeps its connection; a message over this one closes it.
 const READ_LIMIT: usize = 4 * MAX_MESSAGE_BYTES;
 
+/// Serves a connection accepted on a listen address, or, with `tunneled`, on the tunnel
+/// listener, where it first takes `cloudflared`'s WebSocket upgrade.
 pub(super) async fn run<B: Backend>(
     stream: TcpStream,
     peer: SocketAddr,
+    tunneled: bool,
     shared: Arc<Shared<B>>,
     cancel: CancellationToken,
 ) {
@@ -72,7 +75,7 @@ pub(super) async fn run<B: Backend>(
     }
     let ws = tokio::select! {
         () = cancel.cancelled() => return,
-        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(&shared.tls, stream)) => ws,
+        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared.tls, stream, peer, tunneled)) => ws,
     };
     let (ws, device) = match ws {
         Ok(Ok(ws)) => ws,
@@ -86,6 +89,25 @@ pub(super) async fn run<B: Backend>(
         }
     };
     serve(ws, device, None, peer, shared, cancel).await;
+}
+
+/// The handshakes of a connection: on a tunneled one, the upgrade from `cloudflared` first.
+async fn open(
+    tls: &Tls,
+    stream: TcpStream,
+    peer: SocketAddr,
+    tunneled: bool,
+) -> Result<(Ws, String)> {
+    let transport = if tunneled {
+        let (frames, client) = tunnel::accept(stream)
+            .await
+            .context("the tunnel's WebSocket upgrade")?;
+        debug!(%peer, client = client.as_deref().unwrap_or("unknown"), "tunnel opened");
+        Transport::Tunnel(Box::new(frames))
+    } else {
+        Transport::Tcp(stream)
+    };
+    handshake(tls, transport).await
 }
 
 /// Has the kernel close `stream` once its peer is gone: one that stopped answering, with
@@ -182,7 +204,7 @@ pub(super) async fn serve<B: Backend>(
 }
 
 /// The TLS and WebSocket handshakes; returns the fingerprint of the peer's device certificate.
-pub(crate) async fn handshake(tls: &Tls, stream: TcpStream) -> Result<(Ws, String)> {
+pub(crate) async fn handshake(tls: &Tls, stream: Transport) -> Result<(Ws, String)> {
     let tls = tls.acceptor().accept(stream).await?;
     // The verifier makes a client certificate mandatory; this only guards against a change there.
     let device = tls

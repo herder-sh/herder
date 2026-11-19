@@ -29,7 +29,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_util::sync::CancellationToken;
 
-use super::{Backend, Host, Server, Tls};
+use super::{Backend, Host, Server, Tls, Transport, tunnel};
 use crate::auth::Auth;
 use crate::auth::authenticator::{self, Authenticator};
 use crate::auth::passkeys::Passkeys;
@@ -173,6 +173,8 @@ struct Daemon {
     addr: SocketAddr,
     /// A second address the server listens on, as a daemon given a list of them does.
     other: SocketAddr,
+    /// Where the server takes tunneled clients, as `cloudflared` delivers them.
+    tunnel: SocketAddr,
     fingerprint: String,
     auth: Arc<Auth>,
     /// A device paired as the owner.
@@ -232,6 +234,8 @@ impl Daemon {
         let addr = listener.local_addr().unwrap();
         let other_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let other = other_listener.local_addr().unwrap();
+        let tunnel_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let tunnel = tunnel_listener.local_addr().unwrap();
         let shutdown = CancellationToken::new();
         let host = Host {
             id: HostId::new("host"),
@@ -279,10 +283,15 @@ impl Daemon {
         };
         server.manage_aws(Aws::from_env(env)).unwrap();
         let control = server.control();
-        tokio::spawn(server.run(vec![listener, other_listener], shutdown.clone()));
+        tokio::spawn(server.run_tunneled(
+            vec![listener, other_listener],
+            Some(tunnel_listener),
+            shutdown.clone(),
+        ));
         Arc::new(Self {
             addr,
             other,
+            tunnel,
             fingerprint,
             auth,
             owner,
@@ -466,7 +475,7 @@ impl View {
 }
 
 struct Client {
-    ws: WebSocketStream<TlsStream<TcpStream>>,
+    ws: WebSocketStream<TlsStream<Transport>>,
     view: View,
     /// Sent in the hello.
     pairing_code: Option<String>,
@@ -489,8 +498,44 @@ impl Client {
             socket.set_recv_buffer_size(size).unwrap();
         }
         let tcp = socket.connect(addr).await.unwrap();
-        let tls = TlsConnector::from(Arc::new(config))
-            .connect(ServerName::try_from("localhost").unwrap(), tcp)
+        Self::over(Transport::Tcp(tcp), addr, &config, code).await
+    }
+
+    /// Connects through the tunnel listener at `tunnel`, as `cloudflared` relays a client that
+    /// reached the public hostname, with an `Origin` header if given; then as [`Client::connect`].
+    async fn connect_tunneled(
+        tunnel: SocketAddr,
+        fingerprint: &str,
+        device: &DeviceKey,
+        origin: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        let config = client_config(fingerprint, device).unwrap();
+        let tcp = TcpStream::connect(tunnel).await.unwrap();
+        let mut request = format!("ws://{tunnel}/").into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("cf-connecting-ip", "203.0.113.7".parse().unwrap());
+        if let Some(origin) = origin {
+            request
+                .headers_mut()
+                .insert("origin", origin.parse().unwrap());
+        }
+        let (outer, _) =
+            tokio_tungstenite::client_async_with_config(request, tcp, Some(tunnel::config()))
+                .await?;
+        let frames = Transport::Tunnel(Box::new(tunnel::Frames::new(outer)));
+        Ok(Self::over(frames, tunnel, &config, None).await?)
+    }
+
+    /// The TLS and WebSocket handshakes over `transport`.
+    async fn over(
+        transport: Transport,
+        addr: SocketAddr,
+        config: &rustls::ClientConfig,
+        code: Option<&str>,
+    ) -> std::io::Result<Self> {
+        let tls = TlsConnector::from(Arc::new(config.clone()))
+            .connect(ServerName::try_from("localhost").unwrap(), transport)
             .await?;
         let ws_config = WebSocketConfig::default()
             .max_message_size(None)
@@ -1272,6 +1317,89 @@ async fn every_listen_address_serves_clients() {
         let hello = client.hello(Vec::new()).await;
         assert_eq!(hello.role, Role::Owner);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tunneled_client_is_authenticated_as_a_direct_one() {
+    let daemon = Daemon::start().await;
+    let mut client =
+        Client::connect_tunneled(daemon.tunnel, &daemon.fingerprint, &daemon.owner, None)
+            .await
+            .unwrap();
+    let hello = client.hello(Vec::new()).await;
+    assert_eq!(hello.role, Role::Owner);
+    let session = daemon.create_session("s-tunnel");
+    let mut head = 0;
+    for n in 0..300 {
+        head = daemon
+            .append(&session, added(&format!("i{n}"), &"x".repeat(1000)))
+            .seq;
+    }
+    client.subscribe(&session, 0).await;
+    client.read_until(|view| view.last_seq() == head).await;
+    let seqs: Vec<Seq> = client.view.events.iter().map(|e| e.seq).collect();
+    assert_eq!(seqs, (1..=head).collect::<Vec<_>>());
+
+    // A device the daemon does not know gets no further through the tunnel than directly.
+    let stranger = DeviceKey::generate().unwrap();
+    let client = Client::connect_tunneled(daemon.tunnel, &daemon.fingerprint, &stranger, None)
+        .await
+        .unwrap();
+    assert_eq!(refused(client).await.code, ErrorCode::Forbidden);
+
+    // Cloudflare relays only ciphertext: the daemon's certificate is still pinned inside.
+    let other = tempfile::tempdir().unwrap();
+    let replaced = Tls::load_or_create(other.path(), "localhost").unwrap();
+    let err = Client::connect_tunneled(daemon.tunnel, replaced.fingerprint(), &daemon.owner, None)
+        .await
+        .err()
+        .expect("the tunneled handshake succeeded against an unpinned certificate");
+    assert!(
+        err.to_string()
+            .contains(&format!("fingerprint is {}", daemon.fingerprint)),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_tunnel_refuses_browsers_and_anything_but_an_upgrade() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let daemon = Daemon::start().await;
+    let err = Client::connect_tunneled(
+        daemon.tunnel,
+        &daemon.fingerprint,
+        &daemon.owner,
+        Some("https://evil.example.com"),
+    )
+    .await
+    .err()
+    .expect("a request with an Origin header was upgraded");
+    assert!(err.to_string().contains("403"), "{err}");
+
+    // A plain request gets nothing it could use.
+    let mut tcp = TcpStream::connect(daemon.tunnel).await.unwrap();
+    tcp.write_all(b"GET / HTTP/1.1\r\nHost: box.example.com\r\n\r\n")
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    tokio::time::timeout(TIMEOUT, tcp.read_to_end(&mut answer))
+        .await
+        .unwrap()
+        .unwrap();
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(
+        !answer.contains("200 OK") && !answer.contains("101"),
+        "{answer}"
+    );
+
+    // Direct listeners speak TLS only: an upgrade without it goes nowhere.
+    let direct = Client::connect_tunneled(daemon.addr, &daemon.fingerprint, &daemon.owner, None);
+    assert!(
+        tokio::time::timeout(TIMEOUT, direct)
+            .await
+            .unwrap()
+            .is_err()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
