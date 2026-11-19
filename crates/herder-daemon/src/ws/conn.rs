@@ -12,10 +12,11 @@ use futures_util::{FutureExt, SinkExt, StreamExt};
 use herder_protocol::{
     ClientHello, ClientMessage, Command, CommandId, CommandResult, Cursor, DeviceId, ErrorCode,
     ErrorInfo, EventBody, MAX_MESSAGE_BYTES, PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello,
-    ServerMessage, SignIn,
+    ServerMessage, SessionId, SignIn,
 };
 use serde::Deserialize;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::{self, Message};
@@ -343,6 +344,10 @@ async fn read<B: Backend>(
         .iter()
         .cloned()
         .map(|cursor| Ok(ClientMessage::Subscribe(cursor)));
+    // Replays run beside the messages, so a long one waiting on a slow client never holds up
+    // the commands sent after it. The task ends with the connection: once its outbox closes.
+    let (replays, queue) = mpsc::unbounded_channel();
+    tokio::spawn(replay(Arc::clone(shared), Arc::clone(outbox), queue));
     let mut waiting = VecDeque::new();
     let mut handling = None;
     // How reading ended, once it did; what was read by then is still handled.
@@ -351,7 +356,8 @@ async fn read<B: Backend>(
         if handling.is_none() {
             match resume.next().or_else(|| waiting.pop_front()) {
                 Some(message) => {
-                    handling = Some(handle(shared, outbox, &identity, &hello, message).boxed());
+                    handling =
+                        Some(handle(shared, outbox, &replays, &identity, &hello, message).boxed());
                 }
                 None => {
                     if let Some(ended) = ended.take() {
@@ -383,6 +389,7 @@ async fn read<B: Backend>(
 async fn handle<B: Backend>(
     shared: &Arc<Shared<B>>,
     outbox: &Arc<Outbox>,
+    replays: &mpsc::UnboundedSender<Replay>,
     identity: &Identity,
     hello: &ClientHello,
     message: Result<ClientMessage, Undecodable>,
@@ -390,11 +397,15 @@ async fn handle<B: Backend>(
     match message {
         Ok(ClientMessage::Hello(_)) => error(outbox, ErrorCode::BadRequest, "already said hello"),
         Ok(ClientMessage::SignIn(_)) => error(outbox, ErrorCode::BadRequest, "already signed in"),
-        Ok(ClientMessage::Subscribe(cursor)) => subscribe(shared, outbox, cursor).await,
-        Ok(ClientMessage::Unsubscribe { session_id }) => {
-            shared.hub.unsubscribe(outbox, &session_id);
+        Ok(ClientMessage::Subscribe(cursor)) => {
+            let _ = replays.send(Replay::Subscribe(cursor));
         }
-        Ok(ClientMessage::Sync { token }) => outbox.push(ServerMessage::Synced { token }),
+        Ok(ClientMessage::Unsubscribe { session_id }) => {
+            let _ = replays.send(Replay::Unsubscribe(session_id));
+        }
+        Ok(ClientMessage::Sync { token }) => {
+            let _ = replays.send(Replay::Sync(token));
+        }
         Ok(ClientMessage::Command(Command { id, body })) => {
             if let Err(error) = auth::authorize(identity.role, &body) {
                 outbox.push(ServerMessage::CommandRejected {
@@ -541,6 +552,32 @@ fn command_id(text: &str) -> Option<CommandId> {
         .ok()
         .filter(|tagged| tagged.r#type == "command")
         .map(|tagged| tagged.id)
+}
+
+/// A subscription change or sync, done in the order the client sent them.
+enum Replay {
+    Subscribe(Cursor),
+    Unsubscribe(SessionId),
+    /// Answered once every replay asked for before it is queued.
+    Sync(String),
+}
+
+/// Does the connection's subscription changes and syncs, one after the other.
+async fn replay<B: Backend>(
+    shared: Arc<Shared<B>>,
+    outbox: Arc<Outbox>,
+    mut queue: mpsc::UnboundedReceiver<Replay>,
+) {
+    while let Some(next) = queue.recv().await {
+        if outbox.state() != OutboxState::Open {
+            return;
+        }
+        match next {
+            Replay::Subscribe(cursor) => subscribe(&shared, &outbox, cursor).await,
+            Replay::Unsubscribe(session_id) => shared.hub.unsubscribe(&outbox, &session_id),
+            Replay::Sync(token) => outbox.push(ServerMessage::Synced { token }),
+        }
+    }
 }
 
 /// Replays the session's journal after the cursor, then switches the subscription to live.
