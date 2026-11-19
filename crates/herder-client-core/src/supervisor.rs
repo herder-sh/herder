@@ -83,12 +83,14 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+use crate::address;
 use crate::auth::{DeviceKey, client_config};
 use crate::cache::SessionLog;
 use crate::demo::{self, DemoAnswer, DemoMachine};
 use crate::offline::{self, Cached};
 use crate::profile::SavedMachine;
 use crate::terminal::{TerminalEvent, TerminalStream};
+use crate::tunnel::{self, Io};
 use crate::{ConnectionQuality, ConnectionState, Error, Machine, SessionUpdate, new_command_id};
 
 /// Time one address gets for TCP, TLS and the WebSocket upgrade.
@@ -169,14 +171,14 @@ impl Alive {
 /// the daemon acknowledged what it was sent. A write into a socket with room shows nothing:
 /// the kernel takes it for a daemon that is long gone too.
 pub(crate) struct Watched {
-    tcp: TcpStream,
+    tcp: Box<dyn Io>,
     alive: Alive,
     /// Whether the socket refused the last write.
     blocked: bool,
 }
 
 impl Watched {
-    fn new(tcp: TcpStream) -> Self {
+    fn new(tcp: Box<dyn Io>) -> Self {
         Self {
             tcp,
             alive: Alive(Arc::new(Mutex::new(Instant::now()))),
@@ -2406,15 +2408,21 @@ where
 /// there, and was told nothing yet.
 async fn reach(address: &str, connector: &TlsConnector) -> anyhow::Result<Ws> {
     let reaching = async {
-        let tcp = TcpStream::connect(address).await.context("connecting")?;
-        tcp.set_nodelay(true)?;
+        let stream: Box<dyn Io> = if address::is_tunnel(address) {
+            Box::new(tunnel::open(address).await?)
+        } else {
+            let tcp = TcpStream::connect(address).await.context("connecting")?;
+            tcp.set_nodelay(true)?;
+            Box::new(tcp)
+        };
         // The certificate is pinned by fingerprint, so the name is never checked.
         let name = ServerName::try_from("herder").context("the TLS server name")?;
         let tls = connector
-            .connect(name, Watched::new(tcp))
+            .connect(name, Watched::new(stream))
             .await
             .context("TLS")?;
-        let request = format!("wss://{address}/").into_client_request()?;
+        // The daemon reads nothing of the URL: inside a tunnel, its own address is as good.
+        let request = "wss://herder/".into_client_request()?;
         let (ws, _) = tokio_tungstenite::client_async(request, tls)
             .await
             .context("the WebSocket upgrade")?;

@@ -5,6 +5,11 @@
 //! signing in sorts them direct routes first: private network addresses (reached at home
 //! or through a VPN into it, such as UniFi Teleport), then other addresses, then Tailscale. The
 //! user can reorder them after that with [`crate::Client::set_addresses`]; nothing re-sorts them.
+//!
+//! An address is `host:port`, or the URL of a tunnel to the daemon, `wss://host[:port][/path]`
+//! (or `ws://`), such as a Cloudflare Tunnel's public hostname: the client runs its ordinary
+//! connection inside that WebSocket ([`crate::tunnel`]). Tunnels sort last, after Tailscale,
+//! as they relay every byte through a third party's edge.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -17,6 +22,9 @@ pub(crate) fn normalize(text: &str) -> Result<String, String> {
     let text = text.trim();
     if text.is_empty() {
         return Err("an address is empty".to_owned());
+    }
+    if text.contains("://") {
+        return normalize_url(text);
     }
     if text.contains(|c: char| c.is_whitespace() || c == '/') {
         return Err(format!("{text} is not a host or host:port"));
@@ -37,6 +45,49 @@ pub(crate) fn normalize(text: &str) -> Result<String, String> {
         Some(_) => Err(format!("{text} is not a host or host:port")),
         None => Ok(format!("{text}:{DEFAULT_PORT}")),
     }
+}
+
+/// `text`, a tunnel's URL, as saved: `https` read as `wss` and `http` as `ws`, since the
+/// hostname a tunnel gets is usually copied as a web address; no default port, and no path
+/// when it is `/`.
+fn normalize_url(text: &str) -> Result<String, String> {
+    let invalid = |why: &str| format!("{text} is not a tunnel URL: {why}");
+    let mut url = url::Url::parse(text).map_err(|err| invalid(&err.to_string()))?;
+    let scheme = match url.scheme() {
+        "wss" | "https" => "wss",
+        "ws" | "http" => "ws",
+        _ => return Err(invalid("it must start with wss:// or https://")),
+    };
+    if url.set_scheme(scheme).is_err() {
+        return Err(invalid("it must start with wss:// or https://"));
+    }
+    if url.host_str().is_none_or(str::is_empty) {
+        return Err(invalid("it names no host"));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(invalid("it may not carry a user name or password"));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(invalid("it may not have a query or fragment"));
+    }
+    let text = url.as_str();
+    Ok(if url.path() == "/" {
+        text.trim_end_matches('/').to_owned()
+    } else {
+        text.to_owned()
+    })
+}
+
+/// The part of `address` after `wss://` or `ws://`, for a tunnel's URL.
+fn tunneled(address: &str) -> Option<&str> {
+    address
+        .strip_prefix("wss://")
+        .or_else(|| address.strip_prefix("ws://"))
+}
+
+/// Whether `address` is a tunnel's URL rather than `host:port`.
+pub(crate) fn is_tunnel(address: &str) -> bool {
+    tunneled(address).is_some()
 }
 
 /// `addresses` without duplicates, direct routes first: see the module docs. Stable, so the
@@ -60,16 +111,28 @@ pub(crate) fn is_loopback(address: &str) -> bool {
         || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
-/// The host of `address`, as `host:port`, without the brackets of an IPv6 address.
+/// The host of `address`, as `host:port` or a tunnel's URL, without the brackets of an IPv6
+/// address.
 fn host(address: &str) -> &str {
-    address
-        .rsplit_once(':')
-        .map_or(address, |(host, _)| host)
-        .trim_matches(['[', ']'])
+    let authority = match tunneled(address) {
+        Some(rest) => rest.split('/').next().unwrap_or(rest),
+        None => address,
+    };
+    let host = if authority.ends_with(']') || !authority.contains(':') {
+        authority
+    } else {
+        authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host)
+    };
+    host.trim_matches(['[', ']'])
 }
 
-/// 0 for a private network address, 1 for any other, 2 for a Tailscale one.
+/// 0 for a private network address, 1 for any other, 2 for a Tailscale one, 3 for a tunnel.
 fn rank(address: &str) -> u8 {
+    if is_tunnel(address) {
+        return 3;
+    }
     let host = host(address);
     let Ok(ip) = host.parse::<IpAddr>() else {
         return if host.ends_with(".ts.net") {
@@ -129,11 +192,73 @@ mod tests {
             "box:0",
             "box:70000",
             "a b",
-            "http://box",
+            "box/x",
             ":7447",
         ] {
             assert!(normalize(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn tunnel_urls_are_kept_as_urls() {
+        let ok = |text: &str| normalize(text).unwrap();
+        assert_eq!(ok("wss://box.example.com"), "wss://box.example.com");
+        assert_eq!(ok(" wss://Box.Example.com/ "), "wss://box.example.com");
+        assert_eq!(ok("https://box.example.com"), "wss://box.example.com");
+        assert_eq!(ok("wss://box.example.com:443"), "wss://box.example.com");
+        assert_eq!(
+            ok("wss://box.example.com:8443"),
+            "wss://box.example.com:8443"
+        );
+        assert_eq!(
+            ok("wss://box.example.com/herder"),
+            "wss://box.example.com/herder"
+        );
+        assert_eq!(ok("http://127.0.0.1:7448"), "ws://127.0.0.1:7448");
+        assert_eq!(ok("http://box"), "ws://box");
+        assert_eq!(ok("ws://[::1]:7448/"), "ws://[::1]:7448");
+        for bad in [
+            "ftp://box.example.com",
+            "wss://",
+            "wss://user:pw@box.example.com",
+            "wss://box.example.com/?token=1",
+            "wss://box.example.com/#x",
+            "box.example.com/herder",
+        ] {
+            assert!(normalize(bad).is_err(), "{bad:?}");
+        }
+        assert!(is_tunnel("wss://box.example.com"));
+        assert!(!is_tunnel("box.example.com:7447"));
+    }
+
+    #[test]
+    fn tunnels_come_last_and_know_their_host() {
+        let ordered = default_order(
+            [
+                "wss://box.example.com",
+                "box.tail1234.ts.net:7447",
+                "203.0.113.7:7447",
+                "192.168.1.5:7447",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        );
+        assert_eq!(
+            ordered,
+            [
+                "192.168.1.5:7447",
+                "203.0.113.7:7447",
+                "box.tail1234.ts.net:7447",
+                "wss://box.example.com",
+            ]
+        );
+        assert_eq!(host("wss://box.example.com"), "box.example.com");
+        assert_eq!(host("wss://box.example.com:8443/herder"), "box.example.com");
+        assert_eq!(host("ws://[::1]:7448"), "::1");
+        assert_eq!(host("ws://[::1]"), "::1");
+        assert!(is_loopback("ws://127.0.0.1:7448"));
+        assert!(is_loopback("ws://localhost/x"));
+        assert!(!is_loopback("wss://box.example.com"));
     }
 
     #[test]

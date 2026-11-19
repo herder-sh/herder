@@ -169,6 +169,7 @@ mod sign_in;
 mod skills;
 mod supervisor;
 mod terminal;
+mod tunnel;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -697,7 +698,8 @@ impl Client {
 
     /// Connects to a machine at `addresses`, in this order of preference, from now on, and
     /// saves that. Each is a host name or an IP address, with an optional port (7447 by
-    /// default). A connection that is up stays up unless it uses an address no longer listed;
+    /// default), or the `wss://` (or `https://`) URL of a tunnel to the daemon, such as a
+    /// Cloudflare Tunnel's public hostname. A connection that is up stays up unless it uses an address no longer listed;
     /// one that uses an address the new order puts after one that answers moves there.
     pub fn set_addresses(&self, host_id: HostId, addresses: Vec<String>) -> Result<(), Error> {
         let mut normalized: Vec<String> = Vec::new();

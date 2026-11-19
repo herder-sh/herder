@@ -24,6 +24,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 ulid.workspace = true
 url.workspace = true
+webpki-roots.workspace = true
 
 [dev-dependencies]
 herder-adapters.workspace = true
