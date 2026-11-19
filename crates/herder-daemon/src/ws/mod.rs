@@ -189,6 +189,8 @@ struct Shared<B> {
     aws: OnceLock<Aws>,
     /// What a person's devices approve for each other, and the terminals each device had.
     approvals: Approvals,
+    /// Counts the tunneled connections not authenticated yet.
+    tunnel_gate: Arc<tunnel::Gate>,
 }
 
 impl<B: Backend> Shared<B> {
@@ -963,6 +965,10 @@ impl<B: Backend> Server<B> {
                 providers: OnceLock::new(),
                 aws: OnceLock::new(),
                 approvals: Approvals::new(APPROVAL_TTL),
+                tunnel_gate: tunnel::Gate::new(
+                    tunnel::UNAUTHENTICATED,
+                    tunnel::UNAUTHENTICATED_PER_CLIENT,
+                ),
             }),
         }
     }
@@ -1030,7 +1036,7 @@ impl<B: Backend> Server<B> {
         cancel: CancellationToken,
     ) {
         let shared = Arc::clone(&self.shared);
-        conn::serve(ws, device, Some(first), peer, shared, cancel).await;
+        conn::serve(ws, device, Some(first), None, peer, shared, cancel).await;
     }
 
     /// Accepts connections on every one of `listeners` until `shutdown`, which also closes

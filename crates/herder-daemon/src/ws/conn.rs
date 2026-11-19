@@ -75,9 +75,12 @@ pub(super) async fn run<B: Backend>(
     }
     let ws = tokio::select! {
         () = cancel.cancelled() => return,
-        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared.tls, stream, peer, tunneled)) => ws,
+        ws = tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            open(&shared.tls, &shared.tunnel_gate, stream, peer, tunneled),
+        ) => ws,
     };
-    let (ws, device) = match ws {
+    let (ws, device, pass) = match ws {
         Ok(Ok(ws)) => ws,
         Ok(Err(err)) => {
             info!(%peer, "handshake failed: {err:#}");
@@ -88,26 +91,29 @@ pub(super) async fn run<B: Backend>(
             return;
         }
     };
-    serve(ws, device, None, peer, shared, cancel).await;
+    serve(ws, device, None, pass, peer, shared, cancel).await;
 }
 
 /// The handshakes of a connection: on a tunneled one, the upgrade from `cloudflared` first.
+/// A tunneled connection also gets its pass through the tunnel's gate.
 async fn open(
     tls: &Tls,
+    gate: &Arc<tunnel::Gate>,
     stream: TcpStream,
     peer: SocketAddr,
     tunneled: bool,
-) -> Result<(Ws, String)> {
-    let transport = if tunneled {
-        let (frames, client) = tunnel::accept(stream)
+) -> Result<(Ws, String, Option<tunnel::Pass>)> {
+    let (transport, pass) = if tunneled {
+        let (frames, pass, client) = tunnel::accept(stream, gate)
             .await
             .context("the tunnel's WebSocket upgrade")?;
         debug!(%peer, client = client.as_deref().unwrap_or("unknown"), "tunnel opened");
-        Transport::Tunnel(Box::new(frames))
+        (Transport::Tunnel(Box::new(frames)), Some(pass))
     } else {
-        Transport::Tcp(stream)
+        (Transport::Tcp(stream), None)
     };
-    handshake(tls, transport).await
+    let (ws, device) = handshake(tls, transport).await?;
+    Ok((ws, device, pass))
 }
 
 /// Has the kernel close `stream` once its peer is gone: one that stopped answering, with
@@ -133,11 +139,13 @@ struct Who {
 }
 
 /// Serves a connection whose handshakes are done; `first` is its first text frame when the
-/// caller already read it. Logs why the connection ended.
+/// caller already read it, and `pass` counts a tunneled one until it authenticated. Logs why
+/// the connection ended.
 pub(super) async fn serve<B: Backend>(
     ws: Ws,
     device: String,
     first: Option<String>,
+    pass: Option<tunnel::Pass>,
     peer: SocketAddr,
     shared: Arc<Shared<B>>,
     cancel: CancellationToken,
@@ -155,7 +163,7 @@ pub(super) async fn serve<B: Backend>(
     // `None` when the writer or a shutdown ended the connection under the reader.
     let ended = tokio::select! {
         () = cancel.cancelled() => None,
-        result = read(stream, first, &shared, &outbox, (peer, &device), &cancel, &who) => {
+        result = read(stream, (first, pass), &shared, &outbox, (peer, &device), &cancel, &who) => {
             Some(result)
         }
     };
@@ -225,7 +233,7 @@ pub(crate) async fn handshake(tls: &Tls, stream: Transport) -> Result<(Ws, Strin
 /// closes the connection.
 async fn read<B: Backend>(
     mut stream: SplitStream<Ws>,
-    first: Option<String>,
+    (first, pass): (Option<String>, Option<tunnel::Pass>),
     shared: &Arc<Shared<B>>,
     outbox: &Arc<Outbox>,
     (peer, device): (SocketAddr, &str),
@@ -274,6 +282,8 @@ async fn read<B: Backend>(
             bail!("device {device} refused");
         }
     };
+    // Authenticated: no longer one of the strangers the tunnel's gate counts.
+    drop(pass);
     info!(
         %peer,
         client = %hello.client,
