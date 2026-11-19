@@ -532,11 +532,21 @@ mod tests {
 
     fn script(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
-        let path = dir.join(name);
-        std::fs::write(&path, body).unwrap();
-        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        let staging = tempfile::tempdir().unwrap();
+        let source = staging.path().join(name);
+        std::fs::write(&source, body).unwrap();
+        let mut perms = std::fs::metadata(&source).unwrap().permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(&path, perms).unwrap();
+        std::fs::set_permissions(&source, perms).unwrap();
+        // Copied into place by `cp`: a file this process wrote stays open for writing in every
+        // child another test thread forks until it execs, and running it then fails with ETXTBSY.
+        let path = dir.join(name);
+        let copied = std::process::Command::new("cp")
+            .arg(&source)
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(copied.success());
         path
     }
 
