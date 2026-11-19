@@ -18,8 +18,8 @@
 //!
 //! A person ([`Person`]) is one identity across every daemon that knows them, named by their
 //! passkeys ([`passkeys`]). A device the daemon does not know signs in as a person with a fresh
-//! assertion, claims a daemon with no owner with the code `herder install` printed, accepts an
-//! invite, or waits for an app of the person to approve its login. A person's devices are
+//! assertion, claims a daemon with no owner with the code `herder install` printed (the window
+//! closes after [`CLAIM_ATTEMPTS`] wrong codes), accepts an invite, or waits for an app of the person to approve its login. A person's devices are
 //! listed under them, and every connection from one acts as the person: its user id is the
 //! person's id. The per-daemon users of an install from before people stay, readable, until
 //! its owner claims them; nothing creates new ones.
@@ -80,6 +80,11 @@ const INVITE_LEN: usize = 20;
 /// Characters in a claim or login code. A person compares it by eye, and it only names a
 /// window a passkey must still sign into.
 const SHORT_CODE_LEN: usize = 6;
+
+/// Wrong codes a claim window takes before it closes. A claim code has 30 bits, and the right
+/// one makes whoever sends it an owner; a daemon reachable from the internet must not let a
+/// stranger guess for ten minutes. The owner runs `herder claim` again for a new code.
+const CLAIM_ATTEMPTS: u32 = 5;
 
 const FILE: &str = "auth.json";
 
@@ -361,6 +366,8 @@ struct Window {
     expires: Instant,
     /// Opened by `herder claim` on the machine: it takes an owner though the daemon has one.
     recovery: bool,
+    /// Wrong codes sent so far; the window closes at [`CLAIM_ATTEMPTS`].
+    wrong: u32,
 }
 
 impl Window {
@@ -810,6 +817,7 @@ impl Auth {
             code: normalize(&code),
             expires: Instant::now() + PAIRING_TTL,
             recovery,
+            wrong: 0,
         });
         let expires_at = Timestamp::now()
             .checked_add(PAIRING_TTL)
@@ -957,9 +965,24 @@ impl Auth {
                 asserted.person_id
             }
             SignIn::ClaimOwnership { code, person } => {
-                let open = state.claim.as_ref().is_some_and(|claim| {
-                    claim.takes_owner(now, users.has_owner()) && claim.code == normalize(&code)
-                });
+                let has_owner = users.has_owner();
+                let open = match state.claim.as_mut() {
+                    Some(claim) if claim.takes_owner(now, has_owner) => {
+                        let right = claim.code == normalize(&code);
+                        if !right {
+                            claim.wrong += 1;
+                            if claim.wrong >= CLAIM_ATTEMPTS {
+                                state.claim = None;
+                                warn!(
+                                    "claim window closed after {CLAIM_ATTEMPTS} wrong codes; \
+                                     run `herder claim` for a new one"
+                                );
+                            }
+                        }
+                        right
+                    }
+                    _ => false,
+                };
                 if !open {
                     return Err(forbidden(
                         "the code is wrong or expired, or this daemon has an owner already; \
@@ -2173,6 +2196,44 @@ mod people_tests {
             },
         };
         (sign_in(auth, "fp-mac", method).unwrap(), passkey)
+    }
+
+    /// A claim of `auth` with `code`, by a passkey created now.
+    fn claim_with(auth: &Auth, code: &str) -> SignIn {
+        let (_, registration) = Authenticator::register("tomas", &auth.creation().unwrap());
+        SignIn::ClaimOwnership {
+            code: code.to_owned(),
+            person: NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Register { registration },
+            },
+        }
+    }
+
+    #[test]
+    fn a_claim_window_closes_after_too_many_wrong_codes() {
+        let (_tmp, auth) = open();
+        let (code, _) = auth.open_claim().unwrap();
+        for _ in 1..super::CLAIM_ATTEMPTS {
+            let wrong = sign_in(&auth, "fp-guess", claim_with(&auth, "AAA-AAA")).unwrap_err();
+            assert_eq!(wrong.code, ErrorCode::Forbidden);
+        }
+        let owner = sign_in(&auth, "fp-mac", claim_with(&auth, &code)).unwrap();
+        assert_eq!(owner.role, Role::Owner);
+
+        let (_tmp, auth) = open();
+        let (code, _) = auth.open_claim().unwrap();
+        for _ in 0..super::CLAIM_ATTEMPTS {
+            assert!(sign_in(&auth, "fp-guess", claim_with(&auth, "AAA-AAA")).is_err());
+        }
+        // The guesses used up the window: the right code no longer claims.
+        let refused = sign_in(&auth, "fp-mac", claim_with(&auth, &code)).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Forbidden);
+        assert_eq!(auth.owner(), None);
+        assert!(auth.sign_in_challenge().unwrap().1.is_none());
+        // A new window takes the owner.
+        let (code, _) = auth.open_claim().unwrap();
+        assert!(sign_in(&auth, "fp-mac", claim_with(&auth, &code)).is_ok());
     }
 
     /// Asks `passkey` to sign a fresh challenge of `auth`.
