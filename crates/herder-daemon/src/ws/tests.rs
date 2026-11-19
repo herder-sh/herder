@@ -1173,6 +1173,57 @@ async fn a_throttled_client_never_builds_a_backlog_and_converges() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_long_replay_to_a_slow_client_does_not_hold_up_its_commands() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    // Far more journal than the socket buffers hold, as a phone resuming a long session has.
+    let text = "y".repeat(CHUNK);
+    for n in 0..CHUNKS {
+        daemon.append(&session, added(&format!("i{n}"), &text));
+    }
+    let mut slow = Client::connect(
+        daemon.addr,
+        &daemon.fingerprint,
+        &daemon.owner,
+        None,
+        Some(4096),
+    )
+    .await
+    .unwrap();
+    slow.hello(vec![cursor(&session, 0)]).await;
+    // The replay is stuck on the client, which reads nothing; its command still applies.
+    slow.send(&ClientMessage::Command(Command {
+        id: CommandId::new("c1"),
+        body: CommandBody::SendPrompt {
+            session_id: session.clone(),
+            text: "hi".into(),
+            images: Vec::new(),
+            files: Vec::new(),
+        },
+    }))
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while daemon.commands.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the command waited for the replay");
+
+    // Once the client reads, it gets the whole replay and the answer.
+    let mut answered = false;
+    while !answered || slow.view.last_seq() < 1 + CHUNKS as Seq {
+        match slow.recv().await {
+            ServerMessage::CommandAccepted { command_id, .. } => {
+                assert_eq!(command_id, CommandId::new("c1"));
+                answered = true;
+            }
+            message => slow.view.apply(message),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_client_resumes_from_its_cursor_after_a_disconnect() {
     let daemon = Daemon::start().await;
     let session = daemon.create_session("s1");
