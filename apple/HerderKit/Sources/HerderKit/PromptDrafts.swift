@@ -92,6 +92,19 @@ final class PromptDrafts {
         save(Content(text: "", images: []), for: from)
     }
 
+    /// Puts back a prompt that could not be sent, before whatever was written there since, so
+    /// neither is lost.
+    func restore(_ content: Content, for key: String) {
+        dropped.remove(key)
+        var restored = content
+        if let since = Self.read(file(key)), !since.isEmpty {
+            restored.text += "\n\n" + since.text
+            restored.images += since.images
+            restored.files += since.files
+        }
+        save(restored, for: key)
+    }
+
     /// Forgets a new session's draft, open or not.
     func drop(_ draft: Draft) {
         save(Content(text: "", images: []), for: draft.key)

@@ -155,6 +155,40 @@ struct DraftCard: View {
     }
 }
 
+/// A session sent from a draft while its machine creates it, laid out as a draft's card with
+/// a spinner, until the session itself takes its place in the list.
+struct StartingCard: View {
+    let start: StartingSession
+    let fleet: Fleet
+
+    var body: some View {
+        let machine = fleet.machines.first { $0.hostId == start.draft.hostId }?.name ?? start.draft.hostId
+        HStack(alignment: .top, spacing: 10) {
+            ProgressView().controlSize(.mini).tint(Theme.secondary).frame(width: 10, height: 10).padding(.top, 4)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(start.prompt.isEmpty ? "New session" : start.prompt.prefix { !$0.isNewline })
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
+                Text("Starting on \(machine)…")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card.opacity(0.5), in: .rect(cornerRadius: Theme.corner))
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.corner)
+                .strokeBorder(Theme.stroke, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("starting-session")
+    }
+}
+
 /// The elbow that ties a child session, or a provider agent, to its parent.
 struct TreeLine: View {
     var body: some View {

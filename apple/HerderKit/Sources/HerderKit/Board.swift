@@ -266,7 +266,11 @@ struct BoardView: View {
         List {
             #if os(iOS)
             // On the phone; iPad's shell says it under the Board's title.
-            if selection == nil { ConnectionLine(machines: lists.machines).taskListRow() }
+            if selection == nil {
+                ConnectionLine(machines: lists.machines).taskListRow()
+                // The phone shows no draft cards beside the Board, as the iPad and the Mac do.
+                ForEach(fleet.starting.filter { !$0.draft.isChat }) { StartingCard(start: $0, fleet: fleet).taskListRow() }
+            }
             #endif
             if sections.isEmpty {
                 Text(query.isEmpty ? "Nothing open." : "No tasks match.")
