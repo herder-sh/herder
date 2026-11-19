@@ -5,7 +5,8 @@
 //! a connection gone dead, a slow upload, a new device asked to sign in as a person, and what
 //! keeps a client from reconnecting in storms: one hello however many addresses race,
 //! connections that die young made less and less often, a slow link kept through a long
-//! replay, and the daemon's log saying why a client let a connection go.
+//! replay, the daemon's log saying why a client let a connection go, and a machine reached only
+//! through its tunnel.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -86,6 +87,8 @@ fn account() -> AccountId {
 struct Daemon {
     runtime: Option<tokio::runtime::Runtime>,
     addr: SocketAddr,
+    /// Where it takes tunneled clients, as `cloudflared` delivers them.
+    tunnel: SocketAddr,
     fingerprint: String,
     auth: Arc<Auth>,
     hub: Arc<Hub>,
@@ -150,6 +153,8 @@ impl Daemon {
             let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
             let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
             let addr = listener.local_addr().unwrap();
+            let tunnel = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let tunnel_addr = tunnel.local_addr().unwrap();
             let fingerprint = tls.fingerprint().to_owned();
             let host = Host {
                 name: format!("test-{host_id}"),
@@ -183,13 +188,19 @@ impl Daemon {
                 _ => None,
             };
             server.manage_aws(Aws::from_env(env)).unwrap();
-            started.send((addr, fingerprint, auth, hub)).ok().unwrap();
-            server.run(vec![listener], shutdown).await;
+            started
+                .send((addr, tunnel_addr, fingerprint, auth, hub))
+                .ok()
+                .unwrap();
+            server
+                .run_tunneled(vec![listener], Some(tunnel), shutdown)
+                .await;
         });
-        let (addr, fingerprint, auth, hub) = ready.await.unwrap();
+        let (addr, tunnel, fingerprint, auth, hub) = ready.await.unwrap();
         Self {
             runtime: Some(runtime),
             addr,
+            tunnel,
             fingerprint,
             auth,
             hub,
@@ -428,6 +439,79 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
         .read_since(&session_id, 0, usize::MAX)
         .unwrap();
     assert_eq!(view.events, journal);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_machine_reached_only_through_its_tunnel_streams_its_sessions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("client");
+    let repo = repo(&tmp.path().join("app"));
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let tunnel = format!("ws://{}", daemon.tunnel);
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
+
+    // The daemon's certificate is pinned through the tunnel: another one is refused.
+    let wrong = "00".repeat(32);
+    let refused =
+        authenticator::sign_in(&daemon.auth, &client, vec![tunnel.clone()], &wrong, "alice")
+            .await
+            .expect_err("a tunnel to an unpinned certificate signed in");
+    assert!(
+        refused.to_string().contains(&daemon.fingerprint),
+        "{refused}"
+    );
+
+    let machine = authenticator::sign_in(
+        &daemon.auth,
+        &client,
+        vec![tunnel.clone()],
+        &daemon.fingerprint,
+        "alice",
+    )
+    .await
+    .unwrap();
+    assert_eq!(machine.addresses, std::slice::from_ref(&tunnel));
+    let host = machine.host_id;
+    let created = client
+        .send(
+            host.clone(),
+            CommandBody::CreateSession {
+                repo: Some(repo),
+                project_id: None,
+                branch: None,
+                account_id: Some(account()),
+                provider: None,
+                model: None,
+                permission_mode: Some(PermissionMode::Ask),
+                failover_pin: None,
+                chat: false,
+            },
+        )
+        .await
+        .unwrap();
+    let CommandResult::SessionCreated { session_id } = created else {
+        panic!("expected a session, got {created:?}");
+    };
+    let sub = client
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
+    tokio::time::timeout(TIMEOUT, client.synced(host.clone()))
+        .await
+        .unwrap()
+        .unwrap();
+    let machine = client.machines().remove(0);
+    assert_eq!(machine.connection, ConnectionState::Connected);
+    let update = sub.next().await.unwrap();
+    assert!(matches!(
+        update.events.first().map(|event| &event.body),
+        Some(EventBody::SessionCreated { .. })
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

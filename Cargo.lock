@@ -1841,6 +1841,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]

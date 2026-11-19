@@ -88,6 +88,7 @@ uuid = { version = "1", features = ["v7"] }
 # of them, which takes the state's serialisation.
 webauthn-rs = { version = "0.6.1-dev", features = ["conditional-ui", "danger-allow-state-serialisation", "danger-credential-internals"] }
 webauthn-rs-proto = "=0.6.1-dev"
+webpki-roots = "1"
 
 # Line tables keep backtraces readable; full debug info would double each worktree's
 # `target/`. Dependencies are rarely stepped into, so they get none.
