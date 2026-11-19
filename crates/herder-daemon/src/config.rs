@@ -12,6 +12,17 @@
 //!
 //! A list may not be empty or name an address twice.
 //!
+//! `tunnel` is where `cloudflared`, on this machine, delivers clients that reach the daemon at
+//! a public hostname through a Cloudflare Tunnel (`service: http://127.0.0.1:7448` in its
+//! ingress). It must be a loopback address, since only `cloudflared` may connect to it, and
+//! no `listen` address. Each client still authenticates as on a direct connection: see
+//! `docs/public-access.md`.
+//!
+//! ```toml
+//! listen = "127.0.0.1:7447"  # no direct listener on the network
+//! tunnel = "127.0.0.1:7448"
+//! ```
+//!
 //! # Accounts
 //!
 //! Each `[[accounts]]` entry is one provider login on this machine:
@@ -303,6 +314,8 @@ pub struct Config {
     pub path: PathBuf,
     /// Addresses the daemon listens on, as configured: at least one, none twice.
     pub listen: Vec<SocketAddr>,
+    /// The loopback address `cloudflared` delivers tunneled clients to, if any.
+    pub tunnel: Option<SocketAddr>,
     /// Directory holding everything the daemon persists.
     pub data_dir: PathBuf,
     /// Logging settings.
@@ -493,6 +506,7 @@ pub enum LogFormat {
 #[serde(default, deny_unknown_fields)]
 struct ConfigFile {
     listen: Listen,
+    tunnel: Option<SocketAddr>,
     data_dir: Option<PathBuf>,
     log: LogConfig,
     accounts: Vec<AccountFile>,
@@ -516,6 +530,7 @@ impl Default for ConfigFile {
                 Ipv4Addr::UNSPECIFIED,
                 DEFAULT_PORT,
             ))),
+            tunnel: None,
             data_dir: None,
             log: LogConfig::default(),
             accounts: Vec::new(),
@@ -543,6 +558,24 @@ impl Default for ConfigFile {
 enum Listen {
     One(SocketAddr),
     Many(Vec<SocketAddr>),
+}
+
+/// `tunnel`, checked: loopback, since only `cloudflared` on this machine may reach it, and no
+/// address `listen` binds too.
+fn resolve_tunnel(tunnel: Option<SocketAddr>, listen: &[SocketAddr]) -> Result<Option<SocketAddr>> {
+    let Some(tunnel) = tunnel else {
+        return Ok(None);
+    };
+    ensure!(
+        tunnel.ip().is_loopback(),
+        "`tunnel` must be a loopback address such as 127.0.0.1:7448, not {tunnel}: only \
+         cloudflared on this machine may connect to it"
+    );
+    ensure!(
+        !listen.contains(&tunnel),
+        "`tunnel` and `listen` both name {tunnel}"
+    );
+    Ok(Some(tunnel))
 }
 
 /// The addresses `listen` names: at least one, none twice.
@@ -785,6 +818,7 @@ fn resolve(
         None => xdg_dir(env, "XDG_DATA_HOME", ".local/share")?.join("herder"),
     };
     let listen = resolve_listen(file.listen)?;
+    let tunnel = resolve_tunnel(file.tunnel, &listen)?;
     file.resources.validate()?;
     let accounts = resolve_accounts(file.accounts, env)?;
     let projects = resolve_projects(file.projects, file.project, &accounts, env)?;
@@ -801,6 +835,7 @@ fn resolve(
     Ok(Config {
         path,
         listen,
+        tunnel,
         data_dir,
         log: file.log,
         accounts,
@@ -2511,6 +2546,38 @@ mod tests {
     }
 
     #[test]
+    fn tunnel_is_a_loopback_address_listen_does_not_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write(
+            tmp.path(),
+            "listen = \"127.0.0.1:7447\"\ntunnel = \"127.0.0.1:7448\"\n",
+        );
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap();
+        assert_eq!(config.tunnel, Some("127.0.0.1:7448".parse().unwrap()));
+        let path = write(tmp.path(), "tunnel = \"[::1]:7448\"\n");
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap();
+        assert_eq!(config.tunnel, Some("[::1]:7448".parse().unwrap()));
+        let config = Config::load_with_env(None, env(&[("HOME", "/h")])).unwrap();
+        assert_eq!(config.tunnel, None);
+
+        for (text, error) in [
+            ("tunnel = \"0.0.0.0:7448\"\n", "must be a loopback address"),
+            (
+                "tunnel = \"192.168.1.5:7448\"\n",
+                "must be a loopback address",
+            ),
+            (
+                "listen = \"127.0.0.1:7447\"\ntunnel = \"127.0.0.1:7447\"\n",
+                "both name 127.0.0.1:7447",
+            ),
+        ] {
+            let path = write(tmp.path(), text);
+            let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();
+            assert!(format!("{err:#}").contains(error), "{text}: {err:#}");
+        }
+    }
+
+    #[test]
     fn relative_xdg_dirs_are_ignored() {
         let config =
             Config::load_with_env(None, env(&[("HOME", "/h"), ("XDG_DATA_HOME", "rel")])).unwrap();
@@ -2563,6 +2630,7 @@ mod tests {
             Config {
                 path: path.clone(),
                 listen: vec!["[::1]:8000".parse().unwrap()],
+                tunnel: None,
                 data_dir: PathBuf::from("/var/lib/herder"),
                 log: LogConfig {
                     level: "debug".to_owned(),

@@ -354,6 +354,7 @@ mod tests {
         let config = Config {
             path: tmp.path().join("daemon.toml"),
             listen: vec!["127.0.0.1:0".parse().unwrap()],
+            tunnel: None,
             data_dir: tmp.path().join("data"),
             log: Default::default(),
             accounts: Default::default(),

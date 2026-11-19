@@ -305,6 +305,14 @@ pub async fn serve(
     sessions.resume().await?;
     let listeners = listen::bind(&config.listen).await?;
     let listen = listen::local_addrs(&listeners)?;
+    let tunnel = match config.tunnel {
+        Some(address) => Some(
+            tokio::net::TcpListener::bind(address)
+                .await
+                .with_context(|| format!("cannot take tunneled clients on {address}"))?,
+        ),
+        None => None,
+    };
     let control = auth::control::bind(data_dir.root())?;
     tokio::spawn(auth::control::serve(
         control,
@@ -320,6 +328,7 @@ pub async fn serve(
         host_id = %data_dir.host_id(),
         data_dir = %data_dir.root().display(),
         listen = ?listen,
+        tunnel = ?config.tunnel,
         tls_fingerprint = tls.fingerprint(),
         "herder daemon started"
     );
@@ -350,7 +359,7 @@ pub async fn serve(
     server.manage_settings(settings)?;
     server.manage_bots(bots)?;
     sessions.serve_control(server.control())?;
-    server.run(listeners, shutdown).await;
+    server.run_tunneled(listeners, tunnel, shutdown).await;
     terminals.close_all();
     info!("herder daemon stopped");
     Ok(())
@@ -385,6 +394,7 @@ mod tests {
         let config = Config {
             path: tmp.path().join("daemon.toml"),
             listen: vec!["127.0.0.1:0".parse().unwrap()],
+            tunnel: Some("127.0.0.1:0".parse().unwrap()),
             data_dir: tmp.path().join("data"),
             log: config::LogConfig::default(),
             accounts: session::Accounts::new(),
