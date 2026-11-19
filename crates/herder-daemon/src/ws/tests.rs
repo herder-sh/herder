@@ -510,20 +510,7 @@ impl Client {
         origin: Option<&str>,
     ) -> anyhow::Result<Self> {
         let config = client_config(fingerprint, device).unwrap();
-        let tcp = TcpStream::connect(tunnel).await.unwrap();
-        let mut request = format!("ws://{tunnel}/").into_client_request().unwrap();
-        request
-            .headers_mut()
-            .insert("cf-connecting-ip", "203.0.113.7".parse().unwrap());
-        if let Some(origin) = origin {
-            request
-                .headers_mut()
-                .insert("origin", origin.parse().unwrap());
-        }
-        let (outer, _) =
-            tokio_tungstenite::client_async_with_config(request, tcp, Some(tunnel::config()))
-                .await?;
-        let frames = Transport::Tunnel(Box::new(tunnel::Frames::new(outer)));
+        let frames = Transport::Tunnel(Box::new(tunnel_from(tunnel, CLIENT_IP, origin).await?));
         Ok(Self::over(frames, tunnel, &config, None).await?)
     }
 
@@ -1359,6 +1346,89 @@ async fn a_tunneled_client_is_authenticated_as_a_direct_one() {
             .contains(&format!("fingerprint is {}", daemon.fingerprint)),
         "{err}"
     );
+}
+
+/// The address Cloudflare names for a test's tunneled clients.
+const CLIENT_IP: &str = "203.0.113.7";
+
+/// The frames of a tunnel to `tunnel`, as `cloudflared` opens it for a client at `client_ip`,
+/// with an `Origin` header if given; nothing is said inside yet.
+async fn tunnel_from(
+    tunnel: SocketAddr,
+    client_ip: &str,
+    origin: Option<&str>,
+) -> anyhow::Result<tunnel::Frames> {
+    let tcp = TcpStream::connect(tunnel).await.unwrap();
+    let mut request = format!("ws://{tunnel}/").into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert("cf-connecting-ip", client_ip.parse().unwrap());
+    if let Some(origin) = origin {
+        request
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
+    }
+    let (outer, _) =
+        tokio_tungstenite::client_async_with_config(request, tcp, Some(tunnel::config())).await?;
+    Ok(tunnel::Frames::new(outer))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_tunnel_caps_strangers_but_not_signed_in_devices() {
+    let daemon = Daemon::start().await;
+    // Strangers that open a tunnel and say nothing in it fill their client's share.
+    let mut strangers = Vec::new();
+    for _ in 0..tunnel::UNAUTHENTICATED_PER_CLIENT {
+        strangers.push(tunnel_from(daemon.tunnel, CLIENT_IP, None).await.unwrap());
+    }
+    let refused = tunnel_from(daemon.tunnel, CLIENT_IP, None)
+        .await
+        .err()
+        .unwrap();
+    assert!(refused.to_string().contains("429"), "{refused}");
+    // Another client still gets in.
+    let other = tunnel_from(daemon.tunnel, "198.51.100.1", None)
+        .await
+        .unwrap();
+    drop(other);
+
+    // A stranger gone frees its place.
+    drop(strangers.pop());
+    tokio::time::timeout(TIMEOUT, async {
+        while tunnel_from(daemon.tunnel, CLIENT_IP, None).await.is_err() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(strangers);
+
+    // Devices that authenticated are not counted: more of them than the cap stay connected,
+    // and a stranger still gets in beside them.
+    let mut devices = Vec::new();
+    for _ in 0..=tunnel::UNAUTHENTICATED_PER_CLIENT {
+        let mut device = tokio::time::timeout(TIMEOUT, async {
+            loop {
+                match Client::connect_tunneled(
+                    daemon.tunnel,
+                    &daemon.fingerprint,
+                    &daemon.owner,
+                    None,
+                )
+                .await
+                {
+                    Ok(device) => return device,
+                    // The strangers above may not all have been noticed gone yet.
+                    Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(device.hello(Vec::new()).await.role, Role::Owner);
+        devices.push(device);
+    }
+    tunnel_from(daemon.tunnel, CLIENT_IP, None).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
