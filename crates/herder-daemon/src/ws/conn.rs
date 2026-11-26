@@ -95,6 +95,39 @@ pub(super) async fn run<B: Backend>(
     serve(ws, device, None, pass, peer, shared, cancel).await;
 }
 
+/// Serves a client that reached this host through its vault, on the relay stream `stream`
+/// the vault at `peer` forwards: the client's own TLS, upgrade and hello run inside it, so it
+/// is authenticated and served exactly as on a direct connection. `device` is the vault's
+/// name for the client's device, and only counts it among those not signed in here yet.
+pub(super) async fn run_relayed<B: Backend>(
+    stream: Box<dyn tunnel::Io>,
+    peer: SocketAddr,
+    device: &DeviceId,
+    shared: Arc<Shared<B>>,
+    cancel: CancellationToken,
+) {
+    let Some(pass) = shared
+        .tunnel_gate
+        .enter(Some(&format!("vault device {device}")))
+    else {
+        warn!(%peer, %device, "refused a relayed connection: too many are not signed in yet");
+        return;
+    };
+    let ws = tokio::select! {
+        () = cancel.cancelled() => return,
+        ws = tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            handshake(&shared.tls, Transport::Relay(stream)),
+        ) => ws,
+    };
+    let (ws, device) = match ws {
+        Ok(Ok(ws)) => ws,
+        Ok(Err(err)) => return info!(%peer, "relayed handshake failed: {err:#}"),
+        Err(_) => return info!(%peer, "relayed handshake timed out"),
+    };
+    serve(ws, device, None, Some(pass), peer, shared, cancel).await;
+}
+
 /// The handshakes of a connection: on a tunneled one, the upgrade from `cloudflared` first.
 /// A tunneled connection also gets its pass through the tunnel's gate.
 async fn open(

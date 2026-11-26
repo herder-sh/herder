@@ -253,10 +253,20 @@
 //! secrets = true               # fetch the sessions' secrets from there; on by default
 //! attachments = true           # back up prompt images and files too; off by default
 //! attachments_cap = 1073741824 # most bytes of them the vault keeps; 1 GiB by default
+//! relay = true                 # clients reach this host through the vault; on by default
 //! ```
 //!
 //! With `attachments`, the vault keeps this host's images and files up to `attachments_cap` bytes,
 //! evicting the oldest first; without it the host sends none.
+//!
+//! `address` is `host:port`, or the URL of a tunnel to the vault, such as
+//! `wss://vault.example.com` for a vault behind a Cloudflare Tunnel: a host that moves
+//! between networks, or sits behind NAT, reaches its vault there from anywhere.
+//!
+//! With `relay`, a client paired with the vault and with this host reaches the host through
+//! the vault when it cannot dial it: the host opens a connection to the vault for each such
+//! client and serves it as it serves a direct one, so the vault forwards bytes it cannot
+//! read and the host decides who gets in (`docs/vault-relay.md`).
 //!
 //! A vault's own `[vault]` table sets how long it keeps archived sessions:
 //!
@@ -393,7 +403,7 @@ pub enum Mode {
 /// The `[vault]` table of a host: where it replicates to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultConfig {
-    /// The vault's address, as `host:port`.
+    /// The vault's address: `host:port`, or the `wss://` or `ws://` URL of a tunnel to it.
     pub address: String,
     /// SHA-256 of the vault's TLS certificate, lowercase hex.
     pub fingerprint: String,
@@ -407,6 +417,8 @@ pub struct VaultConfig {
     pub attachments: bool,
     /// Most bytes of this host's images the vault keeps, when `attachments` is on.
     pub attachments_cap: u64,
+    /// Whether clients paired with the vault reach this host through it.
+    pub relay: bool,
 }
 
 impl VaultConfig {
@@ -421,6 +433,7 @@ impl VaultConfig {
             secrets: true,
             attachments: false,
             attachments_cap: DEFAULT_ATTACHMENTS_CAP,
+            relay: true,
         }
     }
 
@@ -441,6 +454,7 @@ struct VaultFile {
     secrets: Option<bool>,
     attachments: Option<bool>,
     attachments_cap: Option<u64>,
+    relay: Option<bool>,
     archive_retention_days: Option<u32>,
     cliproxyapi: Option<String>,
     cliproxyapi_endpoint: Option<String>,
@@ -1079,7 +1093,8 @@ fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<VaultSide> {
                 && table.backup.is_none()
                 && table.secrets.is_none()
                 && table.attachments.is_none()
-                && table.attachments_cap.is_none(),
+                && table.attachments_cap.is_none()
+                && table.relay.is_none(),
             "a vault does not replicate to another vault; its [vault] table takes \
              archive_retention_days, cliproxyapi and cliproxyapi_endpoint only"
         );
@@ -1124,8 +1139,9 @@ fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<VaultSide> {
         secrets: table.secrets.unwrap_or(true),
         attachments: table.attachments.unwrap_or(false),
         attachments_cap: table.attachments_cap.unwrap_or(DEFAULT_ATTACHMENTS_CAP),
+        relay: table.relay.unwrap_or(true),
         ..VaultConfig::new(
-            address,
+            vault_address(&address)?,
             fingerprint.to_ascii_lowercase(),
             table.pairing_code,
         )
@@ -1134,6 +1150,28 @@ fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<VaultSide> {
         vault: Some(vault),
         ..VaultSide::default()
     })
+}
+
+/// `address`, a vault's as written: `host:port`, or the URL of a tunnel to it, with `https`
+/// read as `wss` and `http` as `ws`, since a tunnel's hostname is usually copied as a web
+/// address.
+fn vault_address(address: &str) -> Result<String> {
+    let address = address.trim();
+    if !address.contains("://") {
+        return Ok(address.to_owned());
+    }
+    let mut url = url::Url::parse(address)
+        .with_context(|| format!("vault.address {address} is not a tunnel URL"))?;
+    let scheme = match url.scheme() {
+        "wss" | "https" => "wss",
+        "ws" | "http" => "ws",
+        _ => bail!("vault.address {address} must be host:port, or start with wss:// or https://"),
+    };
+    ensure!(
+        url.set_scheme(scheme).is_ok() && url.host_str().is_some_and(|host| !host.is_empty()),
+        "vault.address {address} names no host"
+    );
+    Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
 /// Validates the `[titles]` table.
@@ -1679,6 +1717,9 @@ pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
                 if vault.attachments_cap != DEFAULT_ATTACHMENTS_CAP {
                     let cap = i64::try_from(vault.attachments_cap).unwrap_or(i64::MAX);
                     table.insert("attachments_cap", toml_edit::value(cap));
+                }
+                if !vault.relay {
+                    table.insert("relay", toml_edit::value(false));
                 }
                 doc.insert("vault", toml_edit::Item::Table(table));
             }
@@ -2728,6 +2769,43 @@ mod tests {
         set_vault(&fresh, Some(&moved)).unwrap();
         let config = Config::load_with_env(Some(&fresh), env(&[("HOME", "/home/dev")])).unwrap();
         assert_eq!(config.vault.unwrap().address, "10.0.0.9:7447");
+    }
+
+    #[test]
+    fn a_host_reaches_its_vault_at_a_tunnel_url_and_may_take_no_relayed_connections() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        let table = |rest: &str| {
+            let text = format!("[vault]\nfingerprint = \"{}\"\n{rest}", "ab".repeat(32));
+            std::fs::write(&path, text).unwrap();
+            Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")]))
+                .map(|config| config.vault.unwrap())
+        };
+        // A tunnel's hostname is usually copied as a web address.
+        for (written, read) in [
+            ("vault.lan:7447", "vault.lan:7447"),
+            ("wss://vault.example.com", "wss://vault.example.com"),
+            ("https://Vault.example.com/", "wss://vault.example.com"),
+            ("http://127.0.0.1:7448", "ws://127.0.0.1:7448"),
+        ] {
+            let vault = table(&format!("address = \"{written}\"\n")).unwrap();
+            assert_eq!(vault.address, read);
+            assert!(vault.relay, "relayed unless turned off");
+        }
+        let err = table("address = \"ftp://vault.example.com\"\n").unwrap_err();
+        assert!(format!("{err:#}").contains("wss:// or https://"), "{err:#}");
+
+        // Turned off, it stays off when the table is written back.
+        let vault = table("address = \"wss://vault.example.com\"\nrelay = false\n").unwrap();
+        assert!(!vault.relay);
+        set_vault(&path, Some(&vault)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("relay = false"), "{text}");
+        let again = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
+        assert_eq!(again.vault.unwrap(), vault);
+        // A vault replicates nowhere, so it has no such switch.
+        std::fs::write(&path, "mode = \"vault\"\n[vault]\nrelay = false\n").unwrap();
+        assert!(Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).is_err());
     }
 
     #[test]

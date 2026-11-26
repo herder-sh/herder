@@ -1896,6 +1896,7 @@ dependencies = [
  "uuid",
  "webauthn-rs",
  "webauthn-rs-proto",
+ "webpki-roots",
 ]
 
 [[package]]

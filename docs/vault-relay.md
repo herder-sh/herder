@@ -128,13 +128,15 @@ vault needs links that name the vault route, which waits on P23.6.
 ### How a host reaches the vault from anywhere
 
 The vault takes tunneled connections like a daemon does (`tunnel` in its config), so its
-public hostname serves apps and hosts alike. A host's `[vault] address` may be a tunnel URL,
-or a list tried in order, direct first:
+public hostname serves apps and hosts alike. A host's `[vault] address` may be a tunnel URL:
 
 ```toml
 [vault]
-address = ["10.0.0.5:7447", "wss://vault.example.com"]
+address = "wss://vault.example.com"
 ```
+
+A host that never leaves the vault's network keeps `host:port`. One that moves uses the
+URL everywhere: replication is light, and at home apps still reach it directly.
 
 In a cluster `cloudflared` is another pod, not loopback, so a vault's `tunnel` listener may
 bind a non-loopback address (a host's still may not). What that gives up is the trust in `CF-Connecting-IP` behind the
@@ -182,7 +184,7 @@ Only a host device whose host holds a client key may open proxy streams, at most
 | `HostHello::relay`, `VaultMessage::RelayOpen`, `VaultHello::cliproxyapi_relay` | this todo; optional, so `REPLICATION_VERSION` stays 1 |
 | `FleetHost::relay` | this todo; optional, so `PROTOCOL_VERSION` stays 5 |
 | `vault://` addresses in client-core | No signature change: `set_addresses` and the saved profile take more strings, as with tunnel URLs. |
-| `tunnel` on a vault, `[vault] relay`, `[vault] address` as a URL or list | Config and daemon internals. |
+| `tunnel` on a vault, `[vault] relay`, `[vault] address` as a URL | Config and daemon internals. |
 
 Old and new builds mix: an old host sets no `relay`, so the vault sends it nothing new and
 lists it without a route; an old vault skips the field and never asks.
@@ -197,8 +199,8 @@ lists it without a route; an old vault skips the field and never asks.
   table above is returned for its case, closing one end closes the other, and a vault
   serves a client through its tunnel listener, all tested.
 - **P24.3 · Hosts take relayed connections.** `[vault] relay`, answering `RelayOpen`,
-  serving the stream as a direct connection, and `[vault] address` as a tunnel URL or a
-  list. Done when a client that can reach only the vault streams a fake-adapter session
+  serving the stream as a direct connection, and `[vault] address` as a tunnel URL. Done
+  when a client that can reach only the vault streams a fake-adapter session
   from a daemon through it, an unpaired device and a wrong pinned fingerprint are refused
   through it as directly, a host with `relay = false` is not listed as relayed, and a test
   reports the round-trip overhead of the relayed route over the direct one.

@@ -170,7 +170,11 @@ Cloudflare relays ciphertext. Leave the hostname outside Cloudflare Access.
 On a machine, set `tunnel = "127.0.0.1:7448"` in the vault's `daemon.toml` and point the
 machine's own `cloudflared` at it, as for a daemon (`docs/public-access.md`).
 
-Clients then add `wss://vault.example.com` to the vault's addresses.
+Clients then add `wss://vault.example.com` to the vault's addresses. A host that is not
+always on the vault's network, a laptop for one, sets `address = "wss://vault.example.com"`
+in its `[vault]` table and reaches the vault there from anywhere. Clients paired with the
+vault and with a linked host then reach that host through the vault whenever they cannot
+dial it; `relay = false` in the host's `[vault]` table turns that off.
 
 ## Pair a host
 

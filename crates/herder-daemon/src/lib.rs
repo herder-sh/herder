@@ -348,6 +348,7 @@ pub async fn serve(
     );
     server.manage_providers(providers)?;
     server.manage_aws(aws::Aws::from_env(|key| std::env::var_os(key)))?;
+    link.serve_relayed(server.relayed(shutdown.clone()))?;
     server.link_vault(link)?;
     server.manage_settings(settings)?;
     server.manage_bots(bots)?;
