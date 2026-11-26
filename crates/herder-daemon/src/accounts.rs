@@ -249,9 +249,19 @@ mod tests {
 
     /// A stand-in CLI that writes its environment to `$OUT` and exits.
     fn env_dumper(dir: &Path) -> PathBuf {
+        let staging = tempfile::tempdir().unwrap();
+        let source = staging.path().join("cli");
+        std::fs::write(&source, "#!/bin/sh\nenv > \"$OUT\"\n").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Copied into place by `cp`: a file this process wrote stays open for writing in every
+        // child another test thread forks until it execs, and running it then fails with ETXTBSY.
         let path = dir.join("cli");
-        std::fs::write(&path, "#!/bin/sh\nenv > \"$OUT\"\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let copied = std::process::Command::new("cp")
+            .arg(&source)
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(copied.success());
         path
     }
 

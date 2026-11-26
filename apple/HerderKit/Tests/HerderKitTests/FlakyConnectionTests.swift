@@ -212,4 +212,46 @@ struct FlakyConnectionTests {
         list([devbox(.connecting)], on: fleet)
         #expect(fleet.machines.first?.connection == down)
     }
+
+    /// The client pings a connected machine every 10 s and tells of each answer: once it has
+    /// told of nothing for 30 s in the foreground, its machines no longer read connected, as a
+    /// phone's did for hours after both its connections were gone. What it tells next shows.
+    @Test func aMachineTheClientTellsNothingOfStopsReadingConnected() throws {
+        let fleet = try openFleet()
+        list([devbox()], on: fleet)
+        fleet.wake()
+        fleet.checkHeard(now: .now + .seconds(20))
+        #expect(fleet.machines.first?.connection == .connected)
+        fleet.checkHeard(now: .now + Fleet.silence)
+        #expect(fleet.machines.first?.connection == .disconnected(error: "no answer for 30 s"))
+        list([devbox()], on: fleet)
+        #expect(fleet.machines.first?.connection == .connected)
+
+        // In the background iOS freezes the app, and nothing is heard: no news is no sign.
+        fleet.suspend()
+        fleet.checkHeard(now: .now + .seconds(600))
+        #expect(fleet.machines.first?.connection == .connected)
+        // Back in the foreground, the client gets its time to tell of the connections again.
+        fleet.wake()
+        fleet.checkHeard(now: .now + .seconds(20))
+        #expect(fleet.machines.first?.connection == .connected)
+    }
+
+    /// While this device has no connection to the host, the session shows from the vault's
+    /// copy: the vault refuses a prompt, so the session is read-only, and its row says the
+    /// host is not connected though the vault sees it online.
+    @Test func aSessionShownFromTheVaultSaysItsHostIsNotConnected() throws {
+        let fleet = try openFleet()
+        list([devbox(), vault()], on: fleet)
+        #expect(rows(fleet).first?.fromVault == false)
+        #expect(!fleet.isReplica(direct))
+
+        list([devbox(.disconnected(error: "unreachable")), vault()], on: fleet)
+        let row = try #require(rows(fleet).first)
+        #expect(row.key == replica)
+        #expect(row.fromVault)
+        #expect(!row.machineOffline)
+        #expect(fleet.isReplica(replica))
+        #expect(!fleet.isReplica(direct))
+    }
 }

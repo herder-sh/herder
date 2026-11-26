@@ -440,10 +440,13 @@ private struct SessionPane: View {
 
     /// Why the session cannot be driven from here, if it cannot.
     private func readOnly(_ model: SessionModel, _ summary: SessionSummary?) -> String? {
-        switch model.state {
-        case .moved: return "Moved to another host · read-only here"
-        default: return summary?.machineOffline == true ? "\(summary?.machine ?? "The host") is offline · read-only" : nil
-        }
+        let host = summary?.machine ?? "The host"
+        if model.state == .moved { return "Moved to another host · read-only here" }
+        if summary?.machineOffline == true { return "\(host) is offline · read-only" }
+        // Shown from a vault's copy, as while this device has no connection to its host: the
+        // vault would refuse what the composer sends.
+        if fleet.isReplica(key) { return "\(host) is not connected to this device · read-only" }
+        return nil
     }
 }
 

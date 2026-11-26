@@ -37,6 +37,8 @@ struct SessionSummary: Hashable, Identifiable {
     /// The machine it runs on: the machine's name, or for a vault the host's.
     let machine: String
     var machineOffline = false
+    /// Listed from a vault's copy: this device has no connection to the host it runs on.
+    var fromVault = false
     let state: SessionState
     let activity: String
     let age: String

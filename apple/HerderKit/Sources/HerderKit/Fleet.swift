@@ -6,6 +6,7 @@ import Foundation
 import Herder
 import Network
 import Observation
+import OSLog
 
 /// The paired machines and the state of every session they list, kept current from the
 /// client's change notifications and one subscription per session, as the TUI keeps them.
@@ -92,6 +93,13 @@ public final class Fleet {
     @ObservationIgnored private var unreadableIcons: Set<String> = []
     @ObservationIgnored private var fetching: Set<String> = []
     @ObservationIgnored fileprivate var previousAverage: [HostId: UInt32?] = [:]
+    /// When the client last told of a change, or the app last woke it; see `checkHeard`.
+    @ObservationIgnored private var heard = ContinuousClock.now
+    /// Whether the app is in the background, where iOS freezes it and nothing is heard.
+    @ObservationIgnored private var asleep = false
+    /// Whether the client pings its machines, so that silence means it reaches none of them;
+    /// the demo pings nothing.
+    @ObservationIgnored var hearsPings = true
     /// Each machine's connection changes since the app opened, oldest first.
     private(set) var connectionLog: [HostId: [ConnectionChange]] = [:]
     /// Each machine's ping round trips since the app opened, oldest first.
@@ -271,6 +279,13 @@ public final class Fleet {
         return source
     }
 
+    /// Whether `key` is a vault's copy of a session another host runs: only that host takes
+    /// what is sent to the session, and the vault refuses it.
+    func isReplica(_ key: SessionKey) -> Bool {
+        let head = machines.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }
+        return head?.hostId.map { $0 != key.hostId } ?? false
+    }
+
     /// The copy the lists show of `key`'s session: itself, unless another stands for it.
     func listed(_ key: SessionKey) -> SessionKey { copies.standIns[key] ?? key }
 
@@ -330,9 +345,44 @@ public final class Fleet {
         let changes = client.changes()
         let network = Task { await self.wakeOnNetworkChanges() }
         defer { network.cancel() }
+        let silence = Task { await self.watchSilence() }
+        defer { silence.cancel() }
         update(client.machines())
-        while await changes.next() { await changed() }
+        while await changes.next() {
+            heard = .now
+            await changed()
+        }
     }
+
+    /// How long the client may tell of nothing before the machines it lists as connected show
+    /// as offline. It pings each connected machine every 10 s and tells of every answer and
+    /// every missed one, so a client silent for this long reaches none of them, whatever they
+    /// read: a phone showed two machines connected for hours after both connections were gone.
+    static let silence = Duration.seconds(30)
+
+    private func watchSilence() async {
+        while (try? await Task.sleep(for: .seconds(5))) != nil { checkHeard() }
+    }
+
+    /// Shows each machine that reads connected as offline once the client has told of nothing
+    /// for `silence` while the app was in the foreground, and wakes the client to replace their
+    /// connections. The next change the client tells of shows the machines as it lists them.
+    func checkHeard(now: ContinuousClock.Instant = .now) {
+        guard hearsPings, !asleep, now - heard >= Self.silence,
+              current.contains(where: { $0.connection == .connected }) else { return }
+        let quiet = String(describing: now - heard)
+        Self.logger.error("no change from the client for \(quiet, privacy: .public): its connected machines show as offline")
+        set(current.map { machine in
+            guard machine.connection == .connected else { return machine }
+            var machine = machine
+            machine.connection = .disconnected(error: "no answer for \(Int(Self.silence.components.seconds)) s")
+            return machine
+        })
+        refreshLists()
+        client.wake()
+    }
+
+    private static let logger = Logger(subsystem: "sh.herder", category: "connection")
 
     /// Takes in the client's lists after a change to them. They are read away from the main
     /// actor: a read copies every session every machine lists out of the client core, and they
@@ -1044,6 +1094,8 @@ public final class Fleet {
 
     /// The app is in the foreground: reconnects now and replaces dead connections.
     public func wake() {
+        asleep = false
+        heard = .now
         client.wake()
     }
 
@@ -1077,6 +1129,7 @@ public final class Fleet {
 
     /// The app went to the background: saves the offline cache and stops retrying.
     public func suspend() {
+        asleep = true
         client.suspend()
     }
 }
