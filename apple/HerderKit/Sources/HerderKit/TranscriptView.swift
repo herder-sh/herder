@@ -658,8 +658,8 @@ private struct ToolRow: View {
     }
 }
 
-/// Where a message from this device is: on its way, waiting for its machine to connect, with
-/// the daemon, or refused.
+/// Where a message from this device is: on its way, waiting for its machine to connect, not
+/// delivered for longer than it should take, with the daemon, or refused.
 private struct DeliveryLine: View {
     let outgoing: Outgoing
     /// Where the message goes: its machine's connection is read only while it is on its way.
@@ -671,17 +671,9 @@ private struct DeliveryLine: View {
         HStack(spacing: 6) {
             switch outgoing.state {
             case .sending:
-                let machine = fleet.machines.first { $0.hostId == hostId }
-                if let machine, let holdUp = machine.connection.holdUp(addresses: machine.addresses.count) {
-                    if machine.connection == .connecting {
-                        ProgressView().controlSize(.mini).tint(Theme.tertiary)
-                    } else {
-                        Image(systemName: "wifi.slash")
-                    }
-                    Text(holdUp).lineLimit(2)
-                } else {
-                    ProgressView().controlSize(.mini).tint(Theme.tertiary)
-                    Text("Sending…")
+                // Drawn again once the message is overdue, whether or not the machine changed.
+                TimelineView(.explicit([outgoing.sentAt.addingTimeInterval(Outgoing.overdue)])) { _ in
+                    sending
                 }
             case .delivered:
                 EmptyView()
@@ -696,6 +688,28 @@ private struct DeliveryLine: View {
         }
         .font(.caption)
         .foregroundStyle(Theme.tertiary)
+    }
+
+    /// The line of a message on its way.
+    private var sending: some View {
+        let machine = fleet.machines.first { $0.hostId == hostId }
+        let now = Date.now
+        let overdue = now.timeIntervalSince(outgoing.sentAt) >= Outgoing.overdue
+        return HStack(spacing: 6) {
+            if let waiting = outgoing.waiting(at: now, for: machine) {
+                if overdue {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.failure)
+                } else if machine?.connection == .connecting {
+                    ProgressView().controlSize(.mini).tint(Theme.tertiary)
+                } else {
+                    Image(systemName: "wifi.slash")
+                }
+                Text(waiting).foregroundStyle(overdue ? Theme.failure : Theme.tertiary).lineLimit(2)
+            } else {
+                ProgressView().controlSize(.mini).tint(Theme.tertiary)
+                Text("Sending…")
+            }
+        }
     }
 }
 

@@ -1038,6 +1038,23 @@ struct Outgoing: Hashable, Identifiable {
     /// The files sent with it, shown until the session takes it.
     var files: [PromptFile] = []
     var state: State = .sending
+    var sentAt = Date.now
+
+    /// How long a message may be on its way before its line says it has not been delivered. The
+    /// client finds a dead connection 5 s after a send and shows the machine as lost 5 s after
+    /// that, so a message still on its way by then has no working path to its machine, whatever
+    /// the machine's connection reads.
+    static let overdue: TimeInterval = 15
+
+    /// What the line under the message says while it is on its way to `machine`, given how long
+    /// ago it was sent: `nil` while it is simply sending.
+    func waiting(at now: Date, for machine: Machine?) -> String? {
+        guard state == .sending else { return nil }
+        let holdUp = machine.flatMap { $0.connection.holdUp(addresses: $0.addresses.count) }
+        guard now.timeIntervalSince(sentAt) >= Self.overdue else { return holdUp }
+        let name = machine?.name ?? "The machine"
+        return "Not delivered yet. " + (holdUp ?? "\(name) is not answering; it gets the message once it does.")
+    }
 }
 
 /// One event of a session's history.

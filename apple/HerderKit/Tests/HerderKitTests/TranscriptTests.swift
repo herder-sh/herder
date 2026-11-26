@@ -435,6 +435,29 @@ struct DefaultAccountTests {
         model.settle([QueuedPrompt(promptId: "p2", text: "next", images: 0, by: "sample", agentMessage: nil)])
         #expect(model.outbox == [typing, failed])
     }
+
+    /// A message its machine has not taken in time says it was not delivered, even while the
+    /// machine reads connected, as a phone showed one whose connection was long gone.
+    @Test func aMessageNotTakenInTimeSaysItWasNotDelivered() {
+        let sent = Date(timeIntervalSince1970: 1_000_000)
+        let outgoing = Outgoing(text: "next", state: .sending, sentAt: sent)
+        let connected = machine("devbox", name: "devbox", sessions: [])
+        let offline = machine("devbox", name: "devbox", sessions: [], connection: .disconnected(error: "unreachable"))
+        let soon = sent.addingTimeInterval(3)
+        let late = sent.addingTimeInterval(Outgoing.overdue)
+
+        #expect(outgoing.waiting(at: soon, for: connected) == nil)
+        #expect(outgoing.waiting(at: late, for: connected)
+            == "Not delivered yet. devbox is not answering; it gets the message once it does.")
+        #expect(outgoing.waiting(at: soon, for: offline)
+            == "The machine is offline (unreachable). Sends once it connects.")
+        #expect(outgoing.waiting(at: late, for: offline)
+            == "Not delivered yet. The machine is offline (unreachable). Sends once it connects.")
+        // Once the machine has it, or refused it, the line says so instead.
+        for state: Outgoing.State in [.delivered, .failed("refused")] {
+            #expect(Outgoing(text: "next", state: state, sentAt: sent).waiting(at: late, for: connected) == nil)
+        }
+    }
 }
 
 struct TurnFailureTests {
