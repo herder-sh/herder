@@ -154,7 +154,7 @@ everything stops once the last clone is dropped.
 | `changes() -> Changes` | Notifications that `machines()` changed. |
 | `async share() -> Result<FleetLink, Error>` | The `herder://fleet` link of every saved machine, connected or not, by the name this device gives it, and of the person this device acts for, by their name and passkeys as the connected machines list them (`list_people`), for another device of the person to sign in to each with one of those passkeys. It carries no code, and no loopback address (`localhost`, `127.0.0.0/8`, `::1`): a machine with only those is left out. Fails with `Local` while no machine is left, in a demo, and while no connected machine knows this device as a person; with the machines' error when none lists the person. See [Fleet links](#fleet-links). |
 | `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
-| `set_addresses(host_id: HostId, addresses: Vec<String>) -> Result<(), Error>` | Connects to a machine at `addresses`, in this order of preference, from now on; each a host or IP with an optional port (7447 by default). Fails with `Error::Local` on an invalid address or an empty list. |
+| `set_addresses(host_id: HostId, addresses: Vec<String>) -> Result<(), Error>` | Connects to a machine at `addresses`, in this order of preference, from now on; each a host or IP with an optional port (7447 by default), a tunnel's `wss://` URL, or `vault://<host id>` (see Addresses). Fails with `Error::Local` on an invalid address or an empty list. |
 | `async reconnect(host_id: HostId) -> Result<String, Error>` | Drops a machine's connection, if up, and connects again at once, racing its addresses in order: the address the new connection uses, or `Unreachable` when none answered. |
 | `forget(host_id: HostId) -> Result<(), Error>` | Unpairs a machine on this device. |
 | `async sign_in(hosts: Vec<String>, fingerprint: String, passkeys: Vec<String>) -> Result<PendingSignIn, Error>` | Connects to a machine under a new device key to sign in as a person: the `PendingSignIn` holds what the person's passkey signs, restricted to the credential ids `passkeys` (a fleet link's person's; empty for any passkey). Fails with `Unreachable` when no address answered. See [Signing in](#signing-in). |
@@ -330,6 +330,26 @@ Teleport), then other addresses, then Tailscale ones (`100.64.0.0/10`, `fd7a:115
 A connection that works is kept: `wake()`, which an app also calls when the network changes,
 only checks it. `set_addresses` moves it to an address that comes before its own once one
 answers, and replaces at once one that uses an address it dropped.
+
+### Through a vault
+
+An address may also be `vault://<host id>`: the route through that vault, one of this
+client's machines. The client opens a connection to the vault at the vault's own addresses,
+with this device's key for the vault, asks it for a stream to the machine, and runs its
+ordinary connection to the machine inside: TLS pinning the machine's certificate, with this
+device's key for the machine. The vault forwards bytes it cannot read, and the machine
+authenticates the device as on a direct connection.
+
+Nothing sets the route up. The client adds it, last, to every machine a vault of its lists
+with `FleetHost::relay`, within a second, and saves it; it adds it again if removed while the
+vault still relays there, and drops it when the vault is forgotten. `set_addresses` may
+reorder it like any address. `share` leaves it out of the link.
+
+The race above then gives the route its place: the machine's own addresses get their head
+start, and the vault answers when they do not. A connection through a vault is the one
+connection that is not just kept: on every `wake()` and once a minute the client checks
+whether an address before the route answers again, and moves there when one does. `address`
+names the route in use, so an app can say that a machine is reached through a vault.
 
 `reconnect` replaces the connection now, whatever answers first: an app connects through a
 chosen address by putting it first with `set_addresses` and then calling `reconnect`. A
