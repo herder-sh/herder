@@ -1692,7 +1692,7 @@
           "type": "object",
           "properties": {
             "addresses": {
-              "description": "Addresses the vault advertises as `host:port`, most likely reachable first.",
+              "description": "Addresses the vault advertises as `host:port`, or a tunnel's `wss://` URL, most\nlikely reachable first.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -1779,7 +1779,7 @@
           "type": "object",
           "properties": {
             "addresses": {
-              "description": "Addresses the daemon advertises as `host:port`, most likely reachable first.",
+              "description": "Addresses the daemon advertises as `host:port`, or a tunnel's `wss://` URL, most\nlikely reachable first.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -5022,7 +5022,7 @@
       "type": "object",
       "properties": {
         "addresses": {
-          "description": "Addresses the daemon listens on, as `host:port`, most likely reachable first, as its\ninvite links name them; a client saves them, so it follows the daemon to a new address.\nEmpty from a daemon that does not say.",
+          "description": "Addresses the daemon listens on, as `host:port`, and the `wss://` URL of its public\ntunnel if it has one (`docs/public-access.md`), most likely reachable first, as its\ninvite links name them; a client saves them, so it follows the daemon to a new address.\nEmpty from a daemon that does not say.",
           "type": "array",
           "items": {
             "type": "string"

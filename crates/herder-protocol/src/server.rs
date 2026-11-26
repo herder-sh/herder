@@ -224,7 +224,8 @@ pub struct ServerHello {
     /// before `update_daemon`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herder_version: Option<String>,
-    /// Addresses the daemon listens on, as `host:port`, most likely reachable first, as its
+    /// Addresses the daemon listens on, as `host:port`, and the `wss://` URL of its public
+    /// tunnel if it has one (`docs/public-access.md`), most likely reachable first, as its
     /// invite links name them; a client saves them, so it follows the daemon to a new address.
     /// Empty from a daemon that does not say.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -707,7 +708,8 @@ pub enum CommandResult {
         code: String,
         /// SHA-256 of the vault's TLS certificate, lowercase hex.
         fingerprint: String,
-        /// Addresses the vault advertises as `host:port`, most likely reachable first.
+        /// Addresses the vault advertises as `host:port`, or a tunnel's `wss://` URL, most
+        /// likely reachable first.
         addresses: Vec<String>,
         /// When the window closes.
         expires_at: Timestamp,
@@ -736,7 +738,8 @@ pub enum CommandResult {
         role: Role,
         /// SHA-256 of the daemon's TLS certificate, lowercase hex.
         fingerprint: String,
-        /// Addresses the daemon advertises as `host:port`, most likely reachable first.
+        /// Addresses the daemon advertises as `host:port`, or a tunnel's `wss://` URL, most
+        /// likely reachable first.
         addresses: Vec<String>,
         /// When the invite stops working.
         expires_at: Timestamp,
