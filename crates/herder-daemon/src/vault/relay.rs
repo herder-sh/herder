@@ -7,13 +7,17 @@
 //! the client and the host run the TLS of a direct connection, which the vault has no key
 //! to.
 //!
+//! A host reaches the vault's CLIProxyAPI the same way, where the vault names no address for
+//! it: on such a stream the vault serves the HTTP the host's CLIs speak, forwarding each
+//! request to the proxy beside it, so the proxy is on no network but the vault's own.
+//!
 //! [`Relays`] holds what connects the three connections involved: which hosts take relayed
 //! connections, on which channel their replication connection is told to open one, the
 //! streams waiting for their host, and how many streams each device and host has open.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
@@ -21,16 +25,27 @@ use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use herder_protocol::{
     DeviceId, HostId, RELAY_VERSION, RelayAnswer, RelayError, RelayErrorCode, RelayHello,
 };
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full};
+use hyper::body::{Bytes, Incoming};
+use hyper::header::{CONNECTION, HOST, HeaderName};
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
+use hyper_rustls::HttpsConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use super::{Shared, blocking};
+use super::{Shared, blocking, cliproxyapi};
 use crate::auth::DeviceRole;
 use crate::ws::Ws;
-use crate::ws::tunnel::Pass;
+use crate::ws::tunnel::{Frames, Pass};
 
 /// How long a host that is not connected gets to connect before its client is refused: after
 /// a vault restart both reconnect, and the client is usually first.
@@ -45,6 +60,16 @@ pub(super) const STREAMS_PER_DEVICE: usize = 32;
 
 /// Streams to one host: every device of a few people.
 pub(super) const STREAMS_PER_HOST: usize = 64;
+
+/// Streams one host may have open to the vault's CLIProxyAPI: one for each request its CLIs
+/// have under way.
+pub(super) const PROXY_STREAMS_PER_HOST: usize = 64;
+
+/// The HTTP client the vault forwards hosts' requests to its CLIProxyAPI with.
+type ProxyClient = Client<HttpsConnector<HttpConnector>, Incoming>;
+
+/// The body of an answer to a host: the proxy's, or the vault's own refusal.
+type ProxyBody = BoxBody<Bytes, hyper::Error>;
 
 /// How often each end of a stream is pinged, and the silence after which it is taken for
 /// gone. A peer behind a tunnel is not the socket's peer, so the kernel cannot tell.
@@ -75,6 +100,8 @@ pub(super) struct Relays {
     accept_timeout: Duration,
     per_device: usize,
     per_host: usize,
+    /// Made the first time a host asks for the CLIProxyAPI.
+    proxy_client: OnceLock<ProxyClient>,
 }
 
 #[derive(Default)]
@@ -87,6 +114,8 @@ struct State {
     waiting: HashMap<String, (HostId, oneshot::Sender<End>)>,
     by_device: HashMap<DeviceId, usize>,
     by_host: HashMap<HostId, usize>,
+    /// Streams to the CLIProxyAPI each host has open.
+    proxied: HashMap<HostId, usize>,
 }
 
 impl Default for Relays {
@@ -114,7 +143,45 @@ impl Relays {
             accept_timeout,
             per_device,
             per_host,
+            proxy_client: OnceLock::new(),
         }
+    }
+
+    /// The client requests are forwarded to the CLIProxyAPI with. It checks a proxy that
+    /// serves TLS against the web's CAs, as the vault's management client does.
+    fn proxy_client(&self) -> Result<ProxyClient> {
+        if let Some(client) = self.proxy_client.get() {
+            return Ok(client.clone());
+        }
+        let roots = rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        };
+        let provider = rustls::crypto::ring::default_provider();
+        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let https = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_tls_config(tls)
+            .https_or_http()
+            .enable_http1()
+            .build();
+        let client = Client::builder(TokioExecutor::new()).build(https);
+        Ok(self.proxy_client.get_or_init(|| client).clone())
+    }
+
+    /// Room for one more stream from `host` to the CLIProxyAPI, until the slot is dropped.
+    fn reserve_proxy(self: &Arc<Self>, host: &HostId) -> Option<ProxySlot> {
+        let mut state = self.lock();
+        let open = state.proxied.get(host).copied().unwrap_or(0);
+        if open >= PROXY_STREAMS_PER_HOST {
+            return None;
+        }
+        state.proxied.insert(host.clone(), open + 1);
+        Some(ProxySlot {
+            relays: Arc::clone(self),
+            host: host.clone(),
+        })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -277,6 +344,24 @@ impl Drop for Slot {
     }
 }
 
+/// One stream of a host to the CLIProxyAPI, counted until dropped.
+struct ProxySlot {
+    relays: Arc<Relays>,
+    host: HostId,
+}
+
+impl Drop for ProxySlot {
+    fn drop(&mut self) {
+        let mut state = self.relays.lock();
+        if let Some(open) = state.proxied.get_mut(&self.host) {
+            *open -= 1;
+            if *open == 0 {
+                state.proxied.remove(&self.host);
+            }
+        }
+    }
+}
+
 struct Waiting {
     relays: Arc<Relays>,
     stream_id: String,
@@ -326,10 +411,7 @@ pub(super) async fn serve(
         RelayHello::Accept { stream_id, .. } => {
             accept(ws, shared, device, pass, &stream_id, peer, cancel).await
         }
-        RelayHello::Proxy { .. } => {
-            let message = "this vault forwards no host to a CLIProxyAPI".to_owned();
-            return refuse(&mut ws, peer, refusal(RelayErrorCode::Forbidden, message)).await;
-        }
+        RelayHello::Proxy { .. } => proxy(ws, shared, device, pass, peer, cancel).await,
     };
     if let Err(err) = result {
         info!(%peer, "relay connection failed: {err:#}");
@@ -467,6 +549,119 @@ async fn accept(
     Ok(())
 }
 
+/// A host's stream to the vault's CLIProxyAPI: serves the HTTP the host's CLIs speak on it,
+/// forwarding each request to the proxy, until the host closes it.
+async fn proxy(
+    mut ws: Ws,
+    shared: &Shared,
+    device: &str,
+    pass: Option<Pass>,
+    peer: SocketAddr,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let identity = match shared
+        .auth
+        .authenticate(device, None, "relay", DeviceRole::Host, &cancel)
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            let error = refusal(RelayErrorCode::Forbidden, error.message);
+            refuse(&mut ws, peer, error).await;
+            return Ok(());
+        }
+    };
+    drop(pass);
+    let device = identity.device_id;
+    let host = blocking(&shared.store, move |store| store.host_of_device(&device)).await?;
+    // Only a host the vault's hello told to come this way: one that holds a client key of a
+    // proxy the vault names no address for.
+    let forwarder = host.as_ref().and_then(|host| {
+        let keys = shared.cliproxyapi.get()?;
+        (keys.endpoint().is_none() && cliproxyapi::set_name(host).is_some())
+            .then(|| keys.management().url().to_owned())
+    });
+    let (Some(host), Some(upstream)) = (host, forwarder) else {
+        let message = "this vault forwards this device to no CLIProxyAPI".to_owned();
+        refuse(&mut ws, peer, refusal(RelayErrorCode::Forbidden, message)).await;
+        return Ok(());
+    };
+    let Some(_slot) = shared.relays.reserve_proxy(&host) else {
+        let message = format!(
+            "too many streams to the CLIProxyAPI are open: at most {PROXY_STREAMS_PER_HOST} \
+             per host"
+        );
+        refuse(&mut ws, peer, refusal(RelayErrorCode::Busy, message)).await;
+        return Ok(());
+    };
+    let client = match shared.relays.proxy_client() {
+        Ok(client) => client,
+        Err(err) => {
+            let message = format!("the vault cannot reach its CLIProxyAPI: {err:#}");
+            refuse(&mut ws, peer, refusal(RelayErrorCode::Internal, message)).await;
+            return Ok(());
+        }
+    };
+    answer(&mut ws, &RelayAnswer::Ready).await?;
+    let service = service_fn(move |request| forward(client.clone(), upstream.clone(), request));
+    let serving = http1::Builder::new().serve_connection(TokioIo::new(Frames::new(ws)), service);
+    tokio::select! {
+        () = cancel.cancelled() => {}
+        served = serving => {
+            if let Err(err) = served {
+                debug!(%peer, host_id = %host, "a stream to the CLIProxyAPI failed: {err}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether the vault forwards a host's request for `path`: anything but the proxy's
+/// management API, which stays the vault's alone, as it is while hosts dial the proxy and
+/// the proxy takes management requests from its own machine only. A path with an escape is
+/// refused too, as it could spell the same.
+fn forwardable(path: &str) -> bool {
+    !path.contains('%') && !path.to_ascii_lowercase().contains("management")
+}
+
+/// Forwards `request` to the CLIProxyAPI at `upstream` as it is, the host's client key
+/// included, and streams the answer back.
+async fn forward(
+    client: ProxyClient,
+    upstream: String,
+    request: Request<Incoming>,
+) -> Result<Response<ProxyBody>, hyper_util::client::legacy::Error> {
+    let (mut parts, body) = request.into_parts();
+    if !forwardable(parts.uri.path()) {
+        let refused = Full::new(Bytes::from_static(b"herder: not forwarded"))
+            .map_err(|never| match never {})
+            .boxed();
+        let mut response = Response::new(refused);
+        *response.status_mut() = StatusCode::FORBIDDEN;
+        return Ok(response);
+    }
+    let path = parts.uri.path_and_query().map_or("/", |path| path.as_str());
+    // A base URL and a path a client sent always make a URL; the client refuses one that
+    // does not.
+    parts.uri = format!("{upstream}{path}").parse().unwrap_or_default();
+    for name in [HOST, CONNECTION] {
+        parts.headers.remove(name);
+    }
+    parts.headers.remove(HeaderName::from_static("keep-alive"));
+    match client.request(Request::from_parts(parts, body)).await {
+        Ok(mut response) => {
+            response.headers_mut().remove(CONNECTION);
+            response
+                .headers_mut()
+                .remove(HeaderName::from_static("keep-alive"));
+            Ok(response.map(BodyExt::boxed))
+        }
+        Err(err) => {
+            warn!("cannot reach the CLIProxyAPI at {upstream}: {err}");
+            Err(err)
+        }
+    }
+}
+
 fn refusal(code: RelayErrorCode, message: String) -> RelayError {
     RelayError { code, message }
 }
@@ -565,6 +760,28 @@ mod tests {
             per_device,
             per_host,
         ))
+    }
+
+    #[test]
+    fn the_proxys_management_api_is_never_forwarded() {
+        for path in [
+            "/v1/messages",
+            "/v1/messages/count_tokens",
+            "/v1/responses",
+            "/v1beta/models/gemini-3-pro:streamGenerateContent",
+            "/",
+        ] {
+            assert!(forwardable(path), "{path}");
+        }
+        for path in [
+            "/v8/management/config/access/api-keys",
+            "/v8/Management/credentials",
+            "//v8/management",
+            "/v8/%6danagement/credentials",
+            "/v1/../v8/management",
+        ] {
+            assert!(!forwardable(path), "{path}");
+        }
     }
 
     #[test]

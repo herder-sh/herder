@@ -10,15 +10,20 @@
 //! its JSON body. Everything else passes as it is, the client key the CLI sends included, and
 //! the answer streams back unchanged. herder never sees a provider token: the CLIProxyAPI
 //! holds them.
+//!
+//! A vault that names no address for its proxy forwards to it itself: each request then
+//! goes on a relay stream to the vault ([`herder_protocol::relay`]), inside the host's
+//! pinned connection to it, so a host reaches the proxy wherever it reaches its vault.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use futures_util::future::BoxFuture;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::{Bytes, Incoming};
-use hyper::header::{CONNECTION, CONTENT_LENGTH, HOST, HeaderName, TRANSFER_ENCODING};
+use hyper::header::{CONNECTION, CONTENT_LENGTH, HOST, HeaderName, HeaderValue, TRANSFER_ENCODING};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
@@ -27,14 +32,52 @@ use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::net::TcpListener;
+use tokio_rustls::TlsConnector;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
+
+use super::client;
+use crate::config::VaultConfig;
+use crate::ws::tunnel::Io;
 
 /// Largest request body forwarded: a prompt with its images.
 const MAX_REQUEST_BYTES: usize = 256 * 1024 * 1024;
 
 /// Where the vault's CLIProxyAPI is now, as the vault last said; `None` while it has not.
-pub type Upstream = Arc<dyn Fn() -> Option<String> + Send + Sync>;
+pub type Upstream = Arc<dyn Fn() -> Option<Target> + Send + Sync>;
+
+/// How a host reaches its vault's CLIProxyAPI.
+#[derive(Clone)]
+pub enum Target {
+    /// At this base URL, which the host can dial.
+    Url(String),
+    /// Through the vault, which forwards to the proxy beside it: the proxy is on no network
+    /// the host could reach it on.
+    Vault(Through),
+}
+
+/// Opens streams to the vault's CLIProxyAPI through the vault.
+#[derive(Clone)]
+pub struct Through(Arc<Open>);
+
+type Open = dyn Fn() -> BoxFuture<'static, Result<Box<dyn Io>>> + Send + Sync;
+
+impl Through {
+    /// Streams opened as `vault` is dialled, with `connector`'s pinned TLS and device key.
+    pub(super) fn new(vault: VaultConfig, connector: TlsConnector) -> Self {
+        Self(Arc::new(move || {
+            let (vault, connector) = (vault.clone(), connector.clone());
+            Box::pin(async move { client::open_proxy(&vault, &connector).await })
+        }))
+    }
+
+    /// One stream, for one request.
+    async fn open(&self) -> Result<Box<dyn Io>> {
+        (self.0)().await
+    }
+}
+
+type Failed = Box<dyn std::error::Error + Send + Sync>;
 
 type Body = BoxBody<Bytes, hyper::Error>;
 
@@ -101,10 +144,7 @@ impl PinProxy {
 /// Forwards `request`, for `/<pin>/<path>`, to the CLIProxyAPI's `/<path>` with its model
 /// pinned. When the proxy cannot be reached, the connection drops with no answer, as it would
 /// have reaching the proxy directly, so the CLI fails the turn as unreachable.
-async fn forward(
-    state: Arc<State>,
-    request: Request<Incoming>,
-) -> Result<Response<Body>, hyper_util::client::legacy::Error> {
+async fn forward(state: Arc<State>, request: Request<Incoming>) -> Result<Response<Body>, Failed> {
     let (mut parts, body) = request.into_parts();
     let path = parts.uri.path().trim_start_matches('/');
     let (pin, rest) = path.split_once('/').unwrap_or((path, ""));
@@ -122,7 +162,11 @@ async fn forward(
         .query()
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
-    let target = format!("{}/{rest}{query}", upstream.trim_end_matches('/'));
+    let (target, through) = match &upstream {
+        Target::Url(url) => (format!("{}/{rest}{query}", url.trim_end_matches('/')), None),
+        // The vault puts its proxy's address before the path.
+        Target::Vault(through) => (format!("/{rest}{query}"), Some(through)),
+    };
     let Ok(uri) = target.parse() else {
         return Ok(refuse(
             StatusCode::BAD_GATEWAY,
@@ -144,7 +188,11 @@ async fn forward(
     }
     parts.headers.remove(HeaderName::from_static("keep-alive"));
     let request = Request::from_parts(parts, Full::new(body));
-    match state.client.request(request).await {
+    let response = match through {
+        None => state.client.request(request).await.map_err(Failed::from),
+        Some(through) => through_vault(through, request).await,
+    };
+    match response {
         Ok(response) => {
             let (mut parts, body) = response.into_parts();
             parts.headers.remove(CONNECTION);
@@ -152,10 +200,35 @@ async fn forward(
             Ok(Response::from_parts(parts, body.boxed()))
         }
         Err(err) => {
-            warn!("cannot reach the vault's CLIProxyAPI at {upstream}: {err}");
+            let at = match &upstream {
+                Target::Url(url) => url.as_str(),
+                Target::Vault(_) => "through the vault",
+            };
+            warn!("cannot reach the vault's CLIProxyAPI {at}: {err}");
             Err(err)
         }
     }
+}
+
+/// Sends `request` on a stream of its own through the vault, which lasts until its answer
+/// is read to the end.
+async fn through_vault(
+    through: &Through,
+    mut request: Request<Full<Bytes>>,
+) -> Result<Response<Incoming>, Failed> {
+    let stream = through.open().await?;
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
+    tokio::spawn(async move {
+        if let Err(err) = connection.await {
+            debug!("a stream to the vault's CLIProxyAPI failed: {err}");
+        }
+    });
+    // HTTP/1.1 wants a host; the vault names the proxy's own in its place.
+    request
+        .headers_mut()
+        .insert(HOST, HeaderValue::from_static("cliproxyapi"));
+    Ok(sender.send_request(request).await?)
 }
 
 /// `body` with `<pin>/` before its JSON `model`, when it has one that has no pin yet; else as

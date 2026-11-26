@@ -2039,7 +2039,7 @@ impl SessionManager {
             .context("vault logins need the vault's secrets")?;
         let upstream: pin::Upstream = {
             let secrets = Arc::clone(&secrets);
-            Arc::new(move || secrets.cliproxyapi())
+            Arc::new(move || secrets.proxy_target())
         };
         let proxy = PinProxy::start(upstream, self.inner.shutdown.clone()).await?;
         let mut logins = secrets.provider_logins();

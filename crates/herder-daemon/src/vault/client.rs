@@ -45,6 +45,9 @@ static WEB_PKI: LazyLock<Result<Arc<rustls::ClientConfig>, String>> = LazyLock::
         .map_err(|err| err.to_string())
 });
 
+/// Time to open a relay connection to the vault and get its answer.
+const RELAY_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// How long reading the vault's session list may take.
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -119,13 +122,39 @@ pub(super) async fn accept_relay(
     connector: &TlsConnector,
     stream_id: &str,
 ) -> Result<(Box<dyn Io>, SocketAddr)> {
-    // Each frame goes out as written: the client's TLS inside decides what to batch.
-    let (mut ws, peer) = dial_with(vault, connector, Some(tunnel::config())).await?;
     let accept = RelayHello::Accept {
         relay_version: RELAY_VERSION,
         stream_id: stream_id.to_owned(),
     };
-    ws.send(Message::text(serde_json::to_string(&accept)?))
+    open_relay(vault, connector, &accept).await
+}
+
+/// Opens a stream to the vault's CLIProxyAPI, for a host the vault forwards there: it
+/// carries the HTTP a CLI speaks to the proxy.
+pub(super) async fn open_proxy(
+    vault: &VaultConfig,
+    connector: &TlsConnector,
+) -> Result<Box<dyn Io>> {
+    let proxy = RelayHello::Proxy {
+        relay_version: RELAY_VERSION,
+    };
+    let opening = open_relay(vault, connector, &proxy);
+    let (stream, _) = tokio::time::timeout(RELAY_TIMEOUT, opening)
+        .await
+        .map_err(|_| anyhow!("no answer from the vault in {RELAY_TIMEOUT:?}"))??;
+    Ok(stream)
+}
+
+/// A relay connection to the vault that says `hello`: the stream the vault opened for it,
+/// and the address of the socket's peer.
+async fn open_relay(
+    vault: &VaultConfig,
+    connector: &TlsConnector,
+    hello: &RelayHello,
+) -> Result<(Box<dyn Io>, SocketAddr)> {
+    // Each frame goes out as written: what runs inside decides what to batch.
+    let (mut ws, peer) = dial_with(vault, connector, Some(tunnel::config())).await?;
+    ws.send(Message::text(serde_json::to_string(hello)?))
         .await?;
     loop {
         let text = match ws.next().await {
