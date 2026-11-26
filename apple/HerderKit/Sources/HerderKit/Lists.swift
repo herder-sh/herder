@@ -448,7 +448,7 @@ struct Lists: Equatable {
                 key: key, title: model.titled ?? head.title ?? model.title ?? head.task ?? "Session …\(key.sessionId.suffix(6))",
                 project: projectId.map { String($0.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? "") } ?? "",
                 projectId: projectId, branch: model.branch ?? "", worktree: model.worktree ?? "", machine: machineName,
-                machineOffline: host.map { !$0.online } ?? false,
+                machineOffline: host.map { !$0.online } ?? false, fromVault: host != nil,
                 state: state, activity: model.activity,
                 age: Timestamp.age(model.updatedAt, now: now), updatedAt: model.updatedAt, prs: model.prs,
                 children: kids.count, childrenNeedYou: kids.filter(\.model.needsUser).count,

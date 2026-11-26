@@ -10,7 +10,9 @@ extension Fleet {
         guard let url = Bundle.module.url(forResource: "demo", withExtension: "json") else {
             throw HerderError.Local(detail: "The demo is missing from the app.")
         }
-        return Fleet(client: try Client.openDemo(demo: try String(contentsOf: url, encoding: .utf8)))
+        let fleet = Fleet(client: try Client.openDemo(demo: try String(contentsOf: url, encoding: .utf8)))
+        fleet.hearsPings = false
+        return fleet
     }
 }
 
