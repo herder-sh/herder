@@ -222,9 +222,16 @@ import AppKit
     }
 
     @Test func drawsTheHubAndItsMachines() async throws {
-        let fleet = try fleet()
-        try await shoot(MachinesView(fleet: fleet, sheet: .constant(nil)).padding(.horizontal, 20), named: "machines.png",
-                        height: 420)
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            throw CancellationError()
+        }
+        // The hub still hears from trash-can-01, which this Mac cannot reach.
+        var machines = sampleFleetMachines()
+        machines[1].connection = .disconnected(error: "no answer in 10s")
+        fleet.setMachinesForTesting(machines)
+        let view = MachinesView(fleet: fleet, sheet: .constant(nil)).padding(20)
+            .frame(width: 1100, height: 420, alignment: .top)
+        try await shoot(view, named: "machines.png", height: 420)
     }
 
     @Test func drawsTheVaultPage() async throws {
