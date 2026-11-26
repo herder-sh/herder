@@ -283,7 +283,10 @@
 //! grants it to the host as a secret for its own use ([`crate::vault::cliproxyapi`]); it reads
 //! the proxy's management secret from `HERDER_CLIPROXYAPI_MANAGEMENT_KEY`, and needs its
 //! secrets key. With `cliproxyapi_endpoint` too, it tells each host holding a key where the
-//! proxy is, and the apps and TUI offer the vault's logins when adding an account there. A
+//! proxy is, and the apps and TUI offer the vault's logins when adding an account there.
+//! Without it the vault forwards each such host to the proxy itself, over the host's own
+//! connection to the vault: the host runs the vault's logins as accounts wherever it reaches
+//! its vault, and the proxy need be on no network but the vault's (`docs/vault-relay.md`). A
 //! host's endpoint account names that secret instead of holding the key:
 //!
 //! ```toml

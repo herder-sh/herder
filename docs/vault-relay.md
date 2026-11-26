@@ -150,15 +150,20 @@ Only the vault is exposed, so the proxy is reached through it too:
 
 - A vault with `cliproxyapi` and no `cliproxyapi_endpoint` sets
   `VaultHello::cliproxyapi_relay`.
-- The host then listens on loopback and points its endpoint accounts' CLIs there. For each
-  connection it opens a relay connection to the vault with `RelayHello::Proxy`; the vault
-  connects to its proxy (speaking the proxy's TLS itself when it has one) and copies bytes.
+- The host already runs its vault logins' CLIs through a proxy of its own on loopback,
+  which pins each request to its login. For each request that proxy now opens a relay
+  connection to the vault with `RelayHello::Proxy` and speaks HTTP on it; the vault serves
+  it, forwarding the request to its proxy (speaking the proxy's TLS itself when it has one)
+  and streaming the answer back.
+- The vault forwards everything but the proxy's management API, which stays reachable
+  from the vault only.
 - The proxy still checks the host's client key. The vault process sees that traffic in the
   clear, as the proxy beside it does; Cloudflare sees ciphertext. Nothing reads or stores a
   provider login.
 
-A vault that sets `cliproxyapi_endpoint` keeps telling hosts that address, as today. The
-alternative, a second public hostname for the proxy, would put it on the internet behind a
+A vault that sets `cliproxyapi_endpoint` keeps telling hosts that address, as today, and
+forwards none. A host older than this ignores `cliproxyapi_relay`, so take the endpoint out
+of a vault's config only once its hosts are updated. The alternative, a second public hostname for the proxy, would put it on the internet behind a
 bearer key and show every prompt to Cloudflare.
 
 Only a host device whose host holds a client key may open proxy streams, at most 64 at once.

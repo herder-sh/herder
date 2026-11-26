@@ -29,6 +29,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+use super::pin;
 use super::store::SecretUse;
 
 /// How long a fetched value is kept in memory.
@@ -61,6 +62,9 @@ struct State {
     linked: bool,
     /// Where the host reaches its vault's CLIProxyAPI, as the vault last said in its hello.
     cliproxyapi: Option<String>,
+    /// How the host reaches that proxy through the vault, when the vault forwards to it
+    /// instead of naming an address.
+    cliproxyapi_through: Option<pin::Through>,
     /// The open replication connection, by its number, and where its requests go.
     connection: Option<(u64, mpsc::UnboundedSender<Ask>)>,
     /// Connections attached so far, to number the next.
@@ -180,6 +184,7 @@ impl HostSecrets {
         if state.linked != linked {
             state.linked = linked;
             state.cliproxyapi = None;
+            state.cliproxyapi_through = None;
             state.cache.clear();
             state.connection = None;
             drop(state);
@@ -193,13 +198,28 @@ impl HostSecrets {
         self.lock().linked
     }
 
-    /// Records where the host reaches its vault's CLIProxyAPI, from the vault's hello; `None`
-    /// when the vault runs none or holds no key for the host.
-    pub(super) fn set_cliproxyapi(&self, endpoint: Option<String>) {
-        let none = endpoint.is_none();
-        self.lock().cliproxyapi = endpoint;
+    /// Records where the host reaches its vault's CLIProxyAPI, from the vault's hello: at
+    /// `endpoint`, or `through` the vault; neither when the vault runs none or holds no key
+    /// for the host.
+    pub(super) fn set_cliproxyapi(&self, endpoint: Option<String>, through: Option<pin::Through>) {
+        let none = endpoint.is_none() && through.is_none();
+        let mut state = self.lock();
+        state.cliproxyapi = endpoint;
+        state.cliproxyapi_through = through;
+        drop(state);
         if none {
             self.set_provider_logins(Vec::new());
+        }
+    }
+
+    /// How the host reaches its vault's CLIProxyAPI now, for the proxy its vault logins'
+    /// CLIs run through.
+    pub fn proxy_target(&self) -> Option<pin::Target> {
+        let state = self.lock();
+        match (&state.cliproxyapi, &state.cliproxyapi_through) {
+            (Some(url), _) => Some(pin::Target::Url(url.clone())),
+            (None, Some(through)) => Some(pin::Target::Vault(through.clone())),
+            (None, None) => None,
         }
     }
 

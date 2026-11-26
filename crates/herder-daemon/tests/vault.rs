@@ -1914,11 +1914,23 @@ async fn a_host_backs_up_and_fetches_secrets_only_as_its_switches_say() {
 
 /// A CLIProxyAPI's management API on localhost, keeping the client keys the vault puts there.
 fn fake_cliproxyapi() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    let (url, keys, _) = fake_cliproxyapi_recording();
+    (url, keys)
+}
+
+/// The requests a fake CLIProxyAPI served outside its management API: each one's head and body.
+type Requests = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+/// [`fake_cliproxyapi`], also recording every request outside the management API, head and
+/// body, which it answers `{"served":true}`.
+fn fake_cliproxyapi_recording() -> (String, Arc<std::sync::Mutex<Vec<String>>>, Requests) {
     use std::io::{BufRead, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let keys = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let held = Arc::clone(&keys);
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&requests);
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
@@ -1938,7 +1950,11 @@ fn fake_cliproxyapi() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
             let path = "/v8/management/config/access/api-keys";
-            let answer = if !head.contains("Bearer management-secret") {
+            let answer = if !head.contains("/v8/management/") {
+                let body = String::from_utf8(body.clone()).unwrap();
+                recorded.lock().unwrap().push((head.clone(), body));
+                r#"{"served":true}"#.to_owned()
+            } else if !head.contains("Bearer management-secret") {
                 "{}".to_owned()
             } else if head.starts_with(&format!("PUT {path} ")) {
                 *held.lock().unwrap() = serde_json::from_slice(&body).unwrap();
@@ -1956,7 +1972,7 @@ fn fake_cliproxyapi() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
             );
         }
     });
-    (url, keys)
+    (url, keys, requests)
 }
 
 /// An adapter that records each start's environment, then plays `failover_retry.jsonl`.
@@ -2024,6 +2040,11 @@ async fn a_paired_host_runs_on_the_vaults_cliproxyapi_with_the_key_it_minted_unt
         host.secrets.cliproxyapi().as_deref(),
         Some("https://cpa.example.com:8317")
     );
+    // And the host dials that address itself, as before the vault forwarded to any proxy.
+    assert!(matches!(
+        host.secrets.proxy_target(),
+        Some(herder_daemon::vault::pin::Target::Url(url)) if url == "https://cpa.example.com:8317"
+    ));
     // Its sessions never get it.
     let unknown = fetch(&host, "s1", &["CLIPROXYAPI_KEY"]).await.unwrap_err();
     assert_eq!(unknown.code, SecretErrorCode::Unknown);
@@ -2850,5 +2871,162 @@ async fn a_host_replicates_through_the_vaults_tunnel() {
     caught_up(&host_dir, &vault_dir).await;
     assert_gap_free(&vault_dir);
     host.runtime.kill().await;
+    vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_reaches_the_vaults_cliproxyapi_through_the_vault() {
+    use herder_daemon::vault::pin::{PinProxy, Target};
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    let (url, _, requests) = fake_cliproxyapi_recording();
+    let management = herder_daemon::vault::cliproxyapi::Management::new(
+        &url,
+        SecretValue::new("management-secret").unwrap(),
+    );
+    // A vault that names no address for its proxy forwards hosts to it itself.
+    let keys = ClientKeys::new(management, None).unwrap();
+    let vault = Vault::start_with(
+        &vault_dir,
+        0,
+        LIVENESS_TIMEOUT,
+        Some(SECRETS_KEY),
+        Some(keys),
+    )
+    .await;
+    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    let upstream: herder_daemon::vault::pin::Upstream = loop {
+        if let Some(Target::Vault(_)) = host.secrets.proxy_target() {
+            let secrets = Arc::clone(&host.secrets);
+            break Arc::new(move || secrets.proxy_target());
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no route to the proxy"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    // The vault told the host no address, and lists its logins all the same.
+    assert_eq!(host.secrets.cliproxyapi(), None);
+    let mut logins = host.secrets.provider_logins();
+    tokio::time::timeout(TIMEOUT, logins.wait_for(|logins| !logins.is_empty()))
+        .await
+        .unwrap()
+        .unwrap();
+
+    // A CLI of the host, pointed at the host's loopback proxy as its vault logins' are,
+    // reaches the vault's proxy: its request arrives as it would dialling the proxy, with
+    // the login pinned and the client key it sent, and the answer comes back.
+    let pin_proxy = PinProxy::start(upstream, CancellationToken::new())
+        .await
+        .unwrap();
+    let call = |path: &'static str, body: &'static str| {
+        let url = format!("{}{path}", pin_proxy.url("claude-ada"));
+        tokio::task::spawn_blocking(move || {
+            // A refusal is an answer here, not an error.
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .build()
+                .into();
+            let mut response = agent
+                .post(&url)
+                .header("x-api-key", "herder-host-key")
+                .header("Content-Type", "application/json")
+                .send(body)
+                .unwrap();
+            let status = response.status().as_u16();
+            (status, response.body_mut().read_to_string().unwrap())
+        })
+    };
+    let answered = call(
+        "/v1/messages?beta=true",
+        r#"{"model":"opus","max_tokens":1}"#,
+    );
+    assert_eq!(
+        answered.await.unwrap(),
+        (200, r#"{"served":true}"#.to_owned())
+    );
+    // Each request has a stream of its own, so a second one works as the first.
+    let answered = call("/v1/messages/count_tokens", r#"{"model":"opus"}"#);
+    assert_eq!(answered.await.unwrap().0, 200);
+    let seen = requests.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    let (head, body) = &seen[0];
+    assert!(head.starts_with("POST /v1/messages?beta=true "), "{head}");
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("x-api-key: herder-host-key"),
+        "{head}"
+    );
+    let body: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(body["model"], "claude-ada/opus");
+    assert!(seen[1].0.starts_with("POST /v1/messages/count_tokens "));
+    // The proxy's management API stays the vault's alone: a request for it is refused by
+    // the vault and never reaches the proxy.
+    let refused = call("/v8/management/config/access/api-keys", "[]");
+    assert_eq!(refused.await.unwrap().0, 403);
+    assert_eq!(requests.lock().unwrap().len(), 2);
+
+    // Only a host the vault forwards may come this way: not a client's device.
+    let proxy = RelayHello::Proxy {
+        relay_version: RELAY_VERSION,
+    };
+    let device = phone(&vault);
+    assert_eq!(
+        relay_refusal(&vault, &device, &proxy).await,
+        RelayErrorCode::Forbidden
+    );
+    host.runtime.kill().await;
+    vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vault_that_names_its_proxys_address_forwards_no_host_to_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    let (url, ..) = fake_cliproxyapi_recording();
+    let management = herder_daemon::vault::cliproxyapi::Management::new(
+        &url,
+        SecretValue::new("management-secret").unwrap(),
+    );
+    let keys = ClientKeys::new(management, Some("https://cpa.example.com:8317".into())).unwrap();
+    let vault = Vault::start_with(
+        &vault_dir,
+        0,
+        LIVENESS_TIMEOUT,
+        Some(SECRETS_KEY),
+        Some(keys),
+    )
+    .await;
+    // The host is told the address, and not to come through the vault.
+    std::fs::create_dir_all(&host_dir).unwrap();
+    let mut ws = dial(&vault, &host_dir).await;
+    let hello = HostMessage::Hello(HostHello {
+        replication_version: REPLICATION_VERSION,
+        host_id: host_id(),
+        host_name: "devbox".into(),
+        build: "test".into(),
+        pairing_code: Some(vault.auth.mint_host("devbox", PAIRING_TTL).unwrap().code),
+        attachments_cap: None,
+        relay: true,
+    });
+    say(&mut ws, &hello).await;
+    let VaultMessage::Hello(hello) = next_message(&mut ws).await else {
+        panic!("no hello from the vault");
+    };
+    assert_eq!(
+        (hello.cliproxyapi.as_deref(), hello.cliproxyapi_relay),
+        (Some("https://cpa.example.com:8317"), false)
+    );
+    let proxy = RelayHello::Proxy {
+        relay_version: RELAY_VERSION,
+    };
+    let host_key = Replicator::device_key(&host_dir).unwrap();
+    assert_eq!(
+        relay_refusal(&vault, &host_key, &proxy).await,
+        RelayErrorCode::Forbidden
+    );
     vault.runtime.kill().await;
 }

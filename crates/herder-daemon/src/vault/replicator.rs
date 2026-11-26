@@ -39,6 +39,7 @@ use tracing::{debug, info, warn};
 use super::BUILD;
 use super::client::{self, Ws};
 use super::host_secrets::{Ask, HostSecrets};
+use super::pin;
 use super::store::SecretUse;
 use crate::config::VaultConfig;
 use crate::data_dir::write_private;
@@ -291,7 +292,10 @@ impl Replicator {
             };
             return match serde_json::from_str(&text)? {
                 VaultMessage::Hello(hello) if hello.replication_version == REPLICATION_VERSION => {
-                    self.secrets.set_cliproxyapi(hello.cliproxyapi);
+                    let through = hello
+                        .cliproxyapi_relay
+                        .then(|| pin::Through::new(self.vault.clone(), connector.clone()));
+                    self.secrets.set_cliproxyapi(hello.cliproxyapi, through);
                     Ok((ws, hello.acked))
                 }
                 VaultMessage::Hello(hello) => Err(anyhow!(

@@ -112,6 +112,8 @@ fn mint() -> Result<SecretValue> {
 /// A CLIProxyAPI's management API.
 #[derive(Clone)]
 pub struct Management {
+    /// The proxy's base URL.
+    url: String,
     /// `<base URL>/v8/management`.
     base: String,
     key: SecretValue,
@@ -131,12 +133,18 @@ impl Management {
             .build()
             .into();
         Self {
+            url: url.trim_end_matches('/').to_owned(),
             base: format!("{}/v8/management", url.trim_end_matches('/')),
             key,
             agent,
             logins: Arc::new(watch::Sender::new(None)),
             pinned: Arc::default(),
         }
+    }
+
+    /// The proxy's base URL, without a trailing slash.
+    pub(super) fn url(&self) -> &str {
+        &self.url
     }
 
     /// The management API of the proxy at `url`, with the secret in [`MANAGEMENT_KEY_ENV`].

@@ -156,7 +156,7 @@ async fn serve(
     };
     drop(pass);
     if hello.replication_version != REPLICATION_VERSION {
-        send(ws, hello_message(Vec::new(), None)).await?;
+        send(ws, hello_message(Vec::new(), None, false)).await?;
         bail!(
             "host {} speaks replication {}, this vault {REPLICATION_VERSION}",
             hello.host_id,
@@ -191,6 +191,8 @@ async fn serve(
     // Before the hello, so the host finds its key as soon as it may ask for it, and is told
     // where the proxy is only once it holds one.
     let mut proxy = None;
+    // Whether the host reaches the proxy through this vault, which names no address for it.
+    let mut proxy_relayed = false;
     if let (Some(keys), Some(key)) = (shared.cliproxyapi.get(), &shared.secrets_key) {
         match keys.ensure_host(&shared.store, key, &host).await {
             Ok(minted) => {
@@ -199,6 +201,7 @@ async fn serve(
                 }
                 if cliproxyapi::set_name(&host).is_some() {
                     proxy = keys.endpoint().map(str::to_owned);
+                    proxy_relayed = proxy.is_none();
                 }
             }
             Err(err) => warn!(host_id = %host, "cannot give the host a CLIProxyAPI key: {err:#}"),
@@ -216,11 +219,11 @@ async fn serve(
         "host connected"
     );
     // A host told where the proxy is runs its logins as accounts.
-    let logins = match (&proxy, shared.cliproxyapi.get()) {
-        (Some(_), Some(keys)) => Some(keys.management().subscribe()),
+    let logins = match shared.cliproxyapi.get() {
+        Some(keys) if proxy.is_some() || proxy_relayed => Some(keys.management().subscribe()),
         _ => None,
     };
-    send(ws, hello_message(cursors, proxy)).await?;
+    send(ws, hello_message(cursors, proxy, proxy_relayed)).await?;
 
     // Before the host is shown online, so it is never online without its relay.
     let mut relay = hello.relay.then(|| shared.relays.host_connected(&host));
@@ -438,13 +441,17 @@ async fn next_logins(
     }
 }
 
-fn hello_message(acked: Vec<Cursor>, cliproxyapi: Option<String>) -> VaultMessage {
+fn hello_message(
+    acked: Vec<Cursor>,
+    cliproxyapi: Option<String>,
+    cliproxyapi_relay: bool,
+) -> VaultMessage {
     VaultMessage::Hello(VaultHello {
         replication_version: REPLICATION_VERSION,
         build: BUILD.to_owned(),
         acked,
         cliproxyapi,
-        cliproxyapi_relay: false,
+        cliproxyapi_relay,
     })
 }
 

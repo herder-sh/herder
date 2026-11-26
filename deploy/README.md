@@ -334,6 +334,15 @@ An init container copies the ConfigMap's config onto the volume at each start, w
 management secret and a random first client key filled in, as the proxy writes its config
 back. Settings changed through the proxy's management API last until the next restart.
 
+### Through the vault
+
+Take `cliproxyapi_endpoint` out of the vault's `[vault]` table and the vault forwards each
+host to the proxy itself, inside the host's own connection to the vault. A host then runs
+the vault's logins as accounts wherever it reaches the vault, a laptop away from home
+included, and nothing but the vault needs an address: port 8317 can come off the Service.
+Hosts must run herder 0.25 or later first; an older one gets no logins from a vault that
+names no endpoint. The rest of this section is for a vault that keeps the endpoint.
+
 ### TLS
 
 Hosts reach the proxy at the Service's port 8317, and the proxy serves TLS itself, with a
