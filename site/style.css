@@ -201,6 +201,48 @@ section { max-width: 1160px; margin: 0 auto; padding: 120px 24px 0; }
 .compare td { color: var(--muted); }
 .compare td:last-child { color: var(--fg); }
 
+/* how it connects: the apps, the hub and the machines, drawn once wide and once tall */
+.map { margin: 48px 0 0; }
+.map svg { display: block; width: 100%; height: auto; font-family: "JetBrains Mono", ui-monospace, monospace; }
+.map .map-tall { display: none; max-width: 440px; margin: 0 auto; }
+.map rect { fill: none; stroke: var(--line); }
+.map .node { fill: var(--surface); }
+.map .hubnode { stroke: var(--accent); }
+.map .group { fill: var(--bg); }
+.map .edge { stroke: var(--dim); stroke-dasharray: 2 4; }
+.map .cut { fill: var(--bg); stroke: none; }
+.map .chip { fill: var(--bg); }
+.map .soon { fill: color-mix(in srgb, var(--b5) 16%, var(--bg)); stroke: var(--b5); }
+.map .ic { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.map .ic rect { stroke: inherit; }
+.map .hubic, .map .e2eic { stroke: var(--accent); }
+.map text { fill: var(--muted); }
+.map .name { font-size: 14px; font-weight: 700; fill: var(--fg); }
+.map .label { font-size: 12.5px; font-weight: 600; fill: var(--fg); }
+.map .head-t { font-size: 12px; font-weight: 500; letter-spacing: .08em; }
+.map .note { font: 12px "Inter", system-ui, sans-serif; }
+.map .tiny { font-size: 10.5px; }
+.map .strong { fill: var(--fg); font-weight: 600; }
+.map .route { fill: none; stroke-width: 2; }
+.map .head { stroke: none; }
+.map .direct { stroke: var(--b4); } .map .head.direct { fill: var(--b4); }
+.map .out { stroke: var(--b2); } .map .head.out { fill: var(--b2); }
+.map .relay { stroke: var(--b5); stroke-dasharray: 6 5; }
+.map .e2e { stroke: var(--accent); stroke-width: 1.5; }
+@media (prefers-reduced-motion: no-preference) {
+  .map .relay { animation: flow 1.4s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -22; } }
+}
+.legend { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); margin: 40px 0 0; }
+.legend > div { background: var(--bg); padding: 22px 24px; }
+.legend dt { font: 600 14px "JetBrains Mono", monospace; display: flex; align-items: center; gap: 10px; }
+.legend dt::before { content: ""; width: 10px; height: 10px; background: var(--muted); }
+.legend div:nth-child(1) dt::before { background: var(--b4); } .legend div:nth-child(2) dt::before { background: var(--b2); }
+.legend div:nth-child(3) dt::before { background: var(--b5); } .legend div:nth-child(4) dt::before { background: var(--accent); }
+.legend dd { margin: 10px 0 0; color: var(--muted); font-size: 15px; }
+.connect .fine { font-size: 13px; color: var(--muted); }
+.tag { color: var(--fg); border: 1px solid var(--b5); background: color-mix(in srgb, var(--b5) 16%, var(--bg)); padding: 1px 7px; margin-right: 8px; font-size: 11.5px; font-weight: 600; }
+
 .final { text-align: center; }
 .final .big { margin: 0 auto; }
 .final .install { margin-top: 32px; }
@@ -249,6 +291,9 @@ details p { margin: -4px 0 22px; color: var(--muted); max-width: 760px; }
 
 @media (max-width: 960px) {
   .steps { grid-template-columns: 1fr; }
+  .legend { grid-template-columns: repeat(2, 1fr); }
+  .map .map-wide { display: none; }
+  .map .map-tall { display: block; }
   .facts dl { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 860px) {
@@ -279,6 +324,9 @@ details p { margin: -4px 0 22px; color: var(--muted); max-width: 760px; }
   .facts { padding-top: 72px; }
   .facts dl > div { padding: 18px; }
   .facts dt { font-size: 28px; }
+  .map { margin-top: 36px; }
+  .legend { grid-template-columns: 1fr; margin-top: 32px; }
+  .legend > div { padding: 18px; }
   .feature .phones { gap: 14px; }
   /* Each row of the comparison stacks: the situation, then by hand, then with herder. */
   .compare .table-wrap { overflow: visible; }
