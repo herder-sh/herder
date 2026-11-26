@@ -1,0 +1,15 @@
+# A turn as the app drives it: the reply streams, a tool call waits for the user's approval,
+# then the turn ends with the agent's answer.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Run the tests."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_started", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": ""}}}}
+{"emit": {"type": "item_delta", "item_id": "item-1", "text": "Running them now."}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Running them now."}}}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-1", "body": {"type": "tool_call", "name": "Bash", "input": {"command": "cargo test"}}}}}
+{"emit": {"type": "approval_requested", "approval_id": "approval-1", "turn_id": "turn-1", "tool_call_id": "item-2", "summary": "Run cargo test"}}
+{"expect": {"type": "answer_approval", "approval_id": "approval-1", "decision": "allow"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-3", "turn_id": "turn-1", "body": {"type": "tool_result", "call_id": "item-2", "output": "test result: ok", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "item-4", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "All tests pass."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "set_model", "model": "fake-large"}}
+{"emit": {"type": "model_changed", "model": "fake-large"}}
