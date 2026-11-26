@@ -277,6 +277,7 @@ impl HostDaemon {
                     sessions: sessions.clone(),
                     changed,
                     secrets: Default::default(),
+                    relayed: Arc::default(),
                 };
                 tokio::spawn(replicator.run(shutdown.clone()));
                 sessions

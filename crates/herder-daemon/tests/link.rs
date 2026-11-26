@@ -5,13 +5,32 @@
 //! stops replicating, and the client revokes
 //! the host's device on the vault. Members can do none of it, and a host code pairs no client.
 //!
+//! A linked host is reached through the vault too: a device paired with both opens a relay
+//! stream at the vault and runs its ordinary connection to the host inside it, authenticated
+//! by the host exactly as a direct one, at a cost in round-trip time the test reports.
+//!
 //! The vault and the host are `herder_daemon::vault::serve` and `herder_daemon::serve`, the
 //! functions `herder daemon` runs, in this process, reached through their control sockets and
 //! their TLS WebSocket ports.
 
+use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
+
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use herder_client_core::auth::{DeviceKey, client_config};
+use rustls::pki_types::ServerName;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
+use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::{Bytes, Message};
 
 use herder_client_core::{Client, Error, Machine};
 use herder_daemon::auth::authenticator::{Authenticator, Join};
@@ -19,8 +38,9 @@ use herder_daemon::auth::control::{self, Request, Response};
 use herder_daemon::service::{Service, Services};
 use herder_daemon::vault::install::LocalVault;
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, ErrorCode, EventBody, HostId, LinkedVault,
-    PermissionMode, Provider, Role, SessionId, Timestamp,
+    AccountId, ClientHello, ClientMessage, CommandBody, CommandResult, Cursor, ErrorCode,
+    EventBody, HostId, LinkedVault, PROTOCOL_VERSION, PermissionMode, Provider, RELAY_VERSION,
+    RelayAnswer, RelayErrorCode, RelayHello, Role, ServerMessage, SessionId, Timestamp,
 };
 use herder_store::{NewEvent, Store};
 use tokio_util::sync::CancellationToken;
@@ -56,6 +76,13 @@ impl Daemon {
             ),
         )
         .unwrap();
+        Self::run(dir, vault, local).await
+    }
+
+    /// Runs the daemon whose config file is already in `dir`, as a restart does.
+    async fn run(dir: &Path, vault: bool, local: Option<LocalVault>) -> Self {
+        let data_dir = dir.join("data");
+        let config = dir.join("daemon.toml");
         let loaded = herder_daemon::Config::load(Some(&config)).unwrap();
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({
@@ -626,4 +653,347 @@ async fn a_daemon_without_a_local_vault_refuses_to_install_one() {
         ErrorCode::Unsupported
     );
     host.stop().await;
+}
+
+/// A relay stream at the vault, read and written as the byte stream it carries; what
+/// `herder-client-core` runs a connection in.
+struct Frames {
+    ws: WebSocketStream<TlsStream<TcpStream>>,
+    read: Bytes,
+}
+
+impl AsyncRead for Frames {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        loop {
+            if !self.read.is_empty() {
+                let n = self.read.len().min(buf.remaining());
+                buf.put_slice(&self.read.split_to(n));
+                return Poll::Ready(Ok(()));
+            }
+            match ready!(Pin::new(&mut self.ws).poll_next(cx)) {
+                Some(Ok(Message::Binary(data))) => self.read = data,
+                Some(Ok(Message::Close(_))) | None => return Poll::Ready(Ok(())),
+                Some(Ok(_)) => {}
+                Some(Err(err)) => return Poll::Ready(Err(io::Error::other(err))),
+            }
+        }
+    }
+}
+
+impl AsyncWrite for Frames {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        ready!(Pin::new(&mut self.ws).poll_ready(cx)).map_err(io::Error::other)?;
+        Pin::new(&mut self.ws)
+            .start_send(Message::binary(buf.to_vec()))
+            .map_err(io::Error::other)?;
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.ws)
+            .poll_flush(cx)
+            .map_err(io::Error::other)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.ws)
+            .poll_close(cx)
+            .map_err(io::Error::other)
+    }
+}
+
+/// The key `client`, whose profile is in `dir`, holds for `machine`.
+fn device_key(dir: &Path, machine: &HostId) -> DeviceKey {
+    let profile = std::fs::read(dir.join("machines.json")).unwrap();
+    let profile: serde_json::Value = serde_json::from_slice(&profile).unwrap();
+    let saved = profile["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|saved| saved["host_id"] == machine.as_str())
+        .unwrap();
+    DeviceKey::from_pem(saved["device_key"].as_str().unwrap()).unwrap()
+}
+
+/// A daemon connection on `stream` up to its WebSocket upgrade: TLS pinned to `fingerprint`,
+/// presenting `device`.
+async fn secure<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: S,
+    fingerprint: &str,
+    device: &DeviceKey,
+) -> anyhow::Result<WebSocketStream<TlsStream<S>>> {
+    let config = client_config(fingerprint, device)?;
+    let tls = TlsConnector::from(Arc::new(config))
+        .connect(ServerName::try_from("herder")?, stream)
+        .await?;
+    let config = WebSocketConfig::default().write_buffer_size(0);
+    let request = "wss://herder/".into_client_request()?;
+    Ok(
+        tokio_tungstenite::client_async_with_config(request, tls, Some(config))
+            .await?
+            .0,
+    )
+}
+
+async fn tcp(address: &str) -> TcpStream {
+    let tcp = TcpStream::connect(address).await.unwrap();
+    tcp.set_nodelay(true).unwrap();
+    tcp
+}
+
+/// What `vault` answers `device` asking for a stream to `host`, and the stream.
+async fn stream_to(vault: &Machine, device: &DeviceKey, host: &HostId) -> (RelayAnswer, Frames) {
+    let mut ws = secure(tcp(&vault.addresses[0]).await, &vault.fingerprint, device)
+        .await
+        .unwrap();
+    let connect = RelayHello::Connect {
+        relay_version: RELAY_VERSION,
+        host_id: host.clone(),
+    };
+    ws.send(Message::text(serde_json::to_string(&connect).unwrap()))
+        .await
+        .unwrap();
+    let answer = loop {
+        match tokio::time::timeout(TIMEOUT, ws.next()).await.unwrap() {
+            Some(Ok(Message::Text(text))) => break serde_json::from_str(&text).unwrap(),
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+            other => panic!("no answer from the vault: {other:?}"),
+        }
+    };
+    let read = Bytes::new();
+    (answer, Frames { ws, read })
+}
+
+/// The next message of the client protocol on `ws`.
+async fn next_message<S>(ws: &mut S) -> ServerMessage
+where
+    S: Stream<Item = tokio_tungstenite::tungstenite::Result<Message>> + Unpin,
+{
+    loop {
+        match tokio::time::timeout(TIMEOUT, ws.next()).await.unwrap() {
+            Some(Ok(Message::Text(text))) => return serde_json::from_str(&text).unwrap(),
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+            other => panic!("the daemon closed the connection: {other:?}"),
+        }
+    }
+}
+
+/// Says hello on `ws`, a connection to a daemon; what the daemon answers first.
+async fn hello<S>(ws: &mut S) -> ServerMessage
+where
+    S: Stream<Item = tokio_tungstenite::tungstenite::Result<Message>>
+        + Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin,
+{
+    let hello = ClientMessage::Hello(ClientHello {
+        protocol_version: PROTOCOL_VERSION,
+        client: "herder-test".into(),
+        resume: Vec::new(),
+        pairing_code: None,
+        sign_in: false,
+        passkey: false,
+    });
+    ws.send(Message::text(serde_json::to_string(&hello).unwrap()))
+        .await
+        .unwrap();
+    next_message(ws).await
+}
+
+/// The median round trip of `rounds` pings on `ws`, each answered by the daemon at its end.
+async fn round_trip<S>(ws: &mut S, rounds: u32) -> Duration
+where
+    S: Stream<Item = tokio_tungstenite::tungstenite::Result<Message>>
+        + Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin,
+{
+    let mut samples = Vec::new();
+    for round in 0..rounds {
+        let payload = Bytes::from(round.to_be_bytes().to_vec());
+        let started = std::time::Instant::now();
+        ws.send(Message::Ping(payload.clone())).await.unwrap();
+        loop {
+            match tokio::time::timeout(TIMEOUT, ws.next()).await.unwrap() {
+                Some(Ok(Message::Pong(pong))) if pong == payload => break,
+                Some(Ok(_)) => {}
+                other => panic!("the connection ended: {other:?}"),
+            }
+        }
+        samples.push(started.elapsed());
+    }
+    samples.sort();
+    samples[samples.len() / 2]
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_device_reaches_a_linked_host_through_the_vault_as_it_does_directly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = Daemon::start(&tmp.path().join("vault"), "", true).await;
+    let host_dir = tmp.path().join("host");
+    seed(&host_dir.join("data"), "s1");
+    let host = Daemon::start(&host_dir, "", false).await;
+    let owner_dir = tmp.path().join("owner");
+    let owner = open(&owner_dir);
+    let (_, on_vault) = vault.claim(&owner, "alice").await;
+    let (_, on_host) = host.claim(&owner, "alice").await;
+    let (vault_id, host_id) = (on_vault.host_id.clone(), on_host.host_id.clone());
+    machine_when(&owner, |m| m.host_id == vault_id && m.role.is_some()).await;
+    machine_when(&owner, |m| m.host_id == host_id && m.role.is_some()).await;
+
+    // Linked, the host takes relayed connections, and the vault says so.
+    let pairing = CommandBody::PairVaultHost {
+        host_name: "devbox".into(),
+    };
+    let CommandResult::HostPairing { code, .. } = send(&owner, &vault_id, pairing).await else {
+        panic!("no host code");
+    };
+    let linking = CommandBody::LinkVault {
+        addresses: on_vault.addresses.clone(),
+        fingerprint: on_vault.fingerprint.clone(),
+        pairing_code: code,
+        backup: true,
+        secrets: true,
+    };
+    assert_eq!(
+        send(&owner, &host_id, linking).await,
+        CommandResult::Applied
+    );
+    let relayed = |m: &Machine| {
+        m.host_id == vault_id && m.hosts.iter().any(|h| h.host_id == host_id && h.relay)
+    };
+    machine_when(&owner, relayed).await;
+
+    // The device holds a key for each machine: the vault knows it by one, the host by the
+    // other, and neither key is of use to the other machine.
+    let at_vault = device_key(&owner_dir, &vault_id);
+    let at_host = device_key(&owner_dir, &host_id);
+
+    // Through the vault the host answers the hello as it does directly, and streams a
+    // session's journal.
+    let (answer, stream) = stream_to(&on_vault, &at_vault, &host_id).await;
+    assert_eq!(answer, RelayAnswer::Ready);
+    let mut through = secure(stream, &on_host.fingerprint, &at_host)
+        .await
+        .unwrap();
+    let ServerMessage::Hello(relayed_hello) = hello(&mut through).await else {
+        panic!("the host did not say hello through the vault");
+    };
+    let direct = tcp(&on_host.addresses[0]).await;
+    let mut direct = secure(direct, &on_host.fingerprint, &at_host)
+        .await
+        .unwrap();
+    let ServerMessage::Hello(direct_hello) = hello(&mut direct).await else {
+        panic!("the host did not say hello");
+    };
+    assert_eq!(relayed_hello.host_id, host_id);
+    assert_eq!(
+        (relayed_hello.user_id, relayed_hello.role),
+        (direct_hello.user_id, direct_hello.role)
+    );
+    let subscribe = ClientMessage::Subscribe(Cursor {
+        session_id: SessionId::new("s1"),
+        after_seq: 0,
+    });
+    through
+        .send(Message::text(serde_json::to_string(&subscribe).unwrap()))
+        .await
+        .unwrap();
+    loop {
+        if let ServerMessage::Event(event) = next_message(&mut through).await {
+            assert_eq!((event.session_id.as_str(), event.seq), ("s1", 1));
+            assert!(matches!(event.body, EventBody::SessionCreated { .. }));
+            break;
+        }
+    }
+
+    // What the vault adds to a round trip, on loopback: both hops and the copy between.
+    let rounds = 300;
+    round_trip(&mut direct, 20).await;
+    round_trip(&mut through, 20).await;
+    let (direct_rtt, relayed_rtt) = (
+        round_trip(&mut direct, rounds).await,
+        round_trip(&mut through, rounds).await,
+    );
+    println!(
+        "relay round trip: direct {direct_rtt:?}, through the vault {relayed_rtt:?}, overhead {:?}",
+        relayed_rtt.saturating_sub(direct_rtt)
+    );
+    assert!(
+        relayed_rtt < direct_rtt + Duration::from_millis(5),
+        "the vault adds too much: direct {direct_rtt:?}, relayed {relayed_rtt:?}"
+    );
+
+    // The host authenticates inside the stream: a device it does not know is refused as it
+    // is directly, though the vault forwarded for the device it knows.
+    let stranger = DeviceKey::generate().unwrap();
+    let (answer, stream) = stream_to(&on_vault, &at_vault, &host_id).await;
+    assert_eq!(answer, RelayAnswer::Ready);
+    let mut unknown = secure(stream, &on_host.fingerprint, &stranger)
+        .await
+        .unwrap();
+    let ServerMessage::Error { error: relayed, .. } = hello(&mut unknown).await else {
+        panic!("the host took a stranger through the vault");
+    };
+    let mut unknown = secure(
+        tcp(&on_host.addresses[0]).await,
+        &on_host.fingerprint,
+        &stranger,
+    )
+    .await
+    .unwrap();
+    let ServerMessage::Error { error: direct, .. } = hello(&mut unknown).await else {
+        panic!("the host took a stranger");
+    };
+    assert_eq!(relayed, direct);
+    assert_eq!(relayed.code, ErrorCode::Forbidden);
+
+    // The host's certificate is pinned inside the stream: the vault cannot answer for it.
+    let (_, stream) = stream_to(&on_vault, &at_vault, &host_id).await;
+    assert!(
+        secure(stream, &on_vault.fingerprint, &at_host)
+            .await
+            .is_err(),
+        "a connection pinned to another certificate went through"
+    );
+    // And the vault forwards only for a device it knows.
+    let (answer, _) = stream_to(&on_vault, &at_host, &host_id).await;
+    assert!(
+        matches!(&answer, RelayAnswer::Refused { error } if error.code == RelayErrorCode::Forbidden),
+        "{answer:?}"
+    );
+
+    // A host that takes no relayed connections is listed without the route, and gets none.
+    drop((through, direct));
+    host.stop().await;
+    let config = std::fs::read_to_string(host_dir.join("daemon.toml")).unwrap();
+    assert!(config.contains("[vault]\n"), "{config}");
+    std::fs::write(
+        host_dir.join("daemon.toml"),
+        config.replace("[vault]\n", "[vault]\nrelay = false\n"),
+    )
+    .unwrap();
+    machine_when(&owner, |m| {
+        m.host_id == vault_id && m.hosts.iter().all(|h| !h.online)
+    })
+    .await;
+    let host = Daemon::run(&host_dir, false, None).await;
+    let unrelayed = machine_when(&owner, |m| {
+        m.host_id == vault_id && m.hosts.iter().any(|h| h.online)
+    })
+    .await;
+    assert!(unrelayed.hosts.iter().all(|h| !h.relay), "{unrelayed:?}");
+    let (answer, _) = stream_to(&on_vault, &at_vault, &host_id).await;
+    assert!(
+        matches!(&answer, RelayAnswer::Refused { error } if error.code == RelayErrorCode::UnknownHost),
+        "{answer:?}"
+    );
+    host.stop().await;
+    vault.stop().await;
 }

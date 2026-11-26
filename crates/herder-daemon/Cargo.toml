@@ -55,6 +55,7 @@ tracing-subscriber.workspace = true
 ulid.workspace = true
 ureq.workspace = true
 url.workspace = true
+webpki-roots.workspace = true
 uuid.workspace = true
 webauthn-rs.workspace = true
 webauthn-rs-proto.workspace = true

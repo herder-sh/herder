@@ -8,21 +8,23 @@
 //! unreachable it retries with a backoff of up to [`BACKOFF_CAP`]. When the host backs up
 //! images (`[vault] attachments`), every image a batch's prompts carried goes just ahead of
 //! the batch; otherwise none does. While connected, it carries the host's secret requests
-//! too ([`HostSecrets`]).
+//! too ([`HostSecrets`]), and, unless `[vault] relay` is off, opens this host's end of every
+//! relay stream the vault asks for, so clients reach the host through the vault
+//! (`docs/vault-relay.md`).
 //!
 //! The `[vault]` table's switches say which of the two it does: with `backup` off it sends the
 //! vault nothing of the journal, and with `secrets` off it carries no secret requests.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
-    Account, Attachment, AttachmentData, Batch, Cursor, Event, FetchedSecret, HostHello,
+    Account, Attachment, AttachmentData, Batch, Cursor, DeviceId, Event, FetchedSecret, HostHello,
     HostMessage, HostSecretFetch, Item, ItemId, JournalRecord, MAX_BATCH_EVENTS,
     REPLICATION_VERSION, RejectReason, SecretError, SecretFetch, SecretInfo, Seq, SessionHead,
     SessionId, SessionStatus, SessionSummary, VaultMessage,
@@ -41,7 +43,7 @@ use super::store::SecretUse;
 use crate::config::VaultConfig;
 use crate::data_dir::write_private;
 use crate::session::{EventSink, SessionManager};
-use crate::ws::Host;
+use crate::ws::{Host, Relayed};
 
 /// File in the data dir holding the key this host pairs with the vault as.
 const DEVICE_FILE: &str = "vault-device.pem";
@@ -111,6 +113,9 @@ pub struct Replicator {
     pub changed: Arc<Notify>,
     /// The host's secret requests, sent while connected.
     pub secrets: Arc<HostSecrets>,
+    /// Serves the clients the vault relays to this host, once the daemon's server is up;
+    /// until then, and for a host that runs none, the vault's requests go unanswered.
+    pub relayed: Arc<OnceLock<Relayed>>,
 }
 
 impl Replicator {
@@ -219,6 +224,9 @@ impl Replicator {
                             VaultMessage::ProviderLogins { logins } => {
                                 self.secrets.set_provider_logins(logins);
                             }
+                            VaultMessage::RelayOpen { stream_id, device_id } => {
+                                self.open_relay(connector, stream_id, device_id);
+                            }
                             message => link.receive(message)?,
                         },
                         Message::Close(_) => bail!("the vault closed the connection"),
@@ -227,6 +235,24 @@ impl Replicator {
                 }
             }
         }
+    }
+
+    /// Opens this host's end of the relay stream `stream_id` on a connection of its own, and
+    /// serves the client the vault knows as `device` in it. Not awaited: the stream outlives
+    /// this replication connection, and opening it must not hold replication up.
+    fn open_relay(&self, connector: &TlsConnector, stream_id: String, device: DeviceId) {
+        let Some(relayed) = self.relayed.get().filter(|_| self.vault.relay).cloned() else {
+            return debug!(%stream_id, "not opening a relay stream: this host serves none");
+        };
+        let (vault, connector) = (self.vault.clone(), connector.clone());
+        tokio::spawn(async move {
+            let accepting = client::accept_relay(&vault, &connector, &stream_id);
+            match tokio::time::timeout(CONNECT_TIMEOUT, accepting).await {
+                Ok(Ok((stream, peer))) => relayed.serve(stream, peer, device),
+                Ok(Err(err)) => info!(%stream_id, "cannot open a relay stream: {err:#}"),
+                Err(_) => info!(%stream_id, "cannot open a relay stream in {CONNECT_TIMEOUT:?}"),
+            }
+        });
     }
 
     /// Makes this host's sessions that another host took over read-only; returns whether
@@ -252,7 +278,7 @@ impl Replicator {
             build: BUILD.to_owned(),
             pairing_code: self.vault.pairing_code.clone(),
             attachments_cap: self.vault.images_cap(),
-            relay: false,
+            relay: self.vault.relay,
         });
         ws.send(Message::text(serde_json::to_string(&hello)?))
             .await?;
@@ -470,9 +496,8 @@ impl Link {
                     let _ = answer.send(Err(error));
                 }
             }
-            // Taken by the connection's loop, for the host's secrets.
+            // Taken by the connection's loop, for the host's secrets and its relayed clients.
             VaultMessage::ProviderLogins { .. }
-            // This host's hello asks for no relayed connections yet.
             | VaultMessage::RelayOpen { .. }
             | VaultMessage::Hello(_)
             | VaultMessage::Unknown => {}

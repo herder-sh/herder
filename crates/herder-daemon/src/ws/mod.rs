@@ -32,6 +32,22 @@ pub(crate) use conn::{handshake, notice_a_gone_peer};
 pub use tls::{Tls, fingerprint};
 pub(crate) use tunnel::Transport;
 
+/// Serves the clients that reach this host through its vault; see [`Server::relayed`].
+#[derive(Clone)]
+pub struct Relayed(Arc<ServeRelayed>);
+
+/// Takes a relay stream, the address of the vault forwarding it, and the vault's name for
+/// the client's device.
+type ServeRelayed = dyn Fn(Box<dyn tunnel::Io>, SocketAddr, DeviceId) + Send + Sync;
+
+impl Relayed {
+    /// Serves a client on the relay stream `stream`, which the vault at `peer` forwards;
+    /// `device` is the vault's name for the client's device.
+    pub(crate) fn serve(&self, stream: Box<dyn tunnel::Io>, peer: SocketAddr, device: DeviceId) {
+        (self.0)(stream, peer, device);
+    }
+}
+
 /// A connection after the TLS and WebSocket handshakes.
 pub(crate) type Ws = tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<Transport>>;
 
@@ -1008,6 +1024,18 @@ impl<B: Backend> Server<B> {
             .bots
             .set(bots)
             .map_err(|_| anyhow::anyhow!("the bots are managed already"))
+    }
+
+    /// What serves the clients that reach this host through its vault, each on the relay
+    /// stream given, until `shutdown`.
+    pub fn relayed(&self, shutdown: CancellationToken) -> Relayed {
+        let shared = Arc::clone(&self.shared);
+        Relayed(Arc::new(move |stream, peer, device| {
+            let (shared, cancel) = (Arc::clone(&shared), shutdown.child_token());
+            tokio::spawn(async move {
+                conn::run_relayed(stream, peer, &device, shared, cancel).await;
+            });
+        }))
     }
 
     /// Answers the vault link commands with `link`; once per server.

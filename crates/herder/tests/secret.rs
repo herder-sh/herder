@@ -212,6 +212,7 @@ async fn host(
         sessions: sessions.clone(),
         changed,
         secrets,
+        relayed: Arc::default(),
     };
     tokio::spawn(replicator.run(shutdown));
     sessions

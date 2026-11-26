@@ -39,9 +39,15 @@ use tracing::warn;
 /// listener is on loopback, where only `cloudflared` reaches it.
 const CONNECTING_IP: &str = "cf-connecting-ip";
 
-/// The outer WebSocket of a tunnel connection, read and written as a byte stream.
-pub(crate) struct Frames {
-    ws: WebSocketStream<TcpStream>,
+/// A byte stream: a TCP socket, TLS on one, or a WebSocket's frames.
+pub(crate) trait Io: AsyncRead + AsyncWrite + Send + Unpin {}
+
+impl<T: AsyncRead + AsyncWrite + Send + Unpin> Io for T {}
+
+/// A WebSocket whose binary frames carry a byte stream, read and written as one: the outer
+/// WebSocket of a tunnel connection, or a relay stream through the vault.
+pub(crate) struct Frames<S = TcpStream> {
+    ws: WebSocketStream<S>,
     /// What is left of the binary frame read last.
     read: Bytes,
 }
@@ -164,9 +170,9 @@ pub(crate) fn config() -> WebSocketConfig {
     WebSocketConfig::default().write_buffer_size(0)
 }
 
-impl Frames {
+impl<S> Frames<S> {
     /// The frames of `ws`, on either end of it.
-    pub(crate) fn new(ws: WebSocketStream<TcpStream>) -> Self {
+    pub(crate) fn new(ws: WebSocketStream<S>) -> Self {
         Self {
             ws,
             read: Bytes::new(),
@@ -178,7 +184,7 @@ fn broken(err: tokio_tungstenite::tungstenite::Error) -> io::Error {
     io::Error::other(err)
 }
 
-impl AsyncRead for Frames {
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for Frames<S> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -207,7 +213,7 @@ impl AsyncRead for Frames {
     }
 }
 
-impl AsyncWrite for Frames {
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for Frames<S> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -229,10 +235,12 @@ impl AsyncWrite for Frames {
     }
 }
 
-/// The byte stream a client's TLS runs on: its TCP socket, or a tunnel's frames.
+/// The byte stream a client's TLS runs on: its TCP socket, a tunnel's frames, or a relay
+/// stream through the vault.
 pub(crate) enum Transport {
     Tcp(TcpStream),
     Tunnel(Box<Frames>),
+    Relay(Box<dyn Io>),
 }
 
 impl From<TcpStream> for Transport {
@@ -250,6 +258,7 @@ impl AsyncRead for Transport {
         match self.get_mut() {
             Self::Tcp(stream) => Pin::new(stream).poll_read(cx, buf),
             Self::Tunnel(frames) => Pin::new(frames.as_mut()).poll_read(cx, buf),
+            Self::Relay(stream) => Pin::new(stream.as_mut()).poll_read(cx, buf),
         }
     }
 }
@@ -263,6 +272,7 @@ impl AsyncWrite for Transport {
         match self.get_mut() {
             Self::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
             Self::Tunnel(frames) => Pin::new(frames.as_mut()).poll_write(cx, buf),
+            Self::Relay(stream) => Pin::new(stream.as_mut()).poll_write(cx, buf),
         }
     }
 
@@ -270,6 +280,7 @@ impl AsyncWrite for Transport {
         match self.get_mut() {
             Self::Tcp(stream) => Pin::new(stream).poll_flush(cx),
             Self::Tunnel(frames) => Pin::new(frames.as_mut()).poll_flush(cx),
+            Self::Relay(stream) => Pin::new(stream.as_mut()).poll_flush(cx),
         }
     }
 
@@ -277,6 +288,7 @@ impl AsyncWrite for Transport {
         match self.get_mut() {
             Self::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::Tunnel(frames) => Pin::new(frames.as_mut()).poll_shutdown(cx),
+            Self::Relay(stream) => Pin::new(stream.as_mut()).poll_shutdown(cx),
         }
     }
 }

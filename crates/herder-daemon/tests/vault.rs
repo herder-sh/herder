@@ -271,6 +271,7 @@ impl HostDaemon {
                     sessions: sessions.clone(),
                     changed,
                     secrets: host_secrets,
+                    relayed: Arc::default(),
                 };
                 tokio::spawn(replicator.run(shutdown));
                 sessions
@@ -2828,6 +2829,26 @@ async fn a_client_reaches_the_vault_through_its_tunnel_listener() {
     .await;
     assert_eq!(machine.address, Some(address));
     assert_eq!(machine.hosts.len(), 1);
+    host.runtime.kill().await;
+    vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_replicates_through_the_vaults_tunnel() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 2, 5);
+    let vault = Vault::start(&vault_dir, 0).await;
+    // As a host away from the vault's network reaches it: at the tunnel's URL, where
+    // `cloudflared` delivers its connection to the vault's tunnel listener.
+    let config = VaultConfig {
+        address: format!("ws://{}", vault.tunnel),
+        ..vault.config()
+    };
+    let host = HostDaemon::start(&host_dir, config).await;
+    caught_up(&host_dir, &vault_dir).await;
+    assert_gap_free(&vault_dir);
     host.runtime.kill().await;
     vault.runtime.kill().await;
 }

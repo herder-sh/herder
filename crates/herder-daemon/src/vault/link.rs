@@ -16,7 +16,7 @@
 //! and backup off, and then opens its window for a first owner, which the client claims.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use anyhow::Result;
 use herder_protocol::{CommandBody, CommandResult, ErrorCode, ErrorInfo, LinkedVault};
@@ -30,7 +30,7 @@ use crate::auth::control::Request;
 use crate::config::{self, VaultConfig};
 use crate::session::SessionManager;
 use crate::session::fork::Forks;
-use crate::ws::Host;
+use crate::ws::{Host, Relayed};
 
 /// What a host replicates with.
 pub struct Setup {
@@ -59,6 +59,8 @@ pub struct Link {
     /// Held through a link or an unlink, so they apply one at a time.
     changing: tokio::sync::Mutex<()>,
     state: Mutex<State>,
+    /// Serves the clients the vault relays to this host; see [`Link::serve_relayed`].
+    relayed: Arc<OnceLock<Relayed>>,
 }
 
 #[derive(Default)]
@@ -76,6 +78,7 @@ impl Link {
             setup,
             changing: tokio::sync::Mutex::new(()),
             state: Mutex::new(State::default()),
+            relayed: Arc::default(),
         };
         link.setup.sessions.fork_from(Forks {
             host: link.setup.host.id.clone(),
@@ -84,6 +87,13 @@ impl Link {
             link.replicate(vault)?;
         }
         Ok(link)
+    }
+
+    /// Has `relayed` serve the clients the vault relays to this host; once.
+    pub fn serve_relayed(&self, relayed: Relayed) -> Result<()> {
+        self.relayed
+            .set(relayed)
+            .map_err(|_| anyhow::anyhow!("relayed clients are served already"))
     }
 
     /// The vault this host replicates to now.
@@ -341,6 +351,7 @@ impl Link {
             sessions: self.setup.sessions.clone(),
             changed: Arc::clone(&self.setup.changed),
             secrets: Arc::clone(&self.setup.secrets),
+            relayed: Arc::clone(&self.relayed),
         })
     }
 
