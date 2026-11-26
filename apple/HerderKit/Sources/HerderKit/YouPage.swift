@@ -562,7 +562,7 @@ struct YouSections: View {
 
 /// A row of the You page: a symbol in its tile, the title with an optional tag beside it, one
 /// line of summary, then what goes at the end.
-private struct YouRow<Trailing: View>: View {
+struct YouRow<Trailing: View>: View {
     let symbol: String
     let title: String
     var tag: String?

@@ -1,6 +1,7 @@
 import Foundation
 import Herder
 @testable import HerderKit
+import SwiftUI
 import Testing
 
 /// Three machines and the vault two of them back up to, as the Machines screen shows them:
@@ -79,64 +80,85 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
 }
 
 @MainActor struct MachineRowTests {
-    @Test func aRowPerMachineWithWhatToActOn() throws {
+    @Test func aRowPerMachineWithHowItIsReached() throws {
         let machines = sampleFleetMachines()
         let lists = Lists(machines: machines, sessions: [:])
         let rows = MachineRow.rows(machines, summaries: lists.machines, localNames: ["127.0.0.1"])
-        // The vault is a line of its own (`MachineLine.vault`).
-        #expect(rows.map(\.name) == ["work-mbp", "trash-can-01", "draugelis"])
-        let mbp = rows[0], can = rows[1], draugelis = rows[2]
+        // By name; the hub is not a machine.
+        #expect(rows.map(\.name) == ["draugelis", "trash-can-01", "work-mbp"])
+        let draugelis = rows[0], can = rows[1], mbp = rows[2]
         #expect(mbp.local && !can.local)
-        #expect(mbp.role == "owner" && draugelis.role == "member")
-        #expect(mbp.latencyMs == 12)
-        #expect(MachinesView.status(can.connection) == "Connected")
-        #expect(can.cpu == 78)
-        #expect(mbp.updates == 0)
-        #expect(can.updates == 2)
-        #expect(can.accounts == 3 && can.signedOut == 1)
-        #expect(mbp.backsUpTo == "herder-vault-0" && can.backsUpTo == "herder-vault-0")
-        #expect(draugelis.backsUpTo == nil)
+        // Only being a member is said, as it is what limits you.
+        #expect(draugelis.member && !mbp.member && !can.member)
+        #expect(rows.allSatisfy { $0.reach == .direct })
+        #expect(mbp.reach.label == "Direct")
     }
 
-    @Test func anOfflineMachineShowsNoStaleLatency() throws {
+    @Test func machinesHangUnderTheHubTheySyncTo() {
         var machines = sampleFleetMachines()
+        let structure = SetupStructure(machines: machines, summaries: [], localNames: [])
+        #expect(structure.hubs.map(\.name) == ["herder-vault-0"])
+        let hub = structure.hubs[0]
+        #expect(hub.id == "paired.h-vault" && hub.hostId == "h-vault" && hub.connection == .connected)
+        #expect(hub.machines.map(\.name) == ["trash-can-01", "work-mbp"])
+        // draugelis syncs to no hub.
+        #expect(structure.others.map(\.name) == ["draugelis"])
+        #expect(structure.machines == 3)
+        #expect(hub.keeps == "Keeps copies of 7 sessions, your secrets and provider logins")
+        #expect(hub.invitation == nil)
+
+        // A hub is reached from anywhere once it has a public address.
+        #expect(hub.reachability == "Reachable on its network only")
+        machines[3].addresses = ["10.0.0.4:7447", "wss://hub.example.com"]
+        let reachable = SetupStructure(machines: machines, summaries: [], localNames: [])
+        #expect(reachable.hubs[0].reachability == "Reachable from anywhere")
+    }
+
+    /// A laptop asleep is expected: it reads Offline, and On another network while its hub
+    /// still hears from it.
+    @Test func aMachineThisDeviceCannotReachIsElsewhereWhileItsHubHearsFromIt() {
+        var machines = sampleFleetMachines()
+        // The hub hears from trash-can-01, and has not heard from work-mbp for six hours.
+        machines[0].connection = .disconnected(error: "refused")
         machines[1].connection = .disconnected(error: "refused")
-        let row = try #require(MachineRow.rows(machines, summaries: []).first { $0.name == "trash-can-01" })
-        #expect(row.latencyMs == nil)
-        #expect(MachinesView.status(row.connection) == "Offline")
-        #expect(row.statusRank > MachineRow.rows(machines, summaries: [])[0].statusRank)
+        let rows = SetupStructure(machines: machines, summaries: [], localNames: []).hubs[0].machines
+        #expect(rows.map(\.name) == ["trash-can-01", "work-mbp"])
+        #expect(rows.map(\.reach) == [.elsewhere, .offline])
+        #expect(rows.map(\.reach.label) == ["On another network", "Offline"])
+
+        // A hub this device has lost says nothing current.
+        machines[3].connection = .disconnected(error: "refused")
+        let lost = SetupStructure(machines: machines, summaries: [], localNames: []).hubs[0]
+        #expect(lost.machines.map(\.reach) == [.offline, .offline])
+        #expect(MachineReach(.connecting, heardByHub: true) == .connecting)
     }
 
-    @Test func aVaultRowNeedsYouOnlyOnceItsBackupIsAnHourBehind() throws {
-        let now = Date.now
-        var machines = sampleFleetMachines(now: now)
-        let behind = try #require(VaultStats(machine: machines[3], sessions: [:], now: now))
-        let line = VaultLine.paired(behind)
-        #expect(line.name == "herder-vault-0")
-        #expect(line.hosts == 2 && line.sessions == 7)
-        #expect(line.size == behind.size)
-        // work-mbp went offline six hours ago.
-        #expect(line.freshness == "work-mbp 6 h behind")
-        #expect(line.isOverdue)
-        #expect(line.why?.contains("work-mbp has not reached the vault for 6 h") == true)
-
-        // Back 27 minutes ago: behind, but not yet something to act on.
-        machines[3].hosts[0].lastSeen = now.addingTimeInterval(-27 * 60).ISO8601Format()
-        let recent = VaultLine.paired(try #require(VaultStats(machine: machines[3], sessions: [:], now: now)))
-        #expect(recent.freshness == "work-mbp 27 min behind")
-        #expect(!recent.isOverdue)
-
-        machines[3].hosts[0].online = true
-        let caughtUp = VaultLine.paired(try #require(VaultStats(machine: machines[3], sessions: [:], now: now)))
-        #expect(caughtUp.freshness == "Up to date" && caughtUp.behind == 0 && caughtUp.why == nil)
+    @Test func aHubNotOnThisDeviceNamesItsMachinesAndOffersSignIn() {
+        let machines = Array(sampleFleetMachines().prefix(3))
+        let unpaired = UnpairedVault(address: "vault.lan:7447", fingerprint: "aa", hosts: ["trash-can-01"])
+        let structure = SetupStructure(machines: machines, summaries: [], unpaired: [unpaired], localNames: [])
+        let hub = structure.hubs[0]
+        #expect(hub.id == "unpaired.aa" && hub.name == "vault.lan")
+        // It has no page and no connection until this device signs in to it.
+        #expect(hub.hostId == nil && hub.connection == nil && hub.unpaired == unpaired)
+        #expect(hub.invitation == "trash-can-01 syncs to it. Sign in to see it here.")
+        #expect(hub.machines.map(\.name) == ["trash-can-01"])
+        #expect(structure.others.map(\.name) == ["draugelis", "work-mbp"])
     }
 
-    @Test func anUnpairedVaultRowKnowsOnlyWhoBacksUpToIt() {
-        let line = VaultLine.unpaired(UnpairedVault(address: "vault.lan:7447", fingerprint: "aa",
-                                                    hosts: ["devbox", "laptop"]))
-        #expect(line.name == "vault.lan" && line.hosts == 2)
-        #expect(line.sessions == nil && line.size == nil && line.freshness == nil && line.behind == nil)
-        #expect(!line.isOverdue)
+    @Test func withNoHubEveryMachineIsListedOnItsOwn() {
+        let machines = Array(sampleFleetMachines().prefix(3))
+        let structure = SetupStructure(machines: machines, summaries: [], localNames: [])
+        #expect(structure.hubs.isEmpty)
+        #expect(structure.others.map(\.name) == ["draugelis", "trash-can-01", "work-mbp"])
+    }
+
+    /// The rail runs past a row to the next, and ends at the last row's middle.
+    @Test func theRailEndsAtTheLastMachine() {
+        let rect = CGRect(x: 0, y: 0, width: 24, height: 58)
+        #expect(HubRail(last: false, gap: 6).path(in: rect).boundingRect.maxY == 58)
+        #expect(HubRail(last: true, gap: 6).path(in: rect).boundingRect.maxY == 32)
+        #expect(HubRail(last: true, gap: 6).path(in: rect).boundingRect.maxX == 24)
     }
 
     @Test func onlyOneMachineIsThisMacThoughSeveralListenOnLoopback() {
@@ -186,9 +208,8 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
 
 #if os(macOS)
 import AppKit
-import SwiftUI
 
-/// Draws Setup's machine table, the vault a row among the machines, and the vault's page, and attaches them;
+/// Draws Setup's hub with its machines under it, and the vault's page, and attaches them;
 /// with `HERDER_SCREENSHOT_DIR` set, also writes them there as `machines.png` and
 /// `vault-page.png`.
 @MainActor struct MachinesScreenshotTests {
@@ -200,7 +221,7 @@ import SwiftUI
         return fleet
     }
 
-    @Test func drawsTheMachinesTableAndItsVault() async throws {
+    @Test func drawsTheHubAndItsMachines() async throws {
         let fleet = try fleet()
         try await shoot(MachinesView(fleet: fleet, sheet: .constant(nil)).padding(.horizontal, 20), named: "machines.png",
                         height: 420)
