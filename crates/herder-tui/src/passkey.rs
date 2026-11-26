@@ -390,6 +390,20 @@ impl Prompted {
             .context("unlocking the passkey")?
     }
 
+    /// Signs this device in to a machine that knows the passkey's person, as an app signs in
+    /// with Face ID.
+    pub async fn sign_in(
+        &self,
+        client: &Client,
+        hosts: Vec<String>,
+        fingerprint: String,
+    ) -> Result<Machine> {
+        let pending = client.sign_in(hosts, fingerprint, Vec::new()).await?;
+        let what = "sign this terminal in".to_owned();
+        let assertion = self.sign(what, pending.challenge()).await?;
+        Ok(pending.finish(SignIn::Passkey { assertion }).await?)
+    }
+
     /// Signs a fresh challenge of `host_id`, for a command that carries its assertion.
     async fn fresh(
         &self,

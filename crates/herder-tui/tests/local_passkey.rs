@@ -376,4 +376,13 @@ async fn the_same_passkey_owns_a_second_machine_and_signs_in_new_terminals() {
     assert!(copied.machines().is_empty());
     let signed_in = sign_in(PASSPHRASE).await.unwrap();
     assert_eq!(signed_in.host_id, machine.host_id);
+
+    // The TUI's add-machine dialog signs in the same way, asking for the passphrase.
+    let tablet = tempfile::tempdir().unwrap();
+    let added = Client::open(profile(tablet.path()), "herder-tui/test".into()).unwrap();
+    let add = || prompted.sign_in(&added, own.addresses.clone(), own.fingerprint.clone());
+    keyboard.typing(Some("not the passphrase"));
+    assert!(add().await.is_err());
+    keyboard.typing(Some(PASSPHRASE));
+    assert_eq!(add().await.unwrap().host_id, machine.host_id);
 }
