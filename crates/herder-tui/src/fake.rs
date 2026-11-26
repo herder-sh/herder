@@ -367,6 +367,7 @@ pub fn vault() -> App {
             online: true,
             last_seen: Timestamp::now(),
             usage: None,
+            relay: false,
         },
         FleetHost {
             host_id: HostId::new("laptop"),
@@ -374,6 +375,7 @@ pub fn vault() -> App {
             online: false,
             last_seen: seen,
             usage: None,
+            relay: false,
         },
     ];
     vault.sessions = [("s1", "devbox"), ("s2", "laptop"), ("s3", "devbox")]
@@ -1454,6 +1456,7 @@ pub fn vault_storage(used: f64) -> App {
             attachment_bytes: bytes,
             attachments_cap: cap,
         }),
+        relay: false,
     };
     const MIB: u64 = 1 << 20;
     if let Some(vault) = machines.iter_mut().find(|m| m.host_id.as_str() == "v") {
@@ -1700,6 +1703,7 @@ pub fn secrets() -> App {
                 online: true,
                 last_seen: now,
                 usage: None,
+                relay: false,
             })
             .into();
     }

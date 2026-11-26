@@ -41,7 +41,8 @@
 //! with [`VaultMessage::Rejected`].
 //!
 //! The vault never writes to a host's sessions: [`VaultMessage`] carries no events and no
-//! commands, only acknowledgements, errors and answers to the host's secret requests. Only durable journal events and the images
+//! commands, only acknowledgements, errors, answers to the host's secret requests and
+//! requests to open a relay stream, whose bytes the vault cannot read. Only durable journal events and the images
 //! they name are replicated; deltas, snapshots, terminals and resource usage never are.
 //!
 //! Events travel as stored ([`JournalRecord`]), with the body as raw JSON, so the vault keeps
@@ -54,6 +55,12 @@
 //! under its `request_id`, in any order relative to acks. The vault answers for the sets
 //! granted to this connection's host, and nothing else.
 //!
+//! The connection also carries the vault's requests for relay streams: a host whose hello sets
+//! `relay` is sent a [`VaultMessage::RelayOpen`] whenever a client asks the vault for a stream
+//! to it, and answers by opening a connection of its own to the vault (see [`crate::relay`]).
+//! The stream's bytes never travel on this connection, so a long replay to a client cannot
+//! hold up replication, nor replication a client.
+//!
 //! Evolution follows the same rules as the client protocol, under its own
 //! [`REPLICATION_VERSION`]; peers with different versions disconnect after the hellos.
 
@@ -64,8 +71,9 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Map, Value};
 
 use crate::{
-    Attachment, Bytes, Cursor, Event, EventBody, FetchedSecret, HostId, ProjectId, PullRequest,
-    SecretError, SecretInfo, SecretRef, Seq, SessionId, SessionStatus, Timestamp, UserId,
+    Attachment, Bytes, Cursor, DeviceId, Event, EventBody, FetchedSecret, HostId, ProjectId,
+    PullRequest, SecretError, SecretInfo, SecretRef, Seq, SessionId, SessionStatus, Timestamp,
+    UserId,
 };
 
 /// Replication protocol version, exchanged in both hellos; peers with different versions
@@ -128,6 +136,11 @@ pub struct HostHello {
     /// sends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments_cap: Option<u64>,
+    /// Whether the host takes relayed connections: it opens a relay stream for every
+    /// [`VaultMessage::RelayOpen`], and serves the client in it as on a direct connection.
+    /// Absent from a host that takes none, which the vault sends no such message.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relay: bool,
 }
 
 /// A session as the fleet index lists it.
@@ -377,6 +390,18 @@ pub enum VaultMessage {
         /// The logins.
         logins: Vec<crate::ProviderLogin>,
     },
+    /// A client asked the vault for a stream to this host: open a relay connection to the
+    /// vault and say [`crate::RelayHello::Accept`] with this `stream_id`. Sent only to a host
+    /// whose hello set `relay`. The vault waits a few seconds for it, then refuses the client;
+    /// a host that will not take the stream just does not answer.
+    RelayOpen {
+        /// The stream; unique on this vault.
+        stream_id: String,
+        /// The vault's id for the device asking. The host uses it only to cap and log
+        /// connections that have not authenticated yet: it knows the device by the
+        /// certificate it presents inside the stream, never by this.
+        device_id: DeviceId,
+    },
     /// A message type newer than this build; skip it.
     #[serde(other, skip_serializing)]
     #[schemars(skip)]
@@ -404,6 +429,14 @@ pub struct VaultHello {
     /// with this `endpoint` and that `key_secret` runs on the vault's provider logins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cliproxyapi: Option<String>,
+    /// Whether the vault forwards this host to its CLIProxyAPI over relay connections
+    /// ([`crate::RelayHello::Proxy`]); sent, without `cliproxyapi`, by a vault that runs one,
+    /// holds this host's client key and is configured with no address hosts reach the proxy
+    /// at. The host then points its CLIs at a listener of its own on loopback, which forwards
+    /// each connection through the vault, and runs the vault's provider logins as it does with
+    /// `cliproxyapi`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cliproxyapi_relay: bool,
 }
 
 /// Why the vault refused a batch.

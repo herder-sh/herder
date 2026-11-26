@@ -390,6 +390,7 @@ fn hello_message(acked: Vec<Cursor>, cliproxyapi: Option<String>) -> VaultMessag
         build: BUILD.to_owned(),
         acked,
         cliproxyapi,
+        cliproxyapi_relay: false,
     })
 }
 

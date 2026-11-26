@@ -247,6 +247,11 @@ pub struct FleetHost {
     /// What the host's copies take on the vault; absent from a vault that does not say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<HostUsage>,
+    /// Whether the vault relays clients to the host now: it is online and takes relayed
+    /// connections. A client paired with both then reaches the host through the vault, with
+    /// [`crate::RelayHello::Connect`] (see [`crate::relay`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relay: bool,
 }
 
 /// What one host's copies take on the vault.

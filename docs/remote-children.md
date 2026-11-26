@@ -10,10 +10,13 @@ keeps every task tool on that child: `send`, `status`, `wait_for`, `answer`, `es
 
 ## 1. Decisions at a glance
 
-1. **Hosts connect to each other directly, never through the vault.** A vault can be shared
-   by several people's hosts; letting it relay commands would let anything that reaches the
-   vault drive every host behind it. Only a host's own owner decides which other host may
-   start work on it.
+1. **A vault never drives a host.** A vault can be shared by several people's hosts; if it
+   could send or relay commands of its own, anything that reaches the vault could drive
+   every host behind it. Hosts therefore pair with each other, and only a host's own owner
+   decides which other host may start work on it. The vault may still carry a connection as
+   opaque bytes ([vault-relay.md](vault-relay.md)): the two ends run their pinned mutual TLS
+   inside it, so the vault reads nothing, and the host authenticates and authorizes the
+   peer exactly as on a direct connection.
 2. **A new pairing: peer.** The target's owner runs `herder pair --peer`; the source host
    runs `herder peer add <link>`. One direction per pairing: the Mac pairing `trash-can-01`
    lets `trash-can-01` spawn on the Mac, not the reverse.

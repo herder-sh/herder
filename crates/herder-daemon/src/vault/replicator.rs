@@ -252,6 +252,7 @@ impl Replicator {
             build: BUILD.to_owned(),
             pairing_code: self.vault.pairing_code.clone(),
             attachments_cap: self.vault.images_cap(),
+            relay: false,
         });
         ws.send(Message::text(serde_json::to_string(&hello)?))
             .await?;
@@ -471,6 +472,8 @@ impl Link {
             }
             // Taken by the connection's loop, for the host's secrets.
             VaultMessage::ProviderLogins { .. }
+            // This host's hello asks for no relayed connections yet.
+            | VaultMessage::RelayOpen { .. }
             | VaultMessage::Hello(_)
             | VaultMessage::Unknown => {}
         }

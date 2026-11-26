@@ -1492,6 +1492,9 @@ pub struct FleetHost {
     // Defaults to nil so Swift and Kotlin code building a `FleetHost` need not name it.
     #[uniffi(default)]
     pub usage: Option<HostUsage>,
+    // Defaults to false for the same reason.
+    #[uniffi(default)]
+    pub relay: bool,
 }
 
 #[uniffi::remote(Record)]

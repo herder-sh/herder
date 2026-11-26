@@ -19,6 +19,7 @@ mod ids;
 mod people;
 mod project;
 mod provider_logins;
+pub mod relay;
 pub mod replication;
 mod resources;
 mod secrets;
@@ -56,6 +57,7 @@ pub use people::{
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use provider_logins::{ProviderLogin, ProviderLoginState};
+pub use relay::{RELAY_VERSION, RelayAnswer, RelayError, RelayErrorCode, RelayHello};
 pub use replication::{
     AttachmentData, Batch, HostHello, HostMessage, HostSecretFetch, JournalRecord,
     MAX_BATCH_EVENTS, REPLICATION_VERSION, RawEventBody, RejectReason, ReplicationError,
@@ -123,4 +125,14 @@ pub fn host_schema() -> schemars::Schema {
 /// JSON Schema for every message the vault sends a host.
 pub fn vault_schema() -> schemars::Schema {
     schemars::schema_for!(VaultMessage)
+}
+
+/// JSON Schema for the first message of a relay connection to the vault.
+pub fn relay_hello_schema() -> schemars::Schema {
+    schemars::schema_for!(RelayHello)
+}
+
+/// JSON Schema for the vault's answer to a relay connection's first message.
+pub fn relay_answer_schema() -> schemars::Schema {
+    schemars::schema_for!(RelayAnswer)
 }

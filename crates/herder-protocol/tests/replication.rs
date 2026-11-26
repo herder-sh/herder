@@ -82,6 +82,7 @@ impl Host {
             build: "herder/0.0.0".into(),
             pairing_code: None,
             attachments_cap: None,
+            relay: false,
         })
     }
 
@@ -132,8 +133,10 @@ impl Host {
                 self.link = None;
                 Vec::new()
             }
-            // Secrets and provider logins are not modelled here: they never touch the journals.
+            // Secrets, provider logins and relay streams are not modelled here: they never
+            // touch the journals.
             VaultMessage::SecretList { .. }
+            | VaultMessage::RelayOpen { .. }
             | VaultMessage::ProviderLogins { .. }
             | VaultMessage::SecretValues { .. }
             | VaultMessage::SecretsRefused { .. }
@@ -236,6 +239,7 @@ impl Vault {
                 build: "herder/0.0.0".into(),
                 acked,
                 cliproxyapi: None,
+                cliproxyapi_relay: false,
             })];
         }
         let Some(host) = link.host.clone() else {

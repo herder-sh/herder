@@ -172,6 +172,8 @@ impl Fleet {
                 }),
                 host_id: host.host_id,
                 host_name: host.host_name,
+                // Nothing relays yet.
+                relay: false,
             })
             .collect();
         self.hub.hosts_changed(hosts);
