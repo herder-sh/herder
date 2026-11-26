@@ -17,13 +17,13 @@ all = { level = "warn", priority = -1 }
 
 [workspace.dependencies]
 anyhow = "1"
-argon2 = "0.6"
+argon2 = "0.5"
 arboard = { version = "3.6", default-features = false, features = ["image-data", "wayland-data-control"] }
 async-trait = "0.1"
 base64 = "0.23"
 clap = { version = "4", features = ["derive", "env"] }
 flate2 = "1"
-frankenstein = { version = "0.53", default-features = false }
+frankenstein = { version = "0.52", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 herder-adapters = { path = "crates/herder-adapters" }
 herder-client-core = { path = "crates/herder-client-core" }
@@ -38,9 +38,9 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["http1"
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 insta = "1"
-jiff = { version = "1.0", features = ["serde"] }
-jsonschema = { version = "0.63", default-features = false }
-nix = { version = "0.32", features = ["fs", "hostname", "net", "poll", "signal"] }
+jiff = { version = "0.2", features = ["serde"] }
+jsonschema = { version = "0.60", default-features = false }
+nix = { version = "0.31", features = ["fs", "hostname", "net", "poll", "signal"] }
 nucleo-matcher = "0.3"
 portable-pty = "0.9"
 prettyplease = "0.3"
@@ -48,12 +48,12 @@ proptest = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = "0.30"
 ratatui-textarea = "0.9"
-qrcode = { version = "0.15", default-features = false }
+qrcode = { version = "0.14", default-features = false }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 regex = "1"
 ring = "0.17"
 rpassword = "7"
-rusqlite = { version = "0.43", features = ["bundled", "fallible_uint", "jiff"] }
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint", "jiff"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 schemars = { version = "1.2", features = ["jiff02"] }
 semver = "1"
