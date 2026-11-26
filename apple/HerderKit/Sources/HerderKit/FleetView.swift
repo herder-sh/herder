@@ -706,7 +706,7 @@ private struct TabBadge: ViewModifier {
     func body(content: Content) -> some View {
         let count = switch tab {
         case .board: fleet.lists.requests.count
-        case .setup: SetupProblem.found(fleet: fleet, directory: people.directory(fleet.machines)).count
+        case .setup: SetupProblem.found(fleet: fleet, directory: people.directory(fleet.machines)).needingYou.count
         case .chats, .projects: 0
         }
         return content.badge(count)

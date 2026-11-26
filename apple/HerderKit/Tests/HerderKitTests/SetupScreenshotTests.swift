@@ -7,7 +7,8 @@ import SwiftUI
 import Testing
 
 /// Draws Setup as the app's dark appearance shows it: the Mac's page on `sampleFleetMachines`
-/// with the mockup's people, with what needs you at its top; a person's sheet; and Needs you's
+/// with the mockup's people, what needs you at its top and the hub with its machines under it;
+/// the same page at the iPhone's width, and with no hub; a person's sheet; and Needs you's
 /// cards at the iPhone's width, their fixes under them.
 /// Attaches each; with `HERDER_SCREENSHOT_DIR` set, also writes them there as
 /// `setup-<screen>-<width>.png`.
@@ -34,7 +35,9 @@ import Testing
         ]
     }()
 
-    @Test func drawsTheMacPage() async throws {
+    /// `sampleFleetMachines` as yours, with or without their hub: draugelis is asleep,
+    /// trash-can-01 runs an older herder, and the hub has a public address.
+    private func setup(hub: Bool = true) async throws -> (Fleet, FleetPeople) {
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
             throw CancellationError()
         }
@@ -45,12 +48,32 @@ import Testing
         }
         machines[0].herderVersion = "0.21.0"
         machines[1].herderVersion = "0.20.0"
+        machines[2].connection = .disconnected(error: "no answer in 10s")
+        machines[3].addresses = ["wss://hub.example.com"]
+        if !hub { machines.removeLast() }
         fleet.setMachinesForTesting(machines)
         let people = FleetPeople { hostId, _ in .people(people: Self.people[hostId] ?? []) }
         await people.reload(machines)
+        return (fleet, people)
+    }
+
+    @Test func drawsTheMacPage() async throws {
+        let (fleet, people) = try await setup()
         let switcher = Switcher(fleet: fleet, item: .constant(.setup), session: .constant(nil), order: ProjectOrder(sort: .manual, stored: ""))
         let page = SetupPane(fleet: fleet, people: people, sheet: .constant(nil), switcher: switcher)
-        try await shoot(page, size: CGSize(width: 1180, height: 1500), named: "setup-mac.png")
+        try await shoot(page, size: CGSize(width: 1180, height: 1300), named: "setup-mac.png")
+    }
+
+    @Test func drawsTheIPhonePage() async throws {
+        let (fleet, people) = try await setup()
+        let page = SetupView(fleet: fleet, people: people, sheet: .constant(nil), showsSections: true)
+        try await shoot(page, size: CGSize(width: 390, height: 1500), named: "setup-iphone.png")
+    }
+
+    @Test func drawsTheIPhonePageWithNoHub() async throws {
+        let (fleet, people) = try await setup(hub: false)
+        let page = SetupView(fleet: fleet, people: people, sheet: .constant(nil), showsSections: true)
+        try await shoot(page, size: CGSize(width: 390, height: 1300), named: "setup-no-hub-iphone.png")
     }
 
     @Test func drawsAPersonsSheet() async throws {
@@ -68,7 +91,7 @@ import Testing
         let overview = ProvidersOverview(accounts: ProviderAccounts(machines: machines, now: now),
                                          versions: ProviderVersions(machines: machines), installs: [:])
         let problems = SetupProblem.found(machines: machines, overview: overview, unclaimed: false, directory: directory)
-        let view = NeedsYouSection(problems: problems) { _ in }.padding(16)
+        let view = NeedsYouSection(problems: problems.needingYou) { _ in }.padding(16)
         try await shoot(view, size: CGSize(width: 390, height: 900), named: "setup-needs-you-iphone.png")
     }
 
