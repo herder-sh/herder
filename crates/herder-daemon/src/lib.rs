@@ -305,14 +305,7 @@ pub async fn serve(
     sessions.resume().await?;
     let listeners = listen::bind(&config.listen).await?;
     let listen = listen::local_addrs(&listeners)?;
-    let tunnel = match config.tunnel {
-        Some(address) => Some(
-            tokio::net::TcpListener::bind(address)
-                .await
-                .with_context(|| format!("cannot take tunneled clients on {address}"))?,
-        ),
-        None => None,
-    };
+    let tunnel = listen::bind_tunnel(config.tunnel).await?;
     let control = auth::control::bind(data_dir.root())?;
     tokio::spawn(auth::control::serve(
         control,

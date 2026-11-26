@@ -27,6 +27,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use super::relay::Relays;
 use super::secrets::{self, SecretsKey};
 use super::{VaultStore, blocking};
 use crate::auth::{Auth, PAIRING_TTL};
@@ -42,6 +43,8 @@ pub(crate) struct Fleet {
     /// Pairs hosts and revokes them, for owners.
     auth: Arc<Auth>,
     presence: Arc<Presence>,
+    /// Which hosts take relayed connections now.
+    relays: Arc<Relays>,
     /// The session list clients got last.
     listed: Arc<tokio::sync::Mutex<Vec<SessionHead>>>,
     /// Held while the host list is read and sent, so an older one never follows a newer one.
@@ -63,12 +66,14 @@ impl Fleet {
         hub: Arc<Hub>,
         auth: Arc<Auth>,
         secrets_key: Option<Arc<SecretsKey>>,
+        relays: Arc<Relays>,
     ) -> Self {
         Self {
             store,
             hub,
             auth,
             presence: Arc::default(),
+            relays,
             listed: Arc::default(),
             sending_hosts: Arc::default(),
             status_changed: Arc::default(),
@@ -170,10 +175,9 @@ impl Fleet {
                     attachment_bytes: host.attachment_bytes,
                     attachments_cap: host.attachments_cap,
                 }),
+                relay: self.presence.online(&host.host_id) && self.relays.takes(&host.host_id),
                 host_id: host.host_id,
                 host_name: host.host_name,
-                // Nothing relays yet.
-                relay: false,
             })
             .collect();
         self.hub.hosts_changed(hosts);

@@ -1,0 +1,627 @@
+//! Relay streams: the vault forwards bytes between a client and a host that both reach it,
+//! so the client reaches a host it cannot dial ([`herder_protocol::relay`]).
+//!
+//! A client device asks for a stream to a host. The vault asks the host, on its replication
+//! connection, to open its end, waits for that connection, then copies every binary frame's
+//! bytes from each to the other until one of them closes. It reads nothing of them: inside,
+//! the client and the host run the TLS of a direct connection, which the vault has no key
+//! to.
+//!
+//! [`Relays`] holds what connects the three connections involved: which hosts take relayed
+//! connections, on which channel their replication connection is told to open one, the
+//! streams waiting for their host, and how many streams each device and host has open.
+
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use anyhow::{Result, anyhow, bail};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use herder_protocol::{
+    DeviceId, HostId, RELAY_VERSION, RelayAnswer, RelayError, RelayErrorCode, RelayHello,
+};
+use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::time::Instant;
+use tokio_tungstenite::tungstenite::{self, Message};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info};
+
+use super::{Shared, blocking};
+use crate::auth::DeviceRole;
+use crate::ws::Ws;
+use crate::ws::tunnel::Pass;
+
+/// How long a host that is not connected gets to connect before its client is refused: after
+/// a vault restart both reconnect, and the client is usually first.
+const HOST_WAIT: Duration = Duration::from_secs(3);
+
+/// How long a host gets to open its end of a stream.
+const ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Streams one device may have open: a connection to each of its machines, with room for the
+/// attempts that race while it reconnects.
+pub(super) const STREAMS_PER_DEVICE: usize = 32;
+
+/// Streams to one host: every device of a few people.
+pub(super) const STREAMS_PER_HOST: usize = 64;
+
+/// How often each end of a stream is pinged, and the silence after which it is taken for
+/// gone. A peer behind a tunnel is not the socket's peer, so the kernel cannot tell.
+const PING_EVERY: Duration = Duration::from_secs(30);
+const SILENCE: Duration = Duration::from_secs(90);
+
+/// Time to deliver an answer or a close frame before the socket is dropped.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// A stream a host is asked to open its end of.
+#[derive(Debug)]
+pub(super) struct Open {
+    /// The stream, as the host's accept names it.
+    pub(super) stream_id: String,
+    /// The vault's id of the device that asked.
+    pub(super) device_id: DeviceId,
+}
+
+/// The host's end of a stream: its connection, and what cancels it.
+type End = (Ws, CancellationToken);
+
+/// What the vault's connections share about relay streams.
+pub(super) struct Relays {
+    state: Mutex<State>,
+    /// Notified when a host that takes relayed connections connects.
+    host_connected: Notify,
+    host_wait: Duration,
+    accept_timeout: Duration,
+    per_device: usize,
+    per_host: usize,
+}
+
+#[derive(Default)]
+struct State {
+    /// Each connected host that takes relayed connections: its registration, and where its
+    /// replication connection takes the streams to open.
+    hosts: HashMap<HostId, (u64, mpsc::UnboundedSender<Open>)>,
+    registrations: u64,
+    /// Streams whose host has not opened its end yet, by stream id.
+    waiting: HashMap<String, (HostId, oneshot::Sender<End>)>,
+    by_device: HashMap<DeviceId, usize>,
+    by_host: HashMap<HostId, usize>,
+}
+
+impl Default for Relays {
+    fn default() -> Self {
+        Self::new(
+            HOST_WAIT,
+            ACCEPT_TIMEOUT,
+            STREAMS_PER_DEVICE,
+            STREAMS_PER_HOST,
+        )
+    }
+}
+
+impl Relays {
+    pub(super) fn new(
+        host_wait: Duration,
+        accept_timeout: Duration,
+        per_device: usize,
+        per_host: usize,
+    ) -> Self {
+        Self {
+            state: Mutex::default(),
+            host_connected: Notify::new(),
+            host_wait,
+            accept_timeout,
+            per_device,
+            per_host,
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
+        // Every update leaves the maps consistent, so a poisoned state is too.
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Notes that `host`, which takes relayed connections, is connected: until the returned
+    /// end is dropped, its streams to open come out of it.
+    pub(super) fn host_connected(self: &Arc<Self>, host: &HostId) -> HostEnd {
+        let (sender, opens) = mpsc::unbounded_channel();
+        let registration = {
+            let mut state = self.lock();
+            state.registrations += 1;
+            let registration = state.registrations;
+            // A host that reconnects replaces its old connection's registration.
+            state.hosts.insert(host.clone(), (registration, sender));
+            registration
+        };
+        self.host_connected.notify_waiters();
+        HostEnd {
+            relays: Arc::clone(self),
+            host: host.clone(),
+            registration,
+            opens,
+        }
+    }
+
+    /// Whether `host` is connected and takes relayed connections.
+    pub(super) fn takes(&self, host: &HostId) -> bool {
+        self.lock().hosts.contains_key(host)
+    }
+
+    /// Room for one more stream from `device` to `host`, until the slot is dropped; `None`
+    /// when either has as many as it may.
+    fn reserve(self: &Arc<Self>, device: &DeviceId, host: &HostId) -> Option<Slot> {
+        let mut state = self.lock();
+        let from_device = state.by_device.get(device).copied().unwrap_or(0);
+        let to_host = state.by_host.get(host).copied().unwrap_or(0);
+        if from_device >= self.per_device || to_host >= self.per_host {
+            return None;
+        }
+        state.by_device.insert(device.clone(), from_device + 1);
+        state.by_host.insert(host.clone(), to_host + 1);
+        Some(Slot {
+            relays: Arc::clone(self),
+            device: device.clone(),
+            host: host.clone(),
+        })
+    }
+
+    /// Asks `host` to open its end of a new stream for `device`, and waits for it: the
+    /// host's end, or `None` when the host is not connected or did not open one in time.
+    async fn open(self: &Arc<Self>, device: &DeviceId, host: &HostId) -> Option<End> {
+        let deadline = Instant::now() + self.host_wait;
+        let stream_id = ulid::Ulid::generate().to_string();
+        let (sender, end) = oneshot::channel();
+        let mut sender = Some(sender);
+        // Removes the stream from those waiting however this ends.
+        let _waiting = Waiting {
+            relays: Arc::clone(self),
+            stream_id: stream_id.clone(),
+        };
+        loop {
+            // Before the check, so a host that connects right after it is not missed.
+            let connected = self.host_connected.notified();
+            tokio::pin!(connected);
+            connected.as_mut().enable();
+            {
+                let mut state = self.lock();
+                if let Some((_, opens)) = state.hosts.get(host) {
+                    let open = Open {
+                        stream_id: stream_id.clone(),
+                        device_id: device.clone(),
+                    };
+                    // A closed channel is a host whose connection just ended: wait for the
+                    // next one.
+                    if opens.send(open).is_ok()
+                        && let Some(sender) = sender.take()
+                    {
+                        state
+                            .waiting
+                            .insert(stream_id.clone(), (host.clone(), sender));
+                        break;
+                    }
+                }
+            }
+            tokio::time::timeout_at(deadline, connected).await.ok()?;
+        }
+        tokio::time::timeout(self.accept_timeout, end)
+            .await
+            .ok()?
+            .ok()
+    }
+
+    /// Where the end `host` opened for `stream_id` goes; `None` when no client waits for it
+    /// from that host any more.
+    fn accept(&self, stream_id: &str, host: &HostId) -> Option<oneshot::Sender<End>> {
+        let mut state = self.lock();
+        let (waited, _) = state.waiting.get(stream_id)?;
+        if waited != host {
+            return None;
+        }
+        state.waiting.remove(stream_id).map(|(_, sender)| sender)
+    }
+}
+
+/// A connected host's registration with [`Relays`], for its replication connection.
+pub(super) struct HostEnd {
+    relays: Arc<Relays>,
+    host: HostId,
+    registration: u64,
+    opens: mpsc::UnboundedReceiver<Open>,
+}
+
+impl HostEnd {
+    /// The next stream the host is to open its end of.
+    pub(super) async fn next(&mut self) -> Open {
+        match self.opens.recv().await {
+            Some(open) => open,
+            // A newer connection of the host took the registration over.
+            None => std::future::pending().await,
+        }
+    }
+}
+
+impl Drop for HostEnd {
+    fn drop(&mut self) {
+        let mut state = self.relays.lock();
+        if state
+            .hosts
+            .get(&self.host)
+            .is_some_and(|(registration, _)| *registration == self.registration)
+        {
+            state.hosts.remove(&self.host);
+        }
+    }
+}
+
+/// One open or opening stream, counted against its device and host until dropped.
+struct Slot {
+    relays: Arc<Relays>,
+    device: DeviceId,
+    host: HostId,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        fn release<K: std::hash::Hash + Eq>(counts: &mut HashMap<K, usize>, key: &K) {
+            if let Some(count) = counts.get_mut(key) {
+                *count -= 1;
+                if *count == 0 {
+                    counts.remove(key);
+                }
+            }
+        }
+        let mut state = self.relays.lock();
+        release(&mut state.by_device, &self.device);
+        release(&mut state.by_host, &self.host);
+    }
+}
+
+struct Waiting {
+    relays: Arc<Relays>,
+    stream_id: String,
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.relays.lock().waiting.remove(&self.stream_id);
+    }
+}
+
+/// Whether a first message is a relay hello: only that one carries a relay version.
+pub(super) fn is_hello(first: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(first)
+        .is_ok_and(|hello| hello.get("relay_version").is_some())
+}
+
+/// Serves a relay connection whose first message is `first`, from the device with
+/// certificate `device`; `pass` counts a tunneled one until it authenticated.
+pub(super) async fn serve(
+    mut ws: Ws,
+    first: &str,
+    shared: &Shared,
+    device: &str,
+    pass: Option<Pass>,
+    peer: SocketAddr,
+    cancel: CancellationToken,
+) {
+    let hello = match serde_json::from_str::<RelayHello>(first) {
+        Ok(hello) => hello,
+        Err(err) => {
+            let error = refusal(RelayErrorCode::BadRequest, format!("invalid hello: {err}"));
+            return refuse(&mut ws, peer, error).await;
+        }
+    };
+    let (RelayHello::Connect { relay_version, .. }
+    | RelayHello::Accept { relay_version, .. }
+    | RelayHello::Proxy { relay_version }) = &hello;
+    if *relay_version != RELAY_VERSION {
+        let message = format!("this vault speaks relay {RELAY_VERSION}, not {relay_version}");
+        return refuse(&mut ws, peer, refusal(RelayErrorCode::Unsupported, message)).await;
+    }
+    let result = match hello {
+        RelayHello::Connect { host_id, .. } => {
+            connect(ws, shared, device, pass, &host_id, peer, cancel).await
+        }
+        RelayHello::Accept { stream_id, .. } => {
+            accept(ws, shared, device, pass, &stream_id, peer, cancel).await
+        }
+        RelayHello::Proxy { .. } => {
+            let message = "this vault forwards no host to a CLIProxyAPI".to_owned();
+            return refuse(&mut ws, peer, refusal(RelayErrorCode::Forbidden, message)).await;
+        }
+    };
+    if let Err(err) = result {
+        info!(%peer, "relay connection failed: {err:#}");
+    }
+}
+
+/// A client's end: checks that the vault forwards for it to `host`, has the host open its
+/// end, then forwards until either end closes.
+async fn connect(
+    mut ws: Ws,
+    shared: &Shared,
+    device: &str,
+    pass: Option<Pass>,
+    host: &HostId,
+    peer: SocketAddr,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let identity =
+        match shared
+            .auth
+            .authenticate(device, None, "relay", DeviceRole::Client, &cancel)
+        {
+            Ok(identity) => identity,
+            Err(error) => {
+                let error = refusal(RelayErrorCode::Forbidden, error.message);
+                refuse(&mut ws, peer, error).await;
+                return Ok(());
+            }
+        };
+    drop(pass);
+    let device = identity.device_id;
+    let relays = &shared.relays;
+    let known = blocking(&shared.store, |store| store.hosts()).await?;
+    let presence = shared.fleet.presence();
+    let error = if !known.iter().any(|known| known.host_id == *host) {
+        Some(refusal(
+            RelayErrorCode::UnknownHost,
+            format!("no host {host} replicates to this vault"),
+        ))
+    } else if presence.online(host) && !relays.takes(host) {
+        Some(no_relay(host))
+    } else {
+        None
+    };
+    if let Some(error) = error {
+        refuse(&mut ws, peer, error).await;
+        return Ok(());
+    }
+    let Some(_slot) = relays.reserve(&device, host) else {
+        let message = format!(
+            "too many relay streams are open: at most {} per device and {} per host",
+            relays.per_device, relays.per_host
+        );
+        refuse(&mut ws, peer, refusal(RelayErrorCode::Busy, message)).await;
+        return Ok(());
+    };
+    let opened = tokio::select! {
+        () = cancel.cancelled() => return Ok(()),
+        opened = relays.open(&device, host) => opened,
+    };
+    let Some((mut host_ws, host_cancel)) = opened else {
+        let error = if presence.online(host) && !relays.takes(host) {
+            no_relay(host)
+        } else {
+            refusal(
+                RelayErrorCode::HostOffline,
+                format!("the host {host} is not connected to this vault, or did not answer"),
+            )
+        };
+        refuse(&mut ws, peer, error).await;
+        return Ok(());
+    };
+    answer(&mut host_ws, &RelayAnswer::Ready).await?;
+    answer(&mut ws, &RelayAnswer::Ready).await?;
+    info!(%peer, device_id = %device, host_id = %host, "relay stream opened");
+    let started = Instant::now();
+    let ended = tokio::select! {
+        () = cancel.cancelled() => "the device was revoked, or the vault is shutting down".to_owned(),
+        () = host_cancel.cancelled() => "the host was revoked".to_owned(),
+        ended = splice(ws, host_ws, PING_EVERY, SILENCE) => ended,
+    };
+    info!(
+        %peer,
+        device_id = %device,
+        host_id = %host,
+        "relay stream closed after {:.1?}: {ended}",
+        started.elapsed()
+    );
+    Ok(())
+}
+
+/// A host's end: hands the connection to the client waiting for `stream_id`, which forwards.
+async fn accept(
+    mut ws: Ws,
+    shared: &Shared,
+    device: &str,
+    pass: Option<Pass>,
+    stream_id: &str,
+    peer: SocketAddr,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let identity = match shared
+        .auth
+        .authenticate(device, None, "relay", DeviceRole::Host, &cancel)
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            let error = refusal(RelayErrorCode::Forbidden, error.message);
+            refuse(&mut ws, peer, error).await;
+            return Ok(());
+        }
+    };
+    drop(pass);
+    let device = identity.device_id;
+    let host = blocking(&shared.store, move |store| store.host_of_device(&device)).await?;
+    let Some(host) = host else {
+        let message = "this device replicates to this vault as no host".to_owned();
+        refuse(&mut ws, peer, refusal(RelayErrorCode::Forbidden, message)).await;
+        return Ok(());
+    };
+    let gone = || {
+        refusal(
+            RelayErrorCode::BadRequest,
+            format!("no client waits for the stream {stream_id}"),
+        )
+    };
+    let Some(waiting) = shared.relays.accept(stream_id, &host) else {
+        refuse(&mut ws, peer, gone()).await;
+        return Ok(());
+    };
+    // The client's task answers and forwards from here; it gave up if it is gone.
+    if let Err((mut ws, _)) = waiting.send((ws, cancel)) {
+        refuse(&mut ws, peer, gone()).await;
+    }
+    Ok(())
+}
+
+fn refusal(code: RelayErrorCode, message: String) -> RelayError {
+    RelayError { code, message }
+}
+
+fn no_relay(host: &HostId) -> RelayError {
+    refusal(
+        RelayErrorCode::UnknownHost,
+        format!("the host {host} takes no relayed connections"),
+    )
+}
+
+async fn answer(ws: &mut Ws, answer: &RelayAnswer) -> Result<()> {
+    let text = serde_json::to_string(answer)?;
+    ws.send(Message::text(text)).await?;
+    Ok(())
+}
+
+/// Tells the peer why it gets no stream, and closes the connection.
+async fn refuse(ws: &mut Ws, peer: SocketAddr, error: RelayError) {
+    debug!(%peer, code = ?error.code, "relay refused: {}", error.message);
+    let refused = async {
+        answer(ws, &RelayAnswer::Refused { error }).await?;
+        ws.close(None).await?;
+        anyhow::Ok(())
+    };
+    let _ = tokio::time::timeout(CLOSE_TIMEOUT, refused).await;
+}
+
+/// Copies binary frames between `a` and `b` until either closes, fails or is silent for
+/// `silence`, pinging each every `ping`; closes both and returns why it ended.
+pub(super) async fn splice<A, B>(a: A, b: B, ping: Duration, silence: Duration) -> String
+where
+    A: Stream<Item = tungstenite::Result<Message>> + Sink<Message, Error = tungstenite::Error>,
+    B: Stream<Item = tungstenite::Result<Message>> + Sink<Message, Error = tungstenite::Error>,
+{
+    let (mut a_sink, a_stream) = a.split();
+    let (mut b_sink, b_stream) = b.split();
+    // Each direction on its own, so one that is held up never holds up the other.
+    let ended = tokio::select! {
+        ended = pump(a_stream, &mut b_sink, ping, silence) => ended,
+        ended = pump(b_stream, &mut a_sink, ping, silence) => ended,
+    };
+    let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
+        let _ = a_sink.close().await;
+        let _ = b_sink.close().await;
+    })
+    .await;
+    match ended {
+        Ok(()) => "one end closed it".to_owned(),
+        Err(err) => format!("{err:#}"),
+    }
+}
+
+/// Copies binary frames from `from` to `to` until `from` closes.
+async fn pump(
+    mut from: impl Stream<Item = tungstenite::Result<Message>> + Unpin,
+    to: &mut (impl Sink<Message, Error = tungstenite::Error> + Unpin),
+    ping: Duration,
+    silence: Duration,
+) -> Result<()> {
+    let mut pings = tokio::time::interval_at(Instant::now() + ping, ping);
+    let mut heard = Instant::now();
+    loop {
+        tokio::select! {
+            frame = from.next() => {
+                heard = Instant::now();
+                match frame {
+                    // The bytes go on as they came: nothing is decoded or copied.
+                    Some(Ok(Message::Binary(data))) => to.send(Message::Binary(data)).await?,
+                    // Pings are answered by the WebSocket itself; a pong is a sign of life.
+                    Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
+                    Some(Ok(Message::Text(_))) => bail!("a stream carries binary frames only"),
+                    Some(Ok(Message::Close(_))) | None => return Ok(()),
+                    Some(Err(err)) => return Err(anyhow!(err)),
+                }
+            }
+            _ = pings.tick() => {
+                if heard.elapsed() > silence {
+                    bail!("one end was silent for {silence:?}");
+                }
+                // To the other end, whose pong the other direction hears.
+                to.send(Message::Ping(Default::default())).await?;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn relays(per_device: usize, per_host: usize) -> Arc<Relays> {
+        Arc::new(Relays::new(
+            Duration::from_millis(50),
+            Duration::from_millis(50),
+            per_device,
+            per_host,
+        ))
+    }
+
+    #[test]
+    fn streams_are_capped_per_device_and_per_host_and_a_dropped_slot_frees_its_place() {
+        let relays = relays(2, 3);
+        let (a, b, c) = (DeviceId::new("a"), DeviceId::new("b"), DeviceId::new("c"));
+        let (h1, h2) = (HostId::new("h1"), HostId::new("h2"));
+        let first = relays.reserve(&a, &h1).unwrap();
+        let _second = relays.reserve(&a, &h2).unwrap();
+        assert!(relays.reserve(&a, &h1).is_none(), "a third from one device");
+        let _third = relays.reserve(&b, &h1).unwrap();
+        let _fourth = relays.reserve(&c, &h1).unwrap();
+        assert!(relays.reserve(&b, &h1).is_none(), "a fourth to one host");
+        drop(first);
+        relays.reserve(&b, &h1).unwrap();
+        let state = relays.lock();
+        assert_eq!(state.by_device.get(&b), Some(&1));
+        assert_eq!(state.by_host.get(&h1), Some(&2));
+    }
+
+    #[tokio::test]
+    async fn a_stream_waits_for_its_host_to_connect_and_only_that_host_may_open_it() {
+        let relays = relays(8, 8);
+        let (device, host) = (DeviceId::new("d"), HostId::new("h"));
+        // No host: given up on after the wait, leaving nothing behind.
+        assert!(relays.open(&device, &host).await.is_none());
+        assert!(relays.lock().waiting.is_empty());
+
+        let opening = tokio::spawn({
+            let (relays, device, host) = (Arc::clone(&relays), device.clone(), host.clone());
+            async move { relays.open(&device, &host).await.is_some() }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let mut end = relays.host_connected(&host);
+        assert!(relays.takes(&host));
+        let open = end.next().await;
+        assert_eq!(open.device_id, device);
+        assert!(
+            relays
+                .accept(&open.stream_id, &HostId::new("other"))
+                .is_none()
+        );
+        assert!(relays.accept("another stream", &host).is_none());
+        let waiting = relays.accept(&open.stream_id, &host).unwrap();
+        assert!(
+            relays.accept(&open.stream_id, &host).is_none(),
+            "taken once"
+        );
+        // The host never sends its end: the client gives up, and the sender finds it gone.
+        assert!(!opening.await.unwrap());
+        assert!(waiting.is_closed());
+
+        // A newer connection of the host takes over; the older one's end leaves it alone.
+        let newer = relays.host_connected(&host);
+        drop(end);
+        assert!(relays.takes(&host));
+        drop(newer);
+        assert!(!relays.takes(&host));
+    }
+}

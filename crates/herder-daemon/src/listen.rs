@@ -8,6 +8,7 @@ use std::task::Poll;
 
 use anyhow::{Context, Result};
 use tokio::net::{TcpListener, TcpStream};
+use tracing::warn;
 
 /// Binds every one of `addresses`, failing on the first that cannot be bound.
 pub(crate) async fn bind(addresses: &[SocketAddr]) -> Result<Vec<TcpListener>> {
@@ -19,6 +20,33 @@ pub(crate) async fn bind(addresses: &[SocketAddr]) -> Result<Vec<TcpListener>> {
         listeners.push(listener);
     }
     Ok(listeners)
+}
+
+/// Binds `tunnel`, where `cloudflared` delivers tunneled connections, if there is one.
+pub(crate) async fn bind_tunnel(tunnel: Option<SocketAddr>) -> Result<Option<TcpListener>> {
+    let Some(address) = tunnel else {
+        return Ok(None);
+    };
+    let listener = TcpListener::bind(address)
+        .await
+        .with_context(|| format!("cannot take tunneled clients on {address}"))?;
+    if !address.ip().is_loopback() {
+        warn!(
+            %address,
+            "`tunnel` is not a loopback address: whatever reaches it can claim any client              address, so allow only cloudflared to (see docs/vault-relay.md)"
+        );
+    }
+    Ok(Some(listener))
+}
+
+/// The next connection on the tunnel listener; never ready without one.
+pub(crate) async fn accept_tunneled(
+    tunnel: Option<&TcpListener>,
+) -> io::Result<(TcpStream, SocketAddr)> {
+    match tunnel {
+        Some(tunnel) => tunnel.accept().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// The addresses `listeners` are bound to, in their order.

@@ -136,11 +136,11 @@ or a list tried in order, direct first:
 address = ["10.0.0.5:7447", "wss://vault.example.com"]
 ```
 
-In a cluster `cloudflared` is another pod, not loopback, so the `tunnel` listener may bind a
-non-loopback address. What that gives up is the trust in `CF-Connecting-IP` behind the
+In a cluster `cloudflared` is another pod, not loopback, so a vault's `tunnel` listener may
+bind a non-loopback address (a host's still may not). What that gives up is the trust in `CF-Connecting-IP` behind the
 per-client cap on unauthenticated connections; the total cap and the inner TLS do not
 depend on it. `deploy/vault.yaml` restricts the port to the `cloudflared` namespace with a
-NetworkPolicy, and the daemon logs a warning for a non-loopback `tunnel`.
+NetworkPolicy, and the vault logs a warning for a non-loopback `tunnel`.
 
 ### The vault's CLIProxyAPI from anywhere
 

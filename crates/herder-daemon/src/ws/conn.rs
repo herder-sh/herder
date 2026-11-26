@@ -120,7 +120,7 @@ async fn open(
 /// Has the kernel close `stream` once its peer is gone: one that stopped answering, with
 /// the socket idle or with data on its way, without a word. The error then ends the
 /// connection's reader or writer, and with it what the daemon holds and sends for the client.
-pub(super) fn notice_a_gone_peer(stream: &TcpStream) -> std::io::Result<()> {
+pub(crate) fn notice_a_gone_peer(stream: &TcpStream) -> std::io::Result<()> {
     let socket = socket2::SockRef::from(stream);
     let keepalive = socket2::TcpKeepalive::new()
         .with_time(KEEPALIVE_IDLE)

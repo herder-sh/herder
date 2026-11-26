@@ -74,7 +74,8 @@ tunnel = "127.0.0.1:7448"        # where cloudflared delivers; must be loopback
 The tunnel listener:
 
 - refuses to start unless `tunnel` is a loopback address, since only `cloudflared` on the
-  same machine may reach it;
+  same machine may reach it (a vault's may be any address, for a `cloudflared` in another
+  pod; see [vault-relay.md](vault-relay.md));
 - accepts only WebSocket upgrades and answers any other request with an error status. The
   path is ignored, because the hostname already picks the machine;
 - refuses any request with an `Origin` header (403). Browsers always send one, and herder
