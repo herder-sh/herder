@@ -18,6 +18,9 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, ui: Ui) {
         Line::raw(""),
         Line::raw("or press a here and paste the link a herder app of yours shares,"),
         Line::raw("then approve this terminal in that app."),
+        Line::raw(""),
+        Line::raw("No herder app? Run herder claim on the machine,"),
+        Line::raw("then the herder login command it prints."),
     ])
     .centered();
     let height = u16::try_from(text.height()).unwrap_or(u16::MAX);

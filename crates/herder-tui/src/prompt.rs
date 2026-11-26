@@ -9,12 +9,13 @@
 //!   prompts first, then those sent to other sessions.
 //! - A long paste collapses to `[pasted ~N lines]`, and is sent in full.
 
-use herder_protocol::CommandBody;
+use herder_protocol::{CommandBody, HostId, Role};
 
 use crate::action::Action;
-use crate::app::{App, Effect};
+use crate::app::{App, Effect, Row};
 use crate::compose::Origin;
 use crate::inbox::InboxAction;
+use crate::passkey::PersonOp;
 use crate::prs::{PrAction, parse_number};
 use crate::session::{Entry, SessionKey};
 use crate::ui::glyphs::Glyphs;
@@ -67,6 +68,16 @@ pub const COMMANDS: &[Command] = &[
     command("fleet", "", "machines"),
     command("add", "", "add a machine"),
     command("reconnect", "", "reconnect every machine now"),
+    command(
+        "approve",
+        "[code]",
+        "approve what a terminal of yours asks, or the code of its herder login",
+    ),
+    command("refuse", "", "refuse what a terminal of yours asks"),
+    command("invite", "owner|member", "invite someone to a machine"),
+    command("people", "", "who is on a machine"),
+    command("role", "<name> <role>", "make someone an owner or a member"),
+    command("remove", "<name>", "remove someone and their devices"),
     command("group", "", "group sessions by project or by machine"),
     command("help", "", "every key and command"),
     command("quit", "", "leave herder"),
@@ -508,6 +519,37 @@ impl App {
                 };
                 Ok(vec![send(key, command)])
             }
+            ("approve", []) => {
+                let (host_id, request_id) = self.asked()?;
+                Ok(vec![person(host_id, PersonOp::ApproveAction(request_id))])
+            }
+            ("approve", [code]) => {
+                let op = PersonOp::ApproveLogin((*code).to_owned());
+                Ok(vec![person(self.person_host(target)?, op)])
+            }
+            ("refuse", []) => {
+                let (host_id, request_id) = self.asked()?;
+                Ok(vec![person(host_id, PersonOp::RefuseAction(request_id))])
+            }
+            ("invite", [role]) => {
+                let role = role_named(role).ok_or("usage: /invite owner|member")?;
+                Ok(vec![person(
+                    self.person_host(target)?,
+                    PersonOp::Invite(role),
+                )])
+            }
+            ("people", []) => Ok(vec![person(self.person_host(target)?, PersonOp::People)]),
+            ("role", [name @ .., role]) if !name.is_empty() => {
+                let role = role_named(role).ok_or("usage: /role <name> owner|member")?;
+                let op = PersonOp::SetRole(name.join(" "), role);
+                Ok(vec![person(self.person_host(target)?, op)])
+            }
+            ("role", _) => Err("usage: /role <name> owner|member".to_owned()),
+            ("invite", _) => Err("usage: /invite owner|member".to_owned()),
+            ("remove", [_, ..]) => {
+                let op = PersonOp::Remove(args.join(" "));
+                Ok(vec![person(self.person_host(target)?, op)])
+            }
             ("stop", []) => self.session_command(session()?, "interrupt", &[]),
             ("model" | "mode" | "archive" | "unarchive" | "down", args) => {
                 self.session_command(session()?, name, args)
@@ -517,6 +559,35 @@ impl App {
                 None => Err(format!("unknown command: /{name}")),
             },
         }
+    }
+
+    /// The machine a people command is for: the session's, the selected heading's, or the
+    /// only one.
+    fn person_host(&self, target: Option<&SessionKey>) -> Result<HostId, String> {
+        if let Some(key) = target {
+            return Ok(key.host_id.clone());
+        }
+        match (self.selected(), self.machines.as_slice()) {
+            (Some(Row::Machine(host_id)), _) => Ok(host_id),
+            (_, [only]) => Ok(only.host_id.clone()),
+            (_, []) => Err("no machine yet".to_owned()),
+            _ => Err("select the machine, or one of its sessions, first".to_owned()),
+        }
+    }
+
+    /// The oldest thing a terminal of this person asks to approve, with its machine.
+    fn asked(&self) -> Result<(HostId, String), String> {
+        self.machines
+            .iter()
+            .find_map(|machine| {
+                let request = machine.approvals.first()?;
+                Some((machine.host_id.clone(), request.request_id.clone()))
+            })
+            .ok_or_else(|| {
+                "nothing asks for your approval; /approve <code> signs in a terminal that \
+                 ran herder login"
+                    .to_owned()
+            })
     }
 
     fn session_command(
@@ -529,6 +600,18 @@ impl App {
             .command(Some(key), name, args)
             .map_err(|error| error.replacen("usage: ", "usage: /", 1))?;
         Ok(vec![send(&key, body)])
+    }
+}
+
+fn person(host_id: HostId, op: PersonOp) -> Effect {
+    Effect::Person { host_id, op }
+}
+
+fn role_named(name: &str) -> Option<Role> {
+    match name {
+        "owner" => Some(Role::Owner),
+        "member" => Some(Role::Member),
+        _ => None,
     }
 }
 
@@ -552,6 +635,100 @@ mod tests {
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Effect> {
         app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+    }
+
+    #[test]
+    fn people_commands_go_to_the_sessions_machine_with_the_passkey() {
+        use crate::passkey::PersonOp;
+        use herder_protocol::{HostId, Role};
+
+        let mut app = fake::tree();
+        let key = fake::key("h1", "s2");
+        let person = |op| {
+            vec![Effect::Person {
+                host_id: HostId::new("h1"),
+                op,
+            }]
+        };
+        let mut run = |line: &str| app.slash(Some(&key), line);
+        assert_eq!(
+            run("/approve K7Q-4PD"),
+            Ok(person(PersonOp::ApproveLogin("K7Q-4PD".into())))
+        );
+        assert_eq!(
+            run("/invite owner"),
+            Ok(person(PersonOp::Invite(Role::Owner)))
+        );
+        assert_eq!(run("/people"), Ok(person(PersonOp::People)));
+        assert_eq!(
+            run("/role Tomas A. member"),
+            Ok(person(PersonOp::SetRole("Tomas A.".into(), Role::Member)))
+        );
+        assert_eq!(
+            run("/remove Tomas A."),
+            Ok(person(PersonOp::Remove("Tomas A.".into())))
+        );
+        assert_eq!(
+            run("/invite admin"),
+            Err("usage: /invite owner|member".into())
+        );
+        assert_eq!(
+            run("/role member"),
+            Err("usage: /role <name> owner|member".into())
+        );
+        // Nothing asks yet.
+        assert!(run("/approve").is_err());
+        assert!(run("/refuse").is_err());
+    }
+
+    #[test]
+    fn a_terminals_request_is_announced_then_approved_or_refused() {
+        use crate::passkey::PersonOp;
+        use herder_protocol::{ApprovalRequest, HostId, Timestamp};
+
+        let mut app = fake::tree();
+        let mut machines = app.machines.clone();
+        machines[0].approvals = vec![ApprovalRequest {
+            request_id: "r1".into(),
+            action: "Open a terminal".into(),
+            client: "herder-tui/0.24.0".into(),
+            expires_at: Timestamp::now(),
+        }];
+        let name = machines[0].name.clone();
+        app.update(Msg::Machines(machines.clone()));
+        assert_eq!(
+            app.notice,
+            Some(format!(
+                "herder-tui/0.24.0 on {name} asks: Open a terminal. /approve or /refuse"
+            ))
+        );
+        // Listed again, it is not news.
+        app.notice = None;
+        app.update(Msg::Machines(machines));
+        assert_eq!(app.notice, None);
+
+        let effect = |op| {
+            vec![Effect::Person {
+                host_id: HostId::new("h1"),
+                op,
+            }]
+        };
+        assert_eq!(
+            app.slash(None, "/approve"),
+            Ok(effect(PersonOp::ApproveAction("r1".into())))
+        );
+        assert_eq!(
+            app.slash(None, "/refuse"),
+            Ok(effect(PersonOp::RefuseAction("r1".into())))
+        );
+
+        // What a people command says goes to the status line, and an invite's link to the
+        // clipboard.
+        let done = Msg::PersonDone(Ok(("copied".into(), Some("herder://invite?x".into()))));
+        assert_eq!(app.update(done), [Effect::Copy("herder://invite?x".into())]);
+        assert_eq!(app.notice.as_deref(), Some("copied"));
+        app.update(Msg::PersonDone(Err("wrong passphrase".into())));
+        assert_eq!(app.notice.as_deref(), Some("wrong passphrase"));
     }
 
     /// [`fake::tree`] with `s2` open, `bodies` fed to it, writing in its prompt.

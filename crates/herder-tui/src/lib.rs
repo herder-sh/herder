@@ -35,6 +35,7 @@ mod nav;
 mod new_session;
 mod pace;
 mod palette;
+pub mod passkey;
 mod projects;
 mod prompt;
 mod prs;
@@ -50,6 +51,7 @@ mod views;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use herder_client_core::{Client, FleetMachine};
@@ -101,13 +103,29 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         notice,
         ..App::default()
     };
-    let client = Client::open(
-        config_dir
-            .to_str()
-            .context("the config dir is not valid UTF-8")?
-            .to_owned(),
-        format!("herder-tui/{}", env!("CARGO_PKG_VERSION")),
-    )?;
+    // With a passkey of its own the terminal approves what it sends, by its passphrase;
+    // without one, a person's phone does.
+    let (ask_tx, mut asks) = mpsc::unbounded_channel::<terminal::PassphraseAsk>();
+    let passkey = passkey::LocalPasskey::load(&config_dir)?.map(|passkey| {
+        let ask: passkey::Ask = Arc::new(move |what| {
+            let (reply, answer) = tokio::sync::oneshot::channel();
+            let sent = ask_tx.send((what, reply));
+            Box::pin(async move {
+                sent.ok()?;
+                answer.await.ok().flatten()
+            })
+        });
+        Arc::new(passkey::Prompted::new(passkey, ask))
+    });
+    let profile = config_dir
+        .to_str()
+        .context("the config dir is not valid UTF-8")?
+        .to_owned();
+    let name = format!("herder-tui/{}", env!("CARGO_PKG_VERSION"));
+    let client = match &passkey {
+        Some(passkey) => Client::open_with_passkey(profile, name, passkey.clone())?,
+        None => Client::open(profile, name)?,
+    };
     let (tx, mut rx) = mpsc::unbounded_channel();
     forward_machines(&client, tx.clone());
     let raw = terminal::RawInput::default();
@@ -146,9 +164,25 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         let now = std::time::Instant::now();
         let leader = app.leader_left(now);
         let wait = [pace.wait(&app, now), leader].into_iter().flatten().min();
-        let received = match wait {
-            Some(wait) => tokio::time::timeout(wait, rx.recv()).await.ok(),
-            None => Some(rx.recv().await),
+        let next = async {
+            tokio::select! {
+                msg = rx.recv() => Ok(msg),
+                Some(ask) = asks.recv() => Err(ask),
+            }
+        };
+        let next = match wait {
+            Some(wait) => tokio::time::timeout(wait, next).await.ok(),
+            None => Some(next.await),
+        };
+        let received = match next {
+            Some(Ok(msg)) => Some(msg),
+            // The passkey signs: its passphrase is typed on the bottom line, over the
+            // frame, which is then drawn anew.
+            Some(Err((what, reply))) => {
+                let _ = reply.send(terminal::passphrase(&what, &raw).await);
+                Some(Some(Msg::Focus))
+            }
+            None => None,
         };
         let msg = match received {
             Some(Some(msg)) => msg,
@@ -178,9 +212,21 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                         host_id,
                         command,
                         origin,
-                    } => send(&client, host_id, command, origin, tx.clone()),
+                    } => send(
+                        &client,
+                        host_id,
+                        command,
+                        origin,
+                        passkey.is_none(),
+                        tx.clone(),
+                    ),
+                    Effect::Person { host_id, op } => {
+                        person(&client, passkey.clone(), host_id, op, tx.clone());
+                    }
                     Effect::OpenUrl(url) => open_url(url, tx.clone()),
-                    Effect::LogIn(machine) => log_in(&client, machine, tx.clone()),
+                    Effect::LogIn(machine) => {
+                        log_in(&client, passkey.clone(), machine, tx.clone());
+                    }
                     Effect::RenameMachine { host_id, name } => {
                         if let Err(err) = client.rename(host_id.clone(), name) {
                             let _ = tx.send(Msg::Notice(format!("renaming: {err}")));
@@ -222,7 +268,8 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
             // The attached program gets plain keys and no mouse reports, and sets its own
             // modes.
             disable_input_modes(modes);
-            let ended = terminal::attach(&client, &host_id, target, &raw, &mut terminal).await;
+            let ended =
+                terminal::attach(&client, &host_id, target, &raw, &mut asks, &mut terminal).await;
             modes = enable_input_modes(app.mouse);
             app.update(Msg::TerminalEnded(ended));
         }
@@ -347,21 +394,49 @@ fn copy(text: &str) {
     let _ = out.flush();
 }
 
-/// Sends a command on its own task and feeds the daemon's answer back to the loop.
+/// What a people command says in a terminal that has no passkey to do it with.
+const NO_PASSKEY: &str = "this terminal has no passkey: do this in the herder app, or claim a \
+                          machine with `herder login '<herder://own link>'` to make one";
+
+/// Does a people command on its own task, with this terminal's passkey, and feeds what
+/// happened back to the loop.
+fn person(
+    client: &Client,
+    passkey: Option<Arc<passkey::Prompted>>,
+    host_id: herder_protocol::HostId,
+    op: passkey::PersonOp,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    let Some(passkey) = passkey else {
+        let _ = tx.send(Msg::PersonDone(Err(NO_PASSKEY.to_owned())));
+        return;
+    };
+    let client = client.clone();
+    tokio::spawn(async move {
+        let result = passkey::person_op(&client, &passkey, &host_id, op)
+            .await
+            .map_err(|err| format!("{err:#}"));
+        let _ = tx.send(Msg::PersonDone(result));
+    });
+}
+
+/// Sends a command on its own task and feeds the daemon's answer back to the loop. With
+/// `phone`, the terminal has no passkey, and a person's phone approves a command that needs
+/// one.
 fn send(
     client: &Client,
     host_id: herder_protocol::HostId,
     command: herder_protocol::CommandBody,
     origin: compose::Origin,
+    phone: bool,
     tx: mpsc::UnboundedSender<Msg>,
 ) {
     let client = client.clone();
-    let signed = command.fresh_assertion().is_some();
+    let signed = phone && command.fresh_assertion().is_some();
     tokio::spawn(async move {
         let sent = client.send(host_id.clone(), command);
         tokio::pin!(sent);
-        // The TUI has no passkey: a person's phone approves such a command, which takes a
-        // while.
+        // The phone's approval takes a while.
         let result = tokio::select! {
             result = &mut sent => result,
             () = tokio::time::sleep(terminal::HINT_AFTER), if signed => {
@@ -448,20 +523,32 @@ fn open_url(url: String, tx: mpsc::UnboundedSender<Msg>) {
     }
 }
 
-/// Signs this terminal in to `machine`, as `herder login` does, and sends the login's code
-/// and then the outcome to the loop.
-fn log_in(client: &Client, machine: FleetMachine, tx: mpsc::UnboundedSender<Msg>) {
+/// Signs this terminal in to `machine`, as `herder login` does: with its passkey, or else by
+/// a code an app approves. Sends the login's code, if any, and then the outcome to the loop.
+fn log_in(
+    client: &Client,
+    passkey: Option<Arc<passkey::Prompted>>,
+    machine: FleetMachine,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
     let client = client.clone();
     tokio::spawn(async move {
-        let shown = tx.clone();
-        let result = client
-            .log_in(machine.hosts, machine.fingerprint, move |code, _| {
-                let _ = shown.send(Msg::LoginCode(code.to_owned()));
-            })
-            .await
-            .map(Box::new)
-            .map_err(|err| err.to_string());
-        let _ = tx.send(Msg::SignedIn(result));
+        let result = match passkey {
+            Some(passkey) => passkey
+                .sign_in(&client, machine.hosts, machine.fingerprint)
+                .await
+                .map_err(|err| format!("{err:#}")),
+            None => {
+                let shown = tx.clone();
+                client
+                    .log_in(machine.hosts, machine.fingerprint, move |code, _| {
+                        let _ = shown.send(Msg::LoginCode(code.to_owned()));
+                    })
+                    .await
+                    .map_err(|err| err.to_string())
+            }
+        };
+        let _ = tx.send(Msg::SignedIn(result.map(Box::new)));
     });
 }
 

@@ -21,6 +21,7 @@ herder-protocol.workspace = true
 herder-tui.workspace = true
 nix = { workspace = true, features = ["user"] }
 qrcode.workspace = true
+rpassword.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true

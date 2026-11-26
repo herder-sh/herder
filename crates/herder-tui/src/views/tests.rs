@@ -1208,7 +1208,7 @@ fn the_help_scrolls_on_a_small_screen() {
 fn the_help_lists_every_section() {
     let mut app = fake::tree();
     press(&mut app, KeyCode::Char('?'));
-    let terminal = render(&mut app, 100, 240);
+    let terminal = render(&mut app, 100, 260);
     let screen = terminal.backend().to_string();
     for section in crate::keys::sections() {
         assert!(

@@ -71,7 +71,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, add: &AddMachine, h
         Step::SigningIn(machine, None) => (
             vec![Part::Text(
                 format!(
-                    "Asking {} for a code{}",
+                    "Signing in to {}{}",
                     machine.hosts.join(", "),
                     ui.glyphs.ellipsis
                 ),
@@ -104,6 +104,11 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, add: &AddMachine, h
                             .add_modifier(Modifier::BOLD),
                     ),
                     Part::Text("Check the app shows the same code.".into(), ui.muted()),
+                    Part::Blank,
+                    Part::Text(
+                        format!("No app? Run /approve {code} where your passkey is."),
+                        ui.muted(),
+                    ),
                 ],
                 vec![Hint::new("esc", "close")],
             )

@@ -16,7 +16,7 @@ use herder_protocol::{AccountId, ErrorCode, HostId, Role, SessionId, TerminalId,
 use ratatui::crossterm::style::Print;
 use ratatui::crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::{cursor, execute};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::session::SessionKey;
 
@@ -241,6 +241,7 @@ pub async fn attach(
     host_id: &HostId,
     target: Target,
     input: &RawInput,
+    asks: &mut Asks,
     terminal: &mut crate::backend::Tui,
 ) -> Ended {
     let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
@@ -253,11 +254,19 @@ pub async fn attach(
             approved(
                 client.open_terminal(host_id.clone(), session_id, cols, rows),
                 rows,
+                input,
+                asks,
             )
             .await
         }
         Target::Existing(terminal_id) => {
-            approved(client.attach_terminal(host_id.clone(), terminal_id), rows).await
+            approved(
+                client.attach_terminal(host_id.clone(), terminal_id),
+                rows,
+                input,
+                asks,
+            )
+            .await
         }
         Target::Login(account) => {
             tokio::time::timeout(
@@ -326,26 +335,117 @@ pub async fn attach(
     }
 }
 
-/// Waits for `answer` to opening or attaching a shell, which a person's phone may have to
-/// approve: past [`HINT_AFTER`] the bottom line says so, and it waits up to
-/// [`APPROVAL_TIMEOUT`].
+/// Waits for `answer` to opening or attaching a shell, which the person approves: with this
+/// terminal's passkey, whose passphrase `asks` then asks for, or else on their phone, and
+/// past [`HINT_AFTER`] the bottom line says so. It waits up to [`APPROVAL_TIMEOUT`].
 async fn approved<T>(
     answer: impl std::future::Future<Output = T>,
     rows: u16,
+    input: &RawInput,
+    asks: &mut Asks,
 ) -> Result<T, tokio::time::error::Elapsed> {
-    tokio::pin!(answer);
-    tokio::select! {
-        answered = &mut answer => return Ok(answered),
-        () = tokio::time::sleep(HINT_AFTER) => {}
-    }
-    let mut stdout = std::io::stdout();
+    tokio::time::timeout(APPROVAL_TIMEOUT, async {
+        tokio::pin!(answer);
+        let hint = tokio::time::sleep(HINT_AFTER);
+        tokio::pin!(hint);
+        // Whether the bottom line already says who approves.
+        let mut said = false;
+        loop {
+            tokio::select! {
+                answered = &mut answer => return answered,
+                Some((what, reply)) = asks.recv() => {
+                    said = true;
+                    let _ = reply.send(passphrase(&what, input).await);
+                }
+                () = &mut hint, if !said => {
+                    said = true;
+                    let _ = execute!(
+                        std::io::stdout(),
+                        cursor::MoveTo(0, rows.saturating_sub(1)),
+                        Clear(ClearType::CurrentLine),
+                        Print(PHONE_HINT),
+                    );
+                }
+            }
+        }
+    })
+    .await
+}
+
+/// Someone asking for the passphrase of this terminal's passkey: what it approves, and where
+/// the passphrase goes, `None` once the user cancels.
+pub type PassphraseAsk = (String, oneshot::Sender<Option<String>>);
+
+/// The asks of the client's authenticator, answered by whoever holds the keyboard.
+pub type Asks = mpsc::UnboundedReceiver<PassphraseAsk>;
+
+/// Bracketed paste's marks around pasted text.
+const PASTE_MARKS: [&[u8]; 2] = [b"\x1b[200~", b"\x1b[201~"];
+
+/// Reads the passkey's passphrase on the bottom line, unseen, to approve `what`: Enter ends
+/// it, Esc or Ctrl-C cancels. The caller repaints the screen after.
+pub async fn passphrase(what: &str, input: &RawInput) -> Option<String> {
+    let (_, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
     let _ = execute!(
-        stdout,
+        std::io::stdout(),
         cursor::MoveTo(0, rows.saturating_sub(1)),
         Clear(ClearType::CurrentLine),
-        Print(PHONE_HINT),
+        Print(format!(
+            "herder: passphrase to {what} (Enter, or Esc to cancel): "
+        )),
+        cursor::Show,
     );
-    tokio::time::timeout(APPROVAL_TIMEOUT - HINT_AFTER, answer).await
+    let (tx, mut typed) = mpsc::unbounded_channel();
+    input.set(Some(tx));
+    let mut line = PassphraseLine::default();
+    let entered = loop {
+        match typed.recv().await {
+            Some(bytes) => {
+                if let Some(ended) = line.type_bytes(&bytes) {
+                    break ended;
+                }
+            }
+            None => break false,
+        }
+    };
+    input.set(None);
+    let _ = execute!(
+        std::io::stdout(),
+        cursor::MoveTo(0, rows.saturating_sub(1)),
+        Clear(ClearType::CurrentLine),
+        Print("herder: checking the passphrase"),
+        cursor::Hide,
+    );
+    entered.then(|| String::from_utf8(line.0).ok()).flatten()
+}
+
+/// A passphrase as typed so far.
+#[derive(Debug, Default)]
+struct PassphraseLine(Vec<u8>);
+
+impl PassphraseLine {
+    /// Takes what the terminal sent: `Some(true)` once Enter ends the line, `Some(false)`
+    /// once Esc or Ctrl-C cancels it.
+    fn type_bytes(&mut self, bytes: &[u8]) -> Option<bool> {
+        let mut rest = bytes;
+        while let Some((&byte, after)) = rest.split_first() {
+            if let Some(mark) = PASTE_MARKS.iter().find(|mark| rest.starts_with(mark)) {
+                rest = &rest[mark.len()..];
+                continue;
+            }
+            rest = after;
+            match byte {
+                b'\r' | b'\n' => return Some(true),
+                // Esc, alone or starting a key's sequence, and Ctrl-C.
+                0x1b | 0x03 => return Some(false),
+                // Backspace takes one character, whatever its bytes.
+                0x7f | 0x08 => while self.0.pop().is_some_and(|byte| byte & 0xc0 == 0x80) {},
+                0x20.. => self.0.push(byte),
+                _ => {}
+            }
+        }
+        None
+    }
 }
 
 /// The end of a terminal's output: where herder's own last line about a login is.
@@ -437,6 +537,25 @@ fn write_all(stdout: &mut std::io::Stdout, data: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_passphrase_is_typed_pasted_corrected_and_cancelled() {
+        let mut line = PassphraseLine::default();
+        assert_eq!(line.type_bytes("corré".as_bytes()), None);
+        // Backspace takes the é whole, then the r.
+        assert_eq!(line.type_bytes(b"\x7f\x7fe"), None);
+        assert_eq!(line.type_bytes(b"\x1b[200~ct horse\x1b[201~"), None);
+        assert_eq!(line.type_bytes(b"\r"), Some(true));
+        assert_eq!(line.0, b"corect horse");
+
+        // Esc, an arrow key and Ctrl-C all cancel; what follows Enter is not read.
+        for cancel in [&b"\x1b"[..], b"\x1b[A", b"\x03"] {
+            assert_eq!(PassphraseLine::default().type_bytes(cancel), Some(false));
+        }
+        let mut line = PassphraseLine::default();
+        assert_eq!(line.type_bytes(b"ab\rcd"), Some(true));
+        assert_eq!(line.0, b"ab");
+    }
 
     #[test]
     fn the_prefix_detaches_on_d_and_escapes_itself() {

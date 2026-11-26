@@ -41,14 +41,15 @@ enum Command {
     },
     /// Pair a host with the vault running on this machine, or list and revoke devices.
     Pair(pair::Args),
-    /// Give the daemon on this machine a new owner, from the herder app, though it has one:
-    /// for someone who lost every device.
+    /// Give the daemon on this machine a new owner, from the herder app or `herder login`,
+    /// though it has one: for someone who lost every device.
     Claim {
         /// Daemon config file, to find its data dir [default: $XDG_CONFIG_HOME/herder/daemon.toml].
         #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
         config: Option<PathBuf>,
     },
-    /// Sign this terminal in as a person: an app of yours approves the code it shows.
+    /// Sign this terminal in as a person: with its own passkey, made when it claims a machine
+    /// from a `herder://own` link, or by a code an app of yours approves.
     Login(login::Args),
     /// Create, prompt, wait on and archive sessions from scripts.
     Session(session::Args),
@@ -318,13 +319,14 @@ mod tests {
     }
 
     #[test]
-    fn login_takes_the_local_daemon_or_an_address_with_its_fingerprint() {
+    fn login_takes_the_local_daemon_a_link_or_an_address_with_its_fingerprint() {
         let local = Cli::try_parse_from(["herder", "login"]);
         assert!(matches!(local.unwrap().command, Some(Command::Login(_))));
         let remote =
             Cli::try_parse_from(["herder", "login", "10.0.4.17:7447", "--fingerprint", "ab"]);
         assert!(matches!(remote.unwrap().command, Some(Command::Login(_))));
-        assert!(Cli::try_parse_from(["herder", "login", "10.0.4.17:7447"]).is_err());
+        let link = Cli::try_parse_from(["herder", "login", "herder://own?host=a&fp=ab&code=c"]);
+        assert!(matches!(link.unwrap().command, Some(Command::Login(_))));
         assert!(Cli::try_parse_from(["herder", "login", "--fingerprint", "ab"]).is_err());
     }
 
