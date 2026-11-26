@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use herder_client_core::OwnUri;
 use herder_daemon::auth::control::{self, OwnInfo, PairingInfo, Request, Response};
 use herder_protocol::{DeviceId, Role, Timestamp, UserInfo};
@@ -82,7 +82,9 @@ pub fn claim(config: Option<PathBuf>) -> Result<()> {
 /// that claims it from a terminal.
 pub fn print_own(info: &OwnInfo) -> Result<()> {
     let uri = own_link(info, &herder_daemon::host_name());
-    let qr = QrCode::new(uri.as_bytes())?
+    // qrcode 0.15's error is not a std error, so `?` cannot convert it.
+    let qr = QrCode::new(uri.as_bytes())
+        .map_err(|err| anyhow!("cannot draw the QR code: {err}"))?
         .render::<Dense1x2>()
         .quiet_zone(true)
         .build();
