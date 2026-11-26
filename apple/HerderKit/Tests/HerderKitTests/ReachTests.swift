@@ -16,12 +16,12 @@ struct ReachTests {
 
     @Test func aProjectWithARemoteIsMissingOnTheOtherMachines() {
         let app = project("github.com/org/app", remote: "git@github.com:org/app.git")
-        let vault = FleetHost(hostId: "a", hostName: "laptop", online: true, lastSeen: "2026-01-01T00:00:00Z")
+        let hub = FleetHost(hostId: "a", hostName: "laptop", online: true, lastSeen: "2026-01-01T00:00:00Z")
         let machines = [
             machine("a", name: "laptop", sessions: [], projects: [app]),
             machine("b", name: "server", sessions: []),
             machine("c", name: "mini", sessions: [], role: .member, connection: .connecting),
-            machine("d", name: "vault", sessions: [], hosts: [vault]),
+            machine("d", name: "hub", sessions: [], hosts: [hub]),
             machine("e", name: "never connected", sessions: [], role: nil),
         ]
         let reach = ProjectReach(projectId: "github.com/org/app", machines: machines)

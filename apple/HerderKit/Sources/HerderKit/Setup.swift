@@ -94,7 +94,7 @@ extension SetupProblem {
     /// Your other Macs and iPhones that are not signed in to every machine you own. A
     /// terminal signs in to one machine with `herder login`, so it misses none.
     static func missingDevices(_ directory: Directory) -> [SetupProblem] {
-        let owned = directory.columns.filter { !$0.vault && directory.me.roles[$0.id] == .owner }
+        let owned = directory.columns.filter { !$0.hub && directory.me.roles[$0.id] == .owner }
         return directory.devices.compactMap { device in
             guard !device.current, device.kind != .terminal else { return nil }
             let missing = owned.filter { device.paired[$0.id] == nil }

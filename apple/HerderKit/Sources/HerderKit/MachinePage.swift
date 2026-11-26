@@ -117,7 +117,7 @@ struct MachinePage: View {
                     DetailRow(label: "Fingerprint", value: grouped(machine.fingerprint), mono: true)
                     DetailRow(label: "Host id", value: machine.hostId, mono: true)
                     if !runsSessions {
-                        DetailRow(label: "Vault of", value: machine.hosts.map(\.hostName).joined(separator: ", "))
+                        DetailRow(label: "Hub of", value: machine.hosts.map(\.hostName).joined(separator: ", "))
                     }
                 }
                 DangerZone {

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{AccountId, FailoverSettings, ProjectId, Provider, SecretRef};
 
 /// Every daemon-wide setting of the daemon's config file, as values in effect when the file
-/// is loaded: a key the file leaves out shows its default. Accounts, projects and the vault
+/// is loaded: a key the file leaves out shows its default. Accounts, projects and the hub
 /// link are not here; they have their own commands.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DaemonSettings {
@@ -27,7 +27,7 @@ pub struct DaemonSettings {
     pub resources: ResourceSettings,
     /// Where projects are discovered.
     pub projects: ProjectDiscovery,
-    /// What is backed up, and kept, on a vault.
+    /// What is backed up, and kept, on a hub.
     pub backup: BackupSettings,
     /// When the daemon prompts an idle agent on its own; the defaults from daemons before it.
     #[serde(default)]
@@ -120,15 +120,15 @@ pub struct ProjectDiscovery {
     pub setup_timeout_secs: u64,
 }
 
-/// The values of the `[vault]` table: a host's say what it backs up while linked to a vault,
-/// a vault's what it keeps. A value that does not apply to the daemon cannot change.
+/// The values of the `[hub]` table: a host's say what it backs up while linked to a hub,
+/// a hub's what it keeps. A value that does not apply to the daemon cannot change.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BackupSettings {
-    /// On a host linked to a vault: whether prompt images are backed up too.
+    /// On a host linked to a hub: whether prompt images are backed up too.
     pub attachments: bool,
-    /// On a host linked to a vault: most bytes of its images the vault keeps.
+    /// On a host linked to a hub: most bytes of its images the hub keeps.
     pub attachments_cap: u64,
-    /// On a vault: days an archived session of an online host is kept after its latest event.
+    /// On a hub: days an archived session of an online host is kept after its latest event.
     pub archive_retention_days: u32,
 }
 
@@ -200,7 +200,7 @@ pub enum McpTransport {
         /// Variables added to its environment, kept in the daemon's config file as given.
         #[serde(default)]
         env: HashMap<String, String>,
-        /// Secrets from the host's vault, each added to its environment as the variable of
+        /// Secrets from the host's hub, each added to its environment as the variable of
         /// its name: the program runs through `herder secret run`, so a value is never in
         /// the config file, on a command line or before an agent.
         #[serde(default)]
@@ -212,9 +212,9 @@ pub enum McpTransport {
         url: String,
         /// Headers sent with every request, such as `Authorization`, kept in the daemon's
         /// config file as given. A value may hold `{secret:NAME}` or `{secret:set/NAME}`
-        /// placeholders (`SecretRef`), which take the secret's value from the host's vault
+        /// placeholders (`SecretRef`), which take the secret's value from the host's hub
         /// as a session's CLI starts, so the value is never in the config file; a session
-        /// whose secrets the vault does not hand out goes without the server.
+        /// whose secrets the hub does not hand out goes without the server.
         #[serde(default)]
         headers: HashMap<String, String>,
     },

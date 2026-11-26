@@ -156,13 +156,13 @@ enum McpServers {
         return clean == reserved ? "herder-server" : clean
     }
 
-    /// Whether `ref` names a vault secret, as `NAME` or `set/NAME`.
+    /// Whether `ref` names a hub secret, as `NAME` or `set/NAME`.
     static func isValidSecretRef(_ ref: String) -> Bool {
         let parts = ref.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
         if parts.count == 2 {
-            return VaultSecrets.setNameProblem(parts[0]) == nil && VaultSecrets.isValidSecretName(parts[1])
+            return HubSecrets.setNameProblem(parts[0]) == nil && HubSecrets.isValidSecretName(parts[1])
         }
-        return VaultSecrets.isValidSecretName(ref)
+        return HubSecrets.isValidSecretName(ref)
     }
 
     /// Whether `name` is an HTTP header name: printable ASCII without `:`.

@@ -1,6 +1,6 @@
 //! Reference in-memory implementation of both ends of the replication protocol, and the
-//! behaviour the real host (P3.3) and vault (P3.2) must match: killing the vault mid-stream
-//! loses nothing and duplicates nothing, re-sends are idempotent, and the vault never writes
+//! behaviour the real host (P3.3) and hub (P3.2) must match: killing the hub mid-stream
+//! loses nothing and duplicates nothing, re-sends are idempotent, and the hub never writes
 //! to a host's sessions.
 //!
 //! Every message crosses the simulated connection as JSON text, as on the wire.
@@ -25,11 +25,11 @@ struct Host {
 /// What a host knows about one connection; dropped with it.
 #[derive(Default)]
 struct HostLink {
-    /// Last seq sent per session; set from the vault's hello.
+    /// Last seq sent per session; set from the hub's hello.
     sent: Option<BTreeMap<SessionId, Seq>>,
-    /// Last seq the vault acknowledged per session.
+    /// Last seq the hub acknowledged per session.
     acked: BTreeMap<SessionId, Seq>,
-    /// Sessions the vault refused as conflicting.
+    /// Sessions the hub refused as conflicting.
     stopped: BTreeSet<SessionId>,
 }
 
@@ -86,12 +86,12 @@ impl Host {
         })
     }
 
-    fn receive(&mut self, message: VaultMessage) -> Vec<HostMessage> {
+    fn receive(&mut self, message: HubMessage) -> Vec<HostMessage> {
         let Some(link) = &mut self.link else {
             return Vec::new();
         };
         match message {
-            VaultMessage::Hello(hello) => {
+            HubMessage::Hello(hello) => {
                 if hello.replication_version != REPLICATION_VERSION {
                     self.link = None;
                     return Vec::new();
@@ -111,12 +111,12 @@ impl Host {
                 out.extend(self.pump());
                 out
             }
-            VaultMessage::Ack(cursor) => {
+            HubMessage::Ack(cursor) => {
                 let acked = link.acked.entry(cursor.session_id).or_default();
                 *acked = (*acked).max(cursor.after_seq);
                 Vec::new()
             }
-            VaultMessage::Rejected { cursor, reason } => {
+            HubMessage::Rejected { cursor, reason } => {
                 match reason {
                     RejectReason::Gap => {
                         if let Some(sent) = &mut link.sent {
@@ -129,18 +129,18 @@ impl Host {
                 }
                 self.pump()
             }
-            VaultMessage::Error { .. } => {
+            HubMessage::Error { .. } => {
                 self.link = None;
                 Vec::new()
             }
             // Secrets, provider logins and relay streams are not modelled here: they never
             // touch the journals.
-            VaultMessage::SecretList { .. }
-            | VaultMessage::RelayOpen { .. }
-            | VaultMessage::ProviderLogins { .. }
-            | VaultMessage::SecretValues { .. }
-            | VaultMessage::SecretsRefused { .. }
-            | VaultMessage::Unknown => Vec::new(),
+            HubMessage::SecretList { .. }
+            | HubMessage::RelayOpen { .. }
+            | HubMessage::ProviderLogins { .. }
+            | HubMessage::SecretValues { .. }
+            | HubMessage::SecretsRefused { .. }
+            | HubMessage::Unknown => Vec::new(),
         }
     }
 
@@ -172,9 +172,9 @@ impl Host {
     }
 }
 
-/// The vault end: durable journals per host, which survive a kill; per-connection state does not.
+/// The hub end: durable journals per host, which survive a kill; per-connection state does not.
 #[derive(Default)]
-struct Vault {
+struct Hub {
     paired: BTreeSet<HostId>,
     journals: BTreeMap<(HostId, SessionId), Vec<JournalRecord>>,
     summaries: BTreeMap<(HostId, SessionId), SessionSummary>,
@@ -182,15 +182,15 @@ struct Vault {
     writes: usize,
 }
 
-/// What a vault knows about one connection: the host its hello authenticated, if any.
+/// What a hub knows about one connection: the host its hello authenticated, if any.
 #[derive(Default)]
-struct VaultLink {
+struct HubLink {
     host: Option<HostId>,
     closed: bool,
 }
 
-fn error(code: ReplicationErrorCode, message: &str) -> VaultMessage {
-    VaultMessage::Error {
+fn error(code: ReplicationErrorCode, message: &str) -> HubMessage {
+    HubMessage::Error {
         error: ReplicationError {
             code,
             message: message.into(),
@@ -198,7 +198,7 @@ fn error(code: ReplicationErrorCode, message: &str) -> VaultMessage {
     }
 }
 
-impl Vault {
+impl Hub {
     fn paired_with(host: &Host) -> Self {
         Self {
             paired: [host.host_id.clone()].into(),
@@ -206,15 +206,15 @@ impl Vault {
         }
     }
 
-    fn receive(&mut self, link: &mut VaultLink, message: HostMessage) -> Vec<VaultMessage> {
+    fn receive(&mut self, link: &mut HubLink, message: HostMessage) -> Vec<HubMessage> {
         let out = self.handle(link, message);
-        if out.iter().any(|m| matches!(m, VaultMessage::Error { .. })) {
+        if out.iter().any(|m| matches!(m, HubMessage::Error { .. })) {
             link.closed = true;
         }
         out
     }
 
-    fn handle(&mut self, link: &mut VaultLink, message: HostMessage) -> Vec<VaultMessage> {
+    fn handle(&mut self, link: &mut HubLink, message: HostMessage) -> Vec<HubMessage> {
         if let HostMessage::Hello(hello) = &message {
             if link.host.is_some() {
                 return vec![error(ReplicationErrorCode::BadRequest, "second hello")];
@@ -234,7 +234,7 @@ impl Vault {
                 .collect();
             link.host = matches.then(|| hello.host_id.clone());
             link.closed = !matches;
-            return vec![VaultMessage::Hello(VaultHello {
+            return vec![HubMessage::Hello(HubHello {
                 replication_version: REPLICATION_VERSION,
                 build: "herder/0.0.0".into(),
                 acked,
@@ -253,7 +253,7 @@ impl Vault {
                 Vec::new()
             }
             HostMessage::Batch(batch) => self.batch(host, batch),
-            // Images and secrets are not modelled here; the daemon's vault tests cover them.
+            // Images and secrets are not modelled here; the daemon's hub tests cover them.
             HostMessage::Attachment(_)
             | HostMessage::ListSecrets { .. }
             | HostMessage::FetchSecrets(_)
@@ -262,7 +262,7 @@ impl Vault {
         }
     }
 
-    fn batch(&mut self, host: HostId, batch: Batch) -> Vec<VaultMessage> {
+    fn batch(&mut self, host: HostId, batch: Batch) -> Vec<HubMessage> {
         let Some(first) = batch.events.first().map(|e| e.seq) else {
             return vec![error(ReplicationErrorCode::BadRequest, "empty batch")];
         };
@@ -281,7 +281,7 @@ impl Vault {
             after_seq: held,
         };
         if first > held + 1 {
-            return vec![VaultMessage::Rejected {
+            return vec![HubMessage::Rejected {
                 cursor,
                 reason: RejectReason::Gap,
             }];
@@ -289,15 +289,15 @@ impl Vault {
         let overlap = (held + 1 - first) as usize;
         let (resent, new) = batch.events.split_at(overlap.min(batch.events.len()));
         if resent != &journal[first as usize - 1..][..resent.len()] {
-            return vec![VaultMessage::Rejected {
+            return vec![HubMessage::Rejected {
                 cursor,
                 reason: RejectReason::Conflict,
             }];
         }
-        // One transaction in a real vault; the ack goes out only after it commits.
+        // One transaction in a real hub; the ack goes out only after it commits.
         journal.extend_from_slice(new);
         self.writes += new.len();
-        vec![VaultMessage::Ack(Cursor {
+        vec![HubMessage::Ack(Cursor {
             after_seq: journal.len() as Seq,
             ..cursor
         })]
@@ -309,58 +309,57 @@ fn wire<T: serde::Serialize + serde::de::DeserializeOwned>(message: T) -> T {
     serde_json::from_str(&serde_json::to_string(&message).unwrap()).unwrap()
 }
 
-/// One connection between a host and the vault, with the frames in flight each way.
+/// One connection between a host and the hub, with the frames in flight each way.
 #[derive(Default)]
 struct Connection {
-    to_vault: VecDeque<HostMessage>,
-    to_host: VecDeque<VaultMessage>,
-    vault_link: VaultLink,
+    to_hub: VecDeque<HostMessage>,
+    to_host: VecDeque<HubMessage>,
+    hub_link: HubLink,
 }
 
 impl Connection {
     fn open(host: &mut Host) -> Self {
         let mut conn = Self::default();
-        conn.to_vault.push_back(host.connect());
+        conn.to_hub.push_back(host.connect());
         conn
     }
 
-    /// The vault handles the next frame from the host; false when there is none.
-    fn vault_step(&mut self, vault: &mut Vault) -> bool {
-        if self.vault_link.closed {
+    /// The hub handles the next frame from the host; false when there is none.
+    fn hub_step(&mut self, hub: &mut Hub) -> bool {
+        if self.hub_link.closed {
             return false;
         }
-        let Some(message) = self.to_vault.pop_front() else {
+        let Some(message) = self.to_hub.pop_front() else {
             return false;
         };
         self.to_host.extend(
-            vault
-                .receive(&mut self.vault_link, wire(message))
+            hub.receive(&mut self.hub_link, wire(message))
                 .into_iter()
                 .map(wire),
         );
         true
     }
 
-    /// The host handles the next frame from the vault; false when there is none.
+    /// The host handles the next frame from the hub; false when there is none.
     fn host_step(&mut self, host: &mut Host) -> bool {
         let Some(message) = self.to_host.pop_front() else {
             return false;
         };
         let before = host.journals.clone();
-        self.to_vault
+        self.to_hub
             .extend(host.receive(message).into_iter().map(wire));
         assert_eq!(
             host.journals, before,
-            "a vault message changed the host's journal"
+            "a hub message changed the host's journal"
         );
         true
     }
 
-    fn run(&mut self, host: &mut Host, vault: &mut Vault) {
-        while self.vault_step(vault) | self.host_step(host) {}
+    fn run(&mut self, host: &mut Host, hub: &mut Hub) {
+        while self.hub_step(hub) | self.host_step(host) {}
     }
 
-    /// The vault dies: frames in flight either way are lost, and so is the host's link.
+    /// The hub dies: frames in flight either way are lost, and so is the host's link.
     fn kill(self, host: &mut Host) {
         host.link = None;
     }
@@ -384,9 +383,9 @@ fn host_with_history(sessions: usize, events: usize, batch_size: usize) -> Host 
     host
 }
 
-fn assert_replicated(host: &Host, vault: &Vault) {
+fn assert_replicated(host: &Host, hub: &Hub) {
     for (session_id, journal) in &host.journals {
-        let replica = &vault.journals[&(host.host_id.clone(), session_id.clone())];
+        let replica = &hub.journals[&(host.host_id.clone(), session_id.clone())];
         let seqs: Vec<Seq> = replica.iter().map(|e| e.seq).collect();
         assert_eq!(
             seqs,
@@ -395,7 +394,7 @@ fn assert_replicated(host: &Host, vault: &Vault) {
         );
         assert_eq!(replica, journal);
         assert_eq!(
-            vault.summaries[&(host.host_id.clone(), session_id.clone())],
+            hub.summaries[&(host.host_id.clone(), session_id.clone())],
             host.summary(session_id)
         );
         let link = host.link.as_ref().unwrap();
@@ -406,20 +405,20 @@ fn assert_replicated(host: &Host, vault: &Vault) {
         );
     }
     let total: usize = host.journals.values().map(Vec::len).sum();
-    assert_eq!(vault.writes, total, "an event was written twice");
+    assert_eq!(hub.writes, total, "an event was written twice");
 }
 
-/// Done when: kill the vault mid-stream; the host resumes from the last acked cursor with no
+/// Done when: kill the hub mid-stream; the host resumes from the last acked cursor with no
 /// gap or duplicate. Tried at every point of the stream, with the host still appending.
 #[test]
-fn killing_the_vault_mid_stream_loses_and_duplicates_nothing() {
+fn killing_the_hub_mid_stream_loses_and_duplicates_nothing() {
     let total_steps = {
         let mut host = host_with_history(3, 20, 4);
-        let mut vault = Vault::paired_with(&host);
+        let mut hub = Hub::paired_with(&host);
         let mut conn = Connection::open(&mut host);
         let mut steps = 0;
         loop {
-            let handled = conn.vault_step(&mut vault);
+            let handled = conn.hub_step(&mut hub);
             steps += usize::from(handled);
             if !(conn.host_step(&mut host) | handled) {
                 break steps;
@@ -429,10 +428,10 @@ fn killing_the_vault_mid_stream_loses_and_duplicates_nothing() {
     assert!(total_steps > 10);
     for kill_after in 0..=total_steps {
         let mut host = host_with_history(3, 20, 4);
-        let mut vault = Vault::paired_with(&host);
+        let mut hub = Hub::paired_with(&host);
         let mut conn = Connection::open(&mut host);
         for step in 0..kill_after {
-            conn.vault_step(&mut vault);
+            conn.hub_step(&mut hub);
             // Some acks reach the host before the kill, the rest are lost with it.
             if step % 2 == 0 {
                 conn.host_step(&mut host);
@@ -443,7 +442,7 @@ fn killing_the_vault_mid_stream_loses_and_duplicates_nothing() {
                     json!({ "type": "turn_completed", "turn_id": "L" }),
                 );
                 let batches = host.pump();
-                conn.to_vault.extend(batches);
+                conn.to_hub.extend(batches);
             }
         }
         conn.kill(&mut host);
@@ -453,17 +452,17 @@ fn killing_the_vault_mid_stream_loses_and_duplicates_nothing() {
         );
 
         let mut conn = Connection::open(&mut host);
-        conn.run(&mut host, &mut vault);
-        assert_replicated(&host, &vault);
+        conn.run(&mut host, &mut hub);
+        assert_replicated(&host, &hub);
     }
 }
 
 #[test]
 fn new_events_stream_live_after_catching_up() {
     let mut host = host_with_history(1, 5, 2);
-    let mut vault = Vault::paired_with(&host);
+    let mut hub = Hub::paired_with(&host);
     let mut conn = Connection::open(&mut host);
-    conn.run(&mut host, &mut vault);
+    conn.run(&mut host, &mut hub);
     host.append(
         "01J9SESSION0",
         json!({ "type": "turn_completed", "turn_id": "T4" }),
@@ -474,21 +473,21 @@ fn new_events_stream_live_after_catching_up() {
     );
     let batches = host.pump();
     assert_eq!(batches.len(), 2);
-    conn.to_vault.extend(batches);
+    conn.to_hub.extend(batches);
     let summary = host.summary(&SessionId::new("01J9SESSION9"));
-    conn.to_vault.push_front(HostMessage::Session(summary));
+    conn.to_hub.push_front(HostMessage::Session(summary));
     let summary = host.summary(&SessionId::new("01J9SESSION0"));
-    conn.to_vault.push_front(HostMessage::Session(summary));
-    conn.run(&mut host, &mut vault);
-    assert_replicated(&host, &vault);
+    conn.to_hub.push_front(HostMessage::Session(summary));
+    conn.run(&mut host, &mut hub);
+    assert_replicated(&host, &hub);
 }
 
 #[test]
 fn a_resent_batch_is_acknowledged_without_writing_it_again() {
     let mut host = host_with_history(1, 6, 6);
-    let mut vault = Vault::paired_with(&host);
-    let mut link = VaultLink::default();
-    vault.receive(&mut link, host.connect());
+    let mut hub = Hub::paired_with(&host);
+    let mut link = HubLink::default();
+    hub.receive(&mut link, host.connect());
     let session_id = SessionId::new("01J9SESSION0");
     let batch = |from: usize, to: usize| {
         HostMessage::Batch(Batch {
@@ -497,19 +496,19 @@ fn a_resent_batch_is_acknowledged_without_writing_it_again() {
         })
     };
     let ack = |after_seq| {
-        vec![VaultMessage::Ack(Cursor {
+        vec![HubMessage::Ack(Cursor {
             session_id: session_id.clone(),
             after_seq,
         })]
     };
-    assert_eq!(vault.receive(&mut link, batch(0, 4)), ack(4));
-    assert_eq!(vault.receive(&mut link, batch(0, 4)), ack(4));
-    assert_eq!(vault.writes, 4);
+    assert_eq!(hub.receive(&mut link, batch(0, 4)), ack(4));
+    assert_eq!(hub.receive(&mut link, batch(0, 4)), ack(4));
+    assert_eq!(hub.writes, 4);
     // Overlapping the held events, then new ones: only the new ones are written.
-    assert_eq!(vault.receive(&mut link, batch(2, 6)), ack(6));
-    assert_eq!(vault.writes, 6);
+    assert_eq!(hub.receive(&mut link, batch(2, 6)), ack(6));
+    assert_eq!(hub.writes, 6);
     assert_eq!(
-        vault.journals[&(host.host_id.clone(), session_id.clone())],
+        hub.journals[&(host.host_id.clone(), session_id.clone())],
         host.journals[&session_id]
     );
 }
@@ -517,23 +516,23 @@ fn a_resent_batch_is_acknowledged_without_writing_it_again() {
 #[test]
 fn a_conflicting_resend_is_rejected_and_changes_nothing() {
     let mut host = host_with_history(1, 4, 4);
-    let mut vault = Vault::paired_with(&host);
+    let mut hub = Hub::paired_with(&host);
     let mut conn = Connection::open(&mut host);
-    conn.run(&mut host, &mut vault);
+    conn.run(&mut host, &mut hub);
     let session_id = SessionId::new("01J9SESSION0");
-    let held = vault.journals.clone();
+    let held = hub.journals.clone();
 
     let mut events = host.journals[&session_id][2..].to_vec();
     events[1].body =
         RawEventBody::from_value(json!({ "type": "turn_started", "turn_id": "OTHER" })).unwrap();
-    conn.to_vault.push_back(HostMessage::Batch(Batch {
+    conn.to_hub.push_back(HostMessage::Batch(Batch {
         session_id: session_id.clone(),
         events,
     }));
-    conn.vault_step(&mut vault);
+    conn.hub_step(&mut hub);
     assert_eq!(
         conn.to_host.back(),
-        Some(&VaultMessage::Rejected {
+        Some(&HubMessage::Rejected {
             cursor: Cursor {
                 session_id: session_id.clone(),
                 after_seq: 4,
@@ -541,11 +540,11 @@ fn a_conflicting_resend_is_rejected_and_changes_nothing() {
             reason: RejectReason::Conflict,
         })
     );
-    assert_eq!(vault.journals, held);
-    assert_eq!(vault.writes, 4);
+    assert_eq!(hub.journals, held);
+    assert_eq!(hub.writes, 4);
 
     // The host stops replicating the conflicting session, and only that one.
-    conn.run(&mut host, &mut vault);
+    conn.run(&mut host, &mut hub);
     host.append(
         "01J9SESSION0",
         json!({ "type": "turn_completed", "turn_id": "T3" }),
@@ -562,27 +561,27 @@ fn a_conflicting_resend_is_rejected_and_changes_nothing() {
 }
 
 #[test]
-fn a_gap_is_rejected_and_the_host_rewinds_to_the_vault_cursor() {
+fn a_gap_is_rejected_and_the_host_rewinds_to_the_hub_cursor() {
     let mut host = host_with_history(1, 12, 3);
-    let mut vault = Vault::paired_with(&host);
+    let mut hub = Hub::paired_with(&host);
     let mut conn = Connection::open(&mut host);
-    conn.vault_step(&mut vault);
+    conn.hub_step(&mut hub);
     conn.host_step(&mut host);
     // The second batch never arrives.
-    let batches: Vec<_> = conn.to_vault.drain(..).collect();
-    conn.to_vault.extend(
+    let batches: Vec<_> = conn.to_hub.drain(..).collect();
+    conn.to_hub.extend(
         batches
             .into_iter()
             .enumerate()
             .filter(|(i, _)| *i != 2)
             .map(|(_, m)| m),
     );
-    conn.vault_step(&mut vault); // summary
-    conn.vault_step(&mut vault); // seqs 1-3
-    conn.vault_step(&mut vault); // seqs 7-9
+    conn.hub_step(&mut hub); // summary
+    conn.hub_step(&mut hub); // seqs 1-3
+    conn.hub_step(&mut hub); // seqs 7-9
     assert_eq!(
         conn.to_host.back(),
-        Some(&VaultMessage::Rejected {
+        Some(&HubMessage::Rejected {
             cursor: Cursor {
                 session_id: SessionId::new("01J9SESSION0"),
                 after_seq: 3,
@@ -590,24 +589,24 @@ fn a_gap_is_rejected_and_the_host_rewinds_to_the_vault_cursor() {
             reason: RejectReason::Gap,
         })
     );
-    conn.run(&mut host, &mut vault);
-    assert_replicated(&host, &vault);
+    conn.run(&mut host, &mut hub);
+    assert_replicated(&host, &hub);
 }
 
 #[test]
-fn a_vault_restored_from_an_older_backup_gets_the_rest_again() {
+fn a_hub_restored_from_an_older_backup_gets_the_rest_again() {
     let mut host = host_with_history(2, 10, 4);
-    let mut vault = Vault::paired_with(&host);
+    let mut hub = Hub::paired_with(&host);
     let mut conn = Connection::open(&mut host);
-    conn.run(&mut host, &mut vault);
+    conn.run(&mut host, &mut hub);
     conn.kill(&mut host);
-    for journal in vault.journals.values_mut() {
+    for journal in hub.journals.values_mut() {
         journal.truncate(3);
     }
-    vault.writes = 6;
+    hub.writes = 6;
     let mut conn = Connection::open(&mut host);
-    conn.run(&mut host, &mut vault);
-    assert_replicated(&host, &vault);
+    conn.run(&mut host, &mut hub);
+    assert_replicated(&host, &hub);
 }
 
 #[test]
@@ -615,43 +614,43 @@ fn unknown_event_types_are_replicated_verbatim() {
     let mut host = host_with_history(1, 2, 4);
     let future = json!({ "type": "event_from_the_future", "detail": { "n": 1 } });
     host.append("01J9SESSION0", future.clone());
-    let mut vault = Vault::paired_with(&host);
+    let mut hub = Hub::paired_with(&host);
     let mut conn = Connection::open(&mut host);
-    conn.run(&mut host, &mut vault);
-    assert_replicated(&host, &vault);
-    let replica = &vault.journals[&(host.host_id.clone(), SessionId::new("01J9SESSION0"))];
+    conn.run(&mut host, &mut hub);
+    assert_replicated(&host, &hub);
+    let replica = &hub.journals[&(host.host_id.clone(), SessionId::new("01J9SESSION0"))];
     assert_eq!(serde_json::to_value(&replica[2].body).unwrap(), future);
     assert_eq!(replica[2].body.decode(), EventBody::Unknown);
 }
 
 #[test]
-fn the_vault_refuses_an_unpaired_host_and_frames_before_hello() {
+fn the_hub_refuses_an_unpaired_host_and_frames_before_hello() {
     let mut host = host_with_history(1, 2, 4);
-    let mut vault = Vault::default();
-    let mut link = VaultLink::default();
-    let refused = vault.receive(&mut link, host.connect());
+    let mut hub = Hub::default();
+    let mut link = HubLink::default();
+    let refused = hub.receive(&mut link, host.connect());
     assert!(matches!(
         &refused[..],
-        [VaultMessage::Error { error }] if error.code == ReplicationErrorCode::Forbidden
+        [HubMessage::Error { error }] if error.code == ReplicationErrorCode::Forbidden
     ));
     assert!(link.closed);
 
-    let mut vault = Vault::paired_with(&host);
-    let mut link = VaultLink::default();
+    let mut hub = Hub::paired_with(&host);
+    let mut link = HubLink::default();
     let batch = HostMessage::Batch(Batch {
         session_id: SessionId::new("01J9SESSION0"),
         events: host.journals[&SessionId::new("01J9SESSION0")].clone(),
     });
-    let refused = vault.receive(&mut link, batch);
+    let refused = hub.receive(&mut link, batch);
     assert!(matches!(
         &refused[..],
-        [VaultMessage::Error { error }] if error.code == ReplicationErrorCode::BadRequest
+        [HubMessage::Error { error }] if error.code == ReplicationErrorCode::BadRequest
     ));
-    assert!(vault.journals.is_empty());
+    assert!(hub.journals.is_empty());
 }
 
 #[test]
-fn the_vault_refuses_malformed_batches() {
+fn the_hub_refuses_malformed_batches() {
     let mut host = host_with_history(1, 4, 4);
     let session_id = SessionId::new("01J9SESSION0");
     let journal = host.journals[&session_id].clone();
@@ -665,10 +664,10 @@ fn the_vault_refuses_malformed_batches() {
         })
         .collect();
     for events in [Vec::new(), shuffled, too_big] {
-        let mut vault = Vault::paired_with(&host);
-        let mut link = VaultLink::default();
-        vault.receive(&mut link, host.connect());
-        let refused = vault.receive(
+        let mut hub = Hub::paired_with(&host);
+        let mut link = HubLink::default();
+        hub.receive(&mut link, host.connect());
+        let refused = hub.receive(
             &mut link,
             HostMessage::Batch(Batch {
                 session_id: session_id.clone(),
@@ -677,9 +676,9 @@ fn the_vault_refuses_malformed_batches() {
         );
         assert!(matches!(
             &refused[..],
-            [VaultMessage::Error { error }] if error.code == ReplicationErrorCode::BadRequest
+            [HubMessage::Error { error }] if error.code == ReplicationErrorCode::BadRequest
         ));
         assert!(link.closed);
-        assert_eq!(vault.writes, 0);
+        assert_eq!(hub.writes, 0);
     }
 }

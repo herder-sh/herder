@@ -11,7 +11,7 @@
 //! │                                                 │
 //! │  value  •••••••••••••                           │
 //! │                                                 │
-//! │  It goes straight to the vault; the agent only  │
+//! │  It goes straight to the hub; the agent only    │
 //! │  learns that it was stored.                     │
 //! └─────────────────────────────────────────────────┘
 //! ```
@@ -80,10 +80,10 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     }
     lines.push(Line::default());
     let status = match &dialog.step {
-        None => "It goes straight to the vault; the agent only learns that it was stored.",
-        Some(Sent::Link | Sent::List(_)) => "Finding the machine's vault…",
+        None => "It goes straight to the hub; the agent only learns that it was stored.",
+        Some(Sent::Link | Sent::List(_)) => "Finding the machine's hub…",
         Some(Sent::Create(_)) => "Creating the set…",
-        Some(Sent::Put) => "Storing it on the vault…",
+        Some(Sent::Put) => "Storing it on the hub…",
         Some(Sent::Confirm) => "Telling the agent…",
     };
     lines.extend(wrapped(status, ui.muted()));

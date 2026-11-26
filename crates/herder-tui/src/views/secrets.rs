@@ -1,9 +1,9 @@
-//! The secrets screen, over the fleet: a vault's sets, the secrets in each with when their
+//! The secrets screen, over the fleet: a hub's sets, the secrets in each with when their
 //! value was last set, the hosts each set is granted to, and the latest fetches. Over it go
 //! the dialogs that change them; a value is typed masked and never shown.
 //!
 //! ```text
-//!  secrets · vault                                      values are never shown
+//!  secrets · hub                                      values are never shown
 //!
 //! ▶ coingate-prod                                              granted to devbox
 //!     API_KEY        coingate merchant api                        updated 3d 2h
@@ -46,8 +46,8 @@ const FETCHES: usize = 8;
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, secrets: &Secrets, hits: &mut Hits) {
     let ui = app.ui();
     let compact = app.width < super::NARROW;
-    let vault = app.machines.iter().find(|m| m.host_id == secrets.vault);
-    let name = vault.map_or_else(|| secrets.vault.to_string(), |m| m.name.clone());
+    let hub = app.machines.iter().find(|m| m.host_id == secrets.hub);
+    let name = hub.map_or_else(|| secrets.hub.to_string(), |m| m.name.clone());
     super::clear(frame, area, ui);
     let area = super::heading(
         frame,
@@ -63,7 +63,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, secrets: &Secrets, 
         Load::Asking => {
             let text = format!("Asking {name}{}", ui.glyphs.ellipsis);
             frame.render_widget(Line::styled(text, ui.muted()), Rect { height: 1, ..area });
-            return dialog(frame, area, app, secrets, vault, hits);
+            return dialog(frame, area, app, secrets, hub, hits);
         }
         Load::Failed(why) => {
             let mut lines = super::failure(ui, &format!("{name} has no secrets to show"), width);
@@ -71,13 +71,13 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, secrets: &Secrets, 
             lines.extend(wrapped(why, width, ui.text()));
             lines.push(Line::default());
             lines.extend(wrapped(
-                "Secrets live on a vault, encrypted under the secrets key it reads at start. \
+                "Secrets live on a hub, encrypted under the secrets key it reads at start. \
                  Press r to ask again.",
                 width,
                 ui.muted(),
             ));
             lines_at(frame.buffer_mut(), area, ui, lines);
-            return dialog(frame, area, app, secrets, vault, hits);
+            return dialog(frame, area, app, secrets, hub, hits);
         }
         Load::Loaded((sets, list)) => (sets, list),
     };
@@ -98,7 +98,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, secrets: &Secrets, 
             selected_row = Some(rows.len());
         }
         rows.push(match pick {
-            Pick::Set(set) => set_row(ui, sets.iter().find(|s| s.name == *set), set, list, vault),
+            Pick::Set(set) => set_row(ui, sets.iter().find(|s| s.name == *set), set, list, hub),
             Pick::Secret { set, name } => match secrets.secret(set, name) {
                 Some(secret) => secret_row(ui, secret, names, now),
                 None => Row::item(Line::default()),
@@ -132,14 +132,14 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, secrets: &Secrets, 
             let hosts = entries
                 .iter()
                 .take(FETCHES)
-                .map(|e| crate::ui::width(&host_name(vault, &e.host_id)))
+                .map(|e| crate::ui::width(&host_name(hub, &e.host_id)))
                 .max()
                 .unwrap_or(0);
             lines.extend(
                 entries
                     .iter()
                     .take(FETCHES)
-                    .map(|entry| fetch_line(ui, entry, vault, hosts, now)),
+                    .map(|entry| fetch_line(ui, entry, hub, hosts, now)),
             );
         }
     }
@@ -167,7 +167,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, secrets: &Secrets, 
         height: area.bottom().saturating_sub(list_area.bottom()),
     };
     lines_at(frame.buffer_mut(), rest, ui, lines);
-    dialog(frame, area, app, secrets, vault, hits);
+    dialog(frame, area, app, secrets, hub, hits);
 }
 
 /// A set's row: its name, and the hosts it is granted to.
@@ -176,10 +176,10 @@ fn set_row<'a>(
     set: Option<&SecretSet>,
     name: &str,
     secrets: &[SecretInfo],
-    vault: Option<&Machine>,
+    hub: Option<&Machine>,
 ) -> Row<'a> {
     let granted: Vec<String> = set
-        .map(|set| set.hosts.iter().map(|h| host_name(vault, h)).collect())
+        .map(|set| set.hosts.iter().map(|h| host_name(hub, h)).collect())
         .unwrap_or_default();
     let mut right = Vec::new();
     if !secrets.iter().any(|s| s.set == name) {
@@ -215,7 +215,7 @@ fn secret_row<'a>(ui: Ui, secret: &SecretInfo, names: usize, now: Timestamp) -> 
 fn fetch_line<'a>(
     ui: Ui,
     entry: &SecretAccess,
-    vault: Option<&Machine>,
+    hub: Option<&Machine>,
     hosts: usize,
     now: Timestamp,
 ) -> Line<'a> {
@@ -223,7 +223,7 @@ fn fetch_line<'a>(
     Line::from(vec![
         Span::styled(format!("  {ago:<8}"), ui.muted()),
         Span::styled(
-            format!("{:<hosts$}  ", host_name(vault, &entry.host_id)),
+            format!("{:<hosts$}  ", host_name(hub, &entry.host_id)),
             ui.text(),
         ),
         Span::styled(format!("{}  ", used_for(entry)), ui.muted()),
@@ -244,10 +244,9 @@ fn since(now: Timestamp, then: Timestamp) -> i64 {
     now.as_second() - then.as_second()
 }
 
-/// A host by the name the vault lists it under, else its id.
-fn host_name(vault: Option<&Machine>, host_id: &HostId) -> String {
-    vault
-        .and_then(|vault| vault.hosts.iter().find(|h| h.host_id == *host_id))
+/// A host by the name the hub lists it under, else its id.
+fn host_name(hub: Option<&Machine>, host_id: &HostId) -> String {
+    hub.and_then(|hub| hub.hosts.iter().find(|h| h.host_id == *host_id))
         .map_or_else(|| host_id.to_string(), |h| h.host_name.clone())
 }
 
@@ -280,7 +279,7 @@ fn dialog(
     area: Rect,
     app: &App,
     secrets: &Secrets,
-    vault: Option<&Machine>,
+    hub: Option<&Machine>,
     hits: &mut Hits,
 ) {
     let Some(dialog) = &secrets.dialog else {
@@ -343,7 +342,7 @@ fn dialog(
                 sending,
                 error: why,
             } => {
-                let hosts = secrets.hosts(vault, set);
+                let hosts = secrets.hosts(hub, set);
                 let granted = secrets
                     .set(set)
                     .map(|s| s.hosts.clone())
@@ -356,7 +355,7 @@ fn dialog(
                 parts.push(Part::Line(Line::default()));
                 if hosts.is_empty() {
                     parts.extend(text(
-                        "No host backs up to this vault yet: back one up from the fleet with b.",
+                        "No host backs up to this hub yet: back one up from the fleet with b.",
                         ui.text(),
                     ));
                 }
@@ -386,7 +385,7 @@ fn dialog(
                 let mut after = error(why);
                 if *sending {
                     after.push(Part::Line(Line::styled(
-                        format!("Telling the vault{}", ui.glyphs.ellipsis),
+                        format!("Telling the hub{}", ui.glyphs.ellipsis),
                         ui.muted(),
                     )));
                 }
@@ -410,7 +409,7 @@ fn dialog(
                     Pick::Set(set) => (
                         "delete set",
                         format!("Delete the set {set}?"),
-                        "Its grants go with it. The vault keeps a set that holds secrets: delete \
+                        "Its grants go with it. The hub keeps a set that holds secrets: delete \
                          them first.",
                     ),
                     Pick::Secret { set, name } => (

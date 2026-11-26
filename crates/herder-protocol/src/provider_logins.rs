@@ -1,7 +1,7 @@
-//! Provider logins: the logins a vault's CLIProxyAPI holds, which hosts reach through endpoint
+//! Provider logins: the logins a hub's CLIProxyAPI holds, which hosts reach through endpoint
 //! accounts.
 //!
-//! The proxy keeps each login's tokens on the vault's volume; herder never reads, keeps or
+//! The proxy keeps each login's tokens on the hub's volume; herder never reads, keeps or
 //! relays them. An owner adds a login from an app: `start_provider_login` has the proxy begin
 //! the provider's OAuth sign-in and hands back its URL; the owner signs in in a browser, which
 //! the provider then sends to a localhost address that does not load, as the proxy is not on
@@ -9,18 +9,18 @@
 //! proxy trades the code in it for the login. Only the URL and that one-time code, useless
 //! without what the proxy keeps, pass through herder.
 //!
-//! Each login is also an account on every host the vault gives a client key to: the vault
-//! sends hosts its logins ([`crate::VaultMessage::ProviderLogins`]), and a host runs the
+//! Each login is also an account on every host the hub gives a client key to: the hub
+//! sends hosts its logins ([`crate::HubMessage::ProviderLogins`]), and a host runs the
 //! provider's CLI on one through the proxy with its model names prefixed by the login's `pin`,
 //! which the proxy routes to that login only. Its label, fallback mark and usage come from the
-//! vault, where owners set them with `set_provider_login`.
+//! hub, where owners set them with `set_provider_login`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{Provider, Timestamp, UsageWindow};
 
-/// A provider login a vault's CLIProxyAPI holds, without its tokens.
+/// A provider login a hub's CLIProxyAPI holds, without its tokens.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderLogin {
     /// The proxy's name for it, the file it is kept in; for `remove_provider_login`.
@@ -54,7 +54,7 @@ pub struct ProviderLogin {
     pub message: Option<String>,
 }
 
-/// Whether a vault's CLIProxyAPI can use a provider login now.
+/// Whether a hub's CLIProxyAPI can use a provider login now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderLoginState {

@@ -1,16 +1,16 @@
 //! Moving a daemon's users to people: the one-time claim an owner runs from their device on
-//! every machine and vault they own.
+//! every machine and hub they own.
 //!
 //! The claiming owner's user becomes the person: the person joins this daemon as an owner, the
 //! user's devices are listed under them, and a record maps the old id to the person, with the
-//! ids the person had on the other machines claimed with this one. A vault holds the sessions
+//! ids the person had on the other machines claimed with this one. A hub holds the sessions
 //! its hosts replicated, attributed to the hosts' users, so it needs those too. Every id moved
 //! resolves to the person ([`Auth::resolve`]), so history attributed to it reads as theirs:
 //! events and queued prompts as clients get them ([`Auth::attribute`]), bot people linked to
 //! it, and the agents of forked sessions acting for it.
 //!
-//! Users that are machines, whose every device replicates to this vault, become hosts, listed
-//! with the vault's hosts. Any other user is left for the owner to decide on
+//! Users that are machines, whose every device replicates to this hub, become hosts, listed
+//! with the hub's hosts. Any other user is left for the owner to decide on
 //! ([`Auth::leftovers`]): the person themselves ([`Auth::claim_leftover`]), or someone to
 //! remove ([`Auth::remove_user`]).
 //!
@@ -54,7 +54,7 @@ pub struct Claimed {
 impl Auth {
     /// Moves the owner `caller` to the person `proven`, with `also`, the ids the person has on
     /// the other machines claimed with this one, and makes hosts of the users whose every
-    /// device is a host's or in `replicated`, those this vault's hosts replicate from.
+    /// device is a host's or in `replicated`, those this hub's hosts replicate from.
     ///
     /// Claiming again as the same person records more ids. Refused for a member, and for an
     /// owner already moved to another person.
@@ -277,7 +277,7 @@ fn retarget(users: &mut Users, old: &UserId, person: &UserId, at: Timestamp) {
     });
 }
 
-/// The users whose devices are all hosts': host-only, or replicating to this vault. A user with
+/// The users whose devices are all hosts': host-only, or replicating to this hub. A user with
 /// no devices is no machine.
 fn machines(users: &Users, replicated: &[DeviceId]) -> Vec<UserId> {
     users

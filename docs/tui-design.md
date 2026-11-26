@@ -108,7 +108,7 @@ last column is never drawn (P2.15).
  ─────────────────────── │ ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  + new            ≡ menu │ ⠹ working · 1m 12s  ctrl+c stop                       claude-main 5h 38%
 ─────────────────────────┴──────────────────────────────────────────────────────────────────────────
- PROMPT  enter send  shift+enter newline  / commands  @ mention                  ● box ● m2 ◌ vault
+ PROMPT  enter send  shift+enter newline  / commands  @ mention                  ● box ● m2 ◌ hub
 ```
 
 How the screen is built:
@@ -161,7 +161,7 @@ The same moment with an approval pending: the panel replaces the prompt.
  ─────────────────────── │ ┃  [ allow ]   deny                 y allow · n deny · ←/→ enter
  + new            ≡ menu │
 ─────────────────────────┴──────────────────────────────────────────────────────────────────────────
- APPROVAL  y allow  n deny  ←/→ choose  enter confirm  esc navigate              ● box ● m2 ◌ vault
+ APPROVAL  y allow  n deny  ←/→ choose  enter confirm  esc navigate              ● box ● m2 ◌ hub
 ```
 
 At **160 columns** a details panel (42 columns, OpenCode's sidebar) opens to the right. Its
@@ -203,7 +203,7 @@ an overlay with `ctrl+x d`.
  ──────────────────────────── │ ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ │
  + new                 ≡ menu │ ⠹ working · 1m 12s  ctrl+c stop                      ctrl+x leader · ctrl+p commands │ ⠹ working 1m 12s                  5h 38%
 ──────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────────┴──────────────────────────────────────────
- PROMPT  enter send  shift+enter newline  / commands  @ mention  esc navigate                                                  ● box  ● m2  ◌ vault (2/3 hosts)
+ PROMPT  enter send  shift+enter newline  / commands  @ mention  esc navigate                                                  ● box  ● m2  ◌ hub (2/3 hosts)
 ```
 
 At **45 columns** (phone) there is no sidebar and no tabs; the layout is Herdr's mobile
@@ -362,7 +362,7 @@ is 60 columns wide, centred, and closes with `esc`.
  ─────────────────────── │ ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  + new            ≡ menu │ ⠹ working · 1m 12s  ctrl+c stop                       claude-main 5h 38%
 ─────────────────────────┴──────────────────────────────────────────────────────────────────────────
- PROMPT  enter send  shift+enter newline  / commands  @ mention                  ● box ● m2 ◌ vault
+ PROMPT  enter send  shift+enter newline  / commands  @ mention                  ● box ● m2 ◌ hub
 ```
 
 ### 2.3 Inbox
@@ -397,7 +397,7 @@ happens in place.
  ─────────────────────── │
  + new            ≡ menu │
 ─────────────────────────┴──────────────────────────────────────────────────────────────────────────
- NAVIGATE  j/k move  1-9 pick  y/n allow/deny  l open  esc back                  ● box ● m2 ◌ vault
+ NAVIGATE  j/k move  1-9 pick  y/n allow/deny  l open  esc back                  ● box ● m2 ◌ hub
 ```
 
 ```text
@@ -451,7 +451,7 @@ session. The `prs` tab of a session shows the same rows filtered to that session
  ─────────────────────── │
  + new            ≡ menu │
 ─────────────────────────┴──────────────────────────────────────────────────────────────────────────
- NAVIGATE  j/k move  o browser  l session  L link  x unlink  esc back            ● box ● m2 ◌ vault
+ NAVIGATE  j/k move  o browser  l session  L link  x unlink  esc back            ● box ● m2 ◌ hub
 ```
 
 ```text
@@ -500,7 +500,7 @@ the client: there is no command for it (§10).
  ─────────────────────── │
  + new            ≡ menu │
 ─────────────────────────┴──────────────────────────────────────────────────────────────────────────
- NAVIGATE  j/k move  n add account  l log in again  esc back                     ● box ● m2 ◌ vault
+ NAVIGATE  j/k move  n add account  l log in again  esc back                     ● box ● m2 ◌ hub
 ```
 
 ```text
@@ -526,7 +526,7 @@ its button show only while an account is selected.
 
 ### 2.6 Fleet
 
-The fleet view is today's machines panel, extended with the vault's hosts and fork.
+The fleet view is today's machines panel, extended with the hub's hosts and fork.
 `F` on any session opens the fork dialog: enter forks it onto a host paired as owner, else
 the dialog shows the command to run there (P0.13).
 
@@ -537,7 +537,7 @@ the dialog shows the command to run there (P0.13).
  ◉ app                 2 │             SHA256:9f2c…41ab   accounts 3   sessions 5
    ├ ✓ fix-login         │   ● m2      member  m2.lan:7447     cpu 61%  mem 72%  turns 2/2 full
    └ ◉ api             1 │             SHA256:01de…77c0   accounts 1   sessions 2   no terminals
-     ├ ● write tests     │   ◌ vault   owner   vault.lan:7447  read-only index
+     ├ ● write tests     │   ◌ hub     owner   hub.lan:7447    read-only index
      └ ◉ docs          ? │     ● box      online
  ● herder                │     ● m2       online
    └ ● p2d-1-design      │     ✗ oldbox   offline · last seen 3h ago
@@ -556,7 +556,7 @@ the dialog shows the command to run there (P0.13).
  ─────────────────────── │
  + new            ≡ menu │
 ─────────────────────────┴──────────────────────────────────────────────────────────────────────────
- NAVIGATE  j/k move  a add  e rename  d forget  F fork  esc back              ● box ● m2 ◌ vault
+ NAVIGATE  j/k move  a add  e rename  d forget  F fork  esc back              ● box ● m2 ◌ hub
 ```
 
 ### 2.7 Switch account / provider / model (picker)
@@ -595,7 +595,7 @@ This is OpenCode's model picker reshaped around herder's switches:
  ─────────────────────── │ ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  + new            ≡ menu │ ⠹ working · 1m 12s  ctrl+c stop                       claude-main 5h 38%
 ─────────────────────────┴──────────────────────────────────────────────────────────────────────────
- PROMPT  enter send  shift+enter newline  / commands  @ mention                  ● box ● m2 ◌ vault
+ PROMPT  enter send  shift+enter newline  / commands  @ mention                  ● box ● m2 ◌ hub
 ```
 
 ### 2.8 Other dialogs
@@ -638,7 +638,7 @@ right, a search box when there is a list, and footer hints.
 The global **views** (inbox, PRs, accounts, fleet) have no Herdr equivalent. They render
 in the main pane, with the sidebar staying put. `esc` returns to the last session.
 
-Grouping (`v`) switches the projects tree to **machine ▸ sessions**. For a vault this is
+Grouping (`v`) switches the projects tree to **machine ▸ sessions**. For a hub this is
 **host ▸ sessions**, with offline hosts marked `✗` and "last seen". This is today's
 behaviour, kept.
 

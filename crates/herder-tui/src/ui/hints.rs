@@ -271,7 +271,7 @@ mod tests {
             ),
             (
                 Span::styled(ui.glyphs.connecting, Style::new().fg(theme.warning)),
-                "vault".to_owned(),
+                "hub".to_owned(),
             ),
         ]
     }

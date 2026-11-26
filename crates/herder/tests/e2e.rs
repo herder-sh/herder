@@ -4,7 +4,7 @@
 //! The daemon is `herder_daemon::serve`, the same function `herder daemon` runs, in this
 //! process: that is where the test hands it a Claude adapter whose transport replays
 //! `fixtures/claude/approval.jsonl` instead of spawning `claude`. Everything past the transport
-//! is production code: the Claude session, the session manager and journal, the hub, TLS, the
+//! is production code: the Claude session, the session manager and journal, the fanout, TLS, the
 //! WebSocket server, pairing through the control socket and the real `herder pair` binary.
 
 use std::collections::HashMap;
@@ -405,7 +405,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             needs_login: None,
             endpoint: None,
             key_secret: None,
-            vault_login: None,
+            hub_login: None,
         }]
     );
     assert_eq!(failover, FailoverSettings::default());

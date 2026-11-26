@@ -94,10 +94,10 @@ struct SkillLibraryTests {
         #expect(lists.map(\.accountId) == ["work"])
     }
 
-    @Test func aVaultKeepsNoLibrary() {
-        let vault = machine("vault", name: "vault", sessions: [],
+    @Test func aHubKeepsNoLibrary() {
+        let hub = machine("hub", name: "hub", sessions: [],
                             hosts: [FleetHost(hostId: "desk", hostName: "desk", online: true, lastSeen: "")])
-        #expect(SkillLibrary([vault]).checkouts.isEmpty)
+        #expect(SkillLibrary([hub]).checkouts.isEmpty)
     }
 
     @Test func aMachineOffTheHeadMostMachinesShareIsBehind() {

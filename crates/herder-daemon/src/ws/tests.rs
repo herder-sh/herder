@@ -34,7 +34,7 @@ use crate::auth::Auth;
 use crate::auth::authenticator::{self, Authenticator};
 use crate::auth::passkeys::Passkeys;
 use crate::aws::Aws;
-use crate::hub::{self, DELTA_BACKLOG, Hub};
+use crate::fanout::{self, DELTA_BACKLOG, Fanout};
 use crate::login::Logins;
 use crate::mcp::Control;
 use crate::session::EventSink;
@@ -54,7 +54,7 @@ struct TestBackend {
     store: Arc<Mutex<Store>>,
     commands: Arc<AtomicUsize>,
     worktree: PathBuf,
-    /// The devices hosts replicate from, as a vault knows them.
+    /// The devices hosts replicate from, as a hub knows them.
     replicated: Arc<Mutex<Vec<DeviceId>>>,
     /// Held for writing by a test, it keeps every command from being applied until released.
     busy: Arc<tokio::sync::RwLock<()>>,
@@ -73,7 +73,7 @@ impl Backend for TestBackend {
             needs_login: None,
             endpoint: None,
             key_secret: None,
-            vault_login: None,
+            hub_login: None,
         }]
     }
 
@@ -179,10 +179,10 @@ struct Daemon {
     auth: Arc<Auth>,
     /// A device paired as the owner.
     owner: DeviceKey,
-    hub: Arc<Hub>,
+    fanout: Arc<Fanout>,
     store: Arc<Mutex<Store>>,
     commands: Arc<AtomicUsize>,
-    /// The devices hosts replicate from, when the daemon plays a vault.
+    /// The devices hosts replicate from, when the daemon plays a hub.
     replicated: Arc<Mutex<Vec<DeviceId>>>,
     /// Held for writing, it keeps the backend from applying any command.
     busy: Arc<tokio::sync::RwLock<()>>,
@@ -229,7 +229,7 @@ impl Daemon {
             replicated: Arc::clone(&replicated),
             busy: Arc::clone(&busy),
         };
-        let hub = Arc::new(Hub::default());
+        let fanout = Arc::new(Fanout::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let other_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -250,11 +250,11 @@ impl Daemon {
         if seeded == Owner::Person {
             authenticator::enroll(&auth, "tomas", Role::Owner, &owner.fingerprint());
         }
-        let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
+        let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
         let server = Server::new(
             tls,
             Arc::clone(&auth),
-            Arc::clone(&hub),
+            Arc::clone(&fanout),
             backend,
             terminals,
             Logins::default(),
@@ -295,7 +295,7 @@ impl Daemon {
             fingerprint,
             auth,
             owner,
-            hub,
+            fanout,
             store,
             commands,
             replicated,
@@ -321,7 +321,7 @@ impl Daemon {
                 body,
             })
             .unwrap();
-        self.hub.event(&event);
+        self.fanout.event(&event);
         event
     }
 
@@ -456,7 +456,7 @@ impl View {
                     .streaming
                     .get_mut(&item_id)
                     .expect("a delta for an item without a snapshot");
-                hub::append(&mut item.body, &text);
+                fanout::append(&mut item.body, &text);
             }
             _ => {}
         }
@@ -1098,8 +1098,8 @@ async fn two_clients_see_identical_durable_streams() {
         async move {
             for n in 0..300 {
                 let id = format!("new{n}");
-                daemon.hub.snapshot(&session, &message(&id, ""));
-                EventSink::delta(&*daemon.hub, &session, &ItemId::new(&id), "partial");
+                daemon.fanout.snapshot(&session, &message(&id, ""));
+                EventSink::delta(&*daemon.fanout, &session, &ItemId::new(&id), "partial");
                 daemon.append(&session, added(&id, "final"));
                 if n % 10 == 0 {
                     tokio::time::sleep(Duration::from_millis(1)).await;
@@ -1147,7 +1147,7 @@ async fn a_throttled_client_never_builds_a_backlog_and_converges() {
             turn_id: TurnId::new("t1"),
         },
     );
-    daemon.hub.snapshot(&session, &message("long", ""));
+    daemon.fanout.snapshot(&session, &message("long", ""));
     let chunk = "y".repeat(CHUNK);
     let full_text = chunk.repeat(CHUNKS);
     let fast_reader = tokio::spawn({
@@ -1162,10 +1162,10 @@ async fn a_throttled_client_never_builds_a_backlog_and_converges() {
     // Far more text than the socket buffers hold, streamed while the slow client reads
     // nothing at all.
     for _ in 0..CHUNKS {
-        EventSink::delta(&*daemon.hub, &session, &ItemId::new("long"), &chunk);
+        EventSink::delta(&*daemon.fanout, &session, &ItemId::new("long"), &chunk);
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
-    let peak = daemon.hub.peak_backlog();
+    let peak = daemon.fanout.peak_backlog();
 
     // Now the slow client reads, slowly, and catches up with the item still in progress.
     let mut slow_messages = 0;
@@ -1193,8 +1193,8 @@ async fn a_throttled_client_never_builds_a_backlog_and_converges() {
 
     // Both converge on the same durable stream once the item completes.
     daemon.append(&session, added("long", &full_text));
-    daemon.hub.snapshot(&session, &message("tail", "the"));
-    EventSink::delta(&*daemon.hub, &session, &ItemId::new("tail"), " end");
+    daemon.fanout.snapshot(&session, &message("tail", "the"));
+    EventSink::delta(&*daemon.fanout, &session, &ItemId::new("tail"), " end");
     fast.read_until(|view| view.text("tail") == Some("the end"))
         .await;
     slow.read_until(|view| view.text("tail") == Some("the end"))
@@ -1705,10 +1705,10 @@ async fn endpoint_account_commands_go_to_the_accounts_never_echoing_the_key() {
             key_secret: None,
         },
         CommandBody::AddEndpointAccount {
-            account_id: AccountId::new("vault"),
+            account_id: AccountId::new("hub"),
             provider: Provider::Claude,
             label: None,
-            endpoint: "https://vault.example.com:8317".into(),
+            endpoint: "https://hub.example.com:8317".into(),
             key: None,
             key_secret: Some("CLIPROXYAPI_KEY".parse().unwrap()),
         },
@@ -2350,7 +2350,7 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
     let control = &daemon.control;
     let list_secrets = || CommandBody::ListSecrets;
     let via = |name: &str| UserId::new(format!("via trash-can, {name}"));
-    // Past the owners-only check, a host with no vault keeps no secrets.
+    // Past the owners-only check, a host with no hub keeps no secrets.
     let ada = control
         .command(SessionId::new("s1"), via("Ada"), list_secrets())
         .await
@@ -2574,7 +2574,7 @@ async fn agents_run_commands_as_their_user_within_its_role() {
             from: PersonId::new("p1"),
             assertion: Box::new(stale_assertion()),
         },
-        CommandBody::PairVaultHost {
+        CommandBody::PairHubHost {
             host_name: "devbox".into(),
         },
         CommandBody::RemoveBot {
@@ -2992,7 +2992,7 @@ async fn after_a_claim_the_owners_history_reads_as_the_person() {
 
     // Live events under the old id too.
     let event = by(&owner);
-    daemon.hub.event(&event);
+    daemon.fanout.event(&event);
     client.read_until(|view| view.last_seq() == 4).await;
     assert_eq!(client.view.events[3].by, Some(person));
 }
@@ -3047,7 +3047,7 @@ async fn after_a_claim_agents_act_for_the_person_by_any_of_their_old_ids() {
 }
 
 /// Appends an event `by` sent to `session` on `daemon`'s journal, as a host's would be, or
-/// as the vault holds it once replicated.
+/// as the hub holds it once replicated.
 fn journal(daemon: &Daemon, session: &SessionId, by: &UserId) -> Event {
     daemon
         .store
@@ -3110,25 +3110,20 @@ async fn challenge(client: &mut Client, id: &str) -> (PasskeyChallenge, Option<P
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn one_claim_makes_the_person_owner_of_a_host_and_its_vault_and_their_sessions_theirs() {
-    // Today's fleet: a host and a vault, each with its own owner user for this device, and on
-    // the vault a machine paired as a user, which replicates.
+async fn one_claim_makes_the_person_owner_of_a_host_and_its_hub_and_their_sessions_theirs() {
+    // Today's fleet: a host and a hub, each with its own owner user for this device, and on
+    // the hub a machine paired as a user, which replicates.
     let host = Daemon::start_unclaimed().await;
-    let vault = Daemon::start_unclaimed().await;
+    let hub = Daemon::start_unclaimed().await;
     let mut on_host = host.client().await;
     let host_user = on_host.hello(Vec::new()).await.user_id;
-    let mut on_vault = vault.client().await;
-    let vault_user = on_vault.hello(Vec::new()).await.user_id;
+    let mut on_hub = hub.client().await;
+    let hub_user = on_hub.hello(Vec::new()).await.user_id;
     let machine = DeviceKey::generate().unwrap();
-    vault
-        .auth
+    hub.auth
         .legacy_user("trash-can-01", Role::Member, &machine.fingerprint());
-    let machine = vault
-        .client_on(&machine, None)
-        .await
-        .hello(Vec::new())
-        .await;
-    vault.replicated.lock().unwrap().push(machine.device_id);
+    let machine = hub.client_on(&machine, None).await.hello(Vec::new()).await;
+    hub.replicated.lock().unwrap().push(machine.device_id);
     // And on the host, a user from before with a CLI device.
     let cli = DeviceKey::generate().unwrap();
     host.auth
@@ -3140,13 +3135,13 @@ async fn one_claim_makes_the_person_owner_of_a_host_and_its_vault_and_their_sess
         .await
         .user_id;
 
-    // A session on the host by the owner, which the vault holds as replicated, and one on the
-    // vault's own owner.
+    // A session on the host by the owner, which the hub holds as replicated, and one on the
+    // hub's own owner.
     let session = host.create_session("s1");
     journal(&host, &session, &host_user);
-    let copy = vault.create_session("s1");
-    journal(&vault, &copy, &host_user);
-    journal(&vault, &copy, &vault_user);
+    let copy = hub.create_session("s1");
+    journal(&hub, &copy, &host_user);
+    journal(&hub, &copy, &hub_user);
 
     // The app creates the passkey on the host and claims it.
     let (_, creation) = challenge(&mut on_host, "c1").await;
@@ -3191,8 +3186,8 @@ async fn one_claim_makes_the_person_owner_of_a_host_and_its_vault_and_their_sess
         panic!("expected the people");
     };
 
-    // The same passkey claims the vault, which learns the person's id on the host too.
-    let (challenge, _) = challenge(&mut on_vault, "c4").await;
+    // The same passkey claims the hub, which learns the person's id on the host too.
+    let (challenge, _) = challenge(&mut on_hub, "c4").await;
     let person = NewPerson {
         name: "Tomas".into(),
         passkey: PersonPasskey::Existing {
@@ -3202,20 +3197,20 @@ async fn one_claim_makes_the_person_owner_of_a_host_and_its_vault_and_their_sess
         },
     };
     let CommandResult::Claimed {
-        person_id: on_the_vault,
+        person_id: on_the_hub,
         hosts,
         leftovers,
-    } = claimed(&mut on_vault, "c5", person, vec![host_user.clone()]).await
+    } = claimed(&mut on_hub, "c5", person, vec![host_user.clone()]).await
     else {
         panic!("expected the claim");
     };
-    assert_eq!(on_the_vault, person_id);
+    assert_eq!(on_the_hub, person_id);
     assert_eq!(hosts, ["trash-can-01"], "the machine is a host now");
     assert!(leftovers.is_empty());
 
     // The person owns both, and their devices sign in with no code.
     let me = UserId::new(person_id.as_str());
-    for daemon in [&host, &vault] {
+    for daemon in [&host, &hub] {
         assert_eq!(daemon.auth.role(&me), Some(Role::Owner));
         let phone = DeviceKey::generate().unwrap();
         let signed_in = daemon
@@ -3227,10 +3222,10 @@ async fn one_claim_makes_the_person_owner_of_a_host_and_its_vault_and_their_sess
             .await;
         assert_eq!(signed_in.user_id, me);
     }
-    // Old sessions show the person as author, on the host and as the vault holds them.
+    // Old sessions show the person as author, on the host and as the hub holds them.
     assert_eq!(authors(&host, &session).await, [None, Some(me.clone())]);
     assert_eq!(
-        authors(&vault, &copy).await,
+        authors(&hub, &copy).await,
         [None, Some(me.clone()), Some(me)]
     );
 }
@@ -3604,7 +3599,7 @@ async fn a_person_opens_a_terminal_and_changes_secrets_only_with_a_fresh_asserti
     };
     assert_eq!(error.code, ErrorCode::Forbidden);
 
-    // Every change to secrets is the same; this daemon is no vault, so a fresh one gets as far
+    // Every change to secrets is the same; this daemon is no hub, so a fresh one gets as far
     // as that.
     let create = |assertion| CommandBody::CreateSecretSet {
         set: "prod".into(),
@@ -3617,7 +3612,7 @@ async fn a_person_opens_a_terminal_and_changes_secrets_only_with_a_fresh_asserti
     let assertion = Some(fresh(&mut mac, &passkey).await);
     let ServerMessage::CommandRejected { error, .. } = mac.answer("set2", create(assertion)).await
     else {
-        panic!("expected the secret change to reach the vault check");
+        panic!("expected the secret change to reach the hub check");
     };
     assert_eq!(error.code, ErrorCode::Unsupported, "{}", error.message);
 

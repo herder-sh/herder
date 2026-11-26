@@ -264,11 +264,11 @@ const SCENES: [Scene; 47] = [
         press(&mut app, KeyCode::Char('j'));
         app_buffer(app, theme, width, height)
     }),
-    ("vault-storage", |theme, _, width, height| {
-        app_buffer(fake::vault_storage(212.4), theme, width, height)
+    ("hub-storage", |theme, _, width, height| {
+        app_buffer(fake::hub_storage(212.4), theme, width, height)
     }),
-    ("vault-full", |theme, _, width, height| {
-        app_buffer(fake::vault_storage(412.8), theme, width, height)
+    ("hub-full", |theme, _, width, height| {
+        app_buffer(fake::hub_storage(412.8), theme, width, height)
     }),
     ("backup-pick", |theme, _, width, height| {
         app_buffer(backup(0, &[]), theme, width, height)
@@ -300,7 +300,7 @@ const SCENES: [Scene; 47] = [
         app_buffer(app, theme, width, height)
     }),
     ("fork", |theme, _, width, height| {
-        let mut app = fake::vault();
+        let mut app = fake::hub();
         app.choose_row(crate::app::Row::Session {
             key: fake::key("v", "s2"),
             depth: 0,
@@ -351,7 +351,7 @@ fn attached(app: &mut App, bytes: Result<usize, &str>) {
 
 /// Presses `code`.
 /// [`fake::chat`] with two images on its prompt, the cursor on it; with `missing`, the second
-/// was found not backed up when opened, as in a session recovered from the vault.
+/// was found not backed up when opened, as in a session recovered from the hub.
 fn attach_transcript(missing: bool) -> App {
     let mut app = fake::chat();
     let key = fake::key("h1", "s2");
@@ -715,16 +715,16 @@ fn limit_reset_frames() {
     std::fs::write(out.join("limit-2.ansi"), ansi(&buffer, &theme)).unwrap();
 }
 
-/// ANSI frames replayed by vhs for the vault storage PR's short recording: down the fleet to
-/// the vault, whose disk then fills past the warning.
+/// ANSI frames replayed by vhs for the hub storage PR's short recording: down the fleet to
+/// the hub, whose disk then fills past the warning.
 #[test]
-#[ignore = "run for the vault storage PR with HERDER_FRAMES"]
-fn vault_storage_frames() {
+#[ignore = "run for the hub storage PR with HERDER_FRAMES"]
+fn hub_storage_frames() {
     let out = std::env::var_os("HERDER_FRAMES").expect("set HERDER_FRAMES");
     let out = Path::new(&out);
     std::fs::create_dir_all(out).unwrap();
     let theme = Theme::herder(Mode::Dark);
-    let mut app = fake::vault_storage(212.4);
+    let mut app = fake::hub_storage(212.4);
     press(&mut app, KeyCode::Char('k'));
     press(&mut app, KeyCode::Char('k'));
     let mut frames = Vec::new();
@@ -734,13 +734,9 @@ fn vault_storage_frames() {
         }
         frames.push(app_buffer_ref(&mut app, &theme, 100, 30));
     }
-    let mut full = fake::vault_storage(412.8);
+    let mut full = fake::hub_storage(412.8);
     frames.push(app_buffer_ref(&mut full, &theme, 100, 30));
     for (index, buffer) in frames.iter().enumerate() {
-        std::fs::write(
-            out.join(format!("vault-{index}.ansi")),
-            ansi(buffer, &theme),
-        )
-        .unwrap();
+        std::fs::write(out.join(format!("hub-{index}.ansi")), ansi(buffer, &theme)).unwrap();
     }
 }

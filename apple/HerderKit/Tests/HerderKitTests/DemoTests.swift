@@ -9,7 +9,7 @@ struct DemoTests {
     /// tasks, and a command says it is a demo instead of going anywhere.
     @Test func theDemoShowsAFleetAndSendsNothing() async throws {
         let fleet = try Fleet.demo()
-        #expect(fleet.machines.map(\.name) == ["devbox", "studio", "laptop", "vault"])
+        #expect(fleet.machines.map(\.name) == ["devbox", "studio", "laptop", "hub"])
         #expect(fleet.machines.allSatisfy { $0.connection == .connected })
         let following = Task { await fleet.follow() }
         defer { following.cancel() }

@@ -66,16 +66,16 @@ pub enum ServerMessage {
         /// Sessions with their latest seq.
         sessions: Vec<SessionHead>,
     },
-    /// Every host whose sessions a vault lists, with its liveness; sent by a vault only, after
+    /// Every host whose sessions a hub lists, with its liveness; sent by a hub only, after
     /// hello and whenever a host connects, disconnects or first replicates. A daemon never
     /// sends it: its sessions all run on its own host.
     Hosts {
         /// The hosts, ordered by host id.
         hosts: Vec<FleetHost>,
     },
-    /// What a vault holds and how each host's replication stands; sent by a vault only, after
+    /// What a hub holds and how each host's replication stands; sent by a hub only, after
     /// hello and whenever it changes, at most once every two seconds.
-    VaultStatus(VaultStatus),
+    HubStatus(HubStatus),
     /// Every project with a clone on this daemon's host; sent after hello and whenever any of
     /// it changes. Clients merge the lists of all their daemons by `project_id`.
     Projects {
@@ -232,53 +232,53 @@ pub struct ServerHello {
     pub addresses: Vec<String>,
 }
 
-/// A host that replicates to a vault, as the vault lists it.
+/// A host that replicates to a hub, as the hub lists it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FleetHost {
     /// The host.
     pub host_id: HostId,
     /// Display name of the host, from its latest replication hello.
     pub host_name: String,
-    /// Whether the host's replication connection is open. A host silent for the vault's
-    /// liveness timeout is offline; its sessions stay listed, read-only as all on a vault are.
+    /// Whether the host's replication connection is open. A host silent for the hub's
+    /// liveness timeout is offline; its sessions stay listed, read-only as all on a hub are.
     pub online: bool,
-    /// When the vault last heard from the host; for an online host, as of when it connected
+    /// When the hub last heard from the host; for an online host, as of when it connected
     /// or the list was last sent.
     pub last_seen: Timestamp,
-    /// What the host's copies take on the vault; absent from a vault that does not say.
+    /// What the host's copies take on the hub; absent from a hub that does not say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<HostUsage>,
-    /// Whether the vault relays clients to the host now: it is online and takes relayed
-    /// connections. A client paired with both then reaches the host through the vault, with
+    /// Whether the hub relays clients to the host now: it is online and takes relayed
+    /// connections. A client paired with both then reaches the host through the hub, with
     /// [`crate::RelayHello::Connect`] (see [`crate::relay`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub relay: bool,
 }
 
-/// What one host's copies take on the vault.
+/// What one host's copies take on the hub.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct HostUsage {
-    /// Sessions of the host the vault holds.
+    /// Sessions of the host the hub holds.
     pub sessions: u32,
-    /// Bytes of the host's images the vault holds.
+    /// Bytes of the host's images the hub holds.
     pub attachment_bytes: u64,
-    /// Most bytes of images the vault keeps for the host; absent when the host backs up no
+    /// Most bytes of images the hub keeps for the host; absent when the host backs up no
     /// images.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments_cap: Option<u64>,
 }
 
-/// The disk the vault keeps its database on.
+/// The disk the hub keeps its database on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct VaultVolume {
+pub struct HubVolume {
     /// Size of the volume, in bytes.
     pub total_bytes: u64,
-    /// Bytes in use, by the vault or anything else.
+    /// Bytes in use, by the hub or anything else.
     pub used_bytes: u64,
 }
 
-impl VaultVolume {
-    /// Share of the volume in use above which clients warn that the vault is filling up.
+impl HubVolume {
+    /// Share of the volume in use above which clients warn that the hub is filling up.
     pub const WARN_RATIO: f64 = 0.8;
 
     /// Share of the volume in use, from 0 to 1.
@@ -295,21 +295,21 @@ impl VaultVolume {
     }
 }
 
-/// What a vault holds, in total and per host.
+/// What a hub holds, in total and per host.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct VaultStatus {
-    /// Sessions the vault lists: every host's, without copies another host took over.
+pub struct HubStatus {
+    /// Sessions the hub lists: every host's, without copies another host took over.
     pub sessions: u64,
     /// Journal events held, of every copy.
     pub events: u64,
-    /// Size of the vault's database, in bytes.
+    /// Size of the hub's database, in bytes.
     pub storage_bytes: u64,
     /// Each host that replicated here, ordered by host id; the same hosts as
     /// [`ServerMessage::Hosts`].
     pub hosts: Vec<HostReplication>,
 }
 
-/// How far one host's replication to a vault got.
+/// How far one host's replication to a hub got.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct HostReplication {
     /// The host.
@@ -322,9 +322,9 @@ pub struct HostReplication {
     /// is held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event_at: Option<Timestamp>,
-    /// How far the vault was behind the host when it last stored a batch from it: the age of
+    /// How far the hub was behind the host when it last stored a batch from it: the age of
     /// that batch's newest event, in milliseconds. Absent until the host sent a batch since
-    /// the vault started.
+    /// the hub started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lag_ms: Option<u64>,
 }
@@ -367,7 +367,7 @@ pub struct UserDevice {
     pub last_seen: Option<Timestamp>,
     /// Whether it has a connection open now.
     pub online: bool,
-    /// Whether it is a host that only replicates to this vault and reads nothing.
+    /// Whether it is a host that only replicates to this hub and reads nothing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub host_only: bool,
 }
@@ -377,7 +377,7 @@ pub struct UserDevice {
 pub struct SessionHead {
     /// The session.
     pub session_id: SessionId,
-    /// Host the session runs on, one of the vault's [`ServerMessage::Hosts`]; set by a vault
+    /// Host the session runs on, one of the hub's [`ServerMessage::Hosts`]; set by a hub
     /// only, as a daemon's sessions all run on its own host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_id: Option<HostId>,
@@ -410,10 +410,10 @@ pub struct SessionHead {
     /// How many of this session's children are `needs_you` or `needs_login`; 0 for a child.
     pub children_need_you: u32,
     /// Prompts waiting for the running turn to end, in the order they will run; a prompt
-    /// leaves it as its turn starts. A vault lists none.
+    /// leaves it as its turn starts. A hub lists none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queue: Vec<QueuedPrompt>,
-    /// Chat threads linked to the session, in the order they were linked. A vault lists none.
+    /// Chat threads linked to the session, in the order they were linked. A hub lists none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<crate::ThreadLink>,
     /// The bot that started the session; absent when the apps or an agent did.
@@ -484,7 +484,7 @@ pub struct Account {
     /// which it never sends to clients.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
-    /// The secret on the host's vault an endpoint account's client key is fetched from, when
+    /// The secret on the host's hub an endpoint account's client key is fetched from, when
     /// the host does not keep the key itself; never the value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_secret: Option<SecretRef>,
@@ -500,12 +500,12 @@ pub struct Account {
     /// it, or a project defaulting to it, still runs on it.
     #[serde(default)]
     pub fallback: bool,
-    /// The vault login it runs on, by its `name` on the vault, for an account the host's vault
-    /// gives it: one per login of the vault's CLIProxyAPI. Such an account is the vault's: its
-    /// label, fallback mark and usage are the login's, set on the vault with
-    /// `set_provider_login`, and it leaves the list when the vault drops the login.
+    /// The hub login it runs on, by its `name` on the hub, for an account the host's hub
+    /// gives it: one per login of the hub's CLIProxyAPI. Such an account is the hub's: its
+    /// label, fallback mark and usage are the login's, set on the hub with
+    /// `set_provider_login`, and it leaves the list when the hub drops the login.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vault_login: Option<String>,
+    pub hub_login: Option<String>,
     /// Since when the account needs logging in again on this host: a turn on it failed as
     /// `auth`. Its sessions hold their prompts meanwhile (`needs_login`); herder never moves
     /// them to another account by itself. Cleared by logging in again, or by the next turn on
@@ -673,22 +673,22 @@ pub enum CommandResult {
         #[serde(default)]
         failovers: Vec<FailoverTotal>,
     },
-    /// Which vault the daemon is linked to, answering `get_vault_link`.
-    VaultLink {
-        /// Whether the daemon is a vault, which hosts link to.
-        is_vault: bool,
-        /// The vault the daemon is linked to; absent when it is linked to none, as a vault
+    /// Which hub the daemon is linked to, answering `get_hub_link`.
+    HubLink {
+        /// Whether the daemon is a hub, which hosts link to.
+        is_hub: bool,
+        /// The hub the daemon is linked to; absent when it is linked to none, as a hub
         /// never is.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        vault: Option<LinkedVault>,
-        /// How full a vault's disk is, as of the answer; absent from a daemon, and when the
-        /// vault cannot tell.
+        hub: Option<LinkedHub>,
+        /// How full a hub's disk is, as of the answer; absent from a daemon, and when the
+        /// hub cannot tell.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        volume: Option<VaultVolume>,
-        /// Whether a vault is installed on this machine, next to the daemon, as
-        /// `install_vault` or `herder vault install` installs one.
+        volume: Option<HubVolume>,
+        /// Whether a hub is installed on this machine, next to the daemon, as
+        /// `install_hub` or `herder hub install` installs one.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        local_vault: bool,
+        local_hub: bool,
     },
     /// The daemon's settings, answering `get_settings` and `set_settings`.
     Settings {
@@ -698,17 +698,17 @@ pub enum CommandResult {
         restart_required: bool,
         /// Directory holding everything the daemon keeps; set where it starts, not here.
         data_dir: String,
-        /// Whether the daemon is a vault; set where it starts, not here.
-        is_vault: bool,
+        /// Whether the daemon is a hub; set where it starts, not here.
+        is_hub: bool,
     },
-    /// The window in which the caller claims the vault `install_vault` ran as its first owner,
-    /// with `claim_ownership` and this code; the vault's, not this daemon's.
+    /// The window in which the caller claims the hub `install_hub` ran as its first owner,
+    /// with `claim_ownership` and this code; the hub's, not this daemon's.
     OwnershipClaim {
         /// The claim code.
         code: String,
-        /// SHA-256 of the vault's TLS certificate, lowercase hex.
+        /// SHA-256 of the hub's TLS certificate, lowercase hex.
         fingerprint: String,
-        /// Addresses the vault advertises as `host:port`, or a tunnel's `wss://` URL, most
+        /// Addresses the hub advertises as `host:port`, or a tunnel's `wss://` URL, most
         /// likely reachable first.
         addresses: Vec<String>,
         /// When the window closes.
@@ -760,15 +760,15 @@ pub enum CommandResult {
         /// Its client, from its hello, e.g. `herder-tui/0.7.0`.
         client: String,
     },
-    /// A one-time code that pairs a host with this vault to replicate and only that,
-    /// answering `pair_vault_host`.
+    /// A one-time code that pairs a host with this hub to replicate and only that,
+    /// answering `pair_hub_host`.
     HostPairing {
-        /// The code, for `link_vault`.
+        /// The code, for `link_hub`.
         code: String,
         /// When the code stops working.
         expires_at: Timestamp,
     },
-    /// A vault's secrets without their values, answering `list_secrets`.
+    /// A hub's secrets without their values, answering `list_secrets`.
     Secrets {
         /// Every set, ordered by name.
         sets: Vec<SecretSet>,
@@ -777,7 +777,7 @@ pub enum CommandResult {
     },
     /// The value an agent's `store_secret` read, answering `get_secret_to_store`.
     SecretToStore {
-        /// The value, for the owner's app to put on the vault.
+        /// The value, for the owner's app to put on the hub.
         value: SecretValue,
     },
     /// The bots this daemon's host holds, answering `list_bots`.
@@ -798,13 +798,13 @@ pub enum CommandResult {
         /// Its memory.
         memory: crate::BotMemory,
     },
-    /// The provider logins a vault's CLIProxyAPI holds, answering `list_provider_logins` and
+    /// The provider logins a hub's CLIProxyAPI holds, answering `list_provider_logins` and
     /// `complete_provider_login`.
     ProviderLogins {
         /// Every login, ordered by provider, then label.
         logins: Vec<crate::ProviderLogin>,
     },
-    /// A provider login a vault's CLIProxyAPI started, answering `start_provider_login`.
+    /// A provider login a hub's CLIProxyAPI started, answering `start_provider_login`.
     ProviderLoginStarted {
         /// The login, for `complete_provider_login` and `cancel_provider_login`.
         login_id: String,
@@ -819,20 +819,20 @@ pub enum CommandResult {
     },
 }
 
-/// The vault a host is linked to, as its `[vault]` table names it.
+/// The hub a host is linked to, as its `[hub]` table names it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct LinkedVault {
-    /// The vault's address, as `host:port`.
+pub struct LinkedHub {
+    /// The hub's address, as `host:port`.
     pub address: String,
-    /// SHA-256 of the vault's TLS certificate, lowercase hex.
+    /// SHA-256 of the hub's TLS certificate, lowercase hex.
     pub fingerprint: String,
-    /// Whether the host replicates its sessions to the vault.
+    /// Whether the host replicates its sessions to the hub.
     pub backup: bool,
-    /// Whether the host's sessions fetch secrets from the vault.
+    /// Whether the host's sessions fetch secrets from the hub.
     pub secrets: bool,
-    /// Where the host reaches the vault's CLIProxyAPI, as the vault last said in its hello;
-    /// absent when the vault runs none, holds no client key for the host, or has not answered
-    /// since the daemon started. A client adds an endpoint account on the vault's provider
+    /// Where the host reaches the hub's CLIProxyAPI, as the hub last said in its hello;
+    /// absent when the hub runs none, holds no client key for the host, or has not answered
+    /// since the daemon started. A client adds an endpoint account on the hub's provider
     /// logins with this `endpoint` and `key_secret` `CLIPROXYAPI_KEY`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cliproxyapi: Option<String>,
@@ -872,7 +872,7 @@ pub enum ErrorCode {
     Conflict,
     /// The provider cannot do it.
     Unsupported,
-    /// The session is read-only here: a vault's copy of a session that runs on another host,
+    /// The session is read-only here: a hub's copy of a session that runs on another host,
     /// which the message names.
     ReadOnly,
     /// The daemon failed.

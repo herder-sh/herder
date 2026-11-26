@@ -38,8 +38,8 @@ impl ToolHandler for Unimplemented {
 
     fn fetch_secrets(&self, _caller: SessionId, secrets: Vec<SecretRef>) -> SecretsFuture {
         Box::pin(std::future::ready(Err(SecretError {
-            code: herder_protocol::SecretErrorCode::NoVault,
-            message: "no vault".into(),
+            code: herder_protocol::SecretErrorCode::NoHub,
+            message: "no hub".into(),
             secret: secrets.first().cloned(),
             candidates: Vec::new(),
         })))
@@ -438,6 +438,6 @@ async fn secrets_go_to_the_tokens_session_only_and_refusals_come_back_whole() {
         .await
         .unwrap()
         .unwrap_err();
-    assert_eq!(refusal.code, herder_protocol::SecretErrorCode::NoVault);
+    assert_eq!(refusal.code, herder_protocol::SecretErrorCode::NoHub);
     assert_eq!(refusal.secret, Some(secrets[0].clone()));
 }

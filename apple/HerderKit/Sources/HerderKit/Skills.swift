@@ -49,7 +49,7 @@ struct SkillLibrary: Equatable {
         var providers: [Provider] { Array(Set(machines.flatMap(\.providers))).sorted() }
     }
 
-    /// Every machine but a vault, which keeps no library.
+    /// Every machine but a hub, which keeps no library.
     let checkouts: [Checkout]
     /// Every skill on any machine, by name.
     let skills: [Skill]

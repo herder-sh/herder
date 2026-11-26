@@ -11,13 +11,13 @@
 //! terminal closes.
 //!
 //! Any attached client may type into a terminal or resize it; the latest resize wins. A client
-//! more than [`TERMINAL_BACKLOG`](crate::hub::TERMINAL_BACKLOG) messages behind is disconnected
+//! more than [`TERMINAL_BACKLOG`](crate::fanout::TERMINAL_BACKLOG) messages behind is disconnected
 //! rather than buffered without bound; it reconnects and re-attaches to get the scrollback.
 //!
 //! A terminal closes when its shell exits, or when an owner closes it ([`Terminals::close`]),
 //! its session is archived ([`KillOnArchive`]) or the daemon stops ([`Terminals::close_all`]),
-//! which hang the shell up. The owners' terminal list ([`Hub::terminals_changed`]) is updated on every open and close; a close is
-//! announced first with the shell's exit code ([`Hub::terminal_closed`]).
+//! which hang the shell up. The owners' terminal list ([`Fanout::terminals_changed`]) is updated on every open and close; a close is
+//! announced first with the shell's exit code ([`Fanout::terminal_closed`]).
 //!
 //! Owner-only access is enforced before commands get here, by [`crate::auth::authorize`].
 
@@ -34,7 +34,7 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 use tracing::{debug, info, warn};
 
 use crate::aws::DeviceWatch;
-use crate::hub::{Hub, Outbox};
+use crate::fanout::{Fanout, Outbox};
 use crate::session::EventSink;
 
 /// Bytes of output each terminal keeps for clients that attach later.
@@ -86,7 +86,7 @@ pub struct Terminals {
 }
 
 struct Inner {
-    hub: Arc<Hub>,
+    fanout: Arc<Fanout>,
     shell: PathBuf,
     /// Open terminals, ordered by id, which is a ULID: oldest first.
     open: Mutex<BTreeMap<TerminalId, Arc<Term>>>,
@@ -113,11 +113,11 @@ struct Output {
 }
 
 impl Terminals {
-    /// No terminals yet; new ones run `shell` and are announced through `hub`.
-    pub fn new(hub: Arc<Hub>, shell: PathBuf) -> Self {
+    /// No terminals yet; new ones run `shell` and are announced through `fanout`.
+    pub fn new(fanout: Arc<Fanout>, shell: PathBuf) -> Self {
         Self {
             inner: Arc::new(Inner {
-                hub,
+                fanout,
                 shell,
                 open: Mutex::new(BTreeMap::new()),
             }),
@@ -279,7 +279,7 @@ impl Terminals {
         {
             let mut open = self.inner.lock();
             open.insert(terminal_id.clone(), Arc::clone(&term));
-            self.inner.hub.terminals_changed(&list(&open));
+            self.inner.fanout.terminals_changed(&list(&open));
         }
         lock(&term.output).attached.push(Arc::clone(outbox));
         // Before the reader starts, so it comes before the program's output.
@@ -499,7 +499,7 @@ impl Inner {
         if open.contains_key(terminal_id) {
             info!(%terminal_id, ?purpose, "terminal repurposed");
             *lock(&term.purpose) = purpose;
-            self.hub.terminals_changed(&list(&open));
+            self.fanout.terminals_changed(&list(&open));
         }
     }
 
@@ -507,7 +507,7 @@ impl Inner {
     fn close(&self, terminal_id: &TerminalId, exit_code: Option<i32>) {
         let mut open = self.lock();
         if open.remove(terminal_id).is_some() {
-            self.hub
+            self.fanout
                 .terminal_closed(terminal_id, exit_code, &list(&open));
         }
     }
@@ -516,7 +516,7 @@ impl Inner {
     fn remove(&self, terminal_id: &TerminalId) -> Option<Arc<Term>> {
         let mut open = self.lock();
         let term = open.remove(terminal_id)?;
-        self.hub.terminals_changed(&list(&open));
+        self.fanout.terminals_changed(&list(&open));
         Some(term)
     }
 

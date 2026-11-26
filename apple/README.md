@@ -77,11 +77,11 @@ print, then open the session waiting on an approval on the first from its card o
 
 ```sh
 cargo run -p herder-ffi --example fake_daemon -- --share   # the link and passkey first, the waiting session last
-cargo run -p herder-ffi --example fake_daemon -- --vault   # a vault that keeps secrets
+cargo run -p herder-ffi --example fake_daemon -- --hub   # a hub that keeps secrets
 cargo run -p herder-ffi --example fake_daemon -- --own     # a machine to approve as its owner
 TEST_RUNNER_HERDER_PAIR_LINK='<link>' TEST_RUNNER_HERDER_PASSKEY='<passkey>' \
 TEST_RUNNER_HERDER_WAITING_SESSION='<session id>' \
-TEST_RUNNER_HERDER_VAULT_LINK='<vault link>' TEST_RUNNER_HERDER_OWN_LINK='<own link>' xcodebuild test -skipPackagePluginValidation -project apple/herder.xcodeproj \
+TEST_RUNNER_HERDER_HUB_LINK='<hub link>' TEST_RUNNER_HERDER_OWN_LINK='<own link>' xcodebuild test -skipPackagePluginValidation -project apple/herder.xcodeproj \
   -scheme herder-iOS -destination 'platform=iOS Simulator,name=iPhone 18 Pro'
 ```
 

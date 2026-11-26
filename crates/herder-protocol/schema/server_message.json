@@ -124,7 +124,7 @@
       ]
     },
     {
-      "description": "Every host whose sessions a vault lists, with its liveness; sent by a vault only, after\nhello and whenever a host connects, disconnects or first replicates. A daemon never\nsends it: its sessions all run on its own host.",
+      "description": "Every host whose sessions a hub lists, with its liveness; sent by a hub only, after\nhello and whenever a host connects, disconnects or first replicates. A daemon never\nsends it: its sessions all run on its own host.",
       "type": "object",
       "properties": {
         "hosts": {
@@ -145,15 +145,15 @@
       ]
     },
     {
-      "description": "What a vault holds and how each host's replication stands; sent by a vault only, after\nhello and whenever it changes, at most once every two seconds.",
+      "description": "What a hub holds and how each host's replication stands; sent by a hub only, after\nhello and whenever it changes, at most once every two seconds.",
       "type": "object",
       "properties": {
         "type": {
           "type": "string",
-          "const": "vault_status"
+          "const": "hub_status"
         }
       },
-      "$ref": "#/$defs/VaultStatus",
+      "$ref": "#/$defs/HubStatus",
       "required": [
         "type"
       ]
@@ -585,8 +585,15 @@
           "type": "boolean",
           "default": false
         },
+        "hub_login": {
+          "description": "The hub login it runs on, by its `name` on the hub, for an account the host's hub\ngives it: one per login of the hub's CLIProxyAPI. Such an account is the hub's: its\nlabel, fallback mark and usage are the login's, set on the hub with\n`set_provider_login`, and it leaves the list when the hub drops the login.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "key_secret": {
-          "description": "The secret on the host's vault an endpoint account's client key is fetched from, when\nthe host does not keep the key itself; never the value.",
+          "description": "The secret on the host's hub an endpoint account's client key is fetched from, when\nthe host does not keep the key itself; never the value.",
           "anyOf": [
             {
               "$ref": "#/$defs/SecretRef"
@@ -618,13 +625,6 @@
           "items": {
             "$ref": "#/$defs/UsageWindow"
           }
-        },
-        "vault_login": {
-          "description": "The vault login it runs on, by its `name` on the vault, for an account the host's vault\ngives it: one per login of the vault's CLIProxyAPI. Such an account is the vault's: its\nlabel, fallback mark and usage are the login's, set on the vault with\n`set_provider_login`, and it leaves the list when the vault drops the login.",
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
@@ -917,21 +917,21 @@
       ]
     },
     "BackupSettings": {
-      "description": "The values of the `[vault]` table: a host's say what it backs up while linked to a vault,\na vault's what it keeps. A value that does not apply to the daemon cannot change.",
+      "description": "The values of the `[hub]` table: a host's say what it backs up while linked to a hub,\na hub's what it keeps. A value that does not apply to the daemon cannot change.",
       "type": "object",
       "properties": {
         "archive_retention_days": {
-          "description": "On a vault: days an archived session of an online host is kept after its latest event.",
+          "description": "On a hub: days an archived session of an online host is kept after its latest event.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
         },
         "attachments": {
-          "description": "On a host linked to a vault: whether prompt images are backed up too.",
+          "description": "On a host linked to a hub: whether prompt images are backed up too.",
           "type": "boolean"
         },
         "attachments_cap": {
-          "description": "On a host linked to a vault: most bytes of its images the vault keeps.",
+          "description": "On a host linked to a hub: most bytes of its images the hub keeps.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -1218,9 +1218,9 @@
           "const": "connected"
         },
         {
-          "description": "Its tokens cannot be read: the host's vault is not linked, unreachable, or does not\nhand them out. It retries.",
+          "description": "Its tokens cannot be read: the host's hub is not linked, unreachable, or does not\nhand them out. It retries.",
           "type": "string",
-          "const": "waiting_for_vault"
+          "const": "waiting_for_hub"
         },
         {
           "description": "The chat refused its tokens; it waits for new ones.",
@@ -1611,37 +1611,37 @@
           ]
         },
         {
-          "description": "Which vault the daemon is linked to, answering `get_vault_link`.",
+          "description": "Which hub the daemon is linked to, answering `get_hub_link`.",
           "type": "object",
           "properties": {
-            "is_vault": {
-              "description": "Whether the daemon is a vault, which hosts link to.",
-              "type": "boolean"
-            },
-            "local_vault": {
-              "description": "Whether a vault is installed on this machine, next to the daemon, as\n`install_vault` or `herder vault install` installs one.",
-              "type": "boolean"
-            },
-            "type": {
-              "type": "string",
-              "const": "vault_link"
-            },
-            "vault": {
-              "description": "The vault the daemon is linked to; absent when it is linked to none, as a vault\nnever is.",
+            "hub": {
+              "description": "The hub the daemon is linked to; absent when it is linked to none, as a hub\nnever is.",
               "anyOf": [
                 {
-                  "$ref": "#/$defs/LinkedVault"
+                  "$ref": "#/$defs/LinkedHub"
                 },
                 {
                   "type": "null"
                 }
               ]
             },
+            "is_hub": {
+              "description": "Whether the daemon is a hub, which hosts link to.",
+              "type": "boolean"
+            },
+            "local_hub": {
+              "description": "Whether a hub is installed on this machine, next to the daemon, as\n`install_hub` or `herder hub install` installs one.",
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "hub_link"
+            },
             "volume": {
-              "description": "How full a vault's disk is, as of the answer; absent from a daemon, and when the\nvault cannot tell.",
+              "description": "How full a hub's disk is, as of the answer; absent from a daemon, and when the\nhub cannot tell.",
               "anyOf": [
                 {
-                  "$ref": "#/$defs/VaultVolume"
+                  "$ref": "#/$defs/HubVolume"
                 },
                 {
                   "type": "null"
@@ -1651,7 +1651,7 @@
           },
           "required": [
             "type",
-            "is_vault"
+            "is_hub"
           ]
         },
         {
@@ -1662,8 +1662,8 @@
               "description": "Directory holding everything the daemon keeps; set where it starts, not here.",
               "type": "string"
             },
-            "is_vault": {
-              "description": "Whether the daemon is a vault; set where it starts, not here.",
+            "is_hub": {
+              "description": "Whether the daemon is a hub; set where it starts, not here.",
               "type": "boolean"
             },
             "restart_required": {
@@ -1684,15 +1684,15 @@
             "settings",
             "restart_required",
             "data_dir",
-            "is_vault"
+            "is_hub"
           ]
         },
         {
-          "description": "The window in which the caller claims the vault `install_vault` ran as its first owner,\nwith `claim_ownership` and this code; the vault's, not this daemon's.",
+          "description": "The window in which the caller claims the hub `install_hub` ran as its first owner,\nwith `claim_ownership` and this code; the hub's, not this daemon's.",
           "type": "object",
           "properties": {
             "addresses": {
-              "description": "Addresses the vault advertises as `host:port`, or a tunnel's `wss://` URL, most\nlikely reachable first.",
+              "description": "Addresses the hub advertises as `host:port`, or a tunnel's `wss://` URL, most\nlikely reachable first.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -1708,7 +1708,7 @@
               "format": "date-time"
             },
             "fingerprint": {
-              "description": "SHA-256 of the vault's TLS certificate, lowercase hex.",
+              "description": "SHA-256 of the hub's TLS certificate, lowercase hex.",
               "type": "string"
             },
             "type": {
@@ -1874,11 +1874,11 @@
           ]
         },
         {
-          "description": "A one-time code that pairs a host with this vault to replicate and only that,\nanswering `pair_vault_host`.",
+          "description": "A one-time code that pairs a host with this hub to replicate and only that,\nanswering `pair_hub_host`.",
           "type": "object",
           "properties": {
             "code": {
-              "description": "The code, for `link_vault`.",
+              "description": "The code, for `link_hub`.",
               "type": "string"
             },
             "expires_at": {
@@ -1898,7 +1898,7 @@
           ]
         },
         {
-          "description": "A vault's secrets without their values, answering `list_secrets`.",
+          "description": "A hub's secrets without their values, answering `list_secrets`.",
           "type": "object",
           "properties": {
             "secrets": {
@@ -1935,7 +1935,7 @@
               "const": "secret_to_store"
             },
             "value": {
-              "description": "The value, for the owner's app to put on the vault.",
+              "description": "The value, for the owner's app to put on the hub.",
               "$ref": "#/$defs/SecretValue"
             }
           },
@@ -2010,7 +2010,7 @@
           ]
         },
         {
-          "description": "The provider logins a vault's CLIProxyAPI holds, answering `list_provider_logins` and\n`complete_provider_login`.",
+          "description": "The provider logins a hub's CLIProxyAPI holds, answering `list_provider_logins` and\n`complete_provider_login`.",
           "type": "object",
           "properties": {
             "logins": {
@@ -2031,7 +2031,7 @@
           ]
         },
         {
-          "description": "A provider login a vault's CLIProxyAPI started, answering `start_provider_login`.",
+          "description": "A provider login a hub's CLIProxyAPI started, answering `start_provider_login`.",
           "type": "object",
           "properties": {
             "login_id": {
@@ -2177,11 +2177,11 @@
       ]
     },
     "DaemonSettings": {
-      "description": "Every daemon-wide setting of the daemon's config file, as values in effect when the file\nis loaded: a key the file leaves out shows its default. Accounts, projects and the vault\nlink are not here; they have their own commands.",
+      "description": "Every daemon-wide setting of the daemon's config file, as values in effect when the file\nis loaded: a key the file leaves out shows its default. Accounts, projects and the hub\nlink are not here; they have their own commands.",
       "type": "object",
       "properties": {
         "backup": {
-          "description": "What is backed up, and kept, on a vault.",
+          "description": "What is backed up, and kept, on a hub.",
           "$ref": "#/$defs/BackupSettings"
         },
         "binaries": {
@@ -2333,7 +2333,7 @@
           "const": "unsupported"
         },
         {
-          "description": "The session is read-only here: a vault's copy of a session that runs on another host,\nwhich the message names.",
+          "description": "The session is read-only here: a hub's copy of a session that runs on another host,\nwhich the message names.",
           "type": "string",
           "const": "read_only"
         },
@@ -2708,7 +2708,7 @@
               "default": "user"
             },
             "secret": {
-              "description": "For an agent's `store_secret`, what to store; always routed to the user. Only an\nowner allows it, from an app: `get_secret_to_store`, then `put_secret` on the\nhost's vault, then `confirm_secret_stored`. `answer_approval` may only deny it.",
+              "description": "For an agent's `store_secret`, what to store; always routed to the user. Only an\nowner allows it, from an app: `get_secret_to_store`, then `put_secret` on the\nhost's hub, then `confirm_secret_stored`. `answer_approval` may only deny it.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/SecretStoreRequest"
@@ -2719,7 +2719,7 @@
               ]
             },
             "secret_request": {
-              "description": "For an agent's `request_secret`, the secret it asks the user to supply; always\nrouted to the user. Only an owner supplies it, from an app: `put_secret` on the\nhost's vault, then `confirm_secret_stored`. `answer_approval` may only decline it.",
+              "description": "For an agent's `request_secret`, the secret it asks the user to supply; always\nrouted to the user. Only an owner supplies it, from an app: `put_secret` on the\nhost's hub, then `confirm_secret_stored`. `answer_approval` may only decline it.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/SecretRequest"
@@ -3284,7 +3284,7 @@
       ]
     },
     "FleetHost": {
-      "description": "A host that replicates to a vault, as the vault lists it.",
+      "description": "A host that replicates to a hub, as the hub lists it.",
       "type": "object",
       "properties": {
         "host_id": {
@@ -3296,20 +3296,20 @@
           "type": "string"
         },
         "last_seen": {
-          "description": "When the vault last heard from the host; for an online host, as of when it connected\nor the list was last sent.",
+          "description": "When the hub last heard from the host; for an online host, as of when it connected\nor the list was last sent.",
           "type": "string",
           "format": "date-time"
         },
         "online": {
-          "description": "Whether the host's replication connection is open. A host silent for the vault's\nliveness timeout is offline; its sessions stay listed, read-only as all on a vault are.",
+          "description": "Whether the host's replication connection is open. A host silent for the hub's\nliveness timeout is offline; its sessions stay listed, read-only as all on a hub are.",
           "type": "boolean"
         },
         "relay": {
-          "description": "Whether the vault relays clients to the host now: it is online and takes relayed\nconnections. A client paired with both then reaches the host through the vault, with\n[`crate::RelayHello::Connect`] (see [`crate::relay`]).",
+          "description": "Whether the hub relays clients to the host now: it is online and takes relayed\nconnections. A client paired with both then reaches the host through the hub, with\n[`crate::RelayHello::Connect`] (see [`crate::relay`]).",
           "type": "boolean"
         },
         "usage": {
-          "description": "What the host's copies take on the vault; absent from a vault that does not say.",
+          "description": "What the host's copies take on the hub; absent from a hub that does not say.",
           "anyOf": [
             {
               "$ref": "#/$defs/HostUsage"
@@ -3418,7 +3418,7 @@
       "type": "string"
     },
     "HostReplication": {
-      "description": "How far one host's replication to a vault got.",
+      "description": "How far one host's replication to a hub got.",
       "type": "object",
       "properties": {
         "events": {
@@ -3432,7 +3432,7 @@
           "$ref": "#/$defs/HostId"
         },
         "lag_ms": {
-          "description": "How far the vault was behind the host when it last stored a batch from it: the age of\nthat batch's newest event, in milliseconds. Absent until the host sent a batch since\nthe vault started.",
+          "description": "How far the hub was behind the host when it last stored a batch from it: the age of\nthat batch's newest event, in milliseconds. Absent until the host sent a batch since\nthe hub started.",
           "type": [
             "integer",
             "null"
@@ -3546,17 +3546,17 @@
       ]
     },
     "HostUsage": {
-      "description": "What one host's copies take on the vault.",
+      "description": "What one host's copies take on the hub.",
       "type": "object",
       "properties": {
         "attachment_bytes": {
-          "description": "Bytes of the host's images the vault holds.",
+          "description": "Bytes of the host's images the hub holds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "attachments_cap": {
-          "description": "Most bytes of images the vault keeps for the host; absent when the host backs up no\nimages.",
+          "description": "Most bytes of images the hub keeps for the host; absent when the host backs up no\nimages.",
           "type": [
             "integer",
             "null"
@@ -3565,7 +3565,7 @@
           "minimum": 0
         },
         "sessions": {
-          "description": "Sessions of the host the vault holds.",
+          "description": "Sessions of the host the hub holds.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -3574,6 +3574,65 @@
       "required": [
         "sessions",
         "attachment_bytes"
+      ]
+    },
+    "HubStatus": {
+      "description": "What a hub holds, in total and per host.",
+      "type": "object",
+      "properties": {
+        "events": {
+          "description": "Journal events held, of every copy.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "hosts": {
+          "description": "Each host that replicated here, ordered by host id; the same hosts as\n[`ServerMessage::Hosts`].",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostReplication"
+          }
+        },
+        "sessions": {
+          "description": "Sessions the hub lists: every host's, without copies another host took over.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "storage_bytes": {
+          "description": "Size of the hub's database, in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "sessions",
+        "events",
+        "storage_bytes",
+        "hosts"
+      ]
+    },
+    "HubVolume": {
+      "description": "The disk the hub keeps its database on.",
+      "type": "object",
+      "properties": {
+        "total_bytes": {
+          "description": "Size of the volume, in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "used_bytes": {
+          "description": "Bytes in use, by the hub or anything else.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_bytes",
+        "used_bytes"
       ]
     },
     "Item": {
@@ -3783,31 +3842,31 @@
         "providers"
       ]
     },
-    "LinkedVault": {
-      "description": "The vault a host is linked to, as its `[vault]` table names it.",
+    "LinkedHub": {
+      "description": "The hub a host is linked to, as its `[hub]` table names it.",
       "type": "object",
       "properties": {
         "address": {
-          "description": "The vault's address, as `host:port`.",
+          "description": "The hub's address, as `host:port`.",
           "type": "string"
         },
         "backup": {
-          "description": "Whether the host replicates its sessions to the vault.",
+          "description": "Whether the host replicates its sessions to the hub.",
           "type": "boolean"
         },
         "cliproxyapi": {
-          "description": "Where the host reaches the vault's CLIProxyAPI, as the vault last said in its hello;\nabsent when the vault runs none, holds no client key for the host, or has not answered\nsince the daemon started. A client adds an endpoint account on the vault's provider\nlogins with this `endpoint` and `key_secret` `CLIPROXYAPI_KEY`.",
+          "description": "Where the host reaches the hub's CLIProxyAPI, as the hub last said in its hello;\nabsent when the hub runs none, holds no client key for the host, or has not answered\nsince the daemon started. A client adds an endpoint account on the hub's provider\nlogins with this `endpoint` and `key_secret` `CLIPROXYAPI_KEY`.",
           "type": [
             "string",
             "null"
           ]
         },
         "fingerprint": {
-          "description": "SHA-256 of the vault's TLS certificate, lowercase hex.",
+          "description": "SHA-256 of the hub's TLS certificate, lowercase hex.",
           "type": "string"
         },
         "secrets": {
-          "description": "Whether the host's sessions fetch secrets from the vault.",
+          "description": "Whether the host's sessions fetch secrets from the hub.",
           "type": "boolean"
         }
       },
@@ -3913,7 +3972,7 @@
               "default": {}
             },
             "secrets": {
-              "description": "Secrets from the host's vault, each added to its environment as the variable of\nits name: the program runs through `herder secret run`, so a value is never in\nthe config file, on a command line or before an agent.",
+              "description": "Secrets from the host's hub, each added to its environment as the variable of\nits name: the program runs through `herder secret run`, so a value is never in\nthe config file, on a command line or before an agent.",
               "type": "array",
               "default": [],
               "items": {
@@ -3935,7 +3994,7 @@
           "type": "object",
           "properties": {
             "headers": {
-              "description": "Headers sent with every request, such as `Authorization`, kept in the daemon's\nconfig file as given. A value may hold `{secret:NAME}` or `{secret:set/NAME}`\nplaceholders (`SecretRef`), which take the secret's value from the host's vault\nas a session's CLI starts, so the value is never in the config file; a session\nwhose secrets the vault does not hand out goes without the server.",
+              "description": "Headers sent with every request, such as `Authorization`, kept in the daemon's\nconfig file as given. A value may hold `{secret:NAME}` or `{secret:set/NAME}`\nplaceholders (`SecretRef`), which take the secret's value from the host's hub\nas a session's CLI starts, so the value is never in the config file; a session\nwhose secrets the hub does not hand out goes without the server.",
               "type": "object",
               "additionalProperties": {
                 "type": "string"
@@ -4379,7 +4438,7 @@
       ]
     },
     "ProviderLogin": {
-      "description": "A provider login a vault's CLIProxyAPI holds, without its tokens.",
+      "description": "A provider login a hub's CLIProxyAPI holds, without its tokens.",
       "type": "object",
       "properties": {
         "email": {
@@ -4449,7 +4508,7 @@
       ]
     },
     "ProviderLoginState": {
-      "description": "Whether a vault's CLIProxyAPI can use a provider login now.",
+      "description": "Whether a hub's CLIProxyAPI can use a provider login now.",
       "oneOf": [
         {
           "description": "In use.",
@@ -4827,11 +4886,11 @@
       ]
     },
     "SecretAccess": {
-      "description": "One fetch of a secret's value by a host, as the vault recorded it.",
+      "description": "One fetch of a secret's value by a host, as the hub recorded it.",
       "type": "object",
       "properties": {
         "at": {
-          "description": "When the vault handed the value out.",
+          "description": "When the hub handed the value out.",
           "type": "string",
           "format": "date-time"
         },
@@ -4840,7 +4899,7 @@
           "$ref": "#/$defs/HostId"
         },
         "id": {
-          "description": "Position in the vault's audit log, increasing; for `list_secret_audit`'s `before`.",
+          "description": "Position in the hub's audit log, increasing; for `list_secret_audit`'s `before`.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -4941,7 +5000,7 @@
       ]
     },
     "SecretSet": {
-      "description": "A set of secrets on a vault, and the hosts it is granted to.",
+      "description": "A set of secrets on a hub, and the hosts it is granted to.",
       "type": "object",
       "properties": {
         "host_use": {
@@ -4979,7 +5038,7 @@
           "minimum": 0
         },
         "delete_file_after": {
-          "description": "Whether the host deletes the file once the owner confirms the vault stored it.",
+          "description": "Whether the host deletes the file once the owner confirms the hub stored it.",
           "type": "boolean"
         },
         "description": {
@@ -5107,7 +5166,7 @@
           "minimum": 0
         },
         "host_id": {
-          "description": "Host the session runs on, one of the vault's [`ServerMessage::Hosts`]; set by a vault\nonly, as a daemon's sessions all run on its own host.",
+          "description": "Host the session runs on, one of the hub's [`ServerMessage::Hosts`]; set by a hub\nonly, as a daemon's sessions all run on its own host.",
           "anyOf": [
             {
               "$ref": "#/$defs/HostId"
@@ -5162,7 +5221,7 @@
           ]
         },
         "queue": {
-          "description": "Prompts waiting for the running turn to end, in the order they will run; a prompt\nleaves it as its turn starts. A vault lists none.",
+          "description": "Prompts waiting for the running turn to end, in the order they will run; a prompt\nleaves it as its turn starts. A hub lists none.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/QueuedPrompt"
@@ -5184,7 +5243,7 @@
           ]
         },
         "threads": {
-          "description": "Chat threads linked to the session, in the order they were linked. A vault lists none.",
+          "description": "Chat threads linked to the session, in the order they were linked. A hub lists none.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/ThreadLink"
@@ -6028,7 +6087,7 @@
           "$ref": "#/$defs/DeviceId"
         },
         "host_only": {
-          "description": "Whether it is a host that only replicates to this vault and reads nothing.",
+          "description": "Whether it is a host that only replicates to this hub and reads nothing.",
           "type": "boolean"
         },
         "last_seen": {
@@ -6089,65 +6148,6 @@
         "name",
         "role",
         "devices"
-      ]
-    },
-    "VaultStatus": {
-      "description": "What a vault holds, in total and per host.",
-      "type": "object",
-      "properties": {
-        "events": {
-          "description": "Journal events held, of every copy.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "hosts": {
-          "description": "Each host that replicated here, ordered by host id; the same hosts as\n[`ServerMessage::Hosts`].",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/HostReplication"
-          }
-        },
-        "sessions": {
-          "description": "Sessions the vault lists: every host's, without copies another host took over.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "storage_bytes": {
-          "description": "Size of the vault's database, in bytes.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "sessions",
-        "events",
-        "storage_bytes",
-        "hosts"
-      ]
-    },
-    "VaultVolume": {
-      "description": "The disk the vault keeps its database on.",
-      "type": "object",
-      "properties": {
-        "total_bytes": {
-          "description": "Size of the volume, in bytes.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "used_bytes": {
-          "description": "Bytes in use, by the vault or anything else.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "total_bytes",
-        "used_bytes"
       ]
     }
   }

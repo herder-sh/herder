@@ -77,7 +77,7 @@ struct BackupFreshnessTests {
         HostReplication(hostId: "a", sessions: 1, events: 10, lastEventAt: last, lagMs: lagMs)
     }
 
-    @Test func saysHowFarTheVaultGot() throws {
+    @Test func saysHowFarTheHubGot() throws {
         let now = try #require(Timestamp.date("2026-10-26T10:03:00Z"))
         #expect(Fleet.freshness(nil, now: now) == "")
         #expect(Fleet.freshness(replication(last: nil, lagMs: nil), now: now) == "Nothing backed up yet")

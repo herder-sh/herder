@@ -36,7 +36,7 @@
 //!
 //! [`Admission::run`] publishes
 //! [`ServerMessage::HostResources`](herder_protocol::ServerMessage::HostResources) through the
-//! [`Hub`] each [`RECHECK_INTERVAL`] when it changed, and at once when the turn limit does.
+//! [`Fanout`] each [`RECHECK_INTERVAL`] when it changed, and at once when the turn limit does.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -50,7 +50,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::cgroup;
-use crate::hub::Hub;
+use crate::fanout::Fanout;
 
 /// How often waiting turns are checked again and the host's resources published; the
 /// contract's limit for `host_resources`.
@@ -404,22 +404,22 @@ impl Admission {
         self.shared.resources(&state, self.shared.read().as_ref())
     }
 
-    /// Admits waiting turns and publishes the host's resources to `hub` when they changed,
+    /// Admits waiting turns and publishes the host's resources to `fanout` when they changed,
     /// each [`RECHECK_INTERVAL`] until `shutdown`.
-    pub async fn run(&self, hub: &Hub, shutdown: CancellationToken) {
+    pub async fn run(&self, fanout: &Fanout, shutdown: CancellationToken) {
         let mut tick = tokio::time::interval(RECHECK_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => return,
-                _ = tick.tick() => self.publish(hub),
-                () = self.shared.limit_changed.notified() => self.publish(hub),
+                _ = tick.tick() => self.publish(fanout),
+                () = self.shared.limit_changed.notified() => self.publish(fanout),
             }
         }
     }
 
-    /// Admits waiting turns, then sends `hub` the host's resources if they changed.
-    pub fn publish(&self, hub: &Hub) {
+    /// Admits waiting turns, then sends `fanout` the host's resources if they changed.
+    pub fn publish(&self, fanout: &Fanout) {
         let shared = &self.shared;
         let mut state = shared.lock();
         shared.admit(&mut state);
@@ -427,7 +427,7 @@ impl Admission {
         if state.published.as_ref() != Some(&resources) {
             state.published = Some(resources.clone());
             drop(state);
-            hub.host_resources(resources);
+            fanout.host_resources(resources);
         }
     }
 }

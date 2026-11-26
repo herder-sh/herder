@@ -1,11 +1,10 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 516
 expression: "render(&mut app, 120, 12).backend()"
 ---
 " herder        inbox 0 « │                                                   │ → docs                            moved  "
 "                         │                                                   │ herder/docs · laptop · ~/src/app         "
-"  ○ vault                │                                                   │ claude-main · claude-opus · ask          "
+"  ○ hub                  │                                                   │ claude-main · claude-opus · ask          "
 "    ├ ○ devbox           │                                                   │                                          "
 "    │ └ ○ app · docs     │                                                   │                                          "
 "    └ · laptop           │                                                   │                                          "
@@ -14,4 +13,4 @@ expression: "render(&mut app, 120, 12).backend()"
 " ─────────────────────── │  moved to devbox · read-only here                 │                                          "
 " + new            ≡ menu │                                    claude-main    │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────┴───────────────────────────────────────── "
-"  NAVIGATE   i write  j/k scroll  [ ] items  e expand  c copy  esc sidebar  s switch  p prs  ? help  ● vault  ● laptop  "
+"  NAVIGATE   i write  j/k scroll  [ ] items  e expand  c copy  esc sidebar  s switch  p prs  ? help    ● hub  ● laptop  "

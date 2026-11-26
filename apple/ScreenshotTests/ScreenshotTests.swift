@@ -409,7 +409,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Integrations: every machine's bots in one table, then `trash-can`'s page, then Add Bot's
-    /// steps. The demo's bots wait for a vault, so none reaches Slack.
+    /// steps. The demo's bots wait for a hub, so none reaches Slack.
     private func integrations() {
         #if os(macOS)
         guard section("Integrations") else { return }
@@ -581,7 +581,7 @@ final class ScreenshotTests: XCTestCase {
                 settle()
                 shoot("mac-machine-settings-mcp")
             }
-            // Its backup to the demo's vault and its switches.
+            // Its backup to the demo's hub and its switches.
             let backup = app.buttons["section-index-Backup"].firstMatch
             if wait(backup, "Backup in the section index") {
                 press(backup)

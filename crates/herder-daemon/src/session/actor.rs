@@ -160,14 +160,14 @@ pub(super) enum Request {
         approval_id: ApprovalId,
     },
     /// An owner's app put the value of the open `store_secret` or `request_secret` approval
-    /// `approval_id` on the vault, in `set`.
+    /// `approval_id` on the hub, in `set`.
     ConfirmSecretStored {
         approval_id: ApprovalId,
         set: String,
     },
 }
 
-/// What an agent's secret approval asks an owner to put on the vault.
+/// What an agent's secret approval asks an owner to put on the hub.
 pub(super) enum SecretAsk {
     /// `store_secret`: `value`, which the host read from the file `store` names.
     Store {
@@ -929,7 +929,7 @@ impl Actor {
             return Err(error(
                 ErrorCode::BadRequest,
                 "store or supply a secret from its card in a herder app or the TUI, as an \
-                 owner of this machine and of its vault: the client puts the value on the vault",
+                 owner of this machine and of its hub: the client puts the value on the hub",
             ));
         }
         let store = self
@@ -1957,7 +1957,7 @@ impl Actor {
                             turn_id: turn_id.clone(),
                         })
                         .await;
-                        // The account's key could not be had from an unreachable vault: the
+                        // The account's key could not be had from an unreachable hub: the
                         // prompt fails over as for an endpoint that cannot be reached.
                         if error.class == ErrorClass::Unreachable {
                             self.turn = Some(turn_id.clone());
@@ -2255,7 +2255,7 @@ impl Actor {
     }
 
     /// The user's MCP servers this start of the session's CLI gets, their headers' secrets
-    /// fetched for the session from the host's vault, as `herder secret run` fetches them.
+    /// fetched for the session from the host's hub, as `herder secret run` fetches them.
     async fn user_mcp_servers(&self) -> Launch {
         let session = &self.session;
         let Some(servers) = self.inner.mcp_servers.get() else {
@@ -2279,7 +2279,7 @@ impl Actor {
             Box::pin(async move {
                 match host {
                     Some(host) => host.fetch(&session_id, &secrets).await,
-                    None => Err(super::tasks::no_vault()),
+                    None => Err(super::tasks::no_hub()),
                 }
             })
         };

@@ -17,8 +17,8 @@
 //!  cpu          23% of 8 cores
 //! ```
 //!
-//! A vault shows how full its disk is, as it said when the fleet view opened, in place of
-//! accounts and load, warning above [`VaultVolume::WARN_RATIO`], and what each host it
+//! A hub shows how full its disk is, as it said when the fleet view opened, in place of
+//! accounts and load, warning above [`HubVolume::WARN_RATIO`], and what each host it
 //! backs up takes there:
 //!
 //! ```text
@@ -28,7 +28,7 @@
 //! ```
 
 use herder_client_core::{ConnectionState, Machine};
-use herder_protocol::{FleetHost, Role, Timestamp, VaultVolume};
+use herder_protocol::{FleetHost, HubVolume, Role, Timestamp};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -198,7 +198,7 @@ fn row<'a>(ui: Ui, app: &App, panel: &MachinePanel, machine: &Machine, compact: 
     };
     let mut facts = vec![Span::styled(short(ui, &machine.fingerprint), ui.muted())];
     if matches!(machine.connection, ConnectionState::Connected) {
-        if is_vault(panel, machine) {
+        if is_hub(panel, machine) {
             facts.push(Span::styled(count(machine.hosts.len(), "host"), ui.muted()));
         } else {
             facts.push(Span::styled(
@@ -206,8 +206,8 @@ fn row<'a>(ui: Ui, app: &App, panel: &MachinePanel, machine: &Machine, compact: 
                 ui.muted(),
             ));
         }
-        // A phone has room for a vault's hosts or its sessions, not both.
-        if !(compact && is_vault(panel, machine)) {
+        // A phone has room for a hub's hosts or its sessions, not both.
+        if !(compact && is_hub(panel, machine)) {
             facts.push(Span::styled(count(sessions, "session"), ui.muted()));
         }
         if let Some(volume) = panel.volumes.get(&machine.host_id) {
@@ -225,18 +225,18 @@ fn row<'a>(ui: Ui, app: &App, panel: &MachinePanel, machine: &Machine, compact: 
         .body(vec![Line::from(ui.joined(facts))])
 }
 
-/// Whether `machine` is a vault: it lists the hosts it backs up, or said it is one.
-fn is_vault(panel: &MachinePanel, machine: &Machine) -> bool {
-    !machine.hosts.is_empty() || panel.links.get(&machine.host_id) == Some(&Known::Vault)
+/// Whether `machine` is a hub: it lists the hosts it backs up, or said it is one.
+fn is_hub(panel: &MachinePanel, machine: &Machine) -> bool {
+    !machine.hosts.is_empty() || panel.links.get(&machine.host_id) == Some(&Known::Hub)
 }
 
-/// How much of the vault's disk is in use, as `86%`.
-fn percent(volume: &VaultVolume) -> String {
+/// How much of the hub's disk is in use, as `86%`.
+fn percent(volume: &HubVolume) -> String {
     format!("{:.0}%", volume.used_ratio() * 100.0)
 }
 
-/// The warning colour once the vault's disk is nearly full, else muted.
-fn disk_style(ui: Ui, volume: &VaultVolume) -> Style {
+/// The warning colour once the hub's disk is nearly full, else muted.
+fn disk_style(ui: Ui, volume: &HubVolume) -> Style {
     if volume.nearly_full() {
         Style::new().fg(ui.theme.warning)
     } else {
@@ -244,13 +244,8 @@ fn disk_style(ui: Ui, volume: &VaultVolume) -> Style {
     }
 }
 
-/// The vault's disk and what each host takes on it, as details rows `width` wide.
-fn vault_facts(
-    ui: Ui,
-    panel: &MachinePanel,
-    machine: &Machine,
-    width: usize,
-) -> Vec<Line<'static>> {
+/// The hub's disk and what each host takes on it, as details rows `width` wide.
+fn hub_facts(ui: Ui, panel: &MachinePanel, machine: &Machine, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     match panel.volumes.get(&machine.host_id) {
         Some(volume) => {
@@ -391,15 +386,15 @@ fn short(ui: Ui, fingerprint: &str) -> String {
     format!("{head}{}{tail}", ui.glyphs.ellipsis)
 }
 
-/// `address` as shown: the route through a vault names the vault, as the user knows it,
+/// `address` as shown: the route through a hub names the hub, as the user knows it,
 /// in place of its host id; any other address is shown as it is.
 fn route(app: &App, address: &str) -> String {
-    let Some(vault) = address.strip_prefix("vault://") else {
+    let Some(hub) = address.strip_prefix("hub://") else {
         return address.to_owned();
     };
-    match app.machines.iter().find(|m| m.host_id.as_str() == vault) {
-        Some(vault) => format!("through {}", vault.name),
-        None => "through a vault".to_owned(),
+    match app.machines.iter().find(|m| m.host_id.as_str() == hub) {
+        Some(hub) => format!("through {}", hub.name),
+        None => "through a hub".to_owned(),
     }
 }
 
@@ -423,24 +418,24 @@ fn details(
     }
     lines.extend(field(ui, "role", role, ui.text(), width));
     if let Some(known) = panel.links.get(&machine.host_id) {
-        let vault = match known {
-            Known::Linked(linked) => app.paired_vault(linked),
+        let hub = match known {
+            Known::Linked(linked) => app.paired_hub(linked),
             _ => None,
         };
         let style = match known {
             Known::Unlinked => Style::new().fg(ui.theme.warning),
             Known::Asking | Known::Unknown(_) => ui.muted(),
-            Known::Vault | Known::Linked(_) => ui.text(),
+            Known::Hub | Known::Linked(_) => ui.text(),
         };
-        let backup = backup::describe(known, vault);
+        let backup = backup::describe(known, hub);
         lines.extend(field(ui, "backup", &backup, style, width));
     }
-    if is_vault(panel, machine) {
-        lines.extend(vault_facts(ui, panel, machine, width));
+    if is_hub(panel, machine) {
+        lines.extend(hub_facts(ui, panel, machine, width));
     } else {
         lines.extend(machine_facts(ui, machine, width));
     }
-    for (label, value) in vault_status(machine, app.now()) {
+    for (label, value) in hub_status(machine, app.now()) {
         lines.extend(field(ui, &label, &value, ui.text(), width));
     }
     lines.extend(field(
@@ -520,10 +515,10 @@ fn latency(machine: &Machine) -> Option<String> {
     Some(latency)
 }
 
-/// A vault's status as of `now`: what it holds, then each host's replication, labelled with
+/// A hub's status as of `now`: what it holds, then each host's replication, labelled with
 /// the host's name.
-fn vault_status(machine: &Machine, now: Timestamp) -> Vec<(String, String)> {
-    let Some(vault) = &machine.vault else {
+fn hub_status(machine: &Machine, now: Timestamp) -> Vec<(String, String)> {
+    let Some(hub) = &machine.hub else {
         return Vec::new();
     };
     let count = |n: u64, one: &str| match n {
@@ -531,15 +526,15 @@ fn vault_status(machine: &Machine, now: Timestamp) -> Vec<(String, String)> {
         n => format!("{n} {one}s"),
     };
     let mut facts = vec![(
-        "vault".to_owned(),
+        "hub".to_owned(),
         format!(
             "{} · {} · {}",
-            count(vault.sessions, "session"),
-            count(vault.events, "event"),
-            storage(vault.storage_bytes)
+            count(hub.sessions, "session"),
+            count(hub.events, "event"),
+            storage(hub.storage_bytes)
         ),
     )];
-    for host in &vault.hosts {
+    for host in &hub.hosts {
         let name = machine
             .hosts
             .iter()
@@ -620,11 +615,11 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
             .collect()
     };
     let provider = account.provider();
-    let mut top = if account.kind == accounts::Kind::Vault {
+    let mut top = if account.kind == accounts::Kind::Hub {
         wrapped(
             &format!(
                 "Runs {} on {machine} on the provider logins in the CLIProxyAPI next to its \
-                 vault, with the key the vault keeps for {machine}. Nothing to type.",
+                 hub, with the key the hub keeps for {machine}. Nothing to type.",
                 provider.as_str()
             ),
             ui.muted(),
@@ -646,9 +641,9 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
     };
     top.push(Line::default());
     let mut bottom = vec![Line::default()];
-    if account.kind == accounts::Kind::Vault {
+    if account.kind == accounts::Kind::Hub {
         bottom.extend(wrapped(
-            &format!("{machine} fetches its key from the vault when a session starts."),
+            &format!("{machine} fetches its key from the hub when a session starts."),
             ui.muted(),
         ));
     } else if account.kind == accounts::Kind::Endpoint {

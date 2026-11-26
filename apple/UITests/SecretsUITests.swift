@@ -1,28 +1,28 @@
 import XCTest
 
-/// Manages a vault's secrets: against the fake vault (`fake_daemon --vault` prints its link; pass
-/// it to `xcodebuild test` as `TEST_RUNNER_HERDER_VAULT_LINK`), whose hosts are `devbox` and
+/// Manages a hub's secrets: against the fake hub (`fake_daemon --hub` prints its link; pass
+/// it to `xcodebuild test` as `TEST_RUNNER_HERDER_HUB_LINK`), whose hosts are `devbox` and
 /// `laptop`, opens its page from Setup and its Secrets tab, adds a set, adds a secret to it and grants the set
 /// to a host, then goes back to Setup.
 final class SecretsUITests: XCTestCase {
     @MainActor
     func testAddingASetAndASecretAndGrantingIt() throws {
-        let link = try XCTUnwrap(ProcessInfo.processInfo.environment["HERDER_VAULT_LINK"], "needs HERDER_VAULT_LINK")
+        let link = try XCTUnwrap(ProcessInfo.processInfo.environment["HERDER_HUB_LINK"], "needs HERDER_HUB_LINK")
         let app = XCUIApplication()
         try app.launchOnFakeFleet([link])
 
         app.tabBars.buttons["Setup"].tap()
         let open = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'machines.paired.'")).firstMatch
-        XCTAssertTrue(open.waitForExistence(timeout: 30), "Setup shows no vault")
+        XCTAssertTrue(open.waitForExistence(timeout: 30), "Setup shows no hub")
         for _ in 0..<5 where !open.isHittable { app.swipeUp() }
         open.tap()
         let secrets = app.buttons["Secrets"].firstMatch
-        XCTAssertTrue(secrets.waitForExistence(timeout: 15), "the vault's page has no Secrets tab")
+        XCTAssertTrue(secrets.waitForExistence(timeout: 15), "the hub's page has no Secrets tab")
         secrets.tap()
 
         // A set, named in the field under the sets.
         let name = app.textFields["secret-set-name"]
-        XCTAssertTrue(name.waitForExistence(timeout: 15), "the vault's page did not list its sets")
+        XCTAssertTrue(name.waitForExistence(timeout: 15), "the hub's page did not list its sets")
         let set = "ci-\(Int.random(in: 1000...9999))"
         enter(set, into: name)
         app.buttons["secret-set-create"].tap()
@@ -54,7 +54,7 @@ final class SecretsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Publishes packages to npm"].exists)
         XCTAssertFalse(app.staticTexts["npm_s3cr3t"].exists)
 
-        // Granted to devbox: the switch stays on once the vault lists the set again.
+        // Granted to devbox: the switch stays on once the hub lists the set again.
         let grant = app.switches["secret-grant-\(set)-devbox"]
         XCTAssertTrue(grant.waitForExistence(timeout: 5))
         XCTAssertEqual(grant.value as? String, "0")

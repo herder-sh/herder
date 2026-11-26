@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Each provider's logins across the machines: the accounts signed in as one email, or without
 /// one the accounts with one id, the machines that have it and those that do not yet, and what
-/// is left of its plan's limits. A vault runs no sessions, so has no accounts; a machine never
+/// is left of its plan's limits. A hub runs no sessions, so has no accounts; a machine never
 /// connected has not said which it has.
 struct ProviderAccounts: Equatable {
     struct Place: Equatable, Identifiable {
@@ -40,31 +40,31 @@ struct ProviderAccounts: Equatable {
         var id: String { ProviderAccounts.key(account) }
 
         /// The API server it runs against, for an endpoint account; `nil` for a login and for
-        /// one of the vault's logins, which the vault runs.
-        var endpoint: String? { vaultLogin == nil ? account.endpoint : nil }
+        /// one of the hub's logins, which the hub runs.
+        var endpoint: String? { hubLogin == nil ? account.endpoint : nil }
 
-        /// The vault login it runs on, by its name on the vault: its label, fallback mark and
-        /// usage are the vault's.
-        var vaultLogin: String? { account.vaultLogin }
+        /// The hub login it runs on, by its name on the hub: its label, fallback mark and
+        /// usage are the hub's.
+        var hubLogin: String? { account.hubLogin }
 
-        /// Whether an endpoint account's key is fetched from the machine's vault, rather than held.
-        var keyFromVault: Bool { account.keySecret != nil }
+        /// Whether an endpoint account's key is fetched from the machine's hub, rather than held.
+        var keyFromHub: Bool { account.keySecret != nil }
 
         /// What an endpoint account runs on, under its URL.
-        static func endpointNote(fromVault: Bool) -> String {
-            fromVault
-                ? "Runs against this API server with a key from the vault; no login. Its limits are the server’s."
+        static func endpointNote(fromHub: Bool) -> String {
+            fromHub
+                ? "Runs against this API server with a key from the hub; no login. Its limits are the server’s."
                 : "Runs against this API server with its client key; no login. Its limits are the server’s."
         }
 
-        /// What it is shown as: its email, or its label without one; a vault login's label, which
-        /// the vault's owner chose.
-        var title: String { vaultLogin == nil ? email ?? account.label : account.label }
+        /// What it is shown as: its email, or its label without one; a hub login's label, which
+        /// the hub's owner chose.
+        var title: String { hubLogin == nil ? email ?? account.label : account.label }
 
-        /// What is shown beside the title, when it says more: a login's label, a vault login's
+        /// What is shown beside the title, when it says more: a login's label, a hub login's
         /// email.
         var subtitle: String? {
-            let other = vaultLogin == nil ? email.map { _ in account.label } : email
+            let other = hubLogin == nil ? email.map { _ in account.label } : email
             return other == title ? nil : other
         }
 
@@ -103,13 +103,13 @@ struct ProviderAccounts: Equatable {
         /// the same id unless taken, label, and config dir when it is in the home dir, which
         /// names the same place there.
         /// An endpoint account's draft has its URL, and needs its key typed again: no machine
-        /// sends one back. One on the vault's logins is on the vault's logins there too.
+        /// sends one back. One on the hub's logins is on the hub's logins there too.
         func draft(taken: [String]) -> AccountDraft {
             AccountDraft(id: taken.contains(account.accountId)
                              ? AccountDraft.nextId(provider: provider, taken: taken, name: email) : account.accountId,
                          provider: provider, label: account.label,
                          configDir: endpoint == nil ? account.configDir.flatMap { $0.hasPrefix("~/") ? $0 : nil } ?? "" : "",
-                         kind: endpoint == nil ? .login : account.keySecret == AccountDraft.vaultKeySecret ? .vault : .endpoint,
+                         kind: endpoint == nil ? .login : account.keySecret == AccountDraft.hubKeySecret ? .hub : .endpoint,
                          url: endpoint ?? "")
         }
     }
@@ -144,9 +144,9 @@ struct ProviderAccounts: Equatable {
             }
             let windows = daemons.flatMap(\.accounts).filter { Self.key($0) == id }.flatMap(\.usage)
             return Login(provider: account.provider, email: account.email, account: account,
-                         // A vault login is on every host of its vault by itself: none sets it up.
+                         // A hub login is on every host of its hub by itself: none sets it up.
                          on: daemons.filter(has).map(place),
-                         missing: account.vaultLogin == nil ? daemons.filter { !has($0) }.map(place) : [],
+                         missing: account.hubLogin == nil ? daemons.filter { !has($0) }.map(place) : [],
                          session: Self.latest("Session", of: windows, now: now),
                          weekly: Self.latest("Weekly", of: windows, now: now))
         }
@@ -163,19 +163,19 @@ struct ProviderAccounts: Equatable {
         return a.id < b.id
     }
 
-    /// What makes accounts one login: the vault login they run on, as each of the vault's logins
-    /// is its own account though they share the vault's endpoint; else their provider and
+    /// What makes accounts one login: the hub login they run on, as each of the hub's logins
+    /// is its own account though they share the hub's endpoint; else their provider and
     /// endpoint, as an endpoint account has no email; else their provider and email, or without
     /// one their id.
     static func key(_ account: Herder.Account) -> String {
-        if let vaultLogin = account.vaultLogin { return vaultKey(provider: account.provider, name: vaultLogin) }
+        if let hubLogin = account.hubLogin { return hubKey(provider: account.provider, name: hubLogin) }
         if let endpoint = account.endpoint { return endpointKey(provider: account.provider, endpoint: endpoint) }
         return "\(account.provider)/\(account.email ?? "id:\(account.accountId)")"
     }
 
-    /// The login of `provider`'s accounts on the vault login `name`.
-    static func vaultKey(provider: Herder.Provider, name: String) -> String {
-        "\(provider)/vault:\(name)"
+    /// The login of `provider`'s accounts on the hub login `name`.
+    static func hubKey(provider: Herder.Provider, name: String) -> String {
+        "\(provider)/hub:\(name)"
     }
 
     /// The login of `provider`'s accounts on `endpoint`.
@@ -641,8 +641,8 @@ struct ProvidersPage: View {
     }
 
     /// The account's email, or its label without one; `label` adds the label after the email,
-    /// or an endpoint account's URL after its label. A vault login shows its label, then its
-    /// email, marked Vault.
+    /// or an endpoint account's URL after its label. A hub login shows its label, then its
+    /// email, marked Hub.
     private func account(_ login: ProviderAccounts.Login, label: Bool) -> some View {
         HStack(spacing: 8) {
             ProviderMark(provider: login.provider, size: 14)
@@ -650,9 +650,9 @@ struct ProvidersPage: View {
             if label, let subtitle = login.subtitle {
                 Text(subtitle).foregroundStyle(Theme.tertiary).lineLimit(1)
             }
-            if login.vaultLogin != nil { Badge(text: "Vault") }
+            if login.hubLogin != nil { Badge(text: "Hub") }
             if let endpoint = login.endpoint {
-                Badge(text: login.keyFromVault ? "Vault" : "Endpoint")
+                Badge(text: login.keyFromHub ? "Hub" : "Endpoint")
                 if label {
                     Text(endpoint).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
                         .lineLimit(1).truncationMode(.middle)

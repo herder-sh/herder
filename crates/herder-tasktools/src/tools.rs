@@ -517,7 +517,7 @@ pub struct StoreSecretInput {
     /// The file on this machine holding the value, as it is: absolute, `~/...`, or relative to
     /// your working directory. Text of at most 64 KiB; newlines are kept.
     pub from_file: String,
-    /// Whether to delete the file once the vault has stored the value.
+    /// Whether to delete the file once the hub has stored the value.
     #[serde(default)]
     pub delete_file_after: bool,
 }
@@ -557,7 +557,7 @@ pub struct RequestSecretInput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestSecretOutcome {
-    /// An owner put the value on the vault.
+    /// An owner put the value on the hub.
     Stored,
     /// The user declined to supply it; nothing was stored.
     Declined,

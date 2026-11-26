@@ -7,14 +7,14 @@ import SwiftUI
 import Testing
 
 /// Draws the machine page as the app's dark appearance shows it, for a machine the user owns
-/// (a signed-out account, two CLI updates, a login missing there, backing up to a vault) and
-/// for one they are a member on, and one they own linked to no vault, and attaches each; with
+/// (a signed-out account, two CLI updates, a login missing there, backing up to a hub) and
+/// for one they are a member on, and one they own linked to no hub, and attaches each; with
 /// `HERDER_SCREENSHOT_DIR` set, also writes them there as `machine-owner.png`,
 /// `machine-member.png` and `machine-unlinked.png`.
 @MainActor struct MachinePageScreenshotTests {
     @Test func drawsTheOwnersPage() async throws {
         let fleet = try sampleFleet()
-        fleet.backupLinks["trash-can-01"] = .linked(LinkedVault(address: "10.0.0.9:7447", fingerprint: "ab12",
+        fleet.backupLinks["trash-can-01"] = .linked(LinkedHub(address: "10.0.0.9:7447", fingerprint: "ab12",
                                                                 backup: true, secrets: true))
         try await shoot(MachinePage(fleet: fleet, hostId: "trash-can-01", sheet: .constant(nil)),
                         crumbs: ["Setup", "trash-can-01"], height: 1900, named: "machine-owner.png")
@@ -22,7 +22,7 @@ import Testing
 
     @Test func drawsAnUnlinkedPage() async throws {
         let fleet = try sampleFleet()
-        fleet.backupLinks["work-mbp"] = .nowhere(localVault: false)
+        fleet.backupLinks["work-mbp"] = .nowhere(localHub: false)
         try await shoot(MachinePage(fleet: fleet, hostId: "work-mbp", sheet: .constant(nil)),
                         crumbs: ["Setup", "work-mbp"], height: 1700, named: "machine-unlinked.png")
     }
@@ -103,15 +103,15 @@ import Testing
         member.resources = resources
         member.quality.lastRttMs = 61
         member.addresses = ["team-box.tailnet.ts.net:7447"]
-        var vault = machine("herder-vault-0", name: "herder-vault-0", sessions: [],
+        var hub = machine("herder-hub-0", name: "herder-hub-0", sessions: [],
                             hosts: [FleetHost(hostId: "trash-can-01", hostName: "trash-can-01", online: true,
                                               lastSeen: Date.now.formatted(.iso8601))])
-        vault.fingerprint = "ab12"
-        vault.vault = VaultStatus(sessions: 40, events: 9000, storageBytes: 1 << 26, hosts: [
+        hub.fingerprint = "ab12"
+        hub.hub = HubStatus(sessions: 40, events: 9000, storageBytes: 1 << 26, hosts: [
             HostReplication(hostId: "trash-can-01", sessions: 40, events: 9000,
                             lastEventAt: Date.now.addingTimeInterval(-180).formatted(.iso8601), lagMs: 300),
         ])
-        fleet.setMachinesForTesting([owned, laptop, member, vault])
+        fleet.setMachinesForTesting([owned, laptop, member, hub])
         return fleet
     }
 }

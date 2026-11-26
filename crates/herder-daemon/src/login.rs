@@ -784,7 +784,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::hub::Hub;
+    use crate::fanout::Fanout;
     use crate::session::{self, Accounts, Adapters, Setup};
     use crate::worktree::Worktrees;
 
@@ -807,7 +807,7 @@ mod tests {
         home: tempfile::TempDir,
         logins: Logins,
         sessions: SessionManager,
-        hub: Arc<Hub>,
+        fanout: Arc<Fanout>,
     }
 
     /// Status checks standing in for the providers' own: codex's answers with its exit status,
@@ -833,7 +833,7 @@ mod tests {
     /// Logins on a daemon with one codex account, `codex`, in the default location.
     async fn fixture() -> Fixture {
         let home = tempfile::tempdir().unwrap();
-        let hub = Arc::new(Hub::default());
+        let fanout = Arc::new(Fanout::default());
         let accounts = Accounts::from([(
             AccountId::new("codex"),
             AccountConfig {
@@ -848,7 +848,7 @@ mod tests {
             store: Store::open(home.path().join("herder.db")).unwrap(),
             adapters: Adapters::new(),
             accounts,
-            sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+            sink: Arc::clone(&fanout) as Arc<dyn session::EventSink>,
             turn_ids: session::ulid_turn_ids(),
             worktrees: Worktrees::new(home.path().join("worktrees")),
             attachments: home.path().join("attachments"),
@@ -866,7 +866,7 @@ mod tests {
             home,
             logins,
             sessions,
-            hub,
+            fanout,
         }
     }
 
@@ -934,9 +934,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_vault_logins_account_is_the_vaults_to_set_and_leaves_with_the_login() {
+    async fn a_hub_logins_account_is_the_hubs_to_set_and_leaves_with_the_login() {
         let f = fixture().await;
-        let proxy = crate::vault::pin::PinProxy::start(Arc::new(|| None), CancellationToken::new())
+        let proxy = crate::hub::pin::PinProxy::start(Arc::new(|| None), CancellationToken::new())
             .await
             .unwrap();
         let login = herder_protocol::ProviderLogin {
@@ -951,8 +951,8 @@ mod tests {
             until: None,
             message: None,
         };
-        let dir = f.home.path().join("vault-accounts");
-        f.sessions.set_vault_logins(&[login], &proxy, &dir);
+        let dir = f.home.path().join("hub-accounts");
+        f.sessions.set_hub_logins(&[login], &proxy, &dir);
         let id = AccountId::new("vault-claude-ada");
         let account = f.sessions.account(&id).unwrap();
         assert_eq!(account.label, "Ada");
@@ -966,7 +966,7 @@ mod tests {
         assert_eq!(refused.code, ErrorCode::BadRequest, "{refused:?}");
         assert!(!std::fs::exists(f.home.path().join("daemon.toml")).unwrap());
 
-        f.sessions.set_vault_logins(&[], &proxy, &dir);
+        f.sessions.set_hub_logins(&[], &proxy, &dir);
         assert!(f.sessions.account(&id).is_none());
         assert!(f.sessions.account(&AccountId::new("codex")).is_some());
     }
@@ -1376,8 +1376,8 @@ mod tests {
     #[tokio::test]
     async fn an_endpoint_account_is_added_without_a_login_and_its_key_stays_on_the_host() {
         let f = fixture().await;
-        let outbox = Arc::new(crate::hub::Outbox::default());
-        f.hub.connect(&outbox, herder_protocol::Role::Owner);
+        let outbox = Arc::new(crate::fanout::Outbox::default());
+        f.fanout.connect(&outbox, herder_protocol::Role::Owner);
         f.add_endpoint("fleet", Provider::Claude, "http://127.0.0.1:8317")
             .unwrap();
 
@@ -1528,8 +1528,8 @@ mod tests {
     #[tokio::test]
     async fn account_settings_refresh_runtime_and_reject_unknown_accounts() {
         let f = fixture().await;
-        let outbox = Arc::new(crate::hub::Outbox::default());
-        f.hub.connect(&outbox, herder_protocol::Role::Owner);
+        let outbox = Arc::new(crate::fanout::Outbox::default());
+        f.fanout.connect(&outbox, herder_protocol::Role::Owner);
         let path = f.home.path().join("daemon.toml");
         std::fs::write(
             &path,

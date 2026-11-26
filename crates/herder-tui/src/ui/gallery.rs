@@ -241,7 +241,7 @@ impl Gallery {
             let machines = vec![
                 connection(ui.glyphs.connected, theme.success, "box"),
                 connection(ui.glyphs.connected, theme.success, "m2"),
-                connection(ui.glyphs.connecting, theme.warning, "vault"),
+                connection(ui.glyphs.connecting, theme.warning, "hub"),
             ];
             ModeBar::new(ui, &hints)
                 .lead(badge::solid(ui, mode, color))

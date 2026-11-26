@@ -36,7 +36,7 @@
 //! A lost connection is ridden out: for [`QUIET`] the machine still shows as connected, with
 //! what its connection brought, while the task reconnects. A connection made within that
 //! time takes over unseen, and what the one before brought of the live values (resources,
-//! skills, a vault's status, approvals) is held until the new one has sent its own. Only a
+//! skills, a hub's status, approvals) is held until the new one has sent its own. Only a
 //! connection still lost after [`QUIET`] shows as lost.
 //!
 //! A sign of life is anything that only a daemon that is there brings about ([`Watched`]),
@@ -101,8 +101,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// addresses that were reached wait for it, so it is short.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How often a connection that runs through a vault checks whether an address that comes
-/// before the vault's answers again, to move there: a wake checks at once.
+/// How often a connection that runs through a hub checks whether an address that comes
+/// before the hub's answers again, to move there: a wake checks at once.
 const ROUTE_CHECK: Duration = Duration::from_secs(60);
 
 /// Head start each address gets over the next one when connecting; one that fails sooner
@@ -298,7 +298,7 @@ pub(crate) struct Supervisor {
     /// For a machine of a demo, what the daemon answered to the commands recorded; such a
     /// supervisor has no task and sends nothing.
     demo: Option<Vec<DemoAnswer>>,
-    /// The client's machines, among them the vault a `vault://` address goes through.
+    /// The client's machines, among them the hub a `hub://` address goes through.
     machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
 }
 
@@ -352,7 +352,7 @@ struct State {
 struct Live {
     resources: Option<herder_protocol::HostResources>,
     session_usage: HashMap<SessionId, herder_protocol::SessionUsage>,
-    vault: Option<herder_protocol::VaultStatus>,
+    hub: Option<herder_protocol::HubStatus>,
     skills: Option<herder_protocol::SkillsStatus>,
     session_skills: HashMap<SessionId, Vec<herder_protocol::SessionSkill>>,
     update: Option<herder_protocol::UpdateStage>,
@@ -366,7 +366,7 @@ impl Live {
         match message {
             ServerMessage::HostResources(resources) => self.resources = Some(resources.clone()),
             ServerMessage::DaemonUpdate { stage } => self.update = Some(stage.clone()),
-            ServerMessage::VaultStatus(status) => self.vault = Some(status.clone()),
+            ServerMessage::HubStatus(status) => self.hub = Some(status.clone()),
             ServerMessage::ApprovalRequest(request) => {
                 self.approvals
                     .retain(|open| open.request_id != request.request_id);
@@ -610,7 +610,7 @@ impl Supervisor {
             live: Live {
                 resources: machine.resources,
                 session_usage: machine.session_usage,
-                vault: machine.vault,
+                hub: machine.hub,
                 skills: machine.skills,
                 session_skills: machine.session_skills,
                 update: machine.update,
@@ -809,7 +809,7 @@ impl Supervisor {
             terminals: state.terminals.clone(),
             resources: state.live.resources.clone(),
             session_usage: state.live.session_usage.clone(),
-            vault: state.live.vault.clone(),
+            hub: state.live.hub.clone(),
             skills: state.live.skills.clone(),
             session_skills: state.live.session_skills.clone(),
             update: state.live.update.clone(),
@@ -1227,21 +1227,21 @@ impl Supervisor {
         addresses
     }
 
-    /// Where this machine's `vault://` addresses lead.
+    /// Where this machine's `hub://` addresses lead.
     fn via(&self) -> Via {
         Via::new(self.saved.host_id.clone(), self.machines.clone())
     }
 
-    /// Whether the current connection runs through a vault.
-    fn through_vault(&self) -> bool {
+    /// Whether the current connection runs through a hub.
+    fn through_hub(&self) -> bool {
         let state = self.lock();
         state
             .address
             .as_deref()
-            .is_some_and(|address| address::vault(address).is_some())
+            .is_some_and(|address| address::hub(address).is_some())
     }
 
-    /// The hosts this machine, a vault, says it relays clients to now.
+    /// The hosts this machine, a hub, says it relays clients to now.
     pub(crate) fn relays_to(&self) -> Vec<herder_protocol::HostId> {
         let state = self.lock();
         let relayed = state.hosts.iter().filter(|host| host.relay);
@@ -1365,7 +1365,7 @@ impl Supervisor {
             // the live values were taken in above.
             ServerMessage::HostResources(_)
             | ServerMessage::DaemonUpdate { .. }
-            | ServerMessage::VaultStatus(_)
+            | ServerMessage::HubStatus(_)
             | ServerMessage::ApprovalRequest(_)
             | ServerMessage::ApprovalClosed { .. }
             | ServerMessage::SkillsStatus(_)
@@ -1978,7 +1978,7 @@ async fn converse(
                             probe = Some(send_ping(outgoing));
                         }
                         // The network may have changed: the machine may answer itself again.
-                        if better.is_none() && supervisor.through_vault() {
+                        if better.is_none() && supervisor.through_hub() {
                             better = supervisor.better();
                         }
                         continue;
@@ -2025,7 +2025,7 @@ async fn converse(
                 continue;
             }
             _ = route_check.tick() => {
-                if better.is_none() && supervisor.through_vault() {
+                if better.is_none() && supervisor.through_hub() {
                     better = supervisor.better();
                 }
                 continue;
@@ -2456,12 +2456,12 @@ where
 }
 
 /// A connection to the daemon at `address`, up to its WebSocket upgrade: the daemon is
-/// there, and was told nothing yet. An address through a vault leads where `via` says.
+/// there, and was told nothing yet. An address through a hub leads where `via` says.
 async fn reach(address: &str, connector: &TlsConnector, via: &Via) -> anyhow::Result<Ws> {
     let reaching = async {
-        match address::vault(address) {
-            Some(vault) => {
-                let stream = via.stream(&vault).await?;
+        match address::hub(address) {
+            Some(hub) => {
+                let stream = via.stream(&hub).await?;
                 secure(Box::new(stream), connector, None).await
             }
             None => direct(address, connector, None).await,

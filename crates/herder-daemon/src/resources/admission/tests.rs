@@ -4,7 +4,7 @@ use std::time::Duration;
 use herder_protocol::{Role, ServerMessage};
 
 use super::*;
-use crate::hub::Outbox;
+use crate::fanout::Outbox;
 use crate::resources::ResourcesConfig;
 
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -280,12 +280,12 @@ fn an_unreadable_host_admits_by_the_turn_limit_only() {
 #[test]
 fn host_resources_are_published_when_they_change() {
     let (admission, host) = admission(1);
-    let hub = Hub::default();
+    let fanout = Fanout::default();
     let client = Arc::new(Outbox::default());
-    hub.connect(&client, Role::Member);
+    fanout.connect(&client, Role::Member);
     let published = || std::iter::from_fn(|| client.pop()).collect::<Vec<_>>();
 
-    admission.publish(&hub);
+    admission.publish(&fanout);
     let [ServerMessage::HostResources(first)] = <[_; 1]>::try_from(published()).unwrap() else {
         panic!("expected host resources");
     };
@@ -304,7 +304,7 @@ fn host_resources_are_published_when_they_change() {
             constraint: None,
         }
     );
-    admission.publish(&hub);
+    admission.publish(&fanout);
     assert!(published().is_empty(), "nothing changed");
 
     let _permit = admitted(admission.request(&turn()));
@@ -313,7 +313,7 @@ fn host_resources_are_published_when_they_change() {
         ..roomy()
     }));
     let _waiting = waiting(admission.request(&turn()));
-    admission.publish(&hub);
+    admission.publish(&fanout);
     let [ServerMessage::HostResources(busy)] = <[_; 1]>::try_from(published()).unwrap() else {
         panic!("expected host resources");
     };
@@ -355,13 +355,13 @@ fn a_new_turn_limit_applies_at_once_and_never_stops_a_running_turn() {
 async fn a_new_turn_limit_is_published_at_once() {
     let (admission, _host) = admission(1);
     let admission = Arc::new(admission);
-    let hub = Arc::new(Hub::default());
+    let fanout = Arc::new(Fanout::default());
     let client = Arc::new(Outbox::default());
-    hub.connect(&client, Role::Member);
+    fanout.connect(&client, Role::Member);
     let shutdown = CancellationToken::new();
     let run = tokio::spawn({
-        let (admission, hub, shutdown) = (admission.clone(), hub.clone(), shutdown.clone());
-        async move { admission.run(&hub, shutdown).await }
+        let (admission, fanout, shutdown) = (admission.clone(), fanout.clone(), shutdown.clone());
+        async move { admission.run(&fanout, shutdown).await }
     });
     let next = || async {
         tokio::time::timeout(RECHECK_INTERVAL / 2, async {

@@ -256,8 +256,8 @@ struct NoticeLine: View {
 }
 
 extension Fleet {
-    /// What to call a machine: its name, else the name a vault lists it under, else its short id.
-    /// Through a vault, the session `key` runs on the host the vault lists it under.
+    /// What to call a machine: its name, else the name a hub lists it under, else its short id.
+    /// Through a hub, the session `key` runs on the host the hub lists it under.
     func machineName(_ id: HostId?, of key: SessionKey) -> String {
         guard var id else { return "?" }
         if id == key.hostId, let runsOn = liveMachines.first(where: { $0.hostId == id })?

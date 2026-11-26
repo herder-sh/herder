@@ -133,7 +133,7 @@ pub(super) fn herd() -> App {
         needs_login: None,
         endpoint: None,
         key_secret: None,
-        vault_login: None,
+        hub_login: None,
     }];
     machines[1].accounts = machines[0].accounts.clone();
     machines[0].resources = Some(fake::host_resources(2));
@@ -429,8 +429,8 @@ fn the_status_line_shows_each_connection() {
 }
 
 #[test]
-fn a_vault_groups_sessions_by_host_and_marks_offline_ones() {
-    let mut app = fake::vault();
+fn a_hub_groups_sessions_by_host_and_marks_offline_ones() {
+    let mut app = fake::hub();
     insta::assert_snapshot!(render(&mut app, 120, 10).backend());
     // By project, each session names its host, and an offline one says so.
     press(&mut app, KeyCode::Char('v'));
@@ -440,7 +440,7 @@ fn a_vault_groups_sessions_by_host_and_marks_offline_ones() {
 #[test]
 fn an_offline_hosts_session_is_read_only_and_offers_the_fork() {
     for (width, height) in [(120, 24), (45, 30)] {
-        let mut app = fake::vault();
+        let mut app = fake::hub();
         app.choose_row(crate::app::Row::Session {
             key: fake::key("v", "s2"),
             depth: 0,
@@ -463,7 +463,7 @@ fn an_offline_hosts_session_is_read_only_and_offers_the_fork() {
 
 #[test]
 fn the_fork_dialog_at_three_widths() {
-    let mut app = fake::vault();
+    let mut app = fake::hub();
     app.choose_row(crate::app::Row::Session {
         key: fake::key("v", "s2"),
         depth: 0,
@@ -884,14 +884,14 @@ fn the_machines_panel_shows_connections_and_fingerprints() {
 }
 
 #[test]
-fn a_vaults_disk_and_each_hosts_usage_with_a_warning_when_nearly_full() {
+fn a_hubs_disk_and_each_hosts_usage_with_a_warning_when_nearly_full() {
     let text = |app: &mut App, width| format!("{:?}", render(app, width, 30).backend());
-    let mut app = fake::vault_storage(212.4);
+    let mut app = fake::hub_storage(212.4);
     let shown = text(&mut app, 100);
     assert!(shown.contains("212.4 / 480.0 GiB, 44%"), "{shown}");
     assert!(!shown.contains("nearly full"), "{shown}");
-    let mut app = fake::vault_storage(412.8);
-    at_three_widths("vault_storage", &mut app);
+    let mut app = fake::hub_storage(412.8);
+    at_three_widths("hub_storage", &mut app);
     let shown = text(&mut app, 100);
     assert!(shown.contains("3 hosts"), "{shown}");
     assert!(shown.contains("disk 86%"), "{shown}");
@@ -910,35 +910,35 @@ fn a_vaults_disk_and_each_hosts_usage_with_a_warning_when_nearly_full() {
 }
 
 #[test]
-fn a_machine_reached_through_its_vault_names_the_vault() {
+fn a_machine_reached_through_its_hub_names_the_hub() {
     let mut app = fake::tree();
     let mut machines = app.machines.clone();
     let reached = machines[0].host_id.clone();
-    let mut vault = fake::machine("0193a5b2-7c1e", "home vault", &[]);
-    vault.addresses = vec!["wss://vault.example.com".into()];
-    let route = format!("vault://{}", vault.host_id);
+    let mut hub = fake::machine("0193a5b2-7c1e", "home hub", &[]);
+    hub.addresses = vec!["wss://hub.example.com".into()];
+    let route = format!("hub://{}", hub.host_id);
     machines[0].addresses = vec!["192.168.1.5:7447".into(), route.clone()];
     machines[0].address = Some(route);
-    machines.push(vault);
+    machines.push(hub);
     app.update(Msg::Machines(machines));
     press(&mut app, KeyCode::Char('m'));
     let shown = format!("{:?}", render(&mut app, 120, 30).backend());
     // On the machine's row, and in its addresses.
-    assert!(shown.contains("through home vault"), "{shown}");
+    assert!(shown.contains("through home hub"), "{shown}");
     assert!(
-        shown.contains("192.168.1.5:7447, through home vault"),
+        shown.contains("192.168.1.5:7447, through home hub"),
         "{shown}"
     );
-    assert!(!shown.contains("vault://"), "{shown}");
+    assert!(!shown.contains("hub://"), "{shown}");
 
-    // A route through a vault this device has left still reads as one.
+    // A route through a hub this device has left still reads as one.
     let mut machines = app.machines.clone();
-    machines.retain(|m| m.name != "home vault");
+    machines.retain(|m| m.name != "home hub");
     assert!(machines.iter().any(|m| m.host_id == reached));
     app.update(Msg::Machines(machines));
     let shown = format!("{:?}", render(&mut app, 120, 30).backend());
-    assert!(shown.contains("through a vault"), "{shown}");
-    assert!(!shown.contains("vault://"), "{shown}");
+    assert!(shown.contains("through a hub"), "{shown}");
+    assert!(!shown.contains("hub://"), "{shown}");
 }
 
 #[test]
@@ -975,7 +975,7 @@ fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
         needs_login: None,
         endpoint: None,
         key_secret: None,
-        vault_login: None,
+        hub_login: None,
     }];
     app.update(Msg::Machines(machines));
     press(&mut app, KeyCode::Char('m'));
@@ -1432,7 +1432,7 @@ fn the_add_account_dialog_takes_an_endpoint_and_masks_its_key() {
 }
 
 #[test]
-fn the_add_account_dialog_offers_the_vaults_logins_with_nothing_to_type() {
+fn the_add_account_dialog_offers_the_hubs_logins_with_nothing_to_type() {
     let mut app = with_accounts();
     press(&mut app, KeyCode::Char('A'));
     press(&mut app, KeyCode::Char('n'));
@@ -1443,13 +1443,13 @@ fn the_add_account_dialog_offers_the_vaults_logins_with_nothing_to_type() {
         .adding
         .as_mut()
         .unwrap();
-    form.vault = Some("https://cpa.lan:8317".into());
-    // Login, endpoint, the vault's logins.
+    form.hub = Some("https://cpa.lan:8317".into());
+    // Login, endpoint, the hub's logins.
     press(&mut app, KeyCode::Tab);
     press(&mut app, KeyCode::Right);
     press(&mut app, KeyCode::Right);
     let screen = render(&mut app, 90, 30).backend().to_string();
-    assert!(screen.contains("the vault's logins"), "{screen}");
+    assert!(screen.contains("the hub's logins"), "{screen}");
     assert!(screen.contains("Nothing to type"), "{screen}");
     assert!(
         !screen.contains("url") && !screen.contains("key  "),
@@ -1460,13 +1460,13 @@ fn the_add_account_dialog_offers_the_vaults_logins_with_nothing_to_type() {
 }
 
 #[test]
-fn the_accounts_screen_says_an_account_s_key_comes_from_the_vault() {
+fn the_accounts_screen_says_an_account_s_key_comes_from_the_hub() {
     let mut app = fake::tree();
     let mut machines = app.machines.clone();
-    let mut vault = fake::endpoint_account("claude-vault", "Vault", "https://cpa.lan:8317");
-    vault.key_secret = Some("CLIPROXYAPI_KEY".parse().unwrap());
+    let mut hub = fake::endpoint_account("claude-hub", "Hub", "https://cpa.lan:8317");
+    hub.key_secret = Some("CLIPROXYAPI_KEY".parse().unwrap());
     let proxy = fake::endpoint_account("claude-proxy", "Proxy", "http://127.0.0.1:8317");
-    machines[0].accounts = vec![vault, proxy];
+    machines[0].accounts = vec![hub, proxy];
     app.update(Msg::Machines(machines));
     press(&mut app, KeyCode::Char('A'));
     let screen = render(&mut app, 90, 20).backend().to_string();
@@ -1474,7 +1474,7 @@ fn the_accounts_screen_says_an_account_s_key_comes_from_the_vault() {
         screen.contains("endpoint  https://cpa.lan:8317"),
         "{screen}"
     );
-    assert_eq!(screen.matches("key from the vault").count(), 1, "{screen}");
+    assert_eq!(screen.matches("key from the hub").count(), 1, "{screen}");
     insta::assert_snapshot!(render(&mut app, 90, 20).backend());
 }
 
@@ -1503,30 +1503,30 @@ fn the_accounts_screen_shows_an_endpoint_account_s_endpoint_instead_of_usage() {
 }
 
 #[test]
-fn the_accounts_screen_marks_vault_logins_and_shows_their_usage() {
+fn the_accounts_screen_marks_hub_logins_and_shows_their_usage() {
     let mut app = fake::tree();
     let mut machines = app.machines.clone();
-    let mut work = fake::vault_login_account("work", "claude-ada@example.com.json", "Work");
+    let mut work = fake::hub_login_account("work", "claude-ada@example.com.json", "Work");
     work.usage = vec![herder_protocol::UsageWindow {
         window: "five_hour".into(),
         used_percent: 42.0,
         resets_at: None,
     }];
-    let mut spare = fake::vault_login_account("spare", "claude-old.json", "Spare");
+    let mut spare = fake::hub_login_account("spare", "claude-old.json", "Spare");
     spare.fallback = true;
     machines[0].accounts = vec![work, spare];
     app.update(Msg::Machines(machines));
     press(&mut app, KeyCode::Char('A'));
     let screen = render(&mut app, 100, 20).backend().to_string();
-    // A vault login's usage shows, unlike an endpoint account's, and no endpoint does.
+    // A hub login's usage shows, unlike an endpoint account's, and no endpoint does.
     assert!(screen.contains("Session"), "{screen}");
     assert!(screen.contains("42%"), "{screen}");
     assert!(!screen.contains("endpoint"), "{screen}");
-    assert_eq!(screen.matches(" · vault ").count(), 2, "{screen}");
+    assert_eq!(screen.matches(" · hub ").count(), 2, "{screen}");
     assert!(screen.contains("fallback"), "{screen}");
     assert_eq!(
         screen
-            .matches("named and marked fallback on the vault")
+            .matches("named and marked fallback on the hub")
             .count(),
         2,
         "{screen}"
@@ -1535,13 +1535,13 @@ fn the_accounts_screen_marks_vault_logins_and_shows_their_usage() {
 }
 
 #[test]
-fn the_switch_dialog_marks_vault_logins_and_fallback_accounts() {
+fn the_switch_dialog_marks_hub_logins_and_fallback_accounts() {
     let mut app = with_accounts();
     press(&mut app, KeyCode::Enter);
     app.open_switch();
     // The dialog lists the machine's accounts as they are now.
     let mut machines = app.machines.clone();
-    let mut spare = fake::vault_login_account("spare", "claude-old.json", "Spare");
+    let mut spare = fake::hub_login_account("spare", "claude-old.json", "Spare");
     spare.fallback = true;
     spare.usage = vec![herder_protocol::UsageWindow {
         window: "five_hour".into(),
@@ -1556,7 +1556,7 @@ fn the_switch_dialog_marks_vault_logins_and_fallback_accounts() {
         .find(|line| line.contains("Spare"))
         .unwrap_or_default();
     assert!(
-        line.contains("vault") && line.contains("fallback") && line.contains("12%"),
+        line.contains("hub") && line.contains("fallback") && line.contains("12%"),
         "{screen}"
     );
     insta::assert_snapshot!(render(&mut app, 100, 30).backend());
@@ -1608,11 +1608,11 @@ fn host_resources_in_the_machines_panel_on_narrow_and_wide_screens() {
 }
 
 #[test]
-fn a_vaults_status_shows_in_the_machines_panel() {
-    use herder_protocol::{HostId, HostReplication, VaultStatus};
-    let mut app = fake::vault();
-    let mut vault = app.machines[0].clone();
-    vault.vault = Some(VaultStatus {
+fn a_hubs_status_shows_in_the_machines_panel() {
+    use herder_protocol::{HostId, HostReplication, HubStatus};
+    let mut app = fake::hub();
+    let mut hub = app.machines[0].clone();
+    hub.hub = Some(HubStatus {
         sessions: 3,
         events: 1250,
         storage_bytes: 3 << 20,
@@ -1633,11 +1633,11 @@ fn a_vaults_status_shows_in_the_machines_panel() {
             },
         ],
     });
-    app.update(Msg::Machines(vec![vault]));
+    app.update(Msg::Machines(vec![hub]));
     press(&mut app, KeyCode::Char('m'));
     let screen = render(&mut app, 160, 40).backend().to_string();
     assert!(
-        screen.contains("vault         3 sessions · 1250 events · 3 MiB"),
+        screen.contains("hub           3 sessions · 1250 events · 3 MiB"),
         "{screen}"
     );
     assert!(
@@ -2106,15 +2106,15 @@ fn the_secret_value_is_masked_as_it_is_typed_and_never_drawn() {
     };
     app.update(Msg::Sent {
         origin: origin.clone(),
-        result: Err("the vault is unreachable".into()),
+        result: Err("the hub is unreachable".into()),
     });
     let screen = render(&mut app, 100, 30).backend().to_string();
     assert!(!screen.contains('•'), "{screen}");
-    assert!(screen.contains("the vault is unreachable"), "{screen}");
+    assert!(screen.contains("the hub is unreachable"), "{screen}");
 }
 
 #[test]
-fn a_vault_that_refuses_secrets_says_why_on_the_screen() {
+fn a_hub_that_refuses_secrets_says_why_on_the_screen() {
     let mut app = fake::secrets();
     let effects = app.update(key(KeyCode::Char('r')));
     for effect in effects {
@@ -2123,19 +2123,19 @@ fn a_vault_that_refuses_secrets_says_why_on_the_screen() {
         };
         app.update(Msg::Sent {
             origin,
-            result: Err("this vault has no secrets key configured".into()),
+            result: Err("this hub has no secrets key configured".into()),
         });
     }
     let screen = render(&mut app, 100, 20).backend().to_string();
-    assert!(screen.contains("vault has no secrets to show"), "{screen}");
+    assert!(screen.contains("hub has no secrets to show"), "{screen}");
     assert!(
-        screen.contains("this vault has no secrets key configured"),
+        screen.contains("this hub has no secrets key configured"),
         "{screen}"
     );
 }
 
 #[test]
-fn the_fleet_offers_secrets_on_a_vault_and_backup_elsewhere() {
+fn the_fleet_offers_secrets_on_a_hub_and_backup_elsewhere() {
     let mut app = fake::backups();
     let screen = render(&mut app, 120, 20).backend().to_string();
     assert!(

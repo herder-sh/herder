@@ -10,12 +10,12 @@ keeps every task tool on that child: `send`, `status`, `wait_for`, `answer`, `es
 
 ## 1. Decisions at a glance
 
-1. **A vault never drives a host.** A vault can be shared by several people's hosts; if it
-   could send or relay commands of its own, anything that reaches the vault could drive
+1. **A hub never drives a host.** A hub can be shared by several people's hosts; if it
+   could send or relay commands of its own, anything that reaches the hub could drive
    every host behind it. Hosts therefore pair with each other, and only a host's own owner
-   decides which other host may start work on it. The vault may still carry a connection as
-   opaque bytes ([vault-relay.md](vault-relay.md)): the two ends run their pinned mutual TLS
-   inside it, so the vault reads nothing, and the host authenticates and authorizes the
+   decides which other host may start work on it. The hub may still carry a connection as
+   opaque bytes ([hub-relay.md](hub-relay.md)): the two ends run their pinned mutual TLS
+   inside it, so the hub reads nothing, and the host authenticates and authorizes the
    peer exactly as on a direct connection.
 2. **A new pairing: peer.** The target's owner runs `herder pair --peer`; the source host
    runs `herder peer add <link>`. One direction per pairing: the Mac pairing `trash-can-01`
@@ -56,17 +56,17 @@ Refusals the agent can act on:
 ## 3. Pairing and trust
 
 - `herder pair --peer` on the target mints a peer-only code, as `herder pair --host` mints a
-  host-only one for vaults. The paired device gets `DeviceRole::Peer` and a user named after
-  the source host (a member), like vault host devices get today.
+  host-only one for hubs. The paired device gets `DeviceRole::Peer` and a user named after
+  the source host (a member), like hub host devices get today.
 - `herder peer add <link>` on the source stores the target's name, addresses, fingerprint
-  and a peer device key under its data dir, as `[vault]` stores the vault's. `herder peer
+  and a peer device key under its data dir, as `[hub]` stores the hub's. `herder peer
   list` and `herder peer remove` look after them; removing on the target is the existing
   device revocation.
-- A peer connection says so in its hello, the way a vault replication hello does, and is
+- A peer connection says so in its hello, the way a hub replication hello does, and is
   authorised per command against the list in decision 3. Every event it causes is `by` the
   peer user, so the target's journal says which host asked.
 - Clients get both sides once the layers below land: owners pair and revoke peers from the
-  apps and the TUI, as they link vault hosts today.
+  apps and the TUI, as they link hub hosts today.
 
 ## 4. How the child runs
 
@@ -94,7 +94,7 @@ The child's actor routes as now, except that a request for its primary goes onto
 connection's queue instead of the local `Tasks` registry. When its turn ends it does not
 write `child_reported` anywhere: there is no local parent journal to write to.
 
-On the source, a per-peer client (built on `herder-client-core`, as the vault client is)
+On the source, a per-peer client (built on `herder-client-core`, as the hub client is)
 subscribes to every live remote child from the source's cursor and:
 
 - writes `child_reported` into the primary's journal when a turn ends, from the child's

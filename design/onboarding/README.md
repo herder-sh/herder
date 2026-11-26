@@ -41,7 +41,7 @@ This is design only: no app code changes here.
    It has three tabs: Linux or Mac, Kubernetes, and Has herder (`herder claim`). The Mac
    watches the clipboard for the link and the iPhone scans the code. The Done screen lists
    your other devices. Devices that are signed in as you get a one-tap “New machine: sign in”
-   item. Backup to your vault is on by default.
+   item. Backup to your hub is on by default.
 4. **You and your passkeys.** One page has your passkeys (where each is stored, when it was
    added, how many machines know it, and which one this device uses), your devices (each on
    “N of 5 machines”) and Recovery. Add a passkey adds it to every machine with one approval.
@@ -64,7 +64,7 @@ This is design only: no app code changes here.
 - **Welcome** (`Launch`/`EmptyFleet` grow into it): the new-or-existing choice and the
   three-step new path with a progress bar. It replaces today’s empty fleet.
 - **Setup** section (sidebar Workspace and the 4th iPhone tab). In order: Needs you, You,
-  Machines (with the vault as a row), People. Header actions are **Add a device** and **Add a
+  Machines (with the hub as a row), People. Header actions are **Add a device** and **Add a
   machine**.
 - **You** page: passkeys, devices, recovery.
 - **Passkey** sheet, **Add a passkey** sheet, **Recovery** page.
@@ -75,8 +75,8 @@ This is design only: no app code changes here.
 - **Fleet + People → Setup.** The machine table stays, without jargon. People becomes a
   section with one row per person.
 - **People › You + Passkeys → You.**
-- **Add to Fleet** (device / machine / vault) **+ Claim your machines + the claim banner**
-  become **Add a machine** (with the Has herder tab) and **Add a device**. A vault is added
+- **Add to Fleet** (device / machine / hub) **+ Claim your machines + the claim banner**
+  become **Add a machine** (with the Has herder tab) and **Add a device**. A hub is added
   from Add a machine; it is a machine with a role.
 - **AddDeviceSheet + JoinFleetSheet** stay as two halves of one flow and share the
   per-machine status rows.

@@ -16,19 +16,19 @@ use herder_protocol::{
     CommandBody, CommandResult, Constraint, Container, ContainerState, DaemonSettings, DeviceId,
     DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FactId,
     FailoverSettings, FailoverTotal, FleetHost, FollowUp, FollowUpReason, FollowUpSettings,
-    HistoryPart, HostId, HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId,
-    LeftoverDecision, LibrarySkill, LinkedVault, LogFormat, LogSettings, McpServerSettings,
-    McpTransport, Mergeable, NewPerson, PasskeyAssertion, PasskeyChallenge, PasskeyCreation,
-    PasskeyKey, PasskeyRegistration, PermissionMode, PersonCard, PersonId, PersonInfo,
-    PersonPasskey, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId,
-    Provider, ProviderBinary, ProviderLogin, ProviderLoginState, ProviderReload, ProviderStatus,
-    PullRequest, QuestionId, QueuedPrompt, RefusedPasskey, RegistrationResponse, Relay,
-    ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef,
+    HistoryPart, HostId, HostReplication, HostResources, HostUsage, HubStatus, HubVolume, Image,
+    Item, ItemBody, ItemId, LeftoverDecision, LibrarySkill, LinkedHub, LogFormat, LogSettings,
+    McpServerSettings, McpTransport, Mergeable, NewPerson, PasskeyAssertion, PasskeyChallenge,
+    PasskeyCreation, PasskeyKey, PasskeyRegistration, PermissionMode, PersonCard, PersonId,
+    PersonInfo, PersonPasskey, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile,
+    PromptId, Provider, ProviderBinary, ProviderLogin, ProviderLoginState, ProviderReload,
+    ProviderStatus, PullRequest, QuestionId, QueuedPrompt, RefusedPasskey, RegistrationResponse,
+    Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef,
     SecretRequest, SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId,
     SessionOrigin, SessionSkill, SessionStatus, SessionUsage, SignIn, SignInRefusal, SkillFile,
     SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink,
     Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen,
-    UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId, UserInfo, VaultStatus, VaultVolume,
+    UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId, UserInfo,
 };
 use serde_json::Value as Json;
 
@@ -81,7 +81,7 @@ uniffi::custom_type!(Bytes, Vec<u8>, {
     try_lift: |bytes| Ok(Bytes(bytes)),
 });
 
-// A secret's value, sent to a vault, and back only as an agent's `store_secret` read it; refused as `SecretValue::new` refuses it.
+// A secret's value, sent to a hub, and back only as an agent's `store_secret` read it; refused as `SecretValue::new` refuses it.
 uniffi::custom_type!(SecretValue, String, {
     remote,
     lower: |value| value.expose().to_owned(),
@@ -135,7 +135,7 @@ pub struct Machine {
     // Defaulted, so Swift and Kotlin code that builds a machine, as previews and tests do,
     // need not name it.
     #[uniffi(default = None)]
-    pub vault: Option<VaultStatus>,
+    pub hub: Option<HubStatus>,
     #[uniffi(default = None)]
     pub skills: Option<SkillsStatus>,
     #[uniffi(default)]
@@ -713,20 +713,20 @@ pub enum CommandBody {
     GetUsageSummary {
         period: UsagePeriod,
     },
-    GetVaultLink,
-    LinkVault {
+    GetHubLink,
+    LinkHub {
         addresses: Vec<String>,
         fingerprint: String,
         pairing_code: String,
         backup: bool,
         secrets: bool,
     },
-    SetVaultLink {
+    SetHubLink {
         backup: bool,
         secrets: bool,
     },
-    UnlinkVault,
-    InstallVault,
+    UnlinkHub,
+    InstallHub,
     RevokeDevice {
         device_id: DeviceId,
         assertion: Option<Box<PasskeyAssertion>>,
@@ -779,10 +779,10 @@ pub enum CommandBody {
         code: String,
         assertion: Box<PasskeyAssertion>,
     },
-    PairVaultHost {
+    PairHubHost {
         host_name: String,
     },
-    RevokeVaultHost {
+    RevokeHubHost {
         host_id: HostId,
     },
     CreateSecretSet {
@@ -1035,17 +1035,17 @@ pub enum CommandResult {
         totals: Vec<UsageTotal>,
         failovers: Vec<FailoverTotal>,
     },
-    VaultLink {
-        is_vault: bool,
-        vault: Option<LinkedVault>,
-        volume: Option<VaultVolume>,
-        local_vault: bool,
+    HubLink {
+        is_hub: bool,
+        hub: Option<LinkedHub>,
+        volume: Option<HubVolume>,
+        local_hub: bool,
     },
     Settings {
         settings: Box<DaemonSettings>,
         restart_required: bool,
         data_dir: String,
-        is_vault: bool,
+        is_hub: bool,
     },
     OwnershipClaim {
         code: String,
@@ -1190,7 +1190,7 @@ pub struct BotStatus {
 pub enum BotState {
     Connecting,
     Connected,
-    WaitingForVault,
+    WaitingForHub,
     TokenRejected,
     Unsupported,
     Unknown,
@@ -1433,7 +1433,7 @@ pub struct SecretAccess {
 }
 
 #[uniffi::remote(Record)]
-pub struct LinkedVault {
+pub struct LinkedHub {
     pub address: String,
     pub fingerprint: String,
     pub backup: bool,
@@ -1505,13 +1505,13 @@ pub struct HostUsage {
 }
 
 #[uniffi::remote(Record)]
-pub struct VaultVolume {
+pub struct HubVolume {
     pub total_bytes: u64,
     pub used_bytes: u64,
 }
 
 #[uniffi::remote(Record)]
-pub struct VaultStatus {
+pub struct HubStatus {
     pub sessions: u64,
     pub events: u64,
     pub storage_bytes: u64,
@@ -1649,7 +1649,7 @@ pub struct Account {
     #[uniffi(default)]
     pub key_secret: Option<SecretRef>,
     #[uniffi(default)]
-    pub vault_login: Option<String>,
+    pub hub_login: Option<String>,
 }
 
 #[uniffi::remote(Record)]

@@ -36,20 +36,20 @@ import UIKit
                         named: "add-account-endpoint-\(Self.device).png")
     }
 
-    @Test func drawsTheVaultsLogins() async throws {
-        try await shoot(AddEndpointPreview(kind: .vault), width: Self.width, height: Self.device == "mac" ? 700 : 900,
-                        named: "add-account-vault-\(Self.device).png")
+    @Test func drawsTheHubsLogins() async throws {
+        try await shoot(AddEndpointPreview(kind: .hub), width: Self.width, height: Self.device == "mac" ? 700 : 900,
+                        named: "add-account-hub-\(Self.device).png")
     }
 
-    @Test func drawsAnAccountOnTheVaultsLogins() async throws {
-        let fleet = try sampleFleet(vault: true)
+    @Test func drawsAnAccountOnTheHubsLogins() async throws {
+        let fleet = try sampleFleet(hub: true)
         let page = VStack(spacing: 0) {
-            PageTrail(crumbs: ["Providers", "Claude vault"]) { _ in }
+            PageTrail(crumbs: ["Providers", "Claude hub"]) { _ in }
             AccountPage(fleet: fleet, loginId: ProviderAccounts.endpointKey(provider: "claude",
                                                                               endpoint: "https://cpa.lan:8317"))
         }
         try await shoot(page, width: Self.pageWidth, height: Self.pageWidth > 500 ? 1250 : 1000,
-                        named: "account-vault-\(Self.device).png")
+                        named: "account-hub-\(Self.device).png")
     }
 
     @Test func drawsAnEndpointAccountsPage() async throws {
@@ -103,17 +103,17 @@ import UIKit
         }
     }
 
-    /// Two machines with the Claude endpoint account on the local CLIProxyAPI, or with `vault`
-    /// on the vault's logins, and a member's machine that lacks it.
-    private func sampleFleet(vault: Bool = false) throws -> Fleet {
+    /// Two machines with the Claude endpoint account on the local CLIProxyAPI, or with `hub`
+    /// on the hub's logins, and a member's machine that lacks it.
+    private func sampleFleet(hub: Bool = false) throws -> Fleet {
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
             throw CancellationError()
         }
         func proxy(_ id: AccountId) -> Account {
-            vault
-                ? Account(accountId: "claude-vault", provider: "claude", label: "Claude vault",
-                          configDir: "~/.herder/accounts/claude-vault", email: nil, usage: [],
-                          endpoint: "https://cpa.lan:8317", keySecret: AccountDraft.vaultKeySecret)
+            hub
+                ? Account(accountId: "claude-hub", provider: "claude", label: "Claude hub",
+                          configDir: "~/.herder/accounts/claude-hub", email: nil, usage: [],
+                          endpoint: "https://cpa.lan:8317", keySecret: AccountDraft.hubKeySecret)
                 : Account(accountId: id, provider: "claude", label: "Proxy", configDir: "~/.herder/accounts/\(id)",
                           email: nil, usage: [], endpoint: "http://127.0.0.1:8317")
         }
@@ -140,7 +140,7 @@ private struct AddEndpointPreview: View {
 
     init(kind: AccountDraft.Kind) {
         self.kind = kind
-        var draft = AccountDraft(provider: "claude", label: kind == .endpoint ? "Proxy" : kind == .vault ? "" : "work")
+        var draft = AccountDraft(provider: "claude", label: kind == .endpoint ? "Proxy" : kind == .hub ? "" : "work")
         draft.kind = kind
         if kind == .endpoint {
             draft.url = "http://127.0.0.1:8317"
@@ -152,9 +152,9 @@ private struct AddEndpointPreview: View {
     var body: some View {
         SheetScaffold(title: "Add Account", height: endpoint ? 1040 : 640, hint: AddAccountSheet.hint(draft)) {
             AddAccountForm(draft: $draft, ticked: $ticked, showsConfigDir: $showsConfigDir, targets: [
-                AccountTarget(hostId: "work-mbp", name: "work-mbp", problem: nil, vault: "https://cpa.lan:8317"),
-                AccountTarget(hostId: "trash-can-01", name: "trash-can-01", problem: nil, vault: "https://cpa.lan:8317"),
-                AccountTarget(hostId: "studio", name: "studio", problem: kind == .vault ? "No vault logins" : nil),
+                AccountTarget(hostId: "work-mbp", name: "work-mbp", problem: nil, hub: "https://cpa.lan:8317"),
+                AccountTarget(hostId: "trash-can-01", name: "trash-can-01", problem: nil, hub: "https://cpa.lan:8317"),
+                AccountTarget(hostId: "studio", name: "studio", problem: kind == .hub ? "No hub logins" : nil),
                 AccountTarget(hostId: "draugelis", name: "draugelis", problem: "Member — can’t add accounts", owner: false),
             ], installing: { _ in false }, install: { _ in },
                failures: endpoint ? ["trash-can-01": "endpoint accounts are not supported by this daemon"] : [:])

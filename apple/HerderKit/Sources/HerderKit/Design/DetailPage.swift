@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// An object's page: a machine, an account, a project's settings, a vault. Every one has the
+/// An object's page: a machine, an account, a project's settings, a hub. Every one has the
 /// same anatomy, top to bottom: the header (name, status chip, a live status sentence, the
 /// actions), `NeedsAttention` when something is wrong, the settings in `SettingsList` groups,
 /// `AboutSection` with the identifiers, collapsed, then `DangerZone`. Each part marked with

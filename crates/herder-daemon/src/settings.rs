@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::config::{self, Config, Mode};
-use crate::hub::Hub;
+use crate::fanout::Fanout;
 use crate::mcp::servers::UserServers;
 use crate::resources::{self, Admission};
 use crate::update::Updater;
@@ -42,7 +42,7 @@ pub(crate) fn restart_requested() -> bool {
 pub struct Settings {
     path: PathBuf,
     data_dir: PathBuf,
-    is_vault: bool,
+    is_hub: bool,
     /// The settings in effect: the file's as the daemon started, with the turn limit as it
     /// was changed since. Locked across a change, so changes apply one at a time.
     running: Mutex<DaemonSettings>,
@@ -67,7 +67,7 @@ impl Settings {
         Self {
             path: config.path.clone(),
             data_dir: config.data_dir.clone(),
-            is_vault: config.mode == Mode::Vault,
+            is_hub: config.mode == Mode::Hub,
             running: Mutex::new(config.settings()),
             mcp_servers: Arc::new(UserServers::new(config.mcp_servers.clone())),
             updater: Arc::new(Updater::new(
@@ -80,9 +80,13 @@ impl Settings {
         }
     }
 
-    /// Answers `update_daemon`, telling `hub` how the update goes ([`crate::update`]).
-    pub fn update(&self, when: UpdateWhen, hub: &Arc<Hub>) -> Result<CommandResult, ErrorInfo> {
-        self.updater.start(when, hub)
+    /// Answers `update_daemon`, telling `fanout` how the update goes ([`crate::update`]).
+    pub fn update(
+        &self,
+        when: UpdateWhen,
+        fanout: &Arc<Fanout>,
+    ) -> Result<CommandResult, ErrorInfo> {
+        self.updater.start(when, fanout)
     }
 
     /// The user's MCP servers as the settings have them now, for sessions' CLIs.
@@ -160,10 +164,10 @@ impl Settings {
         let backup = |settings: &DaemonSettings| {
             (settings.backup.attachments, settings.backup.attachments_cap)
         };
-        if file.vault.is_none() && !self.is_vault && backup(&new) != backup(&old) {
+        if file.hub.is_none() && !self.is_hub && backup(&new) != backup(&old) {
             return Err(error(
                 ErrorCode::BadRequest,
-                "images are backed up only while the daemon is linked to a vault",
+                "images are backed up only while the daemon is linked to a hub",
             ));
         }
         let path = self.path.clone();
@@ -206,7 +210,7 @@ impl Settings {
             restart_required: settings != *running,
             settings: Box::new(settings),
             data_dir: self.data_dir.display().to_string(),
-            is_vault: self.is_vault,
+            is_hub: self.is_hub,
         }
     }
 }

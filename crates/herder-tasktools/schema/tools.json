@@ -730,8 +730,15 @@
                   "type": "boolean",
                   "default": false
                 },
+                "hub_login": {
+                  "description": "The hub login it runs on, by its `name` on the hub, for an account the host's hub\ngives it: one per login of the hub's CLIProxyAPI. Such an account is the hub's: its\nlabel, fallback mark and usage are the login's, set on the hub with\n`set_provider_login`, and it leaves the list when the hub drops the login.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "key_secret": {
-                  "description": "The secret on the host's vault an endpoint account's client key is fetched from, when\nthe host does not keep the key itself; never the value.",
+                  "description": "The secret on the host's hub an endpoint account's client key is fetched from, when\nthe host does not keep the key itself; never the value.",
                   "type": [
                     "string",
                     "null"
@@ -792,13 +799,6 @@
                       "used_percent"
                     ]
                   }
-                },
-                "vault_login": {
-                  "description": "The vault login it runs on, by its `name` on the vault, for an account the host's vault\ngives it: one per login of the vault's CLIProxyAPI. Such an account is the vault's: its\nlabel, fallback mark and usage are the login's, set on the vault with\n`set_provider_login`, and it leaves the list when the vault drops the login.",
-                  "type": [
-                    "string",
-                    "null"
-                  ]
                 }
               },
               "required": [
@@ -944,7 +944,7 @@
                   "minimum": 0
                 },
                 "host_id": {
-                  "description": "Host the session runs on, one of the vault's [`ServerMessage::Hosts`]; set by a vault\nonly, as a daemon's sessions all run on its own host.",
+                  "description": "Host the session runs on, one of the hub's [`ServerMessage::Hosts`]; set by a hub\nonly, as a daemon's sessions all run on its own host.",
                   "type": [
                     "string",
                     "null"
@@ -1046,7 +1046,7 @@
                   ]
                 },
                 "queue": {
-                  "description": "Prompts waiting for the running turn to end, in the order they will run; a prompt\nleaves it as its turn starts. A vault lists none.",
+                  "description": "Prompts waiting for the running turn to end, in the order they will run; a prompt\nleaves it as its turn starts. A hub lists none.",
                   "type": "array",
                   "items": {
                     "description": "A prompt waiting in a session's queue.",
@@ -1199,7 +1199,7 @@
                   ]
                 },
                 "threads": {
-                  "description": "Chat threads linked to the session, in the order they were linked. A vault lists none.",
+                  "description": "Chat threads linked to the session, in the order they were linked. A hub lists none.",
                   "type": "array",
                   "items": {
                     "description": "A chat thread linked to a session: the thread's messages reach the session, and the bot\nposts the session's answers there.",
@@ -1335,11 +1335,11 @@
                   "set_project_icon",
                   "get_project_icon",
                   "get_usage_summary",
-                  "get_vault_link",
-                  "link_vault",
-                  "set_vault_link",
-                  "unlink_vault",
-                  "install_vault",
+                  "get_hub_link",
+                  "link_hub",
+                  "set_hub_link",
+                  "unlink_hub",
+                  "install_hub",
                   "revoke_device",
                   "passkey_challenge",
                   "list_people",
@@ -1354,8 +1354,8 @@
                   "approve_action",
                   "refuse_action",
                   "approve_login",
-                  "pair_vault_host",
-                  "revoke_vault_host",
+                  "pair_hub_host",
+                  "revoke_hub_host",
                   "create_secret_set",
                   "delete_secret_set",
                   "put_secret",
@@ -1419,7 +1419,7 @@
     },
     {
       "name": "secrets",
-      "description": "List the secrets you may use on this host: API keys, tokens and passwords that herder keeps for you, each with its name, set and what it is for. Never returns a value, and you never need one: run the command that needs it through `herder secret run NAME [set/NAME ...] -- command args...` (`run` holds its full path), which starts the command with each secret in its environment as the variable `NAME`. Refer to it there as `$NAME`, e.g. `herder secret run STRIPE_KEY -- sh -c 'curl -u \"$STRIPE_KEY:\" ...'`. Name a secret `set/NAME` only when `secret` says so. Never print, log, commit or publish a value. When a secret you need is not listed, ask the user for it with `request_secret`. Fails with `unavailable` when this host has no vault or cannot reach it now.",
+      "description": "List the secrets you may use on this host: API keys, tokens and passwords that herder keeps for you, each with its name, set and what it is for. Never returns a value, and you never need one: run the command that needs it through `herder secret run NAME [set/NAME ...] -- command args...` (`run` holds its full path), which starts the command with each secret in its environment as the variable `NAME`. Refer to it there as `$NAME`, e.g. `herder secret run STRIPE_KEY -- sh -c 'curl -u \"$STRIPE_KEY:\" ...'`. Name a secret `set/NAME` only when `secret` says so. Never print, log, commit or publish a value. When a secret you need is not listed, ask the user for it with `request_secret`. Fails with `unavailable` when this host has no hub or cannot reach it now.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false
@@ -1473,12 +1473,12 @@
     },
     {
       "name": "store_secret",
-      "description": "Store a file's contents as a secret on this machine's vault without ever seeing them: when the user asks to keep a key, token or password file as a secret, e.g. \"store ~/Downloads/AuthKey_X.p8 as ASC_PRIVATE_KEY in personal\". herder reads `from_file` on this machine itself and asks the user to approve; an owner of the vault allows it in a herder app, which may pick another set, and the call returns once they answered. Never read, print or copy the file yourself. There is no way to pass a value: when the user typed a secret in the chat, do not write it to a file; ask them for it with `request_secret` instead. With `delete_file_after`, the file is deleted once the vault stored the value. Returns the set, name, size and a short fingerprint, never the value. Fails with `unavailable` when this machine is not linked to a vault with Secrets on, and `not_allowed` when the user denies it.",
+      "description": "Store a file's contents as a secret on this machine's hub without ever seeing them: when the user asks to keep a key, token or password file as a secret, e.g. \"store ~/Downloads/AuthKey_X.p8 as ASC_PRIVATE_KEY in personal\". herder reads `from_file` on this machine itself and asks the user to approve; an owner of the hub allows it in a herder app, which may pick another set, and the call returns once they answered. Never read, print or copy the file yourself. There is no way to pass a value: when the user typed a secret in the chat, do not write it to a file; ask them for it with `request_secret` instead. With `delete_file_after`, the file is deleted once the hub stored the value. Returns the set, name, size and a short fingerprint, never the value. Fails with `unavailable` when this machine is not linked to a hub with Secrets on, and `not_allowed` when the user denies it.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "delete_file_after": {
-            "description": "Whether to delete the file once the vault has stored the value.",
+            "description": "Whether to delete the file once the hub has stored the value.",
             "type": "boolean",
             "default": false
           },
@@ -1544,7 +1544,7 @@
     },
     {
       "name": "request_secret",
-      "description": "Ask the user to supply a secret you need and do not have, such as an API token or key they have to create or look up, e.g. `name: \"GITHUB_SIEM_PAT\", set: \"coingate\", description: \"GitHub fine-grained PAT, read-only on the org audit log\"`. herder shows the request in their herder app; an owner of the vault pastes the value into a secure field there, and it goes straight to this machine's vault: you never see it, and neither does this machine until a command runs with it. Use this rather than telling the user to add the secret themselves and come back, and never ask them to paste a value in the chat. When the value is already in a file on this machine, use `store_secret` instead. Say in `description` what the value is and where they get it; it becomes the secret's description. When the set already holds a secret of that name, the user is told the value will replace it. The call returns once they answered: `stored`, with the set they picked, or `declined`; never the value. Then run commands with it as `secrets` describes. Fails with `unavailable` when this machine is not linked to a vault with Secrets on.",
+      "description": "Ask the user to supply a secret you need and do not have, such as an API token or key they have to create or look up, e.g. `name: \"GITHUB_SIEM_PAT\", set: \"coingate\", description: \"GitHub fine-grained PAT, read-only on the org audit log\"`. herder shows the request in their herder app; an owner of the hub pastes the value into a secure field there, and it goes straight to this machine's hub: you never see it, and neither does this machine until a command runs with it. Use this rather than telling the user to add the secret themselves and come back, and never ask them to paste a value in the chat. When the value is already in a file on this machine, use `store_secret` instead. Say in `description` what the value is and where they get it; it becomes the secret's description. When the set already holds a secret of that name, the user is told the value will replace it. The call returns once they answered: `stored`, with the set they picked, or `declined`; never the value. Then run commands with it as `secrets` describes. Fails with `unavailable` when this machine is not linked to a hub with Secrets on.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1579,7 +1579,7 @@
             "description": "Whether the value was stored.",
             "oneOf": [
               {
-                "description": "An owner put the value on the vault.",
+                "description": "An owner put the value on the hub.",
                 "type": "string",
                 "const": "stored"
               },

@@ -467,7 +467,7 @@ fn the_switch_dialog_picks_an_account_by_tap_and_switches_on_a_second() {
 #[test]
 fn fork_opens_by_a_tap_on_the_open_offline_session() {
     for size in SIZES {
-        let mut app = fake::vault();
+        let mut app = fake::hub();
         tap_last(&mut app, size, "docs");
         assert_eq!(app.open, Some(key("v", "s2")), "{size:?}");
         tap(&mut app, size, "F fork");

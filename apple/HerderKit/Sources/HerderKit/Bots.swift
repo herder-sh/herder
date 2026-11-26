@@ -207,7 +207,7 @@ final class FleetBots {
         for list in lists.values { await list.reloadStatus() }
     }
 
-    /// "2 bots · 2 waiting for the vault": how many, then how many stand each way but connected,
+    /// "2 bots · 2 waiting for the hub": how many, then how many stand each way but connected,
     /// then the machines too old for bots; zeros left out.
     /// Empty until every machine has answered.
     var status: String {
@@ -215,7 +215,7 @@ final class FleetBots {
         let bots = lists.values.flatMap { list in list.list.map { list.statuses[$0.botId]?.state } }
         let outdated = lists.values.filter(\.outdated).count
         var parts = [bots.isEmpty ? "No bots yet" : bots.count == 1 ? "1 bot" : "\(bots.count) bots"]
-        for state in [BotState.connecting, .waitingForVault, .tokenRejected, .unsupported] {
+        for state in [BotState.connecting, .waitingForHub, .tokenRejected, .unsupported] {
             let count = bots.filter { $0 == state }.count
             if count > 0 { parts.append("\(count) \(state.label.lowercased())") }
         }
@@ -236,7 +236,7 @@ struct BotTarget: Identifiable, Equatable {
 
     /// Every daemon this device is paired with, those it can't add a bot to now with why.
     static func all(_ machines: [Machine]) -> [BotTarget] {
-        machines.filter { $0.hosts.isEmpty && $0.vault == nil }.map { machine in
+        machines.filter { $0.hosts.isEmpty && $0.hub == nil }.map { machine in
             BotTarget(hostId: machine.hostId, name: machine.name, problem:
                 machine.role != .owner ? "Only its owners add bots."
                 : machine.connection != .connected ? "Not connected."
@@ -246,26 +246,26 @@ struct BotTarget: Identifiable, Equatable {
 }
 
 extension Fleet {
-    /// The machines whose bots this device can list: connected daemons it owns, not vaults.
+    /// The machines whose bots this device can list: connected daemons it owns, not hubs.
     var botMachines: [Machine] {
         machines.filter { $0.role == .owner && $0.connection == .connected && $0.hosts.isEmpty }
     }
 
-    /// The paired vault `hostId` keeps its machine-level secrets in, which this device owns.
-    func secretsVault(of hostId: HostId) async throws -> HostId {
+    /// The paired hub `hostId` keeps its machine-level secrets in, which this device owns.
+    func secretsHub(of hostId: HostId) async throws -> HostId {
         switch try await backupLink(of: hostId) {
-        case .vault:
-            throw HerderError.Local(detail: "A vault runs no bots.")
+        case .hub:
+            throw HerderError.Local(detail: "A hub runs no bots.")
         case .nowhere:
-            throw HerderError.Local(detail: "The machine is linked to no vault, which keeps the bot’s tokens. Link it to one under Backup on its page.")
+            throw HerderError.Local(detail: "The machine is linked to no hub, which keeps the bot’s tokens. Link it to one under Backup on its page.")
         case .linked(let link):
             guard link.secrets else {
-                throw HerderError.Local(detail: "The machine fetches no secrets from its vault. Turn on Secrets under Backup on its page.")
+                throw HerderError.Local(detail: "The machine fetches no secrets from its hub. Turn on Secrets under Backup on its page.")
             }
-            guard let vault = pairedVault(link), vault.role == .owner else {
-                throw HerderError.Local(detail: "Pair this device with the machine’s vault as its owner.")
+            guard let hub = pairedHub(link), hub.role == .owner else {
+                throw HerderError.Local(detail: "Pair this device with the machine’s hub as its owner.")
             }
-            return vault.hostId
+            return hub.hostId
         }
     }
 }
@@ -285,19 +285,19 @@ extension BotState {
         switch self {
         case .connecting: "Connecting"
         case .connected: "Connected"
-        case .waitingForVault: "Waiting for the vault"
+        case .waitingForHub: "Waiting for the hub"
         case .tokenRejected: "Token rejected"
         case .unsupported: "Not supported here"
         case .unknown: "Unknown"
         }
     }
 
-    /// The machine retries while it waits for the vault, so that is not the user's to act on.
+    /// The machine retries while it waits for the hub, so that is not the user's to act on.
     var urgency: Urgency {
         switch self {
         case .connected: .done
         case .connecting: .running
-        case .waitingForVault, .unknown: .quiet
+        case .waitingForHub, .unknown: .quiet
         case .tokenRejected, .unsupported: .failing
         }
     }
@@ -305,7 +305,7 @@ extension BotState {
     /// What to do about it, when anything.
     var fix: String? {
         switch self {
-        case .waitingForVault: "The machine cannot read the bot’s tokens from its vault. It retries; check the vault is up and its set is granted to the machine."
+        case .waitingForHub: "The machine cannot read the bot’s tokens from its hub. It retries; check the hub is up and its set is granted to the machine."
         case .tokenRejected: "The chat refused the bot’s tokens. Add the bot again with new ones."
         case .unsupported: "This machine’s herder cannot run bots of this kind yet."
         case .connecting, .connected, .unknown: nil
@@ -314,7 +314,7 @@ extension BotState {
 }
 
 /// Adding a bot to a machine: its machine, kind and name, then its tokens. Saving puts the
-/// tokens into the machine's vault as machine-level secrets, in a set of the bot's own granted
+/// tokens into the machine's hub as machine-level secrets, in a set of the bot's own granted
 /// to the machine for its own use, then the bot on the machine. The tokens leave the form before
 /// anything is sent, so they are never kept nor shown again.
 @MainActor @Observable
@@ -322,8 +322,8 @@ final class BotSetup {
     typealias Send = @MainActor (HostId, CommandBody) async throws -> CommandResult
 
     private let send: Send
-    /// The vault that keeps a machine's secrets.
-    private let vaultOf: @MainActor (HostId) async throws -> HostId
+    /// The hub that keeps a machine's secrets.
+    private let hubOf: @MainActor (HostId) async throws -> HostId
     var hostId: HostId?
     /// The machines it may go on, each with why it can't, once asked.
     private(set) var targets: [BotTarget] = []
@@ -339,20 +339,20 @@ final class BotSetup {
     static let botTokenName = "BOT_TOKEN"
     static let appTokenName = "APP_TOKEN"
 
-    init(hostId: HostId?, send: @escaping Send, vaultOf: @escaping @MainActor (HostId) async throws -> HostId) {
+    init(hostId: HostId?, send: @escaping Send, hubOf: @escaping @MainActor (HostId) async throws -> HostId) {
         self.hostId = hostId
         self.send = send
-        self.vaultOf = vaultOf
+        self.hubOf = hubOf
     }
 
     convenience init(fleet: Fleet) {
         let client = fleet.client
         self.init(hostId: nil,
                   send: { try await client.send(hostId: $0, command: $1) },
-                  vaultOf: { try await fleet.secretsVault(of: $0) })
+                  hubOf: { try await fleet.secretsHub(of: $0) })
     }
 
-    /// Asks each of `targets` that may run a bot whether its herder knows bots and its vault
+    /// Asks each of `targets` that may run a bot whether its herder knows bots and its hub
     /// can keep the tokens, then picks the first that can when none is picked.
     func check(_ targets: [BotTarget]) async {
         var checked = targets
@@ -360,7 +360,7 @@ final class BotSetup {
             let hostId = checked[index].hostId
             do {
                 _ = try await send(hostId, .listBots)
-                _ = try await vaultOf(hostId)
+                _ = try await hubOf(hostId)
             } catch {
                 checked[index].problem = (error as? HerderError)?.needsNewerHerder == true
                     ? "Runs an older herder; bots need \(botsRelease)." : describe(error)
@@ -387,7 +387,7 @@ final class BotSetup {
     /// The bot's id, from its name: lowercase letters, digits and single hyphens.
     var botId: String { Self.slug(botName) }
 
-    /// The vault set that keeps its tokens.
+    /// The hub set that keeps its tokens.
     var secretSet: String { "bot-\(botId)" }
 
     var problem: String? {
@@ -420,19 +420,19 @@ final class BotSetup {
         let name = botName
         let set = secretSet
         do {
-            let vault = try await vaultOf(hostId)
-            guard case .secrets(let sets, _) = try await send(vault, .listSecrets) else {
-                throw HerderError.Local(detail: "the vault did not list its secrets")
+            let hub = try await hubOf(hostId)
+            guard case .secrets(let sets, _) = try await send(hub, .listSecrets) else {
+                throw HerderError.Local(detail: "the hub did not list its secrets")
             }
             if !sets.contains(where: { $0.name == set }) {
-                _ = try await send(vault, .createSecretSet(set: set, assertion: nil))
+                _ = try await send(hub, .createSecretSet(set: set, assertion: nil))
             }
             for (secret, value) in tokens {
-                _ = try await send(vault, .putSecret(
+                _ = try await send(hub, .putSecret(
                     set: set, name: secret, description: "\(kind.label) \(secret == Self.botTokenName ? "bot" : "app-level") token of the bot \(name)",
                     value: value, assertion: nil))
             }
-            _ = try await send(vault, .grantSecretSet(set: set, hostId: hostId, hostUse: true, assertion: nil))
+            _ = try await send(hub, .grantSecretSet(set: set, hostId: hostId, hostUse: true, assertion: nil))
             _ = try await send(hostId, .putBot(bot: Bot(
                 botId: botId, kind: kind, name: name,
                 token: "\(set)/\(Self.botTokenName)",

@@ -4,13 +4,13 @@
 //! The list is the config file's, replaced whenever an owner changes the settings, and read as
 //! a CLI starts: a session gets the servers that are enabled and are for every project or its
 //! own. A stdio server with `secrets` runs through `herder secret run`, which fetches their
-//! values from the vault with the session's token and hands them to the server only, as
+//! values from the hub with the session's token and hands them to the server only, as
 //! variables of their names; without herder's own MCP server there is no token, and such a
 //! server is left out.
 //!
 //! A header of a server at a URL may hold placeholders, `{secret:NAME}` or
 //! `{secret:set/NAME}`, which take the secret's value as the CLI starts: fetched from the
-//! vault for the session as `herder secret run` fetches them, so the vault checks its grant
+//! hub for the session as `herder secret run` fetches them, so the hub checks its grant
 //! and audits the fetch. Values go to the CLI only, in its private config file or on its stdin,
 //! never in the config file, a log, a command line or the journal. A server whose secrets
 //! cannot be fetched is left out of that run, and the session told why, by name only.
@@ -186,7 +186,7 @@ async fn fill_in_secrets(
         .join(", ");
     let fetched = fetch(secrets.into_iter().collect())
         .await
-        .map_err(|err| format!("cannot fetch {names} from the vault: {}", err.message))?;
+        .map_err(|err| format!("cannot fetch {names} from the hub: {}", err.message))?;
     let values: HashMap<_, _> = fetched
         .iter()
         .map(|fetched| (&fetched.secret, fetched.value.expose()))
@@ -199,7 +199,7 @@ async fn fill_in_secrets(
                 Part::Secret(secret) => {
                     let value = values
                         .get(&secret)
-                        .ok_or_else(|| format!("the vault did not send {secret}"))?;
+                        .ok_or_else(|| format!("the hub did not send {secret}"))?;
                     if value.contains(['\r', '\n']) {
                         return Err(format!(
                             "{secret} holds a line break, which header {header} cannot"
@@ -282,10 +282,10 @@ mod tests {
 
     use super::*;
 
-    /// A vault granting the host `prod`, which holds `LINEAR_KEY` and `DB_URL`: what
-    /// [`crate::vault::HostSecrets::fetch`] answers for it, refusing every secret unless all
-    /// are there, as the vault does.
-    fn vault(secrets: Vec<SecretRef>) -> SecretsFuture {
+    /// A hub granting the host `prod`, which holds `LINEAR_KEY` and `DB_URL`: what
+    /// [`crate::hub::HostSecrets::fetch`] answers for it, refusing every secret unless all
+    /// are there, as the hub does.
+    fn hub(secrets: Vec<SecretRef>) -> SecretsFuture {
         Box::pin(async move {
             let held = [("LINEAR_KEY", "lin_api_s3cr3t"), ("DB_URL", "postgres://x")];
             secrets
@@ -316,11 +316,11 @@ mod tests {
         })
     }
 
-    fn no_vault(_: Vec<SecretRef>) -> SecretsFuture {
+    fn no_hub(_: Vec<SecretRef>) -> SecretsFuture {
         Box::pin(async {
             Err(SecretError {
-                code: SecretErrorCode::NoVault,
-                message: "this host is not linked to a vault with Secrets on, so it has no secrets; an owner \
+                code: SecretErrorCode::NoHub,
+                message: "this host is not linked to a hub with Secrets on, so it has no secrets; an owner \
                           links it to one in the herder app, on the machine's page under Secrets"
                     .into(),
                 secret: None,
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(
             names(
                 &servers
-                    .for_session(Some(&herder_project), None, no_vault)
+                    .for_session(Some(&herder_project), None, no_hub)
                     .await
                     .servers
             ),
@@ -398,19 +398,19 @@ mod tests {
         assert_eq!(
             names(
                 &servers
-                    .for_session(Some(&other), None, no_vault)
+                    .for_session(Some(&other), None, no_hub)
                     .await
                     .servers
             ),
             ["everywhere", "remote"]
         );
         assert_eq!(
-            names(&servers.for_session(None, None, no_vault).await.servers),
+            names(&servers.for_session(None, None, no_hub).await.servers),
             ["everywhere", "remote"]
         );
 
         servers.set(vec![stdio("replaced", &[])]);
-        let replaced = servers.for_session(None, None, no_vault).await.servers;
+        let replaced = servers.for_session(None, None, no_hub).await.servers;
         assert_eq!(names(&replaced), ["replaced"]);
         assert_eq!(
             replaced[0].transport,
@@ -424,14 +424,14 @@ mod tests {
 
     #[tokio::test]
     async fn secrets_run_the_server_through_herder_secret_run() {
-        let servers = UserServers::new(vec![stdio("vaulted", &["API_TOKEN", "prod/DB_URL"])]);
+        let servers = UserServers::new(vec![stdio("hubbed", &["API_TOKEN", "prod/DB_URL"])]);
         // Without herder's MCP server there is no token to fetch them with.
-        let launch = servers.for_session(None, None, no_vault).await;
+        let launch = servers.for_session(None, None, no_hub).await;
         assert!(launch.servers.is_empty());
         assert_eq!(
             launch.left_out,
             [LeftOut {
-                server: "vaulted".into(),
+                server: "hubbed".into(),
                 reason: "its secrets need herder's MCP server, which is not running".into(),
             }]
         );
@@ -442,7 +442,7 @@ mod tests {
             session_id: &session_id,
         };
         let launched = servers
-            .for_session(None, Some(&herder), no_vault)
+            .for_session(None, Some(&herder), no_hub)
             .await
             .servers;
         assert_eq!(
@@ -511,7 +511,7 @@ mod tests {
             ),
             http("plain", &[("Authorization", "Bearer kept")]),
         ]);
-        let launch = servers.for_session(None, None, vault).await;
+        let launch = servers.for_session(None, None, hub).await;
         assert!(launch.left_out.is_empty());
         assert_eq!(
             launch.servers[0].transport,
@@ -545,20 +545,20 @@ mod tests {
             ),
             http("docs", &[]),
         ]);
-        let launch = servers.for_session(None, None, vault).await;
+        let launch = servers.for_session(None, None, hub).await;
         assert_eq!(names(&launch.servers), ["linear", "docs"]);
         assert_eq!(
             launch.left_out,
             [LeftOut {
                 server: "github".into(),
-                reason: "cannot fetch GITHUB_TOKEN from the vault: no set granted to this host \
+                reason: "cannot fetch GITHUB_TOKEN from the hub: no set granted to this host \
                          has GITHUB_TOKEN"
                     .into(),
             }]
         );
 
-        // Without a vault, every server with a placeholder goes; the rest stay.
-        let launch = servers.for_session(None, None, no_vault).await;
+        // Without a hub, every server with a placeholder goes; the rest stay.
+        let launch = servers.for_session(None, None, no_hub).await;
         assert_eq!(names(&launch.servers), ["docs"]);
         assert_eq!(launch.left_out.len(), 2);
     }

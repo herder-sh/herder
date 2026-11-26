@@ -3,14 +3,14 @@ import Herder
 @testable import HerderKit
 import Testing
 
-/// A vault's CLIProxyAPI, as the app reaches it: it records what it is sent, starts logins,
+/// A hub's CLIProxyAPI, as the app reaches it: it records what it is sent, starts logins,
 /// and signs one in when the pasted address carries the code `good`.
-@MainActor final class FakeLoginsVault {
+@MainActor final class FakeLoginsHub {
     var sent: [CommandBody] = []
     var logins: [ProviderLogin] = sampleProviderLogins()
 
-    func model() -> VaultLogins {
-        VaultLogins(vault: "h-vault") { [self] command in
+    func model() -> HubLogins {
+        HubLogins(hub: "h-hub") { [self] command in
             sent.append(command)
             switch command {
             case .listProviderLogins:
@@ -66,9 +66,9 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
 }
 
 @MainActor struct ProviderLoginsTests {
-    @Test func addingALoginStartsItThenHandsTheVaultThePastedAddress() async {
-        let vault = FakeLoginsVault()
-        let logins = vault.model()
+    @Test func addingALoginStartsItThenHandsTheHubThePastedAddress() async {
+        let hub = FakeLoginsHub()
+        let logins = hub.model()
         await logins.reload()
         #expect(logins.logins.count == 3)
 
@@ -83,7 +83,7 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
         #expect(logins.logins.map(\.label).contains("grace@example.com"))
         // Done: leaving cancels nothing.
         await adder.leave()
-        #expect(vault.sent == [
+        #expect(hub.sent == [
             .listProviderLogins,
             .startProviderLogin(provider: "claude"),
             .completeProviderLogin(loginId: "state1", redirectUrl: "http://localhost:54545/callback?state=state1"),
@@ -92,29 +92,29 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
     }
 
     @Test func leavingALoginBeforeItIsDoneCancelsIt() async {
-        let vault = FakeLoginsVault()
-        let adder = LoginAdder(logins: vault.model())
+        let hub = FakeLoginsHub()
+        let adder = LoginAdder(logins: hub.model())
         adder.provider = "codex"
         // Not started: nothing to cancel.
         await adder.leave()
         await adder.start()
         await adder.leave()
         await adder.leave()
-        #expect(vault.sent == [.startProviderLogin(provider: "codex"), .cancelProviderLogin(loginId: "state1")])
+        #expect(hub.sent == [.startProviderLogin(provider: "codex"), .cancelProviderLogin(loginId: "state1")])
     }
 
     @Test func removingALoginListsAgain() async throws {
-        let vault = FakeLoginsVault()
-        let logins = vault.model()
+        let hub = FakeLoginsHub()
+        let logins = hub.model()
         await logins.reload()
         try await logins.remove(logins.logins[2])
-        #expect(vault.sent.last == .listProviderLogins)
+        #expect(hub.sent.last == .listProviderLogins)
         #expect(logins.logins.map(\.name) == ["claude-ada@example.com.json", "codex-ada@example.com-plus.json"])
     }
 
-    @Test func aVaultWithNoProxySaysSo() async {
-        let logins = VaultLogins(vault: "h-vault") { _ in
-            throw HerderError.Rejected(info: ErrorInfo(code: .unsupported, message: "this vault runs no CLIProxyAPI"))
+    @Test func aHubWithNoProxySaysSo() async {
+        let logins = HubLogins(hub: "h-hub") { _ in
+            throw HerderError.Rejected(info: ErrorInfo(code: .unsupported, message: "this hub runs no CLIProxyAPI"))
         }
         await logins.reload()
         guard case .failed(let why) = logins.list else {
@@ -124,12 +124,12 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
         #expect(why.contains("runs no CLIProxyAPI"))
     }
 
-    @Test func renamingALoginSendsItsNewNameAndShowsTheVaultsList() async {
-        let vault = FakeLoginsVault()
-        let logins = vault.model()
+    @Test func renamingALoginSendsItsNewNameAndShowsTheHubsList() async {
+        let hub = FakeLoginsHub()
+        let logins = hub.model()
         await logins.reload()
         let work = logins.logins[0]
-        #expect(VaultLogins.ownName(work) == "Work")
+        #expect(HubLogins.ownName(work) == "Work")
         // The same name, trimmed, changes nothing.
         #expect(await logins.rename(work, to: " Work "))
         #expect(await logins.rename(work, to: "  Personal "))
@@ -137,17 +137,17 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
         // Emptied, it goes back to its email.
         #expect(await logins.rename(logins.logins[0], to: ""))
         #expect(logins.logins[0].label == "ada@example.com")
-        #expect(VaultLogins.ownName(logins.logins[0]) == "")
-        #expect(VaultLogins.email(logins.logins[0]) == nil)
-        #expect(vault.sent.dropFirst() == [
+        #expect(HubLogins.ownName(logins.logins[0]) == "")
+        #expect(HubLogins.email(logins.logins[0]) == nil)
+        #expect(hub.sent.dropFirst() == [
             .setProviderLogin(name: work.name, label: "Personal", fallback: nil),
             .setProviderLogin(name: work.name, label: "", fallback: nil),
         ])
     }
 
     @Test func markingALoginFallbackSendsOnlyTheMark() async {
-        let vault = FakeLoginsVault()
-        let logins = vault.model()
+        let hub = FakeLoginsHub()
+        let logins = hub.model()
         await logins.reload()
         await logins.setFallback(logins.logins[0], true)
         #expect(logins.logins[0].fallback)
@@ -155,15 +155,15 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
         await logins.setFallback(logins.logins[0], true)
         await logins.setFallback(logins.logins[1], false)
         #expect(!logins.logins[1].fallback)
-        #expect(vault.sent.dropFirst() == [
+        #expect(hub.sent.dropFirst() == [
             .setProviderLogin(name: "claude-ada@example.com.json", label: nil, fallback: true),
             .setProviderLogin(name: "codex-ada@example.com-plus.json", label: nil, fallback: false),
         ])
     }
 
     @Test func aRefusedChangeShowsOnItsLoginUntilTheNext() async {
-        let vault = FakeLoginsVault()
-        let logins = vault.model()
+        let hub = FakeLoginsHub()
+        let logins = hub.model()
         await logins.reload()
         let work = logins.logins[0]
         #expect(await logins.rename(work, to: String(repeating: "x", count: 65)) == false)
@@ -174,42 +174,42 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
         #expect(logins.errors.isEmpty)
     }
 
-    @Test func aVaultThatCannotNameLoginsYetSaysSo() async {
+    @Test func aHubThatCannotNameLoginsYetSaysSo() async {
         let logins = sampleProviderLogins()
-        let model = VaultLogins(vault: "h-vault") { command in
+        let model = HubLogins(hub: "h-hub") { command in
             if case .setProviderLogin = command {
-                throw HerderError.Rejected(info: ErrorInfo(code: .unsupported, message: "update the vault to name its logins"))
+                throw HerderError.Rejected(info: ErrorInfo(code: .unsupported, message: "update the hub to name its logins"))
             }
             return .providerLogins(logins: logins)
         }
         await model.reload()
         await model.setFallback(model.logins[0], true)
-        #expect(model.errors[logins[0].name] == "update the vault to name its logins")
+        #expect(model.errors[logins[0].name] == "update the hub to name its logins")
         #expect(!model.logins[0].fallback)
     }
 
     @Test func aLoginShowsWhatIsLeftOfItsWindowsAndNothingUnreported() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let logins = sampleProviderLogins(now: now)
-        let work = VaultLogins.windows(logins[0], now: now)
+        let work = HubLogins.windows(logins[0], now: now)
         #expect(work.session?.percentLeft == 58)
         #expect(work.weekly?.percentLeft == 19)
         #expect(work.session?.resets == "2h 0m")
-        let codex = VaultLogins.windows(logins[1], now: now)
+        let codex = HubLogins.windows(logins[1], now: now)
         #expect(codex.session?.percentLeft == 0 && codex.weekly == nil)
-        let old = VaultLogins.windows(logins[2], now: now)
+        let old = HubLogins.windows(logins[2], now: now)
         #expect(old.session == nil && old.weekly == nil)
         // The email shows under an owner's own name only.
-        #expect(logins.map(VaultLogins.email) == ["ada@example.com", nil, nil])
+        #expect(logins.map(HubLogins.email) == ["ada@example.com", nil, nil])
     }
 
     @Test func eachStateReadsAsWhatItMeans() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let logins = sampleProviderLogins(now: now)
-        #expect(VaultLogins.stateLabel(logins[0], now: now) == "In use")
-        #expect(VaultLogins.stateLabel(logins[1], now: now).hasPrefix("Cooling down, back in 1"))
-        #expect(VaultLogins.stateLabel(logins[1], now: now.addingTimeInterval(7200)) == "Cooling down")
-        #expect(VaultLogins.stateLabel(logins[2], now: now) == "Needs signing in")
+        #expect(HubLogins.stateLabel(logins[0], now: now) == "In use")
+        #expect(HubLogins.stateLabel(logins[1], now: now).hasPrefix("Cooling down, back in 1"))
+        #expect(HubLogins.stateLabel(logins[1], now: now.addingTimeInterval(7200)) == "Cooling down")
+        #expect(HubLogins.stateLabel(logins[2], now: now) == "Needs signing in")
     }
 }
 
@@ -217,7 +217,7 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
 import AppKit
 import SwiftUI
 
-/// Draws the vault page's Logins tab, and the Add Login sheet at each step, as the app's dark
+/// Draws the hub page's Logins tab, and the Add Login sheet at each step, as the app's dark
 /// appearance shows them, and attaches them; with `HERDER_SCREENSHOT_DIR` set, also writes them
 /// there.
 @MainActor struct ProviderLoginsScreenshotTests {
@@ -226,18 +226,18 @@ import SwiftUI
             throw CancellationError()
         }
         fleet.setMachinesForTesting(sampleFleetMachines())
-        let vault = FakeLoginsVault()
-        let page = VaultPage(fleet: fleet, vault: "h-vault", tab: .logins,
-                             secrets: VaultSecrets(vault: "h-vault") { _ in .applied }, logins: vault.model())
-        try await shoot(page, named: "vault-logins.png", width: 1100, height: 460)
+        let hub = FakeLoginsHub()
+        let page = HubPage(fleet: fleet, hub: "h-hub", tab: .logins,
+                             secrets: HubSecrets(hub: "h-hub") { _ in .applied }, logins: hub.model())
+        try await shoot(page, named: "hub-logins.png", width: 1100, height: 460)
     }
 
     @Test func drawsTheAddLoginSheetAtEachStep() async throws {
-        let vault = FakeLoginsVault()
-        try await shoot(AddProviderLoginSheet(adder: LoginAdder(logins: vault.model())), named: "add-login-start.png",
+        let hub = FakeLoginsHub()
+        try await shoot(AddProviderLoginSheet(adder: LoginAdder(logins: hub.model())), named: "add-login-start.png",
                         width: 560, height: 480)
         // Its own: closing a sheet cancels the login it started.
-        let adder = LoginAdder(logins: vault.model())
+        let adder = LoginAdder(logins: hub.model())
         await adder.start()
         adder.address = "http://localhost:54545/callback?code=abc"
         try await shoot(AddProviderLoginSheet(adder: adder), named: "add-login-paste.png", width: 560, height: 480)

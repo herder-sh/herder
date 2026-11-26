@@ -6,7 +6,7 @@ use herder_protocol::{Role, ServerMessage, SessionId};
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::hub::Outbox;
+use crate::fanout::Outbox;
 use crate::resources::{Budget, ReadHost, Reading, Ticket};
 
 const LATEST: &str = "99.0.0";
@@ -81,7 +81,7 @@ impl ReadHost for Unread {
 struct Daemon {
     _dir: tempfile::TempDir,
     exe: std::path::PathBuf,
-    hub: Arc<Hub>,
+    fanout: Arc<Fanout>,
     owner: Arc<Outbox>,
     admission: Arc<Admission>,
     shutdown: CancellationToken,
@@ -93,9 +93,9 @@ impl Daemon {
         let dir = tempfile::tempdir().unwrap();
         let exe = dir.path().join("herder");
         std::fs::write(&exe, b"herder 0.1.0").unwrap();
-        let hub = Arc::new(Hub::default());
+        let fanout = Arc::new(Fanout::default());
         let owner = Arc::new(Outbox::default());
-        hub.connect(&owner, Role::Owner);
+        fanout.connect(&owner, Role::Owner);
         let budget = Budget {
             cores: 4,
             max_turns: 4,
@@ -117,7 +117,7 @@ impl Daemon {
         Self {
             _dir: dir,
             exe,
-            hub,
+            fanout,
             owner,
             admission,
             shutdown,
@@ -126,7 +126,7 @@ impl Daemon {
     }
 
     fn start(&self, when: UpdateWhen) -> Result<CommandResult, ErrorInfo> {
-        self.updater.start(when, &self.hub)
+        self.updater.start(when, &self.fanout)
     }
 
     /// The next stage clients are sent.
@@ -275,7 +275,9 @@ async fn now_starts_an_update_waiting_for_turns() {
 async fn refused_where_the_binary_cannot_be_replaced_or_restarted() {
     let daemon = Daemon::new(release_server(None));
     let unmanaged = Arc::new(Updater::new(None, None, CancellationToken::new()));
-    let refused = unmanaged.start(UpdateWhen::Now, &daemon.hub).unwrap_err();
+    let refused = unmanaged
+        .start(UpdateWhen::Now, &daemon.fanout)
+        .unwrap_err();
     assert_eq!(refused.code, ErrorCode::Unsupported);
 
     let dir = daemon.exe.parent().unwrap();

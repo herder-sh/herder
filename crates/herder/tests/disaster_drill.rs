@@ -1,15 +1,15 @@
-//! Disaster drill: host A loses its disk, and its session goes on on host B from the vault.
+//! Disaster drill: host A loses its disk, and its session goes on on host B from the hub.
 //!
-//! Everything runs on this machine in scratch dirs, as separate processes: a vault (`herder
-//! daemon` in vault mode), hosts A and B, a bare git `origin` both hosts clone. A runs a few
+//! Everything runs on this machine in scratch dirs, as separate processes: a hub (`herder
+//! daemon` in hub mode), hosts A and B, a bare git `origin` both hosts clone. A runs a few
 //! turns that change code, each checkpointed to `origin`, and is SIGKILLed in the middle of the
-//! next one. The owner's terminal on B, signed in to the vault and to B with `herder login`,
-//! forks the session there with `herder fork`: it reads the session from the vault and relays
-//! it to B, which never reads the vault itself. The fork's worktree must be A's last checkpoint
+//! next one. The owner's terminal on B, signed in to the hub and to B with `herder login`,
+//! forks the session there with `herder fork`: it reads the session from the hub and relays
+//! it to B, which never reads the hub itself. The fork's worktree must be A's last checkpoint
 //! exactly, and the session's history goes on there. A, started again on its old data dir,
 //! keeps its session as it was.
 //!
-//! The vault and `herder fork` / `herder login` / `herder pair` are the herder binary. A host is this test
+//! The hub and `herder fork` / `herder login` / `herder pair` are the herder binary. A host is this test
 //! binary run again as a child ([`drill_host`]): `herder_daemon::serve`, the function `herder
 //! daemon` runs, with a scripted agent ([`Agent`]) in place of a vendor CLI, so no provider is
 //! ever called. Run the drill on its own with `cargo test -p herder --test disaster_drill`.
@@ -30,8 +30,8 @@ use herder_adapters::{
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_client_core::{LoginUri, OwnUri};
 use herder_daemon::auth::authenticator::{Authenticator, Join};
+use herder_daemon::hub::HubStore;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters};
-use herder_daemon::vault::VaultStore;
 use herder_protocol::{
     AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor,
     ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION, PermissionMode,
@@ -228,8 +228,8 @@ impl Process {
         }
     }
 
-    /// The vault: `herder daemon` on `config`, whose `mode` is `vault`.
-    fn vault(config: &Path) -> Self {
+    /// The hub: `herder daemon` on `config`, whose `mode` is `hub`.
+    fn hub(config: &Path) -> Self {
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_herder"));
         command.args(["daemon", "--config"]).arg(config);
         Self::spawn(command, config.with_file_name("daemon.log"))
@@ -341,8 +341,8 @@ async fn own(config: &Path) -> OwnUri {
         .unwrap()
 }
 
-/// Pairs the host named `host` to replicate to the vault of `config` with `herder pair
-/// --host`: the `[vault]` table of its daemon.toml, as printed.
+/// Pairs the host named `host` to replicate to the hub of `config` with `herder pair
+/// --host`: the `[hub]` table of its daemon.toml, as printed.
 async fn pair_host(config: &Path, host: &str) -> String {
     let home = config.parent().unwrap();
     let args = ["pair", "--config", config.to_str().unwrap(), "--host", host];
@@ -351,7 +351,7 @@ async fn pair_host(config: &Path, host: &str) -> String {
     let table: Vec<_> = output
         .lines()
         .map(str::trim)
-        .filter(|line| *line == "[vault]" || line.contains(" = \""))
+        .filter(|line| *line == "[hub]" || line.contains(" = \""))
         .collect();
     assert_eq!(table.len(), 4, "{output}");
     table.join("\n")
@@ -643,34 +643,34 @@ const A_LAST: &str = "src/lib.rs=pub fn run() { half written\nhang";
 const B_TURN: &str = "src/lib.rs=pub fn run() { println!(\"recovered\") }";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
+async fn a_dead_hosts_session_is_forked_on_another_host_from_the_hub() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let (a_dir, b_dir) = (root.join("a"), root.join("b"));
     clones(root, &[&a_dir, &b_dir]);
     let origin = root.join("origin.git");
 
-    // The vault, claimed by its owner's app, and a host pairing code on it for each host.
-    let vault_config = write_config(&root.join("vault"), free_port(), "mode = \"vault\"\n");
-    let _vault = Process::vault(&vault_config);
-    wait_for(&root.join("vault/data/control.sock")).await;
+    // The hub, claimed by its owner's app, and a host pairing code on it for each host.
+    let hub_config = write_config(&root.join("hub"), free_port(), "mode = \"hub\"\n");
+    let _hub = Process::hub(&hub_config);
+    wait_for(&root.join("hub/data/control.sock")).await;
     let device = DeviceKey::generate().unwrap();
-    let vault_link = own(&vault_config).await;
-    let mut vault_app = Client::connect(
-        &vault_link.hosts[0],
-        &vault_link.fingerprint,
+    let hub_link = own(&hub_config).await;
+    let mut hub_app = Client::connect(
+        &hub_link.hosts[0],
+        &hub_link.fingerprint,
         &device,
-        Some(vault_link.code.clone()),
+        Some(hub_link.code.clone()),
     )
     .await;
     let host_config = async |dir: &Path, port: u16| {
-        let vault = pair_host(&vault_config, dir.file_name().unwrap().to_str().unwrap()).await;
+        let hub = pair_host(&hub_config, dir.file_name().unwrap().to_str().unwrap()).await;
         let app = dir.join("app");
         write_config(
             dir,
             port,
             &format!(
-                "{RESOURCES}\n[[project]]\nremotes = [\"https://{PROJECT}\"]\npaths = [{:?}]\n\n{vault}\n",
+                "{RESOURCES}\n[[project]]\nremotes = [\"https://{PROJECT}\"]\npaths = [{:?}]\n\n{hub}\n",
                 app.to_str().unwrap(),
             ),
         )
@@ -744,29 +744,26 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
         .await;
     let a_events = client.events.len();
     drop(client);
-    // What the vault holds is all B will know: wait until it has A's whole journal.
+    // What the hub holds is all B will know: wait until it has A's whole journal.
     let a_host = HostId::new(
         std::fs::read_to_string(a_dir.join("data/host-id"))
             .unwrap()
             .trim(),
     );
-    let vault_db = root.join("vault/data/db/vault.db");
+    let hub_db = root.join("hub/data/db/hub.db");
     let deadline = Instant::now() + TIMEOUT;
-    while VaultStore::open(&vault_db)
+    while HubStore::open(&hub_db)
         .unwrap()
         .records(&a_host, &session_id, 0, usize::MAX)
         .unwrap()
         .len()
         < a_events
     {
-        assert!(
-            Instant::now() < deadline,
-            "the vault never held A's journal"
-        );
+        assert!(Instant::now() < deadline, "the hub never held A's journal");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    // A's disk is gone with it: B must work from the vault and origin alone.
+    // A's disk is gone with it: B must work from the hub and origin alone.
     let mut b = Process::host(&b_config);
     wait_for(&b_dir.join("data/control.sock")).await;
     a.sigkill();
@@ -774,8 +771,8 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     let lost = a_dir.join("lost-worktrees");
     std::fs::rename(&a_disk, &lost).unwrap();
 
-    // The owner claims B, signs B's terminal in to the vault and to B, and forks the session
-    // there from the vault.
+    // The owner claims B, signs B's terminal in to the hub and to B, and forks the session
+    // there from the hub.
     let b_link = own(&b_config).await;
     let mut client = Client::connect(
         &b_link.hosts[0],
@@ -785,12 +782,12 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     )
     .await;
     let terminal = root.join("terminal");
-    let vault_login = [
-        vault_link.hosts[0].as_str(),
+    let hub_login = [
+        hub_link.hosts[0].as_str(),
         "--fingerprint",
-        &vault_link.fingerprint,
+        &hub_link.fingerprint,
     ];
-    log_in(&terminal, &vault_login, &mut vault_app).await;
+    log_in(&terminal, &hub_login, &mut hub_app).await;
     log_in(
         &terminal,
         &["--config", b_config.to_str().unwrap()],

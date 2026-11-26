@@ -2,23 +2,23 @@ import Herder
 import SwiftUI
 
 /// What an agent's `request_secret` asks: "This session asks you to add the secret
-/// GITHUB_SIEM_PAT in coingate on herder-vault-0", with its hint, a warning when it replaces
-/// a value, the vault's sets to pick another from, and a secure field for the value.
+/// GITHUB_SIEM_PAT in coingate on herder-hub-0", with its hint, a warning when it replaces
+/// a value, the hub's sets to pick another from, and a secure field for the value.
 struct SecretRequestAsk: View {
     let fleet: Fleet
     let hostId: HostId
     let secret: SecretRequest
     @Binding var picked: String?
     @Binding var value: SecretInput
-    @State private var vault: Machine?
+    @State private var hub: Machine?
     @State private var sets: [String] = []
-    /// The vault's secrets, to tell whether the picked set has the name already.
+    /// The hub's secrets, to tell whether the picked set has the name already.
     @State private var held: [SecretInfo]?
     @State private var problem: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(Self.question(secret, set: chosen, vault: vault?.name))
+            Text(Self.question(secret, set: chosen, hub: hub?.name))
                 .font(.subheadline)
                 .foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
@@ -45,7 +45,7 @@ struct SecretRequestAsk: View {
                 Spacer(minLength: 0)
             }
             valueField
-            Text("Goes straight to the vault. The agent only learns that it was stored.")
+            Text("Goes straight to the hub. The agent only learns that it was stored.")
                 .font(.caption).foregroundStyle(Theme.tertiary)
             if let problem {
                 Text(problem).font(.footnote).foregroundStyle(Theme.failure)
@@ -57,7 +57,7 @@ struct SecretRequestAsk: View {
 
     private var chosen: String { picked ?? secret.set }
 
-    /// The vault's sets, with the agent's first when the vault lacks it: Store creates it.
+    /// The hub's sets, with the agent's first when the hub lacks it: Store creates it.
     private var choices: [String] {
         sets.contains(secret.set) ? sets : [secret.set] + sets
     }
@@ -103,9 +103,9 @@ struct SecretRequestAsk: View {
 
     private func load() async {
         do {
-            let vault = try await fleet.ownedVault(of: hostId)
-            self.vault = vault
-            guard case .secrets(let sets, let secrets) = try await fleet.client.send(hostId: vault.hostId, command: .listSecrets)
+            let hub = try await fleet.ownedHub(of: hostId)
+            self.hub = hub
+            guard case .secrets(let sets, let secrets) = try await fleet.client.send(hostId: hub.hostId, command: .listSecrets)
             else { return }
             self.sets = sets.map(\.name)
             held = secrets
@@ -115,12 +115,12 @@ struct SecretRequestAsk: View {
         }
     }
 
-    /// "This session asks you to add the secret GITHUB_SIEM_PAT in coingate on vault-0."
-    nonisolated static func question(_ secret: SecretRequest, set: String, vault: String?) -> String {
-        "This session asks you to add the secret \(secret.name) in \(set) on \(vault ?? "its vault")."
+    /// "This session asks you to add the secret GITHUB_SIEM_PAT in coingate on hub-0."
+    nonisolated static func question(_ secret: SecretRequest, set: String, hub: String?) -> String {
+        "This session asks you to add the secret \(secret.name) in \(set) on \(hub ?? "its hub")."
     }
 
-    /// Whether storing in `set` replaces a value: as the vault lists its secrets once loaded,
+    /// Whether storing in `set` replaces a value: as the hub lists its secrets once loaded,
     /// else as the host saw its granted sets when the agent asked.
     nonisolated static func replaces(_ secret: SecretRequest, set: String, held: [SecretInfo]?) -> Bool {
         guard let held else { return set == secret.set && secret.replaces }
@@ -133,7 +133,7 @@ struct SecretRequestAsk: View {
         return held.first { $0.set == set && $0.name == secret.name }?.description ?? ""
     }
 
-    /// Why `value` cannot be stored, as the vault checks it; `nil` when it can.
+    /// Why `value` cannot be stored, as the hub checks it; `nil` when it can.
     nonisolated static func problem(_ value: SecretInput) -> String? {
         if value.isEmpty { return "Enter or paste the value." }
         if value.text.utf8.count > 64 * 1024 || value.text.contains("\0") {

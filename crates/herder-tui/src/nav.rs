@@ -197,8 +197,8 @@ impl App {
     }
 
     /// Whether another listed copy of `key`'s session stands for it, so this one is not
-    /// listed or counted. A session a vault replicates is listed once: from its own host while
-    /// that host is paired here and connected; else from the vault, read-only.
+    /// listed or counted. A session a hub replicates is listed once: from its own host while
+    /// that host is paired here and connected; else from the hub, read-only.
     pub fn shadowed(&self, key: &SessionKey) -> bool {
         let Some(machine) = self.machines.iter().find(|m| m.host_id == key.host_id) else {
             return false;
@@ -219,24 +219,25 @@ impl App {
             .and_then(|head| head.host_id.as_ref())
             .filter(|host| **host != key.host_id);
         match origin {
-            // A vault's copy, while its host is reachable directly.
+            // A hub's copy, while its host is reachable directly.
             Some(origin) => self
                 .machines
                 .iter()
                 .any(|m| m.host_id == *origin && connected(m) && lists(m, None)),
-            // The host's own copy, while it is not connected and a vault lists the session.
+            // The host's own copy, while it is not connected and a hub lists the session.
             None => {
                 !connected(machine)
-                    && self.machines.iter().any(|vault| {
-                        vault.host_id != key.host_id && lists(vault, Some(&key.host_id))
-                    })
+                    && self
+                        .machines
+                        .iter()
+                        .any(|hub| hub.host_id != key.host_id && lists(hub, Some(&key.host_id)))
             }
         }
     }
 
-    /// Whether `key` is a vault's read-only copy standing in for a session whose host is
+    /// Whether `key` is a hub's read-only copy standing in for a session whose host is
     /// paired here but not reachable now.
-    pub fn vault_copy(&self, key: &SessionKey) -> bool {
+    pub fn hub_copy(&self, key: &SessionKey) -> bool {
         let Some(host) = self.fleet_host(key) else {
             return false;
         };
@@ -245,7 +246,7 @@ impl App {
             && self.machines.iter().any(|m| m.host_id == host.host_id)
     }
 
-    /// The machine `key`'s session runs on: for a vault's copy, the host it runs on.
+    /// The machine `key`'s session runs on: for a hub's copy, the host it runs on.
     pub fn session_machine(&self, key: &SessionKey) -> String {
         let host_id = self
             .head(key)
@@ -295,8 +296,8 @@ impl App {
                 .filter(|(key, _)| key.host_id == *host_id)
                 .map(|(key, _)| key)
                 .collect(),
-            Row::Host { vault, host } => listed
-                .filter(|(key, on)| key.host_id == *vault && *on == Some(host))
+            Row::Host { hub, host } => listed
+                .filter(|(key, on)| key.host_id == *hub && *on == Some(host))
                 .map(|(key, _)| key)
                 .collect(),
         }
@@ -697,13 +698,13 @@ mod tests {
     }
 
     /// `devbox` paired directly, running `s1` (asking for an approval) and `s2`, and a
-    /// vault that replicates it, listing both on `devbox` and `s3`, from a host not paired
+    /// hub that replicates it, listing both on `devbox` and `s3`, from a host not paired
     /// here. Grouped by project.
-    fn host_and_vault() -> App {
+    fn host_and_hub() -> App {
         use herder_client_core::ConnectionState;
         use herder_protocol::{FleetHost, SessionHead, Timestamp};
-        let mut vault = fake::machine("v", "vault", &[]);
-        vault.hosts = ["devbox", "laptop"]
+        let mut hub = fake::machine("v", "hub", &[]);
+        hub.hosts = ["devbox", "laptop"]
             .into_iter()
             .map(|host| FleetHost {
                 host_id: HostId::new(host),
@@ -714,7 +715,7 @@ mod tests {
                 relay: false,
             })
             .collect();
-        vault.sessions = [("s1", "devbox"), ("s2", "devbox"), ("s3", "laptop")]
+        hub.sessions = [("s1", "devbox"), ("s2", "devbox"), ("s3", "laptop")]
             .into_iter()
             .map(|(id, host)| SessionHead {
                 host_id: Some(HostId::new(host)),
@@ -728,7 +729,7 @@ mod tests {
             .collect();
         devbox.connection = ConnectionState::Connected;
         let mut app = App::default();
-        app.update(Msg::Machines(vec![devbox, vault]));
+        app.update(Msg::Machines(vec![devbox, hub]));
         for host in ["devbox", "v"] {
             for id in ["s1", "s2", "s3"] {
                 let mut bodies = vec![fake::created(id, None, None), status(SessionStatus::Idle)];
@@ -749,10 +750,10 @@ mod tests {
     }
 
     #[test]
-    fn a_session_a_vault_replicates_is_listed_once_from_its_live_host() {
+    fn a_session_a_hub_replicates_is_listed_once_from_its_live_host() {
         use herder_client_core::ConnectionState;
-        let mut app = host_and_vault();
-        // The live copies, and the vault's copy of what only the vault reaches: by project
+        let mut app = host_and_hub();
+        // The live copies, and the hub's copy of what only the hub reaches: by project
         // newest first, by machine each machine's.
         assert_eq!(
             listed(&app),
@@ -773,10 +774,10 @@ mod tests {
         app.open_key(key("devbox", "s1"));
         assert_eq!(app.position(), Some((3, 3)));
         // A copy of a host not paired here is simply the session, unmarked.
-        assert!(!app.vault_copy(&key("devbox", "s1")));
-        assert!(!app.vault_copy(&key("v", "s3")));
+        assert!(!app.hub_copy(&key("devbox", "s1")));
+        assert!(!app.hub_copy(&key("v", "s3")));
 
-        // devbox drops: the vault's read-only copies stand in for its sessions.
+        // devbox drops: the hub's read-only copies stand in for its sessions.
         let mut machines = app.machines.clone();
         machines[0].connection = ConnectionState::Disconnected {
             error: "connection refused".into(),
@@ -784,10 +785,10 @@ mod tests {
         app.update(Msg::Machines(machines));
         let mut rows = listed(&app);
         rows.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-        let vault = [key("v", "s1"), key("v", "s2"), key("v", "s3")];
-        assert_eq!(rows, vault);
-        assert!(app.vault_copy(&key("v", "s1")));
-        assert!(!app.vault_copy(&key("v", "s3")));
+        let hub = [key("v", "s1"), key("v", "s2"), key("v", "s3")];
+        assert_eq!(rows, hub);
+        assert!(app.hub_copy(&key("v", "s1")));
+        assert!(!app.hub_copy(&key("v", "s3")));
         assert_eq!(app.waiting().len(), 1);
         assert_eq!(app.row_sessions(&project).len(), 3);
     }

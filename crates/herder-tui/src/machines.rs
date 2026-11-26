@@ -13,7 +13,7 @@ use std::net::{IpAddr, SocketAddr};
 
 use herder_client_core::Machine;
 use herder_client_core::{FleetLink, FleetMachine};
-use herder_protocol::{HostId, VaultVolume};
+use herder_protocol::{HostId, HubVolume};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::accounts::{self, AddAccount};
@@ -40,12 +40,12 @@ pub struct MachinePanel {
     pub edit: Option<PanelEdit>,
     /// The backup dialog, over the panel.
     pub backup: Option<Backup>,
-    /// The secrets screen of the selected vault, over the panel.
+    /// The secrets screen of the selected hub, over the panel.
     pub secrets: Option<Secrets>,
     /// Where each machine this client owns backs up, as it last said.
     pub links: Links,
-    /// How full each vault's disk is, as it said with its link when the panel opened.
-    pub volumes: HashMap<HostId, VaultVolume>,
+    /// How full each hub's disk is, as it said with its link when the panel opened.
+    pub volumes: HashMap<HostId, HubVolume>,
 }
 
 /// What the panel does to the selected machine.
@@ -216,9 +216,9 @@ pub enum Input {
     Rename,
     /// Ask before forgetting the selected machine.
     Forget,
-    /// Back the selected machine up to a vault, or stop.
+    /// Back the selected machine up to a hub, or stop.
     Backup,
-    /// Manage the secrets of the selected vault.
+    /// Manage the secrets of the selected hub.
     Secrets,
     /// Pick the previous choice.
     Left,
@@ -409,7 +409,7 @@ impl App {
                         None => {
                             panel.account =
                                 Some(AddAccount::for_provider(host_id.clone(), 0, &self.machines));
-                            return vec![crate::accounts::ask_vault(host_id)];
+                            return vec![crate::accounts::ask_hub(host_id)];
                         }
                     }
                 }

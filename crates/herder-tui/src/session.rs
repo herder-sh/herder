@@ -74,7 +74,7 @@ pub struct Session {
     /// Pull requests linked to the session now, in the order they were linked.
     pub prs: Vec<PullRequest>,
     /// Images its prompts carried that its machine does not have, as fetching them told:
-    /// the vault never got them, so a session recovered from it lacks them.
+    /// the hub never got them, so a session recovered from it lacks them.
     pub not_backed_up: HashSet<AttachmentId>,
 }
 

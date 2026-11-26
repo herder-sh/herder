@@ -89,7 +89,7 @@
 //! to it: the CLI runs on this host, so any agent can read them. `get_attachment` reads one
 //! back; it changes nothing, so its answer is not remembered ([`changes_nothing`]). A
 //! transcript replayed into another CLI keeps each prompt's attachments, and the adapter names
-//! every image and file in a line of text: the seed carries no bytes, and the vault keeps none
+//! every image and file in a line of text: the seed carries no bytes, and the hub keeps none
 //! either, so a forked session's earlier attachments are references only.
 //!
 //! # Checkpoints
@@ -227,10 +227,10 @@
 //!
 //! # Forks
 //!
-//! Any session, of this host or, through the vault, of another one whose host is up or gone,
+//! Any session, of this host or, through the hub, of another one whose host is up or gone,
 //! can be forked here: its history goes on in a new session ([`SessionManager::fork`], see
 //! [`fork`]), and the original is left as it is. A copy of a session that another host took
-//! over under the same id, as the vault shows it, is stopped and made `moved`, read-only
+//! over under the same id, as the hub shows it, is stopped and made `moved`, read-only
 //! ([`SessionManager::moved_away`]).
 //!
 //! # Restart
@@ -289,6 +289,9 @@ pub use titles::{TitleCli, TitleClis, TitlesConfig};
 
 use crate::bots::memory;
 use crate::config::ProjectSettings;
+use crate::hub::HostSecrets;
+use crate::hub::cliproxyapi::KEY_SECRET;
+use crate::hub::pin::{self, PinProxy};
 use crate::mcp::servers::UserServers;
 use crate::mcp::{self, Control, Mcp};
 use crate::projects::{self, Overrides};
@@ -297,9 +300,6 @@ use crate::resources::{Admission, Docker, Scopes};
 use crate::skills::Skills;
 use crate::stalls::{self, Stalls};
 use crate::usage::{self, Usage};
-use crate::vault::HostSecrets;
-use crate::vault::cliproxyapi::KEY_SECRET;
-use crate::vault::pin::{self, PinProxy};
 use crate::worktree::{self, Worktree, Worktrees, checkpoint};
 
 /// The bot of an id, as it runs now; `None` for one the host does not hold.
@@ -346,7 +346,7 @@ pub struct AccountConfig {
     pub endpoint: Option<Endpoint>,
 }
 
-/// What the host fetches endpoint account `account_id`'s key from its vault for, as the vault's
+/// What the host fetches endpoint account `account_id`'s key from its hub for, as the hub's
 /// audit shows it: `endpoint:<id>` in lowercase, or `endpoint` for an id too long for that.
 fn key_purpose(account_id: &AccountId) -> String {
     let purpose = format!("endpoint:{}", account_id.as_str().to_ascii_lowercase());
@@ -372,8 +372,8 @@ pub struct Endpoint {
 pub enum EndpointKey {
     /// In the daemon's config.
     Held(SecretValue),
-    /// In a secret on the host's vault, granted to the host for its own use, such as the key
-    /// the vault's CLIProxyAPI minted for it; fetched when a CLI starts on the account.
+    /// In a secret on the host's hub, granted to the host for its own use, such as the key
+    /// the hub's CLIProxyAPI minted for it; fetched when a CLI starts on the account.
     Secret(SecretRef),
 }
 
@@ -449,11 +449,11 @@ pub struct SessionManager {
 struct Inner {
     journal: Journal,
     adapters: Adapters,
-    /// Grows as accounts are added ([`SessionManager::add_account`]), and follows the vault's
-    /// logins ([`SessionManager::use_vault_logins`]): only those ever leave it.
+    /// Grows as accounts are added ([`SessionManager::add_account`]), and follows the hub's
+    /// logins ([`SessionManager::use_hub_logins`]): only those ever leave it.
     accounts: RwLock<Accounts>,
-    /// The accounts that are the vault's logins, with each login's name on the vault.
-    vault_logins: RwLock<BTreeMap<AccountId, String>>,
+    /// The accounts that are the hub's logins, with each login's name on the hub.
+    hub_logins: RwLock<BTreeMap<AccountId, String>>,
     account_settings: Mutex<()>,
     turn_ids: TurnIds,
     worktrees: Worktrees,
@@ -472,7 +472,7 @@ struct Inner {
     mcp_servers: OnceLock<Arc<UserServers>>,
     /// The daemon as agents drive it through `overview` and `command`, once set.
     control: OnceLock<Arc<dyn Control>>,
-    /// The vault's secrets, for `secrets` and `herder secret run`, once set.
+    /// The hub's secrets, for `secrets` and `herder secret run`, once set.
     secrets: OnceLock<Arc<HostSecrets>>,
     /// The host's bots, for what their sessions know and `remember` and `forget`, once set.
     bots: OnceLock<BotOf>,
@@ -507,7 +507,7 @@ struct Inner {
     titling: Mutex<()>,
     /// Where artifacts are uploaded for their public links, once set; without one, none is.
     publisher: OnceLock<Arc<dyn publish::Publisher>>,
-    /// Where forks find sessions, updated when the vault link changes ([`SessionManager::fork_from`]).
+    /// Where forks find sessions, updated when the hub link changes ([`SessionManager::fork_from`]).
     forks: std::sync::RwLock<Option<Arc<fork::Forks>>>,
     /// Histories clients relay for forks, until the fork takes them.
     uploads: fork::Uploads,
@@ -555,11 +555,11 @@ impl Inner {
     /// Every account, with `usage`, as clients see them.
     fn account_list(&self, usage: &crate::usage::Known) -> Vec<Account> {
         let needs_login = self.limits.logins().borrow().clone();
-        let vault_logins = self
-            .vault_logins
+        let hub_logins = self
+            .hub_logins
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        crate::accounts::list(&self.accounts_lock(), usage, &needs_login, &vault_logins)
+        crate::accounts::list(&self.accounts_lock(), usage, &needs_login, &hub_logins)
     }
 
     /// Notes that `account_id` hit its limit just now; failover passes it over until it resets.
@@ -598,10 +598,10 @@ impl Inner {
     }
 
     /// `account`, account `account_id`, ready for its CLI to start: an endpoint account whose
-    /// key is a vault secret gets the key, fetched for the host's own use from the host's
-    /// vault, or from memory for a few minutes after. A vault that cannot be reached, with no
+    /// key is a hub secret gets the key, fetched for the host's own use from the host's
+    /// hub, or from memory for a few minutes after. A hub that cannot be reached, with no
     /// key in memory, fails as `unreachable`, as an endpoint that cannot be, so failover moves
-    /// the session; a vault that refuses the key fails for its owner.
+    /// the session; a hub that refuses the key fails for its owner.
     pub(super) async fn ready_to_start(
         &self,
         account_id: &AccountId,
@@ -619,7 +619,7 @@ impl Inner {
                     .fetch_for_host(&key_purpose(account_id), std::slice::from_ref(secret))
                     .await
             }
-            None => Err(tasks::no_vault()),
+            None => Err(tasks::no_hub()),
         };
         match fetched.map(|mut fetched| fetched.pop()) {
             Ok(Some(fetched)) => {
@@ -628,17 +628,17 @@ impl Inner {
             }
             Ok(None) => Err(TurnError {
                 class: ErrorClass::Fatal,
-                message: format!("the vault sent no value for {secret}"),
+                message: format!("the hub sent no value for {secret}"),
             }),
             Err(error) => {
                 let class = match error.code {
-                    herder_protocol::SecretErrorCode::VaultUnreachable => ErrorClass::Unreachable,
+                    herder_protocol::SecretErrorCode::HubUnreachable => ErrorClass::Unreachable,
                     _ => ErrorClass::Fatal,
                 };
                 Err(TurnError {
                     class,
                     message: format!(
-                        "cannot get the client key of account {account_id} from the vault \
+                        "cannot get the client key of account {account_id} from the hub \
                          secret {secret}: {}",
                         error.message
                     ),
@@ -730,7 +730,7 @@ impl SessionManager {
                 journal,
                 adapters: setup.adapters,
                 accounts: RwLock::new(setup.accounts),
-                vault_logins: RwLock::default(),
+                hub_logins: RwLock::default(),
                 account_settings: Mutex::new(()),
                 turn_ids: setup.turn_ids,
                 worktrees: setup.worktrees,
@@ -1068,15 +1068,15 @@ impl SessionManager {
             | CommandBody::ClearBotMemory { .. } => {
                 return Err(error(ErrorCode::Unsupported, "this daemon holds no bots"));
             }
-            // The daemon's vault link answers these ([`crate::vault::Link`]).
-            CommandBody::GetVaultLink
-            | CommandBody::LinkVault { .. }
-            | CommandBody::SetVaultLink { .. }
-            | CommandBody::UnlinkVault
-            | CommandBody::InstallVault => {
+            // The daemon's hub link answers these ([`crate::hub::Link`]).
+            CommandBody::GetHubLink
+            | CommandBody::LinkHub { .. }
+            | CommandBody::SetHubLink { .. }
+            | CommandBody::UnlinkHub
+            | CommandBody::InstallHub => {
                 return Err(error(
                     ErrorCode::Unsupported,
-                    "this daemon cannot back up to a vault",
+                    "this daemon cannot back up to a hub",
                 ));
             }
             command @ (CommandBody::SetSkillsRepo { .. }
@@ -1090,10 +1090,10 @@ impl SessionManager {
                 })?;
                 return skills.command(command).await;
             }
-            CommandBody::PairVaultHost { .. } | CommandBody::RevokeVaultHost { .. } => {
+            CommandBody::PairHubHost { .. } | CommandBody::RevokeHubHost { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,
-                    "this daemon is not a vault; pair hosts on the vault",
+                    "this daemon is not a hub; pair hosts on the hub",
                 ));
             }
             CommandBody::ListProviderLogins
@@ -1104,8 +1104,8 @@ impl SessionManager {
             | CommandBody::RemoveProviderLogin { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,
-                    "this machine is not a vault: provider logins live in the CLIProxyAPI next \
-                     to the vault it is linked to; manage them on that vault's page in the \
+                    "this machine is not a hub: provider logins live in the CLIProxyAPI next \
+                     to the hub it is linked to; manage them on that hub's page in the \
                      herder app",
                 ));
             }
@@ -1119,8 +1119,8 @@ impl SessionManager {
             | CommandBody::ListSecretAudit { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,
-                    "this machine is not a vault: secrets live on the vault it is linked to; \
-                     manage them on that vault's Secrets tab in the herder app, or have an \
+                    "this machine is not a hub: secrets live on the hub it is linked to; \
+                     manage them on that hub's Secrets tab in the herder app, or have an \
                      agent store a file's contents with store_secret or ask the user for a \
                      value with request_secret",
                 ));
@@ -1303,7 +1303,7 @@ impl SessionManager {
             .map_err(|_| anyhow::anyhow!("agents drive the daemon already"))
     }
 
-    /// Lets sessions use the secrets their host's vault grants it, through `secrets`; once per
+    /// Lets sessions use the secrets their host's hub grants it, through `secrets`; once per
     /// manager. Without it, sessions have no secrets.
     pub fn use_secrets(&self, secrets: Arc<HostSecrets>) -> anyhow::Result<()> {
         self.inner
@@ -2024,19 +2024,19 @@ impl SessionManager {
         self.inner.account_list(&self.inner.usage.all())
     }
 
-    /// Runs every login of the vault's CLIProxyAPI as an account, as the vault sends them, until
+    /// Runs every login of the hub's CLIProxyAPI as an account, as the hub sends them, until
     /// the manager's shutdown; once per manager, after [`Self::use_secrets`]. Each runs its CLI
     /// in a config dir of its own under `dir`, through a [`PinProxy`] that pins its requests to
-    /// the login, with the host's client key [`KEY_SECRET`] from the vault. Its label, fallback
-    /// mark, email and usage are the vault's; a login the vault no longer lists is no longer an
+    /// the login, with the host's client key [`KEY_SECRET`] from the hub. Its label, fallback
+    /// mark, email and usage are the hub's; a login the hub no longer lists is no longer an
     /// account. A login whose account id an account of the config has keeps that one.
-    pub async fn use_vault_logins(&self, dir: PathBuf) -> anyhow::Result<()> {
+    pub async fn use_hub_logins(&self, dir: PathBuf) -> anyhow::Result<()> {
         let secrets = self
             .inner
             .secrets
             .get()
             .cloned()
-            .context("vault logins need the vault's secrets")?;
+            .context("hub logins need the hub's secrets")?;
         let upstream: pin::Upstream = {
             let secrets = Arc::clone(&secrets);
             Arc::new(move || secrets.proxy_target())
@@ -2048,7 +2048,7 @@ impl SessionManager {
         tokio::spawn(async move {
             loop {
                 let listed = logins.borrow_and_update().clone();
-                manager.set_vault_logins(&listed, &proxy, &dir);
+                manager.set_hub_logins(&listed, &proxy, &dir);
                 tokio::select! {
                     () = shutdown.cancelled() => return,
                     changed = logins.changed() => if changed.is_err() { return },
@@ -2058,9 +2058,9 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Makes the accounts on the vault's logins `logins`, run through `proxy`, with config dirs
+    /// Makes the accounts on the hub's logins `logins`, run through `proxy`, with config dirs
     /// under `dir`.
-    pub(crate) fn set_vault_logins(&self, logins: &[ProviderLogin], proxy: &PinProxy, dir: &Path) {
+    pub(crate) fn set_hub_logins(&self, logins: &[ProviderLogin], proxy: &PinProxy, dir: &Path) {
         let inner = &self.inner;
         let Ok(key) = KEY_SECRET.parse::<SecretRef>() else {
             return warn!("{KEY_SECRET} cannot name a secret");
@@ -2074,10 +2074,13 @@ impl SessionManager {
             {
                 continue;
             }
+            // The id keeps the word from before the hub was renamed: sessions' journals and
+            // the config dirs name their account by it, and an id that changed would leave
+            // every session on a hub login without a configured account.
             let account_id = AccountId::new(format!("vault-{}", login.pin));
             let config_dir = dir.join(account_id.as_str());
             if let Err(err) = std::fs::create_dir_all(&config_dir) {
-                warn!(%account_id, "cannot make the vault login's config dir: {err}");
+                warn!(%account_id, "cannot make the hub login's config dir: {err}");
                 continue;
             }
             let account = AccountConfig {
@@ -2106,11 +2109,11 @@ impl SessionManager {
                 .accounts
                 .write()
                 .unwrap_or_else(PoisonError::into_inner);
-            let mut vault = inner
-                .vault_logins
+            let mut hub = inner
+                .hub_logins
                 .write()
                 .unwrap_or_else(PoisonError::into_inner);
-            vault.retain(|account_id, _| {
+            hub.retain(|account_id, _| {
                 let keep = wanted.contains_key(account_id);
                 if !keep {
                     accounts.remove(account_id);
@@ -2120,16 +2123,16 @@ impl SessionManager {
                 keep
             });
             for (account_id, (account, name, usage)) in wanted {
-                if accounts.contains_key(&account_id) && !vault.contains_key(&account_id) {
-                    warn!(%account_id, "an account of the config has this vault login's id; keeping it");
+                if accounts.contains_key(&account_id) && !hub.contains_key(&account_id) {
+                    warn!(%account_id, "an account of the config has this hub login's id; keeping it");
                     continue;
                 }
                 if accounts.get(&account_id) != Some(&account) {
                     accounts.insert(account_id.clone(), account);
                     changed = true;
                 }
-                vault.insert(account_id.clone(), name);
-                // The vault's usage is all there is of it: it replaces what was known.
+                hub.insert(account_id.clone(), name);
+                // The hub's usage is all there is of it: it replaces what was known.
                 inner.usage.forget(&account_id);
                 inner.usage.probed(&account_id, usage);
             }
@@ -2160,15 +2163,15 @@ impl SessionManager {
             .account(account_id)
             .ok_or_else(|| error(ErrorCode::NotFound, "account does not exist"))?;
         if inner
-            .vault_logins
+            .hub_logins
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .contains_key(account_id)
         {
             return Err(error(
                 ErrorCode::BadRequest,
-                "this account is one of the vault's logins: rename it, or mark it fallback, on \
-                 the vault's Logins page",
+                "this account is one of the hub's logins: rename it, or mark it fallback, on \
+                 the hub's Logins page",
             ));
         }
         let may_change_directory = inner
@@ -2412,7 +2415,7 @@ impl SessionManager {
     }
 
     /// Up to `limit` events of `session_id` after `after_seq`, exactly as stored; for
-    /// replicating to the vault.
+    /// replicating to the hub.
     pub async fn read_records_since(
         &self,
         session_id: &SessionId,
@@ -2425,7 +2428,7 @@ impl SessionManager {
             .await
     }
 
-    /// Every session as the vault's fleet index lists it, ordered by session id.
+    /// Every session as the hub's fleet index lists it, ordered by session id.
     pub async fn summaries(&self, host: &HostId) -> anyhow::Result<Vec<SessionSummary>> {
         self.inner.journal.summaries(host).await
     }
@@ -2645,7 +2648,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
         CommandBody::GetAttachment { .. }
             | CommandBody::ListDirectory { .. }
             | CommandBody::GetProjectIcon { .. }
-            | CommandBody::GetVaultLink
+            | CommandBody::GetHubLink
             | CommandBody::GetUsageSummary { .. }
             | CommandBody::ListAwsProfiles
             | CommandBody::ListBots

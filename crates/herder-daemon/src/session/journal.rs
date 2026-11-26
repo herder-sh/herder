@@ -178,7 +178,7 @@ impl Journal {
             .await
     }
 
-    /// Every session as the vault's fleet index lists it, ordered by session id; a session
+    /// Every session as the hub's fleet index lists it, ordered by session id; a session
     /// whose repo discovery has not resolved yet gets the local project id of `host`.
     pub(crate) async fn summaries(&self, host: &HostId) -> Result<Vec<SessionSummary>> {
         let sessions = self

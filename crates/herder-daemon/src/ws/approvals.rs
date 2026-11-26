@@ -17,7 +17,7 @@ use herder_protocol::{
 };
 use tokio::sync::oneshot;
 
-use crate::hub::Outbox;
+use crate::fanout::Outbox;
 
 /// How long a device waits for its person to approve.
 pub(crate) const APPROVAL_TTL: Duration = Duration::from_secs(120);
@@ -246,7 +246,7 @@ mod tests {
     use herder_protocol::{ErrorCode, ServerMessage, UserId};
 
     use super::Approvals;
-    use crate::hub::Outbox;
+    use crate::fanout::Outbox;
 
     fn drain(outbox: &Outbox) -> Vec<ServerMessage> {
         std::iter::from_fn(|| outbox.pop()).collect()

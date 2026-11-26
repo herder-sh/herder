@@ -6,7 +6,7 @@ import SwiftUI
 enum MachineReach: Hashable {
     /// Connected, at one of the machine's addresses.
     case direct
-    /// Connected through the vault of that name, as no address of its own answered.
+    /// Connected through the hub of that name, as no address of its own answered.
     case through(String)
     case connecting
     /// Not connected here, while its hub hears from it: it is up, on a network this device is
@@ -14,11 +14,11 @@ enum MachineReach: Hashable {
     case elsewhere
     case offline
 
-    /// `vault` names the vault the connection goes through, when it goes through one.
-    init(_ connection: ConnectionState, heardByHub: Bool, through vault: String? = nil) {
+    /// `hub` names the hub the connection goes through, when it goes through one.
+    init(_ connection: ConnectionState, heardByHub: Bool, through hub: String? = nil) {
         switch connection {
         case .connected:
-            if let vault { self = .through(vault) } else { self = .direct }
+            if let hub { self = .through(hub) } else { self = .direct }
         case .connecting: self = .connecting
         case .disconnected: self = heardByHub ? .elsewhere : .offline
         }
@@ -27,7 +27,7 @@ enum MachineReach: Hashable {
     var label: String {
         switch self {
         case .direct: "Direct"
-        case .through(let vault): "Through \(vault)"
+        case .through(let hub): "Through \(hub)"
         case .connecting: "Connecting…"
         case .elsewhere: "On another network"
         case .offline: "Offline"
@@ -96,23 +96,23 @@ struct MachineRow: Hashable, Identifiable {
 
     /// Whether `address`, "host:port" or "[v6]:port", names one of `names`.
     static func isLocal(_ address: String?, names: Set<String>) -> Bool {
-        guard let address, !address.hasPrefix(vaultRoute) else { return false }
+        guard let address, !address.hasPrefix(hubRoute) else { return false }
         return names.contains(host(of: address).lowercased())
     }
 
-    /// What the address of a route through a vault starts with, before the vault's host id.
-    static let vaultRoute = "vault://"
+    /// What the address of a route through a hub starts with, before the hub's host id.
+    static let hubRoute = "hub://"
 
-    /// The name of the vault `address` goes through, for "vault://<host id>", the route
-    /// through a vault among `machines`: "a vault" for one this device no longer has. Nil for
+    /// The name of the hub `address` goes through, for "hub://<host id>", the route
+    /// through a hub among `machines`: "a hub" for one this device no longer has. Nil for
     /// any other address.
     static func via(_ address: String, among machines: [Machine]) -> String? {
-        guard address.hasPrefix(vaultRoute) else { return nil }
-        let vault = String(address.dropFirst(vaultRoute.count))
-        return machines.first { $0.hostId == vault }?.name ?? "a vault"
+        guard address.hasPrefix(hubRoute) else { return nil }
+        let hub = String(address.dropFirst(hubRoute.count))
+        return machines.first { $0.hostId == hub }?.name ?? "a hub"
     }
 
-    /// `address` as a person reads it: "through <vault>" for the route through a vault,
+    /// `address` as a person reads it: "through <hub>" for the route through a hub,
     /// else the address itself.
     static func label(_ address: String, among machines: [Machine]) -> String {
         via(address, among: machines).map { "through \($0)" } ?? address
@@ -182,7 +182,7 @@ enum AddressScope: Comparable, Hashable {
 
 extension Machine {
     /// Whether it is a hub, which keeps its machines' sessions rather than running any.
-    var isHub: Bool { !hosts.isEmpty || vault != nil }
+    var isHub: Bool { !hosts.isEmpty || hub != nil }
 }
 
 /// Setup's structure: each hub with the machines that sync to it, then the machines that sync
@@ -195,7 +195,7 @@ struct SetupStructure: Equatable {
         /// Its page; nil for a hub this device has not signed in to.
         var hostId: HostId?
         /// What Sign In adds, for a hub this device has not signed in to.
-        var unpaired: UnpairedVault?
+        var unpaired: UnpairedHub?
         /// This device's connection to it; nil when it has none to have.
         var connection: ConnectionState?
         /// How far its furthest-reaching address reaches, and that address's host.
@@ -241,7 +241,7 @@ struct SetupStructure: Equatable {
 
     /// `unpaired` are the hubs the machines sync to that this device has not signed in to,
     /// which name their machines.
-    init(machines: [Machine], summaries: [MachineSummary], unpaired: [UnpairedVault] = [],
+    init(machines: [Machine], summaries: [MachineSummary], unpaired: [UnpairedHub] = [],
          localNames: Set<String> = MachineRow.localNames) {
         let paired = machines.filter(\.isHub)
         // Only a hub connected here says who it hears from now.
@@ -277,7 +277,7 @@ struct SetupStructure: Equatable {
 struct MachinesView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
-    @State private var unpaired: [UnpairedVault] = []
+    @State private var unpaired: [UnpairedHub] = []
     @Environment(\.pages) private var pages
 
     var body: some View {
@@ -286,8 +286,8 @@ struct MachinesView: View {
             SectionHeading(title: structure.hubs.isEmpty ? "Machines" : "Hub and machines", count: structure.machines)
             ForEach(structure.hubs) { hub in
                 VStack(spacing: 0) {
-                    HubCard(hub: hub, open: { if let hostId = hub.hostId { pages.open(.vault(hostId)) } },
-                            signIn: { sheet = .addMachine(vault: hub.unpaired) })
+                    HubCard(hub: hub, open: { if let hostId = hub.hostId { pages.open(.hub(hostId)) } },
+                            signIn: { sheet = .addMachine(hub: hub.unpaired) })
                     ForEach(Array(hub.machines.enumerated()), id: \.element.id) { index, row in
                         MachineCard(row: row) { pages.open(.machine(row.hostId)) }
                             .padding(.top, Self.gap)
@@ -320,7 +320,7 @@ struct MachinesView: View {
         }
         // Asked again as machines connect, and as a hub gets signed in to.
         .task(id: fleet.machines.filter { $0.connection == .connected }.map(\.hostId)) {
-            unpaired = await fleet.unpairedVaults()
+            unpaired = await fleet.unpairedHubs()
         }
     }
 
@@ -346,7 +346,7 @@ struct MachinesView: View {
 
     /// How many of the machines that run sessions are connected: "2 of 3 machines connected".
     static func connections(_ machines: [MachineSummary]) -> String {
-        let hosts = machines.filter { !$0.vault }
+        let hosts = machines.filter { !$0.hub }
         let connected = hosts.filter(\.connected).count
         if hosts.isEmpty { return "No machines yet" }
         if connected < hosts.count { return "\(connected) of \(hosts.count) machines connected" }

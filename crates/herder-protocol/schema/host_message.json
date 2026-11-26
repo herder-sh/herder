@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "HostMessage",
-  "description": "A host-to-vault message.",
+  "description": "A host-to-hub message.",
   "oneOf": [
     {
       "description": "First message on every connection.",
@@ -18,7 +18,7 @@
       ]
     },
     {
-      "description": "A session's current state for the fleet index; sent for every session after the vault's\nhello, then whenever any of it changes. Replaces what the vault had for the session.",
+      "description": "A session's current state for the fleet index; sent for every session after the hub's\nhello, then whenever any of it changes. Replaces what the hub had for the session.",
       "type": "object",
       "properties": {
         "type": {
@@ -60,7 +60,7 @@
       ]
     },
     {
-      "description": "List the secrets in the sets granted to this host, without values; answered with\n[`VaultMessage::SecretList`].",
+      "description": "List the secrets in the sets granted to this host, without values; answered with\n[`HubMessage::SecretList`].",
       "type": "object",
       "properties": {
         "request_id": {
@@ -80,7 +80,7 @@
       ]
     },
     {
-      "description": "Fetch secrets' values for one of this host's sessions; answered with\n[`VaultMessage::SecretValues`], or [`VaultMessage::SecretsRefused`] when any of them\ncannot be handed out. The vault records each value it hands out.",
+      "description": "Fetch secrets' values for one of this host's sessions; answered with\n[`HubMessage::SecretValues`], or [`HubMessage::SecretsRefused`] when any of them\ncannot be handed out. The hub records each value it hands out.",
       "type": "object",
       "properties": {
         "type": {
@@ -94,7 +94,7 @@
       ]
     },
     {
-      "description": "Fetch secrets' values for this host's own use, from the sets granted to it for that;\nanswered as [`HostMessage::FetchSecrets`] is. A vault older than this message skips it,\nso the host hears nothing back.",
+      "description": "Fetch secrets' values for this host's own use, from the sets granted to it for that;\nanswered as [`HostMessage::FetchSecrets`] is. A hub older than this message skips it,\nso the host hears nothing back.",
       "type": "object",
       "properties": {
         "type": {
@@ -146,7 +146,7 @@
       "type": "object",
       "properties": {
         "attachment": {
-          "description": "The image or file as the `user_message` names it. The vault refuses it as a bad request\nunless `size` is the length of `data` and, for an image, `media_type` is one of\n[`crate::IMAGE_MEDIA_TYPES`] and `size` at most [`crate::MAX_IMAGE_BYTES`], for a file,\n`size` is at most [`crate::MAX_FILE_BYTES`]; or when it holds different bytes under its\nid.",
+          "description": "The image or file as the `user_message` names it. The hub refuses it as a bad request\nunless `size` is the length of `data` and, for an image, `media_type` is one of\n[`crate::IMAGE_MEDIA_TYPES`] and `size` at most [`crate::MAX_IMAGE_BYTES`], for a file,\n`size` is at most [`crate::MAX_FILE_BYTES`]; or when it holds different bytes under its\nid.",
           "$ref": "#/$defs/Attachment"
         },
         "data": {
@@ -279,7 +279,7 @@
       "type": "object",
       "properties": {
         "attachments_cap": {
-          "description": "Most bytes of this host's images the vault keeps, oldest evicted first to make room\nfor a new one; absent when the host backs up no images, so the vault keeps none it\nsends.",
+          "description": "Most bytes of this host's images the hub keeps, oldest evicted first to make room\nfor a new one; absent when the host backs up no images, so the hub keeps none it\nsends.",
           "type": [
             "integer",
             "null"
@@ -300,18 +300,18 @@
           "type": "string"
         },
         "pairing_code": {
-          "description": "One-time code from the vault's pairing, sent by a host that is not paired yet; ignored\nonce it is.",
+          "description": "One-time code from the hub's pairing, sent by a host that is not paired yet; ignored\nonce it is.",
           "type": [
             "string",
             "null"
           ]
         },
         "relay": {
-          "description": "Whether the host takes relayed connections: it opens a relay stream for every\n[`VaultMessage::RelayOpen`], and serves the client in it as on a direct connection.\nAbsent from a host that takes none, which the vault sends no such message.",
+          "description": "Whether the host takes relayed connections: it opens a relay stream for every\n[`HubMessage::RelayOpen`], and serves the client in it as on a direct connection.\nAbsent from a host that takes none, which the hub sends no such message.",
           "type": "boolean"
         },
         "replication_version": {
-          "description": "Must equal the vault's [`REPLICATION_VERSION`].",
+          "description": "Must equal the hub's [`REPLICATION_VERSION`].",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -333,7 +333,7 @@
       "type": "object",
       "properties": {
         "purpose": {
-          "description": "What the values are for, such as `bot:trip1-team`, as the vault's audit records it;\nrefused unless [`crate::is_valid_secret_purpose`] accepts it.",
+          "description": "What the values are for, such as `bot:trip1-team`, as the hub's audit records it;\nrefused unless [`crate::is_valid_secret_purpose`] accepts it.",
           "type": "string"
         },
         "request_id": {
@@ -565,7 +565,7 @@
           }
         },
         "session_id": {
-          "description": "The session of this host the values are for, as the vault's audit records it.",
+          "description": "The session of this host the values are for, as the hub's audit records it.",
           "$ref": "#/$defs/SessionId"
         }
       },
@@ -673,7 +673,7 @@
           "type": "boolean"
         },
         "head_seq": {
-          "description": "Seq of the session's latest event on the host; the vault is caught up once it holds it.",
+          "description": "Seq of the session's latest event on the host; the hub is caught up once it holds it.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0

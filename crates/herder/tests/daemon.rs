@@ -192,7 +192,7 @@ fn pair_lists_and_revokes_on_the_running_daemon_and_mints_no_client_codes() {
     assert_eq!(output.status.code(), Some(1));
     let output = pair(&config, &["--host", "devbox"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("vault only"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("hub only"));
 
     sigterm(&child);
     assert_eq!(wait_with_timeout(&mut child).code(), Some(0));

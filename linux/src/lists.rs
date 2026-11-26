@@ -117,7 +117,7 @@ pub struct View {
     pub archived: Vec<Task>,
 }
 
-/// The listed sessions, without the copies a vault keeps of a machine this device is paired
+/// The listed sessions, without the copies a hub keeps of a machine this device is paired
 /// with too: following both would show every such session twice.
 pub fn keys(machines: &[Machine]) -> HashSet<SessionKey> {
     let direct: HashSet<(&HostId, &SessionId)> = machines
@@ -418,7 +418,7 @@ impl Lists<'_> {
             })
     }
 
-    /// The machine a session runs on: a vault's sessions run on one of its hosts.
+    /// The machine a session runs on: a hub's sessions run on one of its hosts.
     fn place(&self, machine: &Machine, head: &SessionHead) -> String {
         head.host_id
             .as_ref()
@@ -561,7 +561,7 @@ pub mod tests {
             terminals: Vec::new(),
             resources: None,
             session_usage: Default::default(),
-            vault: None,
+            hub: None,
             skills: None,
             session_skills: Default::default(),
             update: None,
@@ -640,7 +640,7 @@ pub mod tests {
     }
 
     /// `box` with a task tree in `api` and a chat; `nas` with an archived `api` session; and
-    /// a vault that keeps a copy of `box`'s sessions.
+    /// a hub that keeps a copy of `box`'s sessions.
     pub fn fleet() -> (Vec<Machine>, HashMap<SessionKey, Session>) {
         let child = SessionHead {
             parent: Some(SessionId::new("s1")),
@@ -661,15 +661,15 @@ pub mod tests {
         };
         let mut nas = machine("h2", "nas", vec![archived]);
         nas.projects = vec![project("p-api", "api"), project("p-web", "web")];
-        let mut vault = machine(
+        let mut hub = machine(
             "v1",
-            "vault",
+            "hub",
             vec![SessionHead {
                 host_id: Some(HostId::new("h1")),
                 ..head("s1", Some("p-api"))
             }],
         );
-        vault.hosts = vec![
+        hub.hosts = vec![
             serde_json::from_value(serde_json::json!({
                 "host_id": "h1", "host_name": "box", "online": true,
                 "last_seen": "2026-01-01T00:00:00Z",
@@ -689,7 +689,7 @@ pub mod tests {
         let mut s4 = Session::default();
         s4.apply(&update("s4", vec![created("/src/api", "herder/old")]));
         sessions.insert(key("h2", "s4"), s4);
-        (vec![boxed, nas, vault], sessions)
+        (vec![boxed, nas, hub], sessions)
     }
 
     fn titles(view: &View) -> Vec<String> {
@@ -700,7 +700,7 @@ pub mod tests {
     }
 
     #[test]
-    fn a_vaults_copy_of_a_paired_machines_session_is_not_followed() {
+    fn a_hubs_copy_of_a_paired_machines_session_is_not_followed() {
         let (machines, _) = fleet();
         let listed = keys(&machines);
         assert!(listed.contains(&key("h1", "s1")));

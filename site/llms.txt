@@ -4,14 +4,14 @@
 
 Install on Linux (x86_64 or arm64) or an Apple silicon Mac: `curl -fsSL https://herder.sh/install | sh`, then `herder service install` to run the daemon at boot. Bare `herder` opens the terminal UI; `herder pair` pairs the Mac and iPhone apps.
 
-How it connects: the apps reach a machine's daemon directly on the same network, encrypted end to end with mutual TLS and pinned certificates. Each machine keeps one outbound connection to the hub, which keeps a copy of every session and the fleet's secrets. Reaching machines from anywhere through the hub, exposed however suits you (a Cloudflare Tunnel, a port forward, a reverse proxy or a VPN), is coming soon.
+How it connects: the apps reach a machine's daemon directly on the same network, encrypted end to end with mutual TLS and pinned certificates. Each machine keeps one outbound connection to the hub, which keeps a copy of every session and the fleet's secrets. Away from that network, the apps reach every machine through the hub, exposed however suits you (a Cloudflare Tunnel, a port forward, a reverse proxy or a VPN).
 
 ## Docs
 
 - [Full description for LLMs](https://herder.sh/llms-full.txt): what herder does, install, features, scripting and FAQ in one file
 - [README](https://github.com/herder-sh/herder/blob/main/README.md): install, using herder from a phone, building from source
 - [Scripting sessions](https://github.com/herder-sh/herder/blob/main/crates/herder/README.md): `herder session new`, `send`, `wait`, `status`, with `--json`
-- [Vault](https://github.com/herder-sh/herder/blob/main/deploy/README.md): running the herder vault on any machine (`herder vault install`) or on Kubernetes, pairing hosts with it, and secrets
+- [Hub](https://github.com/herder-sh/herder/blob/main/deploy/README.md): running the herder hub on any machine (`herder hub install`) or on Kubernetes, pairing hosts with it, and secrets
 - [Mac and iPhone app](https://github.com/herder-sh/herder/blob/main/apple/README.md): building and installing the Apple apps
 
 ## Optional

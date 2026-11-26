@@ -6,7 +6,7 @@ use herder_protocol::{ContainerState, Role, ServerMessage};
 use tokio::process::Child;
 
 use super::*;
-use crate::hub::Outbox;
+use crate::fanout::Outbox;
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
@@ -211,9 +211,9 @@ async fn the_sampler_publishes_changes_then_one_zero_once_the_scope_is_gone() {
     write_cgroup(&dir, 4096, 0, &[10, 11]);
     scopes.lock().scopes.get_mut(&session).unwrap().cgroup = Some(dir.clone());
 
-    let hub = Hub::default();
+    let fanout = Fanout::default();
     let outbox = Arc::new(Outbox::default());
-    hub.connect(&outbox, Role::Member);
+    fanout.connect(&outbox, Role::Member);
     let usage = |memory_bytes, processes| ServerMessage::SessionResources {
         session_id: session.clone(),
         usage: SessionUsage {
@@ -224,16 +224,16 @@ async fn the_sampler_publishes_changes_then_one_zero_once_the_scope_is_gone() {
         },
     };
 
-    scopes.sample(&hub, &HashMap::new()).await;
+    scopes.sample(&fanout, &HashMap::new()).await;
     assert_eq!(drain(&outbox), [usage(4096, 2)]);
     // Unchanged: nothing to send.
-    scopes.sample(&hub, &HashMap::new()).await;
+    scopes.sample(&fanout, &HashMap::new()).await;
     assert!(drain(&outbox).is_empty());
 
     std::fs::remove_dir_all(&dir).unwrap();
-    scopes.sample(&hub, &HashMap::new()).await;
+    scopes.sample(&fanout, &HashMap::new()).await;
     assert_eq!(drain(&outbox), [usage(0, 0)]);
-    scopes.sample(&hub, &HashMap::new()).await;
+    scopes.sample(&fanout, &HashMap::new()).await;
     assert!(drain(&outbox).is_empty());
     assert_eq!(scopes.unit(&session), None);
 }
@@ -511,9 +511,9 @@ async fn without_docker_no_containers_are_tracked_and_nothing_fails() {
 async fn a_sessions_containers_are_published_without_a_scope_and_cleared_once_gone() {
     let session = SessionId::new("s1");
     let scopes = Scopes::new(ResourcesConfig::default(), host(), false);
-    let hub = Hub::default();
+    let fanout = Fanout::default();
     let outbox = Arc::new(Outbox::default());
-    hub.connect(&outbox, Role::Member);
+    fanout.connect(&outbox, Role::Member);
     let container = Container {
         id: "c1".into(),
         name: "app-db-1".into(),
@@ -532,14 +532,14 @@ async fn a_sessions_containers_are_published_without_a_scope_and_cleared_once_go
     };
 
     let tracked = HashMap::from([(session.clone(), vec![container.clone()])]);
-    scopes.sample(&hub, &tracked).await;
+    scopes.sample(&fanout, &tracked).await;
     assert_eq!(drain(&outbox), [usage(vec![container.clone()])]);
-    scopes.sample(&hub, &tracked).await;
+    scopes.sample(&fanout, &tracked).await;
     assert!(drain(&outbox).is_empty());
 
-    scopes.sample(&hub, &HashMap::new()).await;
+    scopes.sample(&fanout, &HashMap::new()).await;
     assert_eq!(drain(&outbox), [usage(Vec::new())]);
-    scopes.sample(&hub, &HashMap::new()).await;
+    scopes.sample(&fanout, &HashMap::new()).await;
     assert!(drain(&outbox).is_empty());
 }
 

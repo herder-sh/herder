@@ -1,11 +1,11 @@
-//! The secrets screen, from the fleet: a vault's sets of secrets, the secrets in each, the
-//! hosts each set is granted to and the latest fetches, for the vault's owners. Its state,
+//! The secrets screen, from the fleet: a hub's sets of secrets, the secrets in each, the
+//! hosts each set is granted to and the latest fetches, for the hub's owners. Its state,
 //! keys and reducer.
 //!
-//! `s` on a vault in the fleet opens it: `list_secrets` and `list_secret_audit` to the vault.
+//! `s` on a hub in the fleet opens it: `list_secrets` and `list_secret_audit` to the hub.
 //! There the owner creates (`n`) and deletes (`d`) sets, adds (`a`) or replaces (`e`) a secret
-//! and deletes it (`d`), and grants or revokes a set to the vault's hosts (`s`), as the vault
-//! lists them to clients. Each change is sent to the vault, and the lists asked for again.
+//! and deletes it (`d`), and grants or revokes a set to the hub's hosts (`s`), as the hub
+//! lists them to clients. Each change is sent to the hub, and the lists asked for again.
 //!
 //! A value is typed into a masked field, and is never shown, kept or logged: the form holds it
 //! only until it is sent, as [`Masked`], whose `Debug` hides it, and the screen draws a mark
@@ -28,8 +28,8 @@ use crate::compose::Origin;
 /// The secrets screen, over the fleet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Secrets {
-    /// The vault.
-    pub vault: HostId,
+    /// The hub.
+    pub hub: HostId,
     /// Its sets and secrets, as it last listed them.
     pub list: Load<(Vec<SecretSet>, Vec<SecretInfo>)>,
     /// Its latest fetches, newest first.
@@ -40,7 +40,7 @@ pub struct Secrets {
     pub dialog: Option<Dialog>,
 }
 
-/// A list the vault was asked for.
+/// A list the hub was asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Load<T> {
     /// Asked; no answer yet.
@@ -81,7 +81,7 @@ pub enum Dialog {
     NewSet(Form<String>),
     /// Adding or replacing a secret.
     Put(Form<PutSecret>),
-    /// Granting a set to the vault's hosts, or revoking it.
+    /// Granting a set to the hub's hosts, or revoking it.
     Hosts {
         /// The set.
         set: String,
@@ -206,14 +206,14 @@ impl fmt::Debug for Masked {
 /// A command sent for the secrets screen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sent {
-    /// `list_secrets` to the vault.
+    /// `list_secrets` to the hub.
     List(HostId),
-    /// `list_secret_audit` to the vault.
+    /// `list_secret_audit` to the hub.
     Audit(HostId),
-    /// A change to the vault's secrets, and what to say once it is made.
+    /// A change to the hub's secrets, and what to say once it is made.
     Change {
-        /// The vault.
-        vault: HostId,
+        /// The hub.
+        hub: HostId,
         /// What was done, for the status line.
         done: String,
     },
@@ -242,7 +242,7 @@ pub enum Input {
     Hosts,
     /// Ask before deleting the selected set or secret.
     Delete,
-    /// Ask the vault for its lists again.
+    /// Ask the hub for its lists again.
     Reload,
     /// Go on: open the selected row, save, toggle a grant, or delete.
     Submit,
@@ -301,9 +301,9 @@ pub fn for_key(key: KeyEvent, secrets: &Secrets) -> Option<Action> {
 }
 
 impl Secrets {
-    fn new(vault: HostId) -> Self {
+    fn new(hub: HostId) -> Self {
         Self {
-            vault,
+            hub,
             list: Load::Asking,
             audit: Load::Asking,
             chosen: None,
@@ -376,13 +376,12 @@ impl Secrets {
         }
     }
 
-    /// The hosts a set can be granted to: the vault's, then any the set is granted to that
-    /// the vault no longer lists. Each with its name, if the vault lists it.
-    pub fn hosts(&self, vault: Option<&Machine>, set: &str) -> Vec<(HostId, Option<String>)> {
-        let mut hosts: Vec<(HostId, Option<String>)> = vault
-            .map(|vault| {
-                vault
-                    .hosts
+    /// The hosts a set can be granted to: the hub's, then any the set is granted to that
+    /// the hub no longer lists. Each with its name, if the hub lists it.
+    pub fn hosts(&self, hub: Option<&Machine>, set: &str) -> Vec<(HostId, Option<String>)> {
+        let mut hosts: Vec<(HostId, Option<String>)> = hub
+            .map(|hub| {
+                hub.hosts
                     .iter()
                     .map(|host| (host.host_id.clone(), Some(host.host_name.clone())))
                     .collect()
@@ -401,29 +400,29 @@ impl Secrets {
     }
 }
 
-/// The commands that ask `vault` for its secrets and its latest fetches.
-fn reload(vault: &HostId) -> Vec<Effect> {
+/// The commands that ask `hub` for its secrets and its latest fetches.
+fn reload(hub: &HostId) -> Vec<Effect> {
     vec![
         Effect::Send {
-            host_id: vault.clone(),
+            host_id: hub.clone(),
             command: CommandBody::ListSecrets,
-            origin: Origin::Secrets(Sent::List(vault.clone())),
+            origin: Origin::Secrets(Sent::List(hub.clone())),
         },
         Effect::Send {
-            host_id: vault.clone(),
+            host_id: hub.clone(),
             command: CommandBody::ListSecretAudit { before: None },
-            origin: Origin::Secrets(Sent::Audit(vault.clone())),
+            origin: Origin::Secrets(Sent::Audit(hub.clone())),
         },
     ]
 }
 
-/// A change to send to `vault`, saying `done` once made.
-fn change(vault: &HostId, command: CommandBody, done: String) -> Effect {
+/// A change to send to `hub`, saying `done` once made.
+fn change(hub: &HostId, command: CommandBody, done: String) -> Effect {
     Effect::Send {
-        host_id: vault.clone(),
+        host_id: hub.clone(),
         command,
         origin: Origin::Secrets(Sent::Change {
-            vault: vault.clone(),
+            hub: hub.clone(),
             done,
         }),
     }
@@ -441,12 +440,12 @@ impl App {
         let machine = &self.machines[at];
         let known = panel.links.get(&machine.host_id);
         let refusal = if machine.role.is_some_and(|role| role != Role::Owner) {
-            Some("secrets: only the vault's owners can manage them".to_owned())
+            Some("secrets: only the hub's owners can manage them".to_owned())
         } else if machine.connection != ConnectionState::Connected {
             Some("secrets: the machine is not connected".to_owned())
         } else if matches!(known, Some(Known::Linked(_) | Known::Unlinked)) {
             Some(format!(
-                "secrets: {} is not a vault; secrets live on a vault, so select it and press s",
+                "secrets: {} is not a hub; secrets live on a hub, so select it and press s",
                 machine.name
             ))
         } else {
@@ -456,19 +455,19 @@ impl App {
             self.notice = Some(refusal);
             return Vec::new();
         }
-        let vault = machine.host_id.clone();
+        let hub = machine.host_id.clone();
         if let Some(panel) = &mut self.machine_panel {
-            panel.secrets = Some(Secrets::new(vault.clone()));
+            panel.secrets = Some(Secrets::new(hub.clone()));
         }
-        reload(&vault)
+        reload(&hub)
     }
 
-    /// Whether the fleet's selected machine is a vault, as it said.
-    pub(crate) fn on_vault(&self) -> bool {
+    /// Whether the fleet's selected machine is a hub, as it said.
+    pub(crate) fn on_hub(&self) -> bool {
         self.machine_panel.as_ref().is_some_and(|panel| {
-            panel.selected(&self.machines).is_some_and(|at| {
-                panel.links.get(&self.machines[at].host_id) == Some(&Known::Vault)
-            })
+            panel
+                .selected(&self.machines)
+                .is_some_and(|at| panel.links.get(&self.machines[at].host_id) == Some(&Known::Hub))
         })
     }
 
@@ -481,8 +480,8 @@ impl App {
         let Some(secrets) = self.machine_panel.as_ref().and_then(|p| p.secrets.as_ref()) else {
             return Vec::new();
         };
-        let vault = secrets.vault.clone();
-        let machine = self.machines.iter().find(|m| m.host_id == vault).cloned();
+        let hub = secrets.hub.clone();
+        let machine = self.machines.iter().find(|m| m.host_id == hub).cloned();
         let Some(panel) = &mut self.machine_panel else {
             return Vec::new();
         };
@@ -494,7 +493,7 @@ impl App {
             return Vec::new();
         }
         match secrets.dialog.take() {
-            None => secrets.screen_input(input, &vault),
+            None => secrets.screen_input(input, &hub),
             Some(dialog) => {
                 let (dialog, effects) = dialog_input(secrets, dialog, input, machine.as_ref());
                 secrets.dialog = dialog;
@@ -507,16 +506,16 @@ impl App {
         })
     }
 
-    /// The vault's answer to a command the secrets screen sent.
+    /// The hub's answer to a command the secrets screen sent.
     pub(crate) fn secrets_sent(
         &mut self,
         sent: Sent,
         result: Result<CommandResult, String>,
     ) -> Vec<Effect> {
-        let vault = match &sent {
-            Sent::List(vault) | Sent::Audit(vault) | Sent::Change { vault, .. } => vault.clone(),
+        let hub = match &sent {
+            Sent::List(hub) | Sent::Audit(hub) | Sent::Change { hub, .. } => hub.clone(),
         };
-        let Some(secrets) = self.secrets_mut().filter(|s| s.vault == vault) else {
+        let Some(secrets) = self.secrets_mut().filter(|s| s.hub == hub) else {
             return Vec::new();
         };
         match (sent, result) {
@@ -544,7 +543,7 @@ impl App {
                     _ => secrets.dialog = None,
                 }
                 self.notice = Some(done);
-                return reload(&vault);
+                return reload(&hub);
             }
             (Sent::Change { .. }, Err(why)) => match &mut secrets.dialog {
                 Some(
@@ -563,7 +562,7 @@ impl App {
     }
 }
 
-/// Why a list did not come: the vault's refusal, or an answer of the wrong kind.
+/// Why a list did not come: the hub's refusal, or an answer of the wrong kind.
 fn failure(result: Result<CommandResult, String>) -> String {
     match result {
         Ok(other) => format!("unexpected answer {other:?}"),
@@ -573,7 +572,7 @@ fn failure(result: Result<CommandResult, String>) -> String {
 
 impl Secrets {
     /// An input with no dialog open: what to send, or a notice for the status line.
-    fn screen_input(&mut self, input: Input, vault: &HostId) -> Result<Vec<Effect>, String> {
+    fn screen_input(&mut self, input: Input, hub: &HostId) -> Result<Vec<Effect>, String> {
         let rows = self.rows();
         let at = self.selected(&rows);
         let last = rows.len().saturating_sub(1);
@@ -587,7 +586,7 @@ impl Secrets {
             Input::Reload => {
                 self.list = Load::Asking;
                 self.audit = Load::Asking;
-                return Ok(reload(vault));
+                return Ok(reload(hub));
             }
             Input::NewSet if matches!(self.list, Load::Loaded(_)) => {
                 self.dialog = Some(Dialog::NewSet(Form::new(String::new())));
@@ -658,7 +657,7 @@ fn dialog_input(
     input: Input,
     machine: Option<&Machine>,
 ) -> Next {
-    let vault = &secrets.vault;
+    let hub = &secrets.hub;
     let busy = match &dialog {
         Dialog::NewSet(form) => form.sending,
         Dialog::Put(form) => form.sending,
@@ -698,7 +697,7 @@ fn dialog_input(
                     };
                     return (
                         Some(Dialog::NewSet(form)),
-                        Ok(vec![change(vault, command, done)]),
+                        Ok(vec![change(hub, command, done)]),
                     );
                 }
                 _ => {}
@@ -714,7 +713,7 @@ fn dialog_input(
                 Input::Clear => form.fields.field().clear(),
                 Input::Down => form.fields.step(true),
                 Input::Up => form.fields.step(false),
-                Input::Submit => return put(vault, form),
+                Input::Submit => return put(hub, form),
                 _ => {}
             }
             (Some(Dialog::Put(form)), Ok(Vec::new()))
@@ -759,7 +758,7 @@ fn dialog_input(
                             )
                         };
                         sending = true;
-                        effects.push(change(vault, command, done));
+                        effects.push(change(hub, command, done));
                     }
                 }
                 _ => {}
@@ -805,14 +804,14 @@ fn dialog_input(
                 sending: true,
                 error: None,
             };
-            (Some(dialog), Ok(vec![change(vault, command, done)]))
+            (Some(dialog), Ok(vec![change(hub, command, done)]))
         }
     }
 }
 
 /// Sends the secret `form` describes, taking its value out of the form; or says what is wrong
 /// with it.
-fn put(vault: &HostId, mut form: Form<PutSecret>) -> Next {
+fn put(hub: &HostId, mut form: Form<PutSecret>) -> Next {
     let fields = &mut form.fields;
     let name = fields.name.trim().to_owned();
     let description = fields.description.trim().to_owned();
@@ -855,7 +854,7 @@ fn put(vault: &HostId, mut form: Form<PutSecret>) -> Next {
     form.error = None;
     (
         Some(Dialog::Put(form)),
-        Ok(vec![change(vault, command, done)]),
+        Ok(vec![change(hub, command, done)]),
     )
 }
 
@@ -884,13 +883,13 @@ mod tests {
             .expect("the secrets screen is open")
     }
 
-    /// The one command `effects` sends to the vault, answered with `result`.
+    /// The one command `effects` sends to the hub, answered with `result`.
     fn answer(app: &mut App, effects: Vec<Effect>, result: Result<CommandResult, String>) {
         let origin = sent(effects).1;
         app.update(Msg::Sent { origin, result });
     }
 
-    /// The one command `effects` sends to the vault, with what for.
+    /// The one command `effects` sends to the hub, with what for.
     fn sent(effects: Vec<Effect>) -> (CommandBody, Origin) {
         let [
             Effect::Send {
@@ -917,7 +916,7 @@ mod tests {
     }
 
     #[test]
-    fn s_on_the_vault_asks_it_for_its_secrets_and_their_fetches() {
+    fn s_on_the_hub_asks_it_for_its_secrets_and_their_fetches() {
         let mut app = fake::backups();
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
@@ -938,23 +937,21 @@ mod tests {
     }
 
     #[test]
-    fn a_machine_that_is_not_a_vault_says_so() {
+    fn a_machine_that_is_not_a_hub_says_so() {
         let mut app = fake::backups();
         assert_eq!(press(&mut app, KeyCode::Char('s')), []);
         assert!(app.machine_panel.as_ref().unwrap().secrets.is_none());
         assert_eq!(
             app.notice.as_deref(),
-            Some(
-                "secrets: devbox is not a vault; secrets live on a vault, so select it and press s"
-            )
+            Some("secrets: devbox is not a hub; secrets live on a hub, so select it and press s")
         );
     }
 
     #[test]
-    fn a_vault_without_a_secrets_key_says_why() {
+    fn a_hub_without_a_secrets_key_says_why() {
         let mut app = fake::secrets();
         let effects = press(&mut app, KeyCode::Char('r'));
-        let refusal = "this vault has no secrets key: set [vault] secrets_key_file";
+        let refusal = "this hub has no secrets key: set [hub] secrets_key_file";
         for effect in effects {
             let Effect::Send { origin, .. } = effect else {
                 continue;
@@ -1059,7 +1056,7 @@ mod tests {
         );
         // Sent: the form keeps no value, and the effect's own Debug hides it.
         let Some(Dialog::Put(form)) = &screen(&app).dialog else {
-            panic!("the secret dialog waits for the vault");
+            panic!("the secret dialog waits for the hub");
         };
         assert!(form.fields.value.is_empty());
         assert!(!format!("{effects:?}").contains("npm_s3cr3t"));
@@ -1160,7 +1157,7 @@ mod tests {
                 assertion: None,
             }]
         );
-        // A set with secrets is refused: the vault says why, in the dialog.
+        // A set with secrets is refused: the hub says why, in the dialog.
         answer(&mut app, effects, Err("the set holds secrets".into()));
         assert!(matches!(
             &screen(&app).dialog,
@@ -1169,7 +1166,7 @@ mod tests {
     }
 
     #[test]
-    fn s_grants_a_set_to_a_host_of_the_vault_or_revokes_it() {
+    fn s_grants_a_set_to_a_host_of_the_hub_or_revokes_it() {
         let mut app = fake::secrets();
         // coingate-prod is granted to devbox, not laptop.
         press(&mut app, KeyCode::Char('s'));
@@ -1183,7 +1180,7 @@ mod tests {
                 assertion: None,
             }]
         );
-        // Keys wait for the vault.
+        // Keys wait for the hub.
         assert_eq!(press(&mut app, KeyCode::Char('j')), []);
         answer(&mut app, effects, Ok(CommandResult::Applied));
         assert_eq!(

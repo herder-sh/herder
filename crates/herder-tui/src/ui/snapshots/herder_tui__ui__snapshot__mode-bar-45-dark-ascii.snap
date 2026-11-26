@@ -1,9 +1,8 @@
 ---
 source: crates/herder-tui/src/ui/snapshot.rs
-assertion_line: 53
 expression: dump(&buffer)
 ---
-|  PROMPT   esc navigate  * box  * m2  ~ v... |
+|  PROMPT   esc navigate   * box  * m2  ~ hub |
 |  NAVIGATE   / commands  esc navigate        |
 
  0   0..1   fg=#e6e6e6 bg=#111216
@@ -11,13 +10,13 @@ expression: dump(&buffer)
  0   9..11  fg=#e6e6e6 bg=#111216
  0  11..14  fg=#e6e6e6 bg=#111216 BOLD
  0  14..23  fg=#7f8492 bg=#111216
- 0  23..25  fg=#e6e6e6 bg=#111216
- 0  25..26  fg=#9ece6a bg=#111216
- 0  26..32  fg=#e6e6e6 bg=#111216
- 0  32..33  fg=#9ece6a bg=#111216
- 0  33..38  fg=#e6e6e6 bg=#111216
- 0  38..39  fg=#e0af68 bg=#111216
- 0  39..45  fg=#e6e6e6 bg=#111216
+ 0  23..26  fg=#e6e6e6 bg=#111216
+ 0  26..27  fg=#9ece6a bg=#111216
+ 0  27..33  fg=#e6e6e6 bg=#111216
+ 0  33..34  fg=#9ece6a bg=#111216
+ 0  34..39  fg=#e6e6e6 bg=#111216
+ 0  39..40  fg=#e0af68 bg=#111216
+ 0  40..45  fg=#e6e6e6 bg=#111216
  1   0..1   fg=#e6e6e6 bg=#111216
  1   1..11  fg=#111216 bg=#6c8ebf BOLD
  1  11..13  fg=#e6e6e6 bg=#111216

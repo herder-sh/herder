@@ -1660,7 +1660,7 @@ fn asked(session_id: &SessionId, body: &EventBody) -> Option<(String, Post)> {
             Post::Approval {
                 session_id: session_id.clone(),
                 approval_id: approval_id.clone(),
-                // A chat can deny it, but only an owner's app puts the value on the vault.
+                // A chat can deny it, but only an owner's app puts the value on the hub.
                 summary: if secret.is_some() {
                     format!("{summary}; an owner allows this in the herder app")
                 } else if secret_request.is_some() {

@@ -20,32 +20,32 @@ struct AddressTests {
         #expect(AddressStatus(address: "b:7447", inUse: "b:7447", connecting: nil, failure: failure) == .inUse)
     }
 
-    /// The route through a vault reads as the vault's name wherever an address shows, never
+    /// The route through a hub reads as the hub's name wherever an address shows, never
     /// as its host id.
-    @Test func aMachineReachedThroughItsVaultNamesTheVault() throws {
-        var vault = machine("v1", name: "home vault", sessions: [])
-        vault.hosts = [FleetHost(hostId: "h1", hostName: "box", online: true, lastSeen: "")]
+    @Test func aMachineReachedThroughItsHubNamesTheHub() throws {
+        var hub = machine("v1", name: "home hub", sessions: [])
+        hub.hosts = [FleetHost(hostId: "h1", hostName: "box", online: true, lastSeen: "")]
         var box = machine("h1", name: "box", sessions: [])
-        box.addresses = ["192.168.1.5:7447", "vault://v1"]
-        box.address = "vault://v1"
-        let machines = [vault, box]
-        #expect(MachineRow.via("vault://v1", among: machines) == "home vault")
-        #expect(MachineRow.label("vault://v1", among: machines) == "through home vault")
+        box.addresses = ["192.168.1.5:7447", "hub://v1"]
+        box.address = "hub://v1"
+        let machines = [hub, box]
+        #expect(MachineRow.via("hub://v1", among: machines) == "home hub")
+        #expect(MachineRow.label("hub://v1", among: machines) == "through home hub")
         #expect(MachineRow.label("192.168.1.5:7447", among: machines) == "192.168.1.5:7447")
-        // A machine that is only named vault is an address like any other.
-        #expect(MachineRow.via("vault.example.com:7447", among: machines) == nil)
-        #expect(MachineRow.label("wss://vault.example.com", among: machines) == "wss://vault.example.com")
-        // A route through a vault this device has left still reads as one.
-        #expect(MachineRow.label("vault://gone", among: machines) == "through a vault")
+        // A machine that is only named hub is an address like any other.
+        #expect(MachineRow.via("hub.example.com:7447", among: machines) == nil)
+        #expect(MachineRow.label("wss://hub.example.com", among: machines) == "wss://hub.example.com")
+        // A route through a hub this device has left still reads as one.
+        #expect(MachineRow.label("hub://gone", among: machines) == "through a hub")
 
         let row = try #require(MachineRow.rows(machines, summaries: []).first { $0.hostId == "h1" })
-        #expect(row.reach == .through("home vault"))
-        #expect(row.reach.label == "Through home vault")
+        #expect(row.reach == .through("home hub"))
+        #expect(row.reach.label == "Through home hub")
         box.address = "192.168.1.5:7447"
-        let direct = try #require(MachineRow.rows([vault, box], summaries: []).first { $0.hostId == "h1" })
+        let direct = try #require(MachineRow.rows([hub, box], summaries: []).first { $0.hostId == "h1" })
         #expect(direct.reach == .direct)
         // The route is not this Mac, whatever this Mac is called.
-        #expect(!MachineRow.isLocal("vault://v1", names: ["vault"]))
+        #expect(!MachineRow.isLocal("hub://v1", names: ["hub"]))
     }
 
     /// A connection under way says how many addresses it tries, and a message says what it

@@ -143,7 +143,7 @@ struct FleetView: View {
             })) { request in
                 ActionRequestPresenter(fleet: fleet, request: request)
             }
-            // A vault this device set up asks to be claimed, as its `herder://own` link would.
+            // A hub this device set up asks to be claimed, as its `herder://own` link would.
             .onChange(of: fleet.claiming) {
                 guard let request = fleet.claiming else { return }
                 fleet.claiming = nil

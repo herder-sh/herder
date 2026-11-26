@@ -55,7 +55,7 @@ struct ProviderVersions: Equatable {
 
     let rows: [Row]
 
-    /// The machines that run sessions, connected or not: a vault runs none.
+    /// The machines that run sessions, connected or not: a hub runs none.
     init(machines all: [Machine]) {
         let machines = all.filter { $0.hosts.isEmpty && $0.role != nil }
         let reported = Set(machines.flatMap(\.providers).filter(\.installed).map(\.provider))

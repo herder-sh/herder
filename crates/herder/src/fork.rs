@@ -2,7 +2,7 @@
 //! it here; the original is left as it is.
 //!
 //! The session may be another machine's, up or gone. This terminal, signed in with `herder
-//! login` to this machine and to one that holds the session (its host, or the vault it backs
+//! login` to this machine and to one that holds the session (its host, or the hub it backs
 //! up to), reads it there as the person signed in and relays it here. Hosts never read each
 //! other's sessions.
 
@@ -21,7 +21,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(clap::Args)]
 pub struct Args {
     /// The session to fork, of this machine or of another one this terminal is signed in to,
-    /// such as the vault.
+    /// such as the hub.
     session: String,
     /// Account of this machine to run the fork on [default: the session's account if this
     /// machine has it, else the project's default account, else the first account of its
@@ -73,7 +73,7 @@ pub fn run(args: Args) -> Result<()> {
         }) else {
             bail!(
                 "no machine this terminal is signed in to holds session {session_id}; sign in \
-                 to its vault with `herder login <address> --fingerprint <hex>`"
+                 to its hub with `herder login <address> --fingerprint <hex>`"
             );
         };
         let forked = client

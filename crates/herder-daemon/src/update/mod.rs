@@ -3,9 +3,9 @@
 //!
 //! The update holds new turns ([`Admission::hold`]), waits for the running ones to end when
 //! asked to, downloads the latest release ([`release`]) and puts it in place of the binary.
-//! Each stage reaches clients as `daemon_update` through the [`Hub`]. Then the daemon stops
+//! Each stage reaches clients as `daemon_update` through the [`Fanout`]. Then the daemon stops
 //! with [`crate::Exit::Updated`], and the herder binary restarts it onto the new binary, and
-//! an installed vault next to it.
+//! an installed hub next to it.
 
 pub mod release;
 
@@ -20,7 +20,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::hub::Hub;
+use crate::fanout::Fanout;
 use crate::resources::Admission;
 
 /// Set once the binary was updated; [`crate::run`] reports it when it returns.
@@ -47,7 +47,7 @@ pub struct SelfUpdate {
 /// Runs owners' updates, one at a time.
 pub struct Updater {
     update: Option<SelfUpdate>,
-    /// What admits turns on a host; a vault runs none.
+    /// What admits turns on a host; a hub runs none.
     admission: Option<Arc<Admission>>,
     /// Stops the daemon, for the restart.
     shutdown: CancellationToken,
@@ -71,12 +71,12 @@ impl Updater {
         }
     }
 
-    /// Answers `update_daemon`: starts the update, telling `hub` how it goes, and answers at
+    /// Answers `update_daemon`: starts the update, telling `fanout` how it goes, and answers at
     /// once, or refuses it.
     pub fn start(
         self: &Arc<Self>,
         when: UpdateWhen,
-        hub: &Arc<Hub>,
+        fanout: &Arc<Fanout>,
     ) -> Result<CommandResult, ErrorInfo> {
         let Some(update) = self.update.clone() else {
             return Err(error(
@@ -104,15 +104,15 @@ impl Updater {
         drop(underway);
         info!(?when, "an owner asked the daemon to update");
         let updater = Arc::clone(self);
-        let hub = Arc::clone(hub);
+        let fanout = Arc::clone(fanout);
         tokio::spawn(async move {
-            let stage = updater.run(update, when, &now, &hub).await;
+            let stage = updater.run(update, when, &now, &fanout).await;
             let restarting = matches!(stage, UpdateStage::Restarting { .. });
             match &stage {
                 UpdateStage::Failed { reason } => warn!("the update failed: {reason}"),
                 stage => info!(?stage, "the update ended"),
             }
-            hub.daemon_update(stage);
+            fanout.daemon_update(stage);
             if restarting {
                 UPDATED.store(true, Ordering::SeqCst);
                 tokio::time::sleep(RESTART_DELAY).await;
@@ -134,20 +134,20 @@ impl Updater {
         update: SelfUpdate,
         when: UpdateWhen,
         now: &Notify,
-        hub: &Arc<Hub>,
+        fanout: &Arc<Fanout>,
     ) -> UpdateStage {
         let hold = self.admission.as_ref().map(|admission| admission.hold());
         if let (UpdateWhen::Idle, Some(hold)) = (when, &hold) {
             let waiting = hold.idle(|running_turns| {
-                hub.daemon_update(UpdateStage::WaitingForIdle { running_turns });
+                fanout.daemon_update(UpdateStage::WaitingForIdle { running_turns });
             });
             tokio::select! {
                 () = waiting => {}
                 () = now.notified() => info!("an owner asked to update now"),
             }
         }
-        let hub = Arc::clone(hub);
-        let installed = tokio::task::spawn_blocking(move || install(&update, &hub)).await;
+        let fanout = Arc::clone(fanout);
+        let installed = tokio::task::spawn_blocking(move || install(&update, &fanout)).await;
         let stage = match installed {
             Ok(Ok(Some((from, to)))) => UpdateStage::Restarting {
                 from: from.to_string(),
@@ -171,16 +171,16 @@ impl Updater {
     }
 }
 
-/// Puts the latest release in place of `update`'s binary, telling `hub` it downloads; returns
+/// Puts the latest release in place of `update`'s binary, telling `fanout` it downloads; returns
 /// the versions it updated from and to, or `None` when the latest runs already.
-fn install(update: &SelfUpdate, hub: &Hub) -> anyhow::Result<Option<(Version, Version)>> {
+fn install(update: &SelfUpdate, fanout: &Fanout) -> anyhow::Result<Option<(Version, Version)>> {
     let current = release::current()?;
     let target = release::this_target()?;
     let latest = release::latest(&update.base)?;
     if latest <= current {
         return Ok(None);
     }
-    hub.daemon_update(UpdateStage::Downloading {
+    fanout.daemon_update(UpdateStage::Downloading {
         from: current.to_string(),
         to: latest.to_string(),
     });

@@ -3,37 +3,37 @@ import Herder
 import Observation
 import SwiftUI
 
-/// The provider logins in a vault's CLIProxyAPI, for its owners: listed without their tokens,
-/// added through the provider's sign-in, and removed. Each change goes to the vault, which drives
+/// The provider logins in a hub's CLIProxyAPI, for its owners: listed without their tokens,
+/// added through the provider's sign-in, and removed. Each change goes to the hub, which drives
 /// the proxy on its own machine.
 @MainActor @Observable
-final class VaultLogins {
+final class HubLogins {
     typealias Send = @MainActor (CommandBody) async throws -> CommandResult
 
-    let vault: HostId
+    let hub: HostId
     private let send: Send
     private(set) var list: Load<[ProviderLogin]> = .asking
 
-    init(vault: HostId, send: @escaping Send) {
-        self.vault = vault
+    init(hub: HostId, send: @escaping Send) {
+        self.hub = hub
         self.send = send
     }
 
-    /// The logins of `vault`, sent through `fleet`.
-    convenience init(fleet: Fleet, vault: HostId) {
+    /// The logins of `hub`, sent through `fleet`.
+    convenience init(fleet: Fleet, hub: HostId) {
         let client = fleet.client
-        self.init(vault: vault) { try await client.send(hostId: vault, command: $0) }
+        self.init(hub: hub) { try await client.send(hostId: hub, command: $0) }
     }
 
     var logins: [ProviderLogin] {
         if case .loaded(let logins) = list { logins } else { [] }
     }
 
-    /// Asks the vault for its proxy's logins.
+    /// Asks the hub for its proxy's logins.
     func reload() async {
         do {
             guard case .providerLogins(let logins) = try await send(.listProviderLogins) else {
-                throw HerderError.Local(detail: "the vault did not list its provider logins")
+                throw HerderError.Local(detail: "the hub did not list its provider logins")
             }
             list = .loaded(logins)
         } catch {
@@ -44,7 +44,7 @@ final class VaultLogins {
     /// Has the proxy start signing in to `provider`: the login and the URL to sign in at.
     func start(_ provider: Provider) async throws -> (loginId: String, url: String) {
         guard case .providerLoginStarted(let loginId, let url) = try await send(.startProviderLogin(provider: provider)) else {
-            throw HerderError.Local(detail: "the vault did not start the login")
+            throw HerderError.Local(detail: "the hub did not start the login")
         }
         return (loginId, url)
     }
@@ -53,7 +53,7 @@ final class VaultLogins {
     func complete(_ loginId: String, redirectUrl: String) async throws {
         let address = redirectUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard case .providerLogins(let logins) = try await send(.completeProviderLogin(loginId: loginId, redirectUrl: address)) else {
-            throw HerderError.Local(detail: "the vault did not finish the login")
+            throw HerderError.Local(detail: "the hub did not finish the login")
         }
         list = .loaded(logins)
     }
@@ -63,13 +63,13 @@ final class VaultLogins {
         _ = try? await send(.cancelProviderLogin(loginId: loginId))
     }
 
-    /// Why the vault refused the last change to each login, by its name; cleared by the next.
+    /// Why the hub refused the last change to each login, by its name; cleared by the next.
     private(set) var errors: [String: String] = [:]
     /// The logins with a change on its way.
     private(set) var changing: Set<String> = []
 
     /// Names `login` for every host it is an account on; an empty name goes back to its email.
-    /// Whether the vault took it.
+    /// Whether the hub took it.
     @discardableResult
     func rename(_ login: ProviderLogin, to label: String) async -> Bool {
         let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -91,7 +91,7 @@ final class VaultLogins {
         do {
             guard case .providerLogins(let logins) = try await send(.setProviderLogin(name: login.name, label: label,
                                                                                          fallback: fallback)) else {
-                throw HerderError.Local(detail: "the vault did not list its provider logins")
+                throw HerderError.Local(detail: "the hub did not list its provider logins")
             }
             list = .loaded(logins)
             return true
@@ -154,7 +154,7 @@ final class VaultLogins {
 /// the browser ended on. A login left before it is done is cancelled.
 @MainActor @Observable
 final class LoginAdder {
-    let logins: VaultLogins
+    let logins: HubLogins
     var provider: Provider = "claude"
     private(set) var started: (loginId: String, url: String)?
     var address = ""
@@ -162,7 +162,7 @@ final class LoginAdder {
     private(set) var sending = false
     private(set) var done = false
 
-    init(logins: VaultLogins) {
+    init(logins: HubLogins) {
         self.logins = logins
     }
 
@@ -195,11 +195,11 @@ final class LoginAdder {
     }
 }
 
-/// The vault's provider logins, each with its state, what is left of its limits, an Add button,
+/// The hub's provider logins, each with its state, what is left of its limits, an Add button,
 /// and on each for owners Rename, a Fallback switch and Remove.
 struct ProviderLoginsSection: View {
-    let logins: VaultLogins
-    /// Whether this device's user owns the vault: only they rename a login or mark it fallback.
+    let logins: HubLogins
+    /// Whether this device's user owns the hub: only they rename a login or mark it fallback.
     var owner = true
     let add: () -> Void
     let remove: (ProviderLogin) -> Void
@@ -208,7 +208,7 @@ struct ProviderLoginsSection: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 4) {
                 SectionHeading(title: "Provider logins", count: logins.logins.count)
-                InfoButton(text: "The logins in the CLIProxyAPI next to this vault. Each is an account on every host the vault serves, under the name you give it here; a fallback one is used only once the others are out. Their tokens stay on the vault; herder never sees them.")
+                InfoButton(text: "The logins in the CLIProxyAPI next to this hub. Each is an account on every host the hub serves, under the name you give it here; a fallback one is used only once the others are out. Their tokens stay on the hub; herder never sees them.")
                 Spacer()
                 PillButton(title: "Add login", symbol: "plus", prominent: true, action: add)
                     .accessibilityIdentifier("provider-login-add")
@@ -221,7 +221,7 @@ struct ProviderLoginsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("provider-logins-error")
             case .loaded(let list) where list.isEmpty:
-                Text("No logins yet. Add one, and hosts' endpoint accounts on this vault run on it.")
+                Text("No logins yet. Add one, and hosts' endpoint accounts on this hub run on it.")
                     .font(.subheadline).foregroundStyle(Theme.tertiary)
             case .loaded(let list):
                 VStack(spacing: 0) {
@@ -237,11 +237,11 @@ struct ProviderLoginsSection: View {
 }
 
 /// A login: its label and email, provider and state, what is left of its session and weekly
-/// windows, and for owners an inline rename, its Fallback switch and Remove. A change the vault
+/// windows, and for owners an inline rename, its Fallback switch and Remove. A change the hub
 /// refuses shows under it.
 private struct ProviderLoginRow: View {
     let login: ProviderLogin
-    let logins: VaultLogins
+    let logins: HubLogins
     let owner: Bool
     let remove: () -> Void
     @State private var renaming = false
@@ -249,7 +249,7 @@ private struct ProviderLoginRow: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        let windows = VaultLogins.windows(login)
+        let windows = HubLogins.windows(login)
         VStack(alignment: .leading, spacing: 8) {
             // On a phone the switch and buttons go on their own line, under the state.
             ViewThatFits(in: .horizontal) {
@@ -299,7 +299,7 @@ private struct ProviderLoginRow: View {
             if renaming { field } else { title }
             HStack(spacing: 6) {
                 Text(ModelCatalog.providerName(login.provider)).foregroundStyle(Theme.secondary)
-                if let email = VaultLogins.email(login) {
+                if let email = HubLogins.email(login) {
                     Text("· \(email)").foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.middle)
                 }
                 if let message = login.message, login.state != .active {
@@ -311,7 +311,7 @@ private struct ProviderLoginRow: View {
     }
 
     private var state: some View {
-        Chip(text: VaultLogins.stateLabel(login), tint: VaultLogins.stateTint(login.state)).fixedSize()
+        Chip(text: HubLogins.stateLabel(login), tint: HubLogins.stateTint(login.state)).fixedSize()
     }
 
     @ViewBuilder private func limits(_ windows: (session: WindowLeft?, weekly: WindowLeft?)) -> some View {
@@ -378,7 +378,7 @@ private struct ProviderLoginRow: View {
     }
 
     private func startRenaming() {
-        label = VaultLogins.ownName(login)
+        label = HubLogins.ownName(login)
         renaming = true
         focused = true
     }
@@ -399,11 +399,11 @@ struct AddProviderLoginSheet: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        SheetScaffold(title: "Add Login", subtitle: "To the CLIProxyAPI next to this vault", height: 480,
-                      hint: adder.started == nil ? "Its tokens stay on the vault." : "The login waits five minutes.") {
+        SheetScaffold(title: "Add Login", subtitle: "To the CLIProxyAPI next to this hub", height: 480,
+                      hint: adder.started == nil ? "Its tokens stay on the hub." : "The login waits five minutes.") {
             Field(label: "Provider") {
                 Picker("Provider", selection: $adder.provider) {
-                    ForEach(VaultLogins.providers, id: \.self) { Text(ModelCatalog.providerName($0)).tag($0) }
+                    ForEach(HubLogins.providers, id: \.self) { Text(ModelCatalog.providerName($0)).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()

@@ -53,7 +53,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         terminals: Vec::new(),
         resources: None,
         session_usage: Default::default(),
-        vault: None,
+        hub: None,
         skills: None,
         session_skills: Default::default(),
         update: None,
@@ -348,19 +348,19 @@ pub fn tree() -> App {
     app
 }
 
-/// A vault listing two hosts' sessions, every session loaded: `devbox`, online, runs `s1`
+/// A hub listing two hosts' sessions, every session loaded: `devbox`, online, runs `s1`
 /// and `s3`; `laptop`, offline and last heard from 2h 5m ago, runs `s2`. The list groups by
 /// machine.
-pub fn vault() -> App {
+pub fn hub() -> App {
     let mut app = App {
         grouping: crate::projects::Grouping::Machines,
         // Times the screen shows are counted from a clock that stands still.
         clock: Some(Timestamp::UNIX_EPOCH),
         ..App::default()
     };
-    let mut vault = machine("v", "vault", &[]);
+    let mut hub = machine("v", "hub", &[]);
     let seen = Timestamp::now() - std::time::Duration::from_secs(2 * 3600 + 5 * 60 + 30);
-    vault.hosts = vec![
+    hub.hosts = vec![
         FleetHost {
             host_id: HostId::new("devbox"),
             host_name: "devbox".into(),
@@ -378,14 +378,14 @@ pub fn vault() -> App {
             relay: false,
         },
     ];
-    vault.sessions = [("s1", "devbox"), ("s2", "laptop"), ("s3", "devbox")]
+    hub.sessions = [("s1", "devbox"), ("s2", "laptop"), ("s3", "devbox")]
         .into_iter()
         .map(|(id, host)| SessionHead {
             host_id: Some(HostId::new(host)),
             ..head(id, Some("github.com/org/app"))
         })
         .collect();
-    app.update(Msg::Machines(vec![vault]));
+    app.update(Msg::Machines(vec![hub]));
     for (id, branch) in [
         ("s1", "herder/login"),
         ("s2", "herder/docs"),
@@ -397,21 +397,21 @@ pub fn vault() -> App {
     app
 }
 
-/// `s2` of [`vault`] after `devbox` took it over and `laptop` came back: the vault lists it
+/// `s2` of [`hub`] after `devbox` took it over and `laptop` came back: the hub lists it
 /// on `devbox`, and `laptop`, paired too, lists its own copy `moved`. Both hosts are online.
 pub fn moved() -> App {
-    let mut app = vault();
-    let mut vault = app.machines[0].clone();
-    for host in &mut vault.hosts {
+    let mut app = hub();
+    let mut hub = app.machines[0].clone();
+    for host in &mut hub.hosts {
         host.online = true;
     }
-    vault.sessions = vec![SessionHead {
+    hub.sessions = vec![SessionHead {
         host_id: Some(HostId::new("devbox")),
         ..head("s2", Some("github.com/org/app"))
     }];
     let mut laptop = machine("laptop", "laptop", &["s2"]);
     laptop.sessions[0].status = SessionStatus::Moved;
-    app.update(Msg::Machines(vec![vault, laptop]));
+    app.update(Msg::Machines(vec![hub, laptop]));
     let moved = vec![
         created("herder/docs", None, None),
         status(SessionStatus::Moved),
@@ -473,7 +473,7 @@ pub fn account(id: &str, label: &str) -> herder_protocol::Account {
         needs_login: None,
         endpoint: None,
         key_secret: None,
-        vault_login: None,
+        hub_login: None,
     }
 }
 
@@ -485,10 +485,10 @@ pub fn endpoint_account(id: &str, label: &str, endpoint: &str) -> herder_protoco
     }
 }
 
-/// An account on the vault's login `name`, as a host runs it: `vault-<pin>` through the proxy.
-pub fn vault_login_account(pin: &str, name: &str, label: &str) -> herder_protocol::Account {
+/// An account on the hub's login `name`, as a host runs it: `vault-<pin>` through the proxy.
+pub fn hub_login_account(pin: &str, name: &str, label: &str) -> herder_protocol::Account {
     herder_protocol::Account {
-        vault_login: Some(name.to_owned()),
+        hub_login: Some(name.to_owned()),
         ..endpoint_account(&format!("vault-{pin}"), label, "https://cpa.lan:8317")
     }
 }
@@ -1103,14 +1103,14 @@ pub fn chat_approval() -> App {
 }
 
 /// [`chat`] with the second turn asking for the secret `coingate/GITHUB_SIEM_PAT` with
-/// `request_secret`, which replaces one; `h1` fetches its secrets from the vault `vault-0`,
+/// `request_secret`, which replaces one; `h1` fetches its secrets from the hub `hub-0`,
 /// paired here with this user its owner.
 pub fn chat_secret_request() -> App {
     let mut app = chat();
     let mut machines = app.machines.clone();
     machines.push(Machine {
         fingerprint: "cd".repeat(32),
-        ..machine("v", "vault-0", &[])
+        ..machine("v", "hub-0", &[])
     });
     app.update(Msg::Machines(machines));
     let bodies = vec![
@@ -1438,11 +1438,11 @@ pub fn live() -> App {
     app
 }
 
-/// The fleet view of [`backups`] with the vault selected: it backs up `devbox` (images on,
+/// The fleet view of [`backups`] with the hub selected: it backs up `devbox` (images on,
 /// a third of its cap), `laptop` (images off) and `old-box`, gone, and its disk is `used`
 /// GiB of 480.
-pub fn vault_storage(used: f64) -> App {
-    use herder_protocol::{HostUsage, VaultVolume};
+pub fn hub_storage(used: f64) -> App {
+    use herder_protocol::{HostUsage, HubVolume};
     let mut app = backups();
     let mut machines = app.machines.clone();
     let seen = Timestamp::now() - std::time::Duration::from_secs(40 * 24 * 3600);
@@ -1459,13 +1459,13 @@ pub fn vault_storage(used: f64) -> App {
         relay: false,
     };
     const MIB: u64 = 1 << 20;
-    if let Some(vault) = machines.iter_mut().find(|m| m.host_id.as_str() == "v") {
-        vault.hosts = vec![
+    if let Some(hub) = machines.iter_mut().find(|m| m.host_id.as_str() == "v") {
+        hub.hosts = vec![
             host("devbox", true, 4, 340 * MIB, Some(1024 * MIB)),
             host("laptop", true, 1, 0, None),
             host("old-box", false, 12, 980 * MIB, Some(1024 * MIB)),
         ];
-        vault.sessions = (1..=17)
+        hub.sessions = (1..=17)
             .map(|n| SessionHead {
                 host_id: Some(HostId::new(match n {
                     ..=4 => "devbox",
@@ -1477,19 +1477,19 @@ pub fn vault_storage(used: f64) -> App {
             .collect();
     }
     app.update(Msg::Machines(machines));
-    // The vault answers the fleet view's question with how full its disk is.
-    let volume = VaultVolume {
+    // The hub answers the fleet view's question with how full its disk is.
+    let volume = HubVolume {
         total_bytes: 480 << 30,
         // Rounded up, so the tenths shown are those given.
         used_bytes: ((used * 10.0).round() as u64 * (1 << 30)).div_ceil(10),
     };
     app.update(Msg::Sent {
         origin: crate::compose::Origin::Backup(crate::backup::Sent::Ask(HostId::new("v"))),
-        result: Ok(herder_protocol::CommandResult::VaultLink {
-            is_vault: true,
-            vault: None,
+        result: Ok(herder_protocol::CommandResult::HubLink {
+            is_hub: true,
+            hub: None,
             volume: Some(volume),
-            local_vault: false,
+            local_hub: false,
         }),
     });
     for _ in 0..2 {
@@ -1502,7 +1502,7 @@ pub fn vault_storage(used: f64) -> App {
 }
 
 /// The fleet view of three machines this client owns, each saying where it backs up: `devbox`
-/// nowhere, `laptop` to `vault`, and `vault` is the vault. `devbox` is selected.
+/// nowhere, `laptop` to `hub`, and `hub` is the hub. `devbox` is selected.
 pub fn backups() -> App {
     let mut app = App {
         // Times the screen shows are counted from a clock that stands still.
@@ -1514,16 +1514,16 @@ pub fn backups() -> App {
         fingerprint: digits.repeat(16),
         ..machine(host, name, &[])
     };
-    let vault = at("v", "vault", "vault.lan:7447", "3f9a");
+    let hub = at("v", "hub", "hub.lan:7447", "3f9a");
     let machines = vec![
         at("devbox", "devbox", "devbox.lan:7447", "9c2e"),
         at("laptop", "laptop", "10.0.0.12:7447", "01de"),
-        vault.clone(),
+        hub.clone(),
     ];
     app.update(Msg::Machines(machines));
-    let linked = herder_protocol::LinkedVault {
-        address: vault.addresses[0].clone(),
-        fingerprint: vault.fingerprint,
+    let linked = herder_protocol::LinkedHub {
+        address: hub.addresses[0].clone(),
+        fingerprint: hub.fingerprint,
         backup: true,
         secrets: true,
         cliproxyapi: None,
@@ -1539,16 +1539,16 @@ pub fn backups() -> App {
         else {
             continue;
         };
-        let (is_vault, vault) = match host_id.as_str() {
+        let (is_hub, hub) = match host_id.as_str() {
             "v" => (true, None),
             "laptop" => (false, Some(linked.clone())),
             _ => (false, None),
         };
-        let result = Ok(herder_protocol::CommandResult::VaultLink {
-            is_vault,
-            vault,
+        let result = Ok(herder_protocol::CommandResult::HubLink {
+            is_hub,
+            hub,
             volume: None,
-            local_vault: false,
+            local_hub: false,
         });
         app.update(Msg::Sent { origin, result });
     }
@@ -1686,8 +1686,8 @@ pub fn board() -> App {
     app
 }
 
-/// The secrets screen of [`backups`]' vault, which `devbox` and `laptop` back up to, as the
-/// vault lists them: `coingate-prod` (granted to `devbox`) with `API_KEY` and `DB_URL`,
+/// The secrets screen of [`backups`]' hub, which `devbox` and `laptop` back up to, as the
+/// hub lists them: `coingate-prod` (granted to `devbox`) with `API_KEY` and `DB_URL`,
 /// `personal` (granted to both) with `GITHUB_TOKEN`, and `staging`, empty; and three fetches.
 pub fn secrets() -> App {
     use herder_protocol::{CommandResult, SecretAccess, SecretInfo, SecretSet, SessionId};
@@ -1695,8 +1695,8 @@ pub fn secrets() -> App {
     let mut machines = app.machines.clone();
     let now = Timestamp::UNIX_EPOCH;
     let ago = |secs: u64| now - std::time::Duration::from_secs(secs);
-    if let Some(vault) = machines.iter_mut().find(|m| m.host_id.as_str() == "v") {
-        vault.hosts = ["devbox", "laptop"]
+    if let Some(hub) = machines.iter_mut().find(|m| m.host_id.as_str() == "v") {
+        hub.hosts = ["devbox", "laptop"]
             .map(|name| FleetHost {
                 host_id: HostId::new(name),
                 host_name: name.into(),

@@ -194,7 +194,7 @@ expression: terminal.backend()
 "     │  e                    rename the machine on this device                              │       "
 "     │  d                    forget the machine                                             │       "
 "     │  b                    backups                                                        │       "
-"     │  s                    a vault's secrets                                              │       "
+"     │  s                    a hub's secrets                                                │       "
 "     │  r                    reconnect                                                      │       "
 "     │  ?                    this help                                                      │       "
 "     │  esc, ⌫, m, q         close                                                          │       "

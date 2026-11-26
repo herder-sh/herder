@@ -14,7 +14,7 @@ async fn the_demo_sets_up_every_scene() -> anyhow::Result<()> {
     assert!(demo.passkey.contains('.'), "{}", demo.passkey);
     // The device that set it up, which `--record-demo` records from, has every machine.
     let names: Vec<String> = demo.client.machines().into_iter().map(|m| m.name).collect();
-    assert_eq!(names, ["devbox", "studio", "laptop", "vault"]);
+    assert_eq!(names, ["devbox", "studio", "laptop", "hub"]);
     let scenes = demo.scenes().await?;
     let scene = |host: &str, title: &str| {
         scenes

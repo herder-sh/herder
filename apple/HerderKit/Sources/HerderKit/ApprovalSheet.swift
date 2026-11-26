@@ -10,10 +10,10 @@ struct ApprovalSheet: View {
     var teammates: [String] = []
     /// Your other devices, by kind: "Mac and iPhone".
     var devices = "Mac and iPhone"
-    /// The vaults a new machine can back up to.
-    var vaults: [String] = []
+    /// The hubs a new machine can back up to.
+    var hubs: [String] = []
     var open: () -> Void = {}
-    var linkVault: () -> Void = {}
+    var linkHub: () -> Void = {}
     var biometry = Biometry.name
     /// Offers a new passkey, for someone new to herder: on a device with none of your machines.
     var offersNewPasskey = false
@@ -130,11 +130,11 @@ struct ApprovalSheet: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 4)
             .padding(.bottom, 12)
-        if request.kind == .machine, !vaults.isEmpty {
-            Button(action: linkVault) {
+        if request.kind == .machine, !hubs.isEmpty {
+            Button(action: linkHub) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Next: \(Text("Link a vault").bold()) for backup and secrets").foregroundStyle(Theme.text)
-                    Text(vaults.joined(separator: " · ")).foregroundStyle(Theme.secondary)
+                    Text("Next: \(Text("Link a hub").bold()) for backup and secrets").foregroundStyle(Theme.text)
+                    Text(hubs.joined(separator: " · ")).foregroundStyle(Theme.secondary)
                 }
                 .font(.footnote)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -205,12 +205,12 @@ struct ApproveSheet: View {
     let fleet: Fleet
     @State private var approval: Approval
     let open: (HostId) -> Void
-    let linkVault: () -> Void
+    let linkHub: () -> Void
 
-    init(fleet: Fleet, request: ApprovalRequest, open: @escaping (HostId) -> Void, linkVault: @escaping () -> Void) {
+    init(fleet: Fleet, request: ApprovalRequest, open: @escaping (HostId) -> Void, linkHub: @escaping () -> Void) {
         self.fleet = fleet
         self.open = open
-        self.linkVault = linkVault
+        self.linkHub = linkHub
         _approval = State(initialValue: Approval(request, authenticator: passkeyAuthenticator()) {
             try await fleet.approve(request, with: $0, newPasskey: $1)
         })
@@ -218,11 +218,11 @@ struct ApproveSheet: View {
 
     var body: some View {
         ApprovalSheet(approval: approval,
-                      vaults: fleet.machines.filter { !$0.hosts.isEmpty }.map(\.name),
+                      hubs: fleet.machines.filter { !$0.hosts.isEmpty }.map(\.name),
                       open: { if let machine = approval.machine { open(machine) } },
-                      linkVault: linkVault,
+                      linkHub: linkHub,
                       offersNewPasskey: fleet.machines.isEmpty)
-            // A vault setup waiting on it fails once it closes unapproved; approved, it went on.
+            // A hub setup waiting on it fails once it closes unapproved; approved, it went on.
             .onDisappear { fleet.settleClaim(approval.request, .failure(CancellationError())) }
     }
 }

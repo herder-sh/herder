@@ -34,11 +34,11 @@ struct SessionSummary: Hashable, Identifiable {
     var projectId: String?
     let branch: String
     var worktree = ""
-    /// The machine it runs on: the machine's name, or for a vault the host's.
+    /// The machine it runs on: the machine's name, or for a hub the host's.
     let machine: String
     var machineOffline = false
-    /// Listed from a vault's copy: this device has no connection to the host it runs on.
-    var fromVault = false
+    /// Listed from a hub's copy: this device has no connection to the host it runs on.
+    var fromHub = false
     let state: SessionState
     let activity: String
     let age: String
@@ -82,9 +82,9 @@ struct PendingRequest: Hashable, Identifiable {
     var note: String?
     /// The session's other requests, answered after this one.
     var more = 0
-    /// For an agent's `store_secret`, what to store: Allow puts it on the vault.
+    /// For an agent's `store_secret`, what to store: Allow puts it on the hub.
     var secret: SecretStoreRequest?
-    /// For an agent's `request_secret`, the secret the owner types: Store puts it on the vault.
+    /// For an agent's `request_secret`, the secret the owner types: Store puts it on the hub.
     var secretRequest: SecretRequest?
     var step: Step?
 }
@@ -123,14 +123,14 @@ struct MachineSummary: Hashable, Identifiable {
     let cpu: Double?
     let memory: Double?
     let running: Int
-    /// The host's turns against its limit, once it has reported them; a vault has none.
+    /// The host's turns against its limit, once it has reported them; a hub has none.
     var turns: TurnLoad?
     let sessions: Int
     let accounts: [AccountSummary]
     let hosts: [FleetHostSummary]
     let pinned: Bool
-    /// Whether it is a vault, which backs up the machines rather than running sessions.
-    var vault = false
+    /// Whether it is a hub, which backs up the machines rather than running sessions.
+    var hub = false
 
     var connected: Bool { connection == .connected }
 }

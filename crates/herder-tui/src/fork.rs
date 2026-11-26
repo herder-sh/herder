@@ -2,12 +2,12 @@
 //!
 //! Any top-level session can be forked: its history goes on in a new session on a host this
 //! device is paired with as an owner. A session of another host, up or gone, is read by this
-//! device from a machine that lists it, its host or a vault, and relayed. The original stays as
+//! device from a machine that lists it, its host or a hub, and relayed. The original stays as
 //! it is. The fork dialog picks the host, sends it `fork_session`, then opens the new session
 //! there. Without such a host it shows the command to run on one, `herder fork <session>`.
-//! A vault's copy of a session whose host is offline offers the fork in place of its composer.
+//! A hub's copy of a session whose host is offline offers the fork in place of its composer.
 //!
-//! A host that took over a session under its id, as the vault shows it, leaves the old copy
+//! A host that took over a session under its id, as the hub shows it, leaves the old copy
 //! `moved`, read-only; a client paired with both sees that copy go to the new host.
 
 use herder_client_core::{ConnectionState, Machine};
@@ -69,7 +69,7 @@ pub fn command(session: &SessionId) -> String {
 }
 
 impl App {
-    /// The host `key`'s session runs on, when a vault lists it with its host.
+    /// The host `key`'s session runs on, when a hub lists it with its host.
     pub fn fleet_host(&self, key: &SessionKey) -> Option<&FleetHost> {
         let machine = self.machines.iter().find(|m| m.host_id == key.host_id)?;
         let host = machine
@@ -81,7 +81,7 @@ impl App {
         machine.hosts.iter().find(|h| h.host_id == *host)
     }
 
-    /// The name of the host `key`'s session runs on: the vault's name for it, or its machine's.
+    /// The name of the host `key`'s session runs on: the hub's name for it, or its machine's.
     pub fn host_name(&self, key: &SessionKey) -> Option<String> {
         if let Some(host) = self.fleet_host(key) {
             return Some(host.host_name.clone());
@@ -92,7 +92,7 @@ impl App {
             .map(|machine| machine.name.clone())
     }
 
-    /// What to call the host `host_id`: its machine's name, else the name a vault lists it
+    /// What to call the host `host_id`: its machine's name, else the name a hub lists it
     /// under, else its id.
     pub fn machine_name(&self, host_id: &HostId) -> String {
         let machine = self.machines.iter().find(|m| m.host_id == *host_id);
@@ -116,14 +116,14 @@ impl App {
             .is_some_and(|session| session.loaded && session.parent.is_none())
     }
 
-    /// The machines a session can be forked onto: hosts, not vaults, connected, with this
+    /// The machines a session can be forked onto: hosts, not hubs, connected, with this
     /// device's user an owner there.
     pub fn fork_targets(&self) -> Vec<&Machine> {
         self.machines
             .iter()
             .filter(|machine| {
                 machine.hosts.is_empty()
-                    && machine.vault.is_none()
+                    && machine.hub.is_none()
                     && machine.connection == ConnectionState::Connected
                     && machine.role == Some(Role::Owner)
             })
@@ -263,7 +263,7 @@ mod tests {
         app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)))
     }
 
-    /// Selects `id` of [`fake::vault`].
+    /// Selects `id` of [`fake::hub`].
     fn select(app: &mut App, id: &str) {
         app.choose_row(Row::Session {
             key: key("v", id),
@@ -271,9 +271,9 @@ mod tests {
         });
     }
 
-    /// [`fake::vault`], paired with `devbox` too, as an owner.
+    /// [`fake::hub`], paired with `devbox` too, as an owner.
     fn with_devbox() -> (App, Vec<Machine>) {
-        let mut app = fake::vault();
+        let mut app = fake::hub();
         let mut machines = app.machines.clone();
         machines.push(fake::machine("devbox", "devbox", &[]));
         app.update(Msg::Machines(machines.clone()));
@@ -281,8 +281,8 @@ mod tests {
     }
 
     #[test]
-    fn a_host_is_named_by_its_machine_else_its_vault_listing_else_its_id() {
-        let mut app = fake::vault();
+    fn a_host_is_named_by_its_machine_else_its_hub_listing_else_its_id() {
+        let mut app = fake::hub();
         let mut machines = app.machines.clone();
         machines.push(fake::machine("devbox", "Devbox", &[]));
         app.update(Msg::Machines(machines));
@@ -347,11 +347,11 @@ mod tests {
 
     #[test]
     fn without_a_paired_owner_host_the_dialog_shows_the_command() {
-        let mut app = fake::vault();
+        let mut app = fake::hub();
         select(&mut app, "s2");
         press(&mut app, KeyCode::Char('F'));
         assert!(app.fork.is_some());
-        // The vault itself takes no fork.
+        // The hub itself takes no fork.
         assert!(app.fork_targets().is_empty());
         assert!(press(&mut app, KeyCode::Enter).is_empty());
         assert!(app.fork.is_some());
@@ -373,13 +373,13 @@ mod tests {
 
     #[test]
     fn an_offline_hosts_session_offers_the_fork_in_place_of_its_composer() {
-        let mut app = fake::vault();
+        let mut app = fake::hub();
         assert_eq!(
             app.read_only(&key("v", "s2")),
             Some(("laptop is offline · F fork".to_owned(), true))
         );
         assert_eq!(app.read_only(&key("v", "s1")), None);
-        // Its composer is not offered: the vault takes no prompts for it.
+        // Its composer is not offered: the hub takes no prompts for it.
         select(&mut app, "s2");
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('i'));
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn a_tasks_child_is_not_forkable() {
-        let mut app = fake::vault();
+        let mut app = fake::hub();
         fake::feed(
             &mut app,
             "v",

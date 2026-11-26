@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 21;
+pub const CLIENT_API_VERSION: u32 = 22;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -42,7 +42,7 @@ pub struct Machine {
     pub terminals: Vec<Terminal>,
     pub resources: Option<HostResources>,
     pub session_usage: HashMap<SessionId, SessionUsage>,
-    pub vault: Option<VaultStatus>,
+    pub hub: Option<HubStatus>,
     pub skills: Option<SkillsStatus>,
     pub session_skills: HashMap<SessionId, Vec<SessionSkill>>,
     pub update: Option<UpdateStage>,

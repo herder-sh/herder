@@ -67,8 +67,8 @@ struct SessionRow: View {
                     }
                     Image(systemName: "server.rack").imageScale(.small).foregroundStyle(Theme.tertiary)
                     Text(session.machineOffline ? "\(session.machine) offline"
-                         : session.fromVault ? "\(session.machine) not connected" : session.machine)
-                        .foregroundStyle(session.machineOffline || session.fromVault ? Theme.failure : Theme.tertiary)
+                         : session.fromHub ? "\(session.machine) not connected" : session.machine)
+                        .foregroundStyle(session.machineOffline || session.fromHub ? Theme.failure : Theme.tertiary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }

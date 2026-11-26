@@ -274,7 +274,7 @@ mod tests {
     fn the_units_cgroup_runs_it() {
         let cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/herder.service\n";
         assert!(in_unit(cgroup, "herder.service"));
-        assert!(!in_unit(cgroup, "herder-vault.service"));
+        assert!(!in_unit(cgroup, "herder-hub.service"));
         let shell = "0::/user.slice/user-1000.slice/session-3.scope\n";
         assert!(!in_unit(shell, "herder.service"));
     }
@@ -310,30 +310,29 @@ WantedBy=default.target
     }
 
     #[test]
-    fn vault_unit_runs_a_vault_with_its_own_config_and_key() {
-        let service =
-            crate::vault::install::service(Path::new("/home/ann/.local/share/herder-vault"));
+    fn hub_unit_runs_a_hub_with_its_own_config_and_key() {
+        let service = crate::hub::install::service(Path::new("/home/ann/.local/share/herder-hub"));
         let unit = unit_file(
             &service,
             Path::new("/home/ann/.local/bin/herder"),
             "/usr/bin",
         )
         .unwrap();
-        assert_eq!(service.unit, "herder-vault.service");
+        assert_eq!(service.unit, "herder-hub.service");
         assert_eq!(
             unit,
             "\
-# Written by `herder vault install`; rerun it after moving the herder binary or
+# Written by `herder hub install`; rerun it after moving the herder binary or
 # changing PATH.
 [Unit]
-Description=herder vault
+Description=herder hub
 Documentation=https://github.com/herder-sh/herder
 
 [Service]
 Type=exec
 Environment=\"PATH=/usr/bin\"
-EnvironmentFile=/home/ann/.local/share/herder-vault/vault.env
-ExecStart=\"/home/ann/.local/bin/herder\" daemon --vault --config /home/ann/.local/share/herder-vault/vault.toml
+EnvironmentFile=/home/ann/.local/share/herder-hub/hub.env
+ExecStart=\"/home/ann/.local/bin/herder\" daemon --hub --config /home/ann/.local/share/herder-hub/hub.toml
 Restart=on-failure
 RestartSec=5
 
@@ -345,15 +344,15 @@ WantedBy=default.target
 
     #[test]
     fn cliproxyapi_unit_runs_the_proxy_with_its_config() {
-        let dir = Path::new("/home/ann/.local/share/herder-vault");
-        let service = crate::vault::install::cliproxyapi::service(dir);
+        let dir = Path::new("/home/ann/.local/share/herder-hub");
+        let service = crate::hub::install::cliproxyapi::service(dir);
         let program = service.program.clone().unwrap();
         let unit = unit_file(&service, &program, "/usr/bin").unwrap();
         assert_eq!(service.unit, "herder-cliproxyapi.service");
         assert!(
             unit.contains(
-                "ExecStart=\"/home/ann/.local/share/herder-vault/cliproxyapi/cli-proxy-api\" \
-                 -config /home/ann/.local/share/herder-vault/cliproxyapi/config.yaml\n"
+                "ExecStart=\"/home/ann/.local/share/herder-hub/cliproxyapi/cli-proxy-api\" \
+                 -config /home/ann/.local/share/herder-hub/cliproxyapi/config.yaml\n"
             ),
             "{unit}"
         );
@@ -362,15 +361,15 @@ WantedBy=default.target
     }
 
     #[test]
-    fn vault_paths_are_quoted_for_systemd() {
-        let service = crate::vault::install::service(Path::new("/home/a b/100%"));
+    fn hub_paths_are_quoted_for_systemd() {
+        let service = crate::hub::install::service(Path::new("/home/a b/100%"));
         let unit = unit_file(&service, Path::new("/bin/herder"), "/usr/bin").unwrap();
         assert!(
-            unit.contains("EnvironmentFile=/home/a b/100%%/vault.env\n"),
+            unit.contains("EnvironmentFile=/home/a b/100%%/hub.env\n"),
             "{unit}"
         );
         assert!(
-            unit.contains(r#"--config "/home/a b/100%%/vault.toml""#),
+            unit.contains(r#"--config "/home/a b/100%%/hub.toml""#),
             "{unit}"
         );
     }

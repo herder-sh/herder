@@ -8,7 +8,7 @@ import AppKit
 enum MachineSource: CaseIterable, Hashable {
     /// A Linux box or a Mac, with the one-line install.
     case install
-    /// A vault in a Kubernetes cluster, from `deploy/vault.yaml`.
+    /// A hub in a Kubernetes cluster, from `deploy/hub.yaml`.
     case kubernetes
     /// A machine that runs herder already: `herder claim` there.
     case hasHerder
@@ -36,7 +36,7 @@ enum MachineSource: CaseIterable, Hashable {
         case .install:
             "curl -fsSL https://herder.sh/install | sh\nherder service install"
         case .kubernetes:
-            "kubectl apply -n herder -f https://raw.githubusercontent.com/herder-sh/herder/main/deploy/vault.yaml\nkubectl exec -it -n herder herder-vault-0 -- /herder claim"
+            "kubectl apply -n herder -f https://raw.githubusercontent.com/herder-sh/herder/main/deploy/hub.yaml\nkubectl exec -it -n herder herder-hub-0 -- /herder claim"
         case .hasHerder:
             Self.claimCommand
         }
@@ -46,12 +46,12 @@ enum MachineSource: CaseIterable, Hashable {
     var note: String {
         switch self {
         case .install: "It installs herder, starts it at every boot, and prints a link and a QR code."
-        case .kubernetes: "It runs a vault, which backs up your machines and keeps their secrets. Create its Secrets first, as deploy/README.md says."
+        case .kubernetes: "It runs a hub, which backs up your machines and keeps their secrets. Create its Secrets first, as deploy/README.md says."
         case .hasHerder: "It prints a link and a QR code that make you its owner, whether it has none yet or you own it from another device."
         }
     }
 
-    /// What to run on a machine, or a vault's: it prints the `herder://own` link that makes
+    /// What to run on a machine, or a hub's: it prints the `herder://own` link that makes
     /// you its owner, whether it has none yet or you own it from another device.
     static let claimCommand = "herder claim"
 
@@ -59,16 +59,16 @@ enum MachineSource: CaseIterable, Hashable {
     static let steps = ["Install", "Approve", "Done"]
 }
 
-/// What Add a machine adds: a machine whose `herder://own` link was scanned or pasted, or a vault
+/// What Add a machine adds: a machine whose `herder://own` link was scanned or pasted, or a hub
 /// your machines back up to that this device has not signed in to.
 enum AddMachineTarget: Hashable {
     case machine(ApprovalRequest)
-    case vault(UnpairedVault)
+    case hub(UnpairedHub)
 
     var name: String {
         switch self {
         case .machine(let request): request.name
-        case .vault(let vault): vault.name
+        case .hub(let hub): hub.name
         }
     }
 }
@@ -116,9 +116,9 @@ struct Approver: Equatable {
     }
 }
 
-/// Add a machine's offer to back the new machine up to a vault you own.
+/// Add a machine's offer to back the new machine up to a hub you own.
 struct BackupOffer: Equatable {
-    let vault: String
+    let hub: String
     var on = true
     var saved: SaveState?
 }
@@ -127,7 +127,7 @@ struct BackupOffer: Equatable {
 /// Linux or Mac box, Kubernetes, a machine that has herder) with the command that prints the
 /// machine's `herder://own` link; the Mac watches the clipboard for it, the iPhone scans its QR
 /// code. Approve shows the machine's name, the code its terminal shows and the passkey that
-/// approves. Done lists your other devices and backs the machine up to a vault you own. A vault
+/// approves. Done lists your other devices and backs the machine up to a hub you own. A hub
 /// your machines back up to is signed in to the same way. Any other herder link (a terminal's
 /// `herder://login`, another device's `herder://fleet`) hands over to its own sheet.
 struct AddMachineSheet: View {
@@ -140,23 +140,23 @@ struct AddMachineSheet: View {
     @State private var source: MachineSource
     @State private var step: AddMachineStep
     @State private var text = ""
-    @State private var vaults: [UnpairedVault] = []
+    @State private var hubs: [UnpairedHub] = []
     @State private var people: FleetPeople
     @State private var newName: String?
     @State private var error: String?
     @State private var scanning = false
     @State private var backup: BackupOffer?
-    /// The new machine is linked to the offered vault, so the switch sets it rather than links.
+    /// The new machine is linked to the offered hub, so the switch sets it rather than links.
     @State private var linked = false
     @Environment(\.dismiss) private var dismiss
 
-    init(fleet: Fleet, source: MachineSource = .install, vault: UnpairedVault? = nil, scanning: Bool = false,
+    init(fleet: Fleet, source: MachineSource = .install, hub: UnpairedHub? = nil, scanning: Bool = false,
          present: @escaping (AppSheet) -> Void, drafted: @escaping (Draft) -> Void) {
         self.fleet = fleet
         self.present = present
         self.drafted = drafted
         _source = State(initialValue: source)
-        _step = State(initialValue: vault.map { .approve(.vault($0)) } ?? .install)
+        _step = State(initialValue: hub.map { .approve(.hub($0)) } ?? .install)
         _people = State(initialValue: FleetPeople(fleet: fleet))
         #if os(iOS)
         _scanning = State(initialValue: scanning)
@@ -184,10 +184,10 @@ struct AddMachineSheet: View {
     private var sheet: some View {
         AddMachineView(source: $source, text: $text, newName: $newName, step: step,
                        approver: approver, offersNewPasskey: fleet.machines.isEmpty,
-                       paired: { fleet.machine(fingerprint: $0)?.name }, vaults: vaults,
+                       paired: { fleet.machine(fingerprint: $0)?.name }, hubs: hubs,
                        devices: devices, backup: backup, error: error, actions: actions)
             .task { await people.reload(fleet.machines) }
-            .task { vaults = await fleet.unpairedVaults() }
+            .task { hubs = await fleet.unpairedHubs() }
             .task(id: step) { await settle() }
     }
 
@@ -207,9 +207,9 @@ struct AddMachineSheet: View {
             error = nil
             step = .install
         }
-        actions.signIn = { vault in
+        actions.signIn = { hub in
             error = nil
-            step = .approve(.vault(vault))
+            step = .approve(.hub(hub))
         }
         actions.addDevice = !fleet.canShare ? nil : { present(.addDevice) }
         if case .done(.machine, let hostId) = step, runsSessions(hostId) {
@@ -238,9 +238,9 @@ struct AddMachineSheet: View {
         return [this] + (people.directory(fleet.machines)?.devices.filter { !$0.current } ?? [])
     }
 
-    /// Whether `hostId` runs sessions, rather than being a vault.
+    /// Whether `hostId` runs sessions, rather than being a hub.
     private func runsSessions(_ hostId: HostId) -> Bool {
-        fleet.machines.first { $0.hostId == hostId }.map { $0.hosts.isEmpty && $0.vault == nil } ?? true
+        fleet.machines.first { $0.hostId == hostId }.map { $0.hosts.isEmpty && $0.hub == nil } ?? true
     }
 
     /// A link scanned, pasted or copied: a machine's `herder://own` goes to Approve; any other
@@ -269,15 +269,15 @@ struct AddMachineSheet: View {
                                                                  newPasskey: name?.isEmpty == false ? name : nil)
                     else { return }
                     hostId = approved
-                case .vault(let vault):
-                    hostId = try await fleet.signIn(hosts: [vault.address], fingerprint: vault.fingerprint,
+                case .hub(let hub):
+                    hostId = try await fleet.signIn(hosts: [hub.address], fingerprint: hub.fingerprint,
                                                     with: passkeyAuthenticator())
                 }
                 step = .done(target, hostId)
             } catch {
                 guard !isCancelled(error) else { return }
-                if case .vault(let vault) = target {
-                    self.error = "\(describe(error)). If \(vault.name) does not know you yet, run `\(MachineSource.claimCommand)` on its machine, then add it from Has herder."
+                if case .hub(let hub) = target {
+                    self.error = "\(describe(error)). If \(hub.name) does not know you yet, run `\(MachineSource.claimCommand)` on its machine, then add it from Has herder."
                 } else {
                     self.error = describe(error)
                 }
@@ -287,30 +287,30 @@ struct AddMachineSheet: View {
         }
     }
 
-    /// Once done, asks the machines for your devices again, and offers a vault you own to back
+    /// Once done, asks the machines for your devices again, and offers a hub you own to back
     /// a new machine up to, linking it at once, unless it backs up somewhere already.
     private func settle() async {
         guard case .done(let target, let hostId) = step else { return }
         await people.reload(fleet.machines)
-        guard case .machine = target, runsSessions(hostId), let vault = fleet.backupVaults(for: hostId).first,
+        guard case .machine = target, runsSessions(hostId), let hub = fleet.backupHubs(for: hostId).first,
               case .nowhere? = try? await fleet.backupLink(of: hostId)
         else { return }
-        backup = BackupOffer(vault: vault.name)
+        backup = BackupOffer(hub: hub.name)
         setBackup(true)
     }
 
     private func setBackup(_ on: Bool) {
         guard case .done(_, let hostId) = step, let host = fleet.machines.first(where: { $0.hostId == hostId }),
-              let vault = fleet.backupVaults(for: hostId).first
+              let hub = fleet.backupHubs(for: hostId).first
         else { return }
         backup?.on = on
         backup?.saved = .saving
         Task {
             do {
                 if linked {
-                    try await fleet.setVaultLink(hostId, backup: on, secrets: on)
+                    try await fleet.setHubLink(hostId, backup: on, secrets: on)
                 } else if on {
-                    try await fleet.link(host, to: vault, backup: true, secrets: true)
+                    try await fleet.link(host, to: hub, backup: true, secrets: true)
                     linked = true
                 }
                 backup?.saved = .saved
@@ -353,7 +353,7 @@ struct AddMachineView: View {
         var go: () -> Void = {}
         var approve: () async -> Void = {}
         var decline: () -> Void = {}
-        var signIn: (UnpairedVault) -> Void = { _ in }
+        var signIn: (UnpairedHub) -> Void = { _ in }
         /// Opens Add a Device, to bring the machine to another device of yours.
         var addDevice: (() -> Void)?
         var startSession: (() -> Void)?
@@ -371,8 +371,8 @@ struct AddMachineView: View {
     var offersNewPasskey = false
     /// The name this device knows a machine of that fingerprint by, if added already.
     var paired: (String) -> String? = { _ in nil }
-    /// Vaults your machines back up to that this device has not signed in to.
-    var vaults: [UnpairedVault] = []
+    /// Hubs your machines back up to that this device has not signed in to.
+    var hubs: [UnpairedHub] = []
     var devices: [Directory.Device] = []
     var backup: BackupOffer?
     var error: String?
@@ -410,7 +410,7 @@ struct AddMachineView: View {
         guard case .done(let target, _) = step else { return Self.sheetTitle }
         switch target {
         case .machine: return "\(target.name) is yours"
-        case .vault: return "Signed in to \(target.name)"
+        case .hub: return "Signed in to \(target.name)"
         }
     }
 
@@ -418,7 +418,7 @@ struct AddMachineView: View {
         guard case .done(let target, _) = step else { return "" }
         switch target {
         case .machine: return "You’re its owner."
-        case .vault: return "It knows you by your passkey."
+        case .hub: return "It knows you by your passkey."
         }
     }
 
@@ -426,7 +426,7 @@ struct AddMachineView: View {
         switch step {
         case .install: Self.installHint
         case .approve(.machine): "You become its owner."
-        case .approve(.vault): "It lets you in if you own it."
+        case .approve(.hub): "It lets you in if you own it."
         case .done: ""
         }
     }
@@ -449,7 +449,7 @@ struct AddMachineView: View {
             if !text.isEmpty && link == nil { notALink }
         }
         #endif
-        if !vaults.isEmpty { vaultList }
+        if !hubs.isEmpty { hubList }
     }
 
     private var command: some View {
@@ -497,15 +497,15 @@ struct AddMachineView: View {
         .foregroundStyle(Theme.secondary)
     }
 
-    /// The vaults your machines back up to that this device has not signed in to: a vault is
+    /// The hubs your machines back up to that this device has not signed in to: a hub is
     /// added as a machine is, and one that knows you already lets you in with your passkey.
-    private var vaultList: some View {
-        SettingsList(title: "Or a vault your machines use") {
-            ForEach(Array(vaults.enumerated()), id: \.element.id) { index, vault in
+    private var hubList: some View {
+        SettingsList(title: "Or a hub your machines use") {
+            ForEach(Array(hubs.enumerated()), id: \.element.id) { index, hub in
                 if index > 0 { RowDivider() }
-                SettingRow(label: vault.name, hint: vault.backsUp) {
-                    PillButton(title: "Sign In", action: { actions.signIn(vault) })
-                        .accessibilityIdentifier("sign-in-vault")
+                SettingRow(label: hub.name, hint: hub.backsUp) {
+                    PillButton(title: "Sign In", action: { actions.signIn(hub) })
+                        .accessibilityIdentifier("sign-in-hub")
                 }
             }
         }
@@ -542,7 +542,7 @@ struct AddMachineView: View {
     private func heading(_ target: AddMachineTarget) -> String {
         switch target {
         case .machine: "Make \(target.name) yours"
-        case .vault: "Sign in to \(target.name)"
+        case .hub: "Sign in to \(target.name)"
         }
     }
 
@@ -570,8 +570,8 @@ struct AddMachineView: View {
         }
         if let backup {
             SettingsList(title: "Backup") {
-                SettingRow(label: "Back up to \(backup.vault)", hint: "Sessions and secrets", saved: backup.saved) {
-                    Toggle("Back up to \(backup.vault)", isOn: Binding(get: { backup.on }, set: actions.setBackup))
+                SettingRow(label: "Back up to \(backup.hub)", hint: "Sessions and secrets", saved: backup.saved) {
+                    Toggle("Back up to \(backup.hub)", isOn: Binding(get: { backup.on }, set: actions.setBackup))
                         .labelsHidden()
                         .toggleStyle(.settings)
                         .accessibilityIdentifier("back-up-new-machine")
@@ -666,7 +666,7 @@ struct AddMachineView: View {
         if newName != nil { return "Create Passkey and Approve" }
         switch target {
         case .machine: return "Approve with \(Biometry.name)"
-        case .vault: return "Sign In with \(Biometry.name)"
+        case .hub: return "Sign In with \(Biometry.name)"
         }
     }
 }
@@ -724,7 +724,7 @@ private struct CommandBox: View {
 }
 
 /// What the link names, recognised by name: the machine, where it is, and the code its
-/// terminal shows to compare; or the vault, and who backs up to it.
+/// terminal shows to compare; or the hub, and who backs up to it.
 private struct TargetCard: View {
     let target: AddMachineTarget
 
@@ -761,14 +761,14 @@ private struct TargetCard: View {
     private var symbol: String {
         switch target {
         case .machine: "server.rack"
-        case .vault: "lock.shield"
+        case .hub: "lock.shield"
         }
     }
 
     private var detail: String {
         switch target {
         case .machine(let request): "\(request.about) · \(request.shortFingerprint)"
-        case .vault(let vault): "\(ApprovalRequest.address(vault.address)) · \(ApprovalRequest.short(vault.fingerprint))"
+        case .hub(let hub): "\(ApprovalRequest.address(hub.address)) · \(ApprovalRequest.short(hub.fingerprint))"
         }
     }
 }

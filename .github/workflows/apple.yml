@@ -147,10 +147,10 @@ jobs:
           # approval last.
           for _ in $(seq 60); do [ "$(wc -l < "$RUNNER_TEMP/fake_daemon.out")" -ge 9 ] && break; sleep 1; done
           [ "$(wc -l < "$RUNNER_TEMP/fake_daemon.out")" -ge 9 ] || { echo "the fake daemons did not start"; exit 1; }
-          # And a vault that keeps secrets, for the secrets screen; the same person owns it.
-          (sleep 3600 | target/debug/examples/fake_daemon --vault > "$RUNNER_TEMP/fake_vault.out" &)
-          for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_vault.out" ] && break; sleep 1; done
-          [ -s "$RUNNER_TEMP/fake_vault.out" ] || { echo "the fake vault did not start"; exit 1; }
+          # And a hub that keeps secrets, for the secrets screen; the same person owns it.
+          (sleep 3600 | target/debug/examples/fake_daemon --hub > "$RUNNER_TEMP/fake_hub.out" &)
+          for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_hub.out" ] && break; sleep 1; done
+          [ -s "$RUNNER_TEMP/fake_hub.out" ] || { echo "the fake hub did not start"; exit 1; }
           # And a machine waiting for an owner, whose herder://own link the app approves.
           (sleep 3600 | target/debug/examples/fake_daemon --own > "$RUNNER_TEMP/fake_own.out" &)
           for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_own.out" ] && break; sleep 1; done
@@ -163,7 +163,7 @@ jobs:
             TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
             TEST_RUNNER_HERDER_PASSKEY=$(sed -n 2p "$RUNNER_TEMP/fake_daemon.out") \
             TEST_RUNNER_HERDER_WAITING_SESSION=$(sed -n 9p "$RUNNER_TEMP/fake_daemon.out") \
-            TEST_RUNNER_HERDER_VAULT_LINK=$(head -1 "$RUNNER_TEMP/fake_vault.out") \
+            TEST_RUNNER_HERDER_HUB_LINK=$(head -1 "$RUNNER_TEMP/fake_hub.out") \
             TEST_RUNNER_HERDER_OWN_LINK=$(head -1 "$RUNNER_TEMP/fake_own.out") \
               xcodebuild test-without-building -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
               -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \

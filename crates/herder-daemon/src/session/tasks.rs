@@ -288,18 +288,18 @@ impl ToolHandler for TaskTools {
                 .and_then(|inner| inner.secrets.get().cloned());
             match secrets_of_host {
                 Some(host) => host.fetch(&caller, &secrets).await,
-                None => Err(no_vault()),
+                None => Err(no_hub()),
             }
         })
     }
 }
 
 /// Why a session of a host without secrets gets none.
-pub(super) fn no_vault() -> SecretError {
+pub(super) fn no_hub() -> SecretError {
     SecretError {
-        code: SecretErrorCode::NoVault,
+        code: SecretErrorCode::NoHub,
         message:
-            "this host is not linked to a vault with Secrets on, so it has no secrets; an owner \
+            "this host is not linked to a hub with Secrets on, so it has no secrets; an owner \
          links it to one in the herder app, on the machine's page under Secrets"
                 .into(),
         secret: None,
@@ -398,12 +398,15 @@ impl SessionManager {
             .map_err(tool_error)
     }
 
-    /// `secrets`: the secrets this host's vault grants it, never their values.
+    /// `secrets`: the secrets this host's hub grants it, never their values.
     async fn list_secrets(&self) -> Result<SecretsOutput, ToolError> {
         let unavailable = |message: String| ToolError::new(ErrorCode::Unavailable, message);
         let secrets = self.inner.secrets.get().ok_or_else(|| {
-            unavailable("this host is not linked to a vault with Secrets on, so it has no secrets; an owner \
-         links it to one in the herder app, on the machine's page under Secrets".into())
+            unavailable(
+                "this host is not linked to a hub with Secrets on, so it has no secrets; an owner \
+         links it to one in the herder app, on the machine's page under Secrets"
+                    .into(),
+            )
         })?;
         let listed = secrets
             .list()

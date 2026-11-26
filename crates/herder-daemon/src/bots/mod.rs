@@ -1,10 +1,10 @@
 //! The chat bots this host holds, as owners list, put and remove them from a client: the
 //! `[[bots]]` entries of its config file ([`crate::config::put_bot`]); and the bots running.
 //!
-//! Each bot runs while its entry is there: it holds its tokens, read from the host's vault as
+//! Each bot runs while its entry is there: it holds its tokens, read from the host's hub as
 //! machine-level secrets and kept in memory only, connects to its chat over that chat's
 //! [`bridge::Bridge`], and drives the host's sessions from it ([`runner`]). A bot whose tokens
-//! cannot be read waits for the vault and retries; one whose chat refuses them waits for new
+//! cannot be read waits for the hub and retries; one whose chat refuses them waits for new
 //! ones; one whose chat cannot be reached connects again, backing off. Changing a bot's entry
 //! connects it again. Slack bots ([`slack`]) and Telegram ones ([`telegram`]) run; a kind newer
 //! than this build is `unsupported`.
@@ -38,8 +38,8 @@ use tracing::{info, warn};
 
 use self::bridge::ConnectError;
 use crate::config::{self, Config};
+use crate::hub::{Held, HostSecrets};
 use crate::session::{BotOf, EventSink, SessionManager};
-use crate::vault::{Held, HostSecrets};
 
 /// Session events the bots have not read yet, at most; a bot that falls further behind misses
 /// some, and says so.
@@ -439,12 +439,12 @@ async fn keep(
     loop {
         let values = match held.borrow_and_update().clone() {
             Held::Ok(values) => values,
-            Held::WaitingForVault => {
-                status.set(BotState::WaitingForVault, None);
+            Held::WaitingForHub => {
+                status.set(BotState::WaitingForHub, None);
                 Vec::new()
             }
             Held::Denied(denied) => {
-                status.set(BotState::WaitingForVault, Some(denied.message));
+                status.set(BotState::WaitingForHub, Some(denied.message));
                 Vec::new()
             }
         };

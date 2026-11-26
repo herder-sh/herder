@@ -139,12 +139,12 @@ pub enum EventBody {
         reason: Option<EscalationReason>,
         /// For an agent's `store_secret`, what to store; always routed to the user. Only an
         /// owner allows it, from an app: `get_secret_to_store`, then `put_secret` on the
-        /// host's vault, then `confirm_secret_stored`. `answer_approval` may only deny it.
+        /// host's hub, then `confirm_secret_stored`. `answer_approval` may only deny it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         secret: Option<SecretStoreRequest>,
         /// For an agent's `request_secret`, the secret it asks the user to supply; always
         /// routed to the user. Only an owner supplies it, from an app: `put_secret` on the
-        /// host's vault, then `confirm_secret_stored`. `answer_approval` may only decline it.
+        /// host's hub, then `confirm_secret_stored`. `answer_approval` may only decline it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         secret_request: Option<SecretRequest>,
     },

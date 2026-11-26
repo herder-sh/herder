@@ -2322,7 +2322,7 @@ async fn agents_act_for_whoever_prompted_their_current_turn() {
 }
 
 #[tokio::test]
-async fn secrets_are_unavailable_on_a_host_without_a_vault() {
+async fn secrets_are_unavailable_on_a_host_without_a_hub() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path()).await;
     let primary = daemon.primary(PermissionMode::Ask).await;
@@ -2330,7 +2330,7 @@ async fn secrets_are_unavailable_on_a_host_without_a_vault() {
     assert_eq!(tools.fails("secrets", json!({})).await, "unavailable");
     daemon
         .manager
-        .use_secrets(Arc::new(herder_daemon::vault::HostSecrets::default()))
+        .use_secrets(Arc::new(herder_daemon::hub::HostSecrets::default()))
         .unwrap();
     assert_eq!(tools.fails("secrets", json!({})).await, "unavailable");
     assert_eq!(
@@ -2373,11 +2373,11 @@ async fn a_session_handed_off_here_acts_for_whoever_took_it_over() {
 /// A PEM key as an App Store Connect `.p8` holds one; no journal, log or result may hold it.
 const KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgSECRETMARKER\n-----END PRIVATE KEY-----\n";
 
-/// A daemon linked to a vault with Secrets on, and a session of it in a turn that hangs, so
+/// A daemon linked to a hub with Secrets on, and a session of it in a turn that hangs, so
 /// its agent can call `store_secret`.
 async fn storing(dir: &Path) -> (Daemon, SessionId) {
     let daemon = Daemon::open(dir).await;
-    let secrets = Arc::new(herder_daemon::vault::HostSecrets::default());
+    let secrets = Arc::new(herder_daemon::hub::HostSecrets::default());
     secrets.set_linked(true);
     daemon.manager.use_secrets(secrets).unwrap();
     let session = daemon.primary(PermissionMode::FullAccess).await;
@@ -2465,7 +2465,7 @@ async fn an_agent_stores_a_file_as_a_secret_once_an_owner_allows_it() {
     );
     assert_eq!(daemon.status(&session).await, SessionStatus::NeedsYou);
 
-    // Only an owner's app allows it, by putting the value on the vault.
+    // Only an owner's app allows it, by putting the value on the hub.
     let allow = CommandBody::AnswerApproval {
         session_id: session.clone(),
         approval_id: approval_id.clone(),
@@ -2485,7 +2485,7 @@ async fn an_agent_stores_a_file_as_a_secret_once_an_owner_allows_it() {
         panic!("expected the value");
     };
     assert_eq!(value.expose(), KEY, "newlines and all");
-    assert!(key.exists(), "the file stays until the vault stored it");
+    assert!(key.exists(), "the file stays until the hub stored it");
     daemon
         .user_answers(CommandBody::ConfirmSecretStored {
             session_id: session.clone(),
@@ -2603,7 +2603,7 @@ async fn a_denied_store_secret_stores_nothing_and_keeps_the_file() {
 }
 
 #[tokio::test]
-async fn store_secret_is_unavailable_on_a_host_without_a_vault() {
+async fn store_secret_is_unavailable_on_a_host_without_a_hub() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path()).await;
     let primary = daemon.primary(PermissionMode::Ask).await;
@@ -2646,7 +2646,7 @@ async fn secret_request(
     })
 }
 
-/// What the owner types into the app for a `request_secret`: it goes to the vault, never
+/// What the owner types into the app for a `request_secret`: it goes to the hub, never
 /// through the host.
 const TYPED: &str = "github_pat_SECRETMARKER";
 
@@ -2675,7 +2675,7 @@ async fn an_agent_asks_for_a_secret_and_learns_only_that_an_owner_stored_it() {
     assert_eq!(summary, "Supply the secret GITHUB_SIEM_PAT in coingate");
     assert_eq!(daemon.status(&session).await, SessionStatus::NeedsYou);
 
-    // Only an owner's app answers it, by putting the value on the vault; the host holds none
+    // Only an owner's app answers it, by putting the value on the hub; the host holds none
     // to hand over.
     let allow = CommandBody::AnswerApproval {
         session_id: session.clone(),
@@ -2775,7 +2775,7 @@ async fn a_declined_request_secret_tells_the_agent_and_stores_nothing() {
 }
 
 #[tokio::test]
-async fn request_secret_is_unavailable_on_a_host_without_a_vault() {
+async fn request_secret_is_unavailable_on_a_host_without_a_hub() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path()).await;
     let primary = daemon.primary(PermissionMode::Ask).await;

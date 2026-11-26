@@ -32,7 +32,7 @@
 //! [`run_sampler`] reads each scope's cgroup every [`SAMPLE_INTERVAL`], adds the containers
 //! [`Docker`] tracks for the session, and publishes
 //! [`ServerMessage::SessionResources`](herder_protocol::ServerMessage::SessionResources)
-//! through the [`Hub`] when it changed; once neither is left, it publishes one zero usage.
+//! through the [`Fanout`] when it changed; once neither is left, it publishes one zero usage.
 //!
 //! When a session's CLI fails, [`Scopes::oom_killed`] says whether the kernel's OOM killer or
 //! systemd-oomd killed in its scope: from the scope's `memory.events` while the scope lives,
@@ -64,7 +64,7 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::hub::Hub;
+use crate::fanout::Fanout;
 
 pub use admission::{Admission, Budget, Parked, Permit, ProcHost, ReadHost, Reading, Ticket};
 pub use cgroup::Sample;
@@ -507,7 +507,7 @@ impl Scopes {
 
     /// Reads every scope once, adds each session's `containers`, and publishes the usages
     /// that changed.
-    async fn sample(&self, hub: &Hub, containers: &HashMap<SessionId, Vec<Container>>) {
+    async fn sample(&self, fanout: &Fanout, containers: &HashMap<SessionId, Vec<Container>>) {
         let pending: Vec<(SessionId, String)> = self
             .lock()
             .scopes
@@ -568,7 +568,7 @@ impl Scopes {
             }
         }
         for (session, usage) in publish {
-            hub.session_resources(&session, usage);
+            fanout.session_resources(&session, usage);
         }
     }
 
@@ -581,13 +581,13 @@ impl Scopes {
     }
 }
 
-/// Publishes every session's usage, from `scopes` and `docker`, to `hub` each
+/// Publishes every session's usage, from `scopes` and `docker`, to `fanout` each
 /// [`SAMPLE_INTERVAL`] until `shutdown`; `worktrees` lists every session's worktree.
 pub async fn run_sampler<F, Fut>(
     scopes: &Scopes,
     docker: &Docker,
     worktrees: F,
-    hub: &Hub,
+    fanout: &Fanout,
     shutdown: CancellationToken,
 ) where
     F: Fn() -> Fut,
@@ -600,7 +600,7 @@ pub async fn run_sampler<F, Fut>(
             () = shutdown.cancelled() => return,
             _ = tick.tick() => {
                 let containers = docker.poll(&worktrees).await;
-                scopes.sample(hub, &containers).await;
+                scopes.sample(fanout, &containers).await;
             }
         }
     }

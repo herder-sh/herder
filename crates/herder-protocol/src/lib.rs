@@ -59,9 +59,9 @@ pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, Pro
 pub use provider_logins::{ProviderLogin, ProviderLoginState};
 pub use relay::{RELAY_VERSION, RelayAnswer, RelayError, RelayErrorCode, RelayHello};
 pub use replication::{
-    AttachmentData, Batch, HostHello, HostMessage, HostSecretFetch, JournalRecord,
-    MAX_BATCH_EVENTS, REPLICATION_VERSION, RawEventBody, RejectReason, ReplicationError,
-    ReplicationErrorCode, SecretFetch, SessionSummary, VaultHello, VaultMessage,
+    AttachmentData, Batch, HostHello, HostMessage, HostSecretFetch, HubHello, HubMessage,
+    JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION, RawEventBody, RejectReason,
+    ReplicationError, ReplicationErrorCode, SecretFetch, SessionSummary,
 };
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use secrets::{
@@ -72,9 +72,9 @@ pub use secrets::{
 };
 pub use server::{
     Account, ApprovalRequest, AwsDeviceCode, AwsProfile, CommandResult, DirectoryEntry, ErrorCode,
-    ErrorInfo, FailoverSettings, FleetHost, HostReplication, HostUsage, LinkedVault,
-    ProviderStatus, QueuedPrompt, Role, ServerHello, ServerMessage, SessionHead, Terminal,
-    TerminalPurpose, UsageWindow, UserDevice, UserInfo, VaultStatus, VaultVolume,
+    ErrorInfo, FailoverSettings, FleetHost, HostReplication, HostUsage, HubStatus, HubVolume,
+    LinkedHub, ProviderStatus, QueuedPrompt, Role, ServerHello, ServerMessage, SessionHead,
+    Terminal, TerminalPurpose, UsageWindow, UserDevice, UserInfo,
 };
 pub use settings::{
     BackupSettings, DaemonSettings, FollowUpSettings, HERDER_MCP_SERVER, LogFormat, LogSettings,
@@ -89,7 +89,7 @@ pub use types::{PermissionMode, Provider, clean_title};
 pub use usage::{FailoverTotal, TurnUsage, UsagePeriod, UsageTotal};
 
 /// Wire protocol version, exchanged in both hellos; peers with different versions disconnect.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Most bytes one WebSocket message a client sends may have. A client does not send a larger
 /// one: it fails the command it carries instead. A daemon sent one refuses it unread.
@@ -117,22 +117,22 @@ pub fn server_schema() -> schemars::Schema {
     schemars::schema_for!(ServerMessage)
 }
 
-/// JSON Schema for every message a host sends the vault.
+/// JSON Schema for every message a host sends the hub.
 pub fn host_schema() -> schemars::Schema {
     schemars::schema_for!(HostMessage)
 }
 
-/// JSON Schema for every message the vault sends a host.
-pub fn vault_schema() -> schemars::Schema {
-    schemars::schema_for!(VaultMessage)
+/// JSON Schema for every message the hub sends a host.
+pub fn hub_schema() -> schemars::Schema {
+    schemars::schema_for!(HubMessage)
 }
 
-/// JSON Schema for the first message of a relay connection to the vault.
+/// JSON Schema for the first message of a relay connection to the hub.
 pub fn relay_hello_schema() -> schemars::Schema {
     schemars::schema_for!(RelayHello)
 }
 
-/// JSON Schema for the vault's answer to a relay connection's first message.
+/// JSON Schema for the hub's answer to a relay connection's first message.
 pub fn relay_answer_schema() -> schemars::Schema {
     schemars::schema_for!(RelayAnswer)
 }

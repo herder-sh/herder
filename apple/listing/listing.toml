@@ -13,7 +13,7 @@ subtitle = "Keep coding agents working"
 promotional_text = """
 Answer your coding agents from your iPhone: allow a command, answer a question or start the \
 next task, on every machine you own. Sign in with a passkey, no codes."""
-keywords = "ai,coding,llm,developer,remote,ssh,terminal,mcp,cli,fleet,failover,slack,telegram,vault,passkey"
+keywords = "ai,coding,llm,developer,remote,ssh,terminal,mcp,cli,fleet,failover,slack,telegram,hub,passkey"
 support_url = "https://herder.sh/support"
 marketing_url = "https://herder.sh"
 privacy_policy_url = "https://herder.sh/privacy"
@@ -41,8 +41,8 @@ Invite someone as a member or an owner. Members drive sessions, while terminals,
 BOTS IN SLACK AND TELEGRAM
 Mention the bot in a Slack thread and it reads the thread, runs the work on your machines and posts what it makes back into it. Every bot conversation is in the app too.
 
-THE VAULT AND YOUR SECRETS
-A vault keeps every session of every machine, so history survives a dead laptop and another machine can take a task over. It holds your secrets too: a program an agent runs fetches them, and the agent never sees one.
+THE HUB AND YOUR SECRETS
+A hub keeps every session of every machine, so history survives a dead laptop and another machine can take a task over. It holds your secrets too: a program an agent runs fetches them, and the agent never sees one.
 
 A TERMINAL WHEN YOU NEED ONE
 Owners can open a shell in any session's worktree, right on the phone. Face ID signs every terminal and secret command.

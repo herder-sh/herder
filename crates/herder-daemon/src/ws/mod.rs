@@ -3,7 +3,7 @@
 //! Each connection runs (directly, or inside a tunnel's frames: [`tunnel`]): TLS with a
 //! device certificate, WebSocket upgrade, client hello,
 //! authentication, server hello, list messages, then subscriptions and commands. A subscription replays the session's journal after the
-//! client's cursor, then streams live events from the [`Hub`] without gaps or duplicates.
+//! client's cursor, then streams live events from the [`Fanout`] without gaps or duplicates.
 
 mod approvals;
 mod commands;
@@ -32,17 +32,17 @@ pub(crate) use conn::{handshake, notice_a_gone_peer};
 pub use tls::{Tls, fingerprint};
 pub(crate) use tunnel::Transport;
 
-/// Serves the clients that reach this host through its vault; see [`Server::relayed`].
+/// Serves the clients that reach this host through its hub; see [`Server::relayed`].
 #[derive(Clone)]
 pub struct Relayed(Arc<ServeRelayed>);
 
-/// Takes a relay stream, the address of the vault forwarding it, and the vault's name for
+/// Takes a relay stream, the address of the hub forwarding it, and the hub's name for
 /// the client's device.
 type ServeRelayed = dyn Fn(Box<dyn tunnel::Io>, SocketAddr, DeviceId) + Send + Sync;
 
 impl Relayed {
-    /// Serves a client on the relay stream `stream`, which the vault at `peer` forwards;
-    /// `device` is the vault's name for the client's device.
+    /// Serves a client on the relay stream `stream`, which the hub at `peer` forwards;
+    /// `device` is the hub's name for the client's device.
     pub(crate) fn serve(&self, stream: Box<dyn tunnel::Io>, peer: SocketAddr, device: DeviceId) {
         (self.0)(stream, peer, device);
     }
@@ -56,8 +56,9 @@ use crate::auth::{self, Auth};
 use crate::aws::Aws;
 use crate::bots::Bots;
 use crate::config::AccountSettings;
-use crate::hub::Hub;
-use crate::hub::Outbox;
+use crate::fanout::Fanout;
+use crate::fanout::Outbox;
+use crate::hub::Link;
 use crate::listen;
 use crate::login::{Login, Logins, NewAccount};
 use crate::mcp::{Control, ControlFuture, Overview};
@@ -65,7 +66,6 @@ use crate::providers::Providers;
 use crate::session::{Endpoint, EndpointKey, SessionManager};
 use crate::settings::Settings;
 use crate::terminal::{LoginHooks, OnExit, Terminals};
-use crate::vault::Link;
 use approvals::{APPROVAL_TTL, Approvals, Waiting};
 use commands::Commands;
 
@@ -90,10 +90,10 @@ pub trait Backend: Send + Sync + 'static {
     /// Every account sessions may run on, sent after the sessions.
     fn accounts(&self) -> Vec<Account>;
 
-    /// Asks for fresh account usage, as a client opened; changes go out through the hub.
+    /// Asks for fresh account usage, as a client opened; changes go out through the fanout.
     fn refresh_usage(&self);
 
-    /// Pulls the skill library, as a client opened; changes go out through the hub.
+    /// Pulls the skill library, as a client opened; changes go out through the fanout.
     fn refresh_skills(&self) {}
 
     /// Up to `limit` events of a session after `after_seq`, oldest first; for replay.
@@ -120,7 +120,7 @@ pub trait Backend: Send + Sync + 'static {
         session_id: &SessionId,
     ) -> impl Future<Output = Result<PathBuf, ErrorInfo>> + Send;
 
-    /// The paired devices hosts replicate to this vault from, which a claim makes hosts of
+    /// The paired devices hosts replicate to this hub from, which a claim makes hosts of
     /// when they are all a user's; a daemon has none.
     fn replicated(&self) -> impl Future<Output = anyhow::Result<Vec<DeviceId>>> + Send {
         std::future::ready(Ok(Vec::new()))
@@ -185,19 +185,19 @@ pub struct Server<B> {
 struct Shared<B> {
     tls: Tls,
     auth: Arc<Auth>,
-    hub: Arc<Hub>,
+    fanout: Arc<Fanout>,
     backend: B,
     terminals: Terminals,
     logins: Logins,
     commands: Commands,
     host: Host,
-    /// The host's link to its vault, which answers the vault link commands; a vault has none.
+    /// The host's link to its hub, which answers the hub link commands; a hub has none.
     link: OnceLock<Arc<Link>>,
     /// The addresses the server listens on, set once it does; `invite` advertises them.
     listen: OnceLock<Vec<SocketAddr>>,
     /// The daemon's settings, which answer the settings commands, once set.
     settings: OnceLock<Arc<Settings>>,
-    /// The host's bots, which answer the bot commands, once set; a vault has none.
+    /// The host's bots, which answer the bot commands, once set; a hub has none.
     bots: OnceLock<Arc<Bots>>,
     /// The host's provider CLIs, which answer install and the providers list, once set.
     providers: OnceLock<Arc<Providers>>,
@@ -567,7 +567,7 @@ impl<B: Backend> Shared<B> {
                     _ => {
                         return Err(ErrorInfo {
                             code: ErrorCode::BadRequest,
-                            message: "an endpoint account needs its client key or the vault \
+                            message: "an endpoint account needs its client key or the hub \
                                       secret holding it, not both"
                                 .to_owned(),
                         });
@@ -601,24 +601,22 @@ impl<B: Backend> Shared<B> {
             CommandBody::ListAwsProfiles => Ok(CommandResult::AwsProfiles {
                 profiles: self.aws()?.profiles()?,
             }),
-            command @ (CommandBody::GetVaultLink
-            | CommandBody::LinkVault { .. }
-            | CommandBody::SetVaultLink { .. }
-            | CommandBody::UnlinkVault)
+            command @ (CommandBody::GetHubLink
+            | CommandBody::LinkHub { .. }
+            | CommandBody::SetHubLink { .. }
+            | CommandBody::UnlinkHub)
                 if let Some(link) = self.link.get() =>
             {
                 link.command(command).await
             }
-            CommandBody::InstallVault if let Some(link) = self.link.get() => {
-                link.install_vault().await
-            }
+            CommandBody::InstallHub if let Some(link) = self.link.get() => link.install_hub().await,
             command @ (CommandBody::GetSettings
             | CommandBody::SetSettings { .. }
             | CommandBody::SetResourceLimits { .. }
             | CommandBody::RestartDaemon
             | CommandBody::UpdateDaemon { .. }) => match self.settings.get() {
                 Some(settings) => match command {
-                    CommandBody::UpdateDaemon { when } => settings.update(when, &self.hub),
+                    CommandBody::UpdateDaemon { when } => settings.update(when, &self.fanout),
                     command => settings.command(command).await,
                 },
                 None => Err(ErrorInfo {
@@ -642,7 +640,7 @@ impl<B: Backend> Shared<B> {
                 }
                 None => Err(ErrorInfo {
                     code: ErrorCode::Unsupported,
-                    message: "this daemon holds no bots; a vault runs none".to_owned(),
+                    message: "this daemon holds no bots; a hub runs none".to_owned(),
                 }),
             },
             command => self.backend.command(user_id, command_id, command).await,
@@ -695,7 +693,7 @@ impl<B: Backend> Shared<B> {
     }
 
     /// Moves the owner `caller` to `person`, with the ids `also` the person has on the other
-    /// machines claimed with this one, making hosts of the users this vault's hosts replicate
+    /// machines claimed with this one, making hosts of the users this hub's hosts replicate
     /// as: what `claim_users` does once the person proved their passkey.
     async fn claim(
         &self,
@@ -707,7 +705,7 @@ impl<B: Backend> Shared<B> {
             warn!("cannot list the devices hosts replicate from: {err:#}");
             ErrorInfo {
                 code: ErrorCode::Internal,
-                message: "cannot read the vault database".to_owned(),
+                message: "cannot read the hub database".to_owned(),
             }
         })?;
         self.auth.claim(caller, person, also, &replicated)
@@ -847,7 +845,7 @@ impl<B: Backend> Control for AgentControl<B> {
             })?;
             Ok(Overview {
                 sessions,
-                projects: shared.hub.projects(),
+                projects: shared.fanout.projects(),
                 accounts: shared.backend.accounts(),
             })
         })
@@ -900,8 +898,8 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::MergePerson { .. }
                     | CommandBody::ApproveAction { .. }
                     | CommandBody::RefuseAction { .. }
-                    | CommandBody::PairVaultHost { .. }
-                    | CommandBody::InstallVault
+                    | CommandBody::PairHubHost { .. }
+                    | CommandBody::InstallHub
                     | CommandBody::PutBot { .. }
                     | CommandBody::RemoveBot { .. }
                     | CommandBody::GetBotMemory { .. }
@@ -954,11 +952,11 @@ impl<B: Backend> Control for AgentControl<B> {
 
 impl<B: Backend> Server<B> {
     /// A server for `backend` and `terminals`, adding accounts through `logins`, whose events
-    /// reach clients through `hub`; `auth` decides who may connect.
+    /// reach clients through `fanout`; `auth` decides who may connect.
     pub fn new(
         tls: Tls,
         auth: Arc<Auth>,
-        hub: Arc<Hub>,
+        fanout: Arc<Fanout>,
         backend: B,
         terminals: Terminals,
         logins: Logins,
@@ -968,7 +966,7 @@ impl<B: Backend> Server<B> {
             shared: Arc::new(Shared {
                 tls,
                 auth,
-                hub,
+                fanout,
                 backend,
                 terminals,
                 logins,
@@ -1026,7 +1024,7 @@ impl<B: Backend> Server<B> {
             .map_err(|_| anyhow::anyhow!("the bots are managed already"))
     }
 
-    /// What serves the clients that reach this host through its vault, each on the relay
+    /// What serves the clients that reach this host through its hub, each on the relay
     /// stream given, until `shutdown`.
     pub fn relayed(&self, shutdown: CancellationToken) -> Relayed {
         let shared = Arc::clone(&self.shared);
@@ -1038,23 +1036,23 @@ impl<B: Backend> Server<B> {
         }))
     }
 
-    /// Answers the vault link commands with `link`; once per server.
-    pub fn link_vault(&self, link: Arc<Link>) -> anyhow::Result<()> {
+    /// Answers the hub link commands with `link`; once per server.
+    pub fn link_hub(&self, link: Arc<Link>) -> anyhow::Result<()> {
         self.shared
             .link
             .set(link)
-            .map_err(|_| anyhow::anyhow!("the vault is linked already"))
+            .map_err(|_| anyhow::anyhow!("the hub is linked already"))
     }
 
     /// Takes `listen` for the addresses clients reach the server on; [`Server::run`] does it
-    /// itself, the vault, which accepts connections for the server, before it serves one.
+    /// itself, the hub, which accepts connections for the server, before it serves one.
     pub(crate) fn listening_on(&self, listen: Vec<SocketAddr>) {
         let _ = self.shared.listen.set(listen);
     }
 
     /// Serves one client whose handshakes are done and whose first text frame, `first`, was
-    /// already read: for the vault, whose port takes hosts and clients alike. `pass` counts a
-    /// tunneled one until it authenticated. The caller runs the hub's flusher.
+    /// already read: for the hub, whose port takes hosts and clients alike. `pass` counts a
+    /// tunneled one until it authenticated. The caller runs the fanout's flusher.
     pub(crate) async fn serve(
         &self,
         ws: Ws,
@@ -1085,10 +1083,10 @@ impl<B: Backend> Server<B> {
             Ok(listen) => self.listening_on(listen),
             Err(err) => warn!("cannot tell the addresses the server listens on: {err}"),
         }
-        let hub = Arc::clone(&self.shared.hub);
+        let fanout = Arc::clone(&self.shared.fanout);
         let flusher = tokio::spawn({
             let shutdown = shutdown.clone();
-            async move { hub.run_flusher(shutdown).await }
+            async move { fanout.run_flusher(shutdown).await }
         });
         let mut acceptor = listen::Acceptor::default();
         loop {

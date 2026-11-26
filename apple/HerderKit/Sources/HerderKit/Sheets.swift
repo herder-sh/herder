@@ -8,9 +8,9 @@ import AppKit
 
 /// The sheets the app presents: short create flows only. Objects open as pages (`Page`).
 enum AppSheet: Identifiable, Hashable {
-    /// Add a machine, on one of its tabs; on a vault a machine backs up to, to sign in to; or,
+    /// Add a machine, on one of its tabs; on a hub a machine backs up to, to sign in to; or,
     /// on the iPhone, with the camera on.
-    case addMachine(MachineSource = .install, vault: UnpairedVault? = nil, scanning: Bool = false)
+    case addMachine(MachineSource = .install, hub: UnpairedHub? = nil, scanning: Bool = false)
     /// A new session: pick its project first.
     case newSession
     /// A new project: a first session in a repository herder does not list yet.
@@ -50,8 +50,8 @@ extension AppSheet {
     func view(fleet: Fleet, drafted: @escaping (Draft) -> Void, openMachine: @escaping (HostId) -> Void,
               present: @escaping (AppSheet) -> Void) -> some View {
         switch self {
-        case .addMachine(let source, let vault, let scanning):
-            AddMachineSheet(fleet: fleet, source: source, vault: vault, scanning: scanning,
+        case .addMachine(let source, let hub, let scanning):
+            AddMachineSheet(fleet: fleet, source: source, hub: hub, scanning: scanning,
                             present: present, drafted: drafted)
         case .newSession: ProjectPicker(fleet: fleet, newProject: false, picked: drafted)
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
@@ -100,7 +100,7 @@ struct Draft: Codable, Hashable, Identifiable {
         projectId == nil ? (repo, nil) : (nil, projectId)
     }
 
-    /// A chat on the connected machine, not a vault, last picked for a chat on this device, else
+    /// A chat on the connected machine, not a hub, last picked for a chat on this device, else
     /// the first.
     @MainActor
     static func chat(fleet: Fleet) -> Draft? {
@@ -151,7 +151,7 @@ struct ProjectPicker: View {
     @State private var submitting = false
     @FocusState private var searching: Bool
 
-    /// Machines that run sessions: connected, and not a vault.
+    /// Machines that run sessions: connected, and not a hub.
     private var machines: [Machine] {
         fleet.machines.filter { machine in
             machine.connection == .connected && machine.hosts.isEmpty
@@ -480,7 +480,7 @@ private struct PickRow: View {
 /// button that starts one, the buttons that move and remove it, and why a Connect failed.
 struct AddressRow: View {
     let index: Int
-    /// The address as shown: a route through a vault names the vault.
+    /// The address as shown: a route through a hub names the hub.
     let address: String
     let count: Int
     let status: AddressStatus

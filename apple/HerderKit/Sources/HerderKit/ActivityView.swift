@@ -334,7 +334,7 @@ struct ActivityDetail: View {
                 CancelLoginButton(fleet: fleet, key: key)
             }
         case (_, .needsNewerHerder):
-            VaultInstallCommand()
+            HubInstallCommand()
         case (.updateHerder, .waitingForTurns):
             HStack(spacing: 10) {
                 Text("Updating now ends the running turns.").font(.footnote).foregroundStyle(Theme.tertiary)
@@ -399,7 +399,7 @@ extension JobText {
         case .install(let provider): provider
         case .add: job?.connection?.account?.provider ?? ""
         case .relogin(let id): found?.accounts.first { $0.accountId == id }?.provider ?? ""
-        case .awsSignIn, .vault, .updateHerder: ""
+        case .awsSignIn, .hub, .updateHerder: ""
         }
         // Read once the installer has ended: its output is whole then, and it is not read again
         // on every redraw while it streams.
@@ -419,7 +419,7 @@ extension JobKey {
         case .add(let id): "job-add-\(id)-\(machine)"
         case .relogin(let id): "job-relogin-\(id)-\(machine)"
         case .awsSignIn(let profile): "job-aws-\(profile)-\(machine)"
-        case .vault: "job-vault-\(machine)"
+        case .hub: "job-hub-\(machine)"
         case .updateHerder: "job-herder-\(machine)"
         }
     }
@@ -470,9 +470,9 @@ extension JobProgress {
     var tint: Color {
         switch self {
         case .queued, .ended: Theme.tertiary
-        case .starting, .installing, .settingUpVault, .claimingVault, .waitingForTurns, .downloading, .restarting: Theme.running
+        case .starting, .installing, .settingUpHub, .claimingHub, .waitingForTurns, .downloading, .restarting: Theme.running
         case .running, .approve: Theme.accent
-        case .added, .signedIn, .installed, .updated, .upToDate, .vaultReady: Theme.success
+        case .added, .signedIn, .installed, .updated, .upToDate, .hubReady: Theme.success
         case .failed, .needsNewerHerder: Theme.failure
         }
     }
@@ -490,7 +490,7 @@ struct CancelLoginButton: View {
         case .add(let id), .relogin(let id): id
         case .install(let provider): ModelCatalog.providerName(provider)
         case .awsSignIn(let profile): profile
-        case .vault: "the vault"
+        case .hub: "the hub"
         case .updateHerder: "herder"
         }
     }

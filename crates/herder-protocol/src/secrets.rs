@@ -1,32 +1,32 @@
 //! Secrets: values agents use to call services without ever seeing them.
 //!
-//! Secrets live only on a vault, encrypted at rest under a master key the vault reads at start;
-//! a daemon not linked to a vault has none. They are grouped into named sets, such as
+//! Secrets live only on a hub, encrypted at rest under a master key the hub reads at start;
+//! a daemon not linked to a hub has none. They are grouped into named sets, such as
 //! `personal` or `prod`; within its set, each secret has a name, as an environment variable
-//! has, and a one-line description. The vault's owners manage them from clients (`put_secret`,
-//! `list_secrets`, ...) and grant sets to hosts, the devices that replicate to the vault.
+//! has, and a one-line description. The hub's owners manage them from clients (`put_secret`,
+//! `list_secrets`, ...) and grant sets to hosts, the devices that replicate to the hub.
 //!
-//! Values are write-only: `put_secret` carries one to the vault, and no result, event or
+//! Values are write-only: `put_secret` carries one to the hub, and no result, event or
 //! client message ever carries one back. The only way out is a host's fetch over its
 //! replication connection, for secrets in sets granted to that host: on behalf of one of its
 //! sessions ([`HostMessage::FetchSecrets`](crate::HostMessage::FetchSecrets)), or for the
 //! host's own use, such as a bot's token
 //! ([`HostMessage::FetchHostSecrets`](crate::HostMessage::FetchHostSecrets)). A set is granted
 //! to a host for one or the other: its sessions never get what is granted for host use. The
-//! vault records each fetch ([`SecretAccess`]), never the value. Hosts keep fetched values in
+//! hub records each fetch ([`SecretAccess`]), never the value. Hosts keep fetched values in
 //! memory only, and hand a session's to its command as environment variables.
 //!
 //! An agent stores a secret without seeing it with `store_secret`: the host reads a file on
 //! its own machine and asks for approval ([`SecretStoreRequest`]). An owner allows it from an
 //! app, which takes the value from the host once
 //! ([`CommandBody::GetSecretToStore`](crate::CommandBody::GetSecretToStore)), puts it on the
-//! vault with `put_secret`, as the owner, and tells the host
+//! hub with `put_secret`, as the owner, and tells the host
 //! ([`CommandBody::ConfirmSecretStored`](crate::CommandBody::ConfirmSecretStored)). That is the
 //! only result carrying a value, of a host's own file, to an owner of the host; it is never
 //! journaled nor kept.
 //!
 //! An agent that does not have a value asks the owner for it with `request_secret`
-//! ([`SecretRequest`]): the owner types it in an app, which puts it on the vault with
+//! ([`SecretRequest`]): the owner types it in an app, which puts it on the hub with
 //! `put_secret`, as the owner, and tells the host with `confirm_secret_stored`. The value never
 //! passes through the host at all.
 //!
@@ -197,7 +197,7 @@ pub struct SecretStoreRequest {
     pub name: String,
     /// What it is for, on one line.
     pub description: String,
-    /// Whether the host deletes the file once the owner confirms the vault stored it.
+    /// Whether the host deletes the file once the owner confirms the hub stored it.
     pub delete_file_after: bool,
 }
 
@@ -233,7 +233,7 @@ pub struct SecretInfo {
     pub updated_at: Timestamp,
 }
 
-/// A set of secrets on a vault, and the hosts it is granted to.
+/// A set of secrets on a hub, and the hosts it is granted to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SecretSet {
     /// The set's name, as [`is_valid_secret_set_name`] accepts it.
@@ -247,12 +247,12 @@ pub struct SecretSet {
     pub host_use: Vec<HostId>,
 }
 
-/// One fetch of a secret's value by a host, as the vault recorded it.
+/// One fetch of a secret's value by a host, as the hub recorded it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SecretAccess {
-    /// Position in the vault's audit log, increasing; for `list_secret_audit`'s `before`.
+    /// Position in the hub's audit log, increasing; for `list_secret_audit`'s `before`.
     pub id: u64,
-    /// When the vault handed the value out.
+    /// When the hub handed the value out.
     pub at: Timestamp,
     /// The host that fetched it.
     pub host_id: HostId,
@@ -270,7 +270,7 @@ pub struct SecretAccess {
     pub name: String,
 }
 
-/// A secret's value, as the vault hands it to a host.
+/// A secret's value, as the hub hands it to a host.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FetchedSecret {
     /// The secret, as the fetch named it.
@@ -306,10 +306,10 @@ pub enum SecretErrorCode {
     Unknown,
     /// The named set exists but is not granted to the host.
     NotGranted,
-    /// The host is not linked to a vault, so it has no secrets.
-    NoVault,
-    /// The host is linked to a vault but cannot reach it now.
-    VaultUnreachable,
+    /// The host is not linked to a hub, so it has no secrets.
+    NoHub,
+    /// The host is linked to a hub but cannot reach it now.
+    HubUnreachable,
 }
 
 /// Where a host stands with secrets it fetches for its own use, so a feature that needs them,
@@ -319,10 +319,10 @@ pub enum SecretErrorCode {
 pub enum HostSecretsState {
     /// The host holds every value.
     Ok,
-    /// The host has no values yet, or no longer, because it cannot reach its vault; it keeps
+    /// The host has no values yet, or no longer, because it cannot reach its hub; it keeps
     /// trying.
-    WaitingForVault,
-    /// The vault, or the host's lack of one, refuses them; the host asks again now and then,
+    WaitingForHub,
+    /// The hub, or the host's lack of one, refuses them; the host asks again now and then,
     /// should an owner grant them.
     Denied {
         /// Why.

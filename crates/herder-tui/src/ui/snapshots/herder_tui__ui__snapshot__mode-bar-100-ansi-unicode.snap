@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/ui/snapshot.rs
 expression: dump(&buffer)
 ---
-|  PROMPT   enter send  shift+enter newline  / commands  esc navigate           ● box  ● m2  ◌ vault |
+|  PROMPT   enter send  shift+enter newline  / commands  @ mention  esc navigate  ● box  ● m2  ◌ hub |
 |  NAVIGATE   / commands  @ mention  esc navigate                                                    |
 
  0   0..1   fg=Reset bg=Reset
@@ -17,15 +17,18 @@ expression: dump(&buffer)
  0  44..45  fg=Reset bg=Reset BOLD
  0  45..54  fg=DarkGray bg=Reset
  0  54..56  fg=Reset bg=Reset
- 0  56..59  fg=Reset bg=Reset BOLD
- 0  59..68  fg=DarkGray bg=Reset
- 0  68..79  fg=Reset bg=Reset
- 0  79..80  fg=Green bg=Reset
- 0  80..86  fg=Reset bg=Reset
- 0  86..87  fg=Green bg=Reset
- 0  87..92  fg=Reset bg=Reset
- 0  92..93  fg=Yellow bg=Reset
- 0  93..100 fg=Reset bg=Reset
+ 0  56..57  fg=Reset bg=Reset BOLD
+ 0  57..65  fg=DarkGray bg=Reset
+ 0  65..67  fg=Reset bg=Reset
+ 0  67..70  fg=Reset bg=Reset BOLD
+ 0  70..79  fg=DarkGray bg=Reset
+ 0  79..81  fg=Reset bg=Reset
+ 0  81..82  fg=Green bg=Reset
+ 0  82..88  fg=Reset bg=Reset
+ 0  88..89  fg=Green bg=Reset
+ 0  89..94  fg=Reset bg=Reset
+ 0  94..95  fg=Yellow bg=Reset
+ 0  95..100 fg=Reset bg=Reset
  1   0..1   fg=Reset bg=Reset
  1   1..11  fg=Black bg=Blue BOLD
  1  11..13  fg=Reset bg=Reset

@@ -7,6 +7,7 @@ pub mod bots;
 mod browse;
 pub mod config;
 pub mod data_dir;
+pub mod fanout;
 pub mod handoff;
 pub mod hub;
 mod listen;
@@ -25,7 +26,6 @@ pub mod stalls;
 pub mod terminal;
 pub mod update;
 pub mod usage;
-pub mod vault;
 pub mod worktree;
 pub mod ws;
 
@@ -39,7 +39,7 @@ use tracing::{error, info, warn};
 
 pub use config::Config;
 pub use data_dir::DataDir;
-pub use hub::Hub;
+pub use fanout::Fanout;
 
 /// How the daemon stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +49,7 @@ pub enum Exit {
     /// An owner asked it to start again ([`settings`]).
     Restart,
     /// An owner updated its binary ([`update`]): it starts again on the new one, and so does
-    /// the service of the vault or daemon next to it.
+    /// the service of the hub or daemon next to it.
     Updated,
 }
 
@@ -75,16 +75,16 @@ pub fn run(config: Config) -> Result<Exit> {
                 }
                 token.cancel();
             });
-            if config.mode == config::Mode::Vault {
-                vault::serve(&config, shutdown).await?;
+            if config.mode == config::Mode::Hub {
+                hub::serve(&config, shutdown).await?;
             } else {
                 let adapters = accounts::adapters(&config.binaries, &config.clis);
                 let probes = accounts::probes(&config.binaries, &config.clis);
-                let local_vault = vault::install::LocalVault::system()
-                    .inspect_err(|err| warn!("cannot run a vault on this machine: {err:#}"))
+                let local_hub = hub::install::LocalHub::system()
+                    .inspect_err(|err| warn!("cannot run a hub on this machine: {err:#}"))
                     .ok();
                 let accounts = config.accounts.clone();
-                serve(&config, adapters, probes, accounts, local_vault, shutdown).await?;
+                serve(&config, adapters, probes, accounts, local_hub, shutdown).await?;
             }
             Ok(if update::updated() {
                 Exit::Updated
@@ -98,13 +98,13 @@ pub fn run(config: Config) -> Result<Exit> {
 
 /// Opens the data dir, the journal and the TLS identity, then serves clients until `shutdown`,
 /// running sessions on `accounts` through `adapters` and reading their usage with `probes`.
-/// `local_vault` is the vault an owner may run on this machine; `None` refuses that.
+/// `local_hub` is the hub an owner may run on this machine; `None` refuses that.
 pub async fn serve(
     config: &Config,
     adapters: session::Adapters,
     probes: usage::Probes,
     accounts: session::Accounts,
-    local_vault: Option<vault::install::LocalVault>,
+    local_hub: Option<hub::install::LocalHub>,
     shutdown: CancellationToken,
 ) -> Result<()> {
     let data_dir = DataDir::open(&config.data_dir)?;
@@ -129,19 +129,19 @@ pub async fn serve(
         }
     }
     let auth_names = Arc::clone(&auth);
-    let hub = Arc::new(Hub::default());
-    let terminals = terminal::Terminals::new(Arc::clone(&hub), terminal::login_shell());
+    let fanout = Arc::new(Fanout::default());
+    let terminals = terminal::Terminals::new(Arc::clone(&fanout), terminal::login_shell());
     let sessions_changed = Arc::new(tokio::sync::Notify::new());
     let mut sink: Arc<dyn session::EventSink> = Arc::new(terminal::KillOnArchive {
         next: Arc::new(projects::OnSessionsChanged {
-            next: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+            next: Arc::clone(&fanout) as Arc<dyn session::EventSink>,
             notify: Arc::clone(&sessions_changed),
         }),
         terminals: terminals.clone(),
     });
-    // Always woken, as an owner may link a vault while the daemon runs.
+    // Always woken, as an owner may link a hub while the daemon runs.
     let journal_grew = Arc::new(tokio::sync::Notify::new());
-    sink = Arc::new(vault::WakeOnEvent {
+    sink = Arc::new(hub::WakeOnEvent {
         next: sink,
         notify: Arc::clone(&journal_grew),
     });
@@ -173,10 +173,10 @@ pub async fn serve(
         keep: worktree::checkpoint::KEEP,
         push_timeout: worktree::checkpoint::PUSH_TIMEOUT,
     })?;
-    let secrets = Arc::new(vault::HostSecrets::default());
+    let secrets = Arc::new(hub::HostSecrets::default());
     sessions.use_secrets(Arc::clone(&secrets))?;
     sessions
-        .use_vault_logins(data_dir.root().join("vault-accounts"))
+        .use_hub_logins(data_dir.root().join("hub-accounts"))
         .await?;
     let bots = Arc::new(bots::Bots::new(config));
     sessions.serve_bots(bots.lookup())?;
@@ -193,8 +193,8 @@ pub async fn serve(
         },
         &config.bots,
     )?;
-    let link = Arc::new(vault::Link::start(
-        vault::LinkSetup {
+    let link = Arc::new(hub::Link::start(
+        hub::LinkSetup {
             config_file: config.path.clone(),
             host: host.clone(),
             sessions: sessions.clone(),
@@ -202,15 +202,15 @@ pub async fn serve(
             data_dir: data_dir.root().to_owned(),
             shutdown: shutdown.clone(),
             secrets,
-            local: local_vault,
+            local: local_hub,
         },
-        config.vault.clone(),
+        config.hub.clone(),
     )?);
     tokio::spawn(
         projects::Discovery {
             host: host.id.clone(),
             config: projects,
-            hub: Arc::clone(&hub),
+            fanout: Arc::clone(&fanout),
             sessions: sessions.clone(),
             sessions_changed,
             data_dir: data_dir.root().to_owned(),
@@ -226,15 +226,15 @@ pub async fn serve(
     )?;
     let docker = Arc::new(resources::Docker::new("docker"));
     sessions.track_containers(Arc::clone(&docker))?;
-    hub.set_failover(config.failover.settings());
+    fanout.set_failover(config.failover.settings());
     tokio::spawn({
-        let hub = Arc::clone(&hub);
+        let fanout = Arc::clone(&fanout);
         let sessions = sessions.clone();
         let shutdown = shutdown.clone();
         let docker = Arc::clone(&docker);
         async move {
             let worktrees = || sessions.worktrees();
-            resources::run_sampler(&scopes, &docker, worktrees, &hub, shutdown).await;
+            resources::run_sampler(&scopes, &docker, worktrees, &fanout, shutdown).await;
         }
     });
     let admission = Arc::new(resources::Admission::new(
@@ -257,9 +257,9 @@ pub async fn serve(
         "agent turns are admitted within this host's capacity"
     );
     tokio::spawn({
-        let hub = Arc::clone(&hub);
+        let fanout = Arc::clone(&fanout);
         let shutdown = shutdown.clone();
-        async move { admission.run(&hub, shutdown).await }
+        async move { admission.run(&fanout, shutdown).await }
     });
     sessions.publish_with(Arc::new(session::publish::Krowk::new()))?;
     let herder = herder_binary()?;
@@ -292,7 +292,7 @@ pub async fn serve(
     let skills = Arc::new(skills::Skills::open(
         data_dir.root(),
         &sessions.providers(),
-        Arc::clone(&hub) as Arc<dyn skills::SkillsSink>,
+        Arc::clone(&fanout) as Arc<dyn skills::SkillsSink>,
     )?);
     sessions.deliver_skills(Arc::clone(&skills))?;
     let listing = sessions.clone();
@@ -313,7 +313,7 @@ pub async fn serve(
         auth::control::Daemon {
             fingerprint: tls.fingerprint().to_owned(),
             listen: listen.clone(),
-            vault: None,
+            hub: None,
         },
         shutdown.clone(),
     ));
@@ -331,7 +331,7 @@ pub async fn serve(
         sessions.clone(),
     );
     let providers = providers::Providers::new(config.binaries.clone(), config.clis.clone());
-    providers.publish_to(Arc::clone(&hub));
+    providers.publish_to(Arc::clone(&fanout));
     tokio::spawn({
         let providers = providers.clone();
         let shutdown = shutdown.clone();
@@ -340,7 +340,7 @@ pub async fn serve(
     let server = ws::Server::new(
         tls,
         auth,
-        hub,
+        fanout,
         sessions.clone(),
         terminals.clone(),
         logins,
@@ -349,7 +349,7 @@ pub async fn serve(
     server.manage_providers(providers)?;
     server.manage_aws(aws::Aws::from_env(|key| std::env::var_os(key)))?;
     link.serve_relayed(server.relayed(shutdown.clone()))?;
-    server.link_vault(link)?;
+    server.link_hub(link)?;
     server.manage_settings(settings)?;
     server.manage_bots(bots)?;
     sessions.serve_control(server.control())?;
@@ -400,7 +400,7 @@ mod tests {
             resources: Default::default(),
             projects: Default::default(),
             mode: config::Mode::Host,
-            vault: None,
+            hub: None,
             retention: Default::default(),
             cliproxyapi: None,
             cliproxyapi_endpoint: None,

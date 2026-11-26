@@ -3,12 +3,12 @@ import Herder
 @testable import HerderKit
 import Testing
 
-/// The app on a connection that drops and comes back: `devbox` runs session `01A`, and a vault
+/// The app on a connection that drops and comes back: `devbox` runs session `01A`, and a hub
 /// replicates it.
 @MainActor
 struct FlakyConnectionTests {
     private let direct = SessionKey(hostId: "devbox", sessionId: "01A")
-    private let replica = SessionKey(hostId: "vault", sessionId: "01A")
+    private let replica = SessionKey(hostId: "hub", sessionId: "01A")
 
     private func openFleet() throws -> Fleet {
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
@@ -21,12 +21,12 @@ struct FlakyConnectionTests {
         machine("devbox", name: "devbox", sessions: sessions, connection: connection)
     }
 
-    private func vault(_ connection: ConnectionState = .connected) -> Machine {
-        var vault = machine("vault", name: "vault", sessions: ["01A"], hosts: [
+    private func hub(_ connection: ConnectionState = .connected) -> Machine {
+        var hub = machine("hub", name: "hub", sessions: ["01A"], hosts: [
             FleetHost(hostId: "devbox", hostName: "devbox", online: true, lastSeen: ""),
         ], connection: connection)
-        vault.sessions[0].hostId = "devbox"
-        return vault
+        hub.sessions[0].hostId = "devbox"
+        return hub
     }
 
     /// Takes `machines` as the client would list them, and shows the lists at once.
@@ -54,13 +54,13 @@ struct FlakyConnectionTests {
 
     // MARK: A long drop
 
-    /// The host stays away for longer than the client rides out: the lists show the vault's copy, and neither the
+    /// The host stays away for longer than the client rides out: the lists show the hub's copy, and neither the
     /// row nor the open session loses anything while that copy loads, nor when the host is back.
     @Test func aLongDropKeepsTheOpenSessionAndItsRow() async throws {
         let fleet = try openFleet()
-        list([devbox(), vault()], on: fleet)
+        list([devbox(), hub()], on: fleet)
         fleet.applyForTesting(SessionUpdate(events: journal(), streaming: []), to: direct)
-        list([devbox(), vault()], on: fleet)
+        list([devbox(), hub()], on: fleet)
         fleet.watch(direct)
         // What this device sent and the machine has yet to take stays too.
         await fleet.submit("And the changelog", to: direct)
@@ -68,8 +68,8 @@ struct FlakyConnectionTests {
         let transcript = fleet.transcript(direct).map(\.id)
         #expect(!transcript.isEmpty)
 
-        // The host is gone: the vault's copy is listed, as the host's showed until now.
-        list([devbox(.disconnected(error: "unreachable")), vault()], on: fleet)
+        // The host is gone: the hub's copy is listed, as the host's showed until now.
+        list([devbox(.disconnected(error: "unreachable")), hub()], on: fleet)
         var row = try #require(rows(fleet).first)
         #expect(rows(fleet).count == 1)
         #expect(row.key == replica)
@@ -77,21 +77,21 @@ struct FlakyConnectionTests {
         #expect(row.state == before.state)
         #expect(row.updatedAt == before.updatedAt)
         #expect(fleet.listed(direct) == replica)
-        // The open session still shows the host's copy: the vault's has not loaded.
+        // The open session still shows the host's copy: the hub's has not loaded.
         #expect(fleet.source(for: direct) == direct)
         #expect(fleet.transcript(direct).map(\.id) == transcript)
         #expect(fleet.session(direct)?.outbox.map(\.text) == ["And the changelog"])
 
-        // The vault's copy loads, and has two more messages: the open session moves on to it.
+        // The hub's copy loads, and has two more messages: the open session moves on to it.
         fleet.applyForTesting(SessionUpdate(events: journal(more: 2), streaming: []), to: replica)
-        list([devbox(.disconnected(error: "unreachable")), vault()], on: fleet)
+        list([devbox(.disconnected(error: "unreachable")), hub()], on: fleet)
         #expect(fleet.source(for: direct) == replica)
         #expect(fleet.session(replica)?.lastSeq == 6)
         #expect(fleet.session(direct) != nil)
 
-        // The host is back: its copy is listed again, showing what the vault's got to meanwhile
+        // The host is back: its copy is listed again, showing what the hub's got to meanwhile
         // until its own journal has replayed.
-        list([devbox(), vault()], on: fleet)
+        list([devbox(), hub()], on: fleet)
         row = try #require(rows(fleet).first)
         #expect(rows(fleet).count == 1)
         #expect(row.key == direct)
@@ -112,7 +112,7 @@ struct FlakyConnectionTests {
 
         // Closed, the copy that stood in is let go.
         fleet.unwatch(direct)
-        list([devbox(), vault()], on: fleet)
+        list([devbox(), hub()], on: fleet)
         #expect(fleet.session(replica) == nil)
         #expect(fleet.session(direct)?.loaded == true)
     }
@@ -135,28 +135,28 @@ struct FlakyConnectionTests {
 
     @Test func withNothingConnectedTheCopyListedStays() {
         let origin = direct
-        let online = Lists.copies([devbox(), vault()])
+        let online = Lists.copies([devbox(), hub()])
         #expect(online.shown[origin] == direct)
         #expect(online.shadowed == [replica])
         #expect(online.standIns == [replica: direct])
 
         // The network is gone: neither copy is the better one, so the one listed stays.
         let down = ConnectionState.disconnected(error: "offline")
-        #expect(Lists.copies([devbox(down), vault(down)], keeping: online.shown).shown[origin] == direct)
-        let away = Lists.copies([devbox(down), vault()], keeping: online.shown)
+        #expect(Lists.copies([devbox(down), hub(down)], keeping: online.shown).shown[origin] == direct)
+        let away = Lists.copies([devbox(down), hub()], keeping: online.shown)
         #expect(away.shown[origin] == replica)
-        #expect(Lists.copies([devbox(down), vault(down)], keeping: away.shown).shown[origin] == replica)
+        #expect(Lists.copies([devbox(down), hub(down)], keeping: away.shown).shown[origin] == replica)
         // Back on its host as soon as that connects.
-        #expect(Lists.copies([devbox(), vault(down)], keeping: away.shown).shown[origin] == direct)
+        #expect(Lists.copies([devbox(), hub(down)], keeping: away.shown).shown[origin] == direct)
     }
 
-    @Test func aSessionTwoVaultsReplicateIsListedOnce() {
-        var second = vault()
-        second.hostId = "vault-2"
-        let copies = Lists.copies([devbox(.connecting), vault(), second])
+    @Test func aSessionTwoHubsReplicateIsListedOnce() {
+        var second = hub()
+        second.hostId = "hub-2"
+        let copies = Lists.copies([devbox(.connecting), hub(), second])
         #expect(copies.shown[direct] == replica)
-        #expect(copies.shadowed == [direct, SessionKey(hostId: "vault-2", sessionId: "01A")])
-        let listed = Lists(machines: [devbox(.connecting), vault(), second], sessions: [:]).projects.flatMap(\.sessions)
+        #expect(copies.shadowed == [direct, SessionKey(hostId: "hub-2", sessionId: "01A")])
+        let listed = Lists(machines: [devbox(.connecting), hub(), second], sessions: [:]).projects.flatMap(\.sessions)
         #expect(listed.map(\.key) == [replica])
     }
 
@@ -167,19 +167,19 @@ struct FlakyConnectionTests {
     /// back, and nothing it lists moves meanwhile.
     @Test func aMachineAwayShowsOfflineThroughItsRetries() throws {
         let fleet = try openFleet()
-        list([devbox(), vault()], on: fleet)
+        list([devbox(), hub()], on: fleet)
         fleet.applyForTesting(SessionUpdate(events: journal(), streaming: []), to: direct)
-        list([devbox(), vault()], on: fleet)
+        list([devbox(), hub()], on: fleet)
         fleet.watch(direct)
         let transcript = fleet.transcript(direct).map(\.id)
         #expect(!transcript.isEmpty)
 
         let down = ConnectionState.disconnected(error: "reset")
-        list([devbox(down), vault()], on: fleet)
+        list([devbox(down), hub()], on: fleet)
         let (rowsAway, machinesAway) = (rows(fleet), fleet.lists.machines)
         #expect(rowsAway.map(\.key) == [replica])
         for connection in [.connecting, down, .connecting, down, .connecting] as [ConnectionState] {
-            list([devbox(connection), vault()], on: fleet)
+            list([devbox(connection), hub()], on: fleet)
             #expect(fleet.machines.map(\.connection) == [down, .connected])
             #expect(rows(fleet) == rowsAway)
             #expect(fleet.lists.machines == machinesAway)
@@ -187,12 +187,12 @@ struct FlakyConnectionTests {
         }
         // The latest failure is the one shown.
         let unreachable = ConnectionState.disconnected(error: "unreachable")
-        list([devbox(unreachable), vault()], on: fleet)
+        list([devbox(unreachable), hub()], on: fleet)
         #expect(fleet.machines.first?.connection == unreachable)
-        list([devbox(.connecting), vault()], on: fleet)
+        list([devbox(.connecting), hub()], on: fleet)
         #expect(fleet.machines.first?.connection == unreachable)
 
-        list([devbox(), vault()], on: fleet)
+        list([devbox(), hub()], on: fleet)
         #expect(fleet.machines.map(\.connection) == [.connected, .connected])
         #expect(rows(fleet).map(\.key) == [direct])
         #expect(fleet.transcript(direct).map(\.id) == transcript)
@@ -237,19 +237,19 @@ struct FlakyConnectionTests {
         #expect(fleet.machines.first?.connection == .connected)
     }
 
-    /// While this device has no connection to the host, the session shows from the vault's
-    /// copy: the vault refuses a prompt, so the session is read-only, and its row says the
-    /// host is not connected though the vault sees it online.
-    @Test func aSessionShownFromTheVaultSaysItsHostIsNotConnected() throws {
+    /// While this device has no connection to the host, the session shows from the hub's
+    /// copy: the hub refuses a prompt, so the session is read-only, and its row says the
+    /// host is not connected though the hub sees it online.
+    @Test func aSessionShownFromTheHubSaysItsHostIsNotConnected() throws {
         let fleet = try openFleet()
-        list([devbox(), vault()], on: fleet)
-        #expect(rows(fleet).first?.fromVault == false)
+        list([devbox(), hub()], on: fleet)
+        #expect(rows(fleet).first?.fromHub == false)
         #expect(!fleet.isReplica(direct))
 
-        list([devbox(.disconnected(error: "unreachable")), vault()], on: fleet)
+        list([devbox(.disconnected(error: "unreachable")), hub()], on: fleet)
         let row = try #require(rows(fleet).first)
         #expect(row.key == replica)
-        #expect(row.fromVault)
+        #expect(row.fromHub)
         #expect(!row.machineOffline)
         #expect(fleet.isReplica(replica))
         #expect(!fleet.isReplica(direct))

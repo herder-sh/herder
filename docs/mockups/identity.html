@@ -59,7 +59,7 @@ td{border-top:1px solid var(--line);padding:9px 8px;text-align:center;font-size:
    <div class="row add">+ Invite a teammate…</div>
   </div>
   <div class="label">Who can do what</div>
-  <table><tr><th>Person</th><th>this Mac</th><th>trash-can-01</th><th>draugelis</th><th>herder-vault-0</th><th>draugelis vault</th></tr>
+  <table><tr><th>Person</th><th>this Mac</th><th>trash-can-01</th><th>draugelis</th><th>herder-hub-0</th><th>draugelis hub</th></tr>
    <tr><td>Tomas</td><td class="o">Owner</td><td class="o">Owner</td><td class="o">Owner</td><td class="o">Owner</td><td class="o">Owner</td></tr>
    <tr><td>Sam</td><td class="m">Member</td><td class="m">Member</td><td class="m">Member</td><td class="n">—</td><td class="n">—</td></tr>
    <tr><td>Kim</td><td class="m">Member</td><td class="m">Member</td><td class="o">Owner</td><td class="n">—</td><td class="o">Owner</td></tr></table>
@@ -88,7 +88,7 @@ td{border-top:1px solid var(--line);padding:9px 8px;text-align:center;font-size:
    <div class="face">☺</div>
    <h3>new-server is yours</h3>
    <div style="color:var(--dim);font-size:13px;margin-bottom:12px">Your Mac and iPhone can use it now: no code needed on them.</div>
-   <div class="cis" style="text-align:left;font-size:12.5px">Next: <b>Link a vault</b> for backup and secrets<br><span style="color:var(--dim)">herder-vault-0 · draugelis vault</span></div>
+   <div class="cis" style="text-align:left;font-size:12.5px">Next: <b>Link a hub</b> for backup and secrets<br><span style="color:var(--dim)">herder-hub-0 · draugelis hub</span></div>
    <span class="btn primary full">Open new-server</span>
   </div></div></div>
 </div>
@@ -109,7 +109,7 @@ Sign in to herder as a person.
 
 <!-- 4 claim -->
 <h2>4 · The one-time move: "Claim these machines as me"</h2>
-<p class="why"><b>Idea:</b> run once from your Mac, which is already an owner everywhere. Each old per-machine "tomas" becomes your passkey. The machine-as-user rows (trash-can-01, Coingate-CJH9FXV367, draugelis) move to the vault's <b>Machines</b> list, and leftover users are listed for you to keep or remove. Sessions started under old IDs are re-attributed to you, which also fixes "no longer paired".</p>
+<p class="why"><b>Idea:</b> run once from your Mac, which is already an owner everywhere. Each old per-machine "tomas" becomes your passkey. The machine-as-user rows (trash-can-01, Coingate-CJH9FXV367, draugelis) move to the hub's <b>Machines</b> list, and leftover users are listed for you to keep or remove. Sessions started under old IDs are re-attributed to you, which also fixes "no longer paired".</p>
 <div class="win"><div class="bar"><span class="dots"><i></i><i></i><i></i></span>Claim your machines</div><div class="body" style="background:var(--sheet)">
  <div class="banner"><div style="font-size:20px">🔑</div><div class="k">Create your herder passkey, then claim 5 machines<small>Stored in iCloud Keychain; Face ID once for all five.</small></div></div>
  <div class="label">Becomes yours</div>
@@ -117,12 +117,12 @@ Sign in to herder as a person.
   <div class="row"><div class="k">This Mac<small>tomas (owner) → you</small></div><span class="pill ok">✓ ready</span></div>
   <div class="row"><div class="k">trash-can-01<small>tomas (owner) → you</small></div><span class="pill ok">✓ ready</span></div>
   <div class="row"><div class="k">draugelis<small>tomas (owner) → you</small></div><span class="pill ok">✓ ready</span></div>
-  <div class="row"><div class="k">herder-vault-0<small>tomas, owner (owner) → you · 3 machine rows move to Machines</small></div><span class="pill ok">✓ ready</span></div>
-  <div class="row"><div class="k">draugelis vault<small>tomas (owner) → you · draugelis moves to Machines</small></div><span class="pill ok">✓ ready</span></div>
+  <div class="row"><div class="k">herder-hub-0<small>tomas, owner (owner) → you · 3 machine rows move to Machines</small></div><span class="pill ok">✓ ready</span></div>
+  <div class="row"><div class="k">draugelis hub<small>tomas (owner) → you · draugelis moves to Machines</small></div><span class="pill ok">✓ ready</span></div>
  </div>
  <div class="label">Needs a decision</div>
  <div class="list" style="background:var(--cis)">
-  <div class="row"><div class="k">"owner" on herder-vault-0<small>A user from Oct 9 whose CLI device is online. Is this you?</small></div><span class="role">It's me ⌄</span></div>
+  <div class="row"><div class="k">"owner" on herder-hub-0<small>A user from Oct 9 whose CLI device is online. Is this you?</small></div><span class="role">It's me ⌄</span></div>
  </div>
  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px"><span class="btn ghost">Later</span><span class="btn primary">Create passkey and claim</span></div>
 </div></div>

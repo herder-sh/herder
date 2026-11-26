@@ -28,7 +28,7 @@ struct BotTableRow: Identifiable {
         case .connected: 0
         case .connecting: 1
         case nil, .unknown: 2
-        case .waitingForVault: 3
+        case .waitingForHub: 3
         case .tokenRejected, .unsupported: 4
         }
     }
@@ -298,7 +298,7 @@ struct AddBotSheet: View {
     }
 
     var body: some View {
-        SheetScaffold(title: "Add Bot", height: 600, hint: "Tokens stay in the vault.") {
+        SheetScaffold(title: "Add Bot", height: 600, hint: "Tokens stay in the hub.") {
             AddBotForm(setup: setup)
         } footer: {
             Spacer()

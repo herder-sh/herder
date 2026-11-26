@@ -6,7 +6,7 @@
 //! repository changes while connected, set from another device, changes the library instead.
 //! A write accepted by one machine (`put_skill`, `delete_skill`, `import_skill`) marks every
 //! other machine as behind, and each is sent `pull_skills` once it is connected and has sent
-//! its status. Only daemons that send a `skills_status` take part; vaults do not.
+//! its status. Only daemons that send a `skills_status` take part; hubs do not.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};

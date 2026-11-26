@@ -17,7 +17,7 @@ struct PageStackTests {
         var stack = PageStack()
         stack.open(.machine("h1"))
         stack.open(.account(loginId: "claude/work"))
-        stack.open(.vault("v1"))
+        stack.open(.hub("v1"))
         stack.open(.machine("h1"))
         #expect(stack.pages == [.machine("h1")])
     }
@@ -26,7 +26,7 @@ struct PageStackTests {
         var stack = PageStack()
         stack.open(.machine("h1"))
         stack.open(.account(loginId: "claude/work"))
-        stack.open(.vault("v1"))
+        stack.open(.hub("v1"))
         stack.close()
         #expect(stack.pages == [.machine("h1"), .account(loginId: "claude/work")])
         stack.back(to: 1)

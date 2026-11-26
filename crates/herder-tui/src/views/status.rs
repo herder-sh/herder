@@ -66,7 +66,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     }
 }
 
-/// Each machine's connection mark and name, as the bar shows them: `● box  ◌ m2  ✗ vault`.
+/// Each machine's connection mark and name, as the bar shows them: `● box  ◌ m2  ✗ hub`.
 pub(super) fn connections(app: &App, ui: Ui) -> Vec<(Span<'static>, String)> {
     app.machines
         .iter()
@@ -154,8 +154,8 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                     tap("a", "add machine", char('a')),
                     tap("n", "add account", char('n')),
                     tap("e", "rename", char('e')),
-                    // A vault backs nothing up; its secrets are managed there.
-                    if app.on_vault() {
+                    // A hub backs nothing up; its secrets are managed there.
+                    if app.on_hub() {
                         tap("s", "secrets", char('s'))
                     } else {
                         tap("b", "backup", char('b'))

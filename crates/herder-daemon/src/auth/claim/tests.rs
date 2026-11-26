@@ -4,13 +4,13 @@ use tokio_util::sync::CancellationToken;
 use super::*;
 use crate::ws::Identity;
 
-/// A vault as the claim finds it, recorded from a real one's `auth.json` with ids and
+/// A hub as the claim finds it, recorded from a real one's `auth.json` with ids and
 /// fingerprints made up: `tomas`, its owner, with a phone; `owner`, a user from before with a
 /// CLI device; `trash-can-01`, a machine paired as a user, which replicates as a client to take
 /// handoffs; `draugelis`, a machine paired with `herder pair --host`; and `bob`, a member.
-const VAULT: &str = include_str!("fixtures/vault-auth.json");
+const HUB: &str = include_str!("fixtures/hub-auth.json");
 
-struct Vault {
+struct Hub {
     tmp: tempfile::TempDir,
     auth: Auth,
     tomas: Identity,
@@ -19,16 +19,16 @@ struct Vault {
     bob: Identity,
 }
 
-fn vault() -> Vault {
+fn hub() -> Hub {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join(super::super::FILE), VAULT).unwrap();
+    std::fs::write(tmp.path().join(super::super::FILE), HUB).unwrap();
     let auth = Auth::open(tmp.path()).unwrap();
     let tomas = connect(&auth, "fp-phone").unwrap();
     let owner = connect(&auth, "fp-cli").unwrap();
     let machine = connect(&auth, "fp-trash-can").unwrap();
     let bob = connect(&auth, "fp-bob").unwrap();
     assert_eq!(tomas.role, Role::Owner);
-    Vault {
+    Hub {
         tmp,
         auth,
         tomas,
@@ -91,8 +91,8 @@ fn by(message: &ServerMessage) -> Option<&UserId> {
 
 #[test]
 fn a_claim_moves_the_owner_to_the_person_makes_machines_hosts_and_leaves_the_rest() {
-    let v = vault();
-    // A host the vault knows from its replication: every device of the machine-user is one.
+    let v = hub();
+    // A host the hub knows from its replication: every device of the machine-user is one.
     let replicated = [v.machine.device_id.clone()];
     let elsewhere = UserId::new("01JA0HOSTUSER");
     let claimed = claim(
@@ -143,7 +143,7 @@ fn a_claim_moves_the_owner_to_the_person_makes_machines_hosts_and_leaves_the_res
 
 #[test]
 fn queued_prompts_read_as_the_person() {
-    let v = vault();
+    let v = hub();
     claim(&v.auth, &v.tomas.user_id, &[], &[]).unwrap();
     let head: herder_protocol::SessionHead = serde_json::from_value(serde_json::json!({
         "session_id": "s1",
@@ -177,7 +177,7 @@ fn queued_prompts_read_as_the_person() {
 
 #[test]
 fn the_claim_survives_a_restart() {
-    let v = vault();
+    let v = hub();
     let replicated = [v.machine.device_id.clone()];
     claim(&v.auth, &v.tomas.user_id, &[], &replicated).unwrap();
     let auth = Auth::open(v.tmp.path()).unwrap();
@@ -193,7 +193,7 @@ fn the_claim_survives_a_restart() {
 
 #[test]
 fn only_an_owner_claims_and_only_for_one_person() {
-    let v = vault();
+    let v = hub();
     let bob = &v.bob;
     assert_eq!(bob.role, Role::Member);
     let refused = claim(&v.auth, &bob.user_id, &[], &[]).unwrap_err();
@@ -222,7 +222,7 @@ fn only_an_owner_claims_and_only_for_one_person() {
 
 #[test]
 fn a_leftover_is_the_person_or_removed() {
-    let v = vault();
+    let v = hub();
     let bob = {
         let connection = CancellationToken::new();
         let bob = v
@@ -280,7 +280,7 @@ fn a_leftover_is_the_person_or_removed() {
 
 #[test]
 fn herder_claim_opens_the_owner_window_on_a_daemon_with_an_owner() {
-    let v = vault();
+    let v = hub();
     // `herder service install` offers the window only while there is no owner.
     assert!(v.auth.open_claim().is_err());
     let (_, creation) = v.auth.sign_in_challenge().unwrap();

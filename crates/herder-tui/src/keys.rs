@@ -649,7 +649,7 @@ pub const FLEET: &[Keys] = &[
     keys(&[ch('e')], "rename the machine on this device"),
     keys(&[ch('d')], "forget the machine"),
     keys(&[ch('b')], "backups"),
-    keys(&[ch('s')], "a vault's secrets"),
+    keys(&[ch('s')], "a hub's secrets"),
     keys(&[ch('r')], "reconnect"),
     keys(&[ch('?')], "this help"),
     keys(&[ESC, BACKSPACE, ch('m'), ch('q')], "close"),

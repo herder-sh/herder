@@ -3,7 +3,7 @@
 //!
 //! Each bot is its own app and bot user in its chat, configured on one host as a `[[bots]]`
 //! entry of the daemon's config, which owners write with `put_bot` and `remove_bot`. The entry
-//! holds no secret: the bot's tokens are machine-level secrets of the host's vault, which the
+//! holds no secret: the bot's tokens are machine-level secrets of the host's hub, which the
 //! entry names and the daemon reads into memory only.
 //!
 //! People in the chat are no herder users: a bot's allowlist names them by their chat user id,
@@ -164,9 +164,9 @@ pub enum BotState {
     Connecting,
     /// Connected: it answers in its chat.
     Connected,
-    /// Its tokens cannot be read: the host's vault is not linked, unreachable, or does not
+    /// Its tokens cannot be read: the host's hub is not linked, unreachable, or does not
     /// hand them out. It retries.
-    WaitingForVault,
+    WaitingForHub,
     /// The chat refused its tokens; it waits for new ones.
     TokenRejected,
     /// This daemon cannot run bots of its kind.

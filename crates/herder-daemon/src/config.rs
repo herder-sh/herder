@@ -16,10 +16,10 @@
 //! a public hostname through a Cloudflare Tunnel (`service: http://127.0.0.1:7448` in its
 //! ingress). It must be a loopback address, since only `cloudflared` may connect to it, and
 //! no `listen` address. Each client still authenticates as on a direct connection: see
-//! `docs/public-access.md`. A vault takes tunneled connections the same way, hosts' as well
+//! `docs/public-access.md`. A hub takes tunneled connections the same way, hosts' as well
 //! as clients', and may name any address, since in a cluster its `cloudflared` is another
 //! pod: there a network policy must keep everything else from the port
-//! (`docs/vault-relay.md`).
+//! (`docs/hub-relay.md`).
 //!
 //! ```toml
 //! listen = "127.0.0.1:7447"  # no direct listener on the network
@@ -113,25 +113,25 @@
 //! command = "github-mcp-server"    # a program the CLI runs, over stdio: a name on `PATH`, an
 //! args = ["stdio"]                 # absolute path or one starting with ~/
 //! env = { GITHUB_HOST = "github.com" }
-//! secrets = ["GITHUB_PERSONAL_ACCESS_TOKEN"] # from the host's vault, each as the variable
+//! secrets = ["GITHUB_PERSONAL_ACCESS_TOKEN"] # from the host's hub, each as the variable
 //!                                  # of its name, through `herder secret run`
 //!
 //! [[mcp_servers]]
 //! name = "linear"
 //! url = "https://mcp.linear.app/mcp" # a server at a URL, over streamable HTTP
 //! headers = { Authorization = "Bearer {secret:linear/API_KEY}" } # {secret:NAME} or
-//!                                  # {secret:set/NAME} takes the value from the host's vault
+//!                                  # {secret:set/NAME} takes the value from the host's hub
 //! transport = "sse"                # the older HTTP with server-sent events instead
 //! project = "github.com/herder-sh/herder" # only this project's sessions get it; every
 //!                                  # session by default
 //! enabled = false                  # kept, but no session gets it; true by default
 //! ```
 //!
-//! `env` and `headers` are kept in this file as given, so a secret is better in the vault: a
+//! `env` and `headers` are kept in this file as given, so a secret is better in the hub: a
 //! stdio server's in `secrets`, a header's as a `{secret:...}` placeholder. Each start of a
-//! session's CLI fetches a header's secrets for that session, so the vault grants and audits
+//! session's CLI fetches a header's secrets for that session, so the hub grants and audits
 //! them as for `herder secret run`, and only the CLI gets their values; a server whose secrets
-//! the vault does not hand out is left out of that run, and the session says so. One secret
+//! the hub does not hand out is left out of that run, and the session says so. One secret
 //! in a set granted to several hosts so serves all of them. Owners list, add, change, remove
 //! and turn servers on and off from a client, as part of the settings; a change reaches each
 //! session when its CLI next starts.
@@ -211,7 +211,7 @@
 //! bot_id = "trash-can"          # unique on this host
 //! kind = "slack"                # slack or telegram
 //! name = "trash-can"
-//! token = "slack/BOT_TOKEN"     # machine-level secrets of the host's vault, never the tokens
+//! token = "slack/BOT_TOKEN"     # machine-level secrets of the host's hub, never the tokens
 //! app_token = "slack/APP_TOKEN" # Slack's Socket Mode token; none for Telegram
 //!
 //! [[bots.allow]]                # each person the bot answers; nobody else
@@ -236,65 +236,65 @@
 //! project_id = "github.com/herder-sh/trip1"
 //! ```
 //!
-//! # Vault
+//! # Hub
 //!
-//! `mode = "vault"` (or `herder daemon --vault`) runs the daemon as a vault: it runs no
-//! sessions and keeps the journals hosts replicate to it; see [`crate::vault`]. The default,
-//! `mode = "host"`, runs sessions. A host links to at most one vault, the one its `[vault]`
+//! `mode = "hub"` (or `herder daemon --hub`) runs the daemon as a hub: it runs no
+//! sessions and keeps the journals hosts replicate to it; see [`crate::hub`]. The default,
+//! `mode = "host"`, runs sessions. A host links to at most one hub, the one its `[hub]`
 //! table names, paired the way a client pairs with a daemon; it replicates every session there
 //! and fetches its sessions' secrets from it, each of which it can stop doing:
 //!
 //! ```toml
-//! [vault]
-//! address = "vault.example.com:7447"
-//! fingerprint = "3f9a..."    # the vault's certificate SHA-256, as `herder pair` prints it
-//! pairing_code = "ABCDE-FGHJK" # from `herder pair` on the vault; only read until paired
+//! [hub]
+//! address = "hub.example.com:7447"
+//! fingerprint = "3f9a..."    # the hub's certificate SHA-256, as `herder pair` prints it
+//! pairing_code = "ABCDE-FGHJK" # from `herder pair` on the hub; only read until paired
 //! backup = true                # replicate every session there; on by default
 //! secrets = true               # fetch the sessions' secrets from there; on by default
 //! attachments = true           # back up prompt images and files too; off by default
-//! attachments_cap = 1073741824 # most bytes of them the vault keeps; 1 GiB by default
-//! relay = true                 # clients reach this host through the vault; on by default
+//! attachments_cap = 1073741824 # most bytes of them the hub keeps; 1 GiB by default
+//! relay = true                 # clients reach this host through the hub; on by default
 //! ```
 //!
-//! With `attachments`, the vault keeps this host's images and files up to `attachments_cap` bytes,
+//! With `attachments`, the hub keeps this host's images and files up to `attachments_cap` bytes,
 //! evicting the oldest first; without it the host sends none.
 //!
-//! `address` is `host:port`, or the URL of a tunnel to the vault, such as
-//! `wss://vault.example.com` for a vault behind a Cloudflare Tunnel: a host that moves
-//! between networks, or sits behind NAT, reaches its vault there from anywhere.
+//! `address` is `host:port`, or the URL of a tunnel to the hub, such as
+//! `wss://hub.example.com` for a hub behind a Cloudflare Tunnel: a host that moves
+//! between networks, or sits behind NAT, reaches its hub there from anywhere.
 //!
-//! With `relay`, a client paired with the vault and with this host reaches the host through
-//! the vault when it cannot dial it: the host opens a connection to the vault for each such
-//! client and serves it as it serves a direct one, so the vault forwards bytes it cannot
-//! read and the host decides who gets in (`docs/vault-relay.md`).
+//! With `relay`, a client paired with the hub and with this host reaches the host through
+//! the hub when it cannot dial it: the host opens a connection to the hub for each such
+//! client and serves it as it serves a direct one, so the hub forwards bytes it cannot
+//! read and the host decides who gets in (`docs/hub-relay.md`).
 //!
-//! A vault's own `[vault]` table sets how long it keeps archived sessions:
+//! A hub's own `[hub]` table sets how long it keeps archived sessions:
 //!
 //! ```toml
-//! mode = "vault"
+//! mode = "hub"
 //!
-//! [vault]
+//! [hub]
 //! archive_retention_days = 90 # archived sessions of online hosts are dropped after this
-//! cliproxyapi = "http://127.0.0.1:8317" # a CLIProxyAPI on the vault's machine; see below
-//! cliproxyapi_endpoint = "https://vault.example.com:8317" # where hosts reach that CLIProxyAPI
+//! cliproxyapi = "http://127.0.0.1:8317" # a CLIProxyAPI on the hub's machine; see below
+//! cliproxyapi_endpoint = "https://hub.example.com:8317" # where hosts reach that CLIProxyAPI
 //! ```
 //!
-//! With `cliproxyapi`, the vault mints a client key for each host in that CLIProxyAPI and
-//! grants it to the host as a secret for its own use ([`crate::vault::cliproxyapi`]); it reads
+//! With `cliproxyapi`, the hub mints a client key for each host in that CLIProxyAPI and
+//! grants it to the host as a secret for its own use ([`crate::hub::cliproxyapi`]); it reads
 //! the proxy's management secret from `HERDER_CLIPROXYAPI_MANAGEMENT_KEY`, and needs its
 //! secrets key. With `cliproxyapi_endpoint` too, it tells each host holding a key where the
-//! proxy is, and the apps and TUI offer the vault's logins when adding an account there.
-//! Without it the vault forwards each such host to the proxy itself, over the host's own
-//! connection to the vault: the host runs the vault's logins as accounts wherever it reaches
-//! its vault, and the proxy need be on no network but the vault's (`docs/vault-relay.md`). A
+//! proxy is, and the apps and TUI offer the hub's logins when adding an account there.
+//! Without it the hub forwards each such host to the proxy itself, over the host's own
+//! connection to the hub: the host runs the hub's logins as accounts wherever it reaches
+//! its hub, and the proxy need be on no network but the hub's (`docs/hub-relay.md`). A
 //! host's endpoint account names that secret instead of holding the key:
 //!
 //! ```toml
 //! [[accounts]]
 //! id = "fleet"
 //! provider = "claude"
-//! endpoint = "https://vault.example.com:8317"
-//! key_secret = "CLIPROXYAPI_KEY" # fetched from the host's vault when a session starts
+//! endpoint = "https://hub.example.com:8317"
+//! key_secret = "CLIPROXYAPI_KEY" # fetched from the host's hub when a session starts
 //! ```
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -352,16 +352,16 @@ pub struct Config {
     pub resources: ResourcesConfig,
     /// Where projects are discovered, and their overrides.
     pub projects: ProjectsConfig,
-    /// Whether this daemon runs sessions or is the vault.
+    /// Whether this daemon runs sessions or is the hub.
     pub mode: Mode,
-    /// The vault a host replicates its sessions to, if any.
-    pub vault: Option<VaultConfig>,
-    /// What a vault keeps, and for how long; read in vault mode only.
+    /// The hub a host replicates its sessions to, if any.
+    pub hub: Option<HubConfig>,
+    /// What a hub keeps, and for how long; read in hub mode only.
     pub retention: Retention,
-    /// Base URL of the CLIProxyAPI on a vault's machine whose client keys it keeps for its
-    /// hosts; read in vault mode only.
+    /// Base URL of the CLIProxyAPI on a hub's machine whose client keys it keeps for its
+    /// hosts; read in hub mode only.
     pub cliproxyapi: Option<String>,
-    /// Where hosts reach that CLIProxyAPI, as an endpoint account's URL; read in vault mode
+    /// Where hosts reach that CLIProxyAPI, as an endpoint account's URL; read in hub mode
     /// only.
     pub cliproxyapi_endpoint: Option<String>,
     /// The user's MCP servers, in file order, as written.
@@ -376,13 +376,13 @@ pub struct Config {
 /// The projects dir unless the `[projects]` table names another.
 pub const DEFAULT_PROJECTS_DIR: &str = "~/Projects";
 
-/// Bytes of images a vault keeps per host unless the host's `[vault]` table says otherwise.
+/// Bytes of images a hub keeps per host unless the host's `[hub]` table says otherwise.
 pub const DEFAULT_ATTACHMENTS_CAP: u64 = 1 << 30;
 
-/// What a vault keeps: its `[vault]` table.
+/// What a hub keeps: its `[hub]` table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Retention {
-    /// Days an archived session of an online host stays on the vault after its latest event.
+    /// Days an archived session of an online host stays on the hub after its latest event.
     pub archive_days: u32,
 }
 
@@ -399,33 +399,33 @@ pub enum Mode {
     /// Runs sessions for clients.
     #[default]
     Host,
-    /// Keeps the journals hosts replicate to it; see [`crate::vault`].
-    Vault,
+    /// Keeps the journals hosts replicate to it; see [`crate::hub`].
+    Hub,
 }
 
-/// The `[vault]` table of a host: where it replicates to.
+/// The `[hub]` table of a host: where it replicates to.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VaultConfig {
-    /// The vault's address: `host:port`, or the `wss://` or `ws://` URL of a tunnel to it.
+pub struct HubConfig {
+    /// The hub's address: `host:port`, or the `wss://` or `ws://` URL of a tunnel to it.
     pub address: String,
-    /// SHA-256 of the vault's TLS certificate, lowercase hex.
+    /// SHA-256 of the hub's TLS certificate, lowercase hex.
     pub fingerprint: String,
-    /// One-time code from `herder pair` on the vault, for the first connection.
+    /// One-time code from `herder pair` on the hub, for the first connection.
     pub pairing_code: Option<String>,
-    /// Whether sessions are replicated to the vault.
+    /// Whether sessions are replicated to the hub.
     pub backup: bool,
-    /// Whether sessions fetch secrets from the vault.
+    /// Whether sessions fetch secrets from the hub.
     pub secrets: bool,
     /// Whether prompt images are backed up too.
     pub attachments: bool,
-    /// Most bytes of this host's images the vault keeps, when `attachments` is on.
+    /// Most bytes of this host's images the hub keeps, when `attachments` is on.
     pub attachments_cap: u64,
-    /// Whether clients paired with the vault reach this host through it.
+    /// Whether clients paired with the hub reach this host through it.
     pub relay: bool,
 }
 
-impl VaultConfig {
-    /// Links to the vault at `address`, pinned to `fingerprint`: backing up and fetching
+impl HubConfig {
+    /// Links to the hub at `address`, pinned to `fingerprint`: backing up and fetching
     /// secrets, images off.
     pub fn new(address: String, fingerprint: String, pairing_code: Option<String>) -> Self {
         Self {
@@ -440,16 +440,16 @@ impl VaultConfig {
         }
     }
 
-    /// The cap the host's hello gives the vault: `None` when images are not backed up.
+    /// The cap the host's hello gives the hub: `None` when images are not backed up.
     pub fn images_cap(&self) -> Option<u64> {
         self.attachments.then_some(self.attachments_cap)
     }
 }
 
-/// The `[vault]` table as written: a host's or a vault's keys.
+/// The `[hub]` table as written: a host's or a hub's keys.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct VaultFile {
+struct HubFile {
     address: Option<String>,
     fingerprint: Option<String>,
     pairing_code: Option<String>,
@@ -538,7 +538,7 @@ struct ConfigFile {
     projects: ProjectsFile,
     project: Vec<ProjectFile>,
     mode: Mode,
-    vault: Option<VaultFile>,
+    hub: Option<HubFile>,
     mcp_servers: Vec<McpServerFile>,
     bots: Vec<Bot>,
 }
@@ -562,7 +562,7 @@ impl Default for ConfigFile {
             projects: ProjectsFile::default(),
             project: Vec::new(),
             mode: Mode::default(),
-            vault: None,
+            hub: None,
             mcp_servers: Vec::new(),
             bots: Vec::new(),
         }
@@ -581,7 +581,7 @@ enum Listen {
 }
 
 /// `tunnel`, checked: loopback on a host, since only `cloudflared` on this machine may reach
-/// it, and no address `listen` binds too. A vault's may be any address: in a cluster its
+/// it, and no address `listen` binds too. A hub's may be any address: in a cluster its
 /// `cloudflared` is another pod, and the cluster's network policy says who reaches the port.
 fn resolve_tunnel(
     tunnel: Option<SocketAddr>,
@@ -592,7 +592,7 @@ fn resolve_tunnel(
         return Ok(None);
     };
     ensure!(
-        mode == Mode::Vault || tunnel.ip().is_loopback(),
+        mode == Mode::Hub || tunnel.ip().is_loopback(),
         "`tunnel` must be a loopback address such as 127.0.0.1:7448, not {tunnel}: only \
          cloudflared on this machine may connect to it"
     );
@@ -782,7 +782,7 @@ impl Config {
             .collect();
         binaries.sort_by(|a, b| a.provider.as_str().cmp(b.provider.as_str()));
         let resources = &self.resources;
-        let vault = self.vault.as_ref();
+        let hub = self.hub.as_ref();
         DaemonSettings {
             listen: self.listen.iter().map(ToString::to_string).collect(),
             log: LogSettings {
@@ -822,9 +822,8 @@ impl Config {
                 setup_timeout_secs: self.projects.setup_timeout.as_secs(),
             },
             backup: BackupSettings {
-                attachments: vault.is_some_and(|vault| vault.attachments),
-                attachments_cap: vault
-                    .map_or(DEFAULT_ATTACHMENTS_CAP, |vault| vault.attachments_cap),
+                attachments: hub.is_some_and(|hub| hub.attachments),
+                attachments_cap: hub.map_or(DEFAULT_ATTACHMENTS_CAP, |hub| hub.attachments_cap),
                 archive_retention_days: self.retention.archive_days,
             },
             mcp_servers: self.mcp_servers.clone(),
@@ -848,12 +847,12 @@ fn resolve(
     let accounts = resolve_accounts(file.accounts, env)?;
     let projects = resolve_projects(file.projects, file.project, &accounts, env)?;
     let titles = resolve_titles(file.titles, &accounts)?;
-    let VaultSide {
-        vault,
+    let HubSide {
+        hub,
         retention,
         cliproxyapi,
         cliproxyapi_endpoint,
-    } = resolve_vault(file.mode, file.vault)?;
+    } = resolve_hub(file.mode, file.hub)?;
     let mcp_servers = resolve_mcp_servers(file.mcp_servers, env)?;
     validate_bots(&file.bots, &accounts)?;
     let (binaries, clis) = resolve_providers(file.providers, env)?;
@@ -872,7 +871,7 @@ fn resolve(
         resources: file.resources,
         projects,
         mode: file.mode,
-        vault,
+        hub,
         retention,
         cliproxyapi,
         cliproxyapi_endpoint,
@@ -1073,22 +1072,22 @@ pub(crate) fn mcp_command(
     resolve_path(path, env).context("command")
 }
 
-/// Validates the `[vault]` table: a host's says where it replicates to, a vault's what it
+/// Validates the `[hub]` table: a host's says where it replicates to, a hub's what it
 /// keeps.
-/// What the `[vault]` table says: a host's link, or a vault's retention and CLIProxyAPI.
+/// What the `[hub]` table says: a host's link, or a hub's retention and CLIProxyAPI.
 #[derive(Default)]
-struct VaultSide {
-    vault: Option<VaultConfig>,
+struct HubSide {
+    hub: Option<HubConfig>,
     retention: Retention,
     cliproxyapi: Option<String>,
     cliproxyapi_endpoint: Option<String>,
 }
 
-fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<VaultSide> {
+fn resolve_hub(mode: Mode, table: Option<HubFile>) -> Result<HubSide> {
     let Some(table) = table else {
-        return Ok(VaultSide::default());
+        return Ok(HubSide::default());
     };
-    if mode == Mode::Vault {
+    if mode == Mode::Hub {
         ensure!(
             table.address.is_none()
                 && table.fingerprint.is_none()
@@ -1098,26 +1097,26 @@ fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<VaultSide> {
                 && table.attachments.is_none()
                 && table.attachments_cap.is_none()
                 && table.relay.is_none(),
-            "a vault does not replicate to another vault; its [vault] table takes \
+            "a hub does not replicate to another hub; its [hub] table takes \
              archive_retention_days, cliproxyapi and cliproxyapi_endpoint only"
         );
         let mut retention = Retention::default();
         if let Some(days) = table.archive_retention_days {
-            ensure!(days > 0, "vault.archive_retention_days must be at least 1");
+            ensure!(days > 0, "hub.archive_retention_days must be at least 1");
             retention.archive_days = days;
         }
         if let Some(url) = &table.cliproxyapi {
-            check_endpoint(url).context("vault.cliproxyapi")?;
+            check_endpoint(url).context("hub.cliproxyapi")?;
         }
         if let Some(url) = &table.cliproxyapi_endpoint {
             ensure!(
                 table.cliproxyapi.is_some(),
-                "vault.cliproxyapi_endpoint needs vault.cliproxyapi, the proxy it is the address of"
+                "hub.cliproxyapi_endpoint needs hub.cliproxyapi, the proxy it is the address of"
             );
-            check_endpoint(url).context("vault.cliproxyapi_endpoint")?;
+            check_endpoint(url).context("hub.cliproxyapi_endpoint")?;
         }
-        return Ok(VaultSide {
-            vault: None,
+        return Ok(HubSide {
+            hub: None,
             retention,
             cliproxyapi: table.cliproxyapi,
             cliproxyapi_endpoint: table.cliproxyapi_endpoint,
@@ -1127,52 +1126,52 @@ fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<VaultSide> {
         table.archive_retention_days.is_none()
             && table.cliproxyapi.is_none()
             && table.cliproxyapi_endpoint.is_none(),
-        "vault.archive_retention_days, vault.cliproxyapi and vault.cliproxyapi_endpoint are \
-         set on the vault, not on a host"
+        "hub.archive_retention_days, hub.cliproxyapi and hub.cliproxyapi_endpoint are \
+         set on the hub, not on a host"
     );
     let (Some(address), Some(fingerprint)) = (table.address, table.fingerprint) else {
-        bail!("the [vault] table needs the vault's address and fingerprint");
+        bail!("the [hub] table needs the hub's address and fingerprint");
     };
     ensure!(
         fingerprint.len() == 64 && fingerprint.chars().all(|c| c.is_ascii_hexdigit()),
-        "vault.fingerprint must be the 64 hex digits `herder pair` prints"
+        "hub.fingerprint must be the 64 hex digits `herder pair` prints"
     );
-    let vault = VaultConfig {
+    let hub = HubConfig {
         backup: table.backup.unwrap_or(true),
         secrets: table.secrets.unwrap_or(true),
         attachments: table.attachments.unwrap_or(false),
         attachments_cap: table.attachments_cap.unwrap_or(DEFAULT_ATTACHMENTS_CAP),
         relay: table.relay.unwrap_or(true),
-        ..VaultConfig::new(
-            vault_address(&address)?,
+        ..HubConfig::new(
+            hub_address(&address)?,
             fingerprint.to_ascii_lowercase(),
             table.pairing_code,
         )
     };
-    Ok(VaultSide {
-        vault: Some(vault),
-        ..VaultSide::default()
+    Ok(HubSide {
+        hub: Some(hub),
+        ..HubSide::default()
     })
 }
 
-/// `address`, a vault's as written: `host:port`, or the URL of a tunnel to it, with `https`
+/// `address`, a hub's as written: `host:port`, or the URL of a tunnel to it, with `https`
 /// read as `wss` and `http` as `ws`, since a tunnel's hostname is usually copied as a web
 /// address.
-fn vault_address(address: &str) -> Result<String> {
+fn hub_address(address: &str) -> Result<String> {
     let address = address.trim();
     if !address.contains("://") {
         return Ok(address.to_owned());
     }
     let mut url = url::Url::parse(address)
-        .with_context(|| format!("vault.address {address} is not a tunnel URL"))?;
+        .with_context(|| format!("hub.address {address} is not a tunnel URL"))?;
     let scheme = match url.scheme() {
         "wss" | "https" => "wss",
         "ws" | "http" => "ws",
-        _ => bail!("vault.address {address} must be host:port, or start with wss:// or https://"),
+        _ => bail!("hub.address {address} must be host:port, or start with wss:// or https://"),
     };
     ensure!(
         url.set_scheme(scheme).is_ok() && url.host_str().is_some_and(|host| !host.is_empty()),
-        "vault.address {address} names no host"
+        "hub.address {address} names no host"
     );
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
@@ -1702,32 +1701,32 @@ pub fn set_project_settings(
     })
 }
 
-/// Sets the `[vault]` table of the config file at `path` to `vault`, or removes it when
+/// Sets the `[hub]` table of the config file at `path` to `hub`, or removes it when
 /// `None`; the rest of the file is kept as written, and only a file that still loads replaces
 /// it. A `pairing_code` is never written: the host is paired by the time it is kept.
-pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
+pub fn set_hub(path: &Path, hub: Option<&HubConfig>) -> Result<()> {
     edit_config(path, |doc, _| {
-        match vault {
-            Some(vault) => {
+        match hub {
+            Some(hub) => {
                 let mut table = toml_edit::Table::new();
-                table.insert("address", toml_edit::value(vault.address.as_str()));
-                table.insert("fingerprint", toml_edit::value(vault.fingerprint.as_str()));
-                table.insert("backup", toml_edit::value(vault.backup));
-                table.insert("secrets", toml_edit::value(vault.secrets));
-                if vault.attachments {
+                table.insert("address", toml_edit::value(hub.address.as_str()));
+                table.insert("fingerprint", toml_edit::value(hub.fingerprint.as_str()));
+                table.insert("backup", toml_edit::value(hub.backup));
+                table.insert("secrets", toml_edit::value(hub.secrets));
+                if hub.attachments {
                     table.insert("attachments", toml_edit::value(true));
                 }
-                if vault.attachments_cap != DEFAULT_ATTACHMENTS_CAP {
-                    let cap = i64::try_from(vault.attachments_cap).unwrap_or(i64::MAX);
+                if hub.attachments_cap != DEFAULT_ATTACHMENTS_CAP {
+                    let cap = i64::try_from(hub.attachments_cap).unwrap_or(i64::MAX);
                     table.insert("attachments_cap", toml_edit::value(cap));
                 }
-                if !vault.relay {
+                if !hub.relay {
                     table.insert("relay", toml_edit::value(false));
                 }
-                doc.insert("vault", toml_edit::Item::Table(table));
+                doc.insert("hub", toml_edit::Item::Table(table));
             }
             None => {
-                doc.remove("vault");
+                doc.remove("hub");
             }
         }
         Ok(())
@@ -1735,17 +1734,14 @@ pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
     Ok(())
 }
 
-/// Sets `backup` and `secrets` of the `[vault]` table of the config file at `path`, which has
+/// Sets `backup` and `secrets` of the `[hub]` table of the config file at `path`, which has
 /// one, keeping the rest of the file as written; only a file that still loads replaces it.
-pub fn set_vault_switches(path: &Path, backup: bool, secrets: bool) -> Result<()> {
+pub fn set_hub_switches(path: &Path, backup: bool, secrets: bool) -> Result<()> {
     edit_file(path, |doc, _| {
-        ensure!(
-            doc.contains_table("vault"),
-            "the config has no [vault] table"
-        );
+        ensure!(doc.contains_table("hub"), "the config has no [hub] table");
         let mut edit = Edit { doc, path };
-        edit.set(&["vault"], "backup", Some(backup.into()))?;
-        edit.set(&["vault"], "secrets", Some(secrets.into()))
+        edit.set(&["hub"], "backup", Some(backup.into()))?;
+        edit.set(&["hub"], "secrets", Some(secrets.into()))
     })?;
     Ok(())
 }
@@ -1974,15 +1970,15 @@ pub fn set_settings(path: &Path, old: &DaemonSettings, new: &DaemonSettings) -> 
         }
         let (was, is) = (&old.backup, &new.backup);
         if was.attachments != is.attachments {
-            edit.set(&["vault"], "attachments", Some(is.attachments.into()))?;
+            edit.set(&["hub"], "attachments", Some(is.attachments.into()))?;
         }
         if was.attachments_cap != is.attachments_cap {
             let cap = int(is.attachments_cap)?;
-            edit.set(&["vault"], "attachments_cap", Some(cap))?;
+            edit.set(&["hub"], "attachments_cap", Some(cap))?;
         }
         if was.archive_retention_days != is.archive_retention_days {
             let days = int(is.archive_retention_days)?;
-            edit.set(&["vault"], "archive_retention_days", Some(days))?;
+            edit.set(&["hub"], "archive_retention_days", Some(days))?;
         }
         if old.mcp_servers != new.mcp_servers {
             set_mcp_servers(edit.doc, &old.mcp_servers, &new.mcp_servers, path)?;
@@ -2628,8 +2624,8 @@ mod tests {
             assert!(format!("{err:#}").contains(error), "{text}: {err:#}");
         }
 
-        // A vault's cloudflared is another pod in a cluster, so its tunnel may be any address.
-        let path = write(tmp.path(), "mode = \"vault\"\ntunnel = \"0.0.0.0:7448\"\n");
+        // A hub's cloudflared is another pod in a cluster, so its tunnel may be any address.
+        let path = write(tmp.path(), "mode = \"hub\"\ntunnel = \"0.0.0.0:7448\"\n");
         let config = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap();
         assert_eq!(config.tunnel, Some("0.0.0.0:7448".parse().unwrap()));
     }
@@ -2719,7 +2715,7 @@ mod tests {
                     ..ProjectsConfig::default()
                 },
                 mode: Mode::Host,
-                vault: None,
+                hub: None,
                 retention: Retention::default(),
                 cliproxyapi: None,
                 cliproxyapi_endpoint: None,
@@ -2731,106 +2727,106 @@ mod tests {
     }
 
     #[test]
-    fn the_vault_table_is_set_and_removed_keeping_the_rest_of_the_file() {
+    fn the_hub_table_is_set_and_removed_keeping_the_rest_of_the_file() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon.toml");
         let original = "# my daemon\nlisten = \"127.0.0.1:7447\"  # loopback only\n\n\
                         [log]\nlevel = \"debug\"\n";
         std::fs::write(&path, original).unwrap();
-        let vault = VaultConfig::new(
-            "vault.lan:7447".into(),
+        let hub = HubConfig::new(
+            "hub.lan:7447".into(),
             "ab".repeat(32),
             Some("ABCDE-FGHJK".into()),
         );
-        set_vault(&path, Some(&vault)).unwrap();
+        set_hub(&path, Some(&hub)).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.starts_with(original), "{text}");
         assert!(!text.contains("ABCDE"), "the code is never kept: {text}");
         let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
         assert_eq!(
-            config.vault,
-            Some(VaultConfig {
+            config.hub,
+            Some(HubConfig {
                 pairing_code: None,
-                ..vault.clone()
+                ..hub.clone()
             })
         );
 
         // Setting it again replaces it; removing it gives the file back as it was.
-        let moved = VaultConfig {
+        let moved = HubConfig {
             address: "10.0.0.9:7447".into(),
-            ..vault
+            ..hub
         };
-        set_vault(&path, Some(&moved)).unwrap();
+        set_hub(&path, Some(&moved)).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(text.matches("[vault]").count(), 1, "{text}");
+        assert_eq!(text.matches("[hub]").count(), 1, "{text}");
         assert!(text.contains("10.0.0.9:7447"), "{text}");
-        set_vault(&path, None).unwrap();
+        set_hub(&path, None).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 
         // A host with no config file gets one.
         let fresh = tmp.path().join("new/daemon.toml");
-        set_vault(&fresh, Some(&moved)).unwrap();
+        set_hub(&fresh, Some(&moved)).unwrap();
         let config = Config::load_with_env(Some(&fresh), env(&[("HOME", "/home/dev")])).unwrap();
-        assert_eq!(config.vault.unwrap().address, "10.0.0.9:7447");
+        assert_eq!(config.hub.unwrap().address, "10.0.0.9:7447");
     }
 
     #[test]
-    fn a_host_reaches_its_vault_at_a_tunnel_url_and_may_take_no_relayed_connections() {
+    fn a_host_reaches_its_hub_at_a_tunnel_url_and_may_take_no_relayed_connections() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon.toml");
         let table = |rest: &str| {
-            let text = format!("[vault]\nfingerprint = \"{}\"\n{rest}", "ab".repeat(32));
+            let text = format!("[hub]\nfingerprint = \"{}\"\n{rest}", "ab".repeat(32));
             std::fs::write(&path, text).unwrap();
             Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")]))
-                .map(|config| config.vault.unwrap())
+                .map(|config| config.hub.unwrap())
         };
         // A tunnel's hostname is usually copied as a web address.
         for (written, read) in [
-            ("vault.lan:7447", "vault.lan:7447"),
-            ("wss://vault.example.com", "wss://vault.example.com"),
-            ("https://Vault.example.com/", "wss://vault.example.com"),
+            ("hub.lan:7447", "hub.lan:7447"),
+            ("wss://hub.example.com", "wss://hub.example.com"),
+            ("https://Hub.example.com/", "wss://hub.example.com"),
             ("http://127.0.0.1:7448", "ws://127.0.0.1:7448"),
         ] {
-            let vault = table(&format!("address = \"{written}\"\n")).unwrap();
-            assert_eq!(vault.address, read);
-            assert!(vault.relay, "relayed unless turned off");
+            let hub = table(&format!("address = \"{written}\"\n")).unwrap();
+            assert_eq!(hub.address, read);
+            assert!(hub.relay, "relayed unless turned off");
         }
-        let err = table("address = \"ftp://vault.example.com\"\n").unwrap_err();
+        let err = table("address = \"ftp://hub.example.com\"\n").unwrap_err();
         assert!(format!("{err:#}").contains("wss:// or https://"), "{err:#}");
 
         // Turned off, it stays off when the table is written back.
-        let vault = table("address = \"wss://vault.example.com\"\nrelay = false\n").unwrap();
-        assert!(!vault.relay);
-        set_vault(&path, Some(&vault)).unwrap();
+        let hub = table("address = \"wss://hub.example.com\"\nrelay = false\n").unwrap();
+        assert!(!hub.relay);
+        set_hub(&path, Some(&hub)).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("relay = false"), "{text}");
         let again = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
-        assert_eq!(again.vault.unwrap(), vault);
-        // A vault replicates nowhere, so it has no such switch.
-        std::fs::write(&path, "mode = \"vault\"\n[vault]\nrelay = false\n").unwrap();
+        assert_eq!(again.hub.unwrap(), hub);
+        // A hub replicates nowhere, so it has no such switch.
+        std::fs::write(&path, "mode = \"hub\"\n[hub]\nrelay = false\n").unwrap();
         assert!(Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).is_err());
     }
 
     #[test]
-    fn the_vault_switches_round_trip_through_the_config_file() {
+    fn the_hub_switches_round_trip_through_the_config_file() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon.toml");
         let load = || {
             let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")]));
-            config.unwrap().vault.unwrap()
+            config.unwrap().hub.unwrap()
         };
-        let vault = VaultConfig::new("vault.lan:7447".into(), "ab".repeat(32), None);
-        set_vault(&path, Some(&vault)).unwrap();
+        let hub = HubConfig::new("hub.lan:7447".into(), "ab".repeat(32), None);
+        set_hub(&path, Some(&hub)).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("backup = true\nsecrets = true\n"), "{text}");
         assert_eq!((load().backup, load().secrets), (true, true));
 
         // Each switch changes alone, keeping the rest of the table as written.
-        let text = text.replace("[vault]\n", "[vault]\nattachments = true # images too\n");
+        let text = text.replace("[hub]\n", "[hub]\nattachments = true # images too\n");
         std::fs::write(&path, &text).unwrap();
-        set_vault_switches(&path, false, true).unwrap();
+        set_hub_switches(&path, false, true).unwrap();
         assert_eq!((load().backup, load().secrets), (false, true));
-        set_vault_switches(&path, true, false).unwrap();
+        set_hub_switches(&path, true, false).unwrap();
         assert_eq!((load().backup, load().secrets), (true, false));
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("attachments = true # images too"), "{text}");
@@ -2840,29 +2836,29 @@ mod tests {
         let fingerprint = "ab".repeat(32);
         std::fs::write(
             &path,
-            format!("[vault]\naddress = \"vault:7447\"\nfingerprint = \"{fingerprint}\"\n"),
+            format!("[hub]\naddress = \"hub:7447\"\nfingerprint = \"{fingerprint}\"\n"),
         )
         .unwrap();
         assert_eq!((load().backup, load().secrets), (true, true));
 
-        // A host with no vault has no switches to set.
-        set_vault(&path, None).unwrap();
-        assert!(set_vault_switches(&path, true, true).is_err());
+        // A host with no hub has no switches to set.
+        set_hub(&path, None).unwrap();
+        assert!(set_hub_switches(&path, true, true).is_err());
     }
 
     #[test]
-    fn vault_mode_and_a_hosts_vault_table() {
+    fn hub_mode_and_a_hosts_hub_table() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon.toml");
-        std::fs::write(&path, "mode = \"vault\"\n").unwrap();
+        std::fs::write(&path, "mode = \"hub\"\n").unwrap();
         let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
-        assert_eq!((config.mode, config.vault), (Mode::Vault, None));
+        assert_eq!((config.mode, config.hub), (Mode::Hub, None));
 
         let fingerprint = "AB".repeat(32);
         std::fs::write(
             &path,
             format!(
-                "[vault]\naddress = \"vault:7447\"\nfingerprint = \"{fingerprint}\"\n\
+                "[hub]\naddress = \"hub:7447\"\nfingerprint = \"{fingerprint}\"\n\
                  pairing_code = \"ABCDE-FGHJK\"\n"
             ),
         )
@@ -2870,36 +2866,34 @@ mod tests {
         let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
         assert_eq!(config.mode, Mode::Host);
         assert_eq!(
-            config.vault,
-            Some(VaultConfig::new(
-                "vault:7447".into(),
+            config.hub,
+            Some(HubConfig::new(
+                "hub:7447".into(),
                 "ab".repeat(32),
                 Some("ABCDE-FGHJK".into())
             ))
         );
         // Images are not backed up unless the host says so.
-        assert_eq!(config.vault.unwrap().images_cap(), None);
+        assert_eq!(config.hub.unwrap().images_cap(), None);
 
         std::fs::write(
             &path,
-            "[vault]\naddress = \"vault:7447\"\nfingerprint = \"abc\"\n",
+            "[hub]\naddress = \"hub:7447\"\nfingerprint = \"abc\"\n",
         )
         .unwrap();
         let err = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap_err();
-        assert!(format!("{err:#}").contains("vault.fingerprint"), "{err:#}");
+        assert!(format!("{err:#}").contains("hub.fingerprint"), "{err:#}");
 
         std::fs::write(
             &path,
-            format!(
-                "mode = \"vault\"\n[vault]\naddress = \"v:1\"\nfingerprint = \"{fingerprint}\"\n"
-            ),
+            format!("mode = \"hub\"\n[hub]\naddress = \"v:1\"\nfingerprint = \"{fingerprint}\"\n"),
         )
         .unwrap();
         assert!(Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).is_err());
     }
 
     #[test]
-    fn images_and_retention_in_the_vault_table() {
+    fn images_and_retention_in_the_hub_table() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon.toml");
         let load = |text: String| {
@@ -2907,55 +2901,55 @@ mod tests {
             Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")]))
         };
         let host = format!(
-            "[vault]\naddress = \"vault:7447\"\nfingerprint = \"{}\"\n",
+            "[hub]\naddress = \"hub:7447\"\nfingerprint = \"{}\"\n",
             "ab".repeat(32)
         );
-        let vault = load(format!("{host}attachments = true\n"))
+        let hub = load(format!("{host}attachments = true\n"))
             .unwrap()
-            .vault
+            .hub
             .unwrap();
-        assert_eq!(vault.images_cap(), Some(DEFAULT_ATTACHMENTS_CAP));
-        let vault = load(format!(
+        assert_eq!(hub.images_cap(), Some(DEFAULT_ATTACHMENTS_CAP));
+        let hub = load(format!(
             "{host}attachments = true\nattachments_cap = 5000\n"
         ))
         .unwrap()
-        .vault
+        .hub
         .unwrap();
-        assert_eq!(vault.images_cap(), Some(5000));
-        let vault = load(format!("{host}attachments_cap = 5000\n"))
+        assert_eq!(hub.images_cap(), Some(5000));
+        let hub = load(format!("{host}attachments_cap = 5000\n"))
             .unwrap()
-            .vault
+            .hub
             .unwrap();
-        assert_eq!(vault.images_cap(), None);
+        assert_eq!(hub.images_cap(), None);
         let err = load(format!("{host}archive_retention_days = 3\n")).unwrap_err();
-        assert!(format!("{err:#}").contains("on the vault"), "{err:#}");
+        assert!(format!("{err:#}").contains("on the hub"), "{err:#}");
 
         // Written back as set, and only what differs from the defaults.
-        let both = VaultConfig {
+        let both = HubConfig {
             attachments: true,
             attachments_cap: 5000,
-            ..vault.clone()
+            ..hub.clone()
         };
-        set_vault(&path, Some(&both)).unwrap();
+        set_hub(&path, Some(&both)).unwrap();
         let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
-        assert_eq!(config.vault, Some(both));
-        let plain = VaultConfig::new(vault.address.clone(), vault.fingerprint.clone(), None);
-        set_vault(&path, Some(&plain)).unwrap();
+        assert_eq!(config.hub, Some(both));
+        let plain = HubConfig::new(hub.address.clone(), hub.fingerprint.clone(), None);
+        set_hub(&path, Some(&plain)).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("attachments"), "{text}");
 
-        let config = load("mode = \"vault\"\n".into()).unwrap();
+        let config = load("mode = \"hub\"\n".into()).unwrap();
         assert_eq!(config.retention.archive_days, 90);
-        let config = load("mode = \"vault\"\n[vault]\narchive_retention_days = 30\n".into());
+        let config = load("mode = \"hub\"\n[hub]\narchive_retention_days = 30\n".into());
         assert_eq!(config.unwrap().retention.archive_days, 30);
         let config =
-            load("mode = \"vault\"\n[vault]\ncliproxyapi = \"http://127.0.0.1:8317\"\n".into());
+            load("mode = \"hub\"\n[hub]\ncliproxyapi = \"http://127.0.0.1:8317\"\n".into());
         assert_eq!(
             config.unwrap().cliproxyapi.as_deref(),
             Some("http://127.0.0.1:8317")
         );
-        assert!(load("mode = \"vault\"\n[vault]\ncliproxyapi = \"cpa\"\n".into()).is_err());
-        let proxy = "mode = \"vault\"\n[vault]\ncliproxyapi = \"http://127.0.0.1:8317\"\n";
+        assert!(load("mode = \"hub\"\n[hub]\ncliproxyapi = \"cpa\"\n".into()).is_err());
+        let proxy = "mode = \"hub\"\n[hub]\ncliproxyapi = \"http://127.0.0.1:8317\"\n";
         let config = load(format!(
             "{proxy}cliproxyapi_endpoint = \"https://cpa.lan:8317\"\n"
         ));
@@ -2964,15 +2958,15 @@ mod tests {
             Some("https://cpa.lan:8317")
         );
         assert!(load(format!("{proxy}cliproxyapi_endpoint = \"cpa.lan\"\n")).is_err());
-        let alone = "mode = \"vault\"\n[vault]\ncliproxyapi_endpoint = \"https://cpa.lan:8317\"\n";
+        let alone = "mode = \"hub\"\n[hub]\ncliproxyapi_endpoint = \"https://cpa.lan:8317\"\n";
         assert!(load(alone.into()).is_err());
         let err = load(format!("{host}cliproxyapi = \"http://127.0.0.1:8317\"\n")).unwrap_err();
         assert!(
-            format!("{err:#}").contains("on the vault, not on a host"),
+            format!("{err:#}").contains("on the hub, not on a host"),
             "{err:#}"
         );
-        assert!(load("mode = \"vault\"\n[vault]\narchive_retention_days = 0\n".into()).is_err());
-        assert!(load("mode = \"vault\"\n[vault]\nattachments = true\n".into()).is_err());
+        assert!(load("mode = \"hub\"\n[hub]\narchive_retention_days = 0\n".into()).is_err());
+        assert!(load("mode = \"hub\"\n[hub]\nattachments = true\n".into()).is_err());
     }
 
     #[test]
@@ -4059,16 +4053,16 @@ mod tests {
     }
 
     #[test]
-    fn an_endpoint_accounts_key_can_be_a_vault_secret_and_switches_back_and_forth() {
+    fn an_endpoint_accounts_key_can_be_a_hub_secret_and_switches_back_and_forth() {
         let home = tempfile::tempdir().unwrap();
         let vars = [("HOME", home.path().to_str().unwrap())];
         let path = write(
             home.path(),
-            "[[accounts]]\nid = \"vault\"\nprovider = \"claude\"\n\
-             endpoint = \"https://vault.example.com:8317\"\nkey_secret = \"CLIPROXYAPI_KEY\"\n",
+            "[[accounts]]\nid = \"hub\"\nprovider = \"claude\"\n\
+             endpoint = \"https://hub.example.com:8317\"\nkey_secret = \"CLIPROXYAPI_KEY\"\n",
         );
         let config = Config::load_with_env(Some(&path), env(&vars)).unwrap();
-        let account = &config.accounts[&AccountId::new("vault")];
+        let account = &config.accounts[&AccountId::new("hub")];
         let secret: SecretRef = "CLIPROXYAPI_KEY".parse().unwrap();
         assert_eq!(
             account.endpoint.as_ref().unwrap().key,
@@ -4076,7 +4070,7 @@ mod tests {
         );
         // Written back as the secret's name; the file holds no key.
         let added = home.path().join("added.toml");
-        append_account_with_env(&added, &AccountId::new("vault"), account, env(&vars)).unwrap();
+        append_account_with_env(&added, &AccountId::new("hub"), account, env(&vars)).unwrap();
         let text = std::fs::read_to_string(&added).unwrap();
         assert!(
             text.contains("key_secret = \"CLIPROXYAPI_KEY\"\n"),
@@ -4088,11 +4082,11 @@ mod tests {
         let key = SecretValue::new("typed-key").unwrap();
         let held = set_account_settings(
             &path,
-            &AccountId::new("vault"),
+            &AccountId::new("hub"),
             account,
             &AccountSettings {
                 key: Some(&key),
-                ..settings("Vault", None, None)
+                ..settings("Hub", None, None)
             },
             true,
         )
@@ -4105,11 +4099,11 @@ mod tests {
         );
         let again = set_account_settings(
             &path,
-            &AccountId::new("vault"),
+            &AccountId::new("hub"),
             &held,
             &AccountSettings {
                 key_secret: Some(&secret),
-                ..settings("Vault", None, None)
+                ..settings("Hub", None, None)
             },
             true,
         )

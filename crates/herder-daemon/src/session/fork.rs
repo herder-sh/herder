@@ -2,10 +2,10 @@
 //!
 //! The session to fork is found on this host, else in the history a client relayed
 //! ([`SessionManager::upload_history`]) from wherever it read the session: its host, or the
-//! vault when that host is gone. A host never reads other hosts' sessions, from them or from
-//! its vault: the client, signed in to both as the person forking, reads the session there and
+//! hub when that host is gone. A host never reads other hosts' sessions, from them or from
+//! its hub: the client, signed in to both as the person forking, reads the session there and
 //! uploads it here, in parts that each fit a WebSocket message. Only owners may upload one, and its events are
-//! imported as history, as a vault copy's are. The original
+//! imported as history, as a hub copy's are. The original
 //! is left as it is. The fork gets a new id; its journal is the original's with that id, minus
 //! the pull requests and other branches the original tracked, so it owns only its own branch.
 //! Its `session_created` names this host's clone of the repository, its new worktree and its
@@ -78,7 +78,7 @@ pub struct Forks {
     pub host: HostId,
 }
 
-/// A session to fork, as its host or the vault holds it.
+/// A session to fork, as its host or the hub holds it.
 pub struct Source {
     /// Its whole journal.
     pub events: Vec<Event>,
@@ -219,7 +219,7 @@ impl SessionManager {
     }
 
     /// The history `by` uploaded of `session_id`, from `relay.host_id`, to fork. It is checked
-    /// as a vault copy is, by [`Self::fork_source`].
+    /// as a hub copy is, by [`Self::fork_source`].
     fn relayed_source(
         &self,
         session_id: &SessionId,

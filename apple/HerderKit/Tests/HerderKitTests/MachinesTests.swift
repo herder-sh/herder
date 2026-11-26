@@ -4,9 +4,9 @@ import Herder
 import SwiftUI
 import Testing
 
-/// Three machines and the vault two of them back up to, as the Machines screen shows them:
+/// Three machines and the hub two of them back up to, as the Machines screen shows them:
 /// `trash-can-01` has two CLIs behind and a signed-out account, `work-mbp` runs on this Mac and
-/// has not reached the vault for six hours.
+/// has not reached the hub for six hours.
 func sampleFleetMachines(now: Date = .now) -> [Machine] {
     func resources(_ cpu: Double) -> HostResources {
         HostResources(cpuCores: 8, cpuPercent: cpu, load1m: 1, memoryTotalBytes: 16 << 30,
@@ -59,24 +59,24 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
         ("02E", "h-can", .archived, "github.com/acme/trip1"), ("02F", "h-can", .archived, "github.com/acme/herder"),
         ("02G", "h-can", .running, "github.com/acme/trip1"),
     ]
-    var vault = machine("h-vault", name: "herder-vault-0", sessions: stored.map(\.0), projects: projects, hosts: [
+    var hub = machine("h-hub", name: "herder-hub-0", sessions: stored.map(\.0), projects: projects, hosts: [
         FleetHost(hostId: "h-mbp", hostName: "work-mbp", online: false,
                   lastSeen: now.addingTimeInterval(-6 * 3600).ISO8601Format()),
         FleetHost(hostId: "h-can", hostName: "trash-can-01", online: true, lastSeen: now.ISO8601Format()),
     ])
     for (index, session) in stored.enumerated() {
-        vault.sessions[index].hostId = session.1
-        vault.sessions[index].status = session.2
-        vault.sessions[index].projectId = session.3
+        hub.sessions[index].hostId = session.1
+        hub.sessions[index].status = session.2
+        hub.sessions[index].projectId = session.3
     }
-    vault.vault = VaultStatus(sessions: UInt64(stored.count), events: 52_000, storageBytes: 245_000_000, hosts: [
+    hub.hub = HubStatus(sessions: UInt64(stored.count), events: 52_000, storageBytes: 245_000_000, hosts: [
         HostReplication(hostId: "h-mbp", sessions: 3, events: 20_000,
                         lastEventAt: now.addingTimeInterval(-6 * 3600 - 120).ISO8601Format(), lagMs: 40),
         HostReplication(hostId: "h-can", sessions: 4, events: 32_000,
                         lastEventAt: now.addingTimeInterval(-180).ISO8601Format(), lagMs: 25),
     ])
-    vault.quality.lastRttMs = 20
-    return [mbp, can, draugelis, vault]
+    hub.quality.lastRttMs = 20
+    return [mbp, can, draugelis, hub]
 }
 
 @MainActor struct MachineRowTests {
@@ -97,9 +97,9 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
     @Test func machinesHangUnderTheHubTheySyncTo() {
         var machines = sampleFleetMachines()
         let structure = SetupStructure(machines: machines, summaries: [], localNames: [])
-        #expect(structure.hubs.map(\.name) == ["herder-vault-0"])
+        #expect(structure.hubs.map(\.name) == ["herder-hub-0"])
         let hub = structure.hubs[0]
-        #expect(hub.id == "paired.h-vault" && hub.hostId == "h-vault" && hub.connection == .connected)
+        #expect(hub.id == "paired.h-hub" && hub.hostId == "h-hub" && hub.connection == .connected)
         #expect(hub.machines.map(\.name) == ["trash-can-01", "work-mbp"])
         // draugelis syncs to no hub.
         #expect(structure.others.map(\.name) == ["draugelis"])
@@ -152,10 +152,10 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
 
     @Test func aHubNotOnThisDeviceNamesItsMachinesAndOffersSignIn() {
         let machines = Array(sampleFleetMachines().prefix(3))
-        let unpaired = UnpairedVault(address: "vault.lan:7447", fingerprint: "aa", hosts: ["trash-can-01"])
+        let unpaired = UnpairedHub(address: "hub.lan:7447", fingerprint: "aa", hosts: ["trash-can-01"])
         let structure = SetupStructure(machines: machines, summaries: [], unpaired: [unpaired], localNames: [])
         let hub = structure.hubs[0]
-        #expect(hub.id == "unpaired.aa" && hub.name == "vault.lan")
+        #expect(hub.id == "unpaired.aa" && hub.name == "hub.lan")
         // It has no page and no connection until this device signs in to it.
         #expect(hub.hostId == nil && hub.connection == nil && hub.unpaired == unpaired)
         #expect(hub.invitation == "trash-can-01 syncs to it. Sign in to see it here.")
@@ -226,9 +226,9 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
 #if os(macOS)
 import AppKit
 
-/// Draws Setup's hub with its machines under it, and the vault's page, and attaches them;
+/// Draws Setup's hub with its machines under it, and the hub's page, and attaches them;
 /// with `HERDER_SCREENSHOT_DIR` set, also writes them there as `machines.png` and
-/// `vault-page.png`.
+/// `hub-page.png`.
 @MainActor struct MachinesScreenshotTests {
     private func fleet() throws -> Fleet {
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
@@ -251,9 +251,9 @@ import AppKit
         try await shoot(view, named: "machines.png", height: 420)
     }
 
-    @Test func drawsTheVaultPage() async throws {
+    @Test func drawsTheHubPage() async throws {
         let fleet = try fleet()
-        try await shoot(VaultPage(fleet: fleet, vault: "h-vault"), named: "vault-page.png", height: 460)
+        try await shoot(HubPage(fleet: fleet, hub: "h-hub"), named: "hub-page.png", height: 460)
     }
 
     private func shoot(_ view: some View, named name: String, height: CGFloat) async throws {

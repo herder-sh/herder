@@ -1,4 +1,4 @@
-//! The TCP listeners the daemon and the vault accept connections on: one per configured
+//! The TCP listeners the daemon and the hub accept connections on: one per configured
 //! address, served by one accept loop.
 
 use std::future::poll_fn;
@@ -33,7 +33,7 @@ pub(crate) async fn bind_tunnel(tunnel: Option<SocketAddr>) -> Result<Option<Tcp
     if !address.ip().is_loopback() {
         warn!(
             %address,
-            "`tunnel` is not a loopback address: whatever reaches it can claim any client              address, so allow only cloudflared to (see docs/vault-relay.md)"
+            "`tunnel` is not a loopback address: whatever reaches it can claim any client              address, so allow only cloudflared to (see docs/hub-relay.md)"
         );
     }
     Ok(Some(listener))

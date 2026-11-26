@@ -1,6 +1,6 @@
 //! The machines page, as the Mac app's Setup lists them: each machine with its connection,
 //! its address, what runs on it and its herder, and what to do with it (reconnect, rename,
-//! forget); a vault's hosts under it. **Add a Machine** signs this device in to the machines
+//! forget); a hub's hosts under it. **Add a Machine** signs this device in to the machines
 //! of a `herder://fleet` link an app of yours shares, or to one machine by its address and
 //! fingerprint, as `herder login` does: an app of yours approves this device with its passkey.
 
@@ -153,9 +153,9 @@ impl MachinesPage {
         name.add_css_class("row-title");
         top.append(&name);
         if !machine.hosts.is_empty() {
-            let vault = gtk::Label::new(Some("vault"));
-            vault.add_css_class("chip");
-            top.append(&vault);
+            let hub = gtk::Label::new(Some("hub"));
+            hub.add_css_class("chip");
+            top.append(&hub);
         }
         if let Some(role) = machine.role {
             let role = gtk::Label::new(Some(match role {

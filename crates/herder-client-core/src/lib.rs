@@ -82,7 +82,7 @@
 //! # Resources
 //!
 //! [`Machine::resources`] and [`Machine::session_usage`] hold the latest figures the daemon
-//! pushed, at most every two seconds each, and a vault's [`Machine::vault`] its latest status;
+//! pushed, at most every two seconds each, and a hub's [`Machine::hub`] its latest status;
 //! they are live only while connected, so they are cleared when the machine no longer reads
 //! `Connected`. So are [`Machine::skills`] and [`Machine::session_skills`], the skill library
 //! and each session's skills as the daemon last sent them, [`Machine::update`] and
@@ -182,9 +182,9 @@ use std::time::Duration;
 use herder_protocol::{
     Account, AccountId, ApprovalRequest, AwsProfile, Command, CommandBody, CommandId,
     CommandResult, ErrorCode, ErrorInfo, Event, FailoverSettings, FleetHost, HostId, HostResources,
-    Item, PasskeyAssertion, PasskeyChallenge, PersonId, Project, Provider, Role, SessionHead,
-    SessionId, SessionSkill, SessionUsage, SignInRefusal, SkillsStatus, Terminal, TerminalId,
-    Timestamp, UpdateStage, UserId, VaultStatus,
+    HubStatus, Item, PasskeyAssertion, PasskeyChallenge, PersonId, Project, Provider, Role,
+    SessionHead, SessionId, SessionSkill, SessionUsage, SignInRefusal, SkillsStatus, Terminal,
+    TerminalId, Timestamp, UpdateStage, UserId,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -206,7 +206,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 21;
+pub const CLIENT_API_VERSION: u32 = 22;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -281,12 +281,12 @@ pub struct Machine {
     pub name: String,
     /// Addresses in order of preference: connecting races them, each with a head start over
     /// the next, the one that answered last first. Each is `host:port`, the `wss://` URL of
-    /// a tunnel to the machine, or `vault://<host id>`, the route through that vault, one of
-    /// this client's machines, which the client adds, last, once the vault says it relays to
+    /// a tunnel to the machine, or `hub://<host id>`, the route through that hub, one of
+    /// this client's machines, which the client adds, last, once the hub says it relays to
     /// the machine (`FleetHost::relay`). Set with [`Client::set_addresses`].
     pub addresses: Vec<String>,
     /// The address the current connection uses; `None` while not connected. While it is a
-    /// `vault://` one, the client moves back to an address before it once one answers.
+    /// `hub://` one, the client moves back to an address before it once one answers.
     pub address: Option<String>,
     /// SHA-256 of the pinned daemon certificate, lowercase hex.
     pub fingerprint: String,
@@ -306,11 +306,11 @@ pub struct Machine {
     /// The daemon's herder version, from the latest hello; `None` until the first connection,
     /// and from daemons too old to update from a client (before `UpdateDaemon`).
     pub herder_version: Option<String>,
-    /// The daemon's sessions, as last listed. A vault's are every host's, each naming its
+    /// The daemon's sessions, as last listed. A hub's are every host's, each naming its
     /// host in `host_id`, and all read-only.
     pub sessions: Vec<SessionHead>,
-    /// The hosts a vault lists sessions of, with their liveness, as last listed; empty for a
-    /// daemon, whose sessions all run on its own host. A machine with hosts is a vault.
+    /// The hosts a hub lists sessions of, with their liveness, as last listed; empty for a
+    /// daemon, whose sessions all run on its own host. A machine with hosts is a hub.
     pub hosts: Vec<FleetHost>,
     /// The projects with a clone on the daemon's host, as last listed; merge them across
     /// machines by `project_id`.
@@ -328,9 +328,9 @@ pub struct Machine {
     /// What each session with processes or containers uses, as last sent; empty while not
     /// connected.
     pub session_usage: HashMap<SessionId, SessionUsage>,
-    /// What a vault holds and how far each host's replication got, as last sent; `None` for a
+    /// What a hub holds and how far each host's replication got, as last sent; `None` for a
     /// daemon, and while not connected.
-    pub vault: Option<VaultStatus>,
+    pub hub: Option<HubStatus>,
     /// The skill library as the daemon has it, as last sent; `None` until it sends it, and
     /// while not connected.
     pub skills: Option<SkillsStatus>,
@@ -469,7 +469,7 @@ impl Client {
         let saved = profile::load(&config_dir)?;
         let changed = Arc::new(watch::Sender::new(0));
         let stop = CancellationToken::new();
-        // Each machine is given the list, to reach another through: a vault relays to it.
+        // Each machine is given the list, to reach another through: a hub relays to it.
         let machines = Arc::new(Mutex::new(Vec::new()));
         let started = saved
             .into_iter()
@@ -620,9 +620,9 @@ impl Client {
                 let hosts: Vec<String> = saved
                     .addresses
                     .into_iter()
-                    // A route through a vault is this client's own: the device that takes
-                    // the link gets its own once it is signed in to the vault.
-                    .filter(|host| !address::is_loopback(host) && address::vault(host).is_none())
+                    // A route through a hub is this client's own: the device that takes
+                    // the link gets its own once it is signed in to the hub.
+                    .filter(|host| !address::is_loopback(host) && address::hub(host).is_none())
                     .collect();
                 (!hosts.is_empty()).then_some(FleetMachine {
                     hosts,
@@ -744,10 +744,10 @@ impl Client {
     /// device until its owner revokes it.
     pub fn forget(&self, host_id: HostId) -> Result<(), Error> {
         self.machine(&host_id)?;
-        let through = address::through_vault(&host_id);
+        let through = address::through_hub(&host_id);
         self.update(|all| {
             all.retain(|m| m.host_id != host_id);
-            // No machine is reached through a vault this device left.
+            // No machine is reached through a hub this device left.
             for machine in all {
                 machine.addresses.retain(|address| *address != through);
             }
@@ -873,11 +873,11 @@ impl Client {
     ///
     /// - a session of `destination` itself forks from its own journal;
     /// - else, while a machine that lists the session is connected (`source`, else the
-    ///   machine the session runs on, else a vault of this client's that backs it up), this
+    ///   machine the session runs on, else a hub of this client's that backs it up), this
     ///   client reads the session's journal and images there and relays them to `destination`
     ///   (`upload_history`);
     /// - else it fails with `not_found`: a host never reads other hosts' sessions, from them
-    ///   or from its vault.
+    ///   or from its hub.
     pub async fn fork_session(
         &self,
         source: HostId,
@@ -1162,14 +1162,14 @@ impl Inner {
         Ok(())
     }
 
-    /// Gives each machine a vault says it relays to the route through that vault, last of
+    /// Gives each machine a hub says it relays to the route through that hub, last of
     /// its addresses, unless it has it: from then on the machine is reached there whenever
     /// its own addresses do not answer.
-    fn add_vault_routes(&self, machines: &mut Vec<Arc<Supervisor>>) {
+    fn add_hub_routes(&self, machines: &mut Vec<Arc<Supervisor>>) {
         let mut missing: Vec<(HostId, String)> = Vec::new();
-        for vault in machines.iter() {
-            let through = address::through_vault(&vault.saved.host_id);
-            for host_id in vault.relays_to() {
+        for hub in machines.iter() {
+            let through = address::through_hub(&hub.saved.host_id);
+            for host_id in hub.relays_to() {
                 let reached = machines.iter().find(|m| m.saved.host_id == host_id);
                 if reached.is_some_and(|m| !m.saved().addresses.contains(&through)) {
                     missing.push((host_id, through.clone()));
@@ -1191,7 +1191,7 @@ impl Inner {
             Ok(())
         });
         if let Err(err) = added {
-            warn!("saving a machine's route through its vault: {err}");
+            warn!("saving a machine's route through its hub: {err}");
         }
     }
 
@@ -1271,7 +1271,7 @@ async fn follow_profile(inner: Weak<Inner>, stop: CancellationToken) {
                 Err(err) => warn!("re-reading the profile: {err}"),
             }
         }
-        inner.add_vault_routes(&mut machines);
+        inner.add_hub_routes(&mut machines);
     }
 }
 

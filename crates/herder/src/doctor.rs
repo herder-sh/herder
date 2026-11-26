@@ -13,18 +13,18 @@ use std::process::{Command, ExitCode, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use herder_daemon::Config;
-use herder_daemon::config::VaultConfig;
+use herder_daemon::config::HubConfig;
+use herder_daemon::hub::cliproxyapi;
+use herder_daemon::hub::install::cliproxyapi as local_cliproxyapi;
 use herder_daemon::login::{self, LoginProgram};
 use herder_daemon::session::AccountConfig;
-use herder_daemon::vault::cliproxyapi;
-use herder_daemon::vault::install::cliproxyapi as local_cliproxyapi;
 use herder_protocol::{AccountId, Provider};
 
 use herder_daemon::service;
 
 /// How long a CLI's `--version` or `gh auth status` may take.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long a TCP connect to the daemon or the vault may take.
+/// How long a TCP connect to the daemon or the hub may take.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How a check came out.
@@ -109,7 +109,7 @@ fn checks(explicit: Option<&Path>, tools: &Tools, service: Option<service::State
     checks.push(service_check(service));
     if let Some(config) = &config {
         checks.extend(config.listen.iter().map(|&address| listen_check(address)));
-        checks.extend(config.vault.as_ref().map(vault_check));
+        checks.extend(config.hub.as_ref().map(hub_check));
         checks.extend(config.cliproxyapi.as_deref().map(|url| {
             cliproxyapi_check(url, local_cliproxyapi::management(url, &config.data_dir))
         }));
@@ -495,21 +495,21 @@ fn listen_check(address: SocketAddr) -> Check {
     }
 }
 
-/// The vault this host replicates to accepts TCP connections.
-fn vault_check(vault: &VaultConfig) -> Check {
-    let subject = format!("vault {}", vault.address);
+/// The hub this host replicates to accepts TCP connections.
+fn hub_check(hub: &HubConfig) -> Check {
+    let subject = format!("hub {}", hub.address);
     let hint = || {
-        "check the vault's daemon runs and that this machine can reach its address (network, \
+        "check the hub's daemon runs and that this machine can reach its address (network, \
          firewall)"
             .to_owned()
     };
-    match connect(vault.address.as_str()) {
+    match connect(hub.address.as_str()) {
         Ok(()) => Check::pass(subject, "reachable"),
         Err(detail) => Check::fail(subject, detail, hint()),
     }
 }
 
-/// A vault's CLIProxyAPI at `url` answers its management API, `management`, and holds provider
+/// A hub's CLIProxyAPI at `url` answers its management API, `management`, and holds provider
 /// credentials for the hosts' sessions.
 fn cliproxyapi_check(url: &str, management: anyhow::Result<cliproxyapi::Management>) -> Check {
     let subject = format!("CLIProxyAPI {url}");
@@ -519,7 +519,7 @@ fn cliproxyapi_check(url: &str, management: anyhow::Result<cliproxyapi::Manageme
             return Check::fail(
                 subject,
                 format!("{err:#}"),
-                "give the vault the proxy's management secret (see deploy/README.md)".into(),
+                "give the hub the proxy's management secret (see deploy/README.md)".into(),
             );
         }
     };
@@ -535,7 +535,7 @@ fn cliproxyapi_check(url: &str, management: anyhow::Result<cliproxyapi::Manageme
         Err(err) => Check::fail(
             subject,
             format!("{err:#}"),
-            "start the CLIProxyAPI next to the vault, with its management API on".into(),
+            "start the CLIProxyAPI next to the hub, with its management API on".into(),
         ),
     }
 }
@@ -926,7 +926,7 @@ binary = "{codex}"
     }
 
     #[test]
-    fn listen_and_vault_checks_connect() {
+    fn listen_and_hub_checks_connect() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let open = listener.local_addr().unwrap();
         // Nothing can listen on port 0, so no parallel test can take it the way it could a
@@ -936,11 +936,11 @@ binary = "{codex}"
         assert_eq!(listen_check(closed).status, Status::Fail);
         let every = SocketAddr::from(([0, 0, 0, 0], open.port()));
         assert_eq!(listen_check(every).status, Status::Pass);
-        let vault = |address: SocketAddr| {
-            vault_check(&VaultConfig::new(address.to_string(), "ab".into(), None))
+        let hub = |address: SocketAddr| {
+            hub_check(&HubConfig::new(address.to_string(), "ab".into(), None))
         };
-        assert_eq!(vault(open).status, Status::Pass);
-        assert_eq!(vault(closed).status, Status::Fail);
+        assert_eq!(hub(open).status, Status::Pass);
+        assert_eq!(hub(closed).status, Status::Fail);
     }
 
     /// A CLIProxyAPI management API answering every request with `answer`, a status line and
@@ -974,7 +974,7 @@ binary = "{codex}"
     }
 
     #[test]
-    fn a_vaults_cliproxyapi_is_checked_through_its_management_api() {
+    fn a_hubs_cliproxyapi_is_checked_through_its_management_api() {
         let management = |url: &str, secret: &str| {
             Ok(cliproxyapi::Management::new(
                 url,

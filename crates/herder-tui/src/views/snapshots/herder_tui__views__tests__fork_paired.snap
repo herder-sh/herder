@@ -1,15 +1,14 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 474
 expression: "render(&mut app, 100, 24).backend()"
 ---
 " herder        inbox 0 « │  chat   tasks   prs   term                                               "
 "                         │                                                                          "
 " machines     by machine │                                                                          "
-"  ○ vault          ┌ fork · app · docs ────────────────────────────────── esc ┐                     "
+"  ○ hub            ┌ fork · app · docs ────────────────────────────────── esc ┐                     "
 "    ├ ○ devbox     │                                                          │                     "
-"    │ ├ ○ app · …  │  ✗ on laptop · offline, last seen 2h 5m ago              │                     "
-"    │ └ ○ app · …  │                                                          │                     "
+"    │ ├ ○ app · api│  ✗ on laptop · offline, last seen 2h 5m ago              │                     "
+"    │ └ ○ app · lo…│                                                          │                     "
 "    └ ○ laptop   of│  fork onto                                               │                     "
 "▶     └ ○ app · doc│ ▶ ● devbox                                               │                     "
 "  · devbox         │                                                          │                     "
@@ -26,4 +25,4 @@ expression: "render(&mut app, 100, 24).backend()"
 " ─────────────────────── │  laptop is offline · F fork                                              "
 " + new            ≡ menu │                                                          claude-main     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
-" esc close                                                                       ● vault  ● devbox  "
+" esc close                                                                         ● hub  ● devbox  "
