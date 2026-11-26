@@ -107,11 +107,28 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
         #expect(hub.keeps == "Keeps copies of 7 sessions, your secrets and provider logins")
         #expect(hub.invitation == nil)
 
-        // A hub is reached from anywhere once it has a public address.
-        #expect(hub.reachability == "Reachable on its network only")
-        machines[3].addresses = ["10.0.0.4:7447", "wss://hub.example.com"]
-        let reachable = SetupStructure(machines: machines, summaries: [], localNames: [])
-        #expect(reachable.hubs[0].reachability == "Reachable from anywhere")
+    }
+
+    /// However the hub is exposed (a port forward, a reverse proxy, a tunnel, a VPN), Setup says
+    /// how far its furthest-reaching address reaches, and names that address.
+    @Test func aHubSaysHowFarItIsReachedAndAtWhichAddress() {
+        var machines = sampleFleetMachines()
+        func reachability(_ addresses: [String]) -> String {
+            machines[3].addresses = addresses
+            return SetupStructure(machines: machines, summaries: [], localNames: []).hubs[0].reachability
+        }
+        #expect(reachability([]) == "Reachable on its network only")
+        #expect(reachability(["10.0.0.4:7447", "hub.lan:7447", "[fe80::1]:7447"]) == "Reachable on its network only")
+        #expect(reachability(["10.0.0.4:7447", "hub.tail1234.ts.net:7447"])
+            == "Reachable over your VPN, at hub.tail1234.ts.net")
+        #expect(reachability(["100.101.4.2:7447"]) == "Reachable over your VPN, at 100.101.4.2")
+        // A forwarded port, a reverse proxy and a tunnel all read the same.
+        #expect(reachability(["10.0.0.4:7447", "203.0.113.7:7447"]) == "Reachable from anywhere, at 203.0.113.7")
+        #expect(reachability(["hub.tail1234.ts.net:7447", "hub.example.com:443"])
+            == "Reachable from anywhere, at hub.example.com")
+        #expect(reachability(["wss://Hub.Example.com:8443/herder", "10.0.0.4:7447"])
+            == "Reachable from anywhere, at hub.example.com")
+        #expect(AddressScope("[fd7a:115c:a1e0::12]:7447") == .vpn && AddressScope("172.20.1.1:7447") == .network)
     }
 
     /// A laptop asleep is expected: it reads Offline, and On another network while its hub

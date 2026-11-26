@@ -107,6 +107,55 @@ struct MachineRow: Hashable, Identifiable {
     static let loopback: Set<String> = ["localhost", "127.0.0.1", "::1"]
 }
 
+/// Where an address can be reached from, by what it names: nothing here knows how it is
+/// exposed (a port forward, a reverse proxy, a tunnel, a VPN), only how far it reaches.
+enum AddressScope: Comparable, Hashable {
+    /// Loopback, a private range, or a name only a local network resolves.
+    case network
+    /// A VPN's range or name: Tailscale's 100.64.0.0/10, fd7a:115c:a1e0::/48 and `*.ts.net`.
+    case vpn
+    /// A public name or address.
+    case anywhere
+
+    /// The host of `address` without its scheme, port and path: `host:port`, `[v6]:port`, or
+    /// a `wss://host[:port][/path]` URL.
+    static func host(of address: String) -> String {
+        var rest = Substring(address)
+        if let scheme = rest.range(of: "://") { rest = rest[scheme.upperBound...] }
+        return MachineRow.host(of: String(rest.prefix { $0 != "/" })).lowercased()
+    }
+
+    /// The ends of names only a local network resolves.
+    private static let localSuffixes = [".local", ".lan", ".home", ".internal", ".home.arpa"]
+
+    init(_ address: String) {
+        let host = Self.host(of: address)
+        let octets = host.split(separator: ".", omittingEmptySubsequences: false).map { UInt8($0) }
+        if octets.count == 4, let first = octets[0], let second = octets[1], !octets.contains(nil) {
+            switch (first, second) {
+            case (10, _), (127, _), (192, 168), (169, 254), (172, 16...31): self = .network
+            case (100, 64...127): self = .vpn
+            default: self = .anywhere
+            }
+        } else if host.contains(":") {
+            // An IPv6 address: Tailscale's range, then loopback, unique local and link local.
+            if host.hasPrefix("fd7a:115c:a1e0:") {
+                self = .vpn
+            } else if host == "::1" || host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe80:") {
+                self = .network
+            } else {
+                self = .anywhere
+            }
+        } else if host.hasSuffix(".ts.net") {
+            self = .vpn
+        } else if !host.contains(".") || Self.localSuffixes.contains(where: { host.hasSuffix($0) }) {
+            self = .network
+        } else {
+            self = .anywhere
+        }
+    }
+}
+
 extension Machine {
     /// Whether it is a hub, which keeps its machines' sessions rather than running any.
     var isHub: Bool { !hosts.isEmpty || vault != nil }
@@ -125,14 +174,22 @@ struct SetupStructure: Equatable {
         var unpaired: UnpairedVault?
         /// This device's connection to it; nil when it has none to have.
         var connection: ConnectionState?
-        /// Whether it has a public address, so it is reached from any network.
-        var anywhere = false
+        /// How far its furthest-reaching address reaches, and that address's host.
+        var scope = AddressScope.network
+        var address: String?
         /// The sessions it keeps a copy of.
         var sessions = 0
         let machines: [MachineRow]
 
-        /// "Reachable from anywhere".
-        var reachability: String { anywhere ? "Reachable from anywhere" : "Reachable on its network only" }
+        /// "Reachable from anywhere, at hub.example.com": how far it reaches and through which
+        /// address, however that address is exposed.
+        var reachability: String {
+            switch (scope, address) {
+            case (.anywhere, let address?): "Reachable from anywhere, at \(address)"
+            case (.vpn, let address?): "Reachable over your VPN, at \(address)"
+            default: "Reachable on its network only"
+            }
+        }
 
         /// "Keeps copies of 7 sessions, your secrets and provider logins".
         var keeps: String {
@@ -174,8 +231,11 @@ struct SetupStructure: Equatable {
         }
         let signedIn: [Hub] = paired.map { hub in
             let hosts = Set(hub.hosts.map(\.hostId))
+            // Of the addresses that reach furthest, the one preferred.
+            let scope = hub.addresses.map(AddressScope.init).max() ?? .network
+            let furthest = hub.addresses.first { AddressScope($0) == scope }
             return Hub(id: "paired.\(hub.hostId)", name: hub.name, hostId: hub.hostId, connection: hub.connection,
-                       anywhere: hub.addresses.contains { $0.hasPrefix("wss://") }, sessions: hub.sessions.count,
+                       scope: scope, address: furthest.map(AddressScope.host(of:)), sessions: hub.sessions.count,
                        machines: take { hosts.contains($0.hostId) })
         }
         let notSignedIn: [Hub] = unpaired.map { hub in
@@ -279,8 +339,8 @@ struct MachinesView: View {
     }
 }
 
-/// The hub: its name, this device's connection to it, whether it is reached from anywhere and
-/// what it keeps. It opens its page; one this device has not signed in to says who syncs to it
+/// The hub: its name, this device's connection to it, how far it is reached and at which
+/// address, and what it keeps. It opens its page; one this device has not signed in to says who syncs to it
 /// and offers Sign In.
 private struct HubCard: View {
     let hub: SetupStructure.Hub
@@ -329,7 +389,7 @@ private struct HubCard: View {
                 if let invitation = hub.invitation {
                     fact("person.badge.key", invitation)
                 } else {
-                    fact(hub.anywhere ? "globe" : "house", hub.reachability)
+                    fact(hub.scope == .anywhere ? "globe" : hub.scope == .vpn ? "lock.shield" : "house", hub.reachability)
                     fact("tray.full", hub.keeps)
                 }
             }
