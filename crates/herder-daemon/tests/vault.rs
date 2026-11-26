@@ -831,6 +831,7 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
         build: "test".into(),
         pairing_code: None,
         attachments_cap: None,
+        relay: false,
     });
     let text = serde_json::to_string(&hello).unwrap();
     ws.send(Message::text(text)).await.unwrap();
@@ -979,6 +980,7 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
         build: "test".into(),
         pairing_code: None,
         attachments_cap: None,
+        relay: false,
     });
     ws.send(Message::text(serde_json::to_string(&hello).unwrap()))
         .await
@@ -1093,6 +1095,7 @@ async fn images_are_not_backed_up_unless_the_host_says_so_and_never_fail_it() {
             build: "test".into(),
             pairing_code: None,
             attachments_cap: cap,
+            relay: false,
         });
         ws.send(Message::text(serde_json::to_string(&hello).unwrap()))
             .await

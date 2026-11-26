@@ -3304,6 +3304,10 @@
           "description": "Whether the host's replication connection is open. A host silent for the vault's\nliveness timeout is offline; its sessions stay listed, read-only as all on a vault are.",
           "type": "boolean"
         },
+        "relay": {
+          "description": "Whether the vault relays clients to the host now: it is online and takes relayed\nconnections. A client paired with both then reaches the host through the vault, with\n[`crate::RelayHello::Connect`] (see [`crate::relay`]).",
+          "type": "boolean"
+        },
         "usage": {
           "description": "What the host's copies take on the vault; absent from a vault that does not say.",
           "anyOf": [

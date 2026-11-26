@@ -867,6 +867,7 @@ impl World {
             online: true,
             last_seen: "2026-01-01T00:00:00Z".parse().unwrap(),
             usage: None,
+            relay: false,
         }]);
         daemon.hub.projects_changed(vec![Project {
             project_id: ProjectId::new("github.com/org/repo"),

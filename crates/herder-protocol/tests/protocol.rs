@@ -2154,6 +2154,7 @@ fn fleet_fixtures() -> Vec<ServerMessage> {
                         attachment_bytes: 340_000_000,
                         attachments_cap: Some(1 << 30),
                     }),
+                    relay: true,
                 },
                 FleetHost {
                     host_id: HostId::new("01J9HOST2"),
@@ -2165,6 +2166,7 @@ fn fleet_fixtures() -> Vec<ServerMessage> {
                         attachment_bytes: 0,
                         attachments_cap: None,
                     }),
+                    relay: false,
                 },
             ],
         },
@@ -3932,6 +3934,7 @@ fn host_fixtures() -> Vec<HostMessage> {
             build: "herder/0.0.0".into(),
             pairing_code: Some("483-921".into()),
             attachments_cap: Some(1 << 30),
+            relay: true,
         }),
         HostMessage::Hello(HostHello {
             replication_version: REPLICATION_VERSION,
@@ -3940,6 +3943,7 @@ fn host_fixtures() -> Vec<HostMessage> {
             build: "herder/0.0.0".into(),
             pairing_code: None,
             attachments_cap: None,
+            relay: false,
         }),
         HostMessage::Session(SessionSummary {
             parent: Some(SessionId::new("01J9PRIMARY")),
@@ -4065,7 +4069,19 @@ fn vault_fixtures() -> Vec<VaultMessage> {
             build: "herder/0.0.0".into(),
             acked: vec![cursor(12)],
             cliproxyapi: Some("https://cpa.lan:8317".into()),
+            cliproxyapi_relay: false,
         }),
+        VaultMessage::Hello(VaultHello {
+            replication_version: REPLICATION_VERSION,
+            build: "herder/0.0.0".into(),
+            acked: Vec::new(),
+            cliproxyapi: None,
+            cliproxyapi_relay: true,
+        }),
+        VaultMessage::RelayOpen {
+            stream_id: "01J9STREAM".into(),
+            device_id: DeviceId::new("01J9DEVICE"),
+        },
         VaultMessage::Ack(cursor(17)),
         VaultMessage::Rejected {
             cursor: cursor(12),
@@ -4166,6 +4182,101 @@ fn every_replication_message_matches_its_schema() {
 fn replication_fixtures_cover_every_variant_and_enum_value() {
     assert_covered(&host_schema(), &host_fixtures());
     assert_covered(&vault_schema(), &vault_fixtures());
+}
+
+fn relay_hello_fixtures() -> Vec<RelayHello> {
+    vec![
+        RelayHello::Connect {
+            relay_version: RELAY_VERSION,
+            host_id: HostId::new("01J9HOST"),
+        },
+        RelayHello::Accept {
+            relay_version: RELAY_VERSION,
+            stream_id: "01J9STREAM".into(),
+        },
+        RelayHello::Proxy {
+            relay_version: RELAY_VERSION,
+        },
+    ]
+}
+
+fn relay_answer_fixtures() -> Vec<RelayAnswer> {
+    let codes = [
+        RelayErrorCode::BadRequest,
+        RelayErrorCode::Unsupported,
+        RelayErrorCode::Forbidden,
+        RelayErrorCode::UnknownHost,
+        RelayErrorCode::HostOffline,
+        RelayErrorCode::Busy,
+        RelayErrorCode::Internal,
+    ];
+    let mut answers = vec![RelayAnswer::Ready];
+    answers.extend(codes.into_iter().map(|code| RelayAnswer::Refused {
+        error: RelayError {
+            code,
+            message: "detail".into(),
+        },
+    }));
+    answers
+}
+
+#[test]
+fn every_relay_message_round_trips_and_matches_its_schema() {
+    relay_hello_fixtures().iter().for_each(assert_round_trips);
+    relay_answer_fixtures().iter().for_each(assert_round_trips);
+    assert_valid(&relay_hello_schema(), &relay_hello_fixtures());
+    assert_valid(&relay_answer_schema(), &relay_answer_fixtures());
+    assert_covered(&relay_hello_schema(), &relay_hello_fixtures());
+    assert_covered(&relay_answer_schema(), &relay_answer_fixtures());
+}
+
+#[test]
+fn relay_schemas_match_their_snapshots() {
+    assert_schema_snapshot("relay_hello.json", &relay_hello_schema());
+    assert_schema_snapshot("relay_answer.json", &relay_answer_schema());
+}
+
+#[test]
+fn a_relay_hello_is_told_from_the_others_by_its_version() {
+    // The vault reads the first message's `relay_version`, as it reads a host's
+    // `replication_version`: neither a client's hello nor a host's carries one.
+    for hello in relay_hello_fixtures() {
+        let value = serde_json::to_value(&hello).unwrap();
+        assert_eq!(value["relay_version"], RELAY_VERSION);
+        assert!(value.get("replication_version").is_none());
+    }
+    for message in host_fixtures() {
+        let value = serde_json::to_value(&message).unwrap();
+        assert!(value.get("relay_version").is_none());
+    }
+    let answer: RelayAnswer = serde_json::from_str(r#"{"type":"moved","to":"x"}"#).unwrap();
+    assert_eq!(answer, RelayAnswer::Unknown);
+}
+
+#[test]
+fn relay_fields_are_absent_unless_set() {
+    // Older peers never see a field they do not know.
+    let hello = HostHello {
+        replication_version: REPLICATION_VERSION,
+        host_id: HostId::new("01J9HOST"),
+        host_name: "devbox".into(),
+        build: "herder/0.0.0".into(),
+        pairing_code: None,
+        attachments_cap: None,
+        relay: false,
+    };
+    assert!(serde_json::to_value(&hello).unwrap().get("relay").is_none());
+    let old: HostHello = serde_json::from_value(serde_json::to_value(&hello).unwrap()).unwrap();
+    assert!(!old.relay);
+    let hello = VaultHello {
+        replication_version: REPLICATION_VERSION,
+        build: "herder/0.0.0".into(),
+        acked: Vec::new(),
+        cliproxyapi: None,
+        cliproxyapi_relay: false,
+    };
+    let value = serde_json::to_value(&hello).unwrap();
+    assert!(value.get("cliproxyapi_relay").is_none());
 }
 
 #[test]

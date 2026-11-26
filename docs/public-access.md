@@ -6,6 +6,9 @@ connection.
 
 Basecamp: P23 · Public access through a Cloudflare Tunnel.
 
+To expose only the vault and reach every machine through it, see
+[vault-relay.md](vault-relay.md) (P24).
+
 ## How a connection works today
 
 A client dials `host:port` (7447 by default) over TCP and runs, in order

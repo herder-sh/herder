@@ -173,6 +173,29 @@
         "type",
         "logins"
       ]
+    },
+    {
+      "description": "A client asked the vault for a stream to this host: open a relay connection to the\nvault and say [`crate::RelayHello::Accept`] with this `stream_id`. Sent only to a host\nwhose hello set `relay`. The vault waits a few seconds for it, then refuses the client;\na host that will not take the stream just does not answer.",
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "description": "The vault's id for the device asking. The host uses it only to cap and log\nconnections that have not authenticated yet: it knows the device by the\ncertificate it presents inside the stream, never by this.",
+          "$ref": "#/$defs/DeviceId"
+        },
+        "stream_id": {
+          "description": "The stream; unique on this vault.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "relay_open"
+        }
+      },
+      "required": [
+        "type",
+        "stream_id",
+        "device_id"
+      ]
     }
   ],
   "$defs": {
@@ -195,6 +218,10 @@
         "session_id",
         "after_seq"
       ]
+    },
+    "DeviceId": {
+      "description": "Identifies a paired client device; a ULID string, opaque to receivers.",
+      "type": "string"
     },
     "FetchedSecret": {
       "description": "A secret's value, as the vault hands it to a host.",
@@ -540,6 +567,10 @@
             "string",
             "null"
           ]
+        },
+        "cliproxyapi_relay": {
+          "description": "Whether the vault forwards this host to its CLIProxyAPI over relay connections\n([`crate::RelayHello::Proxy`]); sent, without `cliproxyapi`, by a vault that runs one,\nholds this host's client key and is configured with no address hosts reach the proxy\nat. The host then points its CLIs at a listener of its own on loopback, which forwards\neach connection through the vault, and runs the vault's provider logins as it does with\n`cliproxyapi`.",
+          "type": "boolean"
         },
         "replication_version": {
           "description": "The vault's [`REPLICATION_VERSION`]; on a mismatch both sides disconnect.",

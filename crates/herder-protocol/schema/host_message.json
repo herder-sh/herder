@@ -306,6 +306,10 @@
             "null"
           ]
         },
+        "relay": {
+          "description": "Whether the host takes relayed connections: it opens a relay stream for every\n[`VaultMessage::RelayOpen`], and serves the client in it as on a direct connection.\nAbsent from a host that takes none, which the vault sends no such message.",
+          "type": "boolean"
+        },
         "replication_version": {
           "description": "Must equal the vault's [`REPLICATION_VERSION`].",
           "type": "integer",
