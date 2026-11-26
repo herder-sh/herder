@@ -69,6 +69,8 @@ pub enum Msg {
     LoginCode(String),
     /// Signing in to a machine ended: the machine, or why it failed.
     SignedIn(Result<Box<Machine>, String>),
+    /// A people command ended: what to say, with a link to copy, or why it failed.
+    PersonDone(Result<(String, Option<String>), String>),
     /// An attached terminal gave the screen back.
     TerminalEnded(terminal::Ended),
     /// Time passed: an armed leader may lapse.
@@ -90,6 +92,26 @@ pub enum Msg {
     },
 }
 
+/// What to say when a terminal of this person asks for an approval `old` did not list: only
+/// a client with a passkey is sent them.
+fn newly_asked(old: &[Machine], new: &[Machine]) -> Option<String> {
+    let known = |id: &str| {
+        old.iter()
+            .flat_map(|machine| &machine.approvals)
+            .any(|request| request.request_id == id)
+    };
+    new.iter().find_map(|machine| {
+        let request = machine
+            .approvals
+            .iter()
+            .find(|request| !known(&request.request_id))?;
+        Some(format!(
+            "{} on {} asks: {}. /approve or /refuse",
+            request.client, machine.name, request.action
+        ))
+    })
+}
+
 /// Something the event loop does for the app.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
@@ -105,6 +127,14 @@ pub enum Effect {
         command: CommandBody,
         /// What it is sent for.
         origin: Origin,
+    },
+    /// Do something with this terminal's passkey that an app's People screen does; its
+    /// outcome comes back as [`Msg::PersonDone`].
+    Person {
+        /// The machine.
+        host_id: HostId,
+        /// What to do.
+        op: crate::passkey::PersonOp,
     },
     /// Open a web page in the browser.
     OpenUrl(String),
@@ -445,8 +475,20 @@ impl App {
             }
             Msg::Resize | Msg::Focus => vec![Effect::Repaint],
             Msg::Machines(machines) => {
+                let asked = newly_asked(&self.machines, &machines);
                 self.machines(machines);
                 self.open_pending();
+                if asked.is_some() {
+                    self.notice = asked;
+                }
+                Vec::new()
+            }
+            Msg::PersonDone(Ok((said, link))) => {
+                self.notice = Some(said);
+                link.map(Effect::Copy).into_iter().collect()
+            }
+            Msg::PersonDone(Err(error)) => {
+                self.notice = Some(error);
                 Vec::new()
             }
             Msg::Session { key, update } => {

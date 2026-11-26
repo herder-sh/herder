@@ -27,6 +27,43 @@ the service is a systemd user service; on macOS it is a launchd LaunchAgent
 `~/Library/Logs/herder/daemon.log`.
 Set `HERDER_VERSION=1.2.3` to install a specific release.
 
+### Make the machine yours
+
+`herder service install` prints a `herder://own` link and QR code, and `herder claim` prints
+them again. Scan the code with the iPhone app, or paste the link into the Mac app's Add to
+Fleet, and approve with Face ID: you are the machine's owner, by your passkey.
+
+### Without a Mac or an iPhone
+
+A terminal can be that owner too. `herder claim` also prints the command for it:
+
+```sh
+herder claim                       # on the machine
+herder login 'herder://own?...'    # there, or on any other machine with herder
+herder                             # the terminal UI
+```
+
+`herder login` asks for your name and a new passphrase, makes a passkey for herder.sh and
+keeps it in `~/.config/herder/passkey.json`. The private key is sealed under the passphrase
+(Argon2id, ChaCha20-Poly1305), so a copy of the file is useless without it; nothing else can
+unseal it, so do not forget it. If you do, delete the file and run `herder claim` again.
+
+The terminal UI then asks for the passphrase wherever the apps ask for Face ID: opening a
+terminal, changing secrets, and these commands, typed after `/` in a prompt or in the
+palette (`ctrl+p`):
+
+| Command | What it does |
+| --- | --- |
+| `/approve <code>` | Signs in another terminal of yours that ran `herder login` and shows that code |
+| `/approve`, `/refuse` | Answers what such a terminal, which has no passkey, asks to do |
+| `/invite owner\|member` | Copies a `herder://invite` link: someone opens it in the app, or runs `herder login '<link>'` |
+| `/people`, `/role <name> owner\|member`, `/remove <name>` | Lists a machine's people, changes a role, removes someone |
+
+The same passkey claims your other machines (`herder claim` there, `herder login '<link>'`
+here), and on a machine that already knows you a plain `herder login` signs a terminal in with
+it. To add an iPhone or a Mac later, `/invite owner` and open the link in the app: the app
+makes its own passkey, so it joins as a second owner next to the terminal's.
+
 ### Check the machine
 
 ```sh

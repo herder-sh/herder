@@ -17,6 +17,7 @@ all = { level = "warn", priority = -1 }
 
 [workspace.dependencies]
 anyhow = "1"
+argon2 = "0.5"
 arboard = { version = "3.6", default-features = false, features = ["image-data", "wayland-data-control"] }
 async-trait = "0.1"
 base64 = "0.23"
@@ -51,6 +52,7 @@ qrcode = { version = "0.14", default-features = false }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 regex = "1"
 ring = "0.17"
+rpassword = "7"
 rusqlite = { version = "0.41", features = ["bundled", "fallible_uint", "jiff"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 schemars = { version = "1.2", features = ["jiff02"] }
@@ -97,3 +99,11 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# Argon2id seals the terminal's passkey with 64 MiB and three passes: unoptimised, every test
+# that unlocks one would wait seconds.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

@@ -29,7 +29,7 @@ The Mac app is a zip on the latest GitHub release (https://github.com/herder-sh/
 ## Get started
 
 1. Install herder and run `herder service install`. `herder doctor` checks the machine and says how to fix what is not ready.
-2. Make the machine yours: `herder service install` prints a link and QR code, and `herder claim` prints them again. Scan it with the iPhone app or paste the link into the Mac app's Add to Fleet, and approve with Face ID. A terminal on another computer signs in with `herder login`.
+2. Make the machine yours: `herder service install` prints a link and QR code, and `herder claim` prints them again. Scan it with the iPhone app or paste the link into the Mac app's Add to Fleet, and approve with Face ID. With no Apple device, run the `herder login '<link>'` command it prints: the terminal makes its own passkey, sealed under a passphrase, and becomes the owner. A terminal on another computer signs in with `herder login`.
 3. Add an account: Add Account in the app, or `n` in the terminal UI. The vendor's own login runs in a terminal on the machine; herder only shows you that terminal.
 
 ## How it connects
@@ -102,6 +102,10 @@ Yes. A machine can run Slack and Telegram bots. Mention the Slack bot in a threa
 ### Can I share a machine with my team?
 
 Yes. Invite someone from the machine's People section with a one-time code, as a member or an owner. Members see and drive the machine's sessions, while terminals, provider logins and settings stay with the machine's owners. Only owners can open, attach to or see a terminal.
+
+### Can I use herder without a Mac or an iPhone?
+
+Yes. `herder claim` also prints a `herder login` command: run it in a terminal, on that machine or another one with herder, and the terminal makes its own passkey, sealed under a passphrase you choose, and becomes the owner. From then on the terminal UI approves with that passphrase what the apps approve with Face ID: terminals, secrets, invites, roles and other terminals' sign-ins. To add an iPhone or a Mac later, type `/invite owner` in the terminal UI and open the link in the app.
 
 ### Is there a herder app for Mac and iPhone?
 

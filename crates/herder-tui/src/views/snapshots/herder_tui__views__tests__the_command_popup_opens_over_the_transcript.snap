@@ -1,6 +1,5 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 1452
 expression: "render(&mut app, 100, 30).backend()"
 ---
 " herder        inbox 0 « │  chat   tasks 2   prs   term                                             "
@@ -20,11 +19,11 @@ expression: "render(&mut app, 100, 30).backend()"
 "                         │                                                                          "
 "                         │     ▣ claude-main · claude-opus · 1m 12s                                 "
 "                         │                                                                          "
-"                         │  ┃                                                                       "
 "                         │  ┌───────────────────────────────────────────────────────────────────┐   "
 "                         │  │ /model <name>                                    switch the model │   "
 "                         │  │ /mode <mode>             read_only, ask, auto_edit or full_access │   "
 "                         │  │ /mouse on|off          take the mouse, or give it to the terminal │   "
+"                         │  │ /remove <name>                   remove someone and their devices │   "
 "                         │  └───────────────────────────────────────────────────────────────────┘   "
 "                         │  ╭───────────────────────────────────────────────────────────────────╮   "
 "                         │  │ /mo                                                               │   "

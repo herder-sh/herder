@@ -142,6 +142,14 @@
     },
     {
      "@type": "Question",
+     "name": "Can I use herder without a Mac or an iPhone?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Yes. herder claim also prints a herder login command: run it in a terminal, on that machine or another one with herder, and the terminal makes its own passkey, sealed under a passphrase you choose, and becomes the owner. From then on the terminal UI approves with that passphrase what the apps approve with Face ID: terminals, secrets, invites, roles and other terminals' sign-ins. To add an iPhone or a Mac later, type /invite owner in the terminal UI and open the link in the app."
+     }
+    },
+    {
+     "@type": "Question",
      "name": "Is there a herder app for Mac and iPhone?",
      "acceptedAnswer": {
       "@type": "Answer",
@@ -405,7 +413,7 @@ herder service install</code></pre>
       <li>
         <span class="tag">02 · claim</span>
         <pre><code>herder claim</code></pre>
-        <p>Prints a link and a QR code that make the machine yours. Scan it with the iPhone app or paste it into the Mac app's Add to Fleet, and approve with Face ID. A terminal elsewhere signs in with <code>herder login</code>.</p>
+        <p>Prints a link and a QR code that make the machine yours. Scan it with the iPhone app or paste it into the Mac app's Add to Fleet, and approve with Face ID. <a href="#faq-no-apple">No Apple device?</a> Run the <code>herder login</code> command it prints, and the terminal becomes the owner with a passkey of its own.</p>
       </li>
       <li>
         <span class="tag">03 · add an account</span>
@@ -454,6 +462,10 @@ herder service install</code></pre>
       <details>
         <summary>Can I share a machine with my team?</summary>
         <p>Yes. Invite someone from the machine's People section with a one-time code, as a member or an owner. Members see and drive the machine's sessions, while terminals, provider logins and settings stay with the machine's owners. Only owners can open, attach to or see a terminal.</p>
+      </details>
+      <details id="faq-no-apple">
+        <summary>Can I use herder without a Mac or an iPhone?</summary>
+        <p>Yes. <code>herder claim</code> also prints a <code>herder login</code> command: run it in a terminal, on that machine or another one with herder, and the terminal makes its own passkey, sealed under a passphrase you choose, and becomes the owner. From then on the terminal UI approves with that passphrase what the apps approve with Face ID: terminals, secrets, invites, roles and other terminals' sign-ins. To add an iPhone or a Mac later, type <code>/invite owner</code> in the terminal UI and open the link in the app.</p>
       </details>
       <details id="faq-apps">
         <summary>Is there a herder app for Mac and iPhone?</summary>

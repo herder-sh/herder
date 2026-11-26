@@ -47,6 +47,7 @@ fn group_of(command: &Command) -> &'static str {
     match command.name {
         "inbox" | "board" | "prs" | "accounts" | "fleet" => "go to",
         "add" | "reconnect" => "machines",
+        "approve" | "refuse" | "invite" | "people" | "role" | "remove" => "people",
         "thinking" | "details" | "glyphs" | "mouse" | "group" => "display",
         "help" | "quit" => "herder",
         _ => "session",
@@ -54,7 +55,9 @@ fn group_of(command: &Command) -> &'static str {
 }
 
 /// The groups, in the order the palette lists them.
-const GROUPS: [&str; 5] = ["session", "go to", "machines", "display", "herder"];
+const GROUPS: [&str; 6] = [
+    "session", "go to", "machines", "people", "display", "herder",
+];
 
 /// Whether `command` cannot run without an argument.
 pub fn needs_args(command: &Command) -> bool {
