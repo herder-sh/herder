@@ -230,8 +230,8 @@ and no "Add a device…" row at the foot of the machines.
 Still to come with the hub's relay (P24): **Through the hub** as a way a machine is reached,
 in place of "On another network", once the client says a connection is relayed.
 
-On iPhone the page is the same, in one column, and Skills, Providers and Integrations are rows
-at its foot. Screenshots: `setup-mac.png`, `setup-iphone.png`, `setup-no-hub-iphone.png`,
+On iPhone the page is the same, in one column, with "Everything is set up" at its top when
+nothing needs you, and Skills, Providers and Integrations are rows at its foot. Screenshots: `setup-mac.png`, `setup-iphone.png`, `setup-no-hub-iphone.png`,
 `setup-person-mac.png`, `setup-needs-you-iphone.png` (`SetupScreenshotTests`), `machines.png`,
 `vault-page.png` (`MachinesScreenshotTests`), and the app's `mac-machines.png`,
 `ios-machines.png`, `mac-person-sheet.png`, `ios-person-sheet.png` (`ScreenshotTests`).

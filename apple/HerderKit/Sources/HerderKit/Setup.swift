@@ -165,7 +165,7 @@ struct SetupView: View {
     let people: FleetPeople
     @Binding var sheet: AppSheet?
     /// Leads to Skills, Providers and Integrations, where they have no section of their own,
-    /// and puts the header's line at the top.
+    /// and says at the top that everything is set up, when it is.
     var showsSections = false
     @Environment(\.pages) private var pages
 
@@ -175,7 +175,8 @@ struct SetupView: View {
         let problems = SetupProblem.found(fleet: fleet, directory: directory)
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                if showsSections {
+                // Needs you says its own count; only "Everything is set up" is worth a line.
+                if showsSections, problems.needingYou.isEmpty {
                     Text(SetupProblem.status(problems))
                         .font(.subheadline).foregroundStyle(Theme.secondary)
                 }
