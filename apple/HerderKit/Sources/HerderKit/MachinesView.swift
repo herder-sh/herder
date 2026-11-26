@@ -6,15 +6,19 @@ import SwiftUI
 enum MachineReach: Hashable {
     /// Connected, at one of the machine's addresses.
     case direct
+    /// Connected through the vault of that name, as no address of its own answered.
+    case through(String)
     case connecting
     /// Not connected here, while its hub hears from it: it is up, on a network this device is
     /// not on.
     case elsewhere
     case offline
 
-    init(_ connection: ConnectionState, heardByHub: Bool) {
+    /// `vault` names the vault the connection goes through, when it goes through one.
+    init(_ connection: ConnectionState, heardByHub: Bool, through vault: String? = nil) {
         switch connection {
-        case .connected: self = .direct
+        case .connected:
+            if let vault { self = .through(vault) } else { self = .direct }
         case .connecting: self = .connecting
         case .disconnected: self = heardByHub ? .elsewhere : .offline
         }
@@ -23,6 +27,7 @@ enum MachineReach: Hashable {
     var label: String {
         switch self {
         case .direct: "Direct"
+        case .through(let vault): "Through \(vault)"
         case .connecting: "Connecting…"
         case .elsewhere: "On another network"
         case .offline: "Offline"
@@ -47,12 +52,13 @@ struct MachineRow: Hashable, Identifiable {
     /// hosts a connected hub hears from.
     static func rows(_ machines: [Machine], summaries: [MachineSummary], heard: Set<HostId> = [],
                      localNames: Set<String> = localNames) -> [MachineRow] {
-        let machines = machines.filter { !$0.isHub }
-        let local = thisMac(machines, names: localNames)
-        return machines.map { machine in
+        let hosts = machines.filter { !$0.isHub }
+        let local = thisMac(hosts, names: localNames)
+        return hosts.map { machine in
             MachineRow(hostId: machine.hostId, name: machine.name, member: machine.role == .member,
                        local: machine.hostId == local,
-                       reach: MachineReach(machine.connection, heardByHub: heard.contains(machine.hostId)),
+                       reach: MachineReach(machine.connection, heardByHub: heard.contains(machine.hostId),
+                                           through: machine.address.flatMap { via($0, among: machines) }),
                        running: summaries.first { $0.hostId == machine.hostId }?.running ?? 0)
         }
         .sorted { $0.name.lowercased() < $1.name.lowercased() }
@@ -90,8 +96,26 @@ struct MachineRow: Hashable, Identifiable {
 
     /// Whether `address`, "host:port" or "[v6]:port", names one of `names`.
     static func isLocal(_ address: String?, names: Set<String>) -> Bool {
-        guard let address else { return false }
+        guard let address, !address.hasPrefix(vaultRoute) else { return false }
         return names.contains(host(of: address).lowercased())
+    }
+
+    /// What the address of a route through a vault starts with, before the vault's host id.
+    static let vaultRoute = "vault://"
+
+    /// The name of the vault `address` goes through, for "vault://<host id>", the route
+    /// through a vault among `machines`: "a vault" for one this device no longer has. Nil for
+    /// any other address.
+    static func via(_ address: String, among machines: [Machine]) -> String? {
+        guard address.hasPrefix(vaultRoute) else { return nil }
+        let vault = String(address.dropFirst(vaultRoute.count))
+        return machines.first { $0.hostId == vault }?.name ?? "a vault"
+    }
+
+    /// `address` as a person reads it: "through <vault>" for the route through a vault,
+    /// else the address itself.
+    static func label(_ address: String, among machines: [Machine]) -> String {
+        via(address, among: machines).map { "through \($0)" } ?? address
     }
 
     /// The host of `address`, "host:port" or "[v6]:port", without its port.
@@ -485,7 +509,7 @@ struct ReachMark: View {
     var body: some View {
         Group {
             switch reach {
-            case .direct:
+            case .direct, .through:
                 Circle().fill(Theme.success)
             case .connecting:
                 Circle().strokeBorder(Theme.waiting, style: StrokeStyle(lineWidth: 1.5, dash: [2, 2]))
