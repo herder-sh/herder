@@ -389,7 +389,7 @@ struct MachinePage: View {
             }
             RowDivider()
             Button { withAnimation(.easeInOut(duration: 0.15)) { showingAddresses.toggle() } } label: {
-                SettingRow(label: "Addresses", hint: machine.address.map { "Connected through \($0)" } ?? "") {
+                SettingRow(label: "Addresses", hint: machine.address.map { "Connected through \(MachineRow.via($0, among: fleet.machines) ?? $0)" } ?? "") {
                     Text(machine.addresses.count == 1 ? "1 address" : "\(machine.addresses.count) addresses")
                         .font(.subheadline).foregroundStyle(Theme.secondary)
                     Image(systemName: "chevron.right")
@@ -458,7 +458,7 @@ struct MachinePage: View {
         let addresses = machine.addresses
         return VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(addresses.enumerated()), id: \.element) { index, address in
-                AddressRow(index: index, address: address, count: addresses.count,
+                AddressRow(index: index, address: MachineRow.label(address, among: fleet.machines), count: addresses.count,
                            status: AddressStatus(address: address, inUse: machine.address,
                                                  connecting: connecting, failure: connectFailure),
                            busy: connecting != nil,

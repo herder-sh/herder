@@ -184,7 +184,7 @@ fn row<'a>(ui: Ui, app: &App, panel: &MachinePanel, machine: &Machine, compact: 
     let address = machine.address.as_ref().or(machine.addresses.first());
     if let Some(address) = address.filter(|_| !compact) {
         left.push(Span::raw("  "));
-        left.push(Span::styled(address.clone(), ui.muted()));
+        left.push(Span::styled(route(app, address), ui.muted()));
     }
     let right = Line::from(super::resources::row(ui, machine, compact));
     let sessions = app
@@ -391,6 +391,18 @@ fn short(ui: Ui, fingerprint: &str) -> String {
     format!("{head}{}{tail}", ui.glyphs.ellipsis)
 }
 
+/// `address` as shown: the route through a vault names the vault, as the user knows it,
+/// in place of its host id; any other address is shown as it is.
+fn route(app: &App, address: &str) -> String {
+    let Some(vault) = address.strip_prefix("vault://") else {
+        return address.to_owned();
+    };
+    match app.machines.iter().find(|m| m.host_id.as_str() == vault) {
+        Some(vault) => format!("through {}", vault.name),
+        None => "through a vault".to_owned(),
+    }
+}
+
 /// The selected machine in full: its name, then each fact, the values `width` wide.
 fn details(
     ui: Ui,
@@ -438,7 +450,8 @@ fn details(
         ui.text(),
         width,
     ));
-    let addresses = machine.addresses.join(", ");
+    let addresses: Vec<String> = machine.addresses.iter().map(|a| route(app, a)).collect();
+    let addresses = addresses.join(", ");
     lines.extend(field(ui, "addresses", &addresses, ui.text(), width));
     lines.extend(field(
         ui,

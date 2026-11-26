@@ -90,8 +90,26 @@ struct MachineRow: Hashable, Identifiable {
 
     /// Whether `address`, "host:port" or "[v6]:port", names one of `names`.
     static func isLocal(_ address: String?, names: Set<String>) -> Bool {
-        guard let address else { return false }
+        guard let address, !address.hasPrefix(vaultRoute) else { return false }
         return names.contains(host(of: address).lowercased())
+    }
+
+    /// What the address of a route through a vault starts with, before the vault's host id.
+    static let vaultRoute = "vault://"
+
+    /// The name of the vault `address` goes through, for "vault://<host id>", the route
+    /// through a vault among `machines`: "a vault" for one this device no longer has. Nil for
+    /// any other address.
+    static func via(_ address: String, among machines: [Machine]) -> String? {
+        guard address.hasPrefix(vaultRoute) else { return nil }
+        let vault = String(address.dropFirst(vaultRoute.count))
+        return machines.first { $0.hostId == vault }?.name ?? "a vault"
+    }
+
+    /// `address` as a person reads it: "through <vault>" for the route through a vault,
+    /// else the address itself.
+    static func label(_ address: String, among machines: [Machine]) -> String {
+        via(address, among: machines).map { "through \($0)" } ?? address
     }
 
     /// The host of `address`, "host:port" or "[v6]:port", without its port.

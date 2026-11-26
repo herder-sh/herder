@@ -910,6 +910,38 @@ fn a_vaults_disk_and_each_hosts_usage_with_a_warning_when_nearly_full() {
 }
 
 #[test]
+fn a_machine_reached_through_its_vault_names_the_vault() {
+    let mut app = fake::tree();
+    let mut machines = app.machines.clone();
+    let reached = machines[0].host_id.clone();
+    let mut vault = fake::machine("0193a5b2-7c1e", "home vault", &[]);
+    vault.addresses = vec!["wss://vault.example.com".into()];
+    let route = format!("vault://{}", vault.host_id);
+    machines[0].addresses = vec!["192.168.1.5:7447".into(), route.clone()];
+    machines[0].address = Some(route);
+    machines.push(vault);
+    app.update(Msg::Machines(machines));
+    press(&mut app, KeyCode::Char('m'));
+    let shown = format!("{:?}", render(&mut app, 120, 30).backend());
+    // On the machine's row, and in its addresses.
+    assert!(shown.contains("through home vault"), "{shown}");
+    assert!(
+        shown.contains("192.168.1.5:7447, through home vault"),
+        "{shown}"
+    );
+    assert!(!shown.contains("vault://"), "{shown}");
+
+    // A route through a vault this device has left still reads as one.
+    let mut machines = app.machines.clone();
+    machines.retain(|m| m.name != "home vault");
+    assert!(machines.iter().any(|m| m.host_id == reached));
+    app.update(Msg::Machines(machines));
+    let shown = format!("{:?}", render(&mut app, 120, 30).backend());
+    assert!(shown.contains("through a vault"), "{shown}");
+    assert!(!shown.contains("vault://"), "{shown}");
+}
+
+#[test]
 fn the_machines_panel_shows_connection_quality() {
     let mut app = fake::tree();
     app.clock = Some(herder_protocol::Timestamp::from_second(320).unwrap());

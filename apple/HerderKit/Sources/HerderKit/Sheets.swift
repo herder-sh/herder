@@ -480,6 +480,7 @@ private struct PickRow: View {
 /// button that starts one, the buttons that move and remove it, and why a Connect failed.
 struct AddressRow: View {
     let index: Int
+    /// The address as shown: a route through a vault names the vault.
     let address: String
     let count: Int
     let status: AddressStatus

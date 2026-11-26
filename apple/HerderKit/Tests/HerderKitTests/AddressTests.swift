@@ -20,6 +20,28 @@ struct AddressTests {
         #expect(AddressStatus(address: "b:7447", inUse: "b:7447", connecting: nil, failure: failure) == .inUse)
     }
 
+    /// The route through a vault reads as the vault's name wherever an address shows, never
+    /// as its host id.
+    @Test func aMachineReachedThroughItsVaultNamesTheVault() {
+        var vault = machine("v1", name: "home vault", sessions: [])
+        vault.hosts = [FleetHost(hostId: "h1", hostName: "box", online: true, lastSeen: "")]
+        var box = machine("h1", name: "box", sessions: [])
+        box.addresses = ["192.168.1.5:7447", "vault://v1"]
+        box.address = "vault://v1"
+        let machines = [vault, box]
+        #expect(MachineRow.via("vault://v1", among: machines) == "home vault")
+        #expect(MachineRow.label("vault://v1", among: machines) == "through home vault")
+        #expect(MachineRow.label("192.168.1.5:7447", among: machines) == "192.168.1.5:7447")
+        // A machine that is only named vault is an address like any other.
+        #expect(MachineRow.via("vault.example.com:7447", among: machines) == nil)
+        #expect(MachineRow.label("wss://vault.example.com", among: machines) == "wss://vault.example.com")
+        // A route through a vault this device has left still reads as one.
+        #expect(MachineRow.label("vault://gone", among: machines) == "through a vault")
+
+        // The route is not this Mac, whatever this Mac is called.
+        #expect(!MachineRow.isLocal("vault://v1", names: ["vault"]))
+    }
+
     /// A connection under way says how many addresses it tries, and a message says what it
     /// waits for instead of "Sending…" while its machine is not connected.
     @Test func aConnectionSaysWhatItTriesAndWhatAMessageWaitsFor() {
