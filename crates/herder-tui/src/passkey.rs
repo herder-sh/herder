@@ -32,7 +32,7 @@ use herder_protocol::{
 };
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use ring::digest::{SHA256, digest};
-use ring::rand::{SecureRandom as _, SystemRandom};
+use ring::rand::{SystemRandom, generate};
 use ring::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair, KeyPair as _};
 use serde::{Deserialize, Serialize};
 
@@ -117,12 +117,10 @@ impl LocalPasskey {
         let raw_id = &hash.as_ref()[..16];
         let credential_id = URL_SAFE_NO_PAD.encode(raw_id);
 
-        let mut salt = [0u8; 16];
-        let mut nonce = [0u8; 12];
-        random
-            .fill(&mut salt)
-            .and_then(|()| random.fill(&mut nonce))
-            .map_err(|_| anyhow!("cannot read random bytes"))?;
+        // Both fresh from the system for every passkey.
+        let unread = |_| anyhow!("cannot read random bytes");
+        let salt: [u8; 16] = generate(&random).map_err(unread)?.expose();
+        let nonce: [u8; 12] = generate(&random).map_err(unread)?.expose();
         let mut sealed = pkcs8.as_ref().to_vec();
         sealing_key(passphrase, &salt)?
             .seal_in_place_append_tag(
@@ -883,6 +881,19 @@ mod tests {
         bytes[10] ^= 1;
         damaged.sealed = URL_SAFE_NO_PAD.encode(bytes);
         assert!(damaged.unlock("correct horse").is_err());
+    }
+
+    #[test]
+    fn every_passkey_is_sealed_with_its_own_salt_and_nonce() {
+        let (first, _) = LocalPasskey::create(&creation(), "alice", "correct horse").unwrap();
+        let (second, _) = LocalPasskey::create(&creation(), "alice", "correct horse").unwrap();
+        assert_ne!(first.salt, second.salt);
+        assert_ne!(first.nonce, second.nonce);
+        for field in [&first.salt, &first.nonce] {
+            assert!(decode(field).unwrap().iter().any(|byte| *byte != 0));
+        }
+        assert_eq!(decode(&first.salt).unwrap().len(), 16);
+        assert_eq!(decode(&first.nonce).unwrap().len(), 12);
     }
 
     #[test]
