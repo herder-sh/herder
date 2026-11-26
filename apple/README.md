@@ -170,13 +170,14 @@ showed. When the app hangs, read what it logged, on the Mac it ran on:
 
 An iPhone's lines show in Console.app on a Mac it is connected to, as they come.
 
-## Launch, resume and scrolling
+## Launch, resume, scrolling and everyday use
 
-`perf.sh` measures how the app launches, resumes, opens a long session and scrolls:
+`perf.sh` measures how the app launches, resumes, opens a long session and scrolls, and on iOS
+how it opens a session, streams a turn, takes typing and switches tabs:
 
 ```sh
 apple/scripts/perf.sh                 # this Mac
-apple/scripts/perf.sh simulator       # the iOS app's launches and resume, on an iPhone simulator
+apple/scripts/perf.sh simulator       # the iOS app, on an iPhone simulator
 apple/scripts/perf.sh mac iphone      # and the scrolling on the iPhone whose UDID is in HERDER_PERF_DEVICE
 ```
 
@@ -188,18 +189,24 @@ journal too, `fake_daemon --load big 335 16000`:
   hitches. It has to scroll with a hitch time ratio under 5 ms/s, Apple's "good";
 - the app's second launch on that fleet, from what the first left on disk; the same launch with
   the fake daemons stopped, so that no machine answers; opening the session of 16,000 events;
-  and on iOS, coming back after half a minute in the background.
+  and on iOS, coming back after half a minute in the background;
+- on iOS, the everyday use (`UsePerfTests`): opening the session of 2,000 items whose turn
+  streams, and going back; reading it as it streams; typing a prompt in it, and in a finished
+  session; going round the tabs.
 
 The script writes the table to `target/perf/perf.md`: per test, the hitch time ratio, when the
-launch showed the Board, and the main thread's hangs while the test measured, which it reads
-from the app's log. It fails when a screen is over the budget or a test failed. The iPhone build
+launch showed the Board, and the main thread's slow turns while the test measured, which it
+reads from the app's log: the tests have the app log every turn of 16 ms or longer, a frame at
+60 a second, and the table gives their sum, its share of the measured time, and how many were
+hangs. It fails when a screen is over the budget or a test failed. The iPhone build
 is `sh.herder.Herder.Perf`, beside the installed app; signing it needs the App Store Connect key
 (`herder secret run apple-herder/ASC_KEY_ID apple-herder/ASC_ISSUER_ID
 apple-herder/ASC_PRIVATE_KEY -- apple/scripts/perf.sh iphone`).
 
 The `apple` workflow's `perf` jobs run the Mac's and the simulator's on every change. Their
 runner is a virtual machine, where XCTest measures no frames: the table says so there, and the
-launches and the hangs are what it has to tell.
+launches and the main thread's slow turns are what it has to tell. Compare them between two
+runs of the same test, not with a phone's: the runner is slower, and shared.
 
 Measure on a quiet machine: other apps' load, and other UI tests taking the screen, show up as
 hitches and as hangs.
