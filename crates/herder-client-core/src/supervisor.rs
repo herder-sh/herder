@@ -53,7 +53,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::task::{self, Poll};
 use std::time::Duration;
 
@@ -78,8 +78,8 @@ use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -89,6 +89,7 @@ use crate::cache::SessionLog;
 use crate::demo::{self, DemoAnswer, DemoMachine};
 use crate::offline::{self, Cached};
 use crate::profile::SavedMachine;
+use crate::relay::Via;
 use crate::terminal::{TerminalEvent, TerminalStream};
 use crate::tunnel::{self, Io};
 use crate::{ConnectionQuality, ConnectionState, Error, Machine, SessionUpdate, new_command_id};
@@ -99,6 +100,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Time a daemon that was reached gets to answer a hello, which it does at once. The other
 /// addresses that were reached wait for it, so it is short.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How often a connection that runs through a vault checks whether an address that comes
+/// before the vault's answers again, to move there: a wake checks at once.
+const ROUTE_CHECK: Duration = Duration::from_secs(60);
 
 /// Head start each address gets over the next one when connecting; one that fails sooner
 /// starts the next at once.
@@ -293,6 +298,8 @@ pub(crate) struct Supervisor {
     /// For a machine of a demo, what the daemon answered to the commands recorded; such a
     /// supervisor has no task and sends nothing.
     demo: Option<Vec<DemoAnswer>>,
+    /// The client's machines, among them the vault a `vault://` address goes through.
+    machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
 }
 
 #[derive(Default)]
@@ -535,6 +542,7 @@ impl Supervisor {
         passkey: bool,
         changed: Arc<watch::Sender<u64>>,
         stop: CancellationToken,
+        machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
     ) -> Result<Arc<Self>, Error> {
         let device = DeviceKey::from_pem(&saved.device_key).map_err(|err| Error::Local {
             message: format!("the device key of {}: {err:#}", saved.name),
@@ -556,6 +564,7 @@ impl Supervisor {
             saving: Mutex::new(()),
             loaded: watch::Sender::new(false),
             demo: None,
+            machines,
         });
         tokio::spawn(run(Arc::clone(&supervisor), device, queue));
         Ok(supervisor)
@@ -630,6 +639,7 @@ impl Supervisor {
             saving: Mutex::new(()),
             loaded: watch::Sender::new(true),
             demo: Some(answers),
+            machines: Weak::new(),
         })
     }
 
@@ -1217,6 +1227,27 @@ impl Supervisor {
         addresses
     }
 
+    /// Where this machine's `vault://` addresses lead.
+    fn via(&self) -> Via {
+        Via::new(self.saved.host_id.clone(), self.machines.clone())
+    }
+
+    /// Whether the current connection runs through a vault.
+    fn through_vault(&self) -> bool {
+        let state = self.lock();
+        state
+            .address
+            .as_deref()
+            .is_some_and(|address| address::vault(address).is_some())
+    }
+
+    /// The hosts this machine, a vault, says it relays clients to now.
+    pub(crate) fn relays_to(&self) -> Vec<herder_protocol::HostId> {
+        let state = self.lock();
+        let relayed = state.hosts.iter().filter(|host| host.relay);
+        relayed.map(|host| host.host_id.clone()).collect()
+    }
+
     /// A connection to the first of the addresses before the current connection's that
     /// answers, which proves it reachable and is then dropped, before it said hello; `None`
     /// when the current connection uses the first address.
@@ -1233,12 +1264,13 @@ impl Supervisor {
         // It loaded when the supervisor started.
         let device = DeviceKey::from_pem(&self.saved.device_key).ok()?;
         let fingerprint = self.saved.fingerprint.clone();
+        let via = self.via();
         Some(Box::pin(async move {
             let config = client_config(&fingerprint, &device).map_err(|err| format!("{err:#}"))?;
             let connector = TlsConnector::from(Arc::new(config));
             let reaching = |address: String| {
-                let connector = connector.clone();
-                async move { reach(&address, &connector).await.map(drop) }
+                let (connector, via) = (connector.clone(), via.clone());
+                async move { reach(&address, &connector, &via).await.map(drop) }
             };
             race(&better, reaching).await.map(|((), address)| address)
         }))
@@ -1541,7 +1573,8 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
             sign_in: false,
             passkey: supervisor.passkey,
         };
-        async move { connect(&addresses, &saved.fingerprint, device, hello, &turn).await }
+        let via = supervisor.via();
+        async move { connect(&addresses, &saved.fingerprint, device, hello, &turn, &via).await }
     };
     'connection: loop {
         supervisor.set_connection(ConnectionState::Connecting);
@@ -1858,6 +1891,9 @@ async fn converse(
     let mut pinged: Option<(String, Instant)> = None;
     let mut save = tokio::time::interval(SAVE_INTERVAL);
     save.reset();
+    let mut route_check = tokio::time::interval(ROUTE_CHECK);
+    route_check.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    route_check.reset();
     // The payload of the ping a probe sent, and when it went out, until its pong comes back.
     let mut probe: Option<(String, Instant)> = None;
     // A connection to an address before this one's, which new addresses start; once one
@@ -1941,6 +1977,10 @@ async fn converse(
                         if probe.is_none() {
                             probe = Some(send_ping(outgoing));
                         }
+                        // The network may have changed: the machine may answer itself again.
+                        if better.is_none() && supervisor.through_vault() {
+                            better = supervisor.better();
+                        }
                         continue;
                     }
                     Some(Op::Readdress) => {
@@ -1969,6 +2009,8 @@ async fn converse(
             } => {
                 match reached {
                     Ok(address) => {
+                        // Dialled first, ahead of the address this connection answered at.
+                        supervisor.lock().answered = Some(address.clone());
                         return Ended::Dropped(format!("moving to {address}, which comes first"));
                     }
                     Err(error) => {
@@ -1980,6 +2022,12 @@ async fn converse(
             }
             _ = save.tick() => {
                 save_in_background(supervisor);
+                continue;
+            }
+            _ = route_check.tick() => {
+                if better.is_none() && supervisor.through_vault() {
+                    better = supervisor.better();
+                }
                 continue;
             }
             _ = ping.tick() => {
@@ -2263,8 +2311,9 @@ pub(crate) async fn connect(
     device: &DeviceKey,
     hello: ClientHello,
     turn: &Turn,
+    via: &Via,
 ) -> Result<(Ws, ServerHello, String), String> {
-    match open_in_turn(addresses, fingerprint, device, hello, turn).await? {
+    match open_in_turn(addresses, fingerprint, device, hello, turn, via).await? {
         (ws, Opened::Hello(hello), address) => Ok((ws, *hello, address)),
         (_, Opened::SignIn { .. }, address) => Err(format!(
             "{address}: the daemon asked this device to sign in"
@@ -2292,7 +2341,8 @@ pub(crate) async fn open(
     device: &DeviceKey,
     hello: ClientHello,
 ) -> Result<(Ws, Opened, String), String> {
-    open_in_turn(addresses, fingerprint, device, hello, &Turn::default()).await
+    let (turn, via) = (Turn::default(), Via::default());
+    open_in_turn(addresses, fingerprint, device, hello, &turn, &via).await
 }
 
 /// [`open`] among the calls that share `turn`.
@@ -2307,13 +2357,14 @@ async fn open_in_turn(
     device: &DeviceKey,
     hello: ClientHello,
     turn: &Turn,
+    via: &Via,
 ) -> Result<(Ws, Opened, String), String> {
     let config = client_config(fingerprint, device).map_err(|err| format!("{err:#}"))?;
     let connector = TlsConnector::from(Arc::new(config));
     let attempt = |address: String| {
         let (connector, hello, turn) = (connector.clone(), hello.clone(), Arc::clone(turn));
         async move {
-            let mut ws = reach(&address, &connector).await?;
+            let mut ws = reach(&address, &connector, via).await?;
             // Held until this attempt is dropped: with its hello answered, that is once
             // every other attempt is gone.
             let _turn = turn.lock().await;
@@ -2331,7 +2382,7 @@ async fn open_in_turn(
 /// What the first `attempt` on one of `addresses` to succeed made, and its address; else why
 /// each failed. Each starts [`HEAD_START`] after the one before, or as soon as every attempt
 /// so far failed. While an address has not answered yet, one that failed is tried again.
-async fn race<T, A>(
+pub(crate) async fn race<T, A>(
     addresses: &[String],
     attempt: impl Fn(String) -> A,
 ) -> Result<(T, String), String>
@@ -2405,32 +2456,58 @@ where
 }
 
 /// A connection to the daemon at `address`, up to its WebSocket upgrade: the daemon is
-/// there, and was told nothing yet.
-async fn reach(address: &str, connector: &TlsConnector) -> anyhow::Result<Ws> {
+/// there, and was told nothing yet. An address through a vault leads where `via` says.
+async fn reach(address: &str, connector: &TlsConnector, via: &Via) -> anyhow::Result<Ws> {
     let reaching = async {
-        let stream: Box<dyn Io> = if address::is_tunnel(address) {
-            Box::new(tunnel::open(address).await?)
-        } else {
-            let tcp = TcpStream::connect(address).await.context("connecting")?;
-            tcp.set_nodelay(true)?;
-            Box::new(tcp)
-        };
-        // The certificate is pinned by fingerprint, so the name is never checked.
-        let name = ServerName::try_from("herder").context("the TLS server name")?;
-        let tls = connector
-            .connect(name, Watched::new(stream))
-            .await
-            .context("TLS")?;
-        // The daemon reads nothing of the URL: inside a tunnel, its own address is as good.
-        let request = "wss://herder/".into_client_request()?;
-        let (ws, _) = tokio_tungstenite::client_async(request, tls)
-            .await
-            .context("the WebSocket upgrade")?;
-        Ok(ws)
+        match address::vault(address) {
+            Some(vault) => {
+                let stream = via.stream(&vault).await?;
+                secure(Box::new(stream), connector, None).await
+            }
+            None => direct(address, connector, None).await,
+        }
     };
     tokio::time::timeout(CONNECT_TIMEOUT, reaching)
         .await
         .unwrap_or_else(|_| Err(anyhow!("no answer in {CONNECT_TIMEOUT:?}")))
+}
+
+/// A connection to the daemon at `address`, its own or a tunnel's, up to its WebSocket
+/// upgrade, with the WebSocket configured as `config` says.
+pub(crate) async fn direct(
+    address: &str,
+    connector: &TlsConnector,
+    config: Option<WebSocketConfig>,
+) -> anyhow::Result<Ws> {
+    let stream: Box<dyn Io> = if address::is_tunnel(address) {
+        Box::new(tunnel::open(address).await?)
+    } else {
+        let tcp = TcpStream::connect(address).await.context("connecting")?;
+        tcp.set_nodelay(true)?;
+        Box::new(tcp)
+    };
+    secure(stream, connector, config).await
+}
+
+/// The TLS, pinned through `connector`, and the WebSocket upgrade of a connection to a
+/// daemon on `stream`.
+async fn secure(
+    stream: Box<dyn Io>,
+    connector: &TlsConnector,
+    config: Option<WebSocketConfig>,
+) -> anyhow::Result<Ws> {
+    // The certificate is pinned by fingerprint, so the name is never checked.
+    let name = ServerName::try_from("herder").context("the TLS server name")?;
+    let tls = connector
+        .connect(name, Watched::new(stream))
+        .await
+        .context("TLS")?;
+    // The daemon reads nothing of the URL: inside a tunnel, its own address is as good.
+    let request = "wss://herder/".into_client_request()?;
+    let (ws, _) = tokio_tungstenite::client_async_with_config(request, tls, config)
+        .await
+        .context("the WebSocket upgrade")?;
+    Ok(ws)
 }
 
 /// Says `hello` on `ws`, and takes what the daemon answers.

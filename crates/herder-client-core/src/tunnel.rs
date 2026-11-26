@@ -71,19 +71,20 @@ pub(crate) async fn open(url: &str) -> anyhow::Result<Frames> {
 }
 
 /// Each frame goes out as soon as it is written, as the TLS inside decides what to batch.
-fn config() -> WebSocketConfig {
+pub(crate) fn config() -> WebSocketConfig {
     WebSocketConfig::default().write_buffer_size(0)
 }
 
-/// A tunnel's WebSocket, read and written as a byte stream.
-pub(crate) struct Frames {
-    ws: WebSocketStream<Box<dyn Io>>,
+/// A WebSocket whose binary frames carry a byte stream, read and written as one: a tunnel's,
+/// or a relay stream through a vault.
+pub(crate) struct Frames<S = Box<dyn Io>> {
+    ws: WebSocketStream<S>,
     /// What is left of the binary frame read last.
     read: Bytes,
 }
 
-impl Frames {
-    fn new(ws: WebSocketStream<Box<dyn Io>>) -> Self {
+impl<S> Frames<S> {
+    pub(crate) fn new(ws: WebSocketStream<S>) -> Self {
         Self {
             ws,
             read: Bytes::new(),
@@ -95,7 +96,7 @@ fn broken(err: tokio_tungstenite::tungstenite::Error) -> io::Error {
     io::Error::other(err)
 }
 
-impl AsyncRead for Frames {
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for Frames<S> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -124,7 +125,7 @@ impl AsyncRead for Frames {
     }
 }
 
-impl AsyncWrite for Frames {
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for Frames<S> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,

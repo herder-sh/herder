@@ -10,8 +10,15 @@
 //! (or `ws://`), such as a Cloudflare Tunnel's public hostname: the client runs its ordinary
 //! connection inside that WebSocket ([`crate::tunnel`]). Tunnels sort last, after Tailscale,
 //! as they relay every byte through a third party's edge.
+//!
+//! A third form, `vault://<vault's host id>`, is the route through a vault this device is
+//! signed in to, which forwards the connection to the machine ([`crate::relay`]). The client
+//! adds it to a machine's addresses once the vault says it relays there; it sorts last of
+//! all, as it takes two hops, the vault's own route and the machine's to the vault.
 
 use std::net::{IpAddr, SocketAddr};
+
+use herder_protocol::HostId;
 
 /// The port a daemon listens on unless configured otherwise, as `herder daemon` has it.
 const DEFAULT_PORT: u16 = 7447;
@@ -22,6 +29,12 @@ pub(crate) fn normalize(text: &str) -> Result<String, String> {
     let text = text.trim();
     if text.is_empty() {
         return Err("an address is empty".to_owned());
+    }
+    if let Some(vault) = text.strip_prefix(VAULT) {
+        if vault.is_empty() || vault.contains(|c: char| c.is_whitespace() || c == '/') {
+            return Err(format!("{text} names no vault"));
+        }
+        return Ok(text.to_owned());
     }
     if text.contains("://") {
         return normalize_url(text);
@@ -78,6 +91,19 @@ fn normalize_url(text: &str) -> Result<String, String> {
     })
 }
 
+/// What the address of a route through a vault starts with.
+const VAULT: &str = "vault://";
+
+/// The address of the route through the vault `vault`.
+pub(crate) fn through_vault(vault: &HostId) -> String {
+    format!("{VAULT}{vault}")
+}
+
+/// The vault `address` goes through, for the address of a route through one.
+pub(crate) fn vault(address: &str) -> Option<HostId> {
+    address.strip_prefix(VAULT).map(HostId::new)
+}
+
 /// The part of `address` after `wss://` or `ws://`, for a tunnel's URL.
 fn tunneled(address: &str) -> Option<&str> {
     address
@@ -106,6 +132,9 @@ pub(crate) fn default_order(addresses: Vec<String>) -> Vec<String> {
 /// Whether `address`, as `host:port`, is this device itself (`localhost`, `127.0.0.0/8`,
 /// `::1`), which no other device reaches it at.
 pub(crate) fn is_loopback(address: &str) -> bool {
+    if vault(address).is_some() {
+        return false;
+    }
     let host = host(address);
     host.eq_ignore_ascii_case("localhost")
         || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
@@ -128,8 +157,12 @@ fn host(address: &str) -> &str {
     host.trim_matches(['[', ']'])
 }
 
-/// 0 for a private network address, 1 for any other, 2 for a Tailscale one, 3 for a tunnel.
+/// 0 for a private network address, 1 for any other, 2 for a Tailscale one, 3 for a tunnel,
+/// 4 for the route through a vault.
 fn rank(address: &str) -> u8 {
+    if vault(address).is_some() {
+        return 4;
+    }
     if is_tunnel(address) {
         return 3;
     }
@@ -259,6 +292,30 @@ mod tests {
         assert!(is_loopback("ws://127.0.0.1:7448"));
         assert!(is_loopback("ws://localhost/x"));
         assert!(!is_loopback("wss://box.example.com"));
+    }
+
+    #[test]
+    fn the_route_through_a_vault_is_an_address_that_comes_last() {
+        let id = HostId::new("0193a5b2-7c1e-7d3a-9f00-2b6f1c0a9e11");
+        let route = through_vault(&id);
+        assert_eq!(route, "vault://0193a5b2-7c1e-7d3a-9f00-2b6f1c0a9e11");
+        assert_eq!(normalize(&format!(" {route} ")).unwrap(), route);
+        assert_eq!(vault(&route), Some(id));
+        assert_eq!(vault("vault:7447"), None, "a machine named vault");
+        assert_eq!(vault("wss://vault.example.com"), None);
+        assert!(!is_tunnel(&route) && !is_loopback(&route));
+        for bad in ["vault://", "vault://a b", "vault://a/b"] {
+            assert!(normalize(bad).is_err(), "{bad:?}");
+        }
+        let ordered = default_order(
+            [route.as_str(), "wss://box.example.com", "192.168.1.5:7447"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
+        assert_eq!(
+            ordered,
+            ["192.168.1.5:7447", "wss://box.example.com", route.as_str()]
+        );
     }
 
     #[test]

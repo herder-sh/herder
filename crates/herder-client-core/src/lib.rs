@@ -165,6 +165,7 @@ mod fork;
 mod link;
 mod offline;
 mod profile;
+mod relay;
 mod sign_in;
 mod skills;
 mod supervisor;
@@ -278,11 +279,14 @@ pub struct Machine {
     pub host_id: HostId,
     /// The name it was given with [`Client::rename`], else the daemon's host name.
     pub name: String,
-    /// Addresses as `host:port`, in order of preference: connecting races them, each with a
-    /// head start over the next, the one that answered last first. Set with
-    /// [`Client::set_addresses`].
+    /// Addresses in order of preference: connecting races them, each with a head start over
+    /// the next, the one that answered last first. Each is `host:port`, the `wss://` URL of
+    /// a tunnel to the machine, or `vault://<host id>`, the route through that vault, one of
+    /// this client's machines, which the client adds, last, once the vault says it relays to
+    /// the machine (`FleetHost::relay`). Set with [`Client::set_addresses`].
     pub addresses: Vec<String>,
-    /// The address the current connection uses; `None` while not connected.
+    /// The address the current connection uses; `None` while not connected. While it is a
+    /// `vault://` one, the client moves back to an address before it once one answers.
     pub address: Option<String>,
     /// SHA-256 of the pinned daemon certificate, lowercase hex.
     pub fingerprint: String,
@@ -465,7 +469,9 @@ impl Client {
         let saved = profile::load(&config_dir)?;
         let changed = Arc::new(watch::Sender::new(0));
         let stop = CancellationToken::new();
-        let machines = saved
+        // Each machine is given the list, to reach another through: a vault relays to it.
+        let machines = Arc::new(Mutex::new(Vec::new()));
+        let started = saved
             .into_iter()
             .map(|saved| {
                 Supervisor::start(
@@ -475,10 +481,11 @@ impl Client {
                     authenticator.is_some(),
                     Arc::clone(&changed),
                     stop.child_token(),
+                    Arc::downgrade(&machines),
                 )
             })
             .collect::<Result<_, _>>()?;
-        let machines = Arc::new(Mutex::new(machines));
+        *machines.lock().unwrap_or_else(PoisonError::into_inner) = started;
         let library = Arc::default();
         tokio::spawn(skills::run(
             Arc::clone(&library),
@@ -613,7 +620,9 @@ impl Client {
                 let hosts: Vec<String> = saved
                     .addresses
                     .into_iter()
-                    .filter(|host| !address::is_loopback(host))
+                    // A route through a vault is this client's own: the device that takes
+                    // the link gets its own once it is signed in to the vault.
+                    .filter(|host| !address::is_loopback(host) && address::vault(host).is_none())
                     .collect();
                 (!hosts.is_empty()).then_some(FleetMachine {
                     hosts,
@@ -735,8 +744,13 @@ impl Client {
     /// device until its owner revokes it.
     pub fn forget(&self, host_id: HostId) -> Result<(), Error> {
         self.machine(&host_id)?;
+        let through = address::through_vault(&host_id);
         self.update(|all| {
             all.retain(|m| m.host_id != host_id);
+            // No machine is reached through a vault this device left.
+            for machine in all {
+                machine.addresses.retain(|address| *address != through);
+            }
             Ok(())
         })
     }
@@ -1117,9 +1131,7 @@ impl Client {
     ) -> Result<(), Error> {
         self.live()?;
         let mut machines = self.lock();
-        let (saved, ()) = profile::update(&self.inner.config_dir, change)?;
-        self.inner.reconcile(&mut machines, saved);
-        Ok(())
+        self.inner.update(&mut machines, change)
     }
 
     fn lock(&self) -> MutexGuard<'_, Vec<Arc<Supervisor>>> {
@@ -1137,6 +1149,50 @@ impl Inner {
     fn lock(&self) -> MutexGuard<'_, Vec<Arc<Supervisor>>> {
         // Every update leaves the list whole, so a poisoned list is consistent.
         self.machines.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Changes the profile as the file holds it now, then matches `machines` to the result.
+    fn update(
+        &self,
+        machines: &mut Vec<Arc<Supervisor>>,
+        change: impl FnOnce(&mut Vec<SavedMachine>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let (saved, ()) = profile::update(&self.config_dir, change)?;
+        self.reconcile(machines, saved);
+        Ok(())
+    }
+
+    /// Gives each machine a vault says it relays to the route through that vault, last of
+    /// its addresses, unless it has it: from then on the machine is reached there whenever
+    /// its own addresses do not answer.
+    fn add_vault_routes(&self, machines: &mut Vec<Arc<Supervisor>>) {
+        let mut missing: Vec<(HostId, String)> = Vec::new();
+        for vault in machines.iter() {
+            let through = address::through_vault(&vault.saved.host_id);
+            for host_id in vault.relays_to() {
+                let reached = machines.iter().find(|m| m.saved.host_id == host_id);
+                if reached.is_some_and(|m| !m.saved().addresses.contains(&through)) {
+                    missing.push((host_id, through.clone()));
+                }
+            }
+        }
+        if missing.is_empty() {
+            return;
+        }
+        let added = self.update(machines, |all| {
+            for (host_id, through) in missing {
+                // Another client sharing the profile may have forgotten the machine, or
+                // added the route, since.
+                let machine = all.iter_mut().find(|m| m.host_id == host_id);
+                if let Some(machine) = machine.filter(|m| !m.addresses.contains(&through)) {
+                    machine.addresses.push(through);
+                }
+            }
+            Ok(())
+        });
+        if let Err(err) = added {
+            warn!("saving a machine's route through its vault: {err}");
+        }
     }
 
     /// Matches `machines` to `saved`, the profile as the file holds it, keeping its order:
@@ -1175,6 +1231,7 @@ impl Inner {
                 self.authenticator.is_some(),
                 Arc::clone(&self.changed),
                 self.stop.child_token(),
+                Arc::downgrade(&self.machines),
             ) {
                 Ok(machine) => machines.push(machine),
                 Err(err) => warn!(machine = %name, "skipping a saved machine: {err}"),
@@ -1205,16 +1262,16 @@ async fn follow_profile(inner: Weak<Inner>, stop: CancellationToken) {
         let mut machines = inner.lock();
         // Read under the list's lock so a change of this client's own is never half seen.
         let stamp = profile::stamp(&inner.config_dir);
-        if stamp == seen {
-            continue;
-        }
-        match profile::load(&inner.config_dir) {
-            Ok(saved) => {
-                inner.reconcile(&mut machines, saved);
-                seen = stamp;
+        if stamp != seen {
+            match profile::load(&inner.config_dir) {
+                Ok(saved) => {
+                    inner.reconcile(&mut machines, saved);
+                    seen = stamp;
+                }
+                Err(err) => warn!("re-reading the profile: {err}"),
             }
-            Err(err) => warn!("re-reading the profile: {err}"),
         }
+        inner.add_vault_routes(&mut machines);
     }
 }
 
