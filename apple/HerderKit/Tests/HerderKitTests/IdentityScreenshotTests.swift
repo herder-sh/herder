@@ -17,7 +17,7 @@ import Testing
     @Test func drawsApprovingAMachine() async throws {
         let approval = Approval(ApprovalTests.machine, authenticator: FakeAuthenticator()) { _, _ in nil }
         let sheet = { (biometry: String) in
-            ApprovalSheet(approval: approval, teammates: ["Sam", "Kim"], vaults: ["herder-vault-0", "draugelis vault"],
+            ApprovalSheet(approval: approval, teammates: ["Sam", "Kim"], hubs: ["herder-hub-0", "draugelis hub"],
                           biometry: biometry)
         }
         try await shoot(phone(sheet("Face ID")), width: Self.phone.width, layer: .canvas, named: "identity-approve-iphone.png")
@@ -55,8 +55,8 @@ import Testing
         plan.machines[1].version = "0.16.0"
         plan.machines[2].version = "0.16.0"
         let claim = Claim(plan, authenticator: FakeAuthenticator()) { hostId, command in
-            if hostId == "draugelis-vault", case .claimUsers = command {
-                throw HerderError.Local(detail: "the vault is read-only while it restores")
+            if hostId == "draugelis-hub", case .claimUsers = command {
+                throw HerderError.Local(detail: "the hub is read-only while it restores")
             }
             return try await ClaimTests.Machines().send(hostId, command)
         }

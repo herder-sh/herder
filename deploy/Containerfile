@@ -17,4 +17,4 @@ COPY --from=build /src/target/release/herder /herder
 # No shell or user database in the image; run as an unprivileged uid.
 USER 65532:65532
 ENTRYPOINT ["/herder"]
-CMD ["daemon", "--vault"]
+CMD ["daemon", "--hub"]

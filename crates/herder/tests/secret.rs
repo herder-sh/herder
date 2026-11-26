@@ -1,6 +1,6 @@
 //! `herder secret run` as a session's agent runs it: the real binary, started by a fake CLI
 //! with exactly the environment herder gives the session, against a host daemon in this
-//! process that replicates to a vault in this process over TLS on localhost. The agent learns
+//! process that replicates to a hub in this process over TLS on localhost. The agent learns
 //! the names and the command from the `secrets` tool; the values reach only the program.
 
 use std::path::Path;
@@ -11,14 +11,14 @@ use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
 use herder_client_core::{Assertion, Client};
-use herder_daemon::Hub;
+use herder_daemon::Fanout;
 use herder_daemon::auth::authenticator::{self, Authenticator};
 use herder_daemon::auth::{Auth, PAIRING_TTL};
-use herder_daemon::config::{Retention, VaultConfig};
-use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
-use herder_daemon::vault::{
-    HostSecrets, LIVENESS_TIMEOUT, Replicator, SecretsKey, Server, VaultStore, WakeOnEvent,
+use herder_daemon::config::{HubConfig, Retention};
+use herder_daemon::hub::{
+    HostSecrets, HubStore, LIVENESS_TIMEOUT, Replicator, SecretsKey, Server, WakeOnEvent,
 };
+use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Tls};
 use herder_daemon::{mcp, session};
@@ -120,18 +120,18 @@ fn alice() -> UserId {
     UserId::new("alice")
 }
 
-struct Vault {
+struct Hub {
     addr: std::net::SocketAddr,
     fingerprint: String,
     auth: Arc<Auth>,
 }
 
-async fn vault(dir: &Path, shutdown: CancellationToken) -> Vault {
+async fn hub(dir: &Path, shutdown: CancellationToken) -> Hub {
     std::fs::create_dir_all(dir.join("tls")).unwrap();
-    let tls = Tls::load_or_create(&dir.join("tls"), "vault").unwrap();
+    let tls = Tls::load_or_create(&dir.join("tls"), "hub").unwrap();
     let auth = Arc::new(Auth::open(dir).unwrap());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let vault = Vault {
+    let hub = Hub {
         addr: listener.local_addr().unwrap(),
         fingerprint: tls.fingerprint().to_owned(),
         auth: Arc::clone(&auth),
@@ -139,27 +139,22 @@ async fn vault(dir: &Path, shutdown: CancellationToken) -> Vault {
     let server = Server::new(
         tls,
         auth,
-        VaultStore::open(dir.join("vault.db")).unwrap(),
+        HubStore::open(dir.join("hub.db")).unwrap(),
         Host {
-            id: HostId::new("vault"),
-            name: "vault".into(),
+            id: HostId::new("hub"),
+            name: "hub".into(),
         },
         LIVENESS_TIMEOUT,
         Retention::default(),
         Some(SecretsKey::new(&[7; 32])),
     );
     tokio::spawn(server.run(vec![listener], shutdown));
-    vault
+    hub
 }
 
 /// A host daemon on `dir` running the `shell` CLI, serving MCP with the herder binary under
-/// test, and replicating to `vault`.
-async fn host(
-    dir: &Path,
-    vault: &Vault,
-    shell: Shell,
-    shutdown: CancellationToken,
-) -> SessionManager {
+/// test, and replicating to `hub`.
+async fn host(dir: &Path, hub: &Hub, shell: Shell, shutdown: CancellationToken) -> SessionManager {
     let fake = Provider::Other("fake".into());
     let mut adapters = Adapters::new();
     adapters.register(fake.clone(), Arc::new(shell));
@@ -175,7 +170,7 @@ async fn host(
     )]);
     let changed = Arc::new(Notify::new());
     let sink = Arc::new(WakeOnEvent {
-        next: Arc::new(Hub::default()) as Arc<dyn EventSink>,
+        next: Arc::new(Fanout::default()) as Arc<dyn EventSink>,
         notify: Arc::clone(&changed),
     });
     let setup = Setup {
@@ -199,10 +194,10 @@ async fn host(
     secrets.set_linked(true);
     sessions.use_secrets(Arc::clone(&secrets)).unwrap();
     let replicator = Replicator {
-        vault: VaultConfig::new(
-            vault.addr.to_string(),
-            vault.fingerprint.clone(),
-            Some(vault.auth.mint_host("devbox", PAIRING_TTL).unwrap().code),
+        hub: HubConfig::new(
+            hub.addr.to_string(),
+            hub.fingerprint.clone(),
+            Some(hub.auth.mint_host("devbox", PAIRING_TTL).unwrap().code),
         ),
         device: Replicator::device_key(dir).unwrap(),
         host: Host {
@@ -284,13 +279,13 @@ async fn secrets_tool(data_dir: &Path, session_id: &SessionId) -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_session_runs_a_command_with_secrets_it_never_sees() {
     let tmp = tempfile::tempdir().unwrap();
-    let (vault_dir, host_dir) = (tmp.path().join("v"), tmp.path().join("h"));
+    let (hub_dir, host_dir) = (tmp.path().join("v"), tmp.path().join("h"));
     std::fs::create_dir_all(&host_dir).unwrap();
     let shutdown = CancellationToken::new();
-    let vault = vault(&vault_dir, shutdown.clone()).await;
-    let sessions = host(&host_dir, &vault, Shell::default(), shutdown.clone()).await;
+    let hub = hub(&hub_dir, shutdown.clone()).await;
+    let sessions = host(&host_dir, &hub, Shell::default(), shutdown.clone()).await;
 
-    // The owner keeps three secrets on the vault, two of them named alike, and grants their
+    // The owner keeps three secrets on the hub, two of them named alike, and grants their
     // sets to the host once it replicated there.
     let face_id = Arc::new(FaceId::default());
     let owner = Client::open_with_passkey(
@@ -299,11 +294,11 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
         face_id.clone(),
     )
     .unwrap();
-    let hosts = vec![vault.addr.to_string()];
-    authenticator::sign_in(&vault.auth, &owner, hosts, &vault.fingerprint, "alice")
+    let hosts = vec![hub.addr.to_string()];
+    authenticator::sign_in(&hub.auth, &owner, hosts, &hub.fingerprint, "alice")
         .await
         .unwrap();
-    *face_id.0.lock().unwrap() = Authenticator::of(&vault.auth, "alice").map(Arc::new);
+    *face_id.0.lock().unwrap() = Authenticator::of(&hub.auth, "alice").map(Arc::new);
     let created = CommandBody::CreateSession {
         repo: None,
         project_id: None,
@@ -321,7 +316,7 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
         panic!("expected a session");
     };
     assert_eq!(run(&sessions, &session_id, "true").await, "exit 0\n");
-    let send = async |command| owner.send(HostId::new("vault"), command).await.unwrap();
+    let send = async |command| owner.send(HostId::new("hub"), command).await.unwrap();
     for set in ["prod", "dev"] {
         send(CommandBody::CreateSecretSet {
             set: set.into(),
@@ -353,7 +348,7 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
                 assertion: None,
             };
             // The host is known once it has replicated.
-            if owner.send(HostId::new("vault"), grant).await.is_ok() {
+            if owner.send(HostId::new("hub"), grant).await.is_ok() {
                 break;
             }
             assert!(
@@ -440,7 +435,7 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
         answers[5]
     );
 
-    // Each value the vault handed out is audited for the session, without the value.
+    // Each value the hub handed out is audited for the session, without the value.
     let audit = send(CommandBody::ListSecretAudit { before: None }).await;
     let CommandResult::SecretAudit { entries } = &audit else {
         panic!("expected the audit: {audit:?}");
@@ -491,7 +486,7 @@ fn files_holding(dir: &Path, needle: &[u8]) -> Vec<std::path::PathBuf> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
+async fn a_header_takes_a_hub_secret_only_the_cli_gets() {
     use herder_adapters::McpTransport as Launch;
     use herder_daemon::mcp::servers::UserServers;
     use herder_protocol::{McpServerSettings, McpTransport};
@@ -508,12 +503,12 @@ async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
     tracing::subscriber::set_global_default(subscriber).unwrap();
 
     let tmp = tempfile::tempdir().unwrap();
-    let (vault_dir, host_dir) = (tmp.path().join("v"), tmp.path().join("h"));
+    let (hub_dir, host_dir) = (tmp.path().join("v"), tmp.path().join("h"));
     std::fs::create_dir_all(&host_dir).unwrap();
     let shutdown = CancellationToken::new();
-    let vault = vault(&vault_dir, shutdown.clone()).await;
+    let hub = hub(&hub_dir, shutdown.clone()).await;
     let shell = Shell::default();
-    let sessions = host(&host_dir, &vault, shell.clone(), shutdown.clone()).await;
+    let sessions = host(&host_dir, &hub, shell.clone(), shutdown.clone()).await;
     let server = |name: &str, header: &str| McpServerSettings {
         name: name.into(),
         enabled: true,
@@ -539,12 +534,12 @@ async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
         face_id.clone(),
     )
     .unwrap();
-    let hosts = vec![vault.addr.to_string()];
-    authenticator::sign_in(&vault.auth, &owner, hosts, &vault.fingerprint, "alice")
+    let hosts = vec![hub.addr.to_string()];
+    authenticator::sign_in(&hub.auth, &owner, hosts, &hub.fingerprint, "alice")
         .await
         .unwrap();
-    *face_id.0.lock().unwrap() = Authenticator::of(&vault.auth, "alice").map(Arc::new);
-    let send = async |command| owner.send(HostId::new("vault"), command).await.unwrap();
+    *face_id.0.lock().unwrap() = Authenticator::of(&hub.auth, "alice").map(Arc::new);
+    let send = async |command| owner.send(HostId::new("hub"), command).await.unwrap();
     for (set, value) in [("prod", VALUE), ("dev", "lin_api_dev")] {
         send(CommandBody::CreateSecretSet {
             set: set.into(),
@@ -569,7 +564,7 @@ async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
             assertion: None,
         };
         // The host is known once it has replicated.
-        if owner.send(HostId::new("vault"), grant).await.is_ok() {
+        if owner.send(HostId::new("hub"), grant).await.is_ok() {
             break;
         }
         assert!(
@@ -665,7 +660,7 @@ async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
              staging Authorization = \"Bearer {{secret:dev/LINEAR_KEY}}\"\n  \
              docs    Authorization = \"Bearer public\"\n\n\
              servers the CLI got: {names:?}\n\
-             linear's header, as the CLI got it: Authorization = Bearer {}…({} chars, matches the vault)\n\n\
+             linear's header, as the CLI got it: Authorization = Bearer {}…({} chars, matches the hub)\n\n\
              session notice ({}):\n{output}\n\n\
              value found in: journal={} files={} log={} env/command line={}\n",
             &VALUE[..8],

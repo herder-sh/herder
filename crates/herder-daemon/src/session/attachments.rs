@@ -207,7 +207,7 @@ pub(super) async fn fetch(
         }
     }
     // Kept before its prompt is journaled, so one a prompt names is missing only from a
-    // session recovered from a vault that never got it.
+    // session recovered from a hub that never got it.
     Err(error(
         ErrorCode::NotFound,
         format!(

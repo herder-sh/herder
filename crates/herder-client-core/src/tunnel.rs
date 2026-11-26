@@ -76,7 +76,7 @@ pub(crate) fn config() -> WebSocketConfig {
 }
 
 /// A WebSocket whose binary frames carry a byte stream, read and written as one: a tunnel's,
-/// or a relay stream through a vault.
+/// or a relay stream through a hub.
 pub(crate) struct Frames<S = Box<dyn Io>> {
     ws: WebSocketStream<S>,
     /// What is left of the binary frame read last.

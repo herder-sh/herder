@@ -21,7 +21,7 @@ use portable_pty::CommandBuilder;
 use tracing::debug;
 
 use crate::accounts::{self, Clis};
-use crate::hub::Hub;
+use crate::fanout::Fanout;
 
 /// How often the daemon re-probes CLIs that may have appeared or been updated outside herder.
 pub const INTERVAL: Duration = Duration::from_secs(60);
@@ -58,7 +58,7 @@ struct Inner {
     /// The newest release of each provider, as last checked.
     latest: Mutex<HashMap<Provider, String>>,
     current: Mutex<Vec<ProviderStatus>>,
-    hub: Mutex<Option<Arc<Hub>>>,
+    fanout: Mutex<Option<Arc<Fanout>>>,
 }
 
 impl Providers {
@@ -72,7 +72,7 @@ impl Providers {
             recipes,
             latest: Mutex::new(HashMap::new()),
             current: Mutex::new(Vec::new()),
-            hub: Mutex::new(None),
+            fanout: Mutex::new(None),
         };
         let providers = Self {
             inner: Arc::new(inner),
@@ -87,7 +87,7 @@ impl Providers {
         recipes.insert(provider, recipe);
         let latest = lock(&self.inner.latest).clone();
         let current = lock(&self.inner.current).clone();
-        let hub = lock(&self.inner.hub).clone();
+        let fanout = lock(&self.inner.fanout).clone();
         let providers = Self {
             inner: Arc::new(Inner {
                 binaries: self.inner.binaries.clone(),
@@ -95,7 +95,7 @@ impl Providers {
                 recipes,
                 latest: Mutex::new(latest),
                 current: Mutex::new(current),
-                hub: Mutex::new(hub),
+                fanout: Mutex::new(fanout),
             }),
         };
         providers.refresh();
@@ -110,9 +110,9 @@ impl Providers {
         self
     }
 
-    /// Announces later probes through `hub`.
-    pub fn publish_to(&self, hub: Arc<Hub>) {
-        *lock(&self.inner.hub) = Some(hub);
+    /// Announces later probes through `fanout`.
+    pub fn publish_to(&self, fanout: Arc<Fanout>) {
+        *lock(&self.inner.fanout) = Some(fanout);
         self.publish();
     }
 
@@ -228,10 +228,10 @@ impl Providers {
     }
 
     fn publish(&self) {
-        let Some(hub) = lock(&self.inner.hub).clone() else {
+        let Some(fanout) = lock(&self.inner.fanout).clone() else {
             return;
         };
-        hub.providers_changed(&self.snapshot());
+        fanout.providers_changed(&self.snapshot());
     }
 }
 

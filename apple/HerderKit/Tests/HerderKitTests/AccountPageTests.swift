@@ -40,40 +40,40 @@ struct AccountPageTests {
         let fleet = [
             machine("a", name: "work-mbp", sessions: [],
                     accounts: [endpointAccount("claude-proxy", on: "http://127.0.0.1:8317"),
-                               endpointAccount("claude-vault", on: "https://vault.lan:8317")]),
+                               endpointAccount("claude-hub", on: "https://hub.lan:8317")]),
             machine("b", name: "trash-can-01", sessions: [],
                     accounts: [endpointAccount("claude", on: "http://127.0.0.1:8317")]),
         ]
         let logins = try #require(ProviderAccounts(machines: fleet, now: now).groups.first?.logins)
         #expect(logins.map(\.id).sorted() == ["claude/endpoint:http://127.0.0.1:8317",
-                                                "claude/endpoint:https://vault.lan:8317"])
+                                                "claude/endpoint:https://hub.lan:8317"])
         let local = try #require(logins.first { $0.endpoint == "http://127.0.0.1:8317" })
         #expect(local.on.map(\.name) == ["work-mbp", "trash-can-01"])
         #expect(local.title == "Proxy" && local.email == nil)
         // Set up elsewhere, it keeps the endpoint, and needs the key typed again.
-        let draft = try #require(logins.first { $0.endpoint == "https://vault.lan:8317" }).draft(taken: [])
-        #expect(draft.usesEndpoint && draft.url == "https://vault.lan:8317" && draft.key.isEmpty)
+        let draft = try #require(logins.first { $0.endpoint == "https://hub.lan:8317" }).draft(taken: [])
+        #expect(draft.usesEndpoint && draft.url == "https://hub.lan:8317" && draft.key.isEmpty)
         #expect(draft.configDir.isEmpty)
     }
 
-    @MainActor @Test func anAccountOnTheVaultsLoginsShowsItsKeyComesFromTheVault() throws {
-        var vault = endpointAccount("claude-vault", on: "https://cpa.lan:8317")
-        vault.keySecret = AccountDraft.vaultKeySecret
-        let fleet = [machine("a", name: "work-mbp", sessions: [], accounts: [vault]),
+    @MainActor @Test func anAccountOnTheHubsLoginsShowsItsKeyComesFromTheHub() throws {
+        var hub = endpointAccount("claude-hub", on: "https://cpa.lan:8317")
+        hub.keySecret = AccountDraft.hubKeySecret
+        let fleet = [machine("a", name: "work-mbp", sessions: [], accounts: [hub]),
                      machine("b", name: "trash-can-01", sessions: [],
                              accounts: [endpointAccount("claude-proxy", on: "http://127.0.0.1:8317")])]
         let logins = try #require(ProviderAccounts(machines: fleet, now: now).groups.first?.logins)
-        let onVault = try #require(logins.first { $0.endpoint == "https://cpa.lan:8317" })
+        let onHub = try #require(logins.first { $0.endpoint == "https://cpa.lan:8317" })
         let held = try #require(logins.first { $0.endpoint == "http://127.0.0.1:8317" })
-        #expect(onVault.keyFromVault && !held.keyFromVault)
-        #expect(ProviderAccounts.Login.endpointNote(fromVault: true).contains("a key from the vault"))
-        #expect(AccountPage.keyHint(fromVault: true, typing: false) == "Key from the vault, each machine’s own")
-        #expect(AccountPage.keyHint(fromVault: false, typing: false) == "Never shown; type a new one to replace it")
-        // Set up elsewhere, it is on that machine's vault's logins too.
-        #expect(onVault.draft(taken: []).usesVault)
-        // An owner switches it to a held key, or back to the vault's.
+        #expect(onHub.keyFromHub && !held.keyFromHub)
+        #expect(ProviderAccounts.Login.endpointNote(fromHub: true).contains("a key from the hub"))
+        #expect(AccountPage.keyHint(fromHub: true, typing: false) == "Key from the hub, each machine’s own")
+        #expect(AccountPage.keyHint(fromHub: false, typing: false) == "Never shown; type a new one to replace it")
+        // Set up elsewhere, it is on that machine's hub's logins too.
+        #expect(onHub.draft(taken: []).usesHub)
+        // An owner switches it to a held key, or back to the hub's.
         guard case .setAccountSettings(_, _, _, _, let endpoint, let key, let keySecret)
-            = vault.settings(label: vault.label, configDir: nil, fallback: nil, key: "sk-own") else {
+            = hub.settings(label: hub.label, configDir: nil, fallback: nil, key: "sk-own") else {
             Issue.record("expected setAccountSettings")
             return
         }
@@ -81,7 +81,7 @@ struct AccountPageTests {
         let account = endpointAccount("claude-proxy", on: "https://cpa.lan:8317")
         guard case .setAccountSettings(_, _, _, _, _, let key, let keySecret)
             = account.settings(label: account.label, configDir: nil, fallback: nil,
-                               keySecret: AccountDraft.vaultKeySecret) else {
+                               keySecret: AccountDraft.hubKeySecret) else {
             Issue.record("expected setAccountSettings")
             return
         }
@@ -99,11 +99,11 @@ struct AccountPageTests {
         #expect(id == "claude-proxy" && label == "Renamed" && fallback == true)
         #expect(dir == nil && endpoint == nil && key == nil)
         guard case .setAccountSettings(_, _, let dir, _, let endpoint, let key, _)
-            = account.settings(label: "Proxy", configDir: nil, fallback: nil, endpoint: "https://vault.lan", key: "sk-2") else {
+            = account.settings(label: "Proxy", configDir: nil, fallback: nil, endpoint: "https://hub.lan", key: "sk-2") else {
             Issue.record("expected setAccountSettings")
             return
         }
-        #expect(dir == nil && endpoint == "https://vault.lan" && key == "sk-2")
+        #expect(dir == nil && endpoint == "https://hub.lan" && key == "sk-2")
         // A login account never sends an endpoint or a key; its config dir goes as given.
         let login = Account(accountId: "main", provider: "claude", label: "work", configDir: "~/.claude-work",
                             email: "work@example.com", usage: [])

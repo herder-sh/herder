@@ -161,7 +161,7 @@ pub fn title_clis(binaries: &HashMap<Provider, PathBuf>, clis: &Clis) -> TitleCl
 /// Points `account`'s CLI at its endpoint in `env`, the environment it runs with, when it is
 /// an endpoint account: its base URL and client key, and none of the inherited credentials
 /// that would be sent instead. A login account's `env` is left as it is, and so is that of an
-/// account whose key is still a vault secret: see [`crate::session`]'s `ready_to_start`.
+/// account whose key is still a hub secret: see [`crate::session`]'s `ready_to_start`.
 pub(crate) fn endpoint_env(account: &AccountConfig, env: &mut BTreeMap<String, String>) {
     let Some(endpoint) = &account.endpoint else {
         return;
@@ -188,12 +188,12 @@ pub(crate) fn endpoint_env(account: &AccountConfig, env: &mut BTreeMap<String, S
 
 /// `accounts` as clients see them, ordered by id, each with the email and windows `usage`
 /// holds for it, none until its provider reports them, and since when it needs logging in
-/// again, as `needs_login` says, and the vault login it is, as `vault_logins` says.
+/// again, as `needs_login` says, and the hub login it is, as `hub_logins` says.
 pub(crate) fn list(
     accounts: &Accounts,
     usage: &Known,
     needs_login: &BTreeMap<AccountId, Timestamp>,
-    vault_logins: &BTreeMap<AccountId, String>,
+    hub_logins: &BTreeMap<AccountId, String>,
 ) -> Vec<Account> {
     accounts
         .iter()
@@ -220,7 +220,7 @@ pub(crate) fn list(
                     EndpointKey::Secret(secret) => Some(secret.clone()),
                     EndpointKey::Held(_) => None,
                 }),
-            vault_login: vault_logins.get(id).cloned(),
+            hub_login: hub_logins.get(id).cloned(),
         })
         .collect()
 }
@@ -524,7 +524,7 @@ mod tests {
                     needs_login: None,
                     endpoint: None,
                     key_secret: None,
-                    vault_login: None,
+                    hub_login: None,
                 },
                 Account {
                     config_dir: None,
@@ -537,7 +537,7 @@ mod tests {
                     needs_login: Some(since),
                     endpoint: None,
                     key_secret: None,
-                    vault_login: None,
+                    hub_login: None,
                 }
             ]
         );

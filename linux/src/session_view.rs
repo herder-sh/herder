@@ -13,7 +13,7 @@
 //!   prompts sent meanwhile wait, marked queued, until the daemon starts them.
 //! - Its pull requests are listed over the transcript ([`crate::prs`]); the header's menu
 //!   links another.
-//! - Archived and moved sessions, and a vault's, are read-only: no composer, and no linking
+//! - Archived and moved sessions, and a hub's, are read-only: no composer, and no linking
 //!   or unlinking PRs.
 
 use std::cell::{Cell, RefCell};
@@ -381,7 +381,7 @@ impl SessionView {
             state.status = head.map_or(session.status, |head| head.status);
             state.read_only = if !machine.hosts.is_empty() {
                 Some(
-                    "A vault's sessions are read-only here: open the session from its own machine to drive it.",
+                    "A hub's sessions are read-only here: open the session from its own machine to drive it.",
                 )
             } else {
                 match state.status {

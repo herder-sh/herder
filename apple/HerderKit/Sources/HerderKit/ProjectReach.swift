@@ -2,7 +2,7 @@ import Herder
 
 /// Where a project is across the machines: the machines with clones of it, the remote those
 /// clones have, and the machines with no clone of it yet. Only a project with a remote is cloned
-/// onto another machine; a vault holds no clones, and a machine never connected has not said
+/// onto another machine; a hub holds no clones, and a machine never connected has not said
 /// what it holds.
 struct ProjectReach: Equatable {
     /// A machine with the project: where its clones are and how many sessions it has there.

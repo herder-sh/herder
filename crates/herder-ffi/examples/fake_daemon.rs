@@ -17,7 +17,7 @@
 //! `fake_daemon --load NAME SESSIONS EVENTS` runs host `NAME` with the journal of a machine used
 //! for months ([`load`]) and prints only its link and its owner's passkey: for measuring how
 //! the apps open and resume against a fleet of a real one's size.
-//! `fake_daemon --vault` runs a vault that keeps secrets ([`vault`]) and prints only its link
+//! `fake_daemon --hub` runs a hub that keeps secrets ([`hub`]) and prints only its link
 //! and its owner's passkey.
 //! `fake_daemon --own` runs `fake-own`, which waits for a new owner as after `herder claim`, and
 //! prints only the `herder://own` link that claim prints.
@@ -26,14 +26,14 @@
 
 #[path = "fake_daemon/demo.rs"]
 mod demo;
+#[path = "fake_daemon/hub.rs"]
+mod hub;
 #[path = "fake_daemon/load.rs"]
 mod load;
 #[path = "fake_daemon/record.rs"]
 mod record;
 #[path = "../tests/support/mod.rs"]
 mod support;
-#[path = "fake_daemon/vault.rs"]
-mod vault;
 
 use std::time::Duration;
 
@@ -58,11 +58,11 @@ async fn main() -> Result<()> {
                 .context("--record-demo needs a path")?;
             return record::record(std::path::Path::new(&out)).await;
         }
-        Some("--vault") => {
-            let vault = vault::Vault::start().await?;
-            println!("{}\n{}", vault.link, vault.passkey);
+        Some("--hub") => {
+            let hub = hub::Hub::start().await?;
+            println!("{}\n{}", hub.link, hub.passkey);
             tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
-            return vault.stop().await;
+            return hub.stop().await;
         }
         Some("--own") => {
             let daemon = support::FakeDaemon::start("fake-own").await?;

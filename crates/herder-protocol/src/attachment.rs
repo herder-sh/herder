@@ -27,8 +27,8 @@ pub const FILE_MEDIA_TYPE: &str = "application/octet-stream";
 /// Most bytes a file's name may have.
 pub const MAX_FILE_NAME_BYTES: usize = 255;
 
-/// How a daemon's error for an attachment the vault never got, or evicted, begins, so a
-/// session recovered from the vault lacks it; clients show it in place of the attachment.
+/// How a daemon's error for an attachment the hub never got, or evicted, begins, so a
+/// session recovered from the hub lacks it; clients show it in place of the attachment.
 pub const IMAGE_NOT_BACKED_UP: &str = "image not backed up";
 
 /// Most bytes all images and files of one prompt may have together; keeps a `send_prompt`,

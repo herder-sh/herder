@@ -1,7 +1,7 @@
 import Herder
 import SwiftUI
 
-/// An account to add, as the form has it: one login, one endpoint, or the vault's logins, for
+/// An account to add, as the form has it: one login, one endpoint, or the hub's logins, for
 /// every machine it is added on. Each machine gets the first id free there, named after the label.
 struct AccountDraft {
     /// How the account signs in.
@@ -10,13 +10,13 @@ struct AccountDraft {
         case login
         /// An API server, `url` with `key`.
         case endpoint
-        /// The provider logins in the CLIProxyAPI next to the machine's vault, with the client
-        /// key the vault keeps for that machine: nothing to type.
-        case vault
+        /// The provider logins in the CLIProxyAPI next to the machine's hub, with the client
+        /// key the hub keeps for that machine: nothing to type.
+        case hub
     }
 
-    /// The secret on a machine's vault holding its CLIProxyAPI client key.
-    static let vaultKeySecret: SecretRef = "CLIPROXYAPI_KEY"
+    /// The secret on a machine's hub holding its CLIProxyAPI client key.
+    static let hubKeySecret: SecretRef = "CLIPROXYAPI_KEY"
 
     /// The id to keep wherever it is free, as a login set up from another machine has; empty
     /// names it after the label.
@@ -39,12 +39,12 @@ struct AccountDraft {
     /// that can.
     var usesEndpoint: Bool { kind == .endpoint && Self.supportsEndpoint(provider) }
 
-    /// Whether the draft adds an account on each machine's vault logins: chosen, for a
+    /// Whether the draft adds an account on each machine's hub logins: chosen, for a
     /// provider that can.
-    var usesVault: Bool { kind == .vault && Self.supportsEndpoint(provider) }
+    var usesHub: Bool { kind == .hub && Self.supportsEndpoint(provider) }
 
     /// Whether it is sent to each machine as an endpoint account, rather than logged in to.
-    var sendsEndpoint: Bool { usesEndpoint || usesVault }
+    var sendsEndpoint: Bool { usesEndpoint || usesHub }
 
     /// An `http` or `https` URL with a host, as the daemon takes for an endpoint.
     static func validEndpoint(_ text: String) -> Bool {
@@ -97,22 +97,22 @@ struct AccountDraft {
     func account(taken: [String]) -> NewAccount {
         let kept = id.trimmingCharacters(in: .whitespacesAndNewlines)
         let id = !kept.isEmpty && !taken.contains(kept)
-            ? kept : Self.nextId(provider: provider, taken: taken, name: clean(label) ?? (usesVault ? "vault" : nil))
+            ? kept : Self.nextId(provider: provider, taken: taken, name: clean(label) ?? (usesHub ? "hub" : nil))
         return NewAccount(accountId: id, provider: provider,
                           label: clean(label) ?? Self.suggestedLabel(id: id, provider: provider),
                           configDir: clean(configDir))
     }
 
     /// What a machine whose ids are `taken` is asked to add, as an endpoint account; on the
-    /// vault's logins, at `vault`, where the machine reaches its vault's CLIProxyAPI. `nil`
-    /// unless the draft is a complete one, and for the vault's logins on a machine without them.
-    func endpointCommand(taken: [String], vault: String? = nil) -> CommandBody? {
+    /// hub's logins, at `hub`, where the machine reaches its hub's CLIProxyAPI. `nil`
+    /// unless the draft is a complete one, and for the hub's logins on a machine without them.
+    func endpointCommand(taken: [String], hub: String? = nil) -> CommandBody? {
         guard complete else { return nil }
-        if usesVault {
-            guard let vault else { return nil }
+        if usesHub {
+            guard let hub else { return nil }
             let account = account(taken: taken)
             return .addEndpointAccount(accountId: account.accountId, provider: provider, label: account.label,
-                                       endpoint: vault, key: nil, keySecret: Self.vaultKeySecret)
+                                       endpoint: hub, key: nil, keySecret: Self.hubKeySecret)
         }
         guard usesEndpoint, let url = clean(url), let key = clean(key) else { return nil }
         let account = account(taken: taken)
@@ -121,7 +121,7 @@ struct AccountDraft {
     }
 
     var problem: String? {
-        if usesVault { return nil }
+        if usesHub { return nil }
         if usesEndpoint {
             if let url = clean(url), !Self.validEndpoint(url) { return "Use an http:// or https:// URL." }
             return nil
@@ -154,16 +154,16 @@ extension Fleet {
         }
     }
 
-    /// Where `hostId` reaches its vault's CLIProxyAPI, as it last said; `nil` unless it is
-    /// linked to a vault that runs one and holds its key.
-    func vaultLogins(on hostId: HostId) -> String? {
+    /// Where `hostId` reaches its hub's CLIProxyAPI, as it last said; `nil` unless it is
+    /// linked to a hub that runs one and holds its key.
+    func hubLogins(on hostId: HostId) -> String? {
         guard case .linked(let link) = backupLinks[hostId] else { return nil }
         return link.cliproxyapi
     }
 
-    /// Asks each of `hostIds` where it backs up, at once, for `vaultLogins(on:)`; a machine
+    /// Asks each of `hostIds` where it backs up, at once, for `hubLogins(on:)`; a machine
     /// that does not answer keeps what it said before.
-    func refreshVaultLogins(on hostIds: [HostId]) async {
+    func refreshHubLogins(on hostIds: [HostId]) async {
         await withTaskGroup(of: Void.self) { group in
             for hostId in hostIds {
                 group.addTask { _ = try? await self.backupLink(of: hostId) }
@@ -172,13 +172,13 @@ extension Fleet {
     }
 
     /// Adds `draft`'s endpoint account on each of `hostIds` at once, under the id free there;
-    /// no terminal, as it has no login. On the vault's logins, each machine's is its own
-    /// vault's. Returns why each machine that refused it did.
+    /// no terminal, as it has no login. On the hub's logins, each machine's is its own
+    /// hub's. Returns why each machine that refused it did.
     func addEndpointAccount(_ draft: AccountDraft, on hostIds: [HostId]) async -> [HostId: String] {
         let commands = hostIds.compactMap { hostId -> (HostId, CommandBody)? in
             let taken = AccountDraft.taken(on: machines.first { $0.hostId == hostId },
                                            pending: activity.pendingIds(on: hostId))
-            return draft.endpointCommand(taken: taken, vault: vaultLogins(on: hostId)).map { (hostId, $0) }
+            return draft.endpointCommand(taken: taken, hub: hubLogins(on: hostId)).map { (hostId, $0) }
         }
         let client = client
         return await withTaskGroup(of: (HostId, String?).self) { group in
@@ -209,29 +209,29 @@ struct AccountTarget: Equatable, Identifiable {
     var installable = false
     /// Whether this device owns the machine: only an owner adds accounts, or sees a key field.
     var owner = true
-    /// Where the machine reaches its vault's CLIProxyAPI, for an account on the vault's logins;
-    /// `nil` when its vault runs none, or it is linked to none.
-    var vault: String?
+    /// Where the machine reaches its hub's CLIProxyAPI, for an account on the hub's logins;
+    /// `nil` when its hub runs none, or it is linked to none.
+    var hub: String?
 
     var id: HostId { hostId }
 
-    /// The machines that run sessions: a vault runs none, and a machine never connected has
+    /// The machines that run sessions: a hub runs none, and a machine never connected has
     /// not said whether this device owns it. Adding an account is the owner's, on a connected
-    /// machine with `provider`'s CLI. On the vault's logins (`usesVault`), only where `vaults`
+    /// machine with `provider`'s CLI. On the hub's logins (`usesHub`), only where `hubs`
     /// says the machine reaches them.
-    static func all(_ machines: [Machine], provider: Provider, vaults: [HostId: String] = [:],
-                    usesVault: Bool = false) -> [AccountTarget] {
+    static func all(_ machines: [Machine], provider: Provider, hubs: [HostId: String] = [:],
+                    usesHub: Bool = false) -> [AccountTarget] {
         machines.filter { $0.hosts.isEmpty && $0.role != nil }.map { machine in
             let status = machine.providers.first { $0.provider == provider }
             let reachable = machine.role == .owner && machine.connection == .connected
             let missing = status?.installed == false
-            let vault = vaults[machine.hostId]
+            let hub = hubs[machine.hostId]
             let problem: String? = if machine.role != .owner {
                 "Member — can’t add accounts"
             } else if machine.connection != .connected {
                 "Not connected"
-            } else if usesVault && vault == nil {
-                "No vault logins"
+            } else if usesHub && hub == nil {
+                "No hub logins"
             } else if missing {
                 "\(ModelCatalog.providerName(provider)) isn’t installed"
             } else {
@@ -239,7 +239,7 @@ struct AccountTarget: Equatable, Identifiable {
             }
             return AccountTarget(hostId: machine.hostId, name: machine.name, problem: problem,
                                  installable: reachable && missing && status?.canInstall == true,
-                                 owner: machine.role == .owner, vault: vault)
+                                 owner: machine.role == .owner, hub: hub)
         }
     }
 }
@@ -266,8 +266,8 @@ struct AddAccountSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private var targets: [AccountTarget] {
-        let vaults = fleet.machines.reduce(into: [HostId: String]()) { $0[$1.hostId] = fleet.vaultLogins(on: $1.hostId) }
-        return AccountTarget.all(fleet.machines, provider: draft.provider, vaults: vaults, usesVault: draft.usesVault)
+        let hubs = fleet.machines.reduce(into: [HostId: String]()) { $0[$1.hostId] = fleet.hubLogins(on: $1.hostId) }
+        return AccountTarget.all(fleet.machines, provider: draft.provider, hubs: hubs, usesHub: draft.usesHub)
     }
     /// The ticked machines it can be added on now, in the list's order.
     private var chosen: [HostId] { targets.filter { $0.problem == nil && ticked.contains($0.hostId) }.map(\.hostId) }
@@ -286,11 +286,11 @@ struct AddAccountSheet: View {
             .keyboardShortcut(.defaultAction)
         }
         .onChange(of: draft.provider) { failures = [:] }
-        // Machines that have the vault's logins stay ticked as it is chosen; those without go.
+        // Machines that have the hub's logins stay ticked as it is chosen; those without go.
         .onChange(of: draft.kind) { failures = [:] }
         .task {
             let owned = fleet.machines.filter { $0.hosts.isEmpty && $0.role == .owner && $0.connection == .connected }
-            await fleet.refreshVaultLogins(on: owned.map(\.hostId))
+            await fleet.refreshHubLogins(on: owned.map(\.hostId))
         }
         .onAppear {
             guard !started else { return }
@@ -324,7 +324,7 @@ struct AddAccountSheet: View {
     }
 
     static func hint(_ draft: AccountDraft) -> String {
-        if draft.usesVault { return "Each machine uses its own key from the vault." }
+        if draft.usesHub { return "Each machine uses its own key from the hub." }
         return draft.usesEndpoint ? "herder never shows the key again."
             : "Logins run in Activity; this sheet closes."
     }
@@ -354,7 +354,7 @@ struct AddAccountForm: View {
         // An endpoint's key is the owner's to enter: a member sees no key field.
         if AccountDraft.supportsEndpoint(draft.provider) && targets.contains(where: \.owner) {
             Field(label: "Sign-in") {
-                ChoiceChips(options: Self.kinds(vault: targets.contains { $0.owner && $0.vault != nil }),
+                ChoiceChips(options: Self.kinds(hub: targets.contains { $0.owner && $0.hub != nil }),
                             selection: $draft.kind)
                 .accessibilityIdentifier("account-kind")
             }
@@ -377,8 +377,8 @@ struct AddAccountForm: View {
             InputBox(placeholder: ModelCatalog.providerName(draft.provider), text: $draft.label)
                 .accessibilityIdentifier("account-label")
         }
-        if draft.usesVault {
-            Text("Runs on the provider logins in the CLIProxyAPI next to each machine’s vault. The vault keeps a key for each machine; nothing to type.")
+        if draft.usesHub {
+            Text("Runs on the provider logins in the CLIProxyAPI next to each machine’s hub. The hub keeps a key for each machine; nothing to type.")
                 .font(.footnote).foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         } else if draft.usesEndpoint && targets.contains(where: \.owner) {
@@ -390,7 +390,7 @@ struct AddAccountForm: View {
                 InputBox(placeholder: "The server’s client key", text: $draft.key, mono: true, secure: true)
                     .accessibilityIdentifier("account-key")
             }
-            Text("A CLIProxyAPI on this machine or the vault, or a local model server. The server holds the provider’s credentials; herder keeps only its key.")
+            Text("A CLIProxyAPI on this machine or the hub, or a local model server. The server holds the provider’s credentials; herder keeps only its key.")
                 .font(.footnote).foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
@@ -406,13 +406,13 @@ struct AddAccountForm: View {
         }
     }
 
-    /// The ways to sign in: the vault's logins only when a machine reaches them.
-    static func kinds(vault: Bool) -> [(value: AccountDraft.Kind, label: String, detail: String)] {
+    /// The ways to sign in: the hub's logins only when a machine reaches them.
+    static func kinds(hub: Bool) -> [(value: AccountDraft.Kind, label: String, detail: String)] {
         var kinds: [(value: AccountDraft.Kind, label: String, detail: String)] = [
             (value: .login, label: "Log in", detail: "The provider’s own login"),
             (value: .endpoint, label: "Use an endpoint", detail: "An API server and its key"),
         ]
-        if vault { kinds.append((value: .vault, label: "Use the vault’s logins", detail: "Its CLIProxyAPI, no key to type")) }
+        if hub { kinds.append((value: .hub, label: "Use the hub’s logins", detail: "Its CLIProxyAPI, no key to type")) }
         return kinds
     }
 

@@ -2,13 +2,13 @@
 //!
 //! The approval panel offers `store` and `decline`. Decline answers the approval as denied.
 //! Store opens this dialog, where the owner types or pastes the value into a masked field.
-//! Enter then puts it on the host's vault as that vault's owner, as the apps do: the host's
-//! `get_vault_link` names the vault, which must be paired here with this user as its owner;
+//! Enter then puts it on the host's hub as that hub's owner, as the apps do: the host's
+//! `get_hub_link` names the hub, which must be paired here with this user as its owner;
 //! `list_secrets` there tells whether the set exists (`create_secret_set` when not) and keeps a
 //! replaced secret's description when the agent gave none; `put_secret` stores the value; and
 //! `confirm_secret_stored` on the host lets the agent go on, knowing only that it was stored.
 //!
-//! The value goes from here to the vault alone, never to the host. It is held as [`Masked`],
+//! The value goes from here to the hub alone, never to the host. It is held as [`Masked`],
 //! whose `Debug` hides it, only until `put_secret` takes it; a failure after that asks for it
 //! again.
 
@@ -44,13 +44,13 @@ pub struct Supply {
 /// A command sent for the dialog, which is also the step it is at.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sent {
-    /// `get_vault_link` to the session's machine.
+    /// `get_hub_link` to the session's machine.
     Link,
-    /// `list_secrets` to the vault.
+    /// `list_secrets` to the hub.
     List(HostId),
-    /// `create_secret_set` to the vault, for the set the request names.
+    /// `create_secret_set` to the hub, for the set the request names.
     Create(HostId),
-    /// `put_secret` to the vault.
+    /// `put_secret` to the hub.
     Put,
     /// `confirm_secret_stored` to the session's machine.
     Confirm,
@@ -105,14 +105,14 @@ impl Supply {
             .unwrap_or_default()
     }
 
-    /// Sends `put_secret` to `vault`, taking the value out of the dialog; or says why not.
-    fn put(&mut self, vault: HostId, description: String) -> Vec<Effect> {
+    /// Sends `put_secret` to `hub`, taking the value out of the dialog; or says why not.
+    fn put(&mut self, hub: HostId, description: String) -> Vec<Effect> {
         let Some(value) = SecretValue::new(std::mem::take(&mut self.value.0)) else {
             return self.failed("the value is longer than 64 KiB, or holds a NUL; enter it again");
         };
         self.step = Some(Sent::Put);
         vec![Effect::Send {
-            host_id: vault,
+            host_id: hub,
             command: CommandBody::PutSecret {
                 set: self.request.set.clone(),
                 name: self.request.name.clone(),
@@ -173,7 +173,7 @@ impl App {
                 dialog.error = None;
                 return vec![Effect::Send {
                     host_id: dialog.session.host_id.clone(),
-                    command: CommandBody::GetVaultLink,
+                    command: CommandBody::GetHubLink,
                     origin: Origin::Supply(Sent::Link),
                 }];
             }
@@ -187,9 +187,9 @@ impl App {
         sent: Sent,
         result: Result<CommandResult, String>,
     ) -> Vec<Effect> {
-        let vault = match (&sent, &result) {
-            (Sent::Link, Ok(CommandResult::VaultLink { vault, .. })) => {
-                Some(self.secrets_vault(vault.as_ref()))
+        let hub = match (&sent, &result) {
+            (Sent::Link, Ok(CommandResult::HubLink { hub, .. })) => {
+                Some(self.secrets_hub(hub.as_ref()))
             }
             _ => None,
         };
@@ -204,37 +204,37 @@ impl App {
             Err(why) => return dialog.failed(why),
         };
         match (sent, result) {
-            (Sent::Link, _) => match vault {
-                Some(Ok(vault)) => {
-                    dialog.step = Some(Sent::List(vault.clone()));
+            (Sent::Link, _) => match hub {
+                Some(Ok(hub)) => {
+                    dialog.step = Some(Sent::List(hub.clone()));
                     vec![Effect::Send {
-                        host_id: vault.clone(),
+                        host_id: hub.clone(),
                         command: CommandBody::ListSecrets,
-                        origin: Origin::Supply(Sent::List(vault)),
+                        origin: Origin::Supply(Sent::List(hub)),
                     }]
                 }
                 Some(Err(why)) => dialog.failed(why),
                 None => dialog.failed("the machine did not say where it keeps secrets"),
             },
-            (Sent::List(vault), CommandResult::Secrets { sets, secrets }) => {
+            (Sent::List(hub), CommandResult::Secrets { sets, secrets }) => {
                 let set = dialog.request.set.clone();
                 if sets.iter().any(|s| s.name == set) {
                     let description = dialog.description(&secrets, &set);
-                    return dialog.put(vault, description);
+                    return dialog.put(hub, description);
                 }
-                dialog.step = Some(Sent::Create(vault.clone()));
+                dialog.step = Some(Sent::Create(hub.clone()));
                 vec![Effect::Send {
-                    host_id: vault.clone(),
+                    host_id: hub.clone(),
                     command: CommandBody::CreateSecretSet {
                         set,
                         assertion: None,
                     },
-                    origin: Origin::Supply(Sent::Create(vault)),
+                    origin: Origin::Supply(Sent::Create(hub)),
                 }]
             }
-            (Sent::Create(vault), _) => {
+            (Sent::Create(hub), _) => {
                 let description = dialog.request.description.clone();
-                dialog.put(vault, description)
+                dialog.put(hub, description)
             }
             (Sent::Put, _) => {
                 dialog.step = Some(Sent::Confirm);
@@ -261,41 +261,38 @@ impl App {
         }
     }
 
-    /// The vault a machine fetches its secrets from, `linked`, as this client reaches it: paired
+    /// The hub a machine fetches its secrets from, `linked`, as this client reaches it: paired
     /// here, connected, with this user its owner; or why it cannot store there.
-    fn secrets_vault(
-        &self,
-        linked: Option<&herder_protocol::LinkedVault>,
-    ) -> Result<HostId, String> {
+    fn secrets_hub(&self, linked: Option<&herder_protocol::LinkedHub>) -> Result<HostId, String> {
         let Some(linked) = linked.filter(|linked| linked.secrets) else {
             return Err(
-                "the machine is not linked to a vault with Secrets on; link it to one \
+                "the machine is not linked to a hub with Secrets on; link it to one \
                         from the machines panel"
                     .to_owned(),
             );
         };
-        let Some(vault) = self.paired_vault(linked) else {
+        let Some(hub) = self.paired_hub(linked) else {
             return Err(format!(
-                "the machine's vault, {}, is not paired here; pair with it as its owner",
+                "the machine's hub, {}, is not paired here; pair with it as its owner",
                 linked.address
             ));
         };
-        if vault.role != Some(Role::Owner) {
+        if hub.role != Some(Role::Owner) {
             return Err(format!(
                 "only the owners of {} store secrets there; ask one of them",
-                vault.name
+                hub.name
             ));
         }
-        if vault.connection != ConnectionState::Connected {
-            return Err(format!("{} is not connected", vault.name));
+        if hub.connection != ConnectionState::Connected {
+            return Err(format!("{} is not connected", hub.name));
         }
-        Ok(vault.host_id.clone())
+        Ok(hub.host_id.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use herder_protocol::{LinkedVault, SecretSet, Timestamp};
+    use herder_protocol::{LinkedHub, SecretSet, Timestamp};
     use ratatui::crossterm::event::KeyEvent;
 
     use super::*;
@@ -361,17 +358,17 @@ mod tests {
     }
 
     fn linked() -> CommandResult {
-        CommandResult::VaultLink {
-            is_vault: false,
-            vault: Some(LinkedVault {
-                address: "vault:7447".into(),
+        CommandResult::HubLink {
+            is_hub: false,
+            hub: Some(LinkedHub {
+                address: "hub:7447".into(),
                 fingerprint: "CD".repeat(32),
                 backup: true,
                 secrets: true,
                 cliproxyapi: None,
             }),
             volume: None,
-            local_vault: false,
+            local_hub: false,
         }
     }
 
@@ -390,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn a_typed_value_goes_to_the_vault_then_the_host_hears_it_was_stored() {
+    fn a_typed_value_goes_to_the_hub_then_the_host_hears_it_was_stored() {
         let mut app = asking("");
         for c in VALUE.chars() {
             press(&mut app, KeyCode::Char(c));
@@ -400,8 +397,8 @@ mod tests {
 
         let link = press(&mut app, KeyCode::Enter);
         let (host, command, _) = sent(link.clone());
-        assert_eq!((host.as_str(), command), ("h1", CommandBody::GetVaultLink));
-        // The vault answers as paired here, its fingerprint in any case.
+        assert_eq!((host.as_str(), command), ("h1", CommandBody::GetHubLink));
+        // The hub answers as paired here, its fingerprint in any case.
         let list = answer(&mut app, link, Ok(linked()));
         let (host, command, _) = sent(list.clone());
         assert_eq!((host.as_str(), command), ("v", CommandBody::ListSecrets));
@@ -481,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn it_stops_where_the_vault_cannot_take_it_and_asks_again() {
+    fn it_stops_where_the_hub_cannot_take_it_and_asks_again() {
         let mut app = asking("");
         press(&mut app, KeyCode::Enter);
         assert_eq!(
@@ -490,11 +487,11 @@ mod tests {
         );
         press(&mut app, KeyCode::Char('x'));
         let link = press(&mut app, KeyCode::Enter);
-        let unlinked = CommandResult::VaultLink {
-            is_vault: false,
-            vault: None,
+        let unlinked = CommandResult::HubLink {
+            is_hub: false,
+            hub: None,
             volume: None,
-            local_vault: false,
+            local_hub: false,
         };
         assert!(answer(&mut app, link, Ok(unlinked)).is_empty());
         let dialog = app.supply.as_ref().unwrap();

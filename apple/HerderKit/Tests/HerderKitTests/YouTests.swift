@@ -127,7 +127,7 @@ enum Fake {
 
 @MainActor
 struct PasskeyAddingTests {
-    let machines = ["devbox", "nas", "laptop", "vault"].map { Directory.Column(id: $0, name: $0) }
+    let machines = ["devbox", "nas", "laptop", "hub"].map { Directory.Column(id: $0, name: $0) }
 
     /// Adding to `machines`, where `fail` says how a machine answers `add_passkey`.
     private func adding(fail: @escaping (HostId) -> Error? = { _ in nil },
@@ -154,12 +154,12 @@ struct PasskeyAddingTests {
     }
 
     @Test func theFirstMachineMakesItAndTheRestLearnItFromTheFirstsListing() async {
-        let (adding, sent) = adding(fail: { $0 == "vault" ? HerderError.Rejected(info: ErrorInfo(code: .conflict, message: "has it")) : nil })
+        let (adding, sent) = adding(fail: { $0 == "hub" ? HerderError.Rejected(info: ErrorInfo(code: .conflict, message: "has it")) : nil })
         await adding.run()
         #expect(adding.rows.map(\.state) == [.added, .added, .added, .added], "a machine that has it already counts as added")
         #expect(adding.key == Fake.newKey)
         let commands = sent()
-        #expect(commands.map(\.0) == ["devbox", "nas", "laptop", "vault"])
+        #expect(commands.map(\.0) == ["devbox", "nas", "laptop", "hub"])
         #expect(commands[0].1 == .addPasskey(passkey: .register(registration: Fake.registration),
                                              assertion: Fake.assertion("cred-you", over: "c-devbox")))
         #expect(commands[1].1 == .addPasskey(
@@ -177,7 +177,7 @@ struct PasskeyAddingTests {
         down = []
         await adding.run()
         #expect(adding.rows.allSatisfy { $0.state == .added })
-        #expect(sent().map(\.0) == ["devbox", "nas", "laptop", "vault", "nas"], "only what was left is tried again")
+        #expect(sent().map(\.0) == ["devbox", "nas", "laptop", "hub", "nas"], "only what was left is tried again")
     }
 
     @Test func closingTheCreateSheetStopsWithNothingSent() async {

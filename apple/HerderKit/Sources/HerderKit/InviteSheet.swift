@@ -64,9 +64,9 @@ final class InviteMaker {
         picked = Set(only.map { [$0] } ?? machines.map(\.hostId))
     }
 
-    /// The machines you can invite to: those you own, connected, not vaults.
+    /// The machines you can invite to: those you own, connected, not hubs.
     nonisolated static func invitable(_ machines: [Herder.Machine]) -> [Machine] {
-        machines.filter { $0.role == .owner && $0.connection == .connected && $0.hosts.isEmpty && $0.vault == nil }
+        machines.filter { $0.role == .owner && $0.connection == .connected && $0.hosts.isEmpty && $0.hub == nil }
             .map { Machine(hostId: $0.hostId, name: $0.name) }
     }
 

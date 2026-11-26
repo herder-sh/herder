@@ -1,4 +1,4 @@
-//! `herder pair`: pair a host with the vault running here, list or revoke devices; and `herder
+//! `herder pair`: pair a host with the hub running here, list or revoke devices; and `herder
 //! claim`, which gives the running daemon a new owner.
 //!
 //! People and their devices join through the app (`herder claim`, invites) and `herder login`,
@@ -15,7 +15,7 @@ use qrcode::render::unicode::Dense1x2;
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// On a vault, pair the host named NAME to replicate here, and only that: it never reads
+    /// On a hub, pair the host named NAME to replicate here, and only that: it never reads
     /// other hosts, sessions or devices.
     #[arg(
         long,
@@ -130,22 +130,22 @@ fn print_host_pairing(info: &PairingInfo) {
     let minutes = u64::try_from(left).unwrap_or(0).div_ceil(60);
     let address = info.addresses.first().map_or("<address>", String::as_str);
     println!(
-        "Pair the host {} to replicate to this vault. In its daemon.toml:\n",
+        "Pair the host {} to replicate to this hub. In its daemon.toml:\n",
         info.user
     );
-    println!("  [vault]");
+    println!("  [hub]");
     println!("  address = \"{address}\"");
     println!("  fingerprint = \"{}\"", info.fingerprint);
     println!("  pairing_code = \"{}\"", info.code);
     if info.addresses.len() > 1 {
         println!(
-            "\nThe vault also listens on {}.",
+            "\nThe hub also listens on {}.",
             info.addresses[1..].join(", ")
         );
     }
     println!(
         "\nThen restart its daemon. The code works once, for the next {minutes} minutes. The \
-         host may only replicate its own sessions: it reads nothing on the vault."
+         host may only replicate its own sessions: it reads nothing on the hub."
     );
 }
 
@@ -195,7 +195,7 @@ fn print_users(users: &[UserInfo]) -> Result<()> {
     Ok(())
 }
 
-/// What a device may do: `client` reads everything, `host` only replicates to a vault.
+/// What a device may do: `client` reads everything, `host` only replicates to a hub.
 fn access(host_only: bool) -> &'static str {
     if host_only { "host" } else { "client" }
 }

@@ -31,7 +31,7 @@ import Testing
             "h-dr": [me([PeopleTests.device("m3", mac, online: true)]), person("p-sam", "Sam", .member),
                      person("p-kim", "Kim", .owner, devices: [PeopleTests.device("k2", "herder-ios/0.21.0", online: true),
                                                               PeopleTests.device("k3", "herder-tui/0.21.0", online: true)])],
-            "h-vault": [me([])],
+            "h-hub": [me([])],
         ]
     }()
 

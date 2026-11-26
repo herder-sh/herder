@@ -45,7 +45,7 @@ pub(crate) trait Io: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin> Io for T {}
 
 /// A WebSocket whose binary frames carry a byte stream, read and written as one: the outer
-/// WebSocket of a tunnel connection, or a relay stream through the vault.
+/// WebSocket of a tunnel connection, or a relay stream through the hub.
 pub(crate) struct Frames<S = TcpStream> {
     ws: WebSocketStream<S>,
     /// What is left of the binary frame read last.
@@ -236,7 +236,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for Frames<S> {
 }
 
 /// The byte stream a client's TLS runs on: its TCP socket, a tunnel's frames, or a relay
-/// stream through the vault.
+/// stream through the hub.
 pub(crate) enum Transport {
     Tcp(TcpStream),
     Tunnel(Box<Frames>),

@@ -17,7 +17,7 @@ use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, 
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Identity, Server, Tls};
-use herder_daemon::{Hub, session};
+use herder_daemon::{Fanout, session};
 use herder_protocol::{AccountId, HostId, Provider, Role, TurnId};
 use herder_store::Store;
 use serde_json::{Value, json};
@@ -60,7 +60,7 @@ async fn daemon_playing(
     let tls = Tls::load_or_create(&dir.join("tls"), "test-host").unwrap();
     let auth = Arc::new(Auth::open(dir).unwrap());
     let (_, owner) = authenticator::enroll(&auth, "tomas", Role::Owner, "fp-owner-app");
-    let hub = Arc::new(Hub::default());
+    let fanout = Arc::new(Fanout::default());
     let fake = Provider::Other("fake".into());
     let mut adapters = Adapters::new();
     adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script.clone())));
@@ -94,7 +94,7 @@ async fn daemon_playing(
         store: Store::open(dir.join("herder.db")).unwrap(),
         adapters,
         accounts,
-        sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+        sink: Arc::clone(&fanout) as Arc<dyn session::EventSink>,
         turn_ids: Box::new(move || {
             TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
         }),
@@ -114,8 +114,16 @@ async fn daemon_playing(
         id: HostId::new("host-1"),
         name: "test-host".into(),
     };
-    let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
-    let server = Server::new(tls, auth, hub, sessions, terminals, Logins::default(), host);
+    let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
+    let server = Server::new(
+        tls,
+        auth,
+        fanout,
+        sessions,
+        terminals,
+        Logins::default(),
+        host,
+    );
     tokio::spawn(server.run(vec![listener], shutdown));
     daemon
 }

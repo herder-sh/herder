@@ -1,6 +1,6 @@
 //! Services herder runs as, starting with the machine: a systemd user service on Linux, a
-//! launchd LaunchAgent on macOS. `herder service install` runs the daemon so; a vault, which
-//! `herder vault install` or an owner's `install_vault` installs, runs as a service of its own.
+//! launchd LaunchAgent on macOS. `herder service install` runs the daemon so; a hub, which
+//! `herder hub install` or an owner's `install_hub` installs, runs as a service of its own.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -12,7 +12,7 @@ mod systemd;
 
 const MACOS: bool = cfg!(target_os = "macos");
 
-/// A service herder installs: the daemon, or a vault next to it and its CLIProxyAPI.
+/// A service herder installs: the daemon, or a hub next to it and its CLIProxyAPI.
 #[derive(Clone)]
 pub struct Service {
     /// The launchd label.
@@ -207,11 +207,11 @@ mod tests {
     #[test]
     fn env_file_lines_are_name_value_pairs() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("vault.env");
-        std::fs::write(&path, "# key\n\nHERDER_VAULT_SECRETS_KEY=YWJj+/==\n").unwrap();
+        let path = dir.path().join("hub.env");
+        std::fs::write(&path, "# key\n\nHERDER_HUB_SECRETS_KEY=YWJj+/==\n").unwrap();
         assert_eq!(
             read_env_file(&path).unwrap(),
-            [("HERDER_VAULT_SECRETS_KEY".to_owned(), "YWJj+/==".to_owned())]
+            [("HERDER_HUB_SECRETS_KEY".to_owned(), "YWJj+/==".to_owned())]
         );
         std::fs::write(&path, "oops\n").unwrap();
         assert!(read_env_file(&path).is_err());

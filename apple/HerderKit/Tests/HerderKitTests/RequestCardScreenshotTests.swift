@@ -49,7 +49,7 @@ import Testing
     /// An agent's `request_secret`: the name, the agent's hint, the warning that it replaces a
     /// value, the set, the secure field with Paste, and Decline and Store. Hosted in a window,
     /// as the field, the picker and Paste are AppKit's; drawn before the card asks the machine
-    /// for its vault, which this test has none of.
+    /// for its hub, which this test has none of.
     @Test func drawsARequestSecretCard() throws {
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
             Issue.record("no profile")

@@ -66,7 +66,7 @@ struct ProjectGroup: Hashable, Identifiable {
 /// A chat bot's conversations: the task trees its people started, on the machine that holds it.
 struct BotGroup: Hashable, Identifiable {
     var id: String { "\(hostId)/\(botId)" }
-    /// The machine the bot runs on: for a vault, the host its sessions run on.
+    /// The machine the bot runs on: for a hub, the host its sessions run on.
     let hostId: HostId
     let botId: BotId
     let kind: BotKind
@@ -315,13 +315,13 @@ struct Lists: Equatable {
     /// listed nor followed; see `copies`.
     static func shadowed(_ machines: [Machine]) -> Set<SessionKey> { copies(machines).shadowed }
 
-    /// Which copy of each session is listed, where its own host and the vaults that replicate
-    /// it each list one: its own host's while that host is connected; else a connected vault's,
+    /// Which copy of each session is listed, where its own host and the hubs that replicate
+    /// it each list one: its own host's while that host is connected; else a connected hub's,
     /// read-only; and with none of them connected the copy in `previous`, an earlier answer's
     /// `shown`, so that losing the network moves no session from one copy to another.
     static func copies(_ machines: [Machine], keeping previous: [SessionKey: SessionKey] = [:]) -> SessionCopies {
         var copies = SessionCopies()
-        // Without a vault's copy of another host's session every session is listed once.
+        // Without a hub's copy of another host's session every session is listed once.
         guard machines.contains(where: { machine in
             machine.sessions.contains { $0.hostId.map { $0 != machine.hostId } ?? false }
         }) else { return copies }
@@ -343,11 +343,11 @@ struct Lists: Equatable {
         }
         for (origin, group) in groups where group.count > 1 {
             let kept = previous[origin]
-            let vaults = group.filter { !$0.own && $0.connected }
+            let hubs = group.filter { !$0.own && $0.connected }
             let own = group.first { $0.own && $0.connected }
-            let vault = vaults.first { $0.key == kept } ?? vaults.first
+            let hub = hubs.first { $0.key == kept } ?? hubs.first
             let before = group.first { $0.key == kept }
-            let shown = own ?? vault ?? before ?? group.first { !$0.own } ?? group[0]
+            let shown = own ?? hub ?? before ?? group.first { !$0.own } ?? group[0]
             copies.shown[origin] = shown.key
             for copy in group {
                 copies.others[copy.key] = group.map(\.key).filter { $0 != copy.key }
@@ -389,7 +389,7 @@ struct Lists: Equatable {
                     sessions: machine.sessions.filter { $0.hostId == host.hostId }.count)
             },
             pinned: machine.failover.pin,
-            vault: !machine.hosts.isEmpty || machine.vault != nil)
+            hub: !machine.hosts.isEmpty || machine.hub != nil)
     }
 
     /// A usage window's name as the TUI labels it (crates/herder-tui/src/account_screen.rs).
@@ -427,7 +427,7 @@ struct Lists: Equatable {
         /// has seen its repository, and for good once the repository's project is removed.
         var projectId: String? { head.projectId }
 
-        /// For a vault, the host the session runs on.
+        /// For a hub, the host the session runs on.
         var host: FleetHost? {
             head.hostId.flatMap { id in machine.hosts.first { $0.hostId == id } }
         }
@@ -448,7 +448,7 @@ struct Lists: Equatable {
                 key: key, title: model.titled ?? head.title ?? model.title ?? head.task ?? "Session …\(key.sessionId.suffix(6))",
                 project: projectId.map { String($0.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? "") } ?? "",
                 projectId: projectId, branch: model.branch ?? "", worktree: model.worktree ?? "", machine: machineName,
-                machineOffline: host.map { !$0.online } ?? false, fromVault: host != nil,
+                machineOffline: host.map { !$0.online } ?? false, fromHub: host != nil,
                 state: state, activity: model.activity,
                 age: Timestamp.age(model.updatedAt, now: now), updatedAt: model.updatedAt, prs: model.prs,
                 children: kids.count, childrenNeedYou: kids.filter(\.model.needsUser).count,
@@ -458,7 +458,7 @@ struct Lists: Equatable {
 }
 
 /// Which copy of each session is listed, of the sessions listed more than once: by their own
-/// host and by the vaults that replicate it. See `Lists.copies`.
+/// host and by the hubs that replicate it. See `Lists.copies`.
 struct SessionCopies: Equatable {
     /// The copy listed, by the session on its own host.
     var shown: [SessionKey: SessionKey] = [:]

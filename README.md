@@ -5,7 +5,7 @@
 herder runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your
 accounts and Linux machines. It drives each vendor's own unmodified CLI and never touches
 provider login tokens. A daemon on each machine hosts agent sessions, fails over between
-accounts when one hits its limit, and an optional vault keeps sessions durable. You watch
+accounts when one hits its limit, and an optional hub keeps sessions durable. You watch
 and steer them from a terminal UI or the native apps for macOS, iOS and Linux, built on a shared
 Rust client core.
 
@@ -72,7 +72,7 @@ herder doctor            # or: herder doctor --config /path/to/daemon.toml
 
 It checks that the config parses, each provider's CLI runs, each account is logged in, git
 and `gh` are set up, the service is installed and running, the daemon answers on its listen
-addresses and the vault (if any) is reachable. Each line is ✓ (pass), ! (warning) or ✗
+addresses and the hub (if any) is reachable. Each line is ✓ (pass), ! (warning) or ✗
 (fail), with how to fix anything that does not pass. It exits non-zero while a check fails, so
 run it until it passes.
 

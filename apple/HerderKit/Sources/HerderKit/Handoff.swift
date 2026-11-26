@@ -11,12 +11,12 @@ struct ForkOrigin: Equatable {
 /// forks the session there and opens the fork, with no sheet in between, and archives the
 /// original, so the session is listed once, where it now runs. The client core finds the
 /// history: on the machine itself, relayed from the session's machine while it is connected,
-/// else in the destination's vault.
+/// else in the destination's hub.
 extension Fleet {
     /// Why `machine` cannot take a session of `provider`, if it cannot.
     static func handoffBlocker(_ machine: Machine, provider: Provider?) -> String? {
         if machine.connection != .connected { return "Offline" }
-        if machine.vault != nil || !machine.hosts.isEmpty { return "Vault" }
+        if machine.hub != nil || !machine.hosts.isEmpty { return "Hub" }
         if machine.role != .owner { return "Owner only" }
         guard let provider else { return "Loading" }
         if !machine.accounts.contains(where: { $0.provider == provider }) {

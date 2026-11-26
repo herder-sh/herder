@@ -41,18 +41,18 @@ import Testing
 
     @Test func namesEachMachineAsTheLinkDoesElseByItsAddress() async {
         var named = Self.machine(1)
-        named.name = "alice’s vault"
+        named.name = "alice’s hub"
         var blank = Self.machine(3)
         blank.name = ""
         let link = FleetLink(person: Self.person, machines: [named, Self.machine(2), blank, Self.machine(4)])
         let join = FleetJoin(link, known: { $0 == Self.machine(4).fingerprint ? "devbox" : nil },
                              check: Self.reach(down: ["10.0.4.1:7447"])) { machine in "host-\(machine.hosts[0])" }
-        #expect(join.rows.map(\.name) == ["alice’s vault", "10.0.4.2", "10.0.4.3", "devbox"])
+        #expect(join.rows.map(\.name) == ["alice’s hub", "10.0.4.2", "10.0.4.3", "devbox"])
         await join.check()
         await join.run()
         // Signing in names it as the machine does; one it could not reach keeps the link's name.
-        #expect(join.rows.map(\.name) == ["alice’s vault", "host-10.0.4.2:7447", "host-10.0.4.3:7447", "devbox"])
-        #expect(FleetJoin.name(named) == "alice’s vault")
+        #expect(join.rows.map(\.name) == ["alice’s hub", "host-10.0.4.2:7447", "host-10.0.4.3:7447", "devbox"])
+        #expect(FleetJoin.name(named) == "alice’s hub")
         #expect(FleetJoin.name(Self.machine(2)) == "10.0.4.2")
     }
 

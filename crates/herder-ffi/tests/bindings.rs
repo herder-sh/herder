@@ -206,9 +206,9 @@ fn a_client_signs_in_and_streams_a_session_without_a_runtime_of_its_callers() {
         "{entries:?}"
     );
 
-    // A daemon is no vault, and refuses to fork a session it cannot find.
+    // A daemon is no hub, and refuses to fork a session it cannot find.
     let machine = client.machines().into_iter().next().unwrap();
-    assert_eq!(machine.vault, None);
+    assert_eq!(machine.hub, None);
     let refused = block_on(client.send(
         host.clone(),
         CommandBody::ForkSession {

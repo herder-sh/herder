@@ -90,7 +90,7 @@ fn buttons(app: &App) -> Vec<Button> {
             button("n", "account", char('n')),
             button("e", "rename", char('e')),
             button("d", "forget", char('d')),
-            if app.on_vault() {
+            if app.on_hub() {
                 button("s", "secrets", char('s'))
             } else {
                 button("b", "backup", char('b'))

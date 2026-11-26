@@ -328,7 +328,7 @@ mod tests {
                     needs_login: None,
                     endpoint: None,
                     key_secret: None,
-                    vault_login: None,
+                    hub_login: None,
                 })
                 .collect(),
             failover: FailoverSettings::default(),
@@ -347,7 +347,7 @@ mod tests {
             terminals: Vec::new(),
             resources: None,
             session_usage: Default::default(),
-            vault: None,
+            hub: None,
             skills: None,
             session_skills: Default::default(),
             update: None,

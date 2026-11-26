@@ -1647,7 +1647,7 @@ mod running {
     }
 
     #[tokio::test]
-    async fn a_bot_whose_tokens_cannot_be_read_waits_for_the_vault() {
+    async fn a_bot_whose_tokens_cannot_be_read_waits_for_the_hub() {
         let tmp = tempfile::tempdir().unwrap();
         let (path, bots) = super::bots(&tmp);
         let (sessions, events) =
@@ -1696,7 +1696,7 @@ mod running {
                 .collect();
             if states
                 .iter()
-                .all(|(_, state, _)| *state == BotState::WaitingForVault)
+                .all(|(_, state, _)| *state == BotState::WaitingForHub)
             {
                 break;
             }
@@ -1705,8 +1705,8 @@ mod running {
         assert_eq!(
             states,
             [
-                ("trash-can".to_owned(), BotState::WaitingForVault, true),
-                ("tg".to_owned(), BotState::WaitingForVault, true),
+                ("trash-can".to_owned(), BotState::WaitingForHub, true),
+                ("tg".to_owned(), BotState::WaitingForHub, true),
             ]
         );
         shutdown.cancel();

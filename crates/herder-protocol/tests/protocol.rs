@@ -376,20 +376,20 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::GetProjectIcon {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
         }),
-        command(CommandBody::GetVaultLink),
-        command(CommandBody::LinkVault {
-            addresses: vec!["vault.lan:7447".into(), "10.0.0.9:7447".into()],
+        command(CommandBody::GetHubLink),
+        command(CommandBody::LinkHub {
+            addresses: vec!["hub.lan:7447".into(), "10.0.0.9:7447".into()],
             fingerprint: "3f9a".repeat(16),
             pairing_code: "ABCDE-FGHJK".into(),
             backup: true,
             secrets: false,
         }),
-        command(CommandBody::SetVaultLink {
+        command(CommandBody::SetHubLink {
             backup: false,
             secrets: true,
         }),
-        command(CommandBody::UnlinkVault),
-        command(CommandBody::InstallVault),
+        command(CommandBody::UnlinkHub),
+        command(CommandBody::InstallHub),
         command(CommandBody::RevokeDevice {
             device_id: DeviceId::new("01J9DEVICE"),
             assertion: None,
@@ -485,10 +485,10 @@ fn client_fixtures() -> Vec<ClientMessage> {
             code: "K7Q-4PD".into(),
             assertion: Box::new(assertion()),
         }),
-        command(CommandBody::PairVaultHost {
+        command(CommandBody::PairHubHost {
             host_name: "devbox".into(),
         }),
-        command(CommandBody::RevokeVaultHost {
+        command(CommandBody::RevokeHubHost {
             host_id: HostId::new("01J9HOST"),
         }),
         command(CommandBody::CreateSecretSet {
@@ -686,10 +686,10 @@ fn client_fixtures() -> Vec<ClientMessage> {
             key_secret: None,
         }),
         command(CommandBody::AddEndpointAccount {
-            account_id: AccountId::new("claude-vault"),
+            account_id: AccountId::new("claude-hub"),
             provider: Provider::Claude,
             label: None,
-            endpoint: "https://vault.example.com:8317".into(),
+            endpoint: "https://hub.example.com:8317".into(),
             key: None,
             key_secret: Some("CLIPROXYAPI_KEY".parse().unwrap()),
         }),
@@ -723,13 +723,13 @@ fn client_fixtures() -> Vec<ClientMessage> {
             label: "Fleet".into(),
             config_dir: None,
             fallback: None,
-            endpoint: Some("https://vault.example.com:8317".into()),
+            endpoint: Some("https://hub.example.com:8317".into()),
             key: Some(SecretValue::new("cpa_rotated_key").unwrap()),
             key_secret: None,
         }),
         command(CommandBody::SetAccountSettings {
-            account_id: AccountId::new("claude-vault"),
-            label: "Vault".into(),
+            account_id: AccountId::new("claude-hub"),
+            label: "Hub".into(),
             config_dir: None,
             fallback: None,
             endpoint: None,
@@ -1112,29 +1112,29 @@ fn server_fixtures() -> Vec<ServerMessage> {
         },
         ServerMessage::CommandAccepted {
             command_id: CommandId::new("01J9COMMAND"),
-            result: CommandResult::VaultLink {
-                is_vault: false,
-                vault: Some(LinkedVault {
-                    address: "vault.lan:7447".into(),
+            result: CommandResult::HubLink {
+                is_hub: false,
+                hub: Some(LinkedHub {
+                    address: "hub.lan:7447".into(),
                     fingerprint: "3f9a".repeat(16),
                     backup: true,
                     secrets: false,
                     cliproxyapi: Some("https://cpa.lan:8317".into()),
                 }),
                 volume: None,
-                local_vault: false,
+                local_hub: false,
             },
         },
         ServerMessage::CommandAccepted {
             command_id: CommandId::new("01J9COMMAND"),
-            result: CommandResult::VaultLink {
-                is_vault: true,
-                vault: None,
-                volume: Some(VaultVolume {
+            result: CommandResult::HubLink {
+                is_hub: true,
+                hub: None,
+                volume: Some(HubVolume {
                     total_bytes: 500_000_000_000,
                     used_bytes: 420_000_000_000,
                 }),
-                local_vault: false,
+                local_hub: false,
             },
         },
         ServerMessage::CommandAccepted {
@@ -1143,7 +1143,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 settings: Box::new(settings()),
                 restart_required: true,
                 data_dir: "/home/u/.local/share/herder".into(),
-                is_vault: false,
+                is_hub: false,
             },
         },
         ServerMessage::CommandAccepted {
@@ -1165,7 +1165,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 }),
                 restart_required: false,
                 data_dir: "/var/lib/herder".into(),
-                is_vault: true,
+                is_hub: true,
             },
         },
         ServerMessage::CommandAccepted {
@@ -1393,7 +1393,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 bots: [
                     BotState::Connecting,
                     BotState::Connected,
-                    BotState::WaitingForVault,
+                    BotState::WaitingForHub,
                     BotState::TokenRejected,
                     BotState::Unsupported,
                 ]
@@ -2062,7 +2062,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             account_id: account_id(),
             label: format!("{} work", provider.as_str()),
             needs_login: (provider == Provider::Claude).then(at),
-            vault_login: (provider == Provider::Gemini).then(|| "gemini-ada.json".into()),
+            hub_login: (provider == Provider::Gemini).then(|| "gemini-ada.json".into()),
             provider,
             email: None,
             usage: vec![
@@ -2138,7 +2138,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
     messages
 }
 
-/// Host lists and statuses of a vault: one empty, one with an online and an offline host.
+/// Host lists and statuses of a hub: one empty, one with an online and an offline host.
 fn fleet_fixtures() -> Vec<ServerMessage> {
     vec![
         ServerMessage::Hosts { hosts: Vec::new() },
@@ -2170,13 +2170,13 @@ fn fleet_fixtures() -> Vec<ServerMessage> {
                 },
             ],
         },
-        ServerMessage::VaultStatus(VaultStatus {
+        ServerMessage::HubStatus(HubStatus {
             sessions: 0,
             events: 0,
             storage_bytes: 4096,
             hosts: Vec::new(),
         }),
-        ServerMessage::VaultStatus(VaultStatus {
+        ServerMessage::HubStatus(HubStatus {
             sessions: 3,
             events: 120,
             storage_bytes: 1_048_576,
@@ -3040,7 +3040,7 @@ fn optional_fields_may_be_absent() {
 }
 
 #[test]
-fn fork_and_vault_status_wire_shape() {
+fn fork_and_hub_status_wire_shape() {
     let fork = serde_json::to_value(command(CommandBody::ForkSession {
         session_id: SessionId::new("s"),
         account_id: None,
@@ -3074,15 +3074,15 @@ fn fork_and_vault_status_wire_shape() {
         json!({"type": "upload_history", "session_id": "s", "part": {"type": "events", "events": []}})
     );
     let status: ServerMessage = serde_json::from_value(json!({
-        "type": "vault_status",
+        "type": "hub_status",
         "sessions": 1,
         "events": 2,
         "storage_bytes": 3,
         "hosts": [{"host_id": "h", "sessions": 1, "events": 2}]
     }))
     .unwrap();
-    let ServerMessage::VaultStatus(status) = status else {
-        panic!("expected a vault status");
+    let ServerMessage::HubStatus(status) = status else {
+        panic!("expected a hub status");
     };
     assert_eq!(
         status.hosts,
@@ -3450,17 +3450,17 @@ fn provider_logins_have_their_wire_form() {
 }
 
 #[test]
-fn vault_link_commands_have_their_wire_form() {
+fn hub_link_commands_have_their_wire_form() {
     assert_eq!(
-        serde_json::to_value(CommandBody::GetVaultLink).unwrap(),
-        json!({ "type": "get_vault_link" })
+        serde_json::to_value(CommandBody::GetHubLink).unwrap(),
+        json!({ "type": "get_hub_link" })
     );
     assert_eq!(
-        serde_json::to_value(CommandBody::UnlinkVault).unwrap(),
-        json!({ "type": "unlink_vault" })
+        serde_json::to_value(CommandBody::UnlinkHub).unwrap(),
+        json!({ "type": "unlink_hub" })
     );
-    let link = CommandBody::LinkVault {
-        addresses: vec!["vault.lan:7447".into()],
+    let link = CommandBody::LinkHub {
+        addresses: vec!["hub.lan:7447".into()],
         fingerprint: "ab".into(),
         pairing_code: "ABCDE-FGHJK".into(),
         backup: true,
@@ -3469,8 +3469,8 @@ fn vault_link_commands_have_their_wire_form() {
     assert_eq!(
         serde_json::to_value(&link).unwrap(),
         json!({
-            "type": "link_vault",
-            "addresses": ["vault.lan:7447"],
+            "type": "link_hub",
+            "addresses": ["hub.lan:7447"],
             "fingerprint": "ab",
             "pairing_code": "ABCDE-FGHJK",
             "backup": true,
@@ -3478,56 +3478,56 @@ fn vault_link_commands_have_their_wire_form() {
         })
     );
     assert_eq!(
-        serde_json::to_value(CommandBody::SetVaultLink {
+        serde_json::to_value(CommandBody::SetHubLink {
             backup: false,
             secrets: true,
         })
         .unwrap(),
-        json!({ "type": "set_vault_link", "backup": false, "secrets": true })
+        json!({ "type": "set_hub_link", "backup": false, "secrets": true })
     );
-    let linked = CommandResult::VaultLink {
-        is_vault: false,
-        vault: Some(LinkedVault {
-            address: "vault.lan:7447".into(),
+    let linked = CommandResult::HubLink {
+        is_hub: false,
+        hub: Some(LinkedHub {
+            address: "hub.lan:7447".into(),
             fingerprint: "ab".into(),
             backup: false,
             secrets: true,
             cliproxyapi: None,
         }),
         volume: None,
-        local_vault: false,
+        local_hub: false,
     };
     assert_eq!(
         serde_json::to_value(&linked).unwrap(),
         json!({
-            "type": "vault_link",
-            "is_vault": false,
-            "vault": {
-                "address": "vault.lan:7447",
+            "type": "hub_link",
+            "is_hub": false,
+            "hub": {
+                "address": "hub.lan:7447",
                 "fingerprint": "ab",
                 "backup": false,
                 "secrets": true,
             },
         })
     );
-    let unlinked = CommandResult::VaultLink {
-        is_vault: false,
-        vault: None,
+    let unlinked = CommandResult::HubLink {
+        is_hub: false,
+        hub: None,
         volume: None,
-        local_vault: false,
+        local_hub: false,
     };
     assert_eq!(
         serde_json::to_value(&unlinked).unwrap(),
-        json!({ "type": "vault_link", "is_vault": false })
+        json!({ "type": "hub_link", "is_hub": false })
     );
-    // A vault installed on the machine but not linked yet, for the client to offer pairing it.
-    let installed = CommandResult::VaultLink {
-        is_vault: false,
-        vault: None,
+    // A hub installed on the machine but not linked yet, for the client to offer pairing it.
+    let installed = CommandResult::HubLink {
+        is_hub: false,
+        hub: None,
         volume: None,
-        local_vault: true,
+        local_hub: true,
     };
-    let json = json!({ "type": "vault_link", "is_vault": false, "local_vault": true });
+    let json = json!({ "type": "hub_link", "is_hub": false, "local_hub": true });
     assert_eq!(serde_json::to_value(&installed).unwrap(), json);
     assert_eq!(
         serde_json::from_value::<CommandResult>(json).unwrap(),
@@ -4057,46 +4057,46 @@ fn host_fixtures() -> Vec<HostMessage> {
     messages
 }
 
-/// One message per variant of every vault-sent replication type, and every value of its enums.
-fn vault_fixtures() -> Vec<VaultMessage> {
+/// One message per variant of every hub-sent replication type, and every value of its enums.
+fn hub_fixtures() -> Vec<HubMessage> {
     let cursor = |after_seq| Cursor {
         session_id: SessionId::new("01J9SESSION"),
         after_seq,
     };
     let mut messages = vec![
-        VaultMessage::Hello(VaultHello {
+        HubMessage::Hello(HubHello {
             replication_version: REPLICATION_VERSION,
             build: "herder/0.0.0".into(),
             acked: vec![cursor(12)],
             cliproxyapi: Some("https://cpa.lan:8317".into()),
             cliproxyapi_relay: false,
         }),
-        VaultMessage::Hello(VaultHello {
+        HubMessage::Hello(HubHello {
             replication_version: REPLICATION_VERSION,
             build: "herder/0.0.0".into(),
             acked: Vec::new(),
             cliproxyapi: None,
             cliproxyapi_relay: true,
         }),
-        VaultMessage::RelayOpen {
+        HubMessage::RelayOpen {
             stream_id: "01J9STREAM".into(),
             device_id: DeviceId::new("01J9DEVICE"),
         },
-        VaultMessage::Ack(cursor(17)),
-        VaultMessage::Rejected {
+        HubMessage::Ack(cursor(17)),
+        HubMessage::Rejected {
             cursor: cursor(12),
             reason: RejectReason::Gap,
         },
-        VaultMessage::Rejected {
+        HubMessage::Rejected {
             cursor: cursor(12),
             reason: RejectReason::Conflict,
         },
     ];
-    messages.push(VaultMessage::SecretList {
+    messages.push(HubMessage::SecretList {
         request_id: 7,
         secrets: vec![secret_info()],
     });
-    messages.push(VaultMessage::SecretValues {
+    messages.push(HubMessage::SecretValues {
         request_id: 8,
         secrets: vec![FetchedSecret {
             secret: "STRIPE_KEY".parse().unwrap(),
@@ -4111,7 +4111,7 @@ fn vault_fixtures() -> Vec<VaultMessage> {
         ProviderLoginState::Error,
         ProviderLoginState::Disabled,
     ];
-    messages.push(VaultMessage::ProviderLogins {
+    messages.push(HubMessage::ProviderLogins {
         logins: states
             .into_iter()
             .map(|state| ProviderLogin {
@@ -4136,10 +4136,10 @@ fn vault_fixtures() -> Vec<VaultMessage> {
         SecretErrorCode::Ambiguous,
         SecretErrorCode::Unknown,
         SecretErrorCode::NotGranted,
-        SecretErrorCode::NoVault,
-        SecretErrorCode::VaultUnreachable,
+        SecretErrorCode::NoHub,
+        SecretErrorCode::HubUnreachable,
     ] {
-        messages.push(VaultMessage::SecretsRefused {
+        messages.push(HubMessage::SecretsRefused {
             request_id: 8,
             error: SecretError {
                 code,
@@ -4157,7 +4157,7 @@ fn vault_fixtures() -> Vec<VaultMessage> {
         ReplicationErrorCode::Forbidden,
         ReplicationErrorCode::Internal,
     ];
-    messages.extend(codes.into_iter().map(|code| VaultMessage::Error {
+    messages.extend(codes.into_iter().map(|code| HubMessage::Error {
         error: ReplicationError {
             code,
             message: "detail".into(),
@@ -4169,19 +4169,19 @@ fn vault_fixtures() -> Vec<VaultMessage> {
 #[test]
 fn every_replication_message_round_trips() {
     host_fixtures().iter().for_each(assert_round_trips);
-    vault_fixtures().iter().for_each(assert_round_trips);
+    hub_fixtures().iter().for_each(assert_round_trips);
 }
 
 #[test]
 fn every_replication_message_matches_its_schema() {
     assert_valid(&host_schema(), &host_fixtures());
-    assert_valid(&vault_schema(), &vault_fixtures());
+    assert_valid(&hub_schema(), &hub_fixtures());
 }
 
 #[test]
 fn replication_fixtures_cover_every_variant_and_enum_value() {
     assert_covered(&host_schema(), &host_fixtures());
-    assert_covered(&vault_schema(), &vault_fixtures());
+    assert_covered(&hub_schema(), &hub_fixtures());
 }
 
 fn relay_hello_fixtures() -> Vec<RelayHello> {
@@ -4238,7 +4238,7 @@ fn relay_schemas_match_their_snapshots() {
 
 #[test]
 fn a_relay_hello_is_told_from_the_others_by_its_version() {
-    // The vault reads the first message's `relay_version`, as it reads a host's
+    // The hub reads the first message's `relay_version`, as it reads a host's
     // `replication_version`: neither a client's hello nor a host's carries one.
     for hello in relay_hello_fixtures() {
         let value = serde_json::to_value(&hello).unwrap();
@@ -4268,7 +4268,7 @@ fn relay_fields_are_absent_unless_set() {
     assert!(serde_json::to_value(&hello).unwrap().get("relay").is_none());
     let old: HostHello = serde_json::from_value(serde_json::to_value(&hello).unwrap()).unwrap();
     assert!(!old.relay);
-    let hello = VaultHello {
+    let hello = HubHello {
         replication_version: REPLICATION_VERSION,
         build: "herder/0.0.0".into(),
         acked: Vec::new(),
@@ -4285,8 +4285,8 @@ fn host_schema_matches_snapshot() {
 }
 
 #[test]
-fn vault_schema_matches_snapshot() {
-    assert_schema_snapshot("vault_message.json", &vault_schema());
+fn hub_schema_matches_snapshot() {
+    assert_schema_snapshot("hub_message.json", &hub_schema());
 }
 
 #[test]
@@ -4353,10 +4353,10 @@ fn event_bodies_without_a_string_type_are_rejected() {
 fn unknown_replication_tags_decode_to_unknown() {
     let host: HostMessage = serde_json::from_value(json!({ "type": "future", "x": 1 })).unwrap();
     assert_eq!(host, HostMessage::Unknown);
-    let vault: VaultMessage = serde_json::from_value(json!({ "type": "future", "x": 1 })).unwrap();
-    assert_eq!(vault, VaultMessage::Unknown);
+    let hub: HubMessage = serde_json::from_value(json!({ "type": "future", "x": 1 })).unwrap();
+    assert_eq!(hub, HubMessage::Unknown);
     assert!(serde_json::to_string(&HostMessage::Unknown).is_err());
-    assert!(serde_json::to_string(&VaultMessage::Unknown).is_err());
+    assert!(serde_json::to_string(&HubMessage::Unknown).is_err());
 }
 
 #[test]
@@ -4394,10 +4394,10 @@ fn replication_optional_fields_may_be_absent() {
     );
 }
 
-/// The vault never writes to a host's sessions: nothing it can send carries an event or a command.
+/// The hub never writes to a host's sessions: nothing it can send carries an event or a command.
 #[test]
-fn vault_messages_carry_no_events_or_commands() {
-    let schema = vault_schema();
+fn hub_messages_carry_no_events_or_commands() {
+    let schema = hub_schema();
     let defs = schema.as_value()["$defs"].as_object().unwrap();
     for absent in [
         "Event",
@@ -4407,7 +4407,7 @@ fn vault_messages_carry_no_events_or_commands() {
         "Batch",
         "Command",
     ] {
-        assert!(!defs.contains_key(absent), "vault schema has {absent}");
+        assert!(!defs.contains_key(absent), "hub schema has {absent}");
     }
 }
 
@@ -4543,12 +4543,12 @@ fn an_account_without_an_endpoint_logs_in() {
 }
 
 #[test]
-fn an_endpoint_key_can_be_a_vault_secret_named_not_held() {
+fn an_endpoint_key_can_be_a_hub_secret_named_not_held() {
     let command: CommandBody = serde_json::from_value(json!({
         "type": "add_endpoint_account",
-        "account_id": "vault",
+        "account_id": "hub",
         "provider": "claude",
-        "endpoint": "https://vault.example.com:8317",
+        "endpoint": "https://hub.example.com:8317",
         "key_secret": "CLIPROXYAPI_KEY"
     }))
     .unwrap();
@@ -4566,9 +4566,9 @@ fn an_endpoint_key_can_be_a_vault_secret_named_not_held() {
     assert!(
         serde_json::from_value::<CommandBody>(json!({
             "type": "add_endpoint_account",
-            "account_id": "vault",
+            "account_id": "hub",
             "provider": "claude",
-            "endpoint": "https://vault.example.com:8317",
+            "endpoint": "https://hub.example.com:8317",
             "key_secret": "sk-not a name"
         }))
         .is_err()
@@ -4859,8 +4859,8 @@ fn secret_values_go_out_only_in_put_secret_fetches_and_stores() {
     }
     assert!(SecretValue::new("x".repeat(MAX_SECRET_VALUE_BYTES)).is_some());
     assert!(SecretValue::new("x".repeat(MAX_SECRET_VALUE_BYTES + 1)).is_none());
-    // No server message carries a vault's value: the only one in any fixture is the fetch's,
-    // and `secret_to_store` carries a host's file to an owner, not a value from the vault.
+    // No server message carries a hub's value: the only one in any fixture is the fetch's,
+    // and `secret_to_store` carries a host's file to an owner, not a value from the hub.
     for message in server_fixtures() {
         assert!(
             !serde_json::to_string(&message)
@@ -4976,7 +4976,7 @@ fn secret_fetches_have_their_wire_form() {
     );
     for state in [
         HostSecretsState::Ok,
-        HostSecretsState::WaitingForVault,
+        HostSecretsState::WaitingForHub,
         HostSecretsState::Denied {
             error: SecretError {
                 code: SecretErrorCode::NotGranted,
@@ -4993,8 +4993,8 @@ fn secret_fetches_have_their_wire_form() {
         );
     }
     assert_eq!(
-        serde_json::to_value(HostSecretsState::WaitingForVault).unwrap(),
-        json!({ "state": "waiting_for_vault" })
+        serde_json::to_value(HostSecretsState::WaitingForHub).unwrap(),
+        json!({ "state": "waiting_for_hub" })
     );
     for purpose in ["bot:trip1-team", "a", "mail.smtp_1"] {
         assert!(is_valid_secret_purpose(purpose), "{purpose}");
@@ -5002,7 +5002,7 @@ fn secret_fetches_have_their_wire_form() {
     for purpose in ["", "Bot:x", "bot x", "bot/x", &"a".repeat(65)] {
         assert!(!is_valid_secret_purpose(purpose), "{purpose}");
     }
-    let refused = VaultMessage::SecretsRefused {
+    let refused = HubMessage::SecretsRefused {
         request_id: 8,
         error: SecretError {
             code: SecretErrorCode::NotGranted,

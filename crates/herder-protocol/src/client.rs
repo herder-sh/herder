@@ -234,19 +234,19 @@ pub enum CommandBody {
     /// Fork a session onto this daemon's host: copy its history into a new session that goes
     /// on here, in a new worktree on a new branch restored from the session's latest
     /// checkpoint; owners only. With `relay`, the history is the one the caller uploaded with
-    /// `upload_history`; without, the session is looked up on this daemon, else in the vault
+    /// `upload_history`; without, the session is looked up on this daemon, else in the hub
     /// it replicates to, whether its own host is up or gone. The original is left as it is.
     /// Answered with `session_forked`; the fork's journal marks it with the event
     /// `session_forked`, `by` the forking user. A task's child cannot be forked.
     ForkSession {
-        /// The session to fork, as this daemon, its vault or the relayed history has it.
+        /// The session to fork, as this daemon, its hub or the relayed history has it.
         session_id: SessionId,
         /// Account the fork runs on; when absent, the session's account if this host has it,
         /// else its project's default account, else this host's first account of its provider.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account_id: Option<AccountId>,
         /// Where the history the caller uploaded comes from; absent to look the session up
-        /// here or in the vault.
+        /// here or in the hub.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         relay: Option<Relay>,
     },
@@ -452,7 +452,7 @@ pub enum CommandBody {
     /// Add an endpoint account: the provider's CLI runs against `endpoint`, an API server
     /// such as a CLIProxyAPI or a local model server, with a client key instead of a login;
     /// owners only. The key is `key` itself, kept on this daemon, or `key_secret`, a secret
-    /// granted to this host for its own use on its vault, such as the key the vault's
+    /// granted to this host for its own use on its hub, such as the key the hub's
     /// CLIProxyAPI minted for this host, fetched when a session starts on the account.
     /// herder gives it a config dir of its own, needing no login. Answered with `applied` and
     /// `accounts`. Refused with `bad_request` for a taken id, an endpoint that is not an
@@ -472,7 +472,7 @@ pub enum CommandBody {
         /// config and never sent back to clients.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<SecretValue>,
-        /// The secret on this host's vault holding the endpoint's client key, granted to this
+        /// The secret on this host's hub holding the endpoint's client key, granted to this
         /// host for its own use; in place of `key`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key_secret: Option<SecretRef>,
@@ -555,7 +555,7 @@ pub enum CommandBody {
     /// waiting turns at once; lowering it stops no running turn, only new ones from starting.
     /// The daemon keeps it as `max_turns` in the `[resources]` table of its config and sends
     /// every client the new `host_resources`. Refused with `bad_request` outside 1 to
-    /// [`MAX_TURNS_LIMIT`](crate::MAX_TURNS_LIMIT), and with `unsupported` on a vault.
+    /// [`MAX_TURNS_LIMIT`](crate::MAX_TURNS_LIMIT), and with `unsupported` on a hub.
     SetResourceLimits {
         /// Most turns running at once.
         max_turns: u32,
@@ -581,7 +581,7 @@ pub enum CommandBody {
     /// Update the daemon's herder to the latest release, as `herder update` does, and restart
     /// onto it; owners only, never an agent. Answered with `applied` once it started: its
     /// progress and outcome arrive as `daemon_update`, `restarting` before the daemon restarts
-    /// its own service, and an installed vault's next to it. No new turn starts until then.
+    /// its own service, and an installed hub's next to it. No new turn starts until then.
     /// Refused with `unsupported` when the daemon does not run as the service herder installed,
     /// or cannot write its binary, and with `conflict` while an update waits or runs already;
     /// a `now` sent while one waits for its turns to end starts it at once instead.
@@ -679,53 +679,53 @@ pub enum CommandBody {
         /// The period, ending now.
         period: UsagePeriod,
     },
-    /// Say which vault this daemon is linked to; owners only. Answered with `vault_link`.
+    /// Say which hub this daemon is linked to; owners only. Answered with `hub_link`.
     /// It changes nothing, so a resend is answered afresh.
-    GetVaultLink,
-    /// Link this host to a vault from now on, without a restart; owners only. The daemon
-    /// connects to the vault at the first of `addresses` that answers and pairs with
-    /// `pairing_code`; only once the vault accepted it does it keep the vault as the `[vault]`
+    GetHubLink,
+    /// Link this host to a hub from now on, without a restart; owners only. The daemon
+    /// connects to the hub at the first of `addresses` that answers and pairs with
+    /// `pairing_code`; only once the hub accepted it does it keep the hub as the `[hub]`
     /// table of its config, and then replicates every session there with `backup` and fetches
     /// its sessions' secrets from it with `secrets`. Clients offer both on for a new link.
-    /// Refused with `conflict` while it is linked to a vault already, as a host links to one
-    /// vault at most, and with `unsupported` on a vault.
-    LinkVault {
-        /// The vault's addresses as `host:port`, tried in order.
+    /// Refused with `conflict` while it is linked to a hub already, as a host links to one
+    /// hub at most, and with `unsupported` on a hub.
+    LinkHub {
+        /// The hub's addresses as `host:port`, tried in order.
         addresses: Vec<String>,
-        /// SHA-256 of the vault's TLS certificate, lowercase hex.
+        /// SHA-256 of the hub's TLS certificate, lowercase hex.
         fingerprint: String,
-        /// A host-only code from the vault's `pair_vault_host`.
+        /// A host-only code from the hub's `pair_hub_host`.
         pairing_code: String,
-        /// Whether the host replicates its sessions to the vault.
+        /// Whether the host replicates its sessions to the hub.
         backup: bool,
-        /// Whether the host's sessions fetch secrets from the vault.
+        /// Whether the host's sessions fetch secrets from the hub.
         secrets: bool,
     },
-    /// Change what this host does with the vault it is linked to, without relinking: turning
-    /// `backup` off stops replicating and on resumes it from where the vault left off; turning
+    /// Change what this host does with the hub it is linked to, without relinking: turning
+    /// `backup` off stops replicating and on resumes it from where the hub left off; turning
     /// `secrets` off forgets every value held and refuses fetches. Owners only; answered with
-    /// `applied`. Kept in the `[vault]` table of its config. Refused with `not_found` when it is
-    /// linked to no vault, and with `unsupported` on a vault.
-    SetVaultLink {
-        /// Whether the host replicates its sessions to the vault.
+    /// `applied`. Kept in the `[hub]` table of its config. Refused with `not_found` when it is
+    /// linked to no hub, and with `unsupported` on a hub.
+    SetHubLink {
+        /// Whether the host replicates its sessions to the hub.
         backup: bool,
-        /// Whether the host's sessions fetch secrets from the vault.
+        /// Whether the host's sessions fetch secrets from the hub.
         secrets: bool,
     },
-    /// Unlink this host from its vault: stop replicating and fetching secrets, and remove the
-    /// `[vault]` table of its config; owners only. What the vault holds stays there. Refused
-    /// with `not_found` when it is linked to no vault.
-    UnlinkVault,
-    /// Run a vault on this machine, next to this daemon, and link this host to it; owners
-    /// only. The daemon does what `herder vault install` does: writes the vault's config and
-    /// secrets key and installs and starts its service. It then links itself to the vault with
-    /// `secrets` on and `backup` off, and opens the vault's window for its first owner.
-    /// Answered with `ownership_claim`, the vault's, which the client claims it with on its
-    /// own (`claim_ownership`). Refused with `conflict` when a vault is installed on this
-    /// machine already or this host is linked to a vault, with `unsupported` on a vault or a
-    /// daemon that installs no vault, and with `internal` when the service cannot be written or
-    /// the vault does not start.
-    InstallVault,
+    /// Unlink this host from its hub: stop replicating and fetching secrets, and remove the
+    /// `[hub]` table of its config; owners only. What the hub holds stays there. Refused
+    /// with `not_found` when it is linked to no hub.
+    UnlinkHub,
+    /// Run a hub on this machine, next to this daemon, and link this host to it; owners
+    /// only. The daemon does what `herder hub install` does: writes the hub's config and
+    /// secrets key and installs and starts its service. It then links itself to the hub with
+    /// `secrets` on and `backup` off, and opens the hub's window for its first owner.
+    /// Answered with `ownership_claim`, the hub's, which the client claims it with on its
+    /// own (`claim_ownership`). Refused with `conflict` when a hub is installed on this
+    /// machine already or this host is linked to a hub, with `unsupported` on a hub or a
+    /// daemon that installs no hub, and with `internal` when the service cannot be written or
+    /// the hub does not start.
+    InstallHub,
     /// Unpair a device and close its connections; owners only. Its user or person stays.
     /// Answered with `applied`. Refused with `not_found` when no such device is paired.
     RevokeDevice {
@@ -864,22 +864,22 @@ pub enum CommandBody {
         /// An assertion over a fresh `passkey_challenge`.
         assertion: Box<PasskeyAssertion>,
     },
-    /// On a vault, mint a one-time code that pairs a host to replicate here and only that,
+    /// On a hub, mint a one-time code that pairs a host to replicate here and only that,
     /// as `herder pair --host` does; owners only. Answered with `host_pairing`.
-    PairVaultHost {
-        /// The host's name; the user its device acts as on the vault.
+    PairHubHost {
+        /// The host's name; the user its device acts as on the hub.
         host_name: String,
     },
-    /// On a vault, unpair every device that replicates as `host_id`, closing its connections;
-    /// owners only. The host's sessions stay on the vault. Refused with `not_found` when no
+    /// On a hub, unpair every device that replicates as `host_id`, closing its connections;
+    /// owners only. The host's sessions stay on the hub. Refused with `not_found` when no
     /// paired device replicates as it.
-    RevokeVaultHost {
+    RevokeHubHost {
         /// The host.
         host_id: HostId,
     },
-    /// On a vault, create an empty set of secrets; owners only. Answered with `applied`.
+    /// On a hub, create an empty set of secrets; owners only. Answered with `applied`.
     /// Refused with `bad_request` for a name [`crate::is_valid_secret_set_name`] refuses,
-    /// `conflict` when the set exists, and `unsupported` on a daemon that is not a vault.
+    /// `conflict` when the set exists, and `unsupported` on a daemon that is not a hub.
     CreateSecretSet {
         /// The set's name.
         set: String,
@@ -887,9 +887,9 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assertion: Option<Box<PasskeyAssertion>>,
     },
-    /// On a vault, delete an empty set of secrets and its grants; owners only. Answered with
+    /// On a hub, delete an empty set of secrets and its grants; owners only. Answered with
     /// `applied`. Refused with `not_found` for an unknown set, `conflict` while it holds
-    /// secrets, and `unsupported` on a daemon that is not a vault.
+    /// secrets, and `unsupported` on a daemon that is not a hub.
     DeleteSecretSet {
         /// The set.
         set: String,
@@ -897,12 +897,12 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assertion: Option<Box<PasskeyAssertion>>,
     },
-    /// On a vault, create a secret in a set, or replace its description and value; owners
-    /// only. The vault keeps the value encrypted and never sends it to a client. Answered with
+    /// On a hub, create a secret in a set, or replace its description and value; owners
+    /// only. The hub keeps the value encrypted and never sends it to a client. Answered with
     /// `applied`. Refused with `bad_request` for a name [`crate::is_valid_secret_name`]
     /// refuses or a description that is not one line of at most
     /// [`crate::MAX_SECRET_DESCRIPTION_CHARS`], `not_found` for an unknown set, and
-    /// `unsupported` on a daemon that is not a vault.
+    /// `unsupported` on a daemon that is not a hub.
     PutSecret {
         /// The set to keep it in.
         set: String,
@@ -916,9 +916,9 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assertion: Option<Box<PasskeyAssertion>>,
     },
-    /// On a vault, delete a secret; owners only. Answered with `applied`. Refused with
+    /// On a hub, delete a secret; owners only. Answered with `applied`. Refused with
     /// `not_found` for an unknown set or secret, and `unsupported` on a daemon that is not a
-    /// vault.
+    /// hub.
     DeleteSecret {
         /// The secret's set.
         set: String,
@@ -928,11 +928,11 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assertion: Option<Box<PasskeyAssertion>>,
     },
-    /// On a vault, let a host fetch the secrets of a set for every session it runs, or, with
+    /// On a hub, let a host fetch the secrets of a set for every session it runs, or, with
     /// `host_use`, for its own use, such as a bot's token, and not its sessions'; owners only.
     /// The two are separate grants. Answered with `applied`; granting it again changes
     /// nothing. Refused with `not_found` for an unknown set or a host that never replicated
-    /// here, and `unsupported` on a daemon that is not a vault.
+    /// here, and `unsupported` on a daemon that is not a hub.
     GrantSecretSet {
         /// The set.
         set: String,
@@ -945,10 +945,10 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assertion: Option<Box<PasskeyAssertion>>,
     },
-    /// On a vault, stop a host fetching the secrets of a set for its sessions, or, with
+    /// On a hub, stop a host fetching the secrets of a set for its sessions, or, with
     /// `host_use`, for its own use; owners only. Values the host fetched already stay in its
     /// memory until they expire. Answered with `applied`. Refused with `not_found` when the set is not granted to the host that way,
-    /// and `unsupported` on a daemon that is not a vault.
+    /// and `unsupported` on a daemon that is not a hub.
     RevokeSecretSet {
         /// The set.
         set: String,
@@ -961,12 +961,12 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assertion: Option<Box<PasskeyAssertion>>,
     },
-    /// On a vault, list every set of secrets with its grants, and every secret without its
+    /// On a hub, list every set of secrets with its grants, and every secret without its
     /// value; owners only. Answered with `secrets`. It changes nothing, so a resend is answered
-    /// afresh. Refused with `unsupported` on a daemon that is not a vault.
+    /// afresh. Refused with `unsupported` on a daemon that is not a hub.
     ListSecrets,
     /// On a host, the value an agent's `store_secret` read for the open approval
-    /// `approval_id` of `session_id`, for an owner's app to put on the vault; owners only.
+    /// `approval_id` of `session_id`, for an owner's app to put on the hub; owners only.
     /// Answered with `secret_to_store`; it is neither journaled nor kept, and changes nothing,
     /// so a resend is answered afresh. Refused with `not_found` once the approval is not open
     /// or is not a `store_secret` one.
@@ -977,7 +977,7 @@ pub enum CommandBody {
         approval_id: ApprovalId,
     },
     /// On a host, allow an agent's `store_secret` or `request_secret` once the owner's app has
-    /// put its value on the host's vault, in `set`: the approval resolves as allowed, the host
+    /// put its value on the host's hub, in `set`: the approval resolves as allowed, the host
     /// deletes a `store_secret`'s file when the agent asked, and the agent learns the secret
     /// is stored. Owners only. Answered with `applied`; refused with `not_found` once the
     /// approval is not open or is neither a `store_secret` nor a `request_secret` one.
@@ -992,21 +992,21 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assertion: Option<Box<PasskeyAssertion>>,
     },
-    /// On a vault, list the latest fetches of secrets by hosts, newest first, at most
+    /// On a hub, list the latest fetches of secrets by hosts, newest first, at most
     /// [`crate::MAX_SECRET_AUDIT_ENTRIES`]; owners only. Answered with `secret_audit`. It
     /// changes nothing, so a resend is answered afresh. Refused with `unsupported` on a daemon
-    /// that is not a vault.
+    /// that is not a hub.
     ListSecretAudit {
         /// Only fetches older than this one, by its `id`, to page back; the latest when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before: Option<u64>,
     },
-    /// On a vault, list the provider logins its CLIProxyAPI holds, without their tokens;
+    /// On a hub, list the provider logins its CLIProxyAPI holds, without their tokens;
     /// owners only. Answered with `provider_logins`. It changes nothing, so a resend is
-    /// answered afresh. Refused with `unsupported` on a daemon that is not a vault, or a vault
+    /// answered afresh. Refused with `unsupported` on a daemon that is not a hub, or a hub
     /// that runs no CLIProxyAPI.
     ListProviderLogins,
-    /// On a vault, have its CLIProxyAPI start signing in to `provider`; owners only. Answered
+    /// On a hub, have its CLIProxyAPI start signing in to `provider`; owners only. Answered
     /// with `provider_login_started`, the URL to sign in at; the login waits five minutes for
     /// `complete_provider_login`. Refused with `bad_request` for a provider the proxy cannot
     /// sign in to here (it can Claude and Codex), and `unsupported` as `list_provider_logins`
@@ -1015,7 +1015,7 @@ pub enum CommandBody {
         /// The provider.
         provider: crate::Provider,
     },
-    /// On a vault, finish a login `start_provider_login` started, with the address the
+    /// On a hub, finish a login `start_provider_login` started, with the address the
     /// browser was sent to once the owner signed in; owners only. The proxy trades the code in
     /// it for the login, which it keeps. Answered with `provider_logins` once the proxy holds
     /// the login. Refused with `bad_request` for an address with no code, `not_found` for a
@@ -1027,14 +1027,14 @@ pub enum CommandBody {
         /// The address the browser was sent to, with the code and state in its query.
         redirect_url: String,
     },
-    /// On a vault, stop a login `start_provider_login` started; owners only. Answered with
+    /// On a hub, stop a login `start_provider_login` started; owners only. Answered with
     /// `applied`. Refused with `not_found` for a login that is not waiting, and `unsupported`
     /// as `list_provider_logins` is.
     CancelProviderLogin {
         /// The login, as `provider_login_started` named it.
         login_id: String,
     },
-    /// On a vault, name a provider login, or mark it fallback-only, for every host it is an
+    /// On a hub, name a provider login, or mark it fallback-only, for every host it is an
     /// account on; owners only. Answered with `provider_logins`. Refused with `bad_request` for
     /// a label longer than 64 characters, `not_found` for a login the proxy does not hold, and
     /// `unsupported` as `list_provider_logins` is.
@@ -1048,7 +1048,7 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fallback: Option<bool>,
     },
-    /// On a vault, have its CLIProxyAPI drop a provider login and its tokens; owners only.
+    /// On a hub, have its CLIProxyAPI drop a provider login and its tokens; owners only.
     /// Answered with `applied`. Refused with `not_found` for a login it does not hold, and
     /// `unsupported` as `list_provider_logins` is.
     RemoveProviderLogin {
@@ -1106,31 +1106,31 @@ pub enum CommandBody {
     },
     /// List the bots this daemon's host holds, as its config's `[[bots]]` entries configure
     /// them; owners only. Answered with `bots`. It changes nothing, so a resend is answered
-    /// afresh. Refused with `unsupported` on a vault.
+    /// afresh. Refused with `unsupported` on a hub.
     ListBots,
     /// Add a bot, or replace the one with its `bot_id`, kept as a `[[bots]]` entry of the
     /// daemon's config; owners only. Answered with `applied`. Refused with `bad_request`,
     /// changing nothing, when an id is not valid, Slack's `app_token` is missing or
     /// Telegram's given, a person or channel is listed twice, or an account is unknown or not
-    /// of the provider; and with `unsupported` on a vault.
+    /// of the provider; and with `unsupported` on a hub.
     PutBot {
         /// The bot, as it is to be.
         bot: Box<crate::Bot>,
     },
     /// Remove a bot's `[[bots]]` entry, disconnecting it; owners only. Its tokens stay in the
-    /// vault, and sessions keep their links to its threads. Answered with `applied`. Refused
-    /// with `not_found` for an unknown bot, and `unsupported` on a vault.
+    /// hub, and sessions keep their links to its threads. Answered with `applied`. Refused
+    /// with `not_found` for an unknown bot, and `unsupported` on a hub.
     RemoveBot {
         /// The bot.
         bot_id: BotId,
     },
     /// Say how each bot's connection to its chat stands; owners only. Answered with
     /// `bot_status`. It changes nothing, so a resend is answered afresh. Refused with
-    /// `unsupported` on a vault.
+    /// `unsupported` on a hub.
     GetBotStatus,
     /// Read what a bot remembers; owners only. Answered with `bot_memory`. It changes nothing,
     /// so a resend is answered afresh. Refused with `not_found` for an unknown bot, and
-    /// `unsupported` on a vault.
+    /// `unsupported` on a hub.
     GetBotMemory {
         /// The bot.
         bot_id: BotId,
@@ -1140,7 +1140,7 @@ pub enum CommandBody {
     /// `bad_request`, changing nothing, when the text is empty, longer than
     /// `MAX_BOT_FACT_CHARS`, looks like a secret, or the memory would hold more than
     /// `MAX_BOT_FACTS` facts or `MAX_BOT_MEMORY_BYTES`; with `not_found` for an unknown bot
-    /// or fact; and with `unsupported` on a vault.
+    /// or fact; and with `unsupported` on a hub.
     SetBotFact {
         /// The bot.
         bot_id: BotId,
@@ -1151,7 +1151,7 @@ pub enum CommandBody {
         text: String,
     },
     /// Remove a fact from a bot's memory; owners only. Answered with `bot_memory`, as it is
-    /// now. Refused with `not_found` for an unknown bot or fact, and `unsupported` on a vault.
+    /// now. Refused with `not_found` for an unknown bot or fact, and `unsupported` on a hub.
     DeleteBotFact {
         /// The bot.
         bot_id: BotId,
@@ -1159,7 +1159,7 @@ pub enum CommandBody {
         fact_id: crate::FactId,
     },
     /// Remove every fact from a bot's memory; owners only. Answered with `bot_memory`, then
-    /// empty. Refused with `not_found` for an unknown bot, and `unsupported` on a vault.
+    /// empty. Refused with `not_found` for an unknown bot, and `unsupported` on a hub.
     ClearBotMemory {
         /// The bot.
         bot_id: BotId,

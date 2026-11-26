@@ -25,7 +25,7 @@ use tracing::{debug, info, warn};
 
 use super::{Backend, Identity, Shared, Tls, Transport, Ws, fingerprint, tunnel};
 use crate::auth::{self, Auth};
-use crate::hub::{Outbox, OutboxState};
+use crate::fanout::{Outbox, OutboxState};
 use crate::session;
 
 /// Time a client gets for the TLS and WebSocket handshakes, and again for its hello.
@@ -95,9 +95,9 @@ pub(super) async fn run<B: Backend>(
     serve(ws, device, None, pass, peer, shared, cancel).await;
 }
 
-/// Serves a client that reached this host through its vault, on the relay stream `stream`
-/// the vault at `peer` forwards: the client's own TLS, upgrade and hello run inside it, so it
-/// is authenticated and served exactly as on a direct connection. `device` is the vault's
+/// Serves a client that reached this host through its hub, on the relay stream `stream`
+/// the hub at `peer` forwards: the client's own TLS, upgrade and hello run inside it, so it
+/// is authenticated and served exactly as on a direct connection. `device` is the hub's
 /// name for the client's device, and only counts it among those not signed in here yet.
 pub(super) async fn run_relayed<B: Backend>(
     stream: Box<dyn tunnel::Io>,
@@ -108,7 +108,7 @@ pub(super) async fn run_relayed<B: Backend>(
 ) {
     let Some(pass) = shared
         .tunnel_gate
-        .enter(Some(&format!("vault device {device}")))
+        .enter(Some(&format!("hub device {device}")))
     else {
         warn!(%peer, %device, "refused a relayed connection: too many are not signed in yet");
         return;
@@ -216,7 +216,7 @@ pub(super) async fn serve<B: Backend>(
             &format!("message too large: at most {MAX_MESSAGE_BYTES} bytes"),
         );
     }
-    shared.hub.disconnect(&outbox);
+    shared.fanout.disconnect(&outbox);
     shared.approvals.disconnect(&outbox);
     shared.terminals.disconnect(&outbox);
     // What the client had not been sent when its connection ended: a number that stays high
@@ -342,20 +342,20 @@ async fn read<B: Backend>(
         herder_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
         addresses: Vec::new(),
     }));
-    shared.hub.connect(outbox, identity.role);
+    shared.fanout.connect(outbox, identity.role);
     let person = shared.auth.resolve(&identity.user_id);
     shared.approvals.connect(&person, outbox, hello.passkey);
     match shared.backend.sessions().await {
-        Ok(sessions) => shared.hub.initial_sessions(outbox, sessions),
+        Ok(sessions) => shared.fanout.initial_sessions(outbox, sessions),
         Err(err) => {
             warn!("cannot list sessions: {err:#}");
             error(outbox, ErrorCode::Internal, "cannot list sessions");
         }
     }
     shared
-        .hub
+        .fanout
         .initial_accounts(outbox, shared.backend.accounts());
-    shared.hub.initial_providers(
+    shared.fanout.initial_providers(
         outbox,
         shared
             .providers
@@ -366,9 +366,9 @@ async fn read<B: Backend>(
     shared.backend.refresh_usage();
     shared.backend.refresh_skills();
     shared
-        .hub
+        .fanout
         .initial_terminals(outbox, shared.terminals.list());
-    shared.hub.initial_projects(outbox);
+    shared.fanout.initial_projects(outbox);
     // The client's messages wait here for their turn while the one before them is handled:
     // the socket is read, and so a ping answered, whatever the daemon is busy with. A client
     // takes a connection that does not answer its ping for dead and replaces it.
@@ -607,7 +607,7 @@ async fn replay<B: Backend>(
         }
         match next {
             Replay::Subscribe(cursor) => subscribe(&shared, &outbox, cursor).await,
-            Replay::Unsubscribe(session_id) => shared.hub.unsubscribe(&outbox, &session_id),
+            Replay::Unsubscribe(session_id) => shared.fanout.unsubscribe(&outbox, &session_id),
             Replay::Sync(token) => outbox.push(ServerMessage::Synced { token }),
         }
     }
@@ -615,8 +615,8 @@ async fn replay<B: Backend>(
 
 /// Replays the session's journal after the cursor, then switches the subscription to live.
 ///
-/// The hub holds live events back from the moment of subscribing, so an event appended
-/// during replay arrives either from the journal or from the hub, and duplicates are dropped
+/// The fanout holds live events back from the moment of subscribing, so an event appended
+/// during replay arrives either from the journal or from the fanout, and duplicates are dropped
 /// by seq.
 async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Cursor) {
     let Cursor {
@@ -634,7 +634,7 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
             return error(outbox, ErrorCode::Internal, "cannot list sessions");
         }
     }
-    shared.hub.subscribe(outbox, &session_id);
+    shared.fanout.subscribe(outbox, &session_id);
     let mut last = after_seq;
     loop {
         outbox.wait_below(REPLAY_PAGE).await;
@@ -649,7 +649,7 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
             Ok(page) => page,
             Err(err) => {
                 warn!(%session_id, "cannot replay the journal: {err:#}");
-                shared.hub.unsubscribe(outbox, &session_id);
+                shared.fanout.unsubscribe(outbox, &session_id);
                 return error(outbox, ErrorCode::Internal, "cannot read the journal");
             }
         };
@@ -667,7 +667,7 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
             break;
         }
     }
-    shared.hub.go_live(outbox, &session_id, last);
+    shared.fanout.go_live(outbox, &session_id, last);
 }
 
 fn error(outbox: &Outbox, code: ErrorCode, message: &str) {

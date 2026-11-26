@@ -159,7 +159,7 @@ impl App {
                     None => {
                         screen.adding =
                             Some(AddAccount::for_provider(host_id.clone(), 0, &self.machines));
-                        return vec![crate::accounts::ask_vault(host_id)];
+                        return vec![crate::accounts::ask_hub(host_id)];
                     }
                 }
             }
@@ -169,8 +169,8 @@ impl App {
                     return Vec::new();
                 };
                 match find(&self.machines, &host_id, &account_id) {
-                    Some(account) if account.vault_login.is_some() => {
-                        self.notice = Some("a vault login signs in on the vault".to_owned());
+                    Some(account) if account.hub_login.is_some() => {
+                        self.notice = Some("a hub login signs in on the hub".to_owned());
                         return Vec::new();
                     }
                     Some(account) if account.endpoint.is_some() => {
@@ -201,7 +201,7 @@ impl App {
             screen.selected(&rows).is_some_and(|at| match &rows[at] {
                 Pick::Account(host_id, account_id) => find(&self.machines, host_id, account_id)
                     .is_some_and(|account| {
-                        account.endpoint.is_none() && account.vault_login.is_none()
+                        account.endpoint.is_none() && account.hub_login.is_none()
                     }),
                 Pick::Machine(_) => false,
             })
@@ -443,28 +443,28 @@ mod tests {
         assert!(app.account_screen.is_some());
     }
 
-    /// The machine's answer to where it backs up: linked to a vault whose CLIProxyAPI it
+    /// The machine's answer to where it backs up: linked to a hub whose CLIProxyAPI it
     /// reaches at `cliproxyapi`, fetching secrets from it or not.
     fn linked(cliproxyapi: Option<&str>, secrets: bool) -> Msg {
         Msg::Sent {
-            origin: crate::compose::Origin::AccountVault(HostId::new("h1")),
-            result: Ok(herder_protocol::CommandResult::VaultLink {
-                is_vault: false,
-                vault: Some(herder_protocol::LinkedVault {
-                    address: "vault.lan:7447".into(),
+            origin: crate::compose::Origin::AccountHub(HostId::new("h1")),
+            result: Ok(herder_protocol::CommandResult::HubLink {
+                is_hub: false,
+                hub: Some(herder_protocol::LinkedHub {
+                    address: "hub.lan:7447".into(),
                     fingerprint: "ab".repeat(32),
                     backup: true,
                     secrets,
                     cliproxyapi: cliproxyapi.map(str::to_owned),
                 }),
                 volume: None,
-                local_vault: false,
+                local_hub: false,
             }),
         }
     }
 
     #[test]
-    fn the_vaults_logins_are_offered_where_the_machine_reaches_them_and_need_nothing_typed() {
+    fn the_hubs_logins_are_offered_where_the_machine_reaches_them_and_need_nothing_typed() {
         let mut app = app();
         press(&mut app, KeyCode::Char('A'));
         // Opening the form asks the machine where it backs up.
@@ -472,13 +472,13 @@ mod tests {
             press(&mut app, KeyCode::Char('n')),
             [Effect::Send {
                 host_id: HostId::new("h1"),
-                command: herder_protocol::CommandBody::GetVaultLink,
-                origin: crate::compose::Origin::AccountVault(HostId::new("h1")),
+                command: herder_protocol::CommandBody::GetHubLink,
+                origin: crate::compose::Origin::AccountHub(HostId::new("h1")),
             }]
         );
         let kinds = [accounts::Kind::Login, accounts::Kind::Endpoint];
         assert_eq!(adding(&app).unwrap().kinds(), kinds);
-        // A vault without a CLIProxyAPI, or one the machine fetches no secrets from, offers none.
+        // A hub without a CLIProxyAPI, or one the machine fetches no secrets from, offers none.
         app.update(linked(None, true));
         assert_eq!(adding(&app).unwrap().kinds(), kinds);
         app.update(linked(Some("https://cpa.lan:8317"), false));
@@ -489,15 +489,15 @@ mod tests {
             [
                 accounts::Kind::Login,
                 accounts::Kind::Endpoint,
-                accounts::Kind::Vault
+                accounts::Kind::Hub
             ]
         );
-        // Left from a login wraps round to the vault's logins: no URL, no key, no config dir.
+        // Left from a login wraps round to the hub's logins: no URL, no key, no config dir.
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Left);
         let form = adding(&app).unwrap();
-        assert_eq!(form.kind, accounts::Kind::Vault);
-        assert_eq!(form.kind.name(), "the vault's logins");
+        assert_eq!(form.kind, accounts::Kind::Hub);
+        assert_eq!(form.kind.name(), "the hub's logins");
         assert_eq!(
             form.fields(),
             [
@@ -543,17 +543,17 @@ mod tests {
     }
 
     #[test]
-    fn a_vault_login_has_no_login_to_run_here() {
+    fn a_hub_login_has_no_login_to_run_here() {
         let mut app = App::default();
         let mut h1 = machine("h1", "box", &[]);
-        h1.accounts = vec![fake::vault_login_account("work", "claude-ada.json", "Work")];
+        h1.accounts = vec![fake::hub_login_account("work", "claude-ada.json", "Work")];
         app.update(Msg::Machines(vec![h1]));
         press(&mut app, KeyCode::Char('A'));
         assert!(!app.on_account());
         assert_eq!(press(&mut app, KeyCode::Char('l')), []);
         assert_eq!(
             app.notice.as_deref(),
-            Some("a vault login signs in on the vault")
+            Some("a hub login signs in on the hub")
         );
     }
 

@@ -129,7 +129,7 @@ mod tests {
         machines[1].projects.push(project("p-cli", "cli"));
         machines[1].connection = ConnectionState::Connecting;
         let labels: Vec<String> = targets(&machines).into_iter().map(|t| t.label).collect();
-        // nas is not connected; the vault runs no sessions.
+        // nas is not connected; the hub runs no sessions.
         assert_eq!(labels, ["api — box", "Chat — box"]);
         let chat = targets(&machines).pop().expect("a chat");
         assert!(matches!(

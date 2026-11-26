@@ -35,13 +35,13 @@
   <section class="doc">
     <p class="eyebrow">privacy</p>
     <h1 class="big">herder collects no data.</h1>
-    <p class="sub">herder is open-source software you run on your own machines. There is no herder account and no herder server: the apps and the terminal UI talk only to the daemons and the vault you run. This page says what leaves your machines, and when.</p>
+    <p class="sub">herder is open-source software you run on your own machines. There is no herder account and no herder server: the apps and the terminal UI talk only to the daemons and the hub you run. This page says what leaves your machines, and when.</p>
     <p class="fine">Last updated 29 October 2026. It covers the herder daemon and CLI, the Mac and iPhone apps, and this website.</p>
 
     <h2>What stays with you</h2>
     <ul>
-      <li><strong>Sessions, transcripts, attachments and settings</strong> are kept by the herder daemon on the machine that runs them, and by the vault you link them to, if you run one. herder never sends them to us: we have nowhere to receive them.</li>
-      <li><strong>Secrets</strong> live in your vault, and go only to the machines you grant them to.</li>
+      <li><strong>Sessions, transcripts, attachments and settings</strong> are kept by the herder daemon on the machine that runs them, and by the hub you link them to, if you run one. herder never sends them to us: we have nowhere to receive them.</li>
+      <li><strong>Secrets</strong> live in your hub, and go only to the machines you grant them to.</li>
       <li><strong>Provider logins</strong> (Claude, Codex, Cursor, OpenCode and the rest) stay in each vendor's own CLI, under its config directory on your machine. herder never reads, stores, copies or relays them; it only runs the unmodified CLI.</li>
       <li><strong>Passkeys</strong> are created and kept by your device's keychain or your password manager. A daemon stores only each passkey's public key, and checks sign-ins against it on the machine itself.</li>
     </ul>

@@ -78,9 +78,9 @@ pub enum Origin {
     Prompt(SessionKey, String),
     /// The new-session dialog's create.
     NewSession(HostId),
-    /// A step of backing a machine up to a vault.
+    /// A step of backing a machine up to a hub.
     Backup(crate::backup::Sent),
-    /// A command of the secrets screen to a vault.
+    /// A command of the secrets screen to a hub.
     Secrets(crate::secrets::Sent),
     /// Fetching a transcript's image: which one, its file name, and whether to open it or
     /// only save it.
@@ -97,7 +97,7 @@ pub enum Origin {
     /// The add-account dialog's endpoint account, added to this host.
     AddAccount(HostId),
     /// The add-account dialog's question to this host of where it backs up.
-    AccountVault(HostId),
+    AccountHub(HostId),
 }
 
 /// The composer and overlays, and what the daemon last said about each session.
@@ -545,7 +545,7 @@ impl App {
             }
             Origin::Backup(sent) => return self.backup_sent(sent, result),
             Origin::AddAccount(_) => self.account_added(result.map(|_| ())),
-            Origin::AccountVault(host_id) => self.account_vault(&host_id, result),
+            Origin::AccountHub(host_id) => self.account_hub(&host_id, result),
             Origin::Secrets(sent) => return self.secrets_sent(sent, result),
             Origin::Supply(sent) => return self.supply_sent(sent, result),
             Origin::Fork(host_id) => {
@@ -1195,11 +1195,11 @@ mod tests {
         assert_eq!(press(&mut app, KeyCode::Char('o')), []);
         assert_eq!(app.notice.as_deref(), Some("no images here"));
 
-        // One the vault never got, in a recovered session: said so, and marked on its chip.
+        // One the hub never got, in a recovered session: said so, and marked on its chip.
         let effects = app.update(Msg::Sent {
             origin: origin("01A", "herder-01A.png"),
             result: Err(format!(
-                "{IMAGE_NOT_BACKED_UP}: the vault holds no image 01A of session s2"
+                "{IMAGE_NOT_BACKED_UP}: the hub holds no image 01A of session s2"
             )),
         });
         assert_eq!(effects, []);

@@ -53,9 +53,9 @@ pub enum Tool {
     Command,
     /// The secrets the session may use, without values.
     Secrets,
-    /// Store a file's contents as a secret on the vault, once an owner allows it.
+    /// Store a file's contents as a secret on the hub, once an owner allows it.
     StoreSecret,
-    /// Ask the user to supply a secret's value on the vault, which the agent never sees.
+    /// Ask the user to supply a secret's value on the hub, which the agent never sees.
     RequestSecret,
     /// Keep a fact in the bot's memory; a bot's sessions only.
     Remember,
@@ -231,22 +231,22 @@ impl Tool {
                  `herder secret run STRIPE_KEY -- sh -c 'curl -u \"$STRIPE_KEY:\" ...'`. Name a \
                  secret `set/NAME` only when `secret` says so. Never print, log, commit or \
                  publish a value. When a secret you need is not listed, ask the user for it \
-                 with `request_secret`. Fails with `unavailable` when this host has no vault or \
+                 with `request_secret`. Fails with `unavailable` when this host has no hub or \
                  cannot reach it now."
             }
             Tool::StoreSecret => {
-                "Store a file's contents as a secret on this machine's vault without ever \
+                "Store a file's contents as a secret on this machine's hub without ever \
                  seeing them: when the user asks to keep a key, token or password file as a \
                  secret, e.g. \"store ~/Downloads/AuthKey_X.p8 as ASC_PRIVATE_KEY in \
                  personal\". herder reads `from_file` on this machine itself and asks the \
-                 user to approve; an owner of the vault allows it in a herder app, which may \
+                 user to approve; an owner of the hub allows it in a herder app, which may \
                  pick another set, and the call returns once they answered. Never read, print \
                  or copy the file yourself. There is no way to pass a value: when the user \
                  typed a secret in the chat, do not write it to a file; ask them for it with \
                  `request_secret` instead. With `delete_file_after`, \
-                 the file is deleted once the vault stored the value. Returns the set, name, \
+                 the file is deleted once the hub stored the value. Returns the set, name, \
                  size and a short fingerprint, never the value. Fails with `unavailable` when \
-                 this machine is not linked to a vault with Secrets on, and `not_allowed` \
+                 this machine is not linked to a hub with Secrets on, and `not_allowed` \
                  when the user denies it."
             }
             Tool::RequestSecret => {
@@ -254,8 +254,8 @@ impl Tool {
                  token or key they have to create or look up, e.g. `name: \"GITHUB_SIEM_PAT\", \
                  set: \"coingate\", description: \"GitHub fine-grained PAT, read-only on the \
                  org audit log\"`. herder shows the request in their herder app; an owner of \
-                 the vault pastes the value into a secure field there, and it goes straight to \
-                 this machine's vault: you never see it, and neither does this machine until a \
+                 the hub pastes the value into a secure field there, and it goes straight to \
+                 this machine's hub: you never see it, and neither does this machine until a \
                  command runs with it. Use this rather than telling the user to add the secret \
                  themselves and come back, and never ask them to paste a value in the chat. \
                  When the value is already in a file on this machine, use `store_secret` \
@@ -264,7 +264,7 @@ impl Tool {
                  name, the user is told the value will replace it. The call returns once they \
                  answered: `stored`, with the set they picked, or `declined`; never the value. \
                  Then run commands with it as `secrets` describes. Fails with `unavailable` \
-                 when this machine is not linked to a vault with Secrets on."
+                 when this machine is not linked to a hub with Secrets on."
             }
             Tool::Remember => {
                 "Save a fact to the chat bot's memory, which every future conversation with the \
@@ -557,7 +557,7 @@ pub enum ErrorCode {
     HostBusy,
     /// `publish` could not upload the artifact for its public link.
     UploadFailed,
-    /// `secrets`, `store_secret` or `request_secret` found this host without a vault, or unable to reach it now.
+    /// `secrets`, `store_secret` or `request_secret` found this host without a hub, or unable to reach it now.
     Unavailable,
     /// The daemon failed.
     Internal,

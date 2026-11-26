@@ -56,7 +56,7 @@ async fn record_machine(client: &Client, machine: Machine) -> Result<DemoMachine
         CommandBody::GetBotStatus,
         CommandBody::ListSecrets,
         CommandBody::ListSecretAudit { before: None },
-        CommandBody::GetVaultLink,
+        CommandBody::GetHubLink,
     ];
     for period in [
         UsagePeriod::Day,

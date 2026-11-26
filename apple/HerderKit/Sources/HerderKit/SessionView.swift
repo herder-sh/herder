@@ -10,7 +10,7 @@ struct SessionView: View {
     var open: ((SessionKey) -> Void)?
 
     var body: some View {
-        // A session a vault replicates is listed from its host or from the vault as they
+        // A session a hub replicates is listed from its host or from the hub as they
         // connect and drop. The view stays as it is, and shows the copy that has the most of
         // the session: nothing it shows goes away for a connection.
         SessionPane(fleet: fleet, key: fleet.source(for: key), opened: key, open: open)
@@ -443,8 +443,8 @@ private struct SessionPane: View {
         let host = summary?.machine ?? "The host"
         if model.state == .moved { return "Moved to another host · read-only here" }
         if summary?.machineOffline == true { return "\(host) is offline · read-only" }
-        // Shown from a vault's copy, as while this device has no connection to its host: the
-        // vault would refuse what the composer sends.
+        // Shown from a hub's copy, as while this device has no connection to its host: the
+        // hub would refuse what the composer sends.
         if fleet.isReplica(key) { return "\(host) is not connected to this device · read-only" }
         return nil
     }

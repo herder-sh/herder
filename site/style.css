@@ -212,7 +212,6 @@ section { max-width: 1160px; margin: 0 auto; padding: 120px 24px 0; }
 .map .edge { stroke: var(--dim); stroke-dasharray: 2 4; }
 .map .cut { fill: var(--bg); stroke: none; }
 .map .chip { fill: var(--bg); }
-.map .soon { fill: color-mix(in srgb, var(--b5) 16%, var(--bg)); stroke: var(--b5); }
 .map .ic { fill: none; stroke: var(--muted); stroke-width: 1.5; }
 .map .ic rect { stroke: inherit; }
 .map .hubic, .map .e2eic { stroke: var(--accent); }
@@ -222,17 +221,12 @@ section { max-width: 1160px; margin: 0 auto; padding: 120px 24px 0; }
 .map .head-t { font-size: 12px; font-weight: 500; letter-spacing: .08em; }
 .map .note { font: 12px "Inter", system-ui, sans-serif; }
 .map .tiny { font-size: 10.5px; }
-.map .strong { fill: var(--fg); font-weight: 600; }
 .map .route { fill: none; stroke-width: 2; }
 .map .head { stroke: none; }
 .map .direct { stroke: var(--b4); } .map .head.direct { fill: var(--b4); }
 .map .out { stroke: var(--b2); } .map .head.out { fill: var(--b2); }
-.map .relay { stroke: var(--b5); stroke-dasharray: 6 5; }
+.map .relay { stroke: var(--b5); } .map .head.relay { fill: var(--b5); }
 .map .e2e { stroke: var(--accent); stroke-width: 1.5; }
-@media (prefers-reduced-motion: no-preference) {
-  .map .relay { animation: flow 1.4s linear infinite; }
-  @keyframes flow { to { stroke-dashoffset: -22; } }
-}
 .legend { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); margin: 40px 0 0; }
 .legend > div { background: var(--bg); padding: 22px 24px; }
 .legend dt { font: 600 14px "JetBrains Mono", monospace; display: flex; align-items: center; gap: 10px; }
@@ -240,7 +234,6 @@ section { max-width: 1160px; margin: 0 auto; padding: 120px 24px 0; }
 .legend div:nth-child(1) dt::before { background: var(--b4); } .legend div:nth-child(2) dt::before { background: var(--b2); }
 .legend div:nth-child(3) dt::before { background: var(--b5); } .legend div:nth-child(4) dt::before { background: var(--accent); }
 .legend dd { margin: 10px 0 0; color: var(--muted); font-size: 15px; }
-.connect .fine { font-size: 13px; color: var(--muted); }
 .tag { color: var(--fg); border: 1px solid var(--b5); background: color-mix(in srgb, var(--b5) 16%, var(--bg)); padding: 1px 7px; margin-right: 8px; font-size: 11.5px; font-weight: 600; }
 
 .final { text-align: center; }

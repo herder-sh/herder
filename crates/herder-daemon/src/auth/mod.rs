@@ -1,5 +1,5 @@
 //! Who may connect, and as whom: people with owner or member roles, their devices, and the
-//! one-time codes that pair a host with a vault.
+//! one-time codes that pair a host with a hub.
 //!
 //! A device is a key pair the client generates once (`herder_client_core::DeviceKey`). It
 //! presents a self-signed certificate for that key as its TLS client certificate, and TLS 1.3
@@ -7,12 +7,12 @@
 //! connection proves the client holds the key. The daemon knows a device by the SHA-256 fingerprint of that
 //! certificate.
 //!
-//! A host pairs with a vault by sending the code `herder pair --host` minted there as the
+//! A host pairs with a hub by sending the code `herder pair --host` minted there as the
 //! `pairing_code` of its hello. A code names the host, works once and expires after
 //! [`PAIRING_TTL`]; codes live in memory only, so a restart voids them.
 //!
 //! A device is a client or a host ([`DeviceRole`]). A client connects as a client and reads
-//! everything, and may replicate to a vault too. A host may only replicate: every client
+//! everything, and may replicate to a hub too. A host may only replicate: every client
 //! connection it opens is refused, so its key, if stolen, reads nothing, and no host reads
 //! another's sessions.
 //!
@@ -95,10 +95,10 @@ const VERSION: u32 = 1;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceRole {
-    /// A client, reading everything its user may; it may replicate to a vault as a host too.
+    /// A client, reading everything its user may; it may replicate to a hub as a host too.
     #[default]
     Client,
-    /// A host replicating its own sessions to the vault, and nothing else.
+    /// A host replicating its own sessions to the hub, and nothing else.
     Host,
 }
 
@@ -121,7 +121,7 @@ pub struct User {
     /// When the user's first device paired.
     pub created_at: Timestamp,
     /// A machine paired as a user before hosts were their own, made a host by a claim: it is
-    /// listed with the vault's hosts, not its users.
+    /// listed with the hub's hosts, not its users.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub host: bool,
 }
@@ -451,7 +451,7 @@ impl Auth {
         })
     }
 
-    /// Mints a one-time code that pairs the vault host named `host` as a host-only device,
+    /// Mints a one-time code that pairs the hub host named `host` as a host-only device,
     /// valid for `ttl`. The device acts as the user `host`, a member when new.
     pub fn mint_host(&self, host: &str, ttl: Duration) -> Result<Pairing> {
         let host = user_name(host)?;
@@ -573,8 +573,8 @@ impl Auth {
         // The code stays, for the host's config.
         if !pending.device_role.allows(peer) {
             return Err(forbidden(
-                "this code pairs a host, which may only back its sessions up to the vault; \
-                 sign in to the vault from the herder app instead",
+                "this code pairs a host, which may only back its sessions up to the hub; \
+                 sign in to the hub from the herder app instead",
             ));
         }
         let now = Timestamp::now();
@@ -730,11 +730,11 @@ impl Auth {
             .collect()
     }
 
-    /// Makes the devices in `hosts`, which replicated to this vault as hosts, host-only, once:
+    /// Makes the devices in `hosts`, which replicated to this hub as hosts, host-only, once:
     /// devices paired before roles could connect as hosts and clients alike, and one that
     /// replicated is taken to be a host's. Returns the devices demoted.
     ///
-    /// Run on the vault before it accepts connections. Later runs change nothing, so a client
+    /// Run on the hub before it accepts connections. Later runs change nothing, so a client
     /// paired since that also replicates stays a client.
     pub fn migrate_device_roles(&self, hosts: &[DeviceId]) -> Result<Vec<DeviceId>> {
         let mut state = self.lock();
@@ -1367,7 +1367,7 @@ impl Auth {
 
 /// Refuses commands `role` does not allow: terminals, and so adding accounts or
 /// logging them in again and signing the host in to AWS, bringing down containers, browsing folders, changing projects,
-/// reading or changing the daemon's settings, restarting it, backing up to a vault, forking
+/// reading or changing the daemon's settings, restarting it, backing up to a hub, forking
 /// sessions onto the host, changing the skill library or which of its skills are enabled,
 /// changing users' and people's roles, inviting people, revoking people and devices, claiming
 /// users as a person, pairing a device as anyone but the caller, managing
@@ -1431,17 +1431,17 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     }
     let backup = matches!(
         command,
-        CommandBody::GetVaultLink
-            | CommandBody::LinkVault { .. }
-            | CommandBody::SetVaultLink { .. }
-            | CommandBody::UnlinkVault
-            | CommandBody::InstallVault
-            | CommandBody::PairVaultHost { .. }
-            | CommandBody::RevokeVaultHost { .. }
+        CommandBody::GetHubLink
+            | CommandBody::LinkHub { .. }
+            | CommandBody::SetHubLink { .. }
+            | CommandBody::UnlinkHub
+            | CommandBody::InstallHub
+            | CommandBody::PairHubHost { .. }
+            | CommandBody::RevokeHubHost { .. }
     );
     if backup && role != Role::Owner {
         return Err(forbidden(
-            "backing up to a vault is for the daemon's owners only",
+            "backing up to a hub is for the daemon's owners only",
         ));
     }
     if matches!(
@@ -1509,7 +1509,7 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     );
     if secrets && role != Role::Owner {
         return Err(forbidden(
-            "managing secrets is for the vault's owners only; ask one of them to do it",
+            "managing secrets is for the hub's owners only; ask one of them to do it",
         ));
     }
     let logins = matches!(
@@ -1523,7 +1523,7 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     );
     if logins && role != Role::Owner {
         return Err(forbidden(
-            "the vault's provider logins are for its owners only; ask one of them to do it",
+            "the hub's provider logins are for its owners only; ask one of them to do it",
         ));
     }
     let store = matches!(
@@ -1532,7 +1532,7 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     );
     if store && role != Role::Owner {
         return Err(forbidden(
-            "storing an agent's secret is for the owners of this machine and its vault; ask \
+            "storing an agent's secret is for the owners of this machine and its hub; ask \
              one of them to allow it",
         ));
     }
@@ -1701,8 +1701,8 @@ fn user_name(name: &str) -> Result<&str> {
 /// person handing a session off to it, to whom the host relays it.
 fn host_only(host: &str) -> ErrorInfo {
     forbidden(&format!(
-        "{host} only backs its sessions up to the vault, so it cannot read other machines' \
-         sessions; turn on \"Takes handoffs\" for it on the vault's page in the app"
+        "{host} only backs its sessions up to the hub, so it cannot read other machines' \
+         sessions; turn on \"Takes handoffs\" for it on the hub's page in the app"
     ))
 }
 
@@ -2707,9 +2707,9 @@ mod people_tests {
         .unwrap();
         let listed = mac.people()[0].passkeys.clone();
 
-        // The vault knows him by his first passkey only.
-        let (_tmp, vault) = open();
-        let (code, _) = vault.open_claim().unwrap();
+        // The hub knows him by his first passkey only.
+        let (_tmp, hub) = open();
+        let (code, _) = hub.open_claim().unwrap();
         let claim = SignIn::ClaimOwnership {
             code,
             person: NewPerson {
@@ -2717,17 +2717,17 @@ mod people_tests {
                 passkey: PersonPasskey::Existing {
                     person_id: tomas_id.clone(),
                     key: listed[0].clone(),
-                    assertion: fresh(&vault, &first),
+                    assertion: fresh(&hub, &first),
                 },
             },
         };
-        sign_in(&vault, "fp-mac", claim).unwrap();
+        sign_in(&hub, "fp-mac", claim).unwrap();
         assert!(
             sign_in(
-                &vault,
+                &hub,
                 "fp-phone",
                 SignIn::Passkey {
-                    assertion: fresh(&vault, &second)
+                    assertion: fresh(&hub, &second)
                 }
             )
             .is_err()
@@ -2739,19 +2739,19 @@ mod people_tests {
             assertion: by_key,
         };
         // Both sign the same challenge.
-        let challenge = vault.challenge().unwrap();
-        let refused = vault
+        let challenge = hub.challenge().unwrap();
+        let refused = hub
             .add_passkey(
                 &tomas_id,
-                &existing(&tomas_id, fresh(&vault, &second)),
+                &existing(&tomas_id, fresh(&hub, &second)),
                 &first.assert(&challenge),
             )
             .unwrap_err();
         assert_eq!(refused.code, ErrorCode::BadRequest);
         // The key is the caller's own.
-        let challenge = vault.challenge().unwrap();
+        let challenge = hub.challenge().unwrap();
         let someone = herder_protocol::PersonId::new(uuid::Uuid::now_v7().to_string());
-        let refused = vault
+        let refused = hub
             .add_passkey(
                 &tomas_id,
                 &existing(&someone, second.assert(&challenge)),
@@ -2760,8 +2760,8 @@ mod people_tests {
             .unwrap_err();
         assert_eq!(refused.code, ErrorCode::BadRequest);
         // The caller proves who they are with a passkey this daemon has.
-        let challenge = vault.challenge().unwrap();
-        let refused = vault
+        let challenge = hub.challenge().unwrap();
+        let refused = hub
             .add_passkey(
                 &tomas_id,
                 &existing(&tomas_id, second.assert(&challenge)),
@@ -2771,8 +2771,8 @@ mod people_tests {
         assert_eq!(refused.code, ErrorCode::Forbidden);
         // And holds the new one: Sam's signature is no proof.
         let sam = Authenticator::new("sam", &first.user_handle);
-        let challenge = vault.challenge().unwrap();
-        let refused = vault
+        let challenge = hub.challenge().unwrap();
+        let refused = hub
             .add_passkey(
                 &tomas_id,
                 &existing(&tomas_id, sam.assert(&challenge)),
@@ -2780,34 +2780,32 @@ mod people_tests {
             )
             .unwrap_err();
         assert_eq!(refused.code, ErrorCode::Forbidden);
-        assert_eq!(vault.people()[0].passkeys.len(), 1);
+        assert_eq!(hub.people()[0].passkeys.len(), 1);
 
-        let challenge = vault.challenge().unwrap();
-        vault
-            .add_passkey(
-                &tomas_id,
-                &existing(&tomas_id, second.assert(&challenge)),
-                &first.assert(&challenge),
-            )
-            .unwrap();
+        let challenge = hub.challenge().unwrap();
+        hub.add_passkey(
+            &tomas_id,
+            &existing(&tomas_id, second.assert(&challenge)),
+            &first.assert(&challenge),
+        )
+        .unwrap();
         // It keeps what the Mac knows of it.
-        assert_eq!(vault.people()[0].passkeys, listed);
+        assert_eq!(hub.people()[0].passkeys, listed);
         // The challenge was used once.
-        let replay = vault.add_passkey(
+        let replay = hub.add_passkey(
             &tomas_id,
             &existing(&tomas_id, second.assert(&challenge)),
             &first.assert(&challenge),
         );
         assert_eq!(replay.unwrap_err().code, ErrorCode::Conflict);
         assert_eq!(
-            vault
-                .verify_assertion(&tomas_id, &first.assert(&challenge))
+            hub.verify_assertion(&tomas_id, &first.assert(&challenge))
                 .unwrap_err()
                 .code,
             ErrorCode::Forbidden
         );
 
-        assert_eq!(second.sign_in(&vault, "fp-phone").person_id, Some(tomas_id));
+        assert_eq!(second.sign_in(&hub, "fp-phone").person_id, Some(tomas_id));
     }
 
     #[test]

@@ -231,7 +231,7 @@ struct DesktopShell: View {
         let tasks = lists.board()
         let working = tasks.filter { $0.state == .working }.count
         let line = "\(tasks.count) open · \(working) working"
-        let hosts = lists.machines.filter { !$0.vault }
+        let hosts = lists.machines.filter { !$0.hub }
         let connected = hosts.filter(\.connected).count
         return connected < hosts.count || hosts.isEmpty ? "\(line) · \(MachinesView.connections(lists.machines))" : line
     }
@@ -609,16 +609,16 @@ struct MachinesFooter: View {
     @Environment(\.pages) private var pages
 
     /// "3 machines · 1 offline": the machines that run sessions, those not connected, then a
-    /// vault that is not, as Machines counts them.
+    /// hub that is not, as Machines counts them.
     nonisolated static func summary(_ machines: [MachineSummary]) -> String {
-        let hosts = machines.filter { !$0.vault }
+        let hosts = machines.filter { !$0.hub }
         guard !hosts.isEmpty else { return machines.isEmpty ? "No machines" : "No machines yet" }
         var parts = [hosts.count == 1 ? "1 machine" : "\(hosts.count) machines"]
         let offline = hosts.filter { if case .disconnected = $0.connection { true } else { false } }.count
         let connecting = hosts.filter { $0.connection == .connecting }.count
         if offline > 0 { parts.append("\(offline) offline") }
         if connecting > 0 { parts.append("\(connecting) connecting") }
-        if machines.contains(where: { $0.vault && !$0.connected }) { parts.append("vault offline") }
+        if machines.contains(where: { $0.hub && !$0.connected }) { parts.append("hub offline") }
         return parts.joined(separator: " · ")
     }
 

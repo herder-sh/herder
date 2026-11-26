@@ -15,7 +15,7 @@ struct BotsTests {
     /// A machine that keeps the bots it is put, and says how each stands.
     @MainActor final class Machine {
         var bots: [Bot] = [BotsTests.bot("trash-can")]
-        var states: [BotId: BotState] = ["trash-can": .waitingForVault]
+        var states: [BotId: BotState] = ["trash-can": .waitingForHub]
         var sent: [CommandBody] = []
 
         func model() -> MachineBots {
@@ -44,7 +44,7 @@ struct BotsTests {
         let bots = machine.model()
         await bots.reload()
         #expect(bots.list.map(\.botId) == ["trash-can"])
-        #expect(bots.statuses["trash-can"]?.state == .waitingForVault)
+        #expect(bots.statuses["trash-can"]?.state == .waitingForHub)
 
         machine.states["trash-can"] = .connected
         await bots.reloadStatus()
@@ -71,11 +71,11 @@ struct BotsTests {
 
     @Test func aRefusedListSaysWhy() async {
         let bots = MachineBots(hostId: "devbox") { _ in
-            throw HerderError.Rejected(info: ErrorInfo(code: .unsupported, message: "a vault runs no bots"))
+            throw HerderError.Rejected(info: ErrorInfo(code: .unsupported, message: "a hub runs no bots"))
         }
         await bots.reload()
         guard case .failed(let why) = bots.bots else { Issue.record("not failed"); return }
-        #expect(why.contains("a vault runs no bots"))
+        #expect(why.contains("a hub runs no bots"))
     }
 
     /// What a daemon older than a command answers it with.
@@ -107,7 +107,7 @@ struct BotsTests {
             [machine("devbox", name: "devbox", sessions: []), machine("trash", name: "trash", sessions: [])],
             ["devbox": list, "trash": empty], projectName: { $0 })
         #expect(rows.map(\.id) == ["devbox/trash-can"])
-        #expect(rows[0].status?.state == .waitingForVault)
+        #expect(rows[0].status?.state == .waitingForHub)
         // The machine retries on its own: neutral, not amber.
         #expect(rows[0].status?.state.urgency == .quiet)
     }
@@ -119,7 +119,7 @@ struct BotsTests {
         }
         #expect(fleet.status == "")
         await fleet.reload()
-        #expect(fleet.status == "1 bot · 1 waiting for the vault · 1 machine needs a newer herder")
+        #expect(fleet.status == "1 bot · 1 waiting for the hub · 1 machine needs a newer herder")
         fleet.keep([]) { _ in Machine().model() }
         #expect(fleet.status == "")
     }
@@ -129,20 +129,20 @@ struct BotsTests {
             machine("member", name: "member", sessions: [], role: .member),
             machine("off", name: "off", sessions: [], connection: .disconnected(error: "offline")),
             machine("old", name: "draugelis", sessions: []),
-            machine("novault", name: "laptop", sessions: []),
+            machine("nohub", name: "laptop", sessions: []),
             machine("devbox", name: "devbox", sessions: []),
         ])
         let setup = BotSetup(hostId: nil, send: { host, _ in
             if host == "old" { throw Self.unknownCommand }
             return .bots(bots: [])
-        }, vaultOf: { host in
-            if host == "novault" { throw HerderError.Local(detail: "The machine is linked to no vault.") }
-            return "vault"
+        }, hubOf: { host in
+            if host == "nohub" { throw HerderError.Local(detail: "The machine is linked to no hub.") }
+            return "hub"
         })
         await setup.check(targets)
         #expect(setup.targets.map(\.problem) == [
             "Only its owners add bots.", "Not connected.", "Runs an older herder; bots need 0.12.0.",
-            "The machine is linked to no vault.", nil,
+            "The machine is linked to no hub.", nil,
         ])
         #expect(setup.hostId == "devbox")
         setup.hostId = "old"
@@ -181,7 +181,7 @@ struct BotsTests {
         #expect(setup.botName == "trash-can")
     }
 
-    /// Records what Add Bot sends to the vault and the machine.
+    /// Records what Add Bot sends to the hub and the machine.
     @MainActor final class Sent {
         var commands: [(HostId, CommandBody)] = []
         var sets: [SecretSet] = []
@@ -191,11 +191,11 @@ struct BotsTests {
                 commands.append((host, command))
                 if case .listSecrets = command { return .secrets(sets: sets, secrets: []) }
                 return .applied
-            }, vaultOf: { _ in "vault" })
+            }, hubOf: { _ in "hub" })
         }
     }
 
-    @Test func addingABotKeepsItsTokensInTheVaultAndPutsTheBotOnItsMachine() async {
+    @Test func addingABotKeepsItsTokensInTheHubAndPutsTheBotOnItsMachine() async {
         let sent = Sent()
         let setup = sent.setup()
         setup.name = "Trash Can"
@@ -204,7 +204,7 @@ struct BotsTests {
         #expect(await setup.save())
         #expect(setup.botToken.isEmpty && setup.appToken.isEmpty)
         let commands = sent.commands
-        #expect(commands.map(\.0) == ["vault", "vault", "vault", "vault", "vault", "devbox"])
+        #expect(commands.map(\.0) == ["hub", "hub", "hub", "hub", "hub", "devbox"])
         #expect(commands[1].1 == .createSecretSet(set: "bot-trash-can", assertion: nil))
         guard case .putSecret(let set, let name, _, let value, _) = commands[2].1 else { Issue.record("no bot token"); return }
         #expect([set, name, value] == ["bot-trash-can", "BOT_TOKEN", "xoxb-1"])
@@ -241,22 +241,22 @@ struct BotsTests {
         #expect(sent.commands.isEmpty)
     }
 
-    @Test func aVaultThatCannotBeReachedKeepsTheBotOffTheMachine() async {
-        let setup = BotSetup(hostId: "devbox", send: { _, _ in .applied }, vaultOf: { _ in
-            throw HerderError.Local(detail: "The machine is linked to no vault")
+    @Test func aHubThatCannotBeReachedKeepsTheBotOffTheMachine() async {
+        let setup = BotSetup(hostId: "devbox", send: { _, _ in .applied }, hubOf: { _ in
+            throw HerderError.Local(detail: "The machine is linked to no hub")
         })
         setup.name = "trash-can"
         setup.botToken.text = "xoxb-1"
         setup.appToken.text = "xapp-2"
         #expect(!(await setup.save()))
-        #expect(setup.error?.contains("linked to no vault") == true)
+        #expect(setup.error?.contains("linked to no hub") == true)
         #expect(setup.botToken.isEmpty)
     }
 
     @Test func theBotsIdAndSetComeFromItsName() {
         #expect(BotSetup.slug("Trash Can!") == "trash-can")
         #expect(BotSetup.slug("  trip1 -- team ") == "trip1-team")
-        #expect(VaultSecrets.setNameProblem("bot-" + BotSetup.slug("Trip1 Team")) == nil)
+        #expect(HubSecrets.setNameProblem("bot-" + BotSetup.slug("Trip1 Team")) == nil)
     }
 
     @Test func theManifestRunsOverSocketModeWithTheScopesTheDaemonUses() {

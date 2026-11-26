@@ -9,7 +9,7 @@ use super::*;
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 struct Fixture {
-    hub: Arc<Hub>,
+    fanout: Arc<Fanout>,
     terminals: Terminals,
     /// An owner's connection, receiving terminal lists.
     lists: Arc<Outbox>,
@@ -17,12 +17,12 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let hub = Arc::new(Hub::default());
+    let fanout = Arc::new(Fanout::default());
     let lists = Arc::new(Outbox::default());
-    hub.connect(&lists, Role::Owner);
+    fanout.connect(&lists, Role::Owner);
     Fixture {
-        terminals: Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh")),
-        hub,
+        terminals: Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh")),
+        fanout,
         lists,
         dir: tempfile::tempdir().unwrap(),
     }
@@ -193,7 +193,7 @@ async fn archiving_a_session_closes_its_terminals() {
     let terminal_id = f.open(&outbox);
     f.next_list().await;
     let sink = KillOnArchive {
-        next: Arc::clone(&f.hub) as Arc<dyn EventSink>,
+        next: Arc::clone(&f.fanout) as Arc<dyn EventSink>,
         terminals: f.terminals.clone(),
     };
     let status = |status| Event {
@@ -223,11 +223,11 @@ async fn a_client_that_falls_behind_is_let_go() {
     f.terminals.attach(&terminal_id, &fast).unwrap();
     let term = f.terminals.get(&terminal_id).unwrap();
     // `slow` never reads; `fast` keeps up.
-    for _ in 0..=crate::hub::TERMINAL_BACKLOG {
+    for _ in 0..=crate::fanout::TERMINAL_BACKLOG {
         term.publish(&terminal_id, b"x");
         while fast.pop().is_some() {}
     }
-    assert_eq!(slow.state(), crate::hub::OutboxState::Overflowed);
+    assert_eq!(slow.state(), crate::fanout::OutboxState::Overflowed);
     let output = lock(&term.output);
     assert!(!output.is_attached(&slow));
     assert!(output.is_attached(&fast));

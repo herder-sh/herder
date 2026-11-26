@@ -105,48 +105,48 @@ struct AccountSettingsTests {
         #expect(id == "codex" && label == "Codex")
     }
 
-    @MainActor @Test func theVaultsLoginsAreOfferedOnlyWhereAMachineReachesThem() {
-        #expect(AddAccountForm.kinds(vault: false).map(\.value) == [.login, .endpoint])
-        let kinds = AddAccountForm.kinds(vault: true)
-        #expect(kinds.map(\.value) == [.login, .endpoint, .vault])
-        #expect(kinds.last?.label == "Use the vault’s logins")
+    @MainActor @Test func theHubsLoginsAreOfferedOnlyWhereAMachineReachesThem() {
+        #expect(AddAccountForm.kinds(hub: false).map(\.value) == [.login, .endpoint])
+        let kinds = AddAccountForm.kinds(hub: true)
+        #expect(kinds.map(\.value) == [.login, .endpoint, .hub])
+        #expect(kinds.last?.label == "Use the hub’s logins")
         let machines = [machine("a", name: "work-mbp", sessions: []), machine("b", name: "studio", sessions: [])]
-        let vaults: [HostId: String] = ["a": "https://cpa.lan:8317"]
-        // Logging in, either machine takes it; on the vault's logins, only the one that has them.
-        #expect(AccountTarget.all(machines, provider: "claude", vaults: vaults).allSatisfy { $0.problem == nil })
-        let targets = AccountTarget.all(machines, provider: "claude", vaults: vaults, usesVault: true)
+        let hubs: [HostId: String] = ["a": "https://cpa.lan:8317"]
+        // Logging in, either machine takes it; on the hub's logins, only the one that has them.
+        #expect(AccountTarget.all(machines, provider: "claude", hubs: hubs).allSatisfy { $0.problem == nil })
+        let targets = AccountTarget.all(machines, provider: "claude", hubs: hubs, usesHub: true)
         #expect(targets.first { $0.hostId == "a" }?.problem == nil)
-        #expect(targets.first { $0.hostId == "a" }?.vault == "https://cpa.lan:8317")
-        #expect(targets.first { $0.hostId == "b" }?.problem == "No vault logins")
+        #expect(targets.first { $0.hostId == "a" }?.hub == "https://cpa.lan:8317")
+        #expect(targets.first { $0.hostId == "b" }?.problem == "No hub logins")
     }
 
-    @MainActor @Test func aVaultLoginsDraftNamesTheVaultsKeyOnEachMachinesOwnProxy() throws {
+    @MainActor @Test func aHubLoginsDraftNamesTheHubsKeyOnEachMachinesOwnProxy() throws {
         var draft = AccountDraft(provider: "claude")
-        draft.kind = .vault
+        draft.kind = .hub
         // Nothing to type: no URL, no key.
-        #expect(draft.usesVault && draft.sendsEndpoint && !draft.usesEndpoint)
+        #expect(draft.usesHub && draft.sendsEndpoint && !draft.usesEndpoint)
         #expect(draft.complete && draft.problem == nil)
-        #expect(AddAccountSheet.hint(draft) == "Each machine uses its own key from the vault.")
-        // A machine without the vault's logins gets nothing.
+        #expect(AddAccountSheet.hint(draft) == "Each machine uses its own key from the hub.")
+        // A machine without the hub's logins gets nothing.
         #expect(draft.endpointCommand(taken: []) == nil)
-        let command = try #require(draft.endpointCommand(taken: ["claude"], vault: "https://cpa.lan:8317"))
+        let command = try #require(draft.endpointCommand(taken: ["claude"], hub: "https://cpa.lan:8317"))
         guard case .addEndpointAccount(let id, let provider, let label, let endpoint, let key, let keySecret) = command else {
             Issue.record("expected addEndpointAccount, got \(command)")
             return
         }
-        #expect(id == "claude-vault" && provider == "claude" && label == "Claude vault")
+        #expect(id == "claude-hub" && provider == "claude" && label == "Claude hub")
         #expect(endpoint == "https://cpa.lan:8317" && key == nil && keySecret == "CLIPROXYAPI_KEY")
         // A label typed names it, as any account's.
         draft.label = "Fleet"
         guard case .addEndpointAccount(let id, _, let label, _, _, _)
-            = try #require(draft.endpointCommand(taken: [], vault: "https://cpa.lan:8317")) else {
+            = try #require(draft.endpointCommand(taken: [], hub: "https://cpa.lan:8317")) else {
             Issue.record("expected addEndpointAccount")
             return
         }
         #expect(id == "claude-fleet" && label == "Fleet")
         // Cursor has no endpoint: it logs in.
         draft.provider = "cursor"
-        #expect(!draft.usesVault && !draft.sendsEndpoint)
+        #expect(!draft.usesHub && !draft.sendsEndpoint)
     }
 
     @Test func aMemberSeesNoKeyField() {
@@ -234,8 +234,8 @@ struct AccountSettingsTests {
         // An owner moves it to another endpoint and replaces its key.
         _ = try await fleet.client.send(hostId: first.hostId, command: account.settings(
             label: account.label, configDir: account.configDir, fallback: nil,
-            endpoint: "https://vault.lan:8317", key: "sk-new"))
-        #expect(await eventually { added(first.hostId)?.endpoint == "https://vault.lan:8317" })
+            endpoint: "https://hub.lan:8317", key: "sk-new"))
+        #expect(await eventually { added(first.hostId)?.endpoint == "https://hub.lan:8317" })
 
         // A machine that refuses the account says why, for itself.
         var codex = draft
@@ -246,7 +246,7 @@ struct AccountSettingsTests {
 
     @MainActor
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
-    func aVaultLoginsAccountIsAddedOnEachMachineWithTheVaultsKey() async throws {
+    func aHubLoginsAccountIsAddedOnEachMachineWithTheHubsKey() async throws {
         let one = try FakeDaemon(name: "one")
         let two = try FakeDaemon(name: "two")
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
@@ -259,13 +259,13 @@ struct AccountSettingsTests {
         let second = try await fleet.signIn(to: two)
         try await fleet.client.synced(hostId: first.hostId)
         try await fleet.client.synced(hostId: second.hostId)
-        // A fake daemon links to no vault with a CLIProxyAPI: each says where its vault's is.
+        // A fake daemon links to no hub with a CLIProxyAPI: each says where its hub's is.
         for hostId in [first.hostId, second.hostId] {
-            fleet.backupLinks[hostId] = .linked(LinkedVault(address: "vault.lan:7447", fingerprint: "ab", backup: true,
+            fleet.backupLinks[hostId] = .linked(LinkedHub(address: "hub.lan:7447", fingerprint: "ab", backup: true,
                                                             secrets: true, cliproxyapi: "https://cpa.lan:8317"))
         }
         var draft = AccountDraft(provider: "claude")
-        draft.kind = .vault
+        draft.kind = .hub
         let failures = await fleet.addEndpointAccount(draft, on: [first.hostId, second.hostId])
         #expect(failures.isEmpty)
         #expect(fleet.activity.keys.isEmpty)
@@ -276,12 +276,12 @@ struct AccountSettingsTests {
         for hostId in [first.hostId, second.hostId] {
             let account = try #require(added(hostId))
             #expect(account.endpoint == "https://cpa.lan:8317" && account.keySecret == "CLIPROXYAPI_KEY")
-            #expect(account.label == "Claude vault")
+            #expect(account.label == "Claude hub")
         }
-        // One login across both machines, by its endpoint, its key from the vault.
+        // One login across both machines, by its endpoint, its key from the hub.
         let login = try #require(ProviderAccounts(machines: fleet.machines).groups.flatMap(\.logins)
             .first { $0.endpoint != nil })
-        #expect(login.on.count == 2 && login.keyFromVault)
+        #expect(login.on.count == 2 && login.keyFromHub)
     }
 
     @Test func progressReadsTheTerminalAndTheAccountList() {

@@ -73,7 +73,7 @@ struct BotPage: View {
                         }
                     }
                     DangerZone {
-                        SettingRow(label: "Remove this bot", hint: "Its tokens stay in the vault; linked sessions keep their threads") {
+                        SettingRow(label: "Remove this bot", hint: "Its tokens stay in the hub; linked sessions keep their threads") {
                             DangerButton(title: "Remove…") { confirmingRemove = true }
                         }
                     }

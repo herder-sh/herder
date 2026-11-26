@@ -15,7 +15,7 @@ use gtk::glib;
 use herder_adapters::AdapterCommand;
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::Client;
-use herder_daemon::Hub;
+use herder_daemon::Fanout;
 use herder_daemon::auth::{Auth, authenticator};
 use herder_daemon::login::Logins;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
@@ -65,7 +65,7 @@ async fn daemon(
     std::fs::create_dir_all(dir.join("tls")).expect("the tls dir");
     let tls = Tls::load_or_create(&dir.join("tls"), "box").expect("a certificate");
     let auth = Arc::new(Auth::open(dir).expect("the auth store"));
-    let hub = Arc::new(Hub::default());
+    let fanout = Arc::new(Fanout::default());
     let fake = Provider::Other("fake".into());
     let mut adapters = Adapters::new();
     adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script)));
@@ -85,7 +85,7 @@ async fn daemon(
         store: herder_store::Store::open(dir.join("herder.db")).expect("the store"),
         adapters,
         accounts,
-        sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+        sink: Arc::clone(&fanout) as Arc<dyn EventSink>,
         turn_ids: Box::new(move || {
             TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
         }),
@@ -99,7 +99,7 @@ async fn daemon(
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("a port");
     let addr = listener.local_addr().expect("the address");
     let fingerprint = tls.fingerprint().to_owned();
-    let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
+    let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
     let logins = Logins::new(HashMap::new(), dir.join("daemon.toml"), sessions.clone());
     let host = Host {
         id: HostId::new("host-1"),
@@ -108,7 +108,7 @@ async fn daemon(
     let server = Server::new(
         tls,
         Arc::clone(&auth),
-        hub,
+        fanout,
         sessions,
         terminals,
         logins,

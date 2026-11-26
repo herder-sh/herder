@@ -320,7 +320,7 @@ fn a_prompts_images_are_fetched_once_and_open_full_size() {
         };
         log.borrow_mut().push(attachment_id.to_string());
         let reply = if attachment_id.as_str() == IMAGE_GONE {
-            Err("the vault holds no image".to_owned())
+            Err("the hub holds no image".to_owned())
         } else {
             Ok(CommandResult::Attachment {
                 media_type: "image/png".to_owned(),
@@ -400,7 +400,7 @@ fn the_controls_switch_account_provider_model_and_mode() {
 }
 
 #[gtk::test]
-fn an_archived_session_or_a_vaults_has_no_composer() {
+fn an_archived_session_or_a_hubs_has_no_composer() {
     let (window, _) = open("chat");
     let view = window.session_view();
     let (_, update) = moment("chat");

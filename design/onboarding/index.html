@@ -329,7 +329,7 @@ const P = {
   phone:'<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/>',
   term:'<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M7.5 9.5l3 2.5-3 2.5M12.5 15h4"/>',
   server:'<rect x="4" y="4" width="16" height="7" rx="1.8"/><rect x="4" y="13" width="16" height="7" rx="1.8"/><path d="M8 7.5h.01M8 16.5h.01"/>',
-  vault:'<rect x="4" y="4" width="16" height="16" rx="2.5"/><circle cx="12" cy="12" r="3.2"/><path d="M12 8.8V7M15.2 12H17"/>',
+  hub:'<rect x="4" y="4" width="16" height="16" rx="2.5"/><circle cx="12" cy="12" r="3.2"/><path d="M12 8.8V7M15.2 12H17"/>',
   person:'<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/>',
   people:'<circle cx="9" cy="9" r="3.2"/><path d="M3.5 19c.7-3.2 2.9-4.8 5.5-4.8s4.8 1.6 5.5 4.8M15.5 6.2a3 3 0 010 5.6M17 14.5c1.8.5 3 1.9 3.5 4.5"/>',
   warn:'<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
@@ -459,7 +459,7 @@ function machineRowsP(unreach=[], extra=''){
     const off = unreach.includes(m.n);
     return row({lead:lead(m.ic), t:m.n, s:`${m.k.replace(' · this Mac','')} · ${off?'<span style="color:var(--fail)">Can’t reach it</span>':'Connected'}`, chev:true, to:''});
   }).join('') + extra +
-  row({lead:lead('vault'), t:'herder-vault-0', s:'Vault · backs up 4 machines · up to date', chev:true}) +
+  row({lead:lead('hub'), t:'herder-hub-0', s:'Hub · backs up 4 machines · up to date', chev:true}) +
   row({lead:`<div class="lead" style="background:none;color:var(--action)">${ic('plus',20,2.2)}</div>`, t:'Add a machine', add:true, to:'3:1'});
 }
 const PEOPLE = [
@@ -490,7 +490,7 @@ function machineRowsM(unreach=[], extra=''){
   M.map(m=>{ const off=unreach.includes(m.n);
     return mrow({lead:lead(m.ic), t:m.n, s:`${m.k}<span class="mono" style="color:var(--quiet)"> · ${m.a}</span>`,
       cols:cols(off?`<span style="color:var(--fail)">● Can’t reach it</span>`:'<span style="color:var(--on)">●</span> Connected', m.n==='work-mbp'?'—':'Up to date', 'Owner')}); }).join('') + extra +
-  mrow({lead:lead('vault'), t:'herder-vault-0 <span class="tag">vault</span>', s:'Backs up 4 machines · keeps secrets', cols:cols('<span style="color:var(--on)">●</span> Connected','—','Owner')}) +
+  mrow({lead:lead('hub'), t:'herder-hub-0 <span class="tag">hub</span>', s:'Backs up 4 machines · keeps secrets', cols:cols('<span style="color:var(--on)">●</span> Connected','—','Owner')}) +
   mrow({t:`<span style="display:flex;gap:8px;align-items:center">${ic('plus',15,2.2)}Add a machine…</span>`, add:true, to:'3:1'});
 }
 function peopleRowsM(){
@@ -718,13 +718,13 @@ const FLOWS = [
    mac:()=> setupMac({over: msheet({t:'Add a machine', body: mprog(1,MACHSTEPS) + mstep(3,'Approve as', `<div class="card pk"><div class="key">${ic('key',20,2)}</div><div class="k"><b>Tomas</b><span>Your passkey in Apple Passwords</span></div></div>`,'now'),
      foot: pbtn('Approve with Touch ID','next','blue','finger')}) + touchid('herder wants to sign in as “Tomas”','Approve gpu-box with your passkey.')}) },
  { t:'Done: it’s on your other devices too',
-   n:'The finish screen answers “and my iPhone?”. Devices already signed in as Tomas get a one-tap sign-in for the new machine; backup is on by default when you own a vault.',
+   n:'The finish screen answers “and my iPhone?”. Devices already signed in as Tomas get a one-tap sign-in for the new machine; backup is on by default when you own a hub.',
    phone:()=> setupPhone({}) + isheet(inav('', 'Add a Machine', '<span class="glass" data-go="next">Done</span>') + scroll(prog(2,MACHSTEPS) + `<div class="big-ok">${ic('check',40,2.6)}</div><div class="hero" style="padding-bottom:18px"><h2>gpu-box is yours</h2></div>` +
        grp('Your devices', row({lead:st('ok'), t:'This iPhone', s:'Signed in'}) + row({lead:st('wait'), t:'MacBook Pro', s:'Asks once, next time it opens'}) + row({lead:`<span class="st" style="color:var(--quiet)">–</span>`, t:'Terminal on trash-can-01', s:'Not needed'}),'','noicons') +
-       grp('', row({lead:lead('vault'), t:'Back up to herder-vault-0', s:'Sessions and secrets', tr:'<span class="sw"></span>'})))),
+       grp('', row({lead:lead('hub'), t:'Back up to herder-hub-0', s:'Sessions and secrets', tr:'<span class="sw"></span>'})))),
    mac:()=> setupMac({over: msheet({t:'gpu-box is yours', s:'You’re its owner.', body: mprog(3,MACHSTEPS) +
        `<div class="mh" style="margin-top:0">Your devices</div><div class="mlist">${mrow({lead:st('ok'), t:'This Mac', s:'Signed in'})}${mrow({lead:st('wait'), t:'iPhone 17 Pro', s:'Asks once, next time it opens'})}${mrow({lead:`<span class="st" style="color:var(--quiet)">–</span>`, t:'Terminal on trash-can-01', s:'Not needed'})}</div>` +
-       `<div class="mh">Backup</div><div class="mlist">${mrow({lead:lead('vault'), t:'Back up to herder-vault-0', s:'Sessions and secrets', tr:'<span class="sw"></span>'})}</div>`,
+       `<div class="mh">Backup</div><div class="mlist">${mrow({lead:lead('hub'), t:'Back up to herder-hub-0', s:'Sessions and secrets', tr:'<span class="sw"></span>'})}</div>`,
      foot: pbtn('Start a Session on It','', 'raised') + pbtn('Done','next','blue')})}) },
  { t:'On the iPhone: one tap',
    n:'The other device sees the new machine as a single item under Needs you, fixed with one Face ID. The same mechanism covers every “device not on all machines” case.',

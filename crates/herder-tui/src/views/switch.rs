@@ -173,7 +173,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
     }
 }
 
-/// An account to pick: marked if the session is on it, its label, `vault` for a vault login,
+/// An account to pick: marked if the session is on it, its label, `hub` for a hub login,
 /// `fallback` for a fallback one, and its busiest window.
 fn row<'a>(ui: Ui, session: &Session, account: &Account, narrow: bool) -> Row<'a> {
     let current = switch::kind(session, account) == Kind::Current;
@@ -191,9 +191,9 @@ fn row<'a>(ui: Ui, session: &Session, account: &Account, narrow: bool) -> Row<'a
         left.push(Span::raw("  "));
         left.push(Span::styled(account.account_id.to_string(), ui.muted()));
     }
-    if account.vault_login.is_some() {
+    if account.hub_login.is_some() {
         left.push(Span::raw("  "));
-        left.push(Span::styled("vault", ui.accent()));
+        left.push(Span::styled("hub", ui.accent()));
     }
     if account.fallback {
         left.push(Span::raw("  "));

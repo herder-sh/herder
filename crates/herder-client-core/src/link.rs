@@ -410,13 +410,13 @@ mod tests {
 
     #[test]
     fn a_fleet_link_names_its_machines() {
-        let mut vault = machine("100.64.0.7:7447", "cd");
-        vault.name = Some("draugelis's vault".into());
+        let mut hub = machine("100.64.0.7:7447", "cd");
+        hub.name = Some("draugelis's hub".into());
         let mut mac = machine("192.168.1.5:7447", "ab");
         mac.name = Some("Coingate-CJH9FXV367".into());
         let link = FleetLink {
             person: alice(),
-            machines: vec![mac, machine("10.0.0.9:7447", "ef"), vault],
+            machines: vec![mac, machine("10.0.0.9:7447", "ef"), hub],
         };
         let text = link.to_string();
         assert_eq!(
@@ -424,7 +424,7 @@ mod tests {
             format!(
                 "herder://fleet?{ALICE}&host=192.168.1.5%3A7447&fp={}&name=Coingate-CJH9FXV367\
                  &host=10.0.0.9%3A7447&fp={}\
-                 &host=100.64.0.7%3A7447&fp={}&name=draugelis%27s+vault",
+                 &host=100.64.0.7%3A7447&fp={}&name=draugelis%27s+hub",
                 "ab".repeat(32),
                 "ef".repeat(32),
                 "cd".repeat(32)

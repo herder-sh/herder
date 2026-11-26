@@ -43,7 +43,7 @@ struct HandoffTests {
         #expect(Fleet.handoffBlocker(host, provider: "claude") == "Owner only")
         host.role = .owner
         host.hosts = [FleetHost(hostId: "replicated", hostName: "replicated", online: false, lastSeen: "")]
-        #expect(Fleet.handoffBlocker(host, provider: "claude") == "Vault")
+        #expect(Fleet.handoffBlocker(host, provider: "claude") == "Hub")
     }
 
     @Test func pickingAMachineHandsTheSessionOffAndAnAccountPicksWithinIt() throws {

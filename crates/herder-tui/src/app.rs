@@ -211,10 +211,10 @@ pub enum Focus {
 pub enum Row {
     /// A machine's heading.
     Machine(HostId),
-    /// Under a vault's heading, a host whose sessions the vault lists.
+    /// Under a hub's heading, a host whose sessions the hub lists.
     Host {
-        /// The vault.
-        vault: HostId,
+        /// The hub.
+        hub: HostId,
         /// The host.
         host: HostId,
     },
@@ -242,7 +242,7 @@ impl Row {
     fn same(&self, other: &Row) -> bool {
         match (self, other) {
             (Row::Machine(a), Row::Machine(b)) => a == b,
-            (Row::Host { vault: a, host: x }, Row::Host { vault: b, host: y }) => a == b && x == y,
+            (Row::Host { hub: a, host: x }, Row::Host { hub: b, host: y }) => a == b && x == y,
             (Row::Project(a), Row::Project(b)) => a == b,
             (Row::Chats, Row::Chats) => true,
             (Row::Session { key: a, .. }, Row::Session { key: b, .. }) => a == b,
@@ -779,7 +779,7 @@ impl App {
     }
 
     /// The session list: each machine, then its sessions, newest first, each followed by its
-    /// children, oldest first, unless it is folded. Under a vault, each host its sessions run
+    /// children, oldest first, unless it is folded. Under a hub, each host its sessions run
     /// on heads them.
     pub fn rows(&self) -> Vec<Row> {
         self.tree(true)
@@ -815,10 +815,10 @@ impl App {
                 rows.extend(self.forest(&keys(None), fold));
                 continue;
             }
-            // A vault: each host, then the sessions that run on it.
+            // A hub: each host, then the sessions that run on it.
             for host in &machine.hosts {
                 rows.push(Row::Host {
-                    vault: machine.host_id.clone(),
+                    hub: machine.host_id.clone(),
                     host: host.host_id.clone(),
                 });
                 rows.extend(self.forest(&keys(Some(&host.host_id)), fold));
@@ -1091,13 +1091,13 @@ mod tests {
     }
 
     #[test]
-    fn a_vaults_sessions_come_under_their_host() {
+    fn a_hubs_sessions_come_under_their_host() {
         let host = |host: &str| Row::Host {
-            vault: HostId::new("v"),
+            hub: HostId::new("v"),
             host: HostId::new(host),
         };
         assert_eq!(
-            fake::vault().rows(),
+            fake::hub().rows(),
             [
                 Row::Machine(HostId::new("v")),
                 host("devbox"),

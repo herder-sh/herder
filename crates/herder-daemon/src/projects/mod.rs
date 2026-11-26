@@ -9,7 +9,7 @@
 //!
 //! [`Discovery::run`] reads every remote at startup and every [`RESCAN_INTERVAL`], and looks at
 //! the session repos again whenever a session is created ([`OnSessionsChanged`]). Each time the resolved
-//! list differs from the last, it goes to every client through [`Hub::projects_changed`].
+//! list differs from the last, it goes to every client through [`Fanout::projects_changed`].
 //!
 //! Owners change the `[[project]]` entries from a client: `add_project` declares a repository,
 //! `clone_project` clones one onto the host first ([`clone`]) and declares the clone,
@@ -44,7 +44,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use crate::hub::Hub;
+use crate::fanout::Fanout;
 use crate::session::{EventSink, SessionManager};
 
 /// How often every remote and icon is read again.
@@ -399,14 +399,14 @@ impl EventSink for OnSessionsChanged {
     }
 }
 
-/// Keeps the hub's project list current.
+/// Keeps the fanout's project list current.
 pub struct Discovery {
     /// This host, for the ids of repositories without a remote.
     pub host: HostId,
     /// Roots and overrides.
     pub config: Arc<Overrides>,
     /// Where the list is published.
-    pub hub: Arc<Hub>,
+    pub fanout: Arc<Fanout>,
     /// Whose repos are discovered.
     pub sessions: SessionManager,
     /// Notified when a session is created; see [`OnSessionsChanged`].
@@ -478,7 +478,7 @@ impl Discovery {
             .await;
             if published.as_ref() != Some(&projects) {
                 debug!(projects = projects.len(), "project list changed");
-                self.hub.projects_changed(projects.clone());
+                self.fanout.projects_changed(projects.clone());
                 self.sessions.set_projects(&projects).await;
                 published = Some(projects);
             }

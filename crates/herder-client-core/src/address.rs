@@ -11,10 +11,10 @@
 //! connection inside that WebSocket ([`crate::tunnel`]). Tunnels sort last, after Tailscale,
 //! as they relay every byte through a third party's edge.
 //!
-//! A third form, `vault://<vault's host id>`, is the route through a vault this device is
+//! A third form, `hub://<hub's host id>`, is the route through a hub this device is
 //! signed in to, which forwards the connection to the machine ([`crate::relay`]). The client
-//! adds it to a machine's addresses once the vault says it relays there; it sorts last of
-//! all, as it takes two hops, the vault's own route and the machine's to the vault.
+//! adds it to a machine's addresses once the hub says it relays there; it sorts last of
+//! all, as it takes two hops, the hub's own route and the machine's to the hub.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -30,9 +30,9 @@ pub(crate) fn normalize(text: &str) -> Result<String, String> {
     if text.is_empty() {
         return Err("an address is empty".to_owned());
     }
-    if let Some(vault) = text.strip_prefix(VAULT) {
-        if vault.is_empty() || vault.contains(|c: char| c.is_whitespace() || c == '/') {
-            return Err(format!("{text} names no vault"));
+    if let Some(hub) = text.strip_prefix(HUB) {
+        if hub.is_empty() || hub.contains(|c: char| c.is_whitespace() || c == '/') {
+            return Err(format!("{text} names no hub"));
         }
         return Ok(text.to_owned());
     }
@@ -91,17 +91,17 @@ fn normalize_url(text: &str) -> Result<String, String> {
     })
 }
 
-/// What the address of a route through a vault starts with.
-const VAULT: &str = "vault://";
+/// What the address of a route through a hub starts with.
+const HUB: &str = "hub://";
 
-/// The address of the route through the vault `vault`.
-pub(crate) fn through_vault(vault: &HostId) -> String {
-    format!("{VAULT}{vault}")
+/// The address of the route through the hub `hub`.
+pub(crate) fn through_hub(hub: &HostId) -> String {
+    format!("{HUB}{hub}")
 }
 
-/// The vault `address` goes through, for the address of a route through one.
-pub(crate) fn vault(address: &str) -> Option<HostId> {
-    address.strip_prefix(VAULT).map(HostId::new)
+/// The hub `address` goes through, for the address of a route through one.
+pub(crate) fn hub(address: &str) -> Option<HostId> {
+    address.strip_prefix(HUB).map(HostId::new)
 }
 
 /// The part of `address` after `wss://` or `ws://`, for a tunnel's URL.
@@ -132,7 +132,7 @@ pub(crate) fn default_order(addresses: Vec<String>) -> Vec<String> {
 /// Whether `address`, as `host:port`, is this device itself (`localhost`, `127.0.0.0/8`,
 /// `::1`), which no other device reaches it at.
 pub(crate) fn is_loopback(address: &str) -> bool {
-    if vault(address).is_some() {
+    if hub(address).is_some() {
         return false;
     }
     let host = host(address);
@@ -158,9 +158,9 @@ fn host(address: &str) -> &str {
 }
 
 /// 0 for a private network address, 1 for any other, 2 for a Tailscale one, 3 for a tunnel,
-/// 4 for the route through a vault.
+/// 4 for the route through a hub.
 fn rank(address: &str) -> u8 {
-    if vault(address).is_some() {
+    if hub(address).is_some() {
         return 4;
     }
     if is_tunnel(address) {
@@ -295,16 +295,16 @@ mod tests {
     }
 
     #[test]
-    fn the_route_through_a_vault_is_an_address_that_comes_last() {
+    fn the_route_through_a_hub_is_an_address_that_comes_last() {
         let id = HostId::new("0193a5b2-7c1e-7d3a-9f00-2b6f1c0a9e11");
-        let route = through_vault(&id);
-        assert_eq!(route, "vault://0193a5b2-7c1e-7d3a-9f00-2b6f1c0a9e11");
+        let route = through_hub(&id);
+        assert_eq!(route, "hub://0193a5b2-7c1e-7d3a-9f00-2b6f1c0a9e11");
         assert_eq!(normalize(&format!(" {route} ")).unwrap(), route);
-        assert_eq!(vault(&route), Some(id));
-        assert_eq!(vault("vault:7447"), None, "a machine named vault");
-        assert_eq!(vault("wss://vault.example.com"), None);
+        assert_eq!(hub(&route), Some(id));
+        assert_eq!(hub("hub:7447"), None, "a machine named hub");
+        assert_eq!(hub("wss://hub.example.com"), None);
         assert!(!is_tunnel(&route) && !is_loopback(&route));
-        for bad in ["vault://", "vault://a b", "vault://a/b"] {
+        for bad in ["hub://", "hub://a b", "hub://a/b"] {
             assert!(normalize(bad).is_err(), "{bad:?}");
         }
         let ordered = default_order(

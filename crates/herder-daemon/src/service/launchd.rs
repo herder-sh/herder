@@ -374,45 +374,44 @@ mod tests {
     }
 
     #[test]
-    fn vault_plist_runs_a_vault_with_its_key_in_its_environment() {
-        let service =
-            crate::vault::install::service(Path::new("/Users/ann/.local/share/herder-vault"));
+    fn hub_plist_runs_a_hub_with_its_key_in_its_environment() {
+        let service = crate::hub::install::service(Path::new("/Users/ann/.local/share/herder-hub"));
         let home = Path::new("/Users/ann");
         let plist = plist(
             &service,
             Path::new("/Users/ann/.local/bin/herder"),
             "/usr/bin",
-            &[("HERDER_VAULT_SECRETS_KEY".to_owned(), "a2V5".to_owned())],
+            &[("HERDER_HUB_SECRETS_KEY".to_owned(), "a2V5".to_owned())],
             &log_path(home, &service),
         )
         .unwrap();
         assert_eq!(
             plist_path(home, service.label),
-            Path::new("/Users/ann/Library/LaunchAgents/sh.herder.vault.plist")
+            Path::new("/Users/ann/Library/LaunchAgents/sh.herder.hub.plist")
         );
         assert_eq!(
             plist,
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Written by `herder vault install`; rerun it after moving the herder binary or
+<!-- Written by `herder hub install`; rerun it after moving the herder binary or
      changing PATH. -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>sh.herder.vault</string>
+	<string>sh.herder.hub</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/Users/ann/.local/bin/herder</string>
 		<string>daemon</string>
-		<string>--vault</string>
+		<string>--hub</string>
 		<string>--config</string>
-		<string>/Users/ann/.local/share/herder-vault/vault.toml</string>
+		<string>/Users/ann/.local/share/herder-hub/hub.toml</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
 		<string>/usr/bin</string>
-		<key>HERDER_VAULT_SECRETS_KEY</key>
+		<key>HERDER_HUB_SECRETS_KEY</key>
 		<string>a2V5</string>
 	</dict>
 	<key>RunAtLoad</key>
@@ -420,9 +419,9 @@ mod tests {
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>/Users/ann/Library/Logs/herder/vault.log</string>
+	<string>/Users/ann/Library/Logs/herder/hub.log</string>
 	<key>StandardErrorPath</key>
-	<string>/Users/ann/Library/Logs/herder/vault.log</string>
+	<string>/Users/ann/Library/Logs/herder/hub.log</string>
 </dict>
 </plist>
 "#
@@ -431,8 +430,8 @@ mod tests {
 
     #[test]
     fn cliproxyapi_plist_runs_the_proxy_with_its_config() {
-        let dir = Path::new("/Users/ann/.local/share/herder-vault");
-        let service = crate::vault::install::cliproxyapi::service(dir);
+        let dir = Path::new("/Users/ann/.local/share/herder-hub");
+        let service = crate::hub::install::cliproxyapi::service(dir);
         let home = Path::new("/Users/ann");
         let program = service.program.clone().unwrap();
         let plist = plist(
@@ -449,9 +448,9 @@ mod tests {
         );
         assert!(
             plist.contains(
-                "\t\t<string>/Users/ann/.local/share/herder-vault/cliproxyapi/cli-proxy-api</string>\n\
+                "\t\t<string>/Users/ann/.local/share/herder-hub/cliproxyapi/cli-proxy-api</string>\n\
                  \t\t<string>-config</string>\n\
-                 \t\t<string>/Users/ann/.local/share/herder-vault/cliproxyapi/config.yaml</string>\n"
+                 \t\t<string>/Users/ann/.local/share/herder-hub/cliproxyapi/config.yaml</string>\n"
             ),
             "{plist}"
         );

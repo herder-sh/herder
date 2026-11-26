@@ -64,14 +64,14 @@ final class FleetPeople {
         }
     }
 
-    /// The directory of `machines`, or nil before any of them listed its people. A vault's
+    /// The directory of `machines`, or nil before any of them listed its people. A hub's
     /// column is named apart from its machine's.
     func directory(_ machines: [Machine], localNames: Set<String> = MachineRow.localNames) -> Directory? {
         guard !people.isEmpty else { return nil }
-        let local = MachineRow.thisMac(machines.filter { $0.hosts.isEmpty && $0.vault == nil }, names: localNames)
+        let local = MachineRow.thisMac(machines.filter { $0.hosts.isEmpty && $0.hub == nil }, names: localNames)
         let columns = machines.filter { people[$0.hostId] != nil }.map { machine in
-            Directory.Column(id: machine.hostId, name: machine.hostId == local ? "this Mac" : UnpairedVault.name(of: machine),
-                             vault: !machine.hosts.isEmpty || machine.vault != nil)
+            Directory.Column(id: machine.hostId, name: machine.hostId == local ? "this Mac" : UnpairedHub.name(of: machine),
+                             hub: !machine.hosts.isEmpty || machine.hub != nil)
         }
         return .merging(people, columns: columns, me: Self.me(machines),
                         thisClient: Self.thisClient + "/")
@@ -222,11 +222,11 @@ struct PeopleSection: View {
     }
 
     /// Gives `person` `role` on `host`, or on every machine for nil: a member on every one
-    /// but the vaults, where a member has nothing to do.
+    /// but the hubs, where a member has nothing to do.
     private func setRole(_ person: Directory.Person, _ role: Role?, _ host: HostId?) {
         let machines = fleet.machines
         let hosts = host.map { id in directory.columns.filter { $0.id == id } }
-            ?? directory.columns.filter { !$0.vault || role != .member }
+            ?? directory.columns.filter { !$0.hub || role != .member }
         run { try await people.setRole(role, of: person, on: hosts, machines: machines, sign: sign) }
     }
 

@@ -1,9 +1,8 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 453
 expression: "render(&mut app, width, height).backend()"
 ---
-" o docs - app - vault          3/3  | switch "
+" o docs - app - hub            3/3  | switch "
 " all quiet                          |        "
 "                                             "
 "                                             "

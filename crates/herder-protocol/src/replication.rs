@@ -1,63 +1,63 @@
-//! Replication: a host streams its session journals to the vault, which keeps them durable.
+//! Replication: a host streams its session journals to the hub, which keeps them durable.
 //!
-//! The vault is the same `herder` binary in vault mode. A host's daemon connects to it the way
+//! The hub is the same `herder` binary in hub mode. A host's daemon connects to it the way
 //! a client connects to a daemon: one TLS WebSocket with a pinned certificate, paired once with
-//! a one-time code, carrying JSON text frames. [`HostMessage`] goes from host to vault and
-//! [`VaultMessage`] from vault to host; both are internally tagged on `"type"`.
+//! a one-time code, carrying JSON text frames. [`HostMessage`] goes from host to hub and
+//! [`HubMessage`] from hub to host; both are internally tagged on `"type"`.
 //!
 //! The exchange:
-//! 1. The host sends [`HostMessage::Hello`]. The vault answers [`VaultMessage::Hello`] with,
+//! 1. The host sends [`HostMessage::Hello`]. The hub answers [`HubMessage::Hello`] with,
 //!    for every session of that host it holds, the last seq it holds durably. Those cursors are
 //!    the only source of truth for where to resume: the host keeps no cursor of its own, so an
-//!    ack lost in flight, or a vault restored from an older backup, never causes a gap.
+//!    ack lost in flight, or a hub restored from an older backup, never causes a gap.
 //! 2. The host sends a [`HostMessage::Session`] for each of its sessions, then, per session,
-//!    [`HostMessage::Batch`]es of the events after the vault's cursor, and from then on each
+//!    [`HostMessage::Batch`]es of the events after the hub's cursor, and from then on each
 //!    new event as it is appended. The host may send further batches before earlier ones are
 //!    acknowledged.
-//! 3. The vault handles messages in order. It acknowledges a batch only once its events are
-//!    durable, with a cumulative [`VaultMessage::Ack`].
+//! 3. The hub handles messages in order. It acknowledges a batch only once its events are
+//!    durable, with a cumulative [`HubMessage::Ack`].
 //!
 //! The images and files prompts carried, their attachments, travel ahead of the events that
 //! name them: before each batch, the host sends a [`HostMessage::Attachment`] for every
-//! attachment of a `user_message` in it. The vault keeps each durably before it handles the
+//! attachment of a `user_message` in it. The hub keeps each durably before it handles the
 //! next message, so the batch's ack covers the attachments too, and a batch re-sent after a
-//! reconnect brings them again. Re-sending one is idempotent: the vault holds one attachment
+//! reconnect brings them again. Re-sending one is idempotent: the hub holds one attachment
 //! per session and attachment id, and skips a re-send with the same content hash. Only bytes
 //! the host still has are sent.
 //!
 //! Attachments are backed up only when the host's hello gives an `attachments_cap`; without
-//! one the host sends none, and the vault drops any it gets. Within the cap the vault evicts
+//! one the host sends none, and the hub drops any it gets. Within the cap the hub evicts
 //! the host's oldest attachments to make room for a new one, and drops one bigger than the
 //! cap. Neither fails the connection: a session whose attachments are not held is recovered
 //! without them.
 //!
-//! The vault drops archived sessions after its retention period. Its hello still gives a
+//! The hub drops archived sessions after its retention period. Its hello still gives a
 //! cursor for each, at the seq it held, so the host does not send it again; it takes the
 //! session back once the host's summary shows it unarchived.
 //!
-//! Re-sending is idempotent: events at seqs the vault already holds are compared with what it
+//! Re-sending is idempotent: events at seqs the hub already holds are compared with what it
 //! holds and, when equal, skipped and acknowledged again. A batch that leaves a gap, or that
-//! holds a different event at a seq the vault already has, changes nothing and is answered
-//! with [`VaultMessage::Rejected`].
+//! holds a different event at a seq the hub already has, changes nothing and is answered
+//! with [`HubMessage::Rejected`].
 //!
-//! The vault never writes to a host's sessions: [`VaultMessage`] carries no events and no
+//! The hub never writes to a host's sessions: [`HubMessage`] carries no events and no
 //! commands, only acknowledgements, errors, answers to the host's secret requests and
-//! requests to open a relay stream, whose bytes the vault cannot read. Only durable journal events and the images
+//! requests to open a relay stream, whose bytes the hub cannot read. Only durable journal events and the images
 //! they name are replicated; deltas, snapshots, terminals and resource usage never are.
 //!
-//! Events travel as stored ([`JournalRecord`]), with the body as raw JSON, so the vault keeps
+//! Events travel as stored ([`JournalRecord`]), with the body as raw JSON, so the hub keeps
 //! event types newer than its own build intact instead of decoding them to
 //! [`EventBody::Unknown`].
 //!
 //! Secrets (see [`crate::SecretInfo`]) travel over the same connection, on the host's request
 //! only: [`HostMessage::ListSecrets`], [`HostMessage::FetchSecrets`] and
 //! [`HostMessage::FetchHostSecrets`], each answered once,
-//! under its `request_id`, in any order relative to acks. The vault answers for the sets
+//! under its `request_id`, in any order relative to acks. The hub answers for the sets
 //! granted to this connection's host, and nothing else.
 //!
-//! The connection also carries the vault's requests for relay streams: a host whose hello sets
-//! `relay` is sent a [`VaultMessage::RelayOpen`] whenever a client asks the vault for a stream
-//! to it, and answers by opening a connection of its own to the vault (see [`crate::relay`]).
+//! The connection also carries the hub's requests for relay streams: a host whose hello sets
+//! `relay` is sent a [`HubMessage::RelayOpen`] whenever a client asks the hub for a stream
+//! to it, and answers by opening a connection of its own to the hub (see [`crate::relay`]).
 //! The stream's bytes never travel on this connection, so a long replay to a client cannot
 //! hold up replication, nor replication a client.
 //!
@@ -78,36 +78,36 @@ use crate::{
 
 /// Replication protocol version, exchanged in both hellos; peers with different versions
 /// disconnect.
-pub const REPLICATION_VERSION: u32 = 1;
+pub const REPLICATION_VERSION: u32 = 2;
 
-/// Most events one [`Batch`] may hold; the vault refuses a larger one as a bad request.
+/// Most events one [`Batch`] may hold; the hub refuses a larger one as a bad request.
 pub const MAX_BATCH_EVENTS: usize = 256;
 
-/// A host-to-vault message.
+/// A host-to-hub message.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostMessage {
     /// First message on every connection.
     Hello(HostHello),
-    /// A session's current state for the fleet index; sent for every session after the vault's
-    /// hello, then whenever any of it changes. Replaces what the vault had for the session.
+    /// A session's current state for the fleet index; sent for every session after the hub's
+    /// hello, then whenever any of it changes. Replaces what the hub had for the session.
     Session(SessionSummary),
     /// Consecutive journal events of one session.
     Batch(Batch),
     /// An image a `user_message` of the next batch names; sent just before that batch.
     Attachment(AttachmentData),
     /// List the secrets in the sets granted to this host, without values; answered with
-    /// [`VaultMessage::SecretList`].
+    /// [`HubMessage::SecretList`].
     ListSecrets {
         /// Chosen by the host to match the answer.
         request_id: u64,
     },
     /// Fetch secrets' values for one of this host's sessions; answered with
-    /// [`VaultMessage::SecretValues`], or [`VaultMessage::SecretsRefused`] when any of them
-    /// cannot be handed out. The vault records each value it hands out.
+    /// [`HubMessage::SecretValues`], or [`HubMessage::SecretsRefused`] when any of them
+    /// cannot be handed out. The hub records each value it hands out.
     FetchSecrets(SecretFetch),
     /// Fetch secrets' values for this host's own use, from the sets granted to it for that;
-    /// answered as [`HostMessage::FetchSecrets`] is. A vault older than this message skips it,
+    /// answered as [`HostMessage::FetchSecrets`] is. A hub older than this message skips it,
     /// so the host hears nothing back.
     FetchHostSecrets(HostSecretFetch),
     /// A message type newer than this build; skip it.
@@ -119,7 +119,7 @@ pub enum HostMessage {
 /// Opening message of a host connection.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HostHello {
-    /// Must equal the vault's [`REPLICATION_VERSION`].
+    /// Must equal the hub's [`REPLICATION_VERSION`].
     pub replication_version: u32,
     /// The host; must be the host this connection's device was paired as.
     pub host_id: HostId,
@@ -127,18 +127,18 @@ pub struct HostHello {
     pub host_name: String,
     /// Build name and version, for logs, e.g. `herder/0.1.0`.
     pub build: String,
-    /// One-time code from the vault's pairing, sent by a host that is not paired yet; ignored
+    /// One-time code from the hub's pairing, sent by a host that is not paired yet; ignored
     /// once it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_code: Option<String>,
-    /// Most bytes of this host's images the vault keeps, oldest evicted first to make room
-    /// for a new one; absent when the host backs up no images, so the vault keeps none it
+    /// Most bytes of this host's images the hub keeps, oldest evicted first to make room
+    /// for a new one; absent when the host backs up no images, so the hub keeps none it
     /// sends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments_cap: Option<u64>,
     /// Whether the host takes relayed connections: it opens a relay stream for every
-    /// [`VaultMessage::RelayOpen`], and serves the client in it as on a direct connection.
-    /// Absent from a host that takes none, which the vault sends no such message.
+    /// [`HubMessage::RelayOpen`], and serves the client in it as on a direct connection.
+    /// Absent from a host that takes none, which the hub sends no such message.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub relay: bool,
 }
@@ -177,7 +177,7 @@ pub struct SessionSummary {
     /// The session's current title; absent until it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Seq of the session's latest event on the host; the vault is caught up once it holds it.
+    /// Seq of the session's latest event on the host; the hub is caught up once it holds it.
     pub head_seq: Seq,
     /// `at` of the session's latest event.
     pub updated_at: Timestamp,
@@ -200,7 +200,7 @@ pub struct Batch {
 pub struct AttachmentData {
     /// Session whose prompt carried it.
     pub session_id: SessionId,
-    /// The image or file as the `user_message` names it. The vault refuses it as a bad request
+    /// The image or file as the `user_message` names it. The hub refuses it as a bad request
     /// unless `size` is the length of `data` and, for an image, `media_type` is one of
     /// [`crate::IMAGE_MEDIA_TYPES`] and `size` at most [`crate::MAX_IMAGE_BYTES`], for a file,
     /// `size` is at most [`crate::MAX_FILE_BYTES`]; or when it holds different bytes under its
@@ -215,7 +215,7 @@ pub struct AttachmentData {
 pub struct SecretFetch {
     /// Chosen by the host to match the answer.
     pub request_id: u64,
-    /// The session of this host the values are for, as the vault's audit records it.
+    /// The session of this host the values are for, as the hub's audit records it.
     pub session_id: SessionId,
     /// The secrets, as the session named them; at least one.
     pub secrets: Vec<SecretRef>,
@@ -226,7 +226,7 @@ pub struct SecretFetch {
 pub struct HostSecretFetch {
     /// Chosen by the host to match the answer.
     pub request_id: u64,
-    /// What the values are for, such as `bot:trip1-team`, as the vault's audit records it;
+    /// What the values are for, such as `bot:trip1-team`, as the hub's audit records it;
     /// refused unless [`crate::is_valid_secret_purpose`] accepts it.
     pub purpose: String,
     /// The secrets, named as a session would name them among the sets granted for host use;
@@ -338,23 +338,23 @@ impl JsonSchema for RawEventBody {
     }
 }
 
-/// A vault-to-host message.
+/// A hub-to-host message.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum VaultMessage {
+pub enum HubMessage {
     /// Answer to the host's hello.
-    Hello(VaultHello),
-    /// Every event of the session up to and including `after_seq` is durable on the vault.
+    Hello(HubHello),
+    /// Every event of the session up to and including `after_seq` is durable on the hub.
     /// Cumulative: a later ack covers every earlier one.
     Ack(Cursor),
-    /// A batch was refused and changed nothing; `cursor` is the last seq the vault holds.
+    /// A batch was refused and changed nothing; `cursor` is the last seq the hub holds.
     Rejected {
-        /// The session and the last seq the vault holds of it.
+        /// The session and the last seq the hub holds of it.
         cursor: Cursor,
         /// Why the batch was refused.
         reason: RejectReason,
     },
-    /// The connection failed, such as a bad hello or a malformed frame; the vault closes it.
+    /// The connection failed, such as a bad hello or a malformed frame; the hub closes it.
     Error {
         /// What went wrong.
         error: ReplicationError,
@@ -382,22 +382,22 @@ pub enum VaultMessage {
         /// Why.
         error: SecretError,
     },
-    /// Every provider login of the vault's CLIProxyAPI, ordered by provider, then label; sent
-    /// right after the hello and whenever one changes, only to a host the vault told where the
-    /// proxy is (`VaultHello.cliproxyapi`). Each is an account on the host, run through the
+    /// Every provider login of the hub's CLIProxyAPI, ordered by provider, then label; sent
+    /// right after the hello and whenever one changes, only to a host the hub told where the
+    /// proxy is (`HubHello.cliproxyapi`). Each is an account on the host, run through the
     /// proxy pinned to it; one not listed any more is no longer an account.
     ProviderLogins {
         /// The logins.
         logins: Vec<crate::ProviderLogin>,
     },
-    /// A client asked the vault for a stream to this host: open a relay connection to the
-    /// vault and say [`crate::RelayHello::Accept`] with this `stream_id`. Sent only to a host
-    /// whose hello set `relay`. The vault waits a few seconds for it, then refuses the client;
+    /// A client asked the hub for a stream to this host: open a relay connection to the
+    /// hub and say [`crate::RelayHello::Accept`] with this `stream_id`. Sent only to a host
+    /// whose hello set `relay`. The hub waits a few seconds for it, then refuses the client;
     /// a host that will not take the stream just does not answer.
     RelayOpen {
-        /// The stream; unique on this vault.
+        /// The stream; unique on this hub.
         stream_id: String,
-        /// The vault's id for the device asking. The host uses it only to cap and log
+        /// The hub's id for the device asking. The host uses it only to cap and log
         /// connections that have not authenticated yet: it knows the device by the
         /// certificate it presents inside the stream, never by this.
         device_id: DeviceId,
@@ -408,45 +408,45 @@ pub enum VaultMessage {
     Unknown,
 }
 
-/// The vault's answer to a host's hello.
+/// The hub's answer to a host's hello.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct VaultHello {
-    /// The vault's [`REPLICATION_VERSION`]; on a mismatch both sides disconnect.
+pub struct HubHello {
+    /// The hub's [`REPLICATION_VERSION`]; on a mismatch both sides disconnect.
     pub replication_version: u32,
     /// Build name and version, for logs, e.g. `herder/0.1.0`.
     pub build: String,
-    /// For every session of this host the vault holds, the last seq it holds durably. A session
-    /// not listed has nothing on the vault yet. The host resumes each session right after its
+    /// For every session of this host the hub holds, the last seq it holds durably. A session
+    /// not listed has nothing on the hub yet. The host resumes each session right after its
     /// cursor here. Empty when the replication versions differ.
     ///
-    /// A cursor beyond the host's own latest seq means the host lost events the vault holds,
+    /// A cursor beyond the host's own latest seq means the host lost events the hub holds,
     /// such as after restoring an older backup; its next events at those seqs would conflict,
     /// so the host does not replicate that session until someone resolves it.
     pub acked: Vec<Cursor>,
-    /// Where this host reaches the vault's CLIProxyAPI, such as `https://cpa.example.com:8317`;
-    /// sent only when the vault runs one and holds this host's client key, the secret
+    /// Where this host reaches the hub's CLIProxyAPI, such as `https://cpa.example.com:8317`;
+    /// sent only when the hub runs one and holds this host's client key, the secret
     /// `CLIPROXYAPI_KEY` granted to the host for its own use. An endpoint account
-    /// with this `endpoint` and that `key_secret` runs on the vault's provider logins.
+    /// with this `endpoint` and that `key_secret` runs on the hub's provider logins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cliproxyapi: Option<String>,
-    /// Whether the vault forwards this host to its CLIProxyAPI over relay connections
-    /// ([`crate::RelayHello::Proxy`]); sent, without `cliproxyapi`, by a vault that runs one,
+    /// Whether the hub forwards this host to its CLIProxyAPI over relay connections
+    /// ([`crate::RelayHello::Proxy`]); sent, without `cliproxyapi`, by a hub that runs one,
     /// holds this host's client key and is configured with no address hosts reach the proxy
     /// at. The host then points its CLIs at a listener of its own on loopback, which forwards
-    /// each connection through the vault, and runs the vault's provider logins as it does with
+    /// each connection through the hub, and runs the hub's provider logins as it does with
     /// `cliproxyapi`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cliproxyapi_relay: bool,
 }
 
-/// Why the vault refused a batch.
+/// Why the hub refused a batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RejectReason {
-    /// The batch starts after the seq following the vault's cursor; re-send from that seq.
+    /// The batch starts after the seq following the hub's cursor; re-send from that seq.
     Gap,
-    /// The batch holds an event at a seq the vault already has, and it differs from what the
-    /// vault has. The host's journal diverged from what it replicated earlier; stop
+    /// The batch holds an event at a seq the hub already has, and it differs from what the
+    /// hub has. The host's journal diverged from what it replicated earlier; stop
     /// replicating the session until someone resolves it.
     Conflict,
 }
@@ -468,6 +468,6 @@ pub enum ReplicationErrorCode {
     BadRequest,
     /// The device is not paired, or the hello names a host it was not paired as.
     Forbidden,
-    /// The vault failed.
+    /// The hub failed.
     Internal,
 }

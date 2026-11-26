@@ -1,4 +1,4 @@
-//! Drives the session manager with the fake adapter, the way clients will through the hub.
+//! Drives the session manager with the fake adapter, the way clients will through the fanout.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -4143,7 +4143,7 @@ async fn an_unreachable_endpoint_account_fails_over_to_a_login_account() {
 }
 
 #[tokio::test]
-async fn an_endpoint_key_the_vault_cannot_be_reached_for_fails_over_to_a_login_account() {
+async fn an_endpoint_key_the_hub_cannot_be_reached_for_fails_over_to_a_login_account() {
     let dir = tempfile::tempdir().unwrap();
     let claude = Scripted::new(&["failover_retry.jsonl"]);
     let mut daemon = Switching::open(
@@ -4153,22 +4153,22 @@ async fn an_endpoint_key_the_vault_cannot_be_reached_for_fails_over_to_a_login_a
         Vec::new(),
     )
     .await;
-    // Linked to a vault that is not connected, with no key in memory.
-    let secrets = Arc::new(herder_daemon::vault::HostSecrets::default());
+    // Linked to a hub that is not connected, with no key in memory.
+    let secrets = Arc::new(herder_daemon::hub::HostSecrets::default());
     secrets.set_linked(true);
     daemon.manager.use_secrets(secrets).unwrap();
     let account = AccountConfig {
         provider: Provider::Claude,
-        label: "Vault".into(),
-        config_dir: Some(dir.path().join("vault")),
+        label: "Hub".into(),
+        config_dir: Some(dir.path().join("hub")),
         fallback: false,
         endpoint: Some(Endpoint {
-            url: "https://vault.example.com:8317".into(),
+            url: "https://hub.example.com:8317".into(),
             key: EndpointKey::Secret("CLIPROXYAPI_KEY".parse().unwrap()),
         }),
     };
-    assert!(daemon.manager.add_account(AccountId::new("vault"), account));
-    let session = daemon.create("vault").await;
+    assert!(daemon.manager.add_account(AccountId::new("hub"), account));
+    let session = daemon.create("hub").await;
     daemon.send(&session, "Refactor the parser.").await;
 
     let journal = daemon.settled(&session, SessionStatus::Idle).await;
@@ -4187,19 +4187,19 @@ async fn an_endpoint_key_the_vault_cannot_be_reached_for_fails_over_to_a_login_a
             "-: status Idle",
         ]
     );
-    // The vault account's CLI never started: it had no key to start with.
+    // The hub account's CLI never started: it had no key to start with.
     let starts = claude.starts();
     let [on_login] = starts.as_slice() else {
         panic!("expected one start, got {starts:?}");
     };
     assert_eq!(on_login.config_dir, Some(dir.path().join("claude-login")));
     let accounts = daemon.manager.accounts();
-    let vault = accounts
+    let hub = accounts
         .iter()
-        .find(|account| account.account_id == AccountId::new("vault"))
+        .find(|account| account.account_id == AccountId::new("hub"))
         .unwrap();
     // Clients see which secret the key is, never a value.
-    assert_eq!(vault.key_secret, Some("CLIPROXYAPI_KEY".parse().unwrap()));
+    assert_eq!(hub.key_secret, Some("CLIPROXYAPI_KEY".parse().unwrap()));
     daemon.shutdown.cancel();
 }
 

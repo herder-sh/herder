@@ -28,7 +28,7 @@ use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, 
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
-use herder_daemon::{Hub, session};
+use herder_daemon::{Fanout, session};
 use herder_protocol::{
     AccountId, AwsDeviceCode, AwsProfile, Bytes, CommandBody, CommandResult, Constraint, Container,
     ContainerState, ErrorCode, Event, EventBody, FailoverSettings, HostId, HostResources, Image,
@@ -91,7 +91,7 @@ struct Daemon {
     tunnel: SocketAddr,
     fingerprint: String,
     auth: Arc<Auth>,
-    hub: Arc<Hub>,
+    fanout: Arc<Fanout>,
 }
 
 impl Daemon {
@@ -121,8 +121,8 @@ impl Daemon {
         runtime.spawn(async move {
             let tls = Tls::load_or_create(&dir.join("tls"), "test-host").unwrap();
             let auth = Arc::new(Auth::open(&dir).unwrap());
-            let hub = Arc::new(Hub::default());
-            hub.set_failover(failover());
+            let fanout = Arc::new(Fanout::default());
+            fanout.set_failover(failover());
             let fake = fake_provider();
             let mut adapters = Adapters::new();
             adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script)));
@@ -141,7 +141,7 @@ impl Daemon {
                 store: Store::open(dir.join("herder.db")).unwrap(),
                 adapters,
                 accounts,
-                sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+                sink: Arc::clone(&fanout) as Arc<dyn session::EventSink>,
                 turn_ids: Box::new(move || {
                     TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
                 }),
@@ -160,7 +160,7 @@ impl Daemon {
                 name: format!("test-{host_id}"),
                 id: host_id,
             };
-            let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
+            let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
             // The login is fake; the account it adds is a real provider's, as the config holds,
             // and the one it logs in again the fake one.
             let logins = Logins::new(
@@ -174,7 +174,7 @@ impl Daemon {
             let server = Server::new(
                 tls,
                 Arc::clone(&auth),
-                Arc::clone(&hub),
+                Arc::clone(&fanout),
                 sessions,
                 terminals,
                 logins,
@@ -189,21 +189,21 @@ impl Daemon {
             };
             server.manage_aws(Aws::from_env(env)).unwrap();
             started
-                .send((addr, tunnel_addr, fingerprint, auth, hub))
+                .send((addr, tunnel_addr, fingerprint, auth, fanout))
                 .ok()
                 .unwrap();
             server
                 .run_tunneled(vec![listener], Some(tunnel), shutdown)
                 .await;
         });
-        let (addr, tunnel, fingerprint, auth, hub) = ready.await.unwrap();
+        let (addr, tunnel, fingerprint, auth, fanout) = ready.await.unwrap();
         Self {
             runtime: Some(runtime),
             addr,
             tunnel,
             fingerprint,
             auth,
-            hub,
+            fanout,
         }
     }
 
@@ -1593,7 +1593,7 @@ async fn host_and_session_resources_stay_current_while_connected() {
     )
     .await;
     // Figures from before the client connects reach it after hello.
-    daemon.hub.host_resources(host_resources(3));
+    daemon.fanout.host_resources(host_resources(3));
     let client = Client::open(
         tmp.path().join("client").display().to_string(),
         "herder-test/0".into(),
@@ -1603,7 +1603,7 @@ async fn host_and_session_resources_stay_current_while_connected() {
     wait_machine(&client, |m| m.resources == Some(host_resources(3))).await;
 
     // Later figures replace them.
-    daemon.hub.host_resources(host_resources(4));
+    daemon.fanout.host_resources(host_resources(4));
     wait_machine(&client, |m| m.resources == Some(host_resources(4))).await;
     let session = SessionId::new("s1");
     let usage = SessionUsage {
@@ -1618,7 +1618,7 @@ async fn host_and_session_resources_stay_current_while_connected() {
             state: ContainerState::Running,
         }],
     };
-    daemon.hub.session_resources(&session, usage.clone());
+    daemon.fanout.session_resources(&session, usage.clone());
     wait_machine(&client, |m| m.session_usage.get(&session) == Some(&usage)).await;
     // A session whose processes and containers are gone leaves the map.
     let idle = SessionUsage {
@@ -1627,11 +1627,11 @@ async fn host_and_session_resources_stay_current_while_connected() {
         processes: 0,
         containers: Vec::new(),
     };
-    daemon.hub.session_resources(&session, idle);
+    daemon.fanout.session_resources(&session, idle);
     wait_machine(&client, |m| m.session_usage.is_empty()).await;
 
     // Live figures go with the connection.
-    daemon.hub.session_resources(&session, usage);
+    daemon.fanout.session_resources(&session, usage);
     wait_machine(&client, |m| !m.session_usage.is_empty()).await;
     daemon.kill().await;
     wait_machine(&client, |m| {
@@ -1660,7 +1660,7 @@ async fn skills_stay_current_while_connected() {
         accounts: Vec::new(),
     };
     // A status from before the client connects reaches it after hello.
-    daemon.hub.skills_status(status("a1"));
+    daemon.fanout.skills_status(status("a1"));
     let client = Client::open(
         tmp.path().join("client").display().to_string(),
         "herder-test/0".into(),
@@ -1668,7 +1668,7 @@ async fn skills_stay_current_while_connected() {
     .unwrap();
     daemon.sign_in(&client, "alice", daemon.addr).await.unwrap();
     wait_machine(&client, |m| m.skills == Some(status("a1"))).await;
-    daemon.hub.skills_status(status("b2"));
+    daemon.fanout.skills_status(status("b2"));
     wait_machine(&client, |m| m.skills == Some(status("b2"))).await;
 
     let session = SessionId::new("s1");
@@ -1678,14 +1678,14 @@ async fn skills_stay_current_while_connected() {
         source: herder_protocol::SkillSource::Library,
         path: None,
     }];
-    daemon.hub.session_skills(&session, skills.clone());
+    daemon.fanout.session_skills(&session, skills.clone());
     wait_machine(&client, |m| m.session_skills.get(&session) == Some(&skills)).await;
     // A session with no skills leaves the map.
-    daemon.hub.session_skills(&session, Vec::new());
+    daemon.fanout.session_skills(&session, Vec::new());
     wait_machine(&client, |m| m.session_skills.is_empty()).await;
 
     // Skills go with the connection.
-    daemon.hub.session_skills(&session, skills);
+    daemon.fanout.session_skills(&session, skills);
     wait_machine(&client, |m| !m.session_skills.is_empty()).await;
     daemon.kill().await;
     wait_machine(&client, |m| {
@@ -2054,7 +2054,7 @@ async fn a_slow_upload_holds_up_neither_reading_nor_a_wake() {
     }
 
     // What the daemon sends now arrives while the prompt is still on its way.
-    daemon.hub.host_resources(host_resources(4));
+    daemon.fanout.host_resources(host_resources(4));
     tokio::select! {
         sent = &mut sending => panic!("the prompt was through too soon to tell: {sent:?}"),
         () = wait_machine(&client, |m| m.resources == Some(host_resources(4))) => {}
@@ -2226,7 +2226,7 @@ async fn a_shared_link_names_every_machine_for_another_device_to_sign_in_to() {
     readdress("host-3", &["192.0.2.3:7447".into(), gone_addr.clone()]);
 
     // The name this device gives a machine is the one it shares.
-    mac.rename(HostId::new("host-2"), "alice's vault".into())
+    mac.rename(HostId::new("host-2"), "alice's hub".into())
         .unwrap();
     wait_host(&mac, "host-1", true).await;
     wait_host(&mac, "host-2", true).await;
@@ -2257,7 +2257,7 @@ async fn a_shared_link_names_every_machine_for_another_device_to_sign_in_to() {
         names,
         [
             Some("test-host-1"),
-            Some("alice's vault"),
+            Some("alice's hub"),
             Some("test-host-3")
         ]
     );
@@ -2899,10 +2899,10 @@ async fn short_drops_mid_stream_are_never_seen() {
         .unwrap()
         .host_id;
     let (kept, gone) = (SessionId::new("kept"), SessionId::new("gone"));
-    daemon.hub.host_resources(host_resources(3));
-    daemon.hub.skills_status(skills_status("a1"));
-    daemon.hub.session_resources(&kept, usage(3));
-    daemon.hub.session_resources(&gone, usage(1));
+    daemon.fanout.host_resources(host_resources(3));
+    daemon.fanout.skills_status(skills_status("a1"));
+    daemon.fanout.session_resources(&kept, usage(3));
+    daemon.fanout.session_resources(&gone, usage(1));
     let session_id = create_session(&client, &host, repo).await;
     let sub = client
         .subscribe_session(host.clone(), session_id.clone())
@@ -2956,7 +2956,7 @@ async fn short_drops_mid_stream_are_never_seen() {
         relay.cut();
         if round == 1 {
             // Only the connection that is gone was told: the next one hears nothing of it.
-            daemon.hub.session_resources(&gone, idle.clone());
+            daemon.fanout.session_resources(&gone, idle.clone());
         }
         wait_machine(&client, |m| m.quality.reconnects == round).await;
         client.synced(host.clone()).await.unwrap();
@@ -3015,7 +3015,7 @@ async fn a_prompt_sent_through_an_outage_is_applied_once() {
         .await
         .unwrap()
         .host_id;
-    daemon.hub.host_resources(host_resources(3));
+    daemon.fanout.host_resources(host_resources(3));
     let session_id = create_session(&client, &host, repo).await;
     let sub = client
         .subscribe_session(host.clone(), session_id.clone())

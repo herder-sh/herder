@@ -1,7 +1,7 @@
 //! Handing a session off between machines: real daemons, with the fake adapter, over TLS on
 //! localhost, each with a clone of one repository. The client relays a session's history from
-//! its machine to another, whether that one has a vault or not. Once the session's machine is
-//! offline, a vault the client reaches relays it, else the destination's vault is the only way.
+//! its machine to another, whether that one has a hub or not. Once the session's machine is
+//! offline, a hub the client reaches relays it, else the destination's hub is the only way.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,15 +12,15 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, StartFuture, StartRequest};
 use herder_client_core::{Client, ConnectionState, Error};
-use herder_daemon::Hub;
+use herder_daemon::Fanout;
 use herder_daemon::auth::authenticator;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
-use herder_daemon::config::{Retention, VaultConfig};
+use herder_daemon::config::{HubConfig, Retention};
+use herder_daemon::hub::{HubStore, LIVENESS_TIMEOUT, Link, LinkSetup};
 use herder_daemon::login::Logins;
 use herder_daemon::projects::{Discovery, OnSessionsChanged, Overrides, ProjectsConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::terminal::Terminals;
-use herder_daemon::vault::{LIVENESS_TIMEOUT, Link, LinkSetup, VaultStore};
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_protocol::{
@@ -137,14 +137,14 @@ struct Daemon {
     shutdown: CancellationToken,
 }
 
-/// Starts a daemon on `<dir>/app`, with project discovery, checkpoints and `vault` as its
-/// `[vault]`; a client signs in as its owner at its entry.
-async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
+/// Starts a daemon on `<dir>/app`, with project discovery, checkpoints and `hub` as its
+/// `[hub]`; a client signs in as its owner at its entry.
+async fn daemon(dir: &Path, id: &str, hub: Option<HubConfig>) -> Daemon {
     let shutdown = CancellationToken::new();
     std::fs::create_dir_all(dir.join("tls")).unwrap();
     let tls = Tls::load_or_create(&dir.join("tls"), id).unwrap();
     let auth = Arc::new(Auth::open(dir).unwrap());
-    let hub = Arc::new(Hub::default());
+    let fanout = Arc::new(Fanout::default());
     let fake = Provider::Other("fake".into());
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../herder-daemon/fixtures/session/fork_a.jsonl");
@@ -167,7 +167,7 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
         adapters,
         accounts,
         sink: Arc::new(OnSessionsChanged {
-            next: Arc::clone(&hub) as Arc<dyn EventSink>,
+            next: Arc::clone(&fanout) as Arc<dyn EventSink>,
             notify: Arc::clone(&sessions_changed),
         }),
         turn_ids: {
@@ -200,7 +200,7 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
                 dir.join("project-icons"),
                 ProjectsConfig::default(),
             )),
-            hub: Arc::clone(&hub),
+            fanout: Arc::clone(&fanout),
             sessions: sessions.clone(),
             sessions_changed,
             data_dir: dir.join("data"),
@@ -218,24 +218,24 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
             secrets: Default::default(),
             local: None,
         },
-        vault,
+        hub,
     )
     .unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let fingerprint = tls.fingerprint().to_owned();
-    let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
+    let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
     let logins = Logins::new(HashMap::new(), dir.join("daemon.toml"), sessions.clone());
     let server = Server::new(
         tls,
         Arc::clone(&auth),
-        hub,
+        fanout,
         sessions,
         terminals,
         logins,
         host,
     );
-    server.link_vault(Arc::new(link)).unwrap();
+    server.link_hub(Arc::new(link)).unwrap();
     tokio::spawn(server.run(vec![listener], shutdown.clone()));
     Daemon {
         entry: Entry {
@@ -248,37 +248,37 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
     }
 }
 
-/// A vault nothing answers at.
-fn dead_vault() -> VaultConfig {
+/// A hub nothing answers at.
+fn dead_hub() -> HubConfig {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     drop(listener);
-    VaultConfig::new(address, "00".repeat(32), None)
+    HubConfig::new(address, "00".repeat(32), None)
 }
 
-/// A running vault that backs up images.
-struct Vault {
+/// A running hub that backs up images.
+struct Hub {
     entry: Entry,
-    config: VaultConfig,
+    config: HubConfig,
     auth: Arc<Auth>,
     shutdown: CancellationToken,
 }
 
-impl Vault {
-    /// Starts a vault on `dir`; a client signs in as its owner at its entry.
+impl Hub {
+    /// Starts a hub on `dir`; a client signs in as its owner at its entry.
     async fn start(dir: &Path) -> Self {
         std::fs::create_dir_all(dir.join("tls")).unwrap();
-        let tls = Tls::load_or_create(&dir.join("tls"), "vault").unwrap();
+        let tls = Tls::load_or_create(&dir.join("tls"), "hub").unwrap();
         let auth = Arc::new(Auth::open(dir).unwrap());
-        let store = VaultStore::open(dir.join("vault.db")).unwrap();
+        let store = HubStore::open(dir.join("hub.db")).unwrap();
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let fingerprint = tls.fingerprint().to_owned();
         let host = Host {
-            id: HostId::new("vault"),
-            name: "vault".into(),
+            id: HostId::new("hub"),
+            name: "hub".into(),
         };
-        let server = herder_daemon::vault::Server::new(
+        let server = herder_daemon::hub::Server::new(
             tls,
             Arc::clone(&auth),
             store,
@@ -294,9 +294,9 @@ impl Vault {
             hosts: vec![addr.clone()],
             fingerprint: fingerprint.clone(),
         };
-        let config = VaultConfig {
+        let config = HubConfig {
             attachments: true,
-            ..VaultConfig::new(addr, fingerprint, None)
+            ..HubConfig::new(addr, fingerprint, None)
         };
         Self {
             entry,
@@ -307,9 +307,9 @@ impl Vault {
     }
 
     /// Where `host` replicates to, as the host-only device a host linked from a client is:
-    /// the vault refuses it reads of other hosts' sessions.
-    fn host_config(&self, host: &str) -> VaultConfig {
-        VaultConfig {
+    /// the hub refuses it reads of other hosts' sessions.
+    fn host_config(&self, host: &str) -> HubConfig {
+        HubConfig {
             pairing_code: Some(self.auth.mint_host(host, PAIRING_TTL).unwrap().code),
             ..self.config.clone()
         }
@@ -362,10 +362,10 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
     let tmp = tempfile::tempdir().unwrap();
     let dirs = ["a", "b", "c"].map(|name| tmp.path().join(name));
     let origin = clones(tmp.path(), &[&dirs[0], &dirs[1], &dirs[2]]);
-    // A runs the session, B has no vault, and C's vault does not answer.
+    // A runs the session, B has no hub, and C's hub does not answer.
     let a = daemon(&dirs[0], "host-a", None).await;
     let b = daemon(&dirs[1], "host-b", None).await;
-    let c = daemon(&dirs[2], "host-c", Some(dead_vault())).await;
+    let c = daemon(&dirs[2], "host-c", Some(dead_hub())).await;
     let client = Client::open(
         tmp.path().join("client").display().to_string(),
         "herder-tui/test".into(),
@@ -419,7 +419,7 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
     }
     let a_journal = journal(&client, "host-a", &session_id).await;
 
-    // A is up: B, without a vault, and C, with one, both take the history relayed from A.
+    // A is up: B, without a hub, and C, with one, both take the history relayed from A.
     for destination in ["host-b", "host-c"] {
         let forked = client
             .fork_session(
@@ -500,7 +500,7 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
     );
 
     // A goes offline: no machine the client reaches holds the session, and neither B nor C
-    // reads it from a vault of its own.
+    // reads it from a hub of its own.
     a.shutdown.cancel();
     until(&client, "host-a is offline", |machines| {
         !matches!(machines[0].connection, ConnectionState::Connected)
@@ -523,7 +523,7 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
         assert_eq!(
             info.message,
             "host-a is offline, and no other machine you are signed in to holds the session; \
-             sign in to its vault to fork it from there"
+             sign in to its hub to fork it from there"
         );
     }
     b.shutdown.cancel();
@@ -531,20 +531,20 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_session_of_an_offline_machine_hands_off_through_a_vault_the_client_reaches() {
+async fn a_session_of_an_offline_machine_hands_off_through_a_hub_the_client_reaches() {
     let tmp = tempfile::tempdir().unwrap();
     let dirs = ["a", "b"].map(|name| tmp.path().join(name));
     clones(tmp.path(), &[&dirs[0], &dirs[1]]);
-    // A and B replicate to the vault as host-only devices: neither reads the other there.
-    let vault = Vault::start(&tmp.path().join("vault")).await;
-    let a = daemon(&dirs[0], "host-a", Some(vault.host_config("host-a"))).await;
-    let b = daemon(&dirs[1], "host-b", Some(vault.host_config("host-b"))).await;
+    // A and B replicate to the hub as host-only devices: neither reads the other there.
+    let hub = Hub::start(&tmp.path().join("hub")).await;
+    let a = daemon(&dirs[0], "host-a", Some(hub.host_config("host-a"))).await;
+    let b = daemon(&dirs[1], "host-b", Some(hub.host_config("host-b"))).await;
     let client = Client::open(
         tmp.path().join("client").display().to_string(),
         "herder-tui/test".into(),
     )
     .unwrap();
-    for entry in [&a.entry, &b.entry, &vault.entry] {
+    for entry in [&a.entry, &b.entry, &hub.entry] {
         entry.sign_in(&client).await;
     }
     let session_id = create(&client, "host-a", &a.repo).await;
@@ -556,7 +556,7 @@ async fn a_session_of_an_offline_machine_hands_off_through_a_vault_the_client_re
     })
     .await;
 
-    // A turn with an image, backed up to the vault.
+    // A turn with an image, backed up to the hub.
     let image = Image {
         media_type: "image/png".into(),
         data: Bytes(b"\x89PNG\r\n\x1a\nscreenshot".to_vec()),
@@ -581,7 +581,7 @@ async fn a_session_of_an_offline_machine_hands_off_through_a_vault_the_client_re
     .await;
     let a_journal = journal(&client, "host-a", &session_id).await;
     let head_seq = a_journal.last().unwrap().seq;
-    until(&client, "the vault has the whole session", |machines| {
+    until(&client, "the hub has the whole session", |machines| {
         machines[2].sessions.iter().any(|s| {
             s.session_id == session_id
                 && s.host_id == Some(HostId::new("host-a"))
@@ -610,18 +610,18 @@ async fn a_session_of_an_offline_machine_hands_off_through_a_vault_the_client_re
     };
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     while client
-        .send(HostId::new("vault"), get_image.clone())
+        .send(HostId::new("hub"), get_image.clone())
         .await
         .is_err()
     {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the image never reached the vault"
+            "the image never reached the hub"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    // A goes offline: the client relays the session from the vault to B.
+    // A goes offline: the client relays the session from the hub to B.
     a.shutdown.cancel();
     until(&client, "host-a is offline", |machines| {
         !matches!(machines[0].connection, ConnectionState::Connected)
@@ -671,5 +671,5 @@ async fn a_session_of_an_offline_machine_hands_off_through_a_vault_the_client_re
         }
     );
     b.shutdown.cancel();
-    vault.shutdown.cancel();
+    hub.shutdown.cancel();
 }

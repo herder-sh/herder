@@ -26,9 +26,9 @@
 //! seconds it rides a drop out for: [`World::trouble`] says for each trouble when it may
 //! show, and why.
 //!
-//! The same holds on the route through a vault ([`World::relayed`]): the app reaches the
-//! vault over one such network and the daemon reaches the vault over another, so a drop can
-//! hit the app's leg, the host's leg, or both at once, as a vault that restarts does.
+//! The same holds on the route through a hub ([`World::relayed`]): the app reaches the
+//! hub over one such network and the daemon reaches the hub over another, so a drop can
+//! hit the app's leg, the host's leg, or both at once, as a hub that restarts does.
 //!
 //! The soak is driven by a seed, printed first with every trouble and every connection state
 //! the machine showed: `HERDER_SOAK_SEEDS=7,8 HERDER_SOAK_SECONDS=3600 cargo test -p
@@ -47,14 +47,14 @@ use herder_adapters::fake::FakeAdapter;
 use herder_client_core::{Client, ConnectionState, Machine, SessionSubscription};
 use herder_daemon::auth::{Auth, PAIRING_TTL, authenticator};
 use herder_daemon::aws::Aws;
-use herder_daemon::config::{Retention, VaultConfig};
+use herder_daemon::config::{HubConfig, Retention};
+use herder_daemon::hub::{self, HostSecrets, HubStore, LIVENESS_TIMEOUT, Replicator};
 use herder_daemon::login::Logins;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
 use herder_daemon::terminal::Terminals;
-use herder_daemon::vault::{self, HostSecrets, LIVENESS_TIMEOUT, Replicator, VaultStore};
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
-use herder_daemon::{Hub, session};
+use herder_daemon::{Fanout, session};
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, Event, EventBody, FailoverSettings, FleetHost, HostId,
     HostResources, ItemBody, ItemId, PermissionMode, Project, ProjectId, Provider, SessionId,
@@ -392,21 +392,21 @@ struct Daemon {
     addr: SocketAddr,
     fingerprint: String,
     auth: Arc<Auth>,
-    hub: Arc<Hub>,
+    fanout: Arc<Fanout>,
     shutdown: CancellationToken,
     serving: tokio::task::JoinHandle<()>,
 }
 
 impl Daemon {
     /// Starts a daemon on `dir` whose sessions run `script`; its turns are `turn-1`, `turn-2`
-    /// and so on. Linked to `vault`, it takes the connections that vault relays; it backs
+    /// and so on. Linked to `hub`, it takes the connections that hub relays; it backs
     /// nothing up there.
-    async fn start(dir: &Path, script: PathBuf, vault: Option<VaultConfig>) -> Self {
+    async fn start(dir: &Path, script: PathBuf, hub: Option<HubConfig>) -> Self {
         std::fs::create_dir_all(dir.join("tls")).unwrap();
         let tls = Tls::load_or_create(&dir.join("tls"), "test-host").unwrap();
         let auth = Arc::new(Auth::open(dir).unwrap());
-        let hub = Arc::new(Hub::default());
-        hub.set_failover(FailoverSettings { pin: true });
+        let fanout = Arc::new(Fanout::default());
+        fanout.set_failover(FailoverSettings { pin: true });
         let fake = Provider::Other("fake".into());
         let mut adapters = Adapters::new();
         adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script)));
@@ -426,7 +426,7 @@ impl Daemon {
             store: Store::open(dir.join("herder.db")).unwrap(),
             adapters,
             accounts,
-            sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+            sink: Arc::clone(&fanout) as Arc<dyn session::EventSink>,
             turn_ids: Box::new(move || {
                 TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
             }),
@@ -443,23 +443,23 @@ impl Daemon {
             name: "test-host-1".into(),
             id: HostId::new("host-1"),
         };
-        let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
+        let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
         let logins = Logins::new(HashMap::new(), dir.join("daemon.toml"), sessions.clone());
         let server = Server::new(
             tls,
             Arc::clone(&auth),
-            Arc::clone(&hub),
+            Arc::clone(&fanout),
             sessions.clone(),
             terminals,
             logins,
             host.clone(),
         );
         server.manage_aws(Aws::from_env(|_| None)).unwrap();
-        if let Some(vault) = vault {
+        if let Some(hub) = hub {
             let relayed = Arc::new(OnceLock::new());
             assert!(relayed.set(server.relayed(shutdown.clone())).is_ok());
             let replicator = Replicator {
-                vault,
+                hub,
                 device: Replicator::device_key(dir).unwrap(),
                 host,
                 sessions,
@@ -475,35 +475,35 @@ impl Daemon {
             addr,
             fingerprint,
             auth,
-            hub,
+            fanout,
             shutdown,
             serving,
         }
     }
 }
 
-/// A vault on the test's own runtime, which the daemon links to and the app reaches the
+/// A hub on the test's own runtime, which the daemon links to and the app reaches the
 /// daemon through.
-struct Vault {
+struct Hub {
     addr: SocketAddr,
     fingerprint: String,
     auth: Arc<Auth>,
 }
 
-impl Vault {
+impl Hub {
     async fn start(dir: &Path) -> Self {
         std::fs::create_dir_all(dir.join("tls")).unwrap();
-        let tls = Tls::load_or_create(&dir.join("tls"), "test-vault").unwrap();
+        let tls = Tls::load_or_create(&dir.join("tls"), "test-hub").unwrap();
         let auth = Arc::new(Auth::open(dir).unwrap());
-        let store = VaultStore::open(dir.join("vault.db")).unwrap();
+        let store = HubStore::open(dir.join("hub.db")).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let fingerprint = tls.fingerprint().to_owned();
         let host = Host {
-            name: "test-vault".into(),
-            id: HostId::new("vault-1"),
+            name: "test-hub".into(),
+            id: HostId::new("hub-1"),
         };
-        let server = vault::Server::new(
+        let server = hub::Server::new(
             tls,
             Arc::clone(&auth),
             store,
@@ -867,9 +867,9 @@ enum Trouble {
 struct World {
     tmp: tempfile::TempDir,
     daemon: Daemon,
-    /// The network the app reaches the daemon over; in a relayed world, the vault.
+    /// The network the app reaches the daemon over; in a relayed world, the hub.
     net: Arc<Net>,
-    /// In a relayed world, the network the daemon reaches the vault over.
+    /// In a relayed world, the network the daemon reaches the hub over.
     host_net: Option<Arc<Net>>,
     /// The connections made while the world was set up.
     setup: u64,
@@ -906,8 +906,8 @@ impl World {
         Self::start_on(seed, turns, big, false).await
     }
 
-    /// [`World::start`], with the app reaching the daemon through a vault only: the app's
-    /// network leads to the vault, and the daemon reaches the vault over a network of its
+    /// [`World::start`], with the app reaching the daemon through a hub only: the app's
+    /// network leads to the hub, and the daemon reaches the hub over a network of its
     /// own, [`World::host_net`].
     async fn relayed(seed: u64, turns: u64) -> Self {
         Self::start_on(seed, turns, None, true).await
@@ -923,26 +923,22 @@ impl World {
         };
         let (app, truth) = (open("app"), open("truth"));
         let (daemon, net, host_net, host) = if relayed {
-            let vault = Vault::start(&tmp.path().join("vault")).await;
-            let host_net = Net::start(vault.addr, seed ^ 0x4057).await;
-            let code = vault
-                .auth
-                .mint_host("test-host-1", PAIRING_TTL)
-                .unwrap()
-                .code;
-            let link = VaultConfig {
+            let hub = Hub::start(&tmp.path().join("hub")).await;
+            let host_net = Net::start(hub.addr, seed ^ 0x4057).await;
+            let code = hub.auth.mint_host("test-host-1", PAIRING_TTL).unwrap().code;
+            let link = HubConfig {
                 backup: false,
                 secrets: false,
-                ..VaultConfig::new(
+                ..HubConfig::new(
                     host_net.addrs[0].to_string(),
-                    vault.fingerprint.clone(),
+                    hub.fingerprint.clone(),
                     Some(code),
                 )
             };
             let daemon = Daemon::start(&tmp.path().join("daemon"), script, Some(link)).await;
-            let net = Net::start(vault.addr, seed).await;
-            // The app signs in to the daemon where it is, then to the vault over its
-            // network, and from then on reaches the daemon through the vault only.
+            let net = Net::start(hub.addr, seed).await;
+            // The app signs in to the daemon where it is, then to the hub over its
+            // network, and from then on reaches the daemon through the hub only.
             let direct = vec![daemon.addr.to_string()];
             let host =
                 authenticator::sign_in(&daemon.auth, &app, direct, &daemon.fingerprint, "alice")
@@ -950,12 +946,12 @@ impl World {
                     .unwrap()
                     .host_id;
             let through = net.addrs.iter().map(ToString::to_string).collect();
-            let vault_id =
-                authenticator::sign_in(&vault.auth, &app, through, &vault.fingerprint, "alice")
+            let hub_id =
+                authenticator::sign_in(&hub.auth, &app, through, &hub.fingerprint, "alice")
                     .await
                     .unwrap()
                     .host_id;
-            let route = format!("vault://{vault_id}");
+            let route = format!("hub://{hub_id}");
             let routed = |m: &Machine| m.host_id == host && m.addresses.contains(&route);
             while !app.machines().iter().any(routed) {
                 tokio::time::sleep(ms(20)).await;
@@ -984,10 +980,10 @@ impl World {
         authenticator::sign_in(&daemon.auth, &truth, direct, &daemon.fingerprint, "alice")
             .await
             .unwrap();
-        daemon.hub.host_resources(host_resources());
-        // What a vault and discovery would list. The providers stay empty: a daemon lists
+        daemon.fanout.host_resources(host_resources());
+        // What a hub and discovery would list. The providers stay empty: a daemon lists
         // those it probed, and this one probes none.
-        daemon.hub.hosts_changed(vec![FleetHost {
+        daemon.fanout.hosts_changed(vec![FleetHost {
             host_id: host.clone(),
             host_name: "test-host-1".into(),
             online: true,
@@ -995,7 +991,7 @@ impl World {
             usage: None,
             relay: false,
         }]);
-        daemon.hub.projects_changed(vec![Project {
+        daemon.fanout.projects_changed(vec![Project {
             project_id: ProjectId::new("github.com/org/repo"),
             name: "repo".into(),
             paths: vec!["/src/repo".into()],
@@ -1175,9 +1171,9 @@ impl World {
         }
     }
 
-    /// Kills every connection of the daemon to the vault, in a relayed world: the one it
+    /// Kills every connection of the daemon to the hub, in a relayed world: the one it
     /// replicates over and the streams it carries for the app, which the app replaces with a
-    /// race of the vault's two addresses once the daemon is back at the vault.
+    /// race of the hub's two addresses once the daemon is back at the hub.
     fn kill_host_leg(&mut self, kill: Kill) {
         eprintln!("{:9.3} s: on the daemon's leg, Kill({kill:?})", self.at());
         self.lost();
@@ -1388,8 +1384,8 @@ impl World {
             self.seen.shows(),
             self.may_show
         );
-        // Through a vault the app keeps two connections, to the vault and through it to the
-        // daemon, and each is replaced with a race of the vault's two addresses.
+        // Through a hub the app keeps two connections, to the hub and through it to the
+        // daemon, and each is replaced with a race of the hub's two addresses.
         let allowed = match self.host_net {
             Some(_) => self.setup + (self.allowed - self.setup) * 2,
             None => self.allowed,
@@ -1865,11 +1861,11 @@ fn soak_from_env() {
     }
 }
 
-/// Through a vault, short drops in the middle of streaming turns: on the app's leg to the
-/// vault, on the daemon's leg to it, and on both at once, as a vault that restarts drops
+/// Through a hub, short drops in the middle of streaming turns: on the app's leg to the
+/// hub, on the daemon's leg to it, and on both at once, as a hub that restarts drops
 /// them. The app shows none of them, and nothing is lost or seen twice.
 #[test]
-fn short_drops_on_either_leg_of_the_vault_route_are_never_seen() {
+fn short_drops_on_either_leg_of_the_hub_route_are_never_seen() {
     run(async {
         let mut world = World::relayed(21, 100).await;
         world.spawn_user(21, 100);
@@ -1884,13 +1880,13 @@ fn short_drops_on_either_leg_of_the_vault_route_are_never_seen() {
             world.unnoticed = Instant::now();
             world.nothing_wrong();
         };
-        // The app's leg: the stream dies with its connection to the vault.
+        // The app's leg: the stream dies with its connection to the hub.
         for kill in [Kill::Fin, Kill::Torn, Kill::Reset, Kill::Silent] {
             tokio::time::sleep(secs(32)).await;
             world.trouble(Trouble::Kill(kill)).await;
             mended(&mut world).await;
         }
-        // The daemon's leg: its replication connection dies with the stream, and the vault
+        // The daemon's leg: its replication connection dies with the stream, and the hub
         // gives the daemon a moment to come back before it turns the app away.
         for kill in [Kill::Fin, Kill::Reset, Kill::Torn] {
             tokio::time::sleep(secs(32)).await;
@@ -1907,7 +1903,7 @@ fn short_drops_on_either_leg_of_the_vault_route_are_never_seen() {
         // connection is kept.
         let host_net = Arc::clone(world.host_net.as_ref().unwrap());
         // Once the attempts that lost the last race, and the app's own connection to the
-        // vault, are through.
+        // hub, are through.
         tokio::time::sleep(secs(8)).await;
         let before = (world.net.accepted(), host_net.accepted());
         for freeze in [500, 2500, 1500] {
@@ -1924,11 +1920,11 @@ fn short_drops_on_either_leg_of_the_vault_route_are_never_seen() {
     });
 }
 
-/// Through a vault, the vault's network is gone for the app for longer than a drop that is
+/// Through a hub, the hub's network is gone for the app for longer than a drop that is
 /// ridden out: the machine shows it once, keeps its lists, and is back within the bound a
 /// direct connection is.
 #[test]
-fn a_long_outage_of_the_vault_route_shows_once_and_recovers() {
+fn a_long_outage_of_the_hub_route_shows_once_and_recovers() {
     run(async {
         let mut world = World::relayed(22, 40).await;
         world.spawn_user(22, 40);
@@ -1948,19 +1944,19 @@ fn a_long_outage_of_the_vault_route_shows_once_and_recovers() {
     });
 }
 
-/// Through a vault, the daemon's link to the vault dies without a word: no FIN, as when the
+/// Through a hub, the daemon's link to the hub dies without a word: no FIN, as when the
 /// daemon's machine changes networks. The app finds its stream dead within 15 s, but the
-/// vault can only reach the daemon again once the daemon has found its own connection dead,
+/// hub can only reach the daemon again once the daemon has found its own connection dead,
 /// which its keepalive does within 80 s. The machine shows that once, and is back.
 #[test]
-fn a_daemons_link_to_the_vault_that_dies_silently_shows_once_and_recovers() {
+fn a_daemons_link_to_the_hub_that_dies_silently_shows_once_and_recovers() {
     run(async {
         let mut world = World::relayed(23, 4).await;
         tokio::time::sleep(secs(2)).await;
         let now = Instant::now();
         world.excuse(now, now + secs(140));
         world.kill_host_leg(Kill::Silent);
-        // Every attempt meanwhile is a race of the vault's two addresses.
+        // Every attempt meanwhile is a race of the hub's two addresses.
         world.allowed += 30;
         tokio::time::sleep(secs(25)).await;
         let machine = world.machine();

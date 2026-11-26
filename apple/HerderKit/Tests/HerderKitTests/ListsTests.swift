@@ -19,7 +19,7 @@ func machine(
                         threads: [])
         },
         hosts: hosts, projects: projects, accounts: accounts, failover: FailoverSettings(pin: false),
-        providers: providers, terminals: [], resources: nil, sessionUsage: [:], vault: nil)
+        providers: providers, terminals: [], resources: nil, sessionUsage: [:], hub: nil)
 }
 
 struct ListsTests {
@@ -246,13 +246,13 @@ struct ListsTests {
         #expect(!Draft(hostId: "host-a", repo: "/src/app").isChat)
     }
 
-    @Test func aVaultSessionShowsItsHostAndWhetherItIsOffline() {
-        var script = Script("01A", host: "vault")
-        var vault = machine("vault", name: "vault", sessions: ["01A"], hosts: [
+    @Test func aHubSessionShowsItsHostAndWhetherItIsOffline() {
+        var script = Script("01A", host: "hub")
+        var hub = machine("hub", name: "hub", sessions: ["01A"], hosts: [
             FleetHost(hostId: "h1", hostName: "builder", online: false, lastSeen: "2026-01-01T00:00:00Z"),
         ])
-        vault.sessions[0].hostId = "h1"
-        let lists = Lists(machines: [vault], sessions: [script.key: script.model([created()])])
+        hub.sessions[0].hostId = "h1"
+        let lists = Lists(machines: [hub], sessions: [script.key: script.model([created()])])
         let row = lists.projects.flatMap(\.sessions).first
         #expect(row?.machine == "builder")
         #expect(row?.machineOffline == true)
@@ -408,25 +408,25 @@ struct FleetListsTests {
         #expect(!others.value)
     }
 
-    /// `devbox` runs `01A` and `01B`; the vault replicates both, and `01C` of a host not paired here.
-    @Test func aSessionAVaultReplicatesIsListedOnceFromItsLiveHost() {
+    /// `devbox` runs `01A` and `01B`; the hub replicates both, and `01C` of a host not paired here.
+    @Test func aSessionAHubReplicatesIsListedOnceFromItsLiveHost() {
         var devbox = machine("devbox", name: "devbox", sessions: ["01A", "01B"])
-        var vault = machine("vault", name: "vault", sessions: ["01A", "01B", "01C"], hosts: [
+        var hub = machine("hub", name: "hub", sessions: ["01A", "01B", "01C"], hosts: [
             FleetHost(hostId: "devbox", hostName: "devbox", online: true, lastSeen: ""),
             FleetHost(hostId: "laptop", hostName: "laptop", online: true, lastSeen: ""),
         ])
-        for (index, host) in ["devbox", "devbox", "laptop"].enumerated() { vault.sessions[index].hostId = host }
+        for (index, host) in ["devbox", "devbox", "laptop"].enumerated() { hub.sessions[index].hostId = host }
         func listed() -> [String] {
-            Lists(machines: [devbox, vault], sessions: [:]).projects.flatMap(\.sessions).map { "\($0.key.hostId)/\($0.key.sessionId)" }.sorted()
+            Lists(machines: [devbox, hub], sessions: [:]).projects.flatMap(\.sessions).map { "\($0.key.hostId)/\($0.key.sessionId)" }.sorted()
         }
 
-        // The live copies, and the vault's copy of what only the vault reaches.
-        #expect(Lists.shadowed([devbox, vault]) == [SessionKey(hostId: "vault", sessionId: "01A"),
-                                                     SessionKey(hostId: "vault", sessionId: "01B")])
-        #expect(listed() == ["devbox/01A", "devbox/01B", "vault/01C"])
+        // The live copies, and the hub's copy of what only the hub reaches.
+        #expect(Lists.shadowed([devbox, hub]) == [SessionKey(hostId: "hub", sessionId: "01A"),
+                                                     SessionKey(hostId: "hub", sessionId: "01B")])
+        #expect(listed() == ["devbox/01A", "devbox/01B", "hub/01C"])
 
-        // devbox drops: the vault's read-only copies stand in for its sessions.
+        // devbox drops: the hub's read-only copies stand in for its sessions.
         devbox.connection = .disconnected(error: "gone")
-        #expect(listed() == ["vault/01A", "vault/01B", "vault/01C"])
+        #expect(listed() == ["hub/01A", "hub/01B", "hub/01C"])
     }
 }

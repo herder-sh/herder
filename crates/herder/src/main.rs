@@ -4,13 +4,13 @@ mod dev;
 mod doctor;
 mod fork;
 mod hook;
+mod hub;
 mod login;
 mod pair;
 mod secret;
 mod service;
 mod session;
 mod update;
-mod vault;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -35,11 +35,11 @@ enum Command {
         /// Config file [default: $XDG_CONFIG_HOME/herder/daemon.toml].
         #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
         config: Option<PathBuf>,
-        /// Run as the vault, keeping the sessions hosts replicate to it, as `mode = "vault"`.
+        /// Run as the hub, keeping the sessions hosts replicate to it, as `mode = "hub"`.
         #[arg(long)]
-        vault: bool,
+        hub: bool,
     },
-    /// Pair a host with the vault running on this machine, or list and revoke devices.
+    /// Pair a host with the hub running on this machine, or list and revoke devices.
     Pair(pair::Args),
     /// Give the daemon on this machine a new owner, from the herder app or `herder login`,
     /// though it has one: for someone who lost every device.
@@ -55,15 +55,15 @@ enum Command {
     Session(session::Args),
     /// Fork a session onto this host: its history goes on in a new session here.
     Fork(fork::Args),
-    /// Use the secrets this host's vault grants it, from a session herder runs.
+    /// Use the secrets this host's hub grants it, from a session herder runs.
     Secret {
         #[command(subcommand)]
         command: secret::Command,
     },
-    /// Run a vault on this machine, next to the daemon, and look after what it holds.
-    Vault {
+    /// Run a hub on this machine, next to the daemon, and look after what it holds.
+    Hub {
         #[command(subcommand)]
-        command: vault::Command,
+        command: hub::Command,
     },
     /// Manage the service that runs the daemon at boot: systemd on Linux, launchd on macOS.
     Service {
@@ -126,16 +126,14 @@ fn main() -> ExitCode {
         }
     };
     let result = match cli.command {
-        Some(Command::Daemon { config, vault }) => {
-            daemon(config, vault).map(|()| ExitCode::SUCCESS)
-        }
+        Some(Command::Daemon { config, hub }) => daemon(config, hub).map(|()| ExitCode::SUCCESS),
         Some(Command::Pair(args)) => pair::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Claim { config }) => pair::claim(config).map(|()| ExitCode::SUCCESS),
         Some(Command::Login(args)) => login::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Session(args)) => session::run(args),
         Some(Command::Fork(args)) => fork::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Secret { command }) => secret::run(command).map(|()| ExitCode::SUCCESS),
-        Some(Command::Vault { command }) => vault::run(command).map(|()| ExitCode::SUCCESS),
+        Some(Command::Hub { command }) => hub::run(command).map(|()| ExitCode::SUCCESS),
         Some(Command::Service { action }) => service::run(action),
         Some(Command::Doctor { config }) => Ok(doctor::run(config)),
         Some(Command::Update {
@@ -162,17 +160,17 @@ fn main() -> ExitCode {
     })
 }
 
-fn daemon(config: Option<PathBuf>, vault: bool) -> anyhow::Result<()> {
+fn daemon(config: Option<PathBuf>, hub: bool) -> anyhow::Result<()> {
     let mut config = herder_daemon::Config::load(config.as_deref())?;
-    if vault {
+    if hub {
         anyhow::ensure!(
-            config.vault.is_none(),
-            "a vault does not replicate to another vault; remove the [vault] table"
+            config.hub.is_none(),
+            "a hub does not replicate to another hub; remove the [hub] table"
         );
-        config.mode = herder_daemon::config::Mode::Vault;
+        config.mode = herder_daemon::config::Mode::Hub;
     }
-    let own = if vault {
-        vault::installed_service()
+    let own = if hub {
+        hub::installed_service()
     } else {
         Some(herder_daemon::service::Service::daemon())
     };
@@ -191,7 +189,7 @@ fn daemon(config: Option<PathBuf>, vault: bool) -> anyhow::Result<()> {
         herder_daemon::Exit::Stopped => Ok(()),
         herder_daemon::Exit::Restart => restart(),
         herder_daemon::Exit::Updated => {
-            if let Some(sibling) = sibling(vault)
+            if let Some(sibling) = sibling(hub)
                 && let Err(err) = herder_daemon::service::restart(&sibling)
             {
                 eprintln!("herder: restarting the {}: {err:#}", sibling.name);
@@ -202,13 +200,13 @@ fn daemon(config: Option<PathBuf>, vault: bool) -> anyhow::Result<()> {
 }
 
 /// The service next to this daemon that an update restarts with it, as `herder update` does,
-/// so a daemon and its vault run the same version: an installed vault's next to a daemon, the
-/// running daemon's next to a vault.
-fn sibling(vault: bool) -> Option<herder_daemon::service::Service> {
-    if vault {
+/// so a daemon and its hub run the same version: an installed hub's next to a daemon, the
+/// running daemon's next to a hub.
+fn sibling(hub: bool) -> Option<herder_daemon::service::Service> {
+    if hub {
         herder_daemon::service::is_active().then(herder_daemon::service::Service::daemon)
     } else {
-        vault::installed_service()
+        hub::installed_service()
     }
 }
 
@@ -265,32 +263,32 @@ mod tests {
     }
 
     #[test]
-    fn parses_vault_flag() {
-        let cli = Cli::try_parse_from(["herder", "daemon", "--vault"]).unwrap();
+    fn parses_hub_flag() {
+        let cli = Cli::try_parse_from(["herder", "daemon", "--hub"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::Daemon { vault: true, .. })
+            Some(Command::Daemon { hub: true, .. })
         ));
     }
 
     #[test]
-    fn parses_vault_forget_host() {
-        let cli = Cli::try_parse_from(["herder", "vault", "forget-host", "old-box"]);
-        assert!(matches!(cli.unwrap().command, Some(Command::Vault { .. })));
-        assert!(Cli::try_parse_from(["herder", "vault", "forget-host"]).is_err());
+    fn parses_hub_forget_host() {
+        let cli = Cli::try_parse_from(["herder", "hub", "forget-host", "old-box"]);
+        assert!(matches!(cli.unwrap().command, Some(Command::Hub { .. })));
+        assert!(Cli::try_parse_from(["herder", "hub", "forget-host"]).is_err());
     }
 
     #[test]
-    fn parses_vault_install_and_uninstall() {
+    fn parses_hub_install_and_uninstall() {
         for args in [
-            &["herder", "vault", "install"][..],
-            &["herder", "vault", "install", "--port", "7500"],
-            &["herder", "vault", "uninstall"],
-            &["herder", "vault", "uninstall", "--purge"],
+            &["herder", "hub", "install"][..],
+            &["herder", "hub", "install", "--port", "7500"],
+            &["herder", "hub", "uninstall"],
+            &["herder", "hub", "uninstall", "--purge"],
         ] {
             assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
         }
-        assert!(Cli::try_parse_from(["herder", "vault", "install", "--port", "x"]).is_err());
+        assert!(Cli::try_parse_from(["herder", "hub", "install", "--port", "x"]).is_err());
     }
 
     #[test]

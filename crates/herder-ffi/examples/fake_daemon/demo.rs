@@ -31,7 +31,7 @@
 //!
 //! The user, Tomas, owns `devbox` and `studio` and is a member on `laptop`, which Pat and Kim
 //! own. Their teammates Sam and Kim are people on the machines too ([`TEAMMATES`]).
-//! `devbox` backs up to a vault, `vault`, which the user owns too.
+//! `devbox` backs up to a hub, `hub`, which the user owns too.
 //!
 //! [`Demo::start`] returns once all of it is in place, with the link a device signed in to every
 //! machine shares, as `--share` prints, and the user's passkey to sign in with.
@@ -56,6 +56,7 @@ use herder_daemon::auth::Auth;
 use herder_daemon::auth::authenticator::{self, Authenticator};
 use herder_daemon::bots::{Bots, Runtime as BotsRuntime, runner};
 use herder_daemon::config::Retention;
+use herder_daemon::hub::{self, HostSecrets, HubStore, Link, LinkSetup, SecretsKey, WakeOnEvent};
 use herder_daemon::login::{self, Logins};
 use herder_daemon::mcp;
 use herder_daemon::projects::{
@@ -69,12 +70,9 @@ use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, Sessi
 use herder_daemon::settings::Settings;
 use herder_daemon::skills::{Skills, SkillsSink};
 use herder_daemon::terminal::Terminals;
-use herder_daemon::vault::{
-    self, HostSecrets, Link, LinkSetup, SecretsKey, VaultStore, WakeOnEvent,
-};
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_daemon::ws::{Host, Server, Tls};
-use herder_daemon::{Config, Hub};
+use herder_daemon::{Config, Fanout};
 use herder_protocol::{
     AccountId, BotId, BotKind, BotPlace, Bytes, CommandBody, CommandResult, EventBody, HostId,
     Item, ItemBody, ItemId, PermissionMode, Provider, Role, SessionId, SessionOrigin,
@@ -357,7 +355,7 @@ headers = { Authorization = "Bearer lin_demo_0000" }
     ),
 ];
 
-/// Each machine's chat bots, as its `daemon.toml` has them. Their tokens are in no vault, so
+/// Each machine's chat bots, as its `daemon.toml` has them. Their tokens are in no hub, so
 /// they wait for one and never reach Slack.
 const BOTS: &[(&str, &str)] = &[(
     "devbox",
@@ -461,11 +459,11 @@ const TEAMMATES: &[(&str, &str, Role)] = &[
     ("laptop", "sam", Role::Member),
 ];
 
-/// The machine that backs up to the demo's vault.
+/// The machine that backs up to the demo's hub.
 const BACKS_UP: &str = "devbox";
 
-/// The demo's vault.
-const VAULT: &str = "vault";
+/// The demo's hub.
+const HUB: &str = "hub";
 
 /// The running demo; [`Demo::stop`] stops it and removes everything it created.
 pub struct Demo {
@@ -476,7 +474,7 @@ pub struct Demo {
     /// The device that set the demo up, signed in to every machine as the user.
     pub client: Client,
     daemons: Vec<Daemon>,
-    vault: DemoVault,
+    hub: DemoHub,
     _tmp: TempDir,
 }
 
@@ -521,27 +519,27 @@ impl Demo {
         if busy {
             demo.busy().await?;
         }
-        let vault = DemoVault::start(&tmp.path().join(VAULT)).await?;
-        demo.back_up(&vault).await?;
+        let hub = DemoHub::start(&tmp.path().join(HUB)).await?;
+        demo.back_up(&hub).await?;
         let shared = shared_link(&client, USER).context("the demo device has no machines")?;
         Ok(Self {
             link: shared.to_string(),
             passkey: Authenticator::known(USER).export(),
             client,
             daemons,
-            vault,
+            hub,
             _tmp: tmp,
         })
     }
 
-    /// Stops every machine and the vault, and waits until they have.
+    /// Stops every machine and the hub, and waits until they have.
     pub async fn stop(self) -> Result<()> {
         for daemon in self.daemons {
             daemon.shutdown.cancel();
             daemon.server.await?;
         }
-        self.vault.shutdown.cancel();
-        Ok(self.vault.server.await?)
+        self.hub.shutdown.cancel();
+        Ok(self.hub.server.await?)
     }
 }
 
@@ -609,32 +607,32 @@ struct Scenario<'a> {
 }
 
 impl Scenario<'_> {
-    /// Signs the demo's device in to `vault` as its owner and links [`BACKS_UP`] to it, as the
-    /// apps' Back Up does, then waits until the vault holds what the machine has.
-    async fn back_up(&self, vault: &DemoVault) -> Result<()> {
-        let hosts = vec![vault.address.clone()];
-        authenticator::sign_in(&vault.auth, self.client, hosts, &vault.fingerprint, USER)
+    /// Signs the demo's device in to `hub` as its owner and links [`BACKS_UP`] to it, as the
+    /// apps' Back Up does, then waits until the hub holds what the machine has.
+    async fn back_up(&self, hub: &DemoHub) -> Result<()> {
+        let hosts = vec![hub.address.clone()];
+        authenticator::sign_in(&hub.auth, self.client, hosts, &hub.fingerprint, USER)
             .await
-            .context("the demo device did not sign in to the vault")?;
-        let vault_id = HostId::new(VAULT);
+            .context("the demo device did not sign in to the hub")?;
+        let hub_id = HostId::new(HUB);
         let CommandResult::HostPairing { code, .. } = self
             .client
             .send(
-                vault_id.clone(),
-                CommandBody::PairVaultHost {
+                hub_id.clone(),
+                CommandBody::PairHubHost {
                     host_name: BACKS_UP.into(),
                 },
             )
             .await?
         else {
-            bail!("the vault did not mint a host code");
+            bail!("the hub did not mint a host code");
         };
         self.client
             .send(
                 HostId::new(BACKS_UP),
-                CommandBody::LinkVault {
-                    addresses: vec![vault.address.clone()],
-                    fingerprint: vault.fingerprint.clone(),
+                CommandBody::LinkHub {
+                    addresses: vec![hub.address.clone()],
+                    fingerprint: hub.fingerprint.clone(),
                     pairing_code: code,
                     backup: true,
                     secrets: true,
@@ -644,8 +642,8 @@ impl Scenario<'_> {
         let changes = self.client.changes();
         tokio::time::timeout(TIMEOUT, async {
             while !self.client.machines().iter().any(|machine| {
-                machine.host_id == vault_id
-                    && machine.vault.as_ref().is_some_and(|status| {
+                machine.host_id == hub_id
+                    && machine.hub.as_ref().is_some_and(|status| {
                         status.hosts.iter().any(|host| {
                             host.host_id == HostId::new(BACKS_UP) && host.last_event_at.is_some()
                         })
@@ -657,7 +655,7 @@ impl Scenario<'_> {
             }
         })
         .await
-        .context("the vault did not catch up with the machine")
+        .context("the hub did not catch up with the machine")
     }
 
     async fn set_up(&self) -> Result<()> {
@@ -1022,8 +1020,8 @@ async fn listen() -> Result<TcpListener> {
     Ok(TcpListener::bind((address.as_str(), 0)).await?)
 }
 
-/// The demo's vault, which [`BACKS_UP`] backs up to.
-struct DemoVault {
+/// The demo's hub, which [`BACKS_UP`] backs up to.
+struct DemoHub {
     /// Who is on it: the user, its owner.
     auth: Arc<Auth>,
     address: String,
@@ -1032,26 +1030,26 @@ struct DemoVault {
     server: JoinHandle<()>,
 }
 
-impl DemoVault {
+impl DemoHub {
     async fn start(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir.join("tls"))?;
-        let tls = Tls::load_or_create(&dir.join("tls"), VAULT)?;
+        let tls = Tls::load_or_create(&dir.join("tls"), HUB)?;
         let auth = Arc::new(Auth::open(dir)?);
-        let store = VaultStore::open(dir.join("vault.db"))?;
+        let store = HubStore::open(dir.join("hub.db"))?;
         let listener = listen().await?;
         let address = listener.local_addr()?.to_string();
         let fingerprint = tls.fingerprint().to_owned();
-        authenticator::enroll_known(&auth, USER, Role::Owner, "demo-vault-owner");
+        authenticator::enroll_known(&auth, USER, Role::Owner, "demo-hub-owner");
         let host = Host {
-            id: HostId::new(VAULT),
-            name: VAULT.into(),
+            id: HostId::new(HUB),
+            name: HUB.into(),
         };
-        let server = vault::Server::new(
+        let server = hub::Server::new(
             tls,
             Arc::clone(&auth),
             store,
             host,
-            vault::LIVENESS_TIMEOUT,
+            hub::LIVENESS_TIMEOUT,
             Retention::default(),
             Some(SecretsKey::new(&[7; 32])),
         );
@@ -1118,7 +1116,7 @@ impl Daemon {
         }
         let tls = Tls::load_or_create(&dir.join("tls"), name)?;
         let auth = Arc::new(Auth::open(dir)?);
-        let hub = Arc::new(Hub::default());
+        let fanout = Arc::new(Fanout::default());
         let scripted = Arc::new(Scripted {
             dir: Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/demo"),
         });
@@ -1143,7 +1141,7 @@ impl Daemon {
         }
         let turns = AtomicU64::new(0);
         let sessions_changed = Arc::new(tokio::sync::Notify::new());
-        // Woken as the journal grows, for the vault the machine may be linked to.
+        // Woken as the journal grows, for the hub the machine may be linked to.
         let journal_grew = Arc::new(tokio::sync::Notify::new());
         let setup = Setup {
             store: herder_store::Store::open(dir.join("herder.db"))?,
@@ -1151,7 +1149,7 @@ impl Daemon {
             accounts: configs,
             sink: Arc::new(WakeOnEvent {
                 next: Arc::new(OnSessionsChanged {
-                    next: Arc::clone(&hub) as Arc<dyn EventSink>,
+                    next: Arc::clone(&fanout) as Arc<dyn EventSink>,
                     notify: Arc::clone(&sessions_changed),
                 }),
                 notify: Arc::clone(&journal_grew),
@@ -1188,7 +1186,7 @@ impl Daemon {
         let skills = Arc::new(Skills::open(
             dir,
             &sessions.providers(),
-            Arc::clone(&hub) as Arc<dyn SkillsSink>,
+            Arc::clone(&fanout) as Arc<dyn SkillsSink>,
         )?);
         skills
             .command(CommandBody::SetSkillsRepo {
@@ -1234,8 +1232,8 @@ impl Daemon {
         ));
         sessions.use_mcp_servers(settings.mcp_servers())?;
         tokio::spawn({
-            let (hub, shutdown) = (Arc::clone(&hub), shutdown.clone());
-            async move { admission.run(&hub, shutdown).await }
+            let (fanout, shutdown) = (Arc::clone(&fanout), shutdown.clone());
+            async move { admission.run(&fanout, shutdown).await }
         });
         let host = Host {
             id: HostId::new(name),
@@ -1260,7 +1258,7 @@ impl Daemon {
                         ..ProjectsConfig::default()
                     },
                 )),
-                hub: Arc::clone(&hub),
+                fanout: Arc::clone(&fanout),
                 sessions: sessions.clone(),
                 sessions_changed,
                 data_dir: dir.join("data"),
@@ -1269,7 +1267,7 @@ impl Daemon {
         );
         let secrets = Arc::new(HostSecrets::default());
         sessions.use_secrets(Arc::clone(&secrets))?;
-        let vault_link = Arc::new(Link::start(
+        let hub_link = Arc::new(Link::start(
             LinkSetup {
                 config_file: config_file.clone(),
                 host: host.clone(),
@@ -1288,7 +1286,7 @@ impl Daemon {
             listener.local_addr()?.to_string(),
             tls.fingerprint().to_owned(),
         );
-        let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
+        let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
         let (binaries, recipes) = clis(dir, name)?;
         let logins = Logins::new(
             login::programs(&binaries, &Default::default()),
@@ -1302,18 +1300,18 @@ impl Daemon {
         for (provider, version) in LATEST {
             providers = providers.with_latest(Provider::from((*provider).to_owned()), version);
         }
-        providers.publish_to(Arc::clone(&hub));
+        providers.publish_to(Arc::clone(&fanout));
         let server = Server::new(
             tls,
             Arc::clone(&auth),
-            hub,
+            fanout,
             sessions.clone(),
             terminals,
             logins,
             host.clone(),
         );
         server.manage_settings(settings)?;
-        server.link_vault(vault_link)?;
+        server.link_hub(hub_link)?;
         server.manage_providers(providers)?;
         let bots = Arc::new(Bots::new(&config));
         bots.start(

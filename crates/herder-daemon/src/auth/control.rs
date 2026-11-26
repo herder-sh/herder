@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::{Auth, DeviceRole, PAIRING_TTL, Pairing};
-use crate::vault::{Admin, Forgot};
+use crate::hub::{Admin, Forgot};
 
 /// File name of the socket in the data dir.
 pub const SOCKET: &str = "control.sock";
@@ -38,7 +38,7 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
-    /// Mint a pairing code for a host to replicate to this vault, and only that.
+    /// Mint a pairing code for a host to replicate to this hub, and only that.
     PairHost {
         /// The host's name; the user its device acts as.
         host: String,
@@ -52,7 +52,7 @@ pub enum Request {
         /// The device.
         device_id: DeviceId,
     },
-    /// Drop a host and everything it replicated from this vault (`herder vault forget-host`).
+    /// Drop a host and everything it replicated from this hub (`herder hub forget-host`).
     ForgetHost {
         /// The host's name or id.
         host: String,
@@ -135,9 +135,9 @@ pub struct Daemon {
     pub fingerprint: String,
     /// The addresses its WebSocket server is bound to, as configured.
     pub listen: Vec<SocketAddr>,
-    /// What it holds, when it is a vault: the only daemon hosts pair with, and that forgets
+    /// What it holds, when it is a hub: the only daemon hosts pair with, and that forgets
     /// them.
-    pub vault: Option<Admin>,
+    pub hub: Option<Admin>,
 }
 
 /// Binds the socket in `data_dir`, replacing a stale one; the caller holds the data-dir lock,
@@ -223,8 +223,8 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
         message: format!("{err:#}"),
     };
     match request {
-        Request::PairHost { .. } if daemon.vault.is_none() => Response::Error {
-            message: "hosts pair with a vault; `--host` works on the vault only".to_owned(),
+        Request::PairHost { .. } if daemon.hub.is_none() => Response::Error {
+            message: "hosts pair with a hub; `--host` works on the hub only".to_owned(),
         },
         Request::PairHost { host } => match auth.mint_host(&host, PAIRING_TTL) {
             Ok(pairing) => paired(pairing, daemon),
@@ -246,13 +246,13 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
         },
         Request::Own => own(auth.open_claim(), daemon),
         Request::Claim => own(auth.open_recovery(), daemon),
-        Request::ForgetHost { host } => match &daemon.vault {
+        Request::ForgetHost { host } => match &daemon.hub {
             Some(admin) => match admin.forget_host(&host).await {
                 Ok(forgot) => Response::ForgotHost(forgot),
                 Err(err) => failed(err),
             },
             None => Response::Error {
-                message: "only a vault forgets hosts; run this on the vault".to_owned(),
+                message: "only a hub forgets hosts; run this on the hub".to_owned(),
             },
         },
     }
@@ -451,7 +451,7 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
-            vault: None,
+            hub: None,
         };
         let shutdown = CancellationToken::new();
         let server = tokio::spawn(serve(listener, auth, daemon, shutdown.clone()));
@@ -478,7 +478,7 @@ mod tests {
         let Response::Error { message } = ask(host).await.unwrap() else {
             panic!("expected a refusal");
         };
-        assert!(message.contains("vault only"), "{message}");
+        assert!(message.contains("hub only"), "{message}");
         let revoke = Request::Revoke {
             device_id: DeviceId::new("nope"),
         };
@@ -494,7 +494,7 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
-            vault: None,
+            hub: None,
         };
         auth.legacy_user("alice", Role::Owner, "fp-a");
         let Response::Error { message } = handle(Request::Own, &auth, &daemon).await else {
@@ -510,13 +510,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_vault_pairs_hosts_and_lists_device_roles() {
+    async fn a_hub_pairs_hosts_and_lists_device_roles() {
         let tmp = tempfile::tempdir().unwrap();
         let auth = Arc::new(Auth::open(tmp.path()).unwrap());
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
-            vault: Some(vault_admin(tmp.path(), &auth)),
+            hub: Some(hub_admin(tmp.path(), &auth)),
         };
         let pair_host = Request::PairHost {
             host: "devbox".into(),
@@ -544,21 +544,21 @@ mod tests {
         assert!(users[0].devices[0].host_only, "{users:?}");
     }
 
-    /// The admin of a vault keeping its database in `dir`.
-    fn vault_admin(dir: &Path, auth: &Arc<Auth>) -> Admin {
+    /// The admin of a hub keeping its database in `dir`.
+    fn hub_admin(dir: &Path, auth: &Arc<Auth>) -> Admin {
         std::fs::create_dir_all(dir.join("tls")).unwrap();
-        let tls = crate::ws::Tls::load_or_create(&dir.join("tls"), "vault").unwrap();
-        let store = crate::vault::VaultStore::open(dir.join("vault.db")).unwrap();
+        let tls = crate::ws::Tls::load_or_create(&dir.join("tls"), "hub").unwrap();
+        let store = crate::hub::HubStore::open(dir.join("hub.db")).unwrap();
         let host = crate::ws::Host {
-            id: herder_protocol::HostId::new("vault"),
-            name: "vault".into(),
+            id: herder_protocol::HostId::new("hub"),
+            name: "hub".into(),
         };
-        crate::vault::Server::new(
+        crate::hub::Server::new(
             tls,
             Arc::clone(auth),
             store,
             host,
-            crate::vault::LIVENESS_TIMEOUT,
+            crate::hub::LIVENESS_TIMEOUT,
             crate::config::Retention::default(),
             None,
         )
@@ -566,13 +566,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_a_vault_forgets_hosts_and_only_ones_it_holds() {
+    async fn only_a_hub_forgets_hosts_and_only_ones_it_holds() {
         let tmp = tempfile::tempdir().unwrap();
         let auth = Arc::new(Auth::open(tmp.path()).unwrap());
         let mut daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
-            vault: None,
+            hub: None,
         };
         let forget = || Request::ForgetHost {
             host: "devbox".into(),
@@ -580,8 +580,8 @@ mod tests {
         let Response::Error { message } = handle(forget(), &auth, &daemon).await else {
             panic!("expected a refusal");
         };
-        assert!(message.contains("only a vault"), "{message}");
-        daemon.vault = Some(vault_admin(tmp.path(), &auth));
+        assert!(message.contains("only a hub"), "{message}");
+        daemon.hub = Some(hub_admin(tmp.path(), &auth));
         let Response::Error { message } = handle(forget(), &auth, &daemon).await else {
             panic!("expected a refusal");
         };

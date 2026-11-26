@@ -36,7 +36,7 @@ struct AddMachineTests {
         #expect(MachineSource.allCases == [.install, .kubernetes, .hasHerder])
         #expect(MachineSource.allCases.map(\.title) == ["Linux or Mac", "Kubernetes", "Has herder"])
         #expect(MachineSource.install.command == "curl -fsSL https://herder.sh/install | sh\nherder service install")
-        #expect(MachineSource.kubernetes.command.hasSuffix("kubectl exec -it -n herder herder-vault-0 -- /herder claim"))
+        #expect(MachineSource.kubernetes.command.hasSuffix("kubectl exec -it -n herder herder-hub-0 -- /herder claim"))
         #expect(MachineSource.hasHerder.command == "herder claim")
         #expect(MachineSource.claimCommand == "herder claim")
     }

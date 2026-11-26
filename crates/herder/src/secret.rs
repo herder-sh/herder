@@ -1,4 +1,4 @@
-//! `herder secret run`: run a program with secrets from the vault in its environment, from a
+//! `herder secret run`: run a program with secrets from the hub in its environment, from a
 //! session herder runs. The session's agent never sees a value: the daemon hands the values
 //! to this process over its MCP socket, with the session's token, and they go to the program
 //! as environment variables, never on a command line.
@@ -103,8 +103,8 @@ fn refusal(error: &SecretError) -> String {
                 candidates.join(", ")
             )
         }
-        SecretErrorCode::NoVault => format!(
-            "{}; link this host to a vault in a herder app to use secrets",
+        SecretErrorCode::NoHub => format!(
+            "{}; link this host to a hub in a herder app to use secrets",
             error.message
         ),
         _ => error.message.clone(),

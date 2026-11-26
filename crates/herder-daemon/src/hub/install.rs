@@ -1,0 +1,356 @@
+//! A hub run on this machine, next to its daemon, as a service of its own with its own data
+//! dir, port and secrets key: what `herder hub install` sets up, and what an owner's
+//! `install_hub` sets up from a client.
+
+use std::ffi::OsStr;
+use std::fs::{DirBuilder, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, bail};
+
+use super::{SECRETS_KEY_ENV, SecretsKey};
+use crate::auth::control::{self, OwnInfo, PairingInfo, Request, Response};
+use crate::config::DEFAULT_PORT;
+use crate::service::{Service, Services};
+
+pub mod cliproxyapi;
+
+/// The port an installed hub listens on unless told otherwise: the one after the daemon's.
+pub const PORT: u16 = DEFAULT_PORT + 1;
+
+/// How long the installer waits for the hub to take a pairing request.
+const START_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The hub this machine runs, or may run, next to its daemon.
+#[derive(Clone)]
+pub struct LocalHub {
+    /// Where it keeps everything: its data, config and secrets key.
+    pub dir: PathBuf,
+    /// The port a new hub listens on; [`PORT`] when absent.
+    pub port: Option<u16>,
+    /// What installs its service.
+    pub services: Arc<dyn Services>,
+    /// The CLIProxyAPI set up next to it, and how its release is downloaded; none when
+    /// absent.
+    pub cliproxyapi: Option<(cliproxyapi::Proxy, cliproxyapi::Download)>,
+}
+
+impl LocalHub {
+    /// The hub `herder hub install` sets up for this user, run by this machine's service
+    /// manager.
+    pub fn system() -> Result<Self> {
+        Ok(Self {
+            dir: env_dir()?,
+            port: None,
+            services: Arc::new(crate::service::System),
+            cliproxyapi: None,
+        })
+    }
+
+    /// Its service.
+    pub fn service(&self) -> Service {
+        service(&self.dir)
+    }
+
+    /// Whether its service is installed.
+    pub fn is_installed(&self) -> bool {
+        self.services.is_installed(&self.service())
+    }
+
+    /// Writes its config and secrets key unless they are there, then installs and starts its
+    /// service. `report` hears each step done.
+    pub fn install(&self, report: &mut dyn FnMut(String)) -> Result<()> {
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&self.dir)
+            .with_context(|| format!("creating {}", self.dir.display()))?;
+
+        let config = config_path(&self.dir);
+        if config.exists() {
+            if self.port.is_some() {
+                bail!(
+                    "a hub is already set up in {}; change `listen` in {} instead",
+                    self.dir.display(),
+                    config.display()
+                );
+            }
+            report(format!("keeping {}", config.display()));
+        } else {
+            let port = self.port.unwrap_or(PORT);
+            // The daemon would only find out once it runs as a service, restarting over and over.
+            std::net::TcpListener::bind(("0.0.0.0", port))
+                .with_context(|| format!("port {port} is taken; pick another with --port"))?;
+            write_new(&config, &config_file(&self.dir, port)?)?;
+            report(format!("wrote {}", config.display()));
+        }
+        // Fails now, not in the service, if the file was edited into something invalid.
+        crate::Config::load_file(&config)?;
+
+        let key = key_path(&self.dir);
+        if key.exists() {
+            report(format!("keeping the secrets key in {}", key.display()));
+        } else {
+            write_new(&key, &key_file(&SecretsKey::generate_base64()?))?;
+            report(format!("generated a secrets key in {}", key.display()));
+        }
+
+        if let Some((proxy, download)) = &self.cliproxyapi {
+            let service = cliproxyapi::service(&self.dir);
+            if !self.services.is_installed(&service) {
+                // As for the hub's port: the proxy would only fail as a service.
+                std::net::TcpListener::bind(proxy.listen).with_context(|| {
+                    format!(
+                        "{} is taken; pick another with --cliproxyapi-listen",
+                        proxy.listen
+                    )
+                })?;
+            }
+            cliproxyapi::set_up(&self.dir, &config, proxy, download, report)?;
+            crate::Config::load_file(&config)?;
+            self.services.install(&service)?;
+        }
+        self.services.install(&self.service())
+    }
+
+    /// Asks the hub for `request`, a pairing, once it takes requests: it may be starting.
+    pub fn pair(&self, request: &Request) -> Result<PairingInfo> {
+        match self.ask(request)? {
+            Response::Paired(info) => Ok(info),
+            Response::Error { message } => bail!("{message}"),
+            _ => bail!("the hub sent an unexpected answer"),
+        }
+    }
+
+    /// Opens the window in which the hub takes its first owner, once it takes requests:
+    /// what the app claims it through.
+    pub fn own(&self) -> Result<OwnInfo> {
+        match self.ask(&Request::Own)? {
+            Response::Own(info) => Ok(info),
+            Response::Error { message } => bail!("{message}"),
+            _ => bail!("the hub sent an unexpected answer"),
+        }
+    }
+
+    /// The hub's answer to `request`, once it takes requests: it may be starting.
+    fn ask(&self, request: &Request) -> Result<Response> {
+        let started = Instant::now();
+        loop {
+            match control::request(&self.dir, request) {
+                Ok(answer) => return Ok(answer),
+                Err(err) if started.elapsed() >= START_TIMEOUT => {
+                    return Err(err).with_context(|| {
+                        format!(
+                            "the hub did not start; see why in {}",
+                            self.services.log_hint(&self.service())
+                        )
+                    });
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(250)),
+            }
+        }
+    }
+}
+
+/// Where an installed hub keeps everything: `$XDG_DATA_HOME/herder-hub`. It is the hub's
+/// data dir, and holds its config and secrets key next to its data, so they go together.
+fn dir(xdg_data_home: Option<&OsStr>, home: Option<&OsStr>) -> Result<PathBuf> {
+    let data = match xdg_data_home.map(Path::new) {
+        Some(dir) if dir.is_absolute() => dir.to_path_buf(),
+        _ => match home.map(Path::new) {
+            Some(home) if home.is_absolute() => home.join(".local/share"),
+            _ => bail!("cannot find the data dir: HOME is not set to an absolute path"),
+        },
+    };
+    Ok(data.join("herder-hub"))
+}
+
+/// The hub's dir for this user, as the environment has it.
+pub fn env_dir() -> Result<PathBuf> {
+    dir(
+        std::env::var_os("XDG_DATA_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+/// The hub's service, run from the files in `dir`.
+pub fn service(dir: &Path) -> Service {
+    Service {
+        label: "sh.herder.hub",
+        unit: "herder-hub.service",
+        name: "herder hub",
+        description: "herder hub",
+        installer: "herder hub install",
+        args: vec![
+            "daemon".to_owned(),
+            "--hub".to_owned(),
+            "--config".to_owned(),
+            config_path(dir).to_string_lossy().into_owned(),
+        ],
+        program: None,
+        env_files: std::iter::once(key_path(dir))
+            .chain(Some(cliproxyapi::management_key_path(dir)).filter(|path| path.exists()))
+            .collect(),
+        log: "hub.log",
+    }
+}
+
+/// The hub's config file in `dir`.
+pub fn config_path(dir: &Path) -> PathBuf {
+    dir.join("hub.toml")
+}
+
+/// The file holding the hub's secrets key, as its service's environment.
+fn key_path(dir: &Path) -> PathBuf {
+    dir.join("hub.env")
+}
+
+/// The hub's `daemon.toml`: a hub on every interface at `port`, keeping its data in `dir`.
+fn config_file(dir: &Path, port: u16) -> Result<String> {
+    #[derive(serde::Serialize)]
+    struct File<'a> {
+        mode: &'static str,
+        listen: String,
+        data_dir: &'a Path,
+    }
+    let file = toml::to_string(&File {
+        mode: "hub",
+        listen: format!("0.0.0.0:{port}"),
+        data_dir: dir,
+    })
+    .context("writing the hub's config")?;
+    Ok(format!(
+        "# Written by `herder hub install`: the hub running next to this machine's daemon.\n\
+         # Restart it after a change: herder hub install\n{file}"
+    ))
+}
+
+/// The environment file holding `key`, the hub's secrets key.
+fn key_file(key: &str) -> String {
+    format!(
+        "# The hub's secrets key: back it up with this dir, as nothing stored under it can be\n\
+         # read without it.\n{SECRETS_KEY_ENV}={key}\n"
+    )
+}
+
+/// Writes `contents` to a new file at `path`, readable by this user only.
+fn write_new(path: &Path, contents: &str) -> Result<()> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .and_then(|mut file| file.write_all(contents.as_bytes()))
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dir_follows_xdg_data_home() {
+        let dir_of =
+            |xdg: Option<&str>, home: Option<&str>| dir(xdg.map(OsStr::new), home.map(OsStr::new));
+        let found = dir_of(Some("/x/data"), Some("/home/ann")).unwrap();
+        assert_eq!(found, Path::new("/x/data/herder-hub"));
+        let found = dir_of(Some("rel"), Some("/home/ann")).unwrap();
+        assert_eq!(found, Path::new("/home/ann/.local/share/herder-hub"));
+        assert!(dir_of(None, None).is_err());
+    }
+
+    #[test]
+    fn config_runs_a_hub_on_its_own_port_and_data_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = config_path(dir.path());
+        std::fs::write(&path, config_file(dir.path(), 7448).unwrap()).unwrap();
+        let config = crate::Config::load_file(&path).unwrap();
+        assert_eq!(config.mode, crate::config::Mode::Hub);
+        assert_eq!(config.listen, ["0.0.0.0:7448".parse().unwrap()]);
+        assert_eq!(config.data_dir, dir.path());
+    }
+
+    #[test]
+    fn key_file_holds_a_key_the_hub_reads() {
+        let key = SecretsKey::generate_base64().unwrap();
+        let file = key_file(&key);
+        let line = file.lines().find(|line| !line.starts_with('#')).unwrap();
+        let (name, value) = line.split_once('=').unwrap();
+        assert_eq!(name, SECRETS_KEY_ENV);
+        assert!(SecretsKey::from_base64(value).is_ok());
+    }
+
+    /// A service manager that only notes what it installed.
+    #[derive(Default)]
+    struct Recorded(std::sync::Mutex<Vec<Service>>);
+
+    impl Services for Recorded {
+        fn install(&self, service: &Service) -> Result<()> {
+            self.0.lock().unwrap().push(service.clone());
+            Ok(())
+        }
+
+        fn is_installed(&self, service: &Service) -> bool {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|s| s.label == service.label)
+        }
+
+        fn log_hint(&self, _: &Service) -> String {
+            "nowhere".into()
+        }
+    }
+
+    #[test]
+    fn install_runs_cliproxyapi_next_to_the_hub() {
+        let tmp = tempfile::tempdir().unwrap();
+        let services = Arc::new(Recorded::default());
+        let listen = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listen.local_addr().unwrap().port();
+        drop(listen);
+        let hub = LocalHub {
+            dir: tmp.path().join("herder-hub"),
+            port: Some(0),
+            services: Arc::clone(&services) as Arc<dyn Services>,
+            cliproxyapi: Some((
+                cliproxyapi::Proxy {
+                    listen: ([127, 0, 0, 1], port).into(),
+                    tls: None,
+                },
+                || Ok(b"proxy".to_vec()),
+            )),
+        };
+        hub.install(&mut |_| {}).unwrap();
+
+        let installed = services.0.lock().unwrap().clone();
+        let labels: Vec<_> = installed.iter().map(|s| s.label).collect();
+        assert_eq!(labels, ["sh.herder.cliproxyapi", "sh.herder.hub"]);
+        // The hub gets the proxy's management secret, and manages it on loopback.
+        assert_eq!(
+            installed[1].env_files,
+            [hub.dir.join("hub.env"), hub.dir.join("cliproxyapi.env")]
+        );
+        let config = crate::Config::load_file(&config_path(&hub.dir)).unwrap();
+        assert_eq!(config.cliproxyapi, Some(format!("http://127.0.0.1:{port}")));
+        assert!(hub.dir.join("cliproxyapi/auth").is_dir());
+    }
+
+    #[test]
+    fn new_files_are_private_and_never_overwritten() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hub.env");
+        write_new(&path, "A=1\n").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(write_new(&path, "A=2\n").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "A=1\n");
+    }
+}

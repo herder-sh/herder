@@ -71,7 +71,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use crate::hub::Hub;
+use crate::fanout::Fanout;
 use crate::worktree::git;
 
 /// How long a clone, fetch or push may take before it is given up.
@@ -93,13 +93,13 @@ pub trait SkillsSink: Send + Sync {
     fn session_skills(&self, session_id: &SessionId, skills: Vec<SessionSkill>);
 }
 
-impl SkillsSink for Hub {
+impl SkillsSink for Fanout {
     fn skills_status(&self, status: SkillsStatus) {
-        Hub::skills_status(self, status);
+        Fanout::skills_status(self, status);
     }
 
     fn session_skills(&self, session_id: &SessionId, skills: Vec<SessionSkill>) {
-        Hub::session_skills(self, session_id, skills);
+        Fanout::session_skills(self, session_id, skills);
     }
 }
 

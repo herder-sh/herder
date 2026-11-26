@@ -4,7 +4,7 @@ import Observation
 import SwiftUI
 
 /// The one-time move to one identity: on each machine you own, your old user (or users) become
-/// your passkey. Machines that show up as users move to the vault's Machines list, and users
+/// your passkey. Machines that show up as users move to the hub's Machines list, and users
 /// nobody can place wait for your decision. Reached from People (Setup's Needs you) while a
 /// machine you own is not claimed yet.
 struct ClaimPlan: Hashable {
@@ -17,7 +17,7 @@ struct ClaimPlan: Hashable {
         let userId: UserId
         /// Your users there now, by name, when known: "tomas", "owner".
         var users: [String] = []
-        /// The users there that are machines, which move to the vault's Machines list.
+        /// The users there that are machines, which move to the hub's Machines list.
         var machineRows: [String] = []
         /// The herder it runs; nil when too old to say.
         var version: String? = ClaimPlan.needs
@@ -128,13 +128,13 @@ extension ClaimPlan {
     }
 
     /// The machines you own that still know you by a per-daemon user: connected, owner, and no
-    /// person in their hello. A vault is named apart from the machine it runs on.
+    /// person in their hello. A hub is named apart from the machine it runs on.
     nonisolated static func unclaimed(_ machines: [Herder.Machine]) -> [Machine] {
         machines.compactMap { machine in
             guard machine.role == .owner, machine.personId == nil, machine.connection == .connected,
                   let userId = machine.userId
             else { return nil }
-            return Machine(hostId: machine.hostId, name: UnpairedVault.name(of: machine), userId: userId,
+            return Machine(hostId: machine.hostId, name: UnpairedHub.name(of: machine), userId: userId,
                            version: machine.herderVersion)
         }
     }
@@ -145,12 +145,12 @@ extension ClaimPlan {
             Machine(hostId: "mac", name: "This Mac", userId: "u-mac", users: ["tomas"]),
             Machine(hostId: "trash", name: "trash-can-01", userId: "u-trash", users: ["tomas"]),
             Machine(hostId: "draugelis", name: "draugelis", userId: "u-draugelis", users: ["tomas"]),
-            Machine(hostId: "vault-0", name: "herder-vault-0", userId: "u-vault-0", users: ["tomas", "owner"],
+            Machine(hostId: "hub-0", name: "herder-hub-0", userId: "u-hub-0", users: ["tomas", "owner"],
                     machineRows: ["trash-can-01", "Coingate-CJH9FXV367", "draugelis"]),
-            Machine(hostId: "draugelis-vault", name: "draugelis vault", userId: "u-draugelis-vault", users: ["tomas"],
+            Machine(hostId: "draugelis-hub", name: "draugelis hub", userId: "u-draugelis-hub", users: ["tomas"],
                     machineRows: ["draugelis"]),
         ],
-        questions: [Question(hostId: "vault-0", userId: "u-owner", user: "owner", machine: "herder-vault-0",
+        questions: [Question(hostId: "hub-0", userId: "u-owner", user: "owner", machine: "herder-hub-0",
                              reason: "A user from Oct 9 whose CLI device is online. Is this you?")],
         name: "Tomas")
 }

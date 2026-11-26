@@ -4,12 +4,12 @@ import Herder
 /// Everyone across the fleet, one person per person: you with your passkey and devices, then
 /// your teammates, each with a role on each machine. The People page draws it.
 struct Directory: Equatable {
-    /// A machine or vault, a column of the grid.
+    /// A machine or hub, a column of the grid.
     struct Column: Equatable, Identifiable {
         let id: HostId
         let name: String
-        /// Vaults keep backups and secrets; a member has nothing to do on one.
-        var vault = false
+        /// Hubs keep backups and secrets; a member has nothing to do on one.
+        var hub = false
     }
 
     /// A person and their role on each machine they can use; a machine they cannot is missing.
@@ -70,7 +70,7 @@ struct Directory: Equatable {
     }
 
     /// The machines that run sessions, where a member has something to do.
-    private var hosts: [Column] { columns.filter { !$0.vault } }
+    private var hosts: [Column] { columns.filter { !$0.hub } }
 
     /// A person's role across the fleet, as their row's menu says it.
     enum FleetRole: Equatable {
@@ -104,8 +104,8 @@ struct Directory: Equatable {
         }
         let owned = columns.filter { person.roles[$0.id] == .owner }
         let member = hosts.filter { person.roles[$0.id] == .member }
-        // A vault named after its machine says so already ("draugelis’s vault").
-        let named = owned.filter { vault in !vault.vault || !owned.contains { !$0.vault && vault.name.hasPrefix($0.name) } }
+        // A hub named after its machine says so already ("draugelis’s hub").
+        let named = owned.filter { hub in !hub.hub || !owned.contains { !$0.hub && hub.name.hasPrefix($0.name) } }
         if owned.isEmpty && member.isEmpty { return "No machines yet" }
         if owned.isEmpty { return "Member on \(Self.list(member.map(\.name)))" }
         let owner = "Owner on \(Self.list(named.map(\.name)))"
@@ -199,16 +199,16 @@ extension Directory {
 }
 
 /// The fleet the mockup draws (docs/mockups/identity.html): you, Sam and Kim on three machines
-/// and two vaults. The screenshot tests and previews draw it; its ids pick the mockup's avatar
+/// and two hubs. The screenshot tests and previews draw it; its ids pick the mockup's avatar
 /// fills.
 extension Directory {
     static func demo(now: Date) -> Directory {
         let mac = Column(id: "mac", name: "this Mac")
         let trash = Column(id: "trash", name: "trash-can-01")
         let draugelis = Column(id: "draugelis", name: "draugelis")
-        let vault = Column(id: "vault-0", name: "herder-vault-0", vault: true)
-        let draugelisVault = Column(id: "draugelis-vault", name: "draugelis’s vault", vault: true)
-        let columns = [mac, trash, draugelis, vault, draugelisVault]
+        let hub = Column(id: "hub-0", name: "herder-hub-0", hub: true)
+        let draugelisHub = Column(id: "draugelis-hub", name: "draugelis’s hub", hub: true)
+        let columns = [mac, trash, draugelis, hub, draugelisHub]
         return Directory(
             columns: columns,
             me: Person(id: "tomas-1", name: "Tomas", roles: Dictionary(uniqueKeysWithValues: columns.map { ($0.id, .owner) })),
@@ -225,7 +225,7 @@ extension Directory {
             teammates: [
                 Person(id: "sam-13", name: "Sam", roles: ["mac": .member, "trash": .member, "draugelis": .member]),
                 Person(id: "kim-6", name: "Kim", roles: ["mac": .member, "trash": .member, "draugelis": .owner,
-                                                       "draugelis-vault": .owner]),
+                                                       "draugelis-hub": .owner]),
             ],
             theirDevices: [
                 "kim-6": [

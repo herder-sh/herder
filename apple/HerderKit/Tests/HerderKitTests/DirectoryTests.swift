@@ -118,19 +118,19 @@ struct FleetPeopleTests {
         #expect(directory.only("devbox").teammates.map(\.name) == ["Sam"])
     }
 
-    @Test func vaultColumnsAreNamedApartFromTheirMachines() async throws {
+    @Test func hubColumnsAreNamedApartFromTheirMachines() async throws {
         let box = [FleetHost(hostId: "trash", hostName: "trash-can-01", online: true, lastSeen: "")]
         var mac = machine("mac", name: "tomas-mbp", sessions: [], personId: "p-tomas")
         mac.address = "127.0.0.1:7447"
         let fleet = [mac,
                      machine("trash", name: "trash-can-01", sessions: [], personId: "p-tomas"),
                      machine("draugelis", name: "draugelis", sessions: [], personId: "p-tomas"),
-                     machine("vault-0", name: "herder-vault-0", sessions: [], hosts: box, personId: "p-tomas"),
-                     machine("draugelis-vault", name: "draugelis", sessions: [], hosts: box, personId: "p-tomas")]
+                     machine("hub-0", name: "herder-hub-0", sessions: [], hosts: box, personId: "p-tomas"),
+                     machine("draugelis-hub", name: "draugelis", sessions: [], hosts: box, personId: "p-tomas")]
         let people = FleetPeople { _, _ in .people(people: [person("p-tomas", "Tomas", .owner)]) }
         await people.reload(fleet)
         let names = try #require(people.directory(fleet, localNames: ["127.0.0.1"])).columns.map(\.name)
-        #expect(names == ["this Mac", "trash-can-01", "draugelis", "herder-vault-0", "draugelis’s vault"])
+        #expect(names == ["this Mac", "trash-can-01", "draugelis", "herder-hub-0", "draugelis’s hub"])
         #expect(Set(names).count == 5, "no two columns share a name")
     }
 
@@ -156,14 +156,14 @@ struct FleetPeopleTests {
     }
 
     @Test func itsMeFoldsADuplicateWithOneAssertionByItsPasskeyOnEveryMachineYouOwn() async throws {
-        // "Mobile User", the iPhone's own passkey, is a second owner of devbox and of vault.
+        // "Mobile User", the iPhone's own passkey, is a second owner of devbox and of hub.
         let duplicate = person("p-mobile", "Mobile User", .owner)
         let listed: [HostId: [PersonInfo]] = [
             "devbox": Self.people["devbox"]! + [duplicate],
             "laptop": Self.people["laptop"]!,
-            "vault": [person("p-tomas", "Tomas", .owner), duplicate],
+            "hub": [person("p-tomas", "Tomas", .owner), duplicate],
         ]
-        let fleet = machines + [machine("vault", name: "vault", sessions: [], personId: "p-tomas")]
+        let fleet = machines + [machine("hub", name: "hub", sessions: [], personId: "p-tomas")]
         var sent: [(HostId, CommandBody)] = []
         let people = FleetPeople { hostId, command in
             switch command {
@@ -196,9 +196,9 @@ struct FleetPeopleTests {
         #expect(sent.isEmpty)
 
         try await people.itsMe(mobile, me: directory.me.id, machines: fleet, sign: byTheirs)
-        // One Face ID over devbox's and vault's challenges, one after the other.
-        #expect(signed.last == Data("devboxvault".utf8).base64URLEncodedString())
-        #expect(sent.map(\.0) == ["devbox", "vault"])
+        // One Face ID over devbox's and hub's challenges, one after the other.
+        #expect(signed.last == Data("devboxhub".utf8).base64URLEncodedString())
+        #expect(sent.map(\.0) == ["devbox", "hub"])
         #expect(sent.allSatisfy {
             if case .mergePerson(let from, let assertion) = $0.1 {
                 from == "p-mobile" && assertion.id == "cred-p-mobile"

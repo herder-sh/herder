@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 21`
+`CLIENT_API_VERSION = 22`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -27,7 +27,7 @@ says what exists, why, and how it maps to foreign languages.
   `RemoveProject` command, a compatible addition that keeps both versions. P0.14 added
   `Project.icon` and the `GetProjectIcon` command, compatible too. P0.13 added, also
   compatibly, the `ForkSession` command with its `SessionForked` result, and a
-  vault's `VaultStatus` message (`VaultStatus`, `HostReplication`). P0.20 added, compatibly,
+  hub's `HubStatus` message (`HubStatus`, `HostReplication`). P0.20 added, compatibly,
   `SessionHead.queue` (`QueuedPrompt`, `PromptId`) and the `RemoveQueued`, `MoveQueued` and
   `SendQueuedNow` commands. The `SetResourceLimits` command, with `MAX_TURNS_LIMIT`, was
   added compatibly too. Handing a session off between machines added, compatibly, the
@@ -93,7 +93,7 @@ Rules the surface keeps, and `public_api` checks the object rules:
   trait, `PasskeyAuthenticator`, with an async `assert`.
 
 The `auth` module is Rust-only plumbing (TLS device keys and certificate pinning) for whatever
-else connects to a daemon as a device: the vault's replicator in `herder-daemon`, and tests.
+else connects to a daemon as a device: the hub's replicator in `herder-daemon`, and tests.
 It is part of the frozen list but not of the foreign-language surface.
 
 ## Coverage by area
@@ -115,7 +115,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
 | Accounts  | `Machine::accounts`, `failover` (the pin; every account takes part in rotation), `Machine::providers` (each runnable CLI on the machine); `AccountSwitched` / `ProviderSwitched` events | `Client::add_account` with `NewAccount` (a login terminal), `install_provider` (an install terminal; owners only), `log_in_account` (a login terminal for an account whose login expired), `close_terminal` (cancels a login: no account, the config dir the machine created removed); `send`: `SwitchAccount`, `SwitchProvider`. `provider_catalog`, `catalog_entry`, `next_account_id` and `provider_hints` are the shared add-account and model lists |
 | Skills    | `Machine::skills` (the library as that daemon has it: `repo`, `head`, `last_pull`, `pull_error`, each skill's `name`, `description`, whether `enabled` there and the `providers` it reaches, and per provider when a running session sees a change: `live`, `next_turn` or `next_session`), `Machine::session_skills` (per live session, the library, project and account skills its agent may use, each with its `source`); `SkillsStatus::accounts` lists each account's own skills, for a session not started yet | owners: `send`: `SetSkillsRepo`, `PutSkill`, `DeleteSkill`, `ImportSkill`, `PullSkills`, `SetSkillEnabled` (per machine); members are refused with `forbidden`. A write commits and pushes through the one daemon it is sent to. The client keeps every machine where the user is owner on one library: an accepted `SetSkillsRepo` is sent on to the others, and to any that connects later naming another repository or none (as one paired since); a repository set from another device on a connected machine becomes the library; after an accepted write every other machine gets `PullSkills`, at once or once it reconnects. Each machine's `skills` (`head`, `last_pull`, `pull_error`) shows where it stands |
-| Fleet     | `Machine::hosts` (a vault), `Machine::vault` (what it holds of each host, live), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a vault rejects commands with `read_only`. To fork any session (its host up or gone) onto a host, call `Client::fork_session` with the machine that lists it and the destination (owners of the destination only) → `CommandResult::SessionForked`; the new session joins the destination's list, the original is left as it is. It forks a session of the destination from its own journal, else relays the history from a connected machine that lists it (its own machine, else a vault the client is signed in to); hosts never read each other's sessions |
+| Fleet     | `Machine::hosts` (a hub), `Machine::hub` (what it holds of each host, live), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a hub rejects commands with `read_only`. To fork any session (its host up or gone) onto a host, call `Client::fork_session` with the machine that lists it and the destination (owners of the destination only) → `CommandResult::SessionForked`; the new session joins the destination's list, the original is left as it is. It forks a session of the destination from its own journal, else relays the history from a connected machine that lists it (its own machine, else a hub the client is signed in to); hosts never read each other's sessions |
 
 ## Reference
 
@@ -154,7 +154,7 @@ everything stops once the last clone is dropped.
 | `changes() -> Changes` | Notifications that `machines()` changed. |
 | `async share() -> Result<FleetLink, Error>` | The `herder://fleet` link of every saved machine, connected or not, by the name this device gives it, and of the person this device acts for, by their name and passkeys as the connected machines list them (`list_people`), for another device of the person to sign in to each with one of those passkeys. It carries no code, and no loopback address (`localhost`, `127.0.0.0/8`, `::1`): a machine with only those is left out. Fails with `Local` while no machine is left, in a demo, and while no connected machine knows this device as a person; with the machines' error when none lists the person. See [Fleet links](#fleet-links). |
 | `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
-| `set_addresses(host_id: HostId, addresses: Vec<String>) -> Result<(), Error>` | Connects to a machine at `addresses`, in this order of preference, from now on; each a host or IP with an optional port (7447 by default), a tunnel's `wss://` URL, or `vault://<host id>` (see Addresses). Fails with `Error::Local` on an invalid address or an empty list. |
+| `set_addresses(host_id: HostId, addresses: Vec<String>) -> Result<(), Error>` | Connects to a machine at `addresses`, in this order of preference, from now on; each a host or IP with an optional port (7447 by default), a tunnel's `wss://` URL, or `hub://<host id>` (see Addresses). Fails with `Error::Local` on an invalid address or an empty list. |
 | `async reconnect(host_id: HostId) -> Result<String, Error>` | Drops a machine's connection, if up, and connects again at once, racing its addresses in order: the address the new connection uses, or `Unreachable` when none answered. |
 | `forget(host_id: HostId) -> Result<(), Error>` | Unpairs a machine on this device. |
 | `async sign_in(hosts: Vec<String>, fingerprint: String, passkeys: Vec<String>) -> Result<PendingSignIn, Error>` | Connects to a machine under a new device key to sign in as a person: the `PendingSignIn` holds what the person's passkey signs, restricted to the credential ids `passkeys` (a fleet link's person's; empty for any passkey). Fails with `Unreachable` when no address answered. See [Signing in](#signing-in). |
@@ -195,7 +195,7 @@ everything stops once the last clone is dropped.
   daemons before `UpdateDaemon`), `sessions`, `hosts`, `projects`, `accounts`, `failover`, `providers` (`Vec<ProviderStatus>`:
   each runnable provider's CLI on the machine, as last listed; `latest_version` when a newer
   release is out), `terminals`, `resources`,
-  `session_usage`, `vault` (`Option<VaultStatus>`: a vault's totals and per-host replication;
+  `session_usage`, `hub` (`Option<HubStatus>`: a hub's totals and per-host replication;
   `None` for a daemon and while not connected), `skills` (`Option<SkillsStatus>`: the skill
   library as the daemon has it; `None` until it sends it and while not connected),
   `session_skills` (`HashMap<SessionId, Vec<SessionSkill>>`: the skills each live session's
@@ -270,7 +270,7 @@ A connection that drops is ridden out, so an app shows nothing of a drop it can 
 about:
 
 - For 5 s after a connection is lost or replaced, the machine still reads `Connected`, with its
-  `address`, `quality` and live values (`resources`, `session_usage`, `vault`, `skills`,
+  `address`, `quality` and live values (`resources`, `session_usage`, `hub`, `skills`,
   `session_skills`, `update`, `approvals`) as they were, while the client reconnects. A
   connection made within that time takes over unseen: `connection` never changes, and
   `quality.reconnects` counts it. Only a machine still without a connection after 5 s reads
@@ -331,25 +331,25 @@ A connection that works is kept: `wake()`, which an app also calls when the netw
 only checks it. `set_addresses` moves it to an address that comes before its own once one
 answers, and replaces at once one that uses an address it dropped.
 
-### Through a vault
+### Through a hub
 
-An address may also be `vault://<host id>`: the route through that vault, one of this
-client's machines. The client opens a connection to the vault at the vault's own addresses,
-with this device's key for the vault, asks it for a stream to the machine, and runs its
+An address may also be `hub://<host id>`: the route through that hub, one of this
+client's machines. The client opens a connection to the hub at the hub's own addresses,
+with this device's key for the hub, asks it for a stream to the machine, and runs its
 ordinary connection to the machine inside: TLS pinning the machine's certificate, with this
-device's key for the machine. The vault forwards bytes it cannot read, and the machine
+device's key for the machine. The hub forwards bytes it cannot read, and the machine
 authenticates the device as on a direct connection.
 
-Nothing sets the route up. The client adds it, last, to every machine a vault of its lists
+Nothing sets the route up. The client adds it, last, to every machine a hub of its lists
 with `FleetHost::relay`, within a second, and saves it; it adds it again if removed while the
-vault still relays there, and drops it when the vault is forgotten. `set_addresses` may
+hub still relays there, and drops it when the hub is forgotten. `set_addresses` may
 reorder it like any address. `share` leaves it out of the link.
 
 The race above then gives the route its place: the machine's own addresses get their head
-start, and the vault answers when they do not. A connection through a vault is the one
+start, and the hub answers when they do not. A connection through a hub is the one
 connection that is not just kept: on every `wake()` and once a minute the client checks
 whether an address before the route answers again, and moves there when one does. `address`
-names the route in use, so an app can say that a machine is reached through a vault.
+names the route in use, so an app can say that a machine is reached through a hub.
 
 `reconnect` replaces the connection now, whatever answers first: an app connects through a
 chosen address by putting it first with `set_addresses` and then calling `reconnect`. A
@@ -377,7 +377,7 @@ it. A group is complete once it has hosts and `fp`, and the next `host` or `fp` 
 complete group starts the next machine; a `name` belongs to the group it follows:
 
 ```
-herder://fleet?person=alice&passkey=<id>&host=192.168.1.5%3A7447&fp=<hex>&name=devbox&host=10.0.0.9%3A7447&host=%5Bfd00%3A%3A9%5D%3A7447&fp=<hex>&name=alice%27s+vault
+herder://fleet?person=alice&passkey=<id>&host=192.168.1.5%3A7447&fp=<hex>&name=devbox&host=10.0.0.9%3A7447&host=%5Bfd00%3A%3A9%5D%3A7447&fp=<hex>&name=alice%27s+hub
 ```
 
 A link without its person, as shared before version 20, does not parse.
@@ -544,7 +544,7 @@ change to secrets need a fresh passkey assertion.
 
 | Before | Now | Why |
 | ------ | --- | --- |
-| — | `Client::fork_session` | Hand a session off to another machine without a vault: the client relays its history from the machine it runs on. |
+| — | `Client::fork_session` | Hand a session off to another machine without a hub: the client relays its history from the machine it runs on. |
 | — | `Client::set_addresses` | Users add addresses (a Tailscale name, a port-forward) and choose which route comes first. |
 | — | `Machine::address: Option<String>` | Apps show which route the connection uses. A new field breaks code that builds a `Machine`. |
 
@@ -565,7 +565,7 @@ change to secrets need a fresh passkey assertion.
 
 | Before | Now | Why |
 | ------ | --- | --- |
-| — | `Machine::vault: Option<VaultStatus>` | Apps show what a vault holds and how far behind each host's replication is. A new field breaks code that builds a `Machine`. |
+| — | `Machine::hub: Option<HubStatus>` | Apps show what a hub holds and how far behind each host's replication is. A new field breaks code that builds a `Machine`. |
 
 ## Changes in version 3
 
@@ -638,7 +638,7 @@ A prompt sent while a turn runs waits in the daemon's queue for its session.
 `QueuedPrompt` with its `prompt_id`, `text`, image and file counts, and sender: the user `by`, or the
 `agent_message` of another agent's message. A prompt leaves the queue as its turn starts. The
 queue arrives with the session list (`Machine::sessions`), which every client gets again
-whenever any session's queue changes; a vault lists none.
+whenever any session's queue changes; a hub lists none.
 
 Whoever may `SendPrompt` to a session may edit its queue, messages from other agents
 included:
@@ -691,13 +691,13 @@ additive (protocol 4) and this API is unchanged.
 
 `send(host, GetSettings)` answers `Settings`: every daemon-wide setting of the daemon's config
 file as a `DaemonSettings` (listen address, log, provider binaries, task, failover, title,
-resource, project-discovery and follow-up settings, and what a vault backs up or keeps), with the
-read-only `data_dir` and `is_vault`, and `restart_required` when the file holds settings not
+resource, project-discovery and follow-up settings, and what a hub backs up or keeps), with the
+read-only `data_dir` and `is_hub`, and `restart_required` when the file holds settings not
 in effect yet. `send(host, SetSettings { settings })` writes the values that changed, in
 place, and answers the same way; a value the daemon cannot run with is refused with
 `bad_request`, changing nothing. The turn limit applies at once; the rest after
 `send(host, RestartDaemon)`, which answers `Applied` and restarts the daemon; clients
-reconnect as after any restart. Accounts, projects and the vault link keep their own commands.
+reconnect as after any restart. Accounts, projects and the hub link keep their own commands.
 Only owners may do any of this. The wire change is additive (protocol 4) and this API is
 unchanged.
 
@@ -706,24 +706,24 @@ to herder's own, whatever its provider and account: each a `McpServerSettings` w
 (ASCII letters, digits, `-` and `_`, unique, never `herder`), `enabled`, an optional `project`
 whose sessions alone get it, and a `transport`: `McpTransport::Stdio { command, args, env,
 secrets }`, a program the agent runs, whose `secrets` (`SecretRef`, `NAME` or `set/NAME`) come
-from the host's vault as variables of their names; or `Http { url, headers }` and
+from the host's hub as variables of their names; or `Http { url, headers }` and
 `Sse { url, headers }`, a server at a URL. A client lists them from `Settings`, and adds,
 changes, removes or toggles them by sending `SetSettings` with the list changed; an invalid
 server, or a name used twice, is refused with `bad_request`. A change applies without a
 restart, to each session's agent from its next start, so it does not set `restart_required`.
 `env` and `headers` are kept in the daemon's config file as given, and sent back to owners. A
 header value may hold `{secret:NAME}` or `{secret:set/NAME}` placeholders, such as
-`Bearer {secret:linear/API_KEY}`: the daemon fills them in from the host's vault, for the
+`Bearer {secret:linear/API_KEY}`: the daemon fills them in from the host's hub, for the
 session and under its grant, each time a session's CLI starts, so one key in a set granted to
 several hosts serves all of them. A malformed placeholder is refused with `bad_request`. A
-server whose secrets the vault does not hand out is left out of that run, and the session's
+server whose secrets the hub does not hand out is left out of that run, and the session's
 transcript says so with a `herder_mcp` tool call and its failed result, naming the server and
 the secret, never a value.
 
 ### Updating a machine's herder (client API 13)
 
 `send(host, UpdateDaemon { when })` updates the daemon's herder to the latest release, as
-`herder update` does on the machine, and restarts it, and an installed vault next to it,
+`herder update` does on the machine, and restarts it, and an installed hub next to it,
 onto the new binary; owners only, and never an agent. It answers `Applied` once the update
 started, or is refused with `unsupported` when the daemon does not run as the service herder
 installed or cannot write its binary, and with `conflict` while an update runs. Its stages

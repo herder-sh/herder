@@ -1,6 +1,6 @@
 //! Rust-only TLS plumbing for whatever connects to a daemon as a device: the device key and a
 //! TLS config that pins the daemon's certificate. [`Client`](crate::Client) uses it, and so
-//! does a vault replicating its daemons. Not part of the foreign-language surface.
+//! does a hub replicating its daemons. Not part of the foreign-language surface.
 
 use std::fmt;
 use std::sync::Arc;

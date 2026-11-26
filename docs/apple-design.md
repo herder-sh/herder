@@ -20,7 +20,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 ## 1. Decisions at a glance
 
 1. **One information architecture everywhere.** Board, Projects, Usage, Skills,
-   Setup (machines, with a vault inside, and people), a session, and settings sheets. The Mac, the iPad and the iPhone show the
+   Setup (machines, with a hub inside, and people), a session, and settings sheets. The Mac, the iPad and the iPhone show the
    same sections with the same names; only the navigation chrome changes (§3).
 2. **Three layouts, chosen by width, not by device.** `FleetView` picks the layout from the
    horizontal size class; `ListAndSession` picks list-beside-session from the pane's width.
@@ -56,7 +56,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 | **Usage** | tokens and API-equivalent dollars over a period, per account and model | — | `UsageView` |
 | **Skills** | the skill library on every machine, and a session's project skills | — | `SkillsView` |
 | **Setup** | what needs you, each with its fix; the hub with the machines that sync to it; your devices; the people | fleet + accounts | `SetupView` |
-| Vault (inside Setup) | a vault's hosts, how current each is, and its secrets | fleet, host grouping | `VaultPage` |
+| Hub (inside Setup) | a hub's hosts, how current each is, and its secrets | fleet, host grouping | `HubPage` |
 | **Session** | one session: transcript, request, composer | session pane, chat tab | `SessionView` |
 | Terminal | owner-only shells in the session's worktree | term tab | `TerminalPane` |
 | Inspector | the session's events and stats | details panel | `SessionInspector` |
@@ -98,7 +98,7 @@ Rules:
   size class is compact and `DesktopShell` otherwise, so an iPad in slide-over gets the iPhone
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
-- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats), then **Workspace**, the setup (Providers, Skills, Setup, Integrations; a vault lives inside Setup), then the
+- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats), then **Workspace**, the setup (Providers, Skills, Setup, Integrations; a hub lives inside Setup), then the
   projects, then one footer line for the machines (`MachinesFooter`). It starts collapsed to
   the rail (`sidebarCollapsed`), which leaves the width to the session and lists the same
   things in the same order; ⇧⌘\ toggles it. The window's traffic lights sit in its top bar
@@ -124,7 +124,7 @@ Rules:
   header controls (§8.4), then a search field where the pane lists sessions.
 - **The tab bar** on compact width has the same sections as the sidebar: Board (badged with the
   request count), Chats, Projects, Setup (badged amber with what needs you). Skills, Providers,
-  Integrations and a vault show inside Setup. Each tab is its own `NavigationStack` (`boardPath`,
+  Integrations and a hub show inside Setup. Each tab is its own `NavigationStack` (`boardPath`,
   `projectsPath`), so switching tabs keeps each tab's place.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
@@ -167,7 +167,7 @@ The apps have no Pull Requests section (unlike the TUI's prs view), and nothing 
 across sessions. A session shows its PRs as text: the chip in its header (§5.1) and the badges
 on its row.
 
-### 4.4 Setup and vault (`SetupView`, `MachinesView`, `VaultPage`)
+### 4.4 Setup and hub (`SetupView`, `MachinesView`, `HubPage`)
 
 Setup shows how your herder is put together, in the words herder.sh uses: your **devices**
 (the apps) reach your **machines**, and the **hub** keeps what should outlive any one machine.
@@ -199,8 +199,9 @@ order, the page has:
   - The **machines that sync to it** hang under the card from a thin rail (`HubRail`), one
     row each (`MachineCard`): the name, "this Mac" on the one this app runs on, "Member"
     where you are not an owner, and how this device reaches it, said quietly with a small
-    mark: **Direct** (green dot), **Connecting…**, **On another network** (the hub hears
-    from it, this device does not) or **Offline** (a grey ring, never red: a laptop asleep is
+    mark: **Direct** (green dot), **Through <hub>** (green dot: connected, through the hub's
+    relay), **Connecting…**, **On another network** (the hub hears from it, this device does
+    not) or **Offline** (a grey ring, never red: a laptop asleep is
     expected). A machine with sessions running says "3 running". A row opens the machine's
     page.
   - **Other machines** follow, without the rail, with one line under them: they don't sync
@@ -230,33 +231,30 @@ People); machine and device counts in the header. The machines are a structure, 
 collection to sort, so they are not a `SortableTable` (§8.4). There is no who-can-do-what grid
 and no "Add a device…" row at the foot of the machines.
 
-Still to come with the hub's relay (P24): **Through the hub** as a way a machine is reached,
-in place of "On another network", once the client says a connection is relayed.
-
 On iPhone the page is the same, in one column, with "Everything is set up" at its top when
 nothing needs you, and Skills, Providers and Integrations are rows at its foot. Screenshots: `setup-mac.png`, `setup-iphone.png`, `setup-no-hub-iphone.png`,
 `setup-person-mac.png`, `setup-needs-you-iphone.png` (`SetupScreenshotTests`), `machines.png`,
-`vault-page.png` (`MachinesScreenshotTests`), and the app's `mac-machines.png`,
+`hub-page.png` (`MachinesScreenshotTests`), and the app's `mac-machines.png`,
 `ios-machines.png`, `mac-person-sheet.png`, `ios-person-sheet.png` (`ScreenshotTests`).
 
-The vault's page (`VaultPage`) reads "Connected · backing up 2 hosts · last batch 3 min. ago".
+The hub's page (`HubPage`) reads "Connected · backing up 2 hosts · last batch 3 min. ago".
 Its owners get two tabs: **Overview** and **Secrets** (the sets, their grants and secrets, and the
 recent access). Overview is a strip of quiet chips (sessions, with the per-state breakdown on
 hover; idle; archived; size), then a hosts table: freshness, sessions and top projects.
-Freshness (`Freshness`) is always relative on the vault's page: "✓ caught up" with the last
+Freshness (`Freshness`) is always relative on the hub's page: "✓ caught up" with the last
 batch's age, or "6 h behind" with a "Why?" popover, when the host has been offline that long or
-its last batch arrived that late (more than five minutes). The gear opens the vault's machine
-page (connection, forget). Screenshots: `machines.png`, `vault-page.png` (HerderKit's
+its last batch arrived that late (more than five minutes). The gear opens the hub's machine
+page (connection, forget). Screenshots: `machines.png`, `hub-page.png` (HerderKit's
 `MachinesScreenshotTests`).
 
-A session a paired vault replicates is listed once (`Lists.shadowed`): from its own host while
-that host is paired here and connected, else from the vault, read-only. Only the listed copy is
-followed, so pairing a vault does not stream every session twice.
+A session a paired hub replicates is listed once (`Lists.shadowed`): from its own host while
+that host is paired here and connected, else from the hub, read-only. Only the listed copy is
+followed, so pairing a hub does not stream every session twice.
 
 In `MachineSettingsSheet` an owner backs a connected machine up (`BackupField`): it shows
-where the machine backs up (`get_vault_link`), backs it up to a connected vault this device owns
-(`pair_vault_host` on the vault, then `link_vault` on the machine), or stops (`unlink_vault`,
-then `revoke_vault_host` on the vault when it is paired here as its owner).
+where the machine backs up (`get_hub_link`), backs it up to a connected hub this device owns
+(`pair_hub_host` on the hub, then `link_hub` on the machine), or stops (`unlink_hub`,
+then `revoke_hub_host` on the hub when it is paired here as its owner).
 
 On a machine's page or Providers an owner adds an account (`AddAccountSheet`, §8.8);
 **Log in on N machines** starts one login per machine in Activity (§4.9) and closes the sheet.
@@ -331,18 +329,18 @@ draws the form, the link, and joining before and after.
 **Adding a machine** (`AddMachine.swift`, flow 3 of the onboarding design). Fleet's header
 action, and Welcome's "Add another machine", open **Add a machine**: one sheet that runs
 Install · Approve · Done under a `FlowProgress` bar (numbered circles joined by lines on the
-Mac, a bar per step on the iPhone). It replaces Add to Fleet's device / machine / vault chooser,
+Mac, a bar per step on the iPhone). It replaces Add to Fleet's device / machine / hub chooser,
 the Claim your machines sheet that came up on launch and Fleet's claim banner.
 
 - **Install** has three tabs (`MachineSource`): **Linux or Mac** (`curl -fsSL
-  https://herder.sh/install | sh` then `herder service install`), **Kubernetes** (the vault of
-  `deploy/vault.yaml`, then `herder claim` in its pod) and **Has herder** (`herder claim`).
+  https://herder.sh/install | sh` then `herder service install`), **Kubernetes** (the hub of
+  `deploy/hub.yaml`, then `herder claim` in its pod) and **Has herder** (`herder claim`).
   Each command prints the machine's `herder://own` link and its QR code. The Mac watches the
   clipboard and goes on as soon as a herder link is copied; the link can be pasted into the
   field too, and the hint says machines on Tailscale need Tailscale on this Mac. The iPhone's
   footer is **Scan the Code** (the camera takes the sheet's place) and **Paste a Link**. Below,
-  "Or a vault your machines use" lists the vaults your machines back up to that this device has
-  not signed in to (`UnpairedVault`), each with **Sign In**: a vault is added the way a machine
+  "Or a hub your machines use" lists the hubs your machines back up to that this device has
+  not signed in to (`UnpairedHub`), each with **Sign In**: a hub is added the way a machine
   is. A `herder://login` or `herder://fleet` link hands over to its own sheet, in this one's place.
 - **Approve** names the machine ("Make gpu-box yours"), with its address and short fingerprint in
   secondary monospace and the code its terminal shows to compare. **As** shows the passkey that
@@ -352,23 +350,23 @@ the Claim your machines sheet that came up on launch and Fleet's claim banner.
   machines, "New to herder? Create a passkey" asks a name and makes the passkey as it approves.
 - **Done** reads "gpu-box is yours · You’re its owner." It lists your devices: this one signed
   in, your other Macs and iPhones not on it yet with **Add a Device** to bring it over, terminals
-  not needed. When you own a connected vault and the machine backs up nowhere, **Back up to
-  herder-vault-0** is on, and links the machine at once (`pair_vault_host`, then `link_vault`);
+  not needed. When you own a connected hub and the machine backs up nowhere, **Back up to
+  herder-hub-0** is on, and links the machine at once (`pair_hub_host`, then `link_hub`);
   turning it off sets the link's backup and secrets off. The footer is **Start a Session on It**
   and **Done**.
 
 Claim your machines (`ClaimSheet`), which moves machines that still know you by an old
 per-machine user to your passkey and asks about the users nobody can place, no longer comes up
 on launch and has no Fleet banner: it opens from People (`fleet.offerClaim`), the entry Setup's
-Needs you takes over. A `herder://own` link opened from outside the app, and a vault set up from
+Needs you takes over. A `herder://own` link opened from outside the app, and a hub set up from
 a machine's Backup, still approve in `ApproveSheet`. `AddMachineScreenshotTests` draws Install,
-Kubernetes, Approve, Done and a vault to sign in to (`mac-add-machine-*.png`, `mac-add-vault.png`).
+Kubernetes, Approve, Done and a hub to sign in to (`mac-add-machine-*.png`, `mac-add-hub.png`).
 
 ### 4.5 Usage (`UsageView`)
 
 Modelled on T3 Code's Usage page. A period picker (24h, 7d, 30d, month to date) and a machine
 filter, all machines added up by default (`UsageReport`, from each connected machine's
-`get_usage_summary`; a vault is not asked). Then the totals as tiles: API-equivalent cost
+`get_usage_summary`; a hub is not asked). Then the totals as tiles: API-equivalent cost
 ("≈" and "partly estimated" when herder priced some of it), tokens, cache savings (the share of
 input read from the prompt cache), input, output, cache read and write. Then one card per
 account, costliest first: provider, tokens and dollars for the period, and what is left of its
@@ -384,7 +382,7 @@ behind", `SkillLibrary.status`), with **Pull** once there is a repository, and *
 tabs with their counts, each with an ⓘ that says where its skills come from:
 
 - **Library** (`SkillLibrary`, from each machine's `skills_status`): a `SortableTable` with the
-  skill and its description, the providers it reaches, one column per machine (a vault keeps no
+  skill and its description, the providers it reaches, one column per machine (a hub keeps no
   library) and the skill's menu (Edit, Delete). A machine's cell is the skill's switch there
   (`set_skill_enabled`); where the machine does not have the skill, an amber dot if the machine
   is behind, else a dash. Under the table, one line of sync health: the repository, then who is
@@ -685,7 +683,7 @@ Screenshots: `mac-session.png`, `mac-session-approval.png`, `mac-session-running
 | Model, account, machine | popover (340 pt) | popover (fits 375 pt) | `ModelPicker`, `FooterMenu` |
 | Permission mode, ⋯ | menu | menu | SwiftUI `Menu` |
 | New Session | sheet | sheet, full width | `ProjectPicker` |
-| Machine, account, project settings, vault, sub-agent | page in the main area (§8.5) | pushed | `DetailPage`, `Page` |
+| Machine, account, project settings, hub, sub-agent | page in the main area (§8.5) | pushed | `DetailPage`, `Page` |
 | Add a machine, Add Account, Add Secret, New Skill, Import Skill, Add MCP Server, Fork | sheet, 560 pt (`SheetScaffold`) | system sheet, full width | `SheetScaffold` |
 | Draft session | session pane | full screen | `DraftSessionView` |
 | Activity (installs, logins, sign-ins) | popover (560 pt) from the header chip | sheet from the toolbar | `ActivityPanel` |
@@ -854,7 +852,7 @@ Xcode preview in its file.
 
 ### 8.5 Detail pages (P14.9)
 
-Objects get pages, actions get sheets. A machine, an account, a project's settings, a vault and
+Objects get pages, actions get sheets. A machine, an account, a project's settings, a hub and
 a provider's sub-agent are a `Page`. On the Mac and iPad a page opens over its section in the
 main area (`PageStack` in `DesktopShell`), under a breadcrumb of the section and each page on
 the way ("Setup › trash-can-01"), each crumb a way back to it and ⌘[ one step back
@@ -932,7 +930,7 @@ protocol has no plan, no daily usage and no command to remove an account. Screen
 - **Capacity**: "Turns at once" as a stepper (`TurnLimitRow`), its hint the machine's memory and
   cores and about how many turns fit (`TurnLoad.fit`: a core and 2 GB a turn, a quarter of the
   cores left to the rest); running and waiting turns behind ⓘ.
-- **Backup** (`BackupSection`, owners only): the vault it backs up to and how far that got
+- **Backup** (`BackupSection`, owners only): the hub it backs up to and how far that got
   ("Caught up · 3m ago"), **Stop…**, and the **Back up sessions** and **Secrets** switches. It
   shows where the machine
   last said it backs up (`Fleet.backupLinks`) while it asks again.
@@ -944,7 +942,7 @@ Each section is one view listed once in `MachinePage.body`, so a new one (Bots, 
 line there. `MachinePageScreenshotTests` draws an owner's page
 ([`screenshots/p14-10/machine-owner.png`](screenshots/p14-10/machine-owner.png)) and a
 member's ([`screenshots/p14-10/machine-member.png`](screenshots/p14-10/machine-member.png)).
-In the demo fleet the user is a member on `laptop`, and `devbox` backs up to a vault, so the
+In the demo fleet the user is a member on `laptop`, and `devbox` backs up to a hub, so the
 app's ScreenshotTests also shoot `mac-machine-backup` and `mac-machine-member`.
 
 ### 8.8 Create sheets (P14.17)

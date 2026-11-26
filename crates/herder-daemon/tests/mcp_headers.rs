@@ -22,7 +22,7 @@ use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The value the fixtures were recorded with, as the vault holds it.
+/// The value the fixtures were recorded with, as the hub holds it.
 const VALUE: &str = "token";
 
 /// The servers the adapters' `mcp_servers` fixtures were recorded with, the HTTP one's
@@ -61,8 +61,8 @@ fn configured(authorization: &str) -> UserServers {
     ])
 }
 
-/// A vault granting the host `linear`, which holds `API_KEY`.
-fn vault(secrets: Vec<SecretRef>) -> SecretsFuture {
+/// A hub granting the host `linear`, which holds `API_KEY`.
+fn hub(secrets: Vec<SecretRef>) -> SecretsFuture {
     Box::pin(async move {
         secrets
             .into_iter()
@@ -85,11 +85,9 @@ fn vault(secrets: Vec<SecretRef>) -> SecretsFuture {
     })
 }
 
-/// The servers a CLI start gets, the header's placeholder filled in from [`vault`].
+/// The servers a CLI start gets, the header's placeholder filled in from [`hub`].
 async fn launched(authorization: &str) -> Vec<UserMcpServer> {
-    let launch = configured(authorization)
-        .for_session(None, None, vault)
-        .await;
+    let launch = configured(authorization).for_session(None, None, hub).await;
     assert!(launch.left_out.is_empty(), "{:?}", launch.left_out);
     launch.servers
 }

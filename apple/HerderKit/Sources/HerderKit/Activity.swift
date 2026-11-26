@@ -3,13 +3,13 @@ import Herder
 
 /// What a background job runs on a machine: an account's login, to add it or to log it in
 /// again, a provider CLI's installer or updater, an AWS IAM Identity Center sign-in, setting
-/// up a vault next to its daemon, or an update of the machine's herder.
+/// up a hub next to its daemon, or an update of the machine's herder.
 enum JobKind: Hashable {
     case add(AccountId)
     case relogin(AccountId)
     case install(Provider)
     case awsSignIn(profile: String)
-    case vault
+    case hub
     case updateHerder
 }
 
@@ -23,7 +23,7 @@ struct JobKey: Hashable, Identifiable {
 }
 
 /// The long-running jobs this device started, kept while the app runs: CLI installs and
-/// updates, account logins, AWS sign-ins, vault setups and herder updates. Each but a vault
+/// updates, account logins, AWS sign-ins, hub setups and herder updates. Each but a hub
 /// setup or a herder update runs in its own terminal on its machine; each stays listed until the
 /// user clears it once it has ended.
 ///
@@ -33,10 +33,10 @@ struct JobKey: Hashable, Identifiable {
 @MainActor
 struct Activity {
     struct Job {
-        /// Its terminal; a vault setup or a herder update has none.
+        /// Its terminal; a hub setup or a herder update has none.
         let connection: TerminalConnection?
-        /// A vault setup's step.
-        var vault: VaultSetupStep?
+        /// A hub setup's step.
+        var hub: HubSetupStep?
         /// Whether its terminal was opened; until then it is queued.
         var started = false
         /// An install's CLI version when it started, as `Fleet.cliVersion` reads it.
@@ -91,8 +91,8 @@ struct Activity {
         jobs[key]?.before = before
     }
 
-    mutating func setVault(_ key: JobKey, _ step: VaultSetupStep) {
-        jobs[key]?.vault = step
+    mutating func setHub(_ key: JobKey, _ step: HubSetupStep) {
+        jobs[key]?.hub = step
     }
 
     mutating func end(_ key: JobKey, at date: Date = .now) {
@@ -181,7 +181,7 @@ extension Fleet {
         case .add: if let account = job.connection?.account { addAccount(account, on: key.hostId) }
         case .relogin(let id): relogin(id, on: key.hostId)
         case .awsSignIn(let profile): signInToAws(profile, on: key.hostId)
-        case .vault: setUpVault(on: key.hostId)
+        case .hub: setUpHub(on: key.hostId)
         case .updateHerder: updateHerder(on: key.hostId, when: job.update?.when ?? .idle)
         }
     }
@@ -225,7 +225,7 @@ extension Fleet {
     func progress(_ key: JobKey) -> JobProgress {
         guard let job = activity[key] else { return .ended }
         guard job.started else { return .queued }
-        if case .vault = key.kind { return JobProgress(vault: job.vault) }
+        if case .hub = key.kind { return JobProgress(hub: job.hub) }
         let machine = machines.first { $0.hostId == key.hostId }
         guard let connection = job.connection else {
             guard let update = job.update else { return .ended }
@@ -242,8 +242,8 @@ extension Fleet {
         case .awsSignIn:
             return JobProgress(AwsSignInStatus(state: connection.state, refusal: connection.refusal,
                                                terminalId: connection.terminalId, terminals: machine?.terminals ?? []))
-        case .vault:
-            return JobProgress(vault: job.vault)
+        case .hub:
+            return JobProgress(hub: job.hub)
         case .updateHerder:
             return .ended
         }
@@ -283,13 +283,13 @@ enum JobProgress: Equatable {
     case updated(from: String, to: String)
     /// The update ended, and the machine lists the CLI at the version it had.
     case upToDate(String)
-    /// The machine installs its vault and links to it.
-    case settingUpVault
-    /// You claim the new vault with your passkey.
-    case claimingVault
-    /// The vault is yours, named so, and the machine linked to it.
-    case vaultReady(String)
-    /// The machine's herder cannot set up a vault from here: install it there by hand.
+    /// The machine installs its hub and links to it.
+    case settingUpHub
+    /// You claim the new hub with your passkey.
+    case claimingHub
+    /// The hub is yours, named so, and the machine linked to it.
+    case hubReady(String)
+    /// The machine's herder cannot set up a hub from here: install it there by hand.
     case needsNewerHerder
     /// A herder update waits for this many running turns to end; no new one starts meanwhile.
     case waitingForTurns(Int)
@@ -370,9 +370,9 @@ enum JobProgress: Equatable {
     var group: Group {
         switch self {
         case .running, .approve: .needsYou
-        case .starting, .installing, .settingUpVault, .claimingVault, .waitingForTurns, .downloading, .restarting: .running
+        case .starting, .installing, .settingUpHub, .claimingHub, .waitingForTurns, .downloading, .restarting: .running
         case .queued: .queued
-        case .added, .signedIn, .ended, .installed, .updated, .upToDate, .vaultReady, .needsNewerHerder, .failed: .done
+        case .added, .signedIn, .ended, .installed, .updated, .upToDate, .hubReady, .needsNewerHerder, .failed: .done
         }
     }
 
@@ -406,9 +406,9 @@ extension JobKey {
         case (.awsSignIn(let profile), .signedIn): return "Signed in to AWS \(profile) on \(machine)"
         case (.awsSignIn(let profile), .failed): return "AWS sign-in to \(profile) on \(machine) failed"
         case (.awsSignIn(let profile), _): return "AWS sign-in to \(profile) on \(machine)"
-        case (.vault, .vaultReady(let name)): return "Ran \(name)"
-        case (.vault, .failed), (.vault, .needsNewerHerder): return "Running a vault on \(machine) failed"
-        case (.vault, _): return "Run a vault on \(machine)"
+        case (.hub, .hubReady(let name)): return "Ran \(name)"
+        case (.hub, .failed), (.hub, .needsNewerHerder): return "Running a hub on \(machine) failed"
+        case (.hub, _): return "Run a hub on \(machine)"
         case (.updateHerder, .updated): return "Updated herder on \(machine)"
         case (.updateHerder, .upToDate): return "herder on \(machine) is up to date"
         case (.updateHerder, .failed): return "Updating herder on \(machine) failed"
@@ -439,10 +439,10 @@ extension JobProgress {
         case .added: "Sessions can use it now"
         case .signedIn: "Signed in"
         case .ended: "Stopped before it signed in"
-        case .settingUpVault: "Installing the vault’s service on \(machine) and linking to it"
-        case .claimingVault: "Approve the vault with your passkey to own it"
-        case .vaultReady: "Yours · \(machine) fetches secrets from it"
-        case .needsNewerHerder: "Its herder cannot do this from here: run \(VaultChoices.installCommand) on \(machine)"
+        case .settingUpHub: "Installing the hub’s service on \(machine) and linking to it"
+        case .claimingHub: "Approve the hub with your passkey to own it"
+        case .hubReady: "Yours · \(machine) fetches secrets from it"
+        case .needsNewerHerder: "Its herder cannot do this from here: run \(HubChoices.installCommand) on \(machine)"
         case .failed(let message): message
         }
     }
@@ -461,9 +461,9 @@ extension JobProgress {
         case .installed(let version): version.isEmpty ? "Installed" : "Installed \(version)"
         case .updated(let from, let to): from.isEmpty || to.isEmpty ? "Updated" : "\(from) → \(to)"
         case .upToDate(let version): version.isEmpty ? "Up to date" : "Up to date \(version)"
-        case .settingUpVault: "Installing"
-        case .claimingVault: "Approving"
-        case .vaultReady: "Ready"
+        case .settingUpHub: "Installing"
+        case .claimingHub: "Approving"
+        case .hubReady: "Ready"
         case .needsNewerHerder: "Needs a newer herder"
         case .waitingForTurns: "Waiting for turns"
         case .downloading: "Downloading"

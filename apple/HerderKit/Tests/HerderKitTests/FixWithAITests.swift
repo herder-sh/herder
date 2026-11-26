@@ -51,7 +51,7 @@ struct FixWithAITests {
         let failed = JobProgress.failed("The installer exited with 1.")
         #expect(FixRequest.offered(.install("codex"), progress: failed, role: .owner))
         #expect(FixRequest.offered(.updateHerder, progress: failed, role: .owner))
-        #expect(FixRequest.offered(.vault, progress: failed, role: .owner))
+        #expect(FixRequest.offered(.hub, progress: failed, role: .owner))
         // A member never gets a shell on the machine, so no agent fixing it either.
         #expect(!FixRequest.offered(.install("codex"), progress: failed, role: .member))
         #expect(!FixRequest.offered(.install("codex"), progress: failed, role: nil))

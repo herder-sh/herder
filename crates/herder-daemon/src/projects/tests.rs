@@ -235,8 +235,8 @@ fn origin_url_follows_git_config_syntax() {
     }
 }
 
-/// The next project list the hub sends to `outbox`, within five seconds.
-async fn next_projects(outbox: &crate::hub::Outbox) -> Vec<Project> {
+/// The next project list the fanout sends to `outbox`, within five seconds.
+async fn next_projects(outbox: &crate::fanout::Outbox) -> Vec<Project> {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match outbox.pop() {
@@ -260,16 +260,16 @@ async fn discovery_lists_declared_paths_only_and_updates_it_when_sessions_change
         "[remote \"origin\"]\n\turl = git@github.com:org/app.git\n",
     );
     let declared = tmp.path().join("notes");
-    let hub = Arc::new(Hub::default());
-    let outbox = Arc::new(crate::hub::Outbox::default());
-    hub.connect(&outbox, herder_protocol::Role::Member);
+    let fanout = Arc::new(Fanout::default());
+    let outbox = Arc::new(crate::fanout::Outbox::default());
+    fanout.connect(&outbox, herder_protocol::Role::Member);
     let shutdown = CancellationToken::new();
     let sessions = SessionManager::open(
         crate::session::Setup {
             store: herder_store::Store::open(tmp.path().join("herder.db")).unwrap(),
             adapters: crate::session::Adapters::new(),
             accounts: crate::session::Accounts::new(),
-            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            sink: Arc::clone(&fanout) as Arc<dyn EventSink>,
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
@@ -296,7 +296,7 @@ async fn discovery_lists_declared_paths_only_and_updates_it_when_sessions_change
                     ..ProjectsConfig::default()
                 },
             )),
-            hub: Arc::clone(&hub),
+            fanout: Arc::clone(&fanout),
             sessions,
             sessions_changed: Arc::clone(&sessions_changed),
             data_dir: tmp.path().join("data"),
@@ -375,16 +375,16 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
             },
         })
         .unwrap();
-    let hub = Arc::new(Hub::default());
-    let outbox = Arc::new(crate::hub::Outbox::default());
-    hub.connect(&outbox, herder_protocol::Role::Member);
+    let fanout = Arc::new(Fanout::default());
+    let outbox = Arc::new(crate::fanout::Outbox::default());
+    fanout.connect(&outbox, herder_protocol::Role::Member);
     let shutdown = CancellationToken::new();
     let sessions = SessionManager::open(
         crate::session::Setup {
             store,
             adapters: crate::session::Adapters::new(),
             accounts: crate::session::Accounts::new(),
-            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            sink: Arc::clone(&fanout) as Arc<dyn EventSink>,
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
@@ -403,7 +403,7 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
                 tmp.path().join("project-icons"),
                 ProjectsConfig::default(),
             )),
-            hub: Arc::clone(&hub),
+            fanout: Arc::clone(&fanout),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
             data_dir: tmp.path().join("data"),
@@ -490,16 +490,16 @@ async fn sessions_in_folders_that_are_not_git_repositories_make_no_project() {
             })
             .unwrap();
     }
-    let hub = Arc::new(Hub::default());
-    let outbox = Arc::new(crate::hub::Outbox::default());
-    hub.connect(&outbox, herder_protocol::Role::Member);
+    let fanout = Arc::new(Fanout::default());
+    let outbox = Arc::new(crate::fanout::Outbox::default());
+    fanout.connect(&outbox, herder_protocol::Role::Member);
     let shutdown = CancellationToken::new();
     let sessions = SessionManager::open(
         crate::session::Setup {
             store,
             adapters: crate::session::Adapters::new(),
             accounts: crate::session::Accounts::new(),
-            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            sink: Arc::clone(&fanout) as Arc<dyn EventSink>,
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
@@ -517,7 +517,7 @@ async fn sessions_in_folders_that_are_not_git_repositories_make_no_project() {
                 tmp.path().join("project-icons"),
                 ProjectsConfig::default(),
             )),
-            hub: Arc::clone(&hub),
+            fanout: Arc::clone(&fanout),
             sessions,
             sessions_changed: Arc::new(Notify::new()),
             data_dir: tmp.path().join("data"),
@@ -557,9 +557,9 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
         ),
     )
     .unwrap();
-    let hub = Arc::new(Hub::default());
-    let outbox = Arc::new(crate::hub::Outbox::default());
-    hub.connect(&outbox, herder_protocol::Role::Owner);
+    let fanout = Arc::new(Fanout::default());
+    let outbox = Arc::new(crate::fanout::Outbox::default());
+    fanout.connect(&outbox, herder_protocol::Role::Owner);
     let shutdown = CancellationToken::new();
     let sessions = SessionManager::open(
         crate::session::Setup {
@@ -575,7 +575,7 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
                     endpoint: None,
                 },
             )]),
-            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            sink: Arc::clone(&fanout) as Arc<dyn EventSink>,
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
@@ -597,7 +597,7 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
         Discovery {
             host: host(),
             config: overrides,
-            hub: Arc::clone(&hub),
+            fanout: Arc::clone(&fanout),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
             data_dir: tmp.path().join("data"),
@@ -846,16 +846,16 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
             },
         })
         .unwrap();
-    let hub = Arc::new(Hub::default());
-    let outbox = Arc::new(crate::hub::Outbox::default());
-    hub.connect(&outbox, herder_protocol::Role::Owner);
+    let fanout = Arc::new(Fanout::default());
+    let outbox = Arc::new(crate::fanout::Outbox::default());
+    fanout.connect(&outbox, herder_protocol::Role::Owner);
     let shutdown = CancellationToken::new();
     let sessions = SessionManager::open(
         crate::session::Setup {
             store,
             adapters: crate::session::Adapters::new(),
             accounts: crate::session::Accounts::new(),
-            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            sink: Arc::clone(&fanout) as Arc<dyn EventSink>,
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
@@ -877,7 +877,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
         Discovery {
             host: host(),
             config: overrides,
-            hub: Arc::clone(&hub),
+            fanout: Arc::clone(&fanout),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
             data_dir: tmp.path().join("data"),
@@ -1002,16 +1002,16 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
         ),
     )
     .unwrap();
-    let hub = Arc::new(Hub::default());
-    let outbox = Arc::new(crate::hub::Outbox::default());
-    hub.connect(&outbox, herder_protocol::Role::Member);
+    let fanout = Arc::new(Fanout::default());
+    let outbox = Arc::new(crate::fanout::Outbox::default());
+    fanout.connect(&outbox, herder_protocol::Role::Member);
     let shutdown = CancellationToken::new();
     let sessions = SessionManager::open(
         crate::session::Setup {
             store: herder_store::Store::open(tmp.path().join("herder.db")).unwrap(),
             adapters: crate::session::Adapters::new(),
             accounts: crate::session::Accounts::new(),
-            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            sink: Arc::clone(&fanout) as Arc<dyn EventSink>,
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
@@ -1033,7 +1033,7 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
         Discovery {
             host: host(),
             config: overrides,
-            hub: Arc::clone(&hub),
+            fanout: Arc::clone(&fanout),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
             data_dir: tmp.path().join("data"),
@@ -1133,16 +1133,16 @@ async fn an_uploaded_icon_wins_until_it_is_cleared() {
         ),
     )
     .unwrap();
-    let hub = Arc::new(Hub::default());
-    let outbox = Arc::new(crate::hub::Outbox::default());
-    hub.connect(&outbox, herder_protocol::Role::Owner);
+    let fanout = Arc::new(Fanout::default());
+    let outbox = Arc::new(crate::fanout::Outbox::default());
+    fanout.connect(&outbox, herder_protocol::Role::Owner);
     let shutdown = CancellationToken::new();
     let sessions = SessionManager::open(
         crate::session::Setup {
             store: herder_store::Store::open(tmp.path().join("herder.db")).unwrap(),
             adapters: crate::session::Adapters::new(),
             accounts: crate::session::Accounts::new(),
-            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            sink: Arc::clone(&fanout) as Arc<dyn EventSink>,
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
@@ -1165,7 +1165,7 @@ async fn an_uploaded_icon_wins_until_it_is_cleared() {
         Discovery {
             host: host(),
             config: overrides,
-            hub: Arc::clone(&hub),
+            fanout: Arc::clone(&fanout),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
             data_dir: tmp.path().join("data"),

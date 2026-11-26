@@ -7,7 +7,7 @@
 herder has three parts, all built on one shared Rust client core:
 
 - `herder daemon` runs on each Linux machine or Mac and hosts agent sessions. It runs the unmodified Claude Code, Codex, Cursor or OpenCode CLI, each account under its own config dir, and keeps every session in an append-only journal.
-- The herder Mac and iPhone apps are native apps. The Board lists every open task on every paired machine, with its agents folded under it; a session shows its transcript, questions and approvals. Providers, Fleet, Skills, Integrations and Activity cover accounts, CLI versions, MCP servers, vaults, bots and every install, update and login. The Mac app is a download from GitHub; the iPhone app is in TestFlight and not on the App Store yet.
+- The herder Mac and iPhone apps are native apps. The Board lists every open task on every paired machine, with its agents folded under it; a session shows its transcript, questions and approvals. Providers, Fleet, Skills, Integrations and Activity cover accounts, CLI versions, MCP servers, hubs, bots and every install, update and login. The Mac app is a download from GitHub; the iPhone app is in TestFlight and not on the App Store yet.
 - Bare `herder` opens the terminal UI. It works over SSH or mosh, including from a phone: below 65 columns it shows one pane at a time, and every view works with the arrow keys, Tab and Enter.
 
 herder is pre-1.0 and changes quickly.
@@ -34,21 +34,21 @@ The Mac app is a zip on the latest GitHub release (https://github.com/herder-sh/
 
 ## How it connects
 
-The iPhone app, the Mac app and the terminal UI connect straight to a machine's daemon on the same network, over mutual TLS with pinned certificates, so traffic is encrypted end to end between app and machine. Each machine keeps one outbound connection to the hub, which keeps a durable copy of every session and the fleet's secrets; a CLIProxyAPI beside it holds the provider logins the machines share. Coming soon: the apps reach every machine from anywhere through the hub, which the owner exposes however suits them (a Cloudflare Tunnel, a port forward, a reverse proxy or a VPN), with the hub and anything in between forwarding only ciphertext.
+The iPhone app, the Mac app and the terminal UI connect straight to a machine's daemon on the same network, over mutual TLS with pinned certificates, so traffic is encrypted end to end between app and machine. Each machine keeps one outbound connection to the hub, which keeps a durable copy of every session and the fleet's secrets; a CLIProxyAPI beside it holds the provider logins the machines share. From anywhere else, the apps reach every machine through the hub, which the owner exposes however suits them (a Cloudflare Tunnel, a port forward, a reverse proxy or a VPN), with the hub and anything in between forwarding only ciphertext.
 
 ## Features
 
 - Failover across accounts: when a session hits a usage limit, herder moves it to another account of the same provider that has room left. It only switches after a limit is hit, never pre-emptively. With no account left and a known reset time, the session waits for the reset and retries by itself.
 - A fleet of machines: run a daemon on every machine, pair once, and see every task in one Board. Fleet shows each machine's load, running sessions, accounts and provider CLIs. `herder fork` continues a session's history on another host.
-- Vaults that run anywhere: a herder vault backs up every session journal its hosts replicate to it, holds secrets, and can take over a session from another machine. Run it on any machine with one click in the app or `herder vault install`, on another box, or on Kubernetes. A host paired with a host code can only replicate its own sessions and reads nothing else on the vault.
+- Hubs that run anywhere: a herder hub backs up every session journal its hosts replicate to it, holds secrets, and can take over a session from another machine. Run it on any machine with one click in the app or `herder hub install`, on another box, or on Kubernetes. A host paired with a host code can only replicate its own sessions and reads nothing else on the hub.
 - Mac, iPhone and terminal: the native apps or the terminal UI over SSH. Allow or deny tool calls and answer agent questions from wherever you are.
 - Multi-agent tasks: an agent can spawn child sessions, prompt them, wait for them, answer their questions or escalate to you. The daemon serves these task tools to every agent over MCP, and the Board folds the children under their task.
 - Login tokens stay yours: herder never reads, stores, copies or relays provider login tokens.
-- Slack and Telegram bots: a machine can run chat bots. DM one, or mention it in a channel, to start a session, chat with it and answer its questions and approvals; a thread is a session. Mentioned in a Slack thread, the bot reads the thread, and files an agent publishes are posted back into it. Each bot has an allowlist with switches per person for DMs, channels and approvals. Bots never reach terminals, logins or settings. Their tokens are secrets in the vault, which the daemon keeps in memory only.
+- Slack and Telegram bots: a machine can run chat bots. DM one, or mention it in a channel, to start a session, chat with it and answer its questions and approvals; a thread is a session. Mentioned in a Slack thread, the bot reads the thread, and files an agent publishes are posted back into it. Each bot has an allowlist with switches per person for DMs, channels and approvals. Bots never reach terminals, logins or settings. Their tokens are secrets in the hub, which the daemon keeps in memory only.
 - Usage: every account's session and weekly windows on every machine, when each resets, tokens, API-equivalent cost and failovers.
 - Shared skills: one skill library in a git repository, checked out on every machine for every provider, with a switch per machine.
 - Providers and CLI updates: every account and provider CLI on every machine on one page, with each machine's version against the latest, and Update All. Installs, updates and logins run as jobs in Activity.
-- MCP servers and secrets: add MCP servers to every machine at once, or import a README's JSON. Secrets live in the vault in sets granted to hosts; `herder secret run NAME -- command` runs a program with them in its environment, and the agent never sees a value.
+- MCP servers and secrets: add MCP servers to every machine at once, or import a README's JSON. Secrets live in the hub in sets granted to hosts; `herder secret run NAME -- command` runs a program with them in its environment, and the agent never sees a value.
 - Owners and members: invite someone with a one-time code from a machine's People section, and change their role or revoke a device later. Only owners of a daemon can open a terminal, log in accounts or change settings; members can drive sessions but never get a shell.
 - Scriptable: `herder session new`, `send`, `wait`, `status`, `list`, `archive`. Each takes `--json` and never prompts.
 
@@ -91,13 +91,13 @@ No. herder never reads, stores, copies or relays provider login tokens. You log 
 
 Yes. Run the herder daemon on each machine, pair them with `herder pair`, and the apps and the terminal UI show the tasks of every machine on one Board, with each machine's load, accounts and provider CLIs on the Fleet page.
 
-### What does the herder vault do?
+### What does the herder hub do?
 
-A vault keeps a copy of every session of the machines linked to it, so a session's history survives its machine and another machine can take the session over. It also holds secrets, granted per machine: `herder secret run` hands them to a program an agent runs, without the agent seeing them. Run the vault on Kubernetes with the manifests in the repository, or on any machine with one click in the app or `herder vault install`.
+A hub keeps a copy of every session of the machines linked to it, so a session's history survives its machine and another machine can take the session over. It also holds secrets, granted per machine: `herder secret run` hands them to a program an agent runs, without the agent seeing them. Run the hub on Kubernetes with the manifests in the repository, or on any machine with one click in the app or `herder hub install`.
 
 ### Can I use herder from Slack or Telegram?
 
-Yes. A machine can run Slack and Telegram bots. Mention the Slack bot in a thread and it reads the thread, starts a session and posts the files the agent publishes back into the thread; DM a bot or mention it in a channel or group to chat with a session and answer its questions and approvals. Each bot has its own allowlist, with switches per person for DMs, channels and approvals, and never opens terminals, logins or settings. The bot's tokens are secrets in your vault, which the daemon keeps in memory only.
+Yes. A machine can run Slack and Telegram bots. Mention the Slack bot in a thread and it reads the thread, starts a session and posts the files the agent publishes back into the thread; DM a bot or mention it in a channel or group to chat with a session and answer its questions and approvals. Each bot has its own allowlist, with switches per person for DMs, channels and approvals, and never opens terminals, logins or settings. The bot's tokens are secrets in your hub, which the daemon keeps in memory only.
 
 ### Can I share a machine with my team?
 

@@ -1,16 +1,16 @@
-//! The backup dialog, over the fleet view: where the machine backs up, or the vaults to pick
+//! The backup dialog, over the fleet view: where the machine backs up, or the hubs to pick
 //! from, and how linking or stopping goes.
 //!
 //! ```text
 //! ┌─ back up · devbox ─────────────────────────── esc ─┐
 //! │                                                    │
-//! │  Its sessions replicate to the vault as they run;  │
-//! │  any host of the vault can take one over.          │
+//! │  Its sessions replicate to the hub as they run;    │
+//! │  any host of the hub can take one over.            │
 //! │                                                    │
 //! │  back up to                                        │
-//! │▶ ● vault   vault.lan:7447 · 3f9a…77c0              │
+//! │▶ ● hub   hub.lan:7447 · 3f9a…77c0                  │
 //! │                                                    │
-//! │  The vault gives devbox a key that only            │
+//! │  The hub gives devbox a key that only              │
 //! │  replicates: it reads nothing there.               │
 //! └────────────────────────────────────────────────────┘
 //! ```
@@ -39,8 +39,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, backup: &Backup) {
         .machine_panel
         .as_ref()
         .and_then(|panel| panel.links.get(&backup.host));
-    let vaults = app.vaults(&backup.host);
-    let cursor = backup.selected.min(vaults.len().saturating_sub(1));
+    let hubs = app.hubs(&backup.host);
+    let cursor = backup.selected.min(hubs.len().saturating_sub(1));
     let width = usize::from(
         Size::Medium
             .width()
@@ -82,14 +82,14 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, backup: &Backup) {
             top.extend(super::failure(ui, why, width));
             hints = vec![Hint::new("enter", "back"), Hint::new("esc", "back")];
         }
-        (Step::Linking { vault }, _) => {
-            let vault = app
+        (Step::Linking { hub }, _) => {
+            let hub = app
                 .machines
                 .iter()
-                .find(|m| m.host_id == *vault)
-                .map_or("the vault", |m| m.name.as_str());
+                .find(|m| m.host_id == *hub)
+                .map_or("the hub", |m| m.name.as_str());
             top.extend(wrapped(
-                &format!("Pairing {name} with {vault}{}", ui.glyphs.ellipsis),
+                &format!("Pairing {name} with {hub}{}", ui.glyphs.ellipsis),
                 ui.muted(),
             ));
             hints.clear();
@@ -108,7 +108,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, backup: &Backup) {
             ));
             top.push(Line::default());
             top.extend(wrapped(
-                "New sessions and turns stay on this machine only. What the vault holds stays \
+                "New sessions and turns stay on this machine only. What the hub holds stays \
                  there, and the machine's key no longer opens it.",
                 ui.muted(),
             ));
@@ -120,10 +120,10 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, backup: &Backup) {
                 ui.muted(),
             ));
         }
-        (Step::Choose, Some(Known::Vault)) => {
+        (Step::Choose, Some(Known::Hub)) => {
             top.extend(wrapped(
                 &format!(
-                    "{name} is a vault: other machines back up to it. Choose one of them here \
+                    "{name} is a hub: other machines back up to it. Choose one of them here \
                      to back it up."
                 ),
                 ui.text(),
@@ -137,7 +137,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, backup: &Backup) {
             ));
         }
         (Step::Choose, Some(Known::Linked(linked))) => {
-            let vault = app.paired_vault(linked);
+            let hub = app.paired_hub(linked);
             let line = vec![
                 Span::styled(
                     format!("{} ", ui.glyphs.connected),
@@ -145,7 +145,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, backup: &Backup) {
                 ),
                 Span::styled(format!("{name} backs up to "), ui.text()),
                 Span::styled(
-                    vault.map_or("a vault", |v| v.name.as_str()).to_owned(),
+                    hub.map_or("a hub", |v| v.name.as_str()).to_owned(),
                     ui.strong(),
                 ),
             ];
@@ -154,7 +154,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, backup: &Backup) {
             top.push(Line::styled(format!("  {}", linked.address), ui.muted()));
             top.push(Line::default());
             top.extend(wrapped(
-                "Its sessions replicate there as they run; any host of the vault can take one \
+                "Its sessions replicate there as they run; any host of the hub can take one \
                  over if this machine goes down.",
                 ui.muted(),
             ));
@@ -165,29 +165,29 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, backup: &Backup) {
         }
         (Step::Choose, Some(Known::Unlinked)) => {
             top.extend(wrapped(
-                "Its sessions replicate to the vault as they run; any host of the vault can take \
+                "Its sessions replicate to the hub as they run; any host of the hub can take \
                  one over if this machine goes down.",
                 ui.muted(),
             ));
             top.push(Line::default());
-            if vaults.is_empty() {
+            if hubs.is_empty() {
                 top.extend(wrapped(
-                    "No vault is paired here. Pair this client with one as its owner: run \
-                     `herder pair` on the vault, then a here.",
+                    "No hub is paired here. Pair this client with one as its owner: run \
+                     `herder pair` on the hub, then a here.",
                     ui.text(),
                 ));
             } else {
                 top.push(Line::styled("back up to", ui.muted()));
-                rows = vaults
+                rows = hubs
                     .iter()
-                    .map(|vault| {
+                    .map(|hub| {
                         Row::item(Line::from(vec![
                             Span::styled(ui.glyphs.connected, Style::new().fg(theme.success)),
                             Span::raw(" "),
-                            Span::styled(vault.name.clone(), ui.text()),
+                            Span::styled(hub.name.clone(), ui.text()),
                         ]))
                         .right(Line::styled(
-                            vault.addresses.first().cloned().unwrap_or_default(),
+                            hub.addresses.first().cloned().unwrap_or_default(),
                             ui.muted(),
                         ))
                     })
@@ -195,14 +195,14 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, backup: &Backup) {
                 bottom.push(Line::default());
                 bottom.extend(wrapped(
                     &format!(
-                        "The vault gives {name} a key that only replicates: it reads nothing \
+                        "The hub gives {name} a key that only replicates: it reads nothing \
                          there."
                     ),
                     ui.muted(),
                 ));
                 hints = vec![
                     Hint::new("enter", "back up"),
-                    Hint::new("j/k", "vault"),
+                    Hint::new("j/k", "hub"),
                     Hint::new("esc", "close"),
                 ];
             }

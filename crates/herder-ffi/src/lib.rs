@@ -494,7 +494,7 @@ impl Client {
 
     /// Forks a session `source` lists onto `destination`: from its own journal there, else
     /// relayed from the session's machine while it is connected, else from the destination's
-    /// vault; owners of `destination` only. Answers `session_forked`.
+    /// hub; owners of `destination` only. Answers `session_forked`.
     pub async fn fork_session(
         &self,
         source: HostId,

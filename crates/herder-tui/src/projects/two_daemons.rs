@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::Client;
-use herder_daemon::Hub;
+use herder_daemon::Fanout;
 use herder_daemon::auth::{Auth, authenticator};
 use herder_daemon::login::Logins;
 use herder_daemon::projects::{Discovery, OnSessionsChanged, Overrides, ProjectsConfig};
@@ -61,7 +61,7 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken, 
     std::fs::create_dir_all(dir.join("tls")).unwrap();
     let tls = Tls::load_or_create(&dir.join("tls"), name).unwrap();
     let auth = Arc::new(Auth::open(dir).unwrap());
-    let hub = Arc::new(Hub::default());
+    let fanout = Arc::new(Fanout::default());
     let fake = Provider::Other("fake".into());
     let mut adapters = Adapters::new();
     adapters.register(
@@ -85,7 +85,7 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken, 
         adapters,
         accounts,
         sink: Arc::new(OnSessionsChanged {
-            next: Arc::clone(&hub) as Arc<dyn EventSink>,
+            next: Arc::clone(&fanout) as Arc<dyn EventSink>,
             notify: Arc::clone(&sessions_changed),
         }),
         turn_ids: ulid_turn_ids(),
@@ -106,7 +106,7 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken, 
                 dir.join("project-icons"),
                 ProjectsConfig::default(),
             )),
-            hub: Arc::clone(&hub),
+            fanout: Arc::clone(&fanout),
             sessions: sessions.clone(),
             sessions_changed,
             data_dir: dir.join("data"),
@@ -116,12 +116,12 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken, 
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let fingerprint = tls.fingerprint().to_owned();
-    let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
+    let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
     let logins = Logins::new(HashMap::new(), dir.join("daemon.toml"), sessions.clone());
     let server = Server::new(
         tls,
         Arc::clone(&auth),
-        hub,
+        fanout,
         sessions,
         terminals,
         logins,

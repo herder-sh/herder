@@ -37,8 +37,8 @@ pub fn run(args: Args) -> Result<()> {
     release::replace_exe(&exe, &binary)?;
     println!("updated {} from {current} to {wanted}", exe.display());
 
-    let vault = crate::vault::installed_service();
-    let services = to_restart(service::is_active(), vault);
+    let hub = crate::hub::installed_service();
+    let services = to_restart(service::is_active(), hub);
     if services.is_empty() {
         return Ok(());
     }
@@ -66,13 +66,13 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 /// The services running this binary that an update restarts onto the new one: the daemon's
-/// while it runs, and an installed vault's, so the vault never runs another version than the
+/// while it runs, and an installed hub's, so the hub never runs another version than the
 /// daemon next to it.
-fn to_restart(daemon_active: bool, vault: Option<Service>) -> Vec<Service> {
+fn to_restart(daemon_active: bool, hub: Option<Service>) -> Vec<Service> {
     daemon_active
         .then(Service::daemon)
         .into_iter()
-        .chain(vault)
+        .chain(hub)
         .collect()
 }
 
@@ -112,16 +112,16 @@ mod tests {
     }
 
     #[test]
-    fn an_update_restarts_an_installed_vault_with_the_daemon() {
-        let vault = || Some(herder_daemon::vault::install::service(Path::new("/v")));
+    fn an_update_restarts_an_installed_hub_with_the_daemon() {
+        let hub = || Some(herder_daemon::hub::install::service(Path::new("/v")));
         let labels = |services: Vec<Service>| -> Vec<&str> {
             services.iter().map(|service| service.label).collect()
         };
         assert_eq!(
-            labels(to_restart(true, vault())),
-            ["sh.herder.daemon", "sh.herder.vault"]
+            labels(to_restart(true, hub())),
+            ["sh.herder.daemon", "sh.herder.hub"]
         );
-        assert_eq!(labels(to_restart(false, vault())), ["sh.herder.vault"]);
+        assert_eq!(labels(to_restart(false, hub())), ["sh.herder.hub"]);
         assert_eq!(labels(to_restart(true, None)), ["sh.herder.daemon"]);
         assert!(to_restart(false, None).is_empty());
     }

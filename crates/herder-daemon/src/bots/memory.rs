@@ -151,7 +151,7 @@ fn refuse_secrets(text: &str) -> Result<(), String> {
     if looks_secret(text) {
         return Err(
             "this looks like it holds a secret, such as a token, key or password; \
-                    secrets are never kept here: keep them in the vault"
+                    secrets are never kept here: keep them in the hub"
                 .to_owned(),
         );
     }

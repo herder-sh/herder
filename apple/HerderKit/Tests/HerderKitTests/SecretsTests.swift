@@ -5,9 +5,9 @@ import Testing
 
 @MainActor
 struct SecretsTests {
-    /// A vault that records what it is sent, lists `sets` and `secrets`, and refuses changes
+    /// A hub that records what it is sent, lists `sets` and `secrets`, and refuses changes
     /// with `refusal` when set.
-    @MainActor final class Vault {
+    @MainActor final class Hub {
         var sent: [CommandBody] = []
         var sets: [SecretSet] = [SecretSet(name: "prod", hosts: ["devbox"], hostUse: [])]
         var secrets: [SecretInfo] = [
@@ -17,8 +17,8 @@ struct SecretsTests {
         /// Runs as each change arrives, before it is answered.
         var onChange: (CommandBody) -> Void = { _ in }
 
-        func model() -> VaultSecrets {
-            VaultSecrets(vault: "vault") { [self] command in
+        func model() -> HubSecrets {
+            HubSecrets(hub: "hub") { [self] command in
                 sent.append(command)
                 switch command {
                 case .listSecrets: return .secrets(sets: sets, secrets: secrets)
@@ -42,9 +42,9 @@ struct SecretsTests {
         }
     }
 
-    @Test func eachActionSendsItsCommandToTheVaultAndListsAgain() async throws {
-        let vault = Vault()
-        let secrets = vault.model()
+    @Test func eachActionSendsItsCommandToTheHubAndListsAgain() async throws {
+        let hub = Hub()
+        let secrets = hub.model()
         await secrets.reload()
         #expect(secrets.sets.map(\.name) == ["prod"])
         #expect(secrets.secrets(in: "prod").map(\.name) == ["API_KEY"])
@@ -54,7 +54,7 @@ struct SecretsTests {
         try await secrets.setGranted(false, set: "prod", host: "devbox")
         try await secrets.deleteSecret(secrets.secrets(in: "prod")[0])
         try await secrets.deleteSet("ci")
-        #expect(vault.changes == [
+        #expect(hub.changes == [
             .createSecretSet(set: "ci", assertion: nil),
             .grantSecretSet(set: "prod", hostId: "laptop", hostUse: false, assertion: nil),
             .revokeSecretSet(set: "prod", hostId: "devbox", hostUse: false, assertion: nil),
@@ -62,30 +62,30 @@ struct SecretsTests {
             .deleteSecretSet(set: "ci", assertion: nil),
         ])
         // Each change is followed by both lists.
-        #expect(vault.sent.count == 2 + 5 * 3)
+        #expect(hub.sent.count == 2 + 5 * 3)
     }
 
     @Test func aBadSetNameIsRefusedBeforeAnythingIsSent() async {
-        let vault = Vault()
-        let secrets = vault.model()
+        let hub = Hub()
+        let secrets = hub.model()
         for bad in ["Prod", "-prod", "prod-", "a--b", "", "has space"] {
             await #expect(throws: HerderError.self) { try await secrets.createSet(bad) }
         }
-        #expect(vault.changes.isEmpty)
+        #expect(hub.changes.isEmpty)
     }
 
     @Test func savingSendsTheSecretAndClearsTheValueBeforeItGoes() async {
-        let vault = Vault()
-        let secrets = vault.model()
+        let hub = Hub()
+        let secrets = hub.model()
         let editor = SecretEditor(secrets: secrets, set: "prod")
         editor.name = "NPM_TOKEN"
         editor.description = " publishes packages to npm "
         editor.value.text = "npm_s3cr3t"
         var heldWhileSending: String?
-        vault.onChange = { _ in heldWhileSending = editor.value.text }
+        hub.onChange = { _ in heldWhileSending = editor.value.text }
 
         #expect(await editor.save())
-        #expect(vault.changes == [
+        #expect(hub.changes == [
             .putSecret(set: "prod", name: "NPM_TOKEN", description: "publishes packages to npm", value: "npm_s3cr3t", assertion: nil),
         ])
         #expect(heldWhileSending == "")
@@ -93,11 +93,11 @@ struct SecretsTests {
         #expect(editor.error == nil)
     }
 
-    @Test func aRefusalShowsTheVaultsMessageAndTheValueIsTypedAgain() async {
-        let vault = Vault()
-        let refusal = "this vault keeps no secrets: set HERDER_VAULT_SECRETS_KEY"
-        vault.refusal = refusal
-        let editor = SecretEditor(secrets: vault.model(), replacing: vault.secrets[0])
+    @Test func aRefusalShowsTheHubsMessageAndTheValueIsTypedAgain() async {
+        let hub = Hub()
+        let refusal = "this hub keeps no secrets: set HERDER_HUB_SECRETS_KEY"
+        hub.refusal = refusal
+        let editor = SecretEditor(secrets: hub.model(), replacing: hub.secrets[0])
         #expect(editor.name == "API_KEY")
         #expect(editor.description == "merchant api")
         editor.value.text = "new-value"
@@ -109,8 +109,8 @@ struct SecretsTests {
     }
 
     @Test func aFormWithAProblemSendsNothing() async {
-        let vault = Vault()
-        let editor = SecretEditor(secrets: vault.model(), set: "prod")
+        let hub = Hub()
+        let editor = SecretEditor(secrets: hub.model(), set: "prod")
         editor.name = "lower"
         editor.description = "x"
         editor.value.text = "v"
@@ -124,12 +124,12 @@ struct SecretsTests {
         editor.value = SecretInput()
         #expect(await editor.save() == false)
         #expect(editor.error == "Enter the value.")
-        #expect(vault.changes.isEmpty)
+        #expect(hub.changes.isEmpty)
     }
 
     @Test func theValueNeverShowsInADescriptionOrADump() {
-        let vault = Vault()
-        let editor = SecretEditor(secrets: vault.model(), set: "prod")
+        let hub = Hub()
+        let editor = SecretEditor(secrets: hub.model(), set: "prod")
         editor.value.text = "npm_s3cr3t"
         var dumped = ""
         dump(editor.value, to: &dumped)
@@ -140,12 +140,12 @@ struct SecretsTests {
         }
     }
 
-    @Test func aSetCanBeGrantedToTheVaultsHostsAndRevokedFromOnesItNoLongerLists() {
+    @Test func aSetCanBeGrantedToTheHubsHostsAndRevokedFromOnesItNoLongerLists() {
         let hosts = [
             FleetHost(hostId: "devbox", hostName: "devbox", online: true, lastSeen: "", usage: nil),
             FleetHost(hostId: "laptop", hostName: "Laptop", online: false, lastSeen: "", usage: nil),
         ]
-        let listed = VaultSecrets.hosts(of: SecretSet(name: "prod", hosts: ["laptop", "gone"], hostUse: []), vaultHosts: hosts)
+        let listed = HubSecrets.hosts(of: SecretSet(name: "prod", hosts: ["laptop", "gone"], hostUse: []), hubHosts: hosts)
         #expect(listed.map(\.id) == ["devbox", "laptop", "gone"])
         #expect(listed.map(\.name) == ["devbox", "Laptop", nil])
     }
@@ -155,8 +155,8 @@ struct SecretsTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("AuthKey_\(UUID()).p8")
         try Data(pem.utf8).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
-        let vault = Vault()
-        let editor = SecretEditor(secrets: vault.model(), set: "prod")
+        let hub = Hub()
+        let editor = SecretEditor(secrets: hub.model(), set: "prod")
         editor.name = "ASC_PRIVATE_KEY"
         editor.description = "App Store Connect API key"
 
@@ -164,7 +164,7 @@ struct SecretsTests {
         #expect(editor.file == url.lastPathComponent)
         #expect(editor.value.text == pem)
         #expect(await editor.save())
-        #expect(vault.changes == [
+        #expect(hub.changes == [
             .putSecret(set: "prod", name: "ASC_PRIVATE_KEY", description: "App Store Connect API key", value: pem, assertion: nil),
         ])
         #expect(editor.file == nil)
@@ -181,7 +181,7 @@ struct SecretsTests {
             try? FileManager.default.removeItem(at: binary)
             try? FileManager.default.removeItem(at: large)
         }
-        let editor = SecretEditor(secrets: Vault().model(), set: "prod")
+        let editor = SecretEditor(secrets: Hub().model(), set: "prod")
         editor.read(binary)
         #expect(editor.file == nil)
         #expect(editor.error?.contains("not text") == true)
@@ -194,18 +194,18 @@ struct SecretsTests {
         let secret = SecretStoreRequest(
             path: "~/Downloads/AuthKey_9WJ.p8", bytes: 257, fingerprint: "2bb80d53", set: "personal",
             name: "ASC_PRIVATE_KEY", description: "App Store Connect API key", deleteFileAfter: true)
-        #expect(SecretStoreAsk.question(secret, set: "personal", vault: "herder-vault-0")
-            == "Store ~/Downloads/AuthKey_9WJ.p8 (257 B) as ASC_PRIVATE_KEY in personal on herder-vault-0?")
-        #expect(SecretStoreAsk.detail(secret) == "Fingerprint 2bb80d53 · the file is deleted once the vault stored it")
+        #expect(SecretStoreAsk.question(secret, set: "personal", hub: "herder-hub-0")
+            == "Store ~/Downloads/AuthKey_9WJ.p8 (257 B) as ASC_PRIVATE_KEY in personal on herder-hub-0?")
+        #expect(SecretStoreAsk.detail(secret) == "Fingerprint 2bb80d53 · the file is deleted once the hub stored it")
     }
 
     @Test func aRequestSecretCardAsksForTheValueAndWarnsOfAReplace() {
         let secret = SecretRequest(
             set: "coingate", name: "GITHUB_SIEM_PAT",
             description: "GitHub fine-grained PAT, read-only on the org audit log", replaces: true)
-        #expect(SecretRequestAsk.question(secret, set: "coingate", vault: "herder-vault-0")
-            == "This session asks you to add the secret GITHUB_SIEM_PAT in coingate on herder-vault-0.")
-        // Until the vault lists its secrets, as the host saw them; then as the vault has them.
+        #expect(SecretRequestAsk.question(secret, set: "coingate", hub: "herder-hub-0")
+            == "This session asks you to add the secret GITHUB_SIEM_PAT in coingate on herder-hub-0.")
+        // Until the hub lists its secrets, as the host saw them; then as the hub has them.
         #expect(SecretRequestAsk.replaces(secret, set: "coingate", held: nil))
         #expect(!SecretRequestAsk.replaces(secret, set: "personal", held: nil))
         let held = [SecretInfo(set: "personal", name: "GITHUB_SIEM_PAT", description: "", updatedAt: "2026-11-09T12:00:00Z")]
@@ -219,7 +219,7 @@ struct SecretsTests {
         #expect(SecretRequestAsk.description(secret, set: "personal", held: described) == secret.description)
     }
 
-    @Test func aRequestedValueIsCheckedAsTheVaultChecksIt() {
+    @Test func aRequestedValueIsCheckedAsTheHubChecksIt() {
         #expect(SecretRequestAsk.problem(SecretInput()) == "Enter or paste the value.")
         #expect(SecretRequestAsk.problem(SecretInput(text: "a\0b")) != nil)
         #expect(SecretRequestAsk.problem(SecretInput(text: String(repeating: "k", count: 64 * 1024 + 1))) != nil)
@@ -235,11 +235,11 @@ struct SecretsTests {
     }
 
     @Test func secretNamesAreEnvironmentVariables() {
-        #expect(VaultSecrets.isValidSecretName("API_KEY"))
-        #expect(VaultSecrets.isValidSecretName("_X1"))
-        #expect(!VaultSecrets.isValidSecretName("1X"))
-        #expect(!VaultSecrets.isValidSecretName("api_key"))
-        #expect(!VaultSecrets.isValidSecretName(""))
-        #expect(!VaultSecrets.isValidSecretName(String(repeating: "A", count: 65)))
+        #expect(HubSecrets.isValidSecretName("API_KEY"))
+        #expect(HubSecrets.isValidSecretName("_X1"))
+        #expect(!HubSecrets.isValidSecretName("1X"))
+        #expect(!HubSecrets.isValidSecretName("api_key"))
+        #expect(!HubSecrets.isValidSecretName(""))
+        #expect(!HubSecrets.isValidSecretName(String(repeating: "A", count: 65)))
     }
 }

@@ -1,4 +1,4 @@
-//! `store_secret`: an agent stores a file's contents as a secret on its host's vault without
+//! `store_secret`: an agent stores a file's contents as a secret on its host's hub without
 //! ever seeing them.
 //!
 //! The daemon reads the file itself, on the host: at most [`MAX_SECRET_VALUE_BYTES`] of text
@@ -8,8 +8,8 @@
 //! result, nor any log carries it, only its path, size and [`fingerprint`].
 //!
 //! The approval is always the user's. An owner allows it from an app, which takes the value
-//! with `get_secret_to_store`, puts it on the vault as that owner with `put_secret`, and says
-//! so with `confirm_secret_stored`: the host's link to its vault only reads secrets, and the
+//! with `get_secret_to_store`, puts it on the hub as that owner with `put_secret`, and says
+//! so with `confirm_secret_stored`: the host's link to its hub only reads secrets, and the
 //! agent never gets the right to write one. Only then is the file deleted, when the agent
 //! asked. A denial, or the turn ending first, stores nothing.
 
@@ -75,7 +75,7 @@ impl SessionManager {
         })
     }
 
-    /// Refuses a secret tool when this machine has no vault with Secrets on to store in.
+    /// Refuses a secret tool when this machine has no hub with Secrets on to store in.
     pub(super) fn check_linked(&self) -> Result<(), ToolError> {
         let linked = self
             .inner
@@ -87,8 +87,8 @@ impl SessionManager {
         }
         Err(ToolError::new(
             ErrorCode::Unavailable,
-            "this machine is not linked to a vault with Secrets on, so it has nowhere to \
-             store a secret; ask an owner to link it to a vault in the herder app (the \
+            "this machine is not linked to a hub with Secrets on, so it has nowhere to \
+             store a secret; ask an owner to link it to a hub in the herder app (the \
              machine's page, Secrets), then try again",
         ))
     }
@@ -143,7 +143,7 @@ impl SessionManager {
     }
 }
 
-/// Refuses a set, name or description the vault would refuse, before the user is asked.
+/// Refuses a set, name or description the hub would refuse, before the user is asked.
 pub(super) fn check(set: &str, name: &str, description: &str) -> Result<(), ToolError> {
     let invalid = |message: &str| ToolError::new(ErrorCode::InvalidArguments, message);
     if !is_valid_secret_set_name(set) {
@@ -242,7 +242,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn check_refuses_what_the_vault_would() {
+    fn check_refuses_what_the_hub_would() {
         assert!(check("personal", "ASC_PRIVATE_KEY", "App Store key").is_ok());
         assert!(check("coingate", "GITHUB_SIEM_PAT", "").is_ok());
         for (set, name, description) in [

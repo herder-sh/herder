@@ -33,7 +33,7 @@ fn demo() -> Demo {
         terminals: Vec::new(),
         resources: None,
         session_usage: HashMap::new(),
-        vault: None,
+        hub: None,
         skills: None,
         session_skills: HashMap::new(),
         update: None,

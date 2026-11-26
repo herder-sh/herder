@@ -6,7 +6,7 @@
 //! Unless the session's project keeps artifacts private, a [`Publisher`] uploads it first for
 //! its public link; a failed upload fails the call, keeping nothing. The session's journal
 //! records `artifact_published` with the file and the link: clients render that event, for
-//! every provider alike, and the vault and forks copy the file as they do a prompt's.
+//! every provider alike, and the hub and forks copy the file as they do a prompt's.
 
 use std::collections::BTreeMap;
 use std::future::Future;

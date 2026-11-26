@@ -17,7 +17,7 @@ enum McpSheet: Identifiable {
 }
 
 extension Fleet {
-    /// The machines that run sessions and so take MCP servers: a vault runs none.
+    /// The machines that run sessions and so take MCP servers: a hub runs none.
     var mcpMachines: [Machine] { machines.filter { $0.hosts.isEmpty && $0.role != nil } }
 
     /// The machines whose MCP servers this device can change now: those it owns, connected.
@@ -516,7 +516,7 @@ struct McpServerSheet: View {
         let machineName = editing.flatMap { editing in fleet.machines.first { $0.hostId == editing.host }?.name }
         SheetScaffold(title: editing == nil ? "Add MCP Server" : "Edit \(editing?.server.name ?? "")",
                       subtitle: machineName ?? "Every session on the machines gets it", height: 640,
-                      hint: "Values go to the machine’s daemon.toml as given; keep tokens in Vault secrets.") {
+                      hint: "Values go to the machine’s daemon.toml as given; keep tokens in Hub secrets.") {
             McpServerForm(draft: $draft, projects: projects)
             if editing == nil {
                 Field(label: "Machines") { McpMachinePicker(machines: machines, selection: $targets) }
@@ -617,7 +617,7 @@ struct McpServerForm: View {
             Field(label: "Environment") {
                 McpPairsEditor(pairs: $draft.env, keyPlaceholder: "NAME", valuePlaceholder: "value", masked: false)
             }
-            Field(label: "Vault secrets") {
+            Field(label: "Hub secrets") {
                 McpSecretsEditor(secrets: $draft.secrets)
             }
         case .http, .sse:
@@ -727,7 +727,7 @@ struct McpPairsEditor: View {
     }
 }
 
-/// The vault secrets a stdio server gets, as `NAME` or `set/NAME`.
+/// The hub secrets a stdio server gets, as `NAME` or `set/NAME`.
 struct McpSecretsEditor: View {
     @Binding var secrets: [String]
     @State private var new = ""

@@ -339,21 +339,21 @@
       "type": "string"
     },
     "BackupSettings": {
-      "description": "The values of the `[vault]` table: a host's say what it backs up while linked to a vault,\na vault's what it keeps. A value that does not apply to the daemon cannot change.",
+      "description": "The values of the `[hub]` table: a host's say what it backs up while linked to a hub,\na hub's what it keeps. A value that does not apply to the daemon cannot change.",
       "type": "object",
       "properties": {
         "archive_retention_days": {
-          "description": "On a vault: days an archived session of an online host is kept after its latest event.",
+          "description": "On a hub: days an archived session of an online host is kept after its latest event.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
         },
         "attachments": {
-          "description": "On a host linked to a vault: whether prompt images are backed up too.",
+          "description": "On a host linked to a hub: whether prompt images are backed up too.",
           "type": "boolean"
         },
         "attachments_cap": {
-          "description": "On a host linked to a vault: most bytes of its images the vault keeps.",
+          "description": "On a host linked to a hub: most bytes of its images the hub keeps.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -871,7 +871,7 @@
           ]
         },
         {
-          "description": "Fork a session onto this daemon's host: copy its history into a new session that goes\non here, in a new worktree on a new branch restored from the session's latest\ncheckpoint; owners only. With `relay`, the history is the one the caller uploaded with\n`upload_history`; without, the session is looked up on this daemon, else in the vault\nit replicates to, whether its own host is up or gone. The original is left as it is.\nAnswered with `session_forked`; the fork's journal marks it with the event\n`session_forked`, `by` the forking user. A task's child cannot be forked.",
+          "description": "Fork a session onto this daemon's host: copy its history into a new session that goes\non here, in a new worktree on a new branch restored from the session's latest\ncheckpoint; owners only. With `relay`, the history is the one the caller uploaded with\n`upload_history`; without, the session is looked up on this daemon, else in the hub\nit replicates to, whether its own host is up or gone. The original is left as it is.\nAnswered with `session_forked`; the fork's journal marks it with the event\n`session_forked`, `by` the forking user. A task's child cannot be forked.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -886,7 +886,7 @@
               ]
             },
             "relay": {
-              "description": "Where the history the caller uploaded comes from; absent to look the session up\nhere or in the vault.",
+              "description": "Where the history the caller uploaded comes from; absent to look the session up\nhere or in the hub.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/Relay"
@@ -897,7 +897,7 @@
               ]
             },
             "session_id": {
-              "description": "The session to fork, as this daemon, its vault or the relayed history has it.",
+              "description": "The session to fork, as this daemon, its hub or the relayed history has it.",
               "$ref": "#/$defs/SessionId"
             },
             "type": {
@@ -1458,7 +1458,7 @@
           ]
         },
         {
-          "description": "Add an endpoint account: the provider's CLI runs against `endpoint`, an API server\nsuch as a CLIProxyAPI or a local model server, with a client key instead of a login;\nowners only. The key is `key` itself, kept on this daemon, or `key_secret`, a secret\ngranted to this host for its own use on its vault, such as the key the vault's\nCLIProxyAPI minted for this host, fetched when a session starts on the account.\nherder gives it a config dir of its own, needing no login. Answered with `applied` and\n`accounts`. Refused with `bad_request` for a taken id, an endpoint that is not an\n`http` or `https` URL, and neither or both of `key` and `key_secret`, and\n`unsupported` for a provider herder cannot point at an endpoint.",
+          "description": "Add an endpoint account: the provider's CLI runs against `endpoint`, an API server\nsuch as a CLIProxyAPI or a local model server, with a client key instead of a login;\nowners only. The key is `key` itself, kept on this daemon, or `key_secret`, a secret\ngranted to this host for its own use on its hub, such as the key the hub's\nCLIProxyAPI minted for this host, fetched when a session starts on the account.\nherder gives it a config dir of its own, needing no login. Answered with `applied` and\n`accounts`. Refused with `bad_request` for a taken id, an endpoint that is not an\n`http` or `https` URL, and neither or both of `key` and `key_secret`, and\n`unsupported` for a provider herder cannot point at an endpoint.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -1481,7 +1481,7 @@
               ]
             },
             "key_secret": {
-              "description": "The secret on this host's vault holding the endpoint's client key, granted to this\nhost for its own use; in place of `key`.",
+              "description": "The secret on this host's hub holding the endpoint's client key, granted to this\nhost for its own use; in place of `key`.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/SecretRef"
@@ -1696,7 +1696,7 @@
           ]
         },
         {
-          "description": "Change how many turns the host runs at once, live; owners only. Raising it starts\nwaiting turns at once; lowering it stops no running turn, only new ones from starting.\nThe daemon keeps it as `max_turns` in the `[resources]` table of its config and sends\nevery client the new `host_resources`. Refused with `bad_request` outside 1 to\n[`MAX_TURNS_LIMIT`](crate::MAX_TURNS_LIMIT), and with `unsupported` on a vault.",
+          "description": "Change how many turns the host runs at once, live; owners only. Raising it starts\nwaiting turns at once; lowering it stops no running turn, only new ones from starting.\nThe daemon keeps it as `max_turns` in the `[resources]` table of its config and sends\nevery client the new `host_resources`. Refused with `bad_request` outside 1 to\n[`MAX_TURNS_LIMIT`](crate::MAX_TURNS_LIMIT), and with `unsupported` on a hub.",
           "type": "object",
           "properties": {
             "max_turns": {
@@ -1760,7 +1760,7 @@
           ]
         },
         {
-          "description": "Update the daemon's herder to the latest release, as `herder update` does, and restart\nonto it; owners only, never an agent. Answered with `applied` once it started: its\nprogress and outcome arrive as `daemon_update`, `restarting` before the daemon restarts\nits own service, and an installed vault's next to it. No new turn starts until then.\nRefused with `unsupported` when the daemon does not run as the service herder installed,\nor cannot write its binary, and with `conflict` while an update waits or runs already;\na `now` sent while one waits for its turns to end starts it at once instead.",
+          "description": "Update the daemon's herder to the latest release, as `herder update` does, and restart\nonto it; owners only, never an agent. Answered with `applied` once it started: its\nprogress and outcome arrive as `daemon_update`, `restarting` before the daemon restarts\nits own service, and an installed hub's next to it. No new turn starts until then.\nRefused with `unsupported` when the daemon does not run as the service herder installed,\nor cannot write its binary, and with `conflict` while an update waits or runs already;\na `now` sent while one waits for its turns to end starts it at once instead.",
           "type": "object",
           "properties": {
             "type": {
@@ -1987,12 +1987,12 @@
           ]
         },
         {
-          "description": "Say which vault this daemon is linked to; owners only. Answered with `vault_link`.\nIt changes nothing, so a resend is answered afresh.",
+          "description": "Say which hub this daemon is linked to; owners only. Answered with `hub_link`.\nIt changes nothing, so a resend is answered afresh.",
           "type": "object",
           "properties": {
             "type": {
               "type": "string",
-              "const": "get_vault_link"
+              "const": "get_hub_link"
             }
           },
           "required": [
@@ -2000,35 +2000,35 @@
           ]
         },
         {
-          "description": "Link this host to a vault from now on, without a restart; owners only. The daemon\nconnects to the vault at the first of `addresses` that answers and pairs with\n`pairing_code`; only once the vault accepted it does it keep the vault as the `[vault]`\ntable of its config, and then replicates every session there with `backup` and fetches\nits sessions' secrets from it with `secrets`. Clients offer both on for a new link.\nRefused with `conflict` while it is linked to a vault already, as a host links to one\nvault at most, and with `unsupported` on a vault.",
+          "description": "Link this host to a hub from now on, without a restart; owners only. The daemon\nconnects to the hub at the first of `addresses` that answers and pairs with\n`pairing_code`; only once the hub accepted it does it keep the hub as the `[hub]`\ntable of its config, and then replicates every session there with `backup` and fetches\nits sessions' secrets from it with `secrets`. Clients offer both on for a new link.\nRefused with `conflict` while it is linked to a hub already, as a host links to one\nhub at most, and with `unsupported` on a hub.",
           "type": "object",
           "properties": {
             "addresses": {
-              "description": "The vault's addresses as `host:port`, tried in order.",
+              "description": "The hub's addresses as `host:port`, tried in order.",
               "type": "array",
               "items": {
                 "type": "string"
               }
             },
             "backup": {
-              "description": "Whether the host replicates its sessions to the vault.",
+              "description": "Whether the host replicates its sessions to the hub.",
               "type": "boolean"
             },
             "fingerprint": {
-              "description": "SHA-256 of the vault's TLS certificate, lowercase hex.",
+              "description": "SHA-256 of the hub's TLS certificate, lowercase hex.",
               "type": "string"
             },
             "pairing_code": {
-              "description": "A host-only code from the vault's `pair_vault_host`.",
+              "description": "A host-only code from the hub's `pair_hub_host`.",
               "type": "string"
             },
             "secrets": {
-              "description": "Whether the host's sessions fetch secrets from the vault.",
+              "description": "Whether the host's sessions fetch secrets from the hub.",
               "type": "boolean"
             },
             "type": {
               "type": "string",
-              "const": "link_vault"
+              "const": "link_hub"
             }
           },
           "required": [
@@ -2041,20 +2041,20 @@
           ]
         },
         {
-          "description": "Change what this host does with the vault it is linked to, without relinking: turning\n`backup` off stops replicating and on resumes it from where the vault left off; turning\n`secrets` off forgets every value held and refuses fetches. Owners only; answered with\n`applied`. Kept in the `[vault]` table of its config. Refused with `not_found` when it is\nlinked to no vault, and with `unsupported` on a vault.",
+          "description": "Change what this host does with the hub it is linked to, without relinking: turning\n`backup` off stops replicating and on resumes it from where the hub left off; turning\n`secrets` off forgets every value held and refuses fetches. Owners only; answered with\n`applied`. Kept in the `[hub]` table of its config. Refused with `not_found` when it is\nlinked to no hub, and with `unsupported` on a hub.",
           "type": "object",
           "properties": {
             "backup": {
-              "description": "Whether the host replicates its sessions to the vault.",
+              "description": "Whether the host replicates its sessions to the hub.",
               "type": "boolean"
             },
             "secrets": {
-              "description": "Whether the host's sessions fetch secrets from the vault.",
+              "description": "Whether the host's sessions fetch secrets from the hub.",
               "type": "boolean"
             },
             "type": {
               "type": "string",
-              "const": "set_vault_link"
+              "const": "set_hub_link"
             }
           },
           "required": [
@@ -2064,12 +2064,12 @@
           ]
         },
         {
-          "description": "Unlink this host from its vault: stop replicating and fetching secrets, and remove the\n`[vault]` table of its config; owners only. What the vault holds stays there. Refused\nwith `not_found` when it is linked to no vault.",
+          "description": "Unlink this host from its hub: stop replicating and fetching secrets, and remove the\n`[hub]` table of its config; owners only. What the hub holds stays there. Refused\nwith `not_found` when it is linked to no hub.",
           "type": "object",
           "properties": {
             "type": {
               "type": "string",
-              "const": "unlink_vault"
+              "const": "unlink_hub"
             }
           },
           "required": [
@@ -2077,12 +2077,12 @@
           ]
         },
         {
-          "description": "Run a vault on this machine, next to this daemon, and link this host to it; owners\nonly. The daemon does what `herder vault install` does: writes the vault's config and\nsecrets key and installs and starts its service. It then links itself to the vault with\n`secrets` on and `backup` off, and opens the vault's window for its first owner.\nAnswered with `ownership_claim`, the vault's, which the client claims it with on its\nown (`claim_ownership`). Refused with `conflict` when a vault is installed on this\nmachine already or this host is linked to a vault, with `unsupported` on a vault or a\ndaemon that installs no vault, and with `internal` when the service cannot be written or\nthe vault does not start.",
+          "description": "Run a hub on this machine, next to this daemon, and link this host to it; owners\nonly. The daemon does what `herder hub install` does: writes the hub's config and\nsecrets key and installs and starts its service. It then links itself to the hub with\n`secrets` on and `backup` off, and opens the hub's window for its first owner.\nAnswered with `ownership_claim`, the hub's, which the client claims it with on its\nown (`claim_ownership`). Refused with `conflict` when a hub is installed on this\nmachine already or this host is linked to a hub, with `unsupported` on a hub or a\ndaemon that installs no hub, and with `internal` when the service cannot be written or\nthe hub does not start.",
           "type": "object",
           "properties": {
             "type": {
               "type": "string",
-              "const": "install_vault"
+              "const": "install_hub"
             }
           },
           "required": [
@@ -2416,16 +2416,16 @@
           ]
         },
         {
-          "description": "On a vault, mint a one-time code that pairs a host to replicate here and only that,\nas `herder pair --host` does; owners only. Answered with `host_pairing`.",
+          "description": "On a hub, mint a one-time code that pairs a host to replicate here and only that,\nas `herder pair --host` does; owners only. Answered with `host_pairing`.",
           "type": "object",
           "properties": {
             "host_name": {
-              "description": "The host's name; the user its device acts as on the vault.",
+              "description": "The host's name; the user its device acts as on the hub.",
               "type": "string"
             },
             "type": {
               "type": "string",
-              "const": "pair_vault_host"
+              "const": "pair_hub_host"
             }
           },
           "required": [
@@ -2434,7 +2434,7 @@
           ]
         },
         {
-          "description": "On a vault, unpair every device that replicates as `host_id`, closing its connections;\nowners only. The host's sessions stay on the vault. Refused with `not_found` when no\npaired device replicates as it.",
+          "description": "On a hub, unpair every device that replicates as `host_id`, closing its connections;\nowners only. The host's sessions stay on the hub. Refused with `not_found` when no\npaired device replicates as it.",
           "type": "object",
           "properties": {
             "host_id": {
@@ -2443,7 +2443,7 @@
             },
             "type": {
               "type": "string",
-              "const": "revoke_vault_host"
+              "const": "revoke_hub_host"
             }
           },
           "required": [
@@ -2452,7 +2452,7 @@
           ]
         },
         {
-          "description": "On a vault, create an empty set of secrets; owners only. Answered with `applied`.\nRefused with `bad_request` for a name [`crate::is_valid_secret_set_name`] refuses,\n`conflict` when the set exists, and `unsupported` on a daemon that is not a vault.",
+          "description": "On a hub, create an empty set of secrets; owners only. Answered with `applied`.\nRefused with `bad_request` for a name [`crate::is_valid_secret_set_name`] refuses,\n`conflict` when the set exists, and `unsupported` on a daemon that is not a hub.",
           "type": "object",
           "properties": {
             "assertion": {
@@ -2481,7 +2481,7 @@
           ]
         },
         {
-          "description": "On a vault, delete an empty set of secrets and its grants; owners only. Answered with\n`applied`. Refused with `not_found` for an unknown set, `conflict` while it holds\nsecrets, and `unsupported` on a daemon that is not a vault.",
+          "description": "On a hub, delete an empty set of secrets and its grants; owners only. Answered with\n`applied`. Refused with `not_found` for an unknown set, `conflict` while it holds\nsecrets, and `unsupported` on a daemon that is not a hub.",
           "type": "object",
           "properties": {
             "assertion": {
@@ -2510,7 +2510,7 @@
           ]
         },
         {
-          "description": "On a vault, create a secret in a set, or replace its description and value; owners\nonly. The vault keeps the value encrypted and never sends it to a client. Answered with\n`applied`. Refused with `bad_request` for a name [`crate::is_valid_secret_name`]\nrefuses or a description that is not one line of at most\n[`crate::MAX_SECRET_DESCRIPTION_CHARS`], `not_found` for an unknown set, and\n`unsupported` on a daemon that is not a vault.",
+          "description": "On a hub, create a secret in a set, or replace its description and value; owners\nonly. The hub keeps the value encrypted and never sends it to a client. Answered with\n`applied`. Refused with `bad_request` for a name [`crate::is_valid_secret_name`]\nrefuses or a description that is not one line of at most\n[`crate::MAX_SECRET_DESCRIPTION_CHARS`], `not_found` for an unknown set, and\n`unsupported` on a daemon that is not a hub.",
           "type": "object",
           "properties": {
             "assertion": {
@@ -2554,7 +2554,7 @@
           ]
         },
         {
-          "description": "On a vault, delete a secret; owners only. Answered with `applied`. Refused with\n`not_found` for an unknown set or secret, and `unsupported` on a daemon that is not a\nvault.",
+          "description": "On a hub, delete a secret; owners only. Answered with `applied`. Refused with\n`not_found` for an unknown set or secret, and `unsupported` on a daemon that is not a\nhub.",
           "type": "object",
           "properties": {
             "assertion": {
@@ -2588,7 +2588,7 @@
           ]
         },
         {
-          "description": "On a vault, let a host fetch the secrets of a set for every session it runs, or, with\n`host_use`, for its own use, such as a bot's token, and not its sessions'; owners only.\nThe two are separate grants. Answered with `applied`; granting it again changes\nnothing. Refused with `not_found` for an unknown set or a host that never replicated\nhere, and `unsupported` on a daemon that is not a vault.",
+          "description": "On a hub, let a host fetch the secrets of a set for every session it runs, or, with\n`host_use`, for its own use, such as a bot's token, and not its sessions'; owners only.\nThe two are separate grants. Answered with `applied`; granting it again changes\nnothing. Refused with `not_found` for an unknown set or a host that never replicated\nhere, and `unsupported` on a daemon that is not a hub.",
           "type": "object",
           "properties": {
             "assertion": {
@@ -2626,7 +2626,7 @@
           ]
         },
         {
-          "description": "On a vault, stop a host fetching the secrets of a set for its sessions, or, with\n`host_use`, for its own use; owners only. Values the host fetched already stay in its\nmemory until they expire. Answered with `applied`. Refused with `not_found` when the set is not granted to the host that way,\nand `unsupported` on a daemon that is not a vault.",
+          "description": "On a hub, stop a host fetching the secrets of a set for its sessions, or, with\n`host_use`, for its own use; owners only. Values the host fetched already stay in its\nmemory until they expire. Answered with `applied`. Refused with `not_found` when the set is not granted to the host that way,\nand `unsupported` on a daemon that is not a hub.",
           "type": "object",
           "properties": {
             "assertion": {
@@ -2664,7 +2664,7 @@
           ]
         },
         {
-          "description": "On a vault, list every set of secrets with its grants, and every secret without its\nvalue; owners only. Answered with `secrets`. It changes nothing, so a resend is answered\nafresh. Refused with `unsupported` on a daemon that is not a vault.",
+          "description": "On a hub, list every set of secrets with its grants, and every secret without its\nvalue; owners only. Answered with `secrets`. It changes nothing, so a resend is answered\nafresh. Refused with `unsupported` on a daemon that is not a hub.",
           "type": "object",
           "properties": {
             "type": {
@@ -2677,7 +2677,7 @@
           ]
         },
         {
-          "description": "On a host, the value an agent's `store_secret` read for the open approval\n`approval_id` of `session_id`, for an owner's app to put on the vault; owners only.\nAnswered with `secret_to_store`; it is neither journaled nor kept, and changes nothing,\nso a resend is answered afresh. Refused with `not_found` once the approval is not open\nor is not a `store_secret` one.",
+          "description": "On a host, the value an agent's `store_secret` read for the open approval\n`approval_id` of `session_id`, for an owner's app to put on the hub; owners only.\nAnswered with `secret_to_store`; it is neither journaled nor kept, and changes nothing,\nso a resend is answered afresh. Refused with `not_found` once the approval is not open\nor is not a `store_secret` one.",
           "type": "object",
           "properties": {
             "approval_id": {
@@ -2700,7 +2700,7 @@
           ]
         },
         {
-          "description": "On a host, allow an agent's `store_secret` or `request_secret` once the owner's app has\nput its value on the host's vault, in `set`: the approval resolves as allowed, the host\ndeletes a `store_secret`'s file when the agent asked, and the agent learns the secret\nis stored. Owners only. Answered with `applied`; refused with `not_found` once the\napproval is not open or is neither a `store_secret` nor a `request_secret` one.",
+          "description": "On a host, allow an agent's `store_secret` or `request_secret` once the owner's app has\nput its value on the host's hub, in `set`: the approval resolves as allowed, the host\ndeletes a `store_secret`'s file when the agent asked, and the agent learns the secret\nis stored. Owners only. Answered with `applied`; refused with `not_found` once the\napproval is not open or is neither a `store_secret` nor a `request_secret` one.",
           "type": "object",
           "properties": {
             "approval_id": {
@@ -2739,7 +2739,7 @@
           ]
         },
         {
-          "description": "On a vault, list the latest fetches of secrets by hosts, newest first, at most\n[`crate::MAX_SECRET_AUDIT_ENTRIES`]; owners only. Answered with `secret_audit`. It\nchanges nothing, so a resend is answered afresh. Refused with `unsupported` on a daemon\nthat is not a vault.",
+          "description": "On a hub, list the latest fetches of secrets by hosts, newest first, at most\n[`crate::MAX_SECRET_AUDIT_ENTRIES`]; owners only. Answered with `secret_audit`. It\nchanges nothing, so a resend is answered afresh. Refused with `unsupported` on a daemon\nthat is not a hub.",
           "type": "object",
           "properties": {
             "before": {
@@ -2761,7 +2761,7 @@
           ]
         },
         {
-          "description": "On a vault, list the provider logins its CLIProxyAPI holds, without their tokens;\nowners only. Answered with `provider_logins`. It changes nothing, so a resend is\nanswered afresh. Refused with `unsupported` on a daemon that is not a vault, or a vault\nthat runs no CLIProxyAPI.",
+          "description": "On a hub, list the provider logins its CLIProxyAPI holds, without their tokens;\nowners only. Answered with `provider_logins`. It changes nothing, so a resend is\nanswered afresh. Refused with `unsupported` on a daemon that is not a hub, or a hub\nthat runs no CLIProxyAPI.",
           "type": "object",
           "properties": {
             "type": {
@@ -2774,7 +2774,7 @@
           ]
         },
         {
-          "description": "On a vault, have its CLIProxyAPI start signing in to `provider`; owners only. Answered\nwith `provider_login_started`, the URL to sign in at; the login waits five minutes for\n`complete_provider_login`. Refused with `bad_request` for a provider the proxy cannot\nsign in to here (it can Claude and Codex), and `unsupported` as `list_provider_logins`\nis.",
+          "description": "On a hub, have its CLIProxyAPI start signing in to `provider`; owners only. Answered\nwith `provider_login_started`, the URL to sign in at; the login waits five minutes for\n`complete_provider_login`. Refused with `bad_request` for a provider the proxy cannot\nsign in to here (it can Claude and Codex), and `unsupported` as `list_provider_logins`\nis.",
           "type": "object",
           "properties": {
             "provider": {
@@ -2792,7 +2792,7 @@
           ]
         },
         {
-          "description": "On a vault, finish a login `start_provider_login` started, with the address the\nbrowser was sent to once the owner signed in; owners only. The proxy trades the code in\nit for the login, which it keeps. Answered with `provider_logins` once the proxy holds\nthe login. Refused with `bad_request` for an address with no code, `not_found` for a\nlogin that is not waiting (cancelled, timed out, or finished), `conflict` when the\nprovider refused it, with its reason, and `unsupported` as `list_provider_logins` is.",
+          "description": "On a hub, finish a login `start_provider_login` started, with the address the\nbrowser was sent to once the owner signed in; owners only. The proxy trades the code in\nit for the login, which it keeps. Answered with `provider_logins` once the proxy holds\nthe login. Refused with `bad_request` for an address with no code, `not_found` for a\nlogin that is not waiting (cancelled, timed out, or finished), `conflict` when the\nprovider refused it, with its reason, and `unsupported` as `list_provider_logins` is.",
           "type": "object",
           "properties": {
             "login_id": {
@@ -2815,7 +2815,7 @@
           ]
         },
         {
-          "description": "On a vault, stop a login `start_provider_login` started; owners only. Answered with\n`applied`. Refused with `not_found` for a login that is not waiting, and `unsupported`\nas `list_provider_logins` is.",
+          "description": "On a hub, stop a login `start_provider_login` started; owners only. Answered with\n`applied`. Refused with `not_found` for a login that is not waiting, and `unsupported`\nas `list_provider_logins` is.",
           "type": "object",
           "properties": {
             "login_id": {
@@ -2833,7 +2833,7 @@
           ]
         },
         {
-          "description": "On a vault, name a provider login, or mark it fallback-only, for every host it is an\naccount on; owners only. Answered with `provider_logins`. Refused with `bad_request` for\na label longer than 64 characters, `not_found` for a login the proxy does not hold, and\n`unsupported` as `list_provider_logins` is.",
+          "description": "On a hub, name a provider login, or mark it fallback-only, for every host it is an\naccount on; owners only. Answered with `provider_logins`. Refused with `bad_request` for\na label longer than 64 characters, `not_found` for a login the proxy does not hold, and\n`unsupported` as `list_provider_logins` is.",
           "type": "object",
           "properties": {
             "fallback": {
@@ -2865,7 +2865,7 @@
           ]
         },
         {
-          "description": "On a vault, have its CLIProxyAPI drop a provider login and its tokens; owners only.\nAnswered with `applied`. Refused with `not_found` for a login it does not hold, and\n`unsupported` as `list_provider_logins` is.",
+          "description": "On a hub, have its CLIProxyAPI drop a provider login and its tokens; owners only.\nAnswered with `applied`. Refused with `not_found` for a login it does not hold, and\n`unsupported` as `list_provider_logins` is.",
           "type": "object",
           "properties": {
             "name": {
@@ -3006,7 +3006,7 @@
           ]
         },
         {
-          "description": "List the bots this daemon's host holds, as its config's `[[bots]]` entries configure\nthem; owners only. Answered with `bots`. It changes nothing, so a resend is answered\nafresh. Refused with `unsupported` on a vault.",
+          "description": "List the bots this daemon's host holds, as its config's `[[bots]]` entries configure\nthem; owners only. Answered with `bots`. It changes nothing, so a resend is answered\nafresh. Refused with `unsupported` on a hub.",
           "type": "object",
           "properties": {
             "type": {
@@ -3019,7 +3019,7 @@
           ]
         },
         {
-          "description": "Add a bot, or replace the one with its `bot_id`, kept as a `[[bots]]` entry of the\ndaemon's config; owners only. Answered with `applied`. Refused with `bad_request`,\nchanging nothing, when an id is not valid, Slack's `app_token` is missing or\nTelegram's given, a person or channel is listed twice, or an account is unknown or not\nof the provider; and with `unsupported` on a vault.",
+          "description": "Add a bot, or replace the one with its `bot_id`, kept as a `[[bots]]` entry of the\ndaemon's config; owners only. Answered with `applied`. Refused with `bad_request`,\nchanging nothing, when an id is not valid, Slack's `app_token` is missing or\nTelegram's given, a person or channel is listed twice, or an account is unknown or not\nof the provider; and with `unsupported` on a hub.",
           "type": "object",
           "properties": {
             "bot": {
@@ -3037,7 +3037,7 @@
           ]
         },
         {
-          "description": "Remove a bot's `[[bots]]` entry, disconnecting it; owners only. Its tokens stay in the\nvault, and sessions keep their links to its threads. Answered with `applied`. Refused\nwith `not_found` for an unknown bot, and `unsupported` on a vault.",
+          "description": "Remove a bot's `[[bots]]` entry, disconnecting it; owners only. Its tokens stay in the\nhub, and sessions keep their links to its threads. Answered with `applied`. Refused\nwith `not_found` for an unknown bot, and `unsupported` on a hub.",
           "type": "object",
           "properties": {
             "bot_id": {
@@ -3055,7 +3055,7 @@
           ]
         },
         {
-          "description": "Say how each bot's connection to its chat stands; owners only. Answered with\n`bot_status`. It changes nothing, so a resend is answered afresh. Refused with\n`unsupported` on a vault.",
+          "description": "Say how each bot's connection to its chat stands; owners only. Answered with\n`bot_status`. It changes nothing, so a resend is answered afresh. Refused with\n`unsupported` on a hub.",
           "type": "object",
           "properties": {
             "type": {
@@ -3068,7 +3068,7 @@
           ]
         },
         {
-          "description": "Read what a bot remembers; owners only. Answered with `bot_memory`. It changes nothing,\nso a resend is answered afresh. Refused with `not_found` for an unknown bot, and\n`unsupported` on a vault.",
+          "description": "Read what a bot remembers; owners only. Answered with `bot_memory`. It changes nothing,\nso a resend is answered afresh. Refused with `not_found` for an unknown bot, and\n`unsupported` on a hub.",
           "type": "object",
           "properties": {
             "bot_id": {
@@ -3086,7 +3086,7 @@
           ]
         },
         {
-          "description": "Add a fact to a bot's memory, or change the one `fact_id` names in its place; owners\nonly. The text is made one line. Answered with `bot_memory`, as it is now. Refused with\n`bad_request`, changing nothing, when the text is empty, longer than\n`MAX_BOT_FACT_CHARS`, looks like a secret, or the memory would hold more than\n`MAX_BOT_FACTS` facts or `MAX_BOT_MEMORY_BYTES`; with `not_found` for an unknown bot\nor fact; and with `unsupported` on a vault.",
+          "description": "Add a fact to a bot's memory, or change the one `fact_id` names in its place; owners\nonly. The text is made one line. Answered with `bot_memory`, as it is now. Refused with\n`bad_request`, changing nothing, when the text is empty, longer than\n`MAX_BOT_FACT_CHARS`, looks like a secret, or the memory would hold more than\n`MAX_BOT_FACTS` facts or `MAX_BOT_MEMORY_BYTES`; with `not_found` for an unknown bot\nor fact; and with `unsupported` on a hub.",
           "type": "object",
           "properties": {
             "bot_id": {
@@ -3120,7 +3120,7 @@
           ]
         },
         {
-          "description": "Remove a fact from a bot's memory; owners only. Answered with `bot_memory`, as it is\nnow. Refused with `not_found` for an unknown bot or fact, and `unsupported` on a vault.",
+          "description": "Remove a fact from a bot's memory; owners only. Answered with `bot_memory`, as it is\nnow. Refused with `not_found` for an unknown bot or fact, and `unsupported` on a hub.",
           "type": "object",
           "properties": {
             "bot_id": {
@@ -3143,7 +3143,7 @@
           ]
         },
         {
-          "description": "Remove every fact from a bot's memory; owners only. Answered with `bot_memory`, then\nempty. Refused with `not_found` for an unknown bot, and `unsupported` on a vault.",
+          "description": "Remove every fact from a bot's memory; owners only. Answered with `bot_memory`, then\nempty. Refused with `not_found` for an unknown bot, and `unsupported` on a hub.",
           "type": "object",
           "properties": {
             "bot_id": {
@@ -3309,11 +3309,11 @@
       ]
     },
     "DaemonSettings": {
-      "description": "Every daemon-wide setting of the daemon's config file, as values in effect when the file\nis loaded: a key the file leaves out shows its default. Accounts, projects and the vault\nlink are not here; they have their own commands.",
+      "description": "Every daemon-wide setting of the daemon's config file, as values in effect when the file\nis loaded: a key the file leaves out shows its default. Accounts, projects and the hub\nlink are not here; they have their own commands.",
       "type": "object",
       "properties": {
         "backup": {
-          "description": "What is backed up, and kept, on a vault.",
+          "description": "What is backed up, and kept, on a hub.",
           "$ref": "#/$defs/BackupSettings"
         },
         "binaries": {
@@ -3754,7 +3754,7 @@
               "default": "user"
             },
             "secret": {
-              "description": "For an agent's `store_secret`, what to store; always routed to the user. Only an\nowner allows it, from an app: `get_secret_to_store`, then `put_secret` on the\nhost's vault, then `confirm_secret_stored`. `answer_approval` may only deny it.",
+              "description": "For an agent's `store_secret`, what to store; always routed to the user. Only an\nowner allows it, from an app: `get_secret_to_store`, then `put_secret` on the\nhost's hub, then `confirm_secret_stored`. `answer_approval` may only deny it.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/SecretStoreRequest"
@@ -3765,7 +3765,7 @@
               ]
             },
             "secret_request": {
-              "description": "For an agent's `request_secret`, the secret it asks the user to supply; always\nrouted to the user. Only an owner supplies it, from an app: `put_secret` on the\nhost's vault, then `confirm_secret_stored`. `answer_approval` may only decline it.",
+              "description": "For an agent's `request_secret`, the secret it asks the user to supply; always\nrouted to the user. Only an owner supplies it, from an app: `put_secret` on the\nhost's hub, then `confirm_secret_stored`. `answer_approval` may only decline it.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/SecretRequest"
@@ -4761,7 +4761,7 @@
               "default": {}
             },
             "secrets": {
-              "description": "Secrets from the host's vault, each added to its environment as the variable of\nits name: the program runs through `herder secret run`, so a value is never in\nthe config file, on a command line or before an agent.",
+              "description": "Secrets from the host's hub, each added to its environment as the variable of\nits name: the program runs through `herder secret run`, so a value is never in\nthe config file, on a command line or before an agent.",
               "type": "array",
               "default": [],
               "items": {
@@ -4783,7 +4783,7 @@
           "type": "object",
           "properties": {
             "headers": {
-              "description": "Headers sent with every request, such as `Authorization`, kept in the daemon's\nconfig file as given. A value may hold `{secret:NAME}` or `{secret:set/NAME}`\nplaceholders (`SecretRef`), which take the secret's value from the host's vault\nas a session's CLI starts, so the value is never in the config file; a session\nwhose secrets the vault does not hand out goes without the server.",
+              "description": "Headers sent with every request, such as `Authorization`, kept in the daemon's\nconfig file as given. A value may hold `{secret:NAME}` or `{secret:set/NAME}`\nplaceholders (`SecretRef`), which take the secret's value from the host's hub\nas a session's CLI starts, so the value is never in the config file; a session\nwhose secrets the hub does not hand out goes without the server.",
               "type": "object",
               "additionalProperties": {
                 "type": "string"
@@ -5454,7 +5454,7 @@
           "minimum": 0
         },
         "delete_file_after": {
-          "description": "Whether the host deletes the file once the owner confirms the vault stored it.",
+          "description": "Whether the host deletes the file once the owner confirms the hub stored it.",
           "type": "boolean"
         },
         "description": {

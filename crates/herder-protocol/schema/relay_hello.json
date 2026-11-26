@@ -1,18 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "RelayHello",
-  "description": "First message of a relay connection to the vault.",
+  "description": "First message of a relay connection to the hub.",
   "oneOf": [
     {
       "description": "From a client device: open a stream to a host.",
       "type": "object",
       "properties": {
         "host_id": {
-          "description": "The host to reach; one that replicates to this vault.",
+          "description": "The host to reach; one that replicates to this hub.",
           "$ref": "#/$defs/HostId"
         },
         "relay_version": {
-          "description": "Must equal the vault's [`RELAY_VERSION`].",
+          "description": "Must equal the hub's [`RELAY_VERSION`].",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -29,17 +29,17 @@
       ]
     },
     {
-      "description": "From a host: this connection is its end of the stream the vault asked it to open.",
+      "description": "From a host: this connection is its end of the stream the hub asked it to open.",
       "type": "object",
       "properties": {
         "relay_version": {
-          "description": "Must equal the vault's [`RELAY_VERSION`].",
+          "description": "Must equal the hub's [`RELAY_VERSION`].",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
         },
         "stream_id": {
-          "description": "The stream, as [`crate::VaultMessage::RelayOpen`] named it.",
+          "description": "The stream, as [`crate::HubMessage::RelayOpen`] named it.",
           "type": "string"
         },
         "type": {
@@ -54,11 +54,11 @@
       ]
     },
     {
-      "description": "From a host: open a stream to the vault's CLIProxyAPI. Only a host the vault told it\nforwards to the proxy ([`crate::VaultHello::cliproxyapi_relay`]) may.",
+      "description": "From a host: open a stream to the hub's CLIProxyAPI. Only a host the hub told it\nforwards to the proxy ([`crate::HubHello::cliproxyapi_relay`]) may.",
       "type": "object",
       "properties": {
         "relay_version": {
-          "description": "Must equal the vault's [`RELAY_VERSION`].",
+          "description": "Must equal the hub's [`RELAY_VERSION`].",
           "type": "integer",
           "format": "uint32",
           "minimum": 0

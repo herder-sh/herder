@@ -16,7 +16,7 @@ public final class Fleet {
     public let client: Client
     /// The machines. A view that reads them redraws when a machine's own state changes, such as
     /// an account, a setting or its connection, not when a session it lists moves on, as a
-    /// running turn's does several times a second, nor what a vault counts of the sessions it
+    /// running turn's does several times a second, nor what a hub counts of the sessions it
     /// keeps, which moves with them: read `liveMachines` for those. Both return the machines as
     /// they are now.
     public var machines: [Machine] {
@@ -31,7 +31,7 @@ public final class Fleet {
         return current
     }
     @ObservationIgnored private var current: [Machine]
-    /// Which copy is listed of each session a host and a vault both list. It moves from one to
+    /// Which copy is listed of each session a host and a hub both list. It moves from one to
     /// the other as machines connect and drop, and nothing a session shows may go with it; see
     /// `source(for:)`.
     private var copies = SessionCopies()
@@ -69,9 +69,9 @@ public final class Fleet {
     private(set) var starting: [StartingSession] = []
     /// A session started away from its list, as Fix with AI starts one, for the window to show.
     var revealed: SessionKey?
-    /// A claim a vault setup asks you to approve, for the window to show its approval sheet.
+    /// A claim a hub setup asks you to approve, for the window to show its approval sheet.
     var claiming: ApprovalRequest?
-    /// The vault setups waiting on their claim's approval; see `claim(_:)`.
+    /// The hub setups waiting on their claim's approval; see `claim(_:)`.
     @ObservationIgnored var claims: [ApprovalRequest: CheckedContinuation<HostId, Error>] = [:]
     /// The installs, logins and AWS sign-ins this device started; see `Activity`.
     var activity = Activity()
@@ -164,8 +164,8 @@ public final class Fleet {
         listsChanged()
     }
 
-    /// A machine without what moves as its sessions do: their heads, and a vault's counts of
-    /// what it keeps of each host's, which change with every event the vault takes in.
+    /// A machine without what moves as its sessions do: their heads, and a hub's counts of
+    /// what it keeps of each host's, which change with every event the hub takes in.
     private static func own(_ machine: Machine) -> Machine {
         var own = machine
         own.sessions = []
@@ -175,8 +175,8 @@ public final class Fleet {
             host.usage = nil
             return host
         }
-        own.vault = machine.vault.map { vault in
-            VaultStatus(sessions: 0, events: 0, storageBytes: 0, hosts: vault.hosts.map { replication in
+        own.hub = machine.hub.map { hub in
+            HubStatus(sessions: 0, events: 0, storageBytes: 0, hosts: hub.hosts.map { replication in
                 HostReplication(hostId: replication.hostId, sessions: 0, events: 0, lastEventAt: nil, lagMs: nil)
             })
         }
@@ -267,8 +267,8 @@ public final class Fleet {
         lists.show(Lists(machines: current, sessions: sessions, done: done, archiving: archiving, copies: copies))
     }
 
-    /// The copy whose state a view of `key` shows. A session a vault replicates is listed from
-    /// its host or from the vault as they connect and drop, and an open session follows it
+    /// The copy whose state a view of `key` shows. A session a hub replicates is listed from
+    /// its host or from the hub as they connect and drop, and an open session follows it
     /// there: it shows the copy that has folded the most of the journal, so it never steps back
     /// or empties while the other copy loads; of two as far along, the listed one.
     func source(for key: SessionKey) -> SessionKey {
@@ -279,8 +279,8 @@ public final class Fleet {
         return source
     }
 
-    /// Whether `key` is a vault's copy of a session another host runs: only that host takes
-    /// what is sent to the session, and the vault refuses it.
+    /// Whether `key` is a hub's copy of a session another host runs: only that host takes
+    /// what is sent to the session, and the hub refuses it.
     func isReplica(_ key: SessionKey) -> Bool {
         let head = machines.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }
         return head?.hostId.map { $0 != key.hostId } ?? false
@@ -438,7 +438,7 @@ public final class Fleet {
                 change(SessionKey(hostId: machine.hostId, sessionId: head.sessionId)) { $0.settle(head.queue) }
             }
         }
-        // A copy another copy stands for is not followed: a vault's copy of every session would
+        // A copy another copy stands for is not followed: a hub's copy of every session would
         // stream each one twice.
         let heads = Dictionary(machines.flatMap { machine in
             machine.sessions.map { (SessionKey(hostId: machine.hostId, sessionId: $0.sessionId), $0.headSeq) }
@@ -604,16 +604,16 @@ public final class Fleet {
     }
 
     /// Allows `request`, an agent's `store_secret` of `secret`, storing it in `set`: a set the
-    /// vault lacks is created first.
+    /// hub lacks is created first.
     func storeSecret(_ request: PendingRequest, _ secret: SecretStoreRequest, in set: String) async {
         let key = request.session.key
         do {
-            let vault = try await ownedVault(of: key.hostId, creating: set).vault
+            let hub = try await ownedHub(of: key.hostId, creating: set).hub
             guard case .secretToStore(let value) = try await client.send(
                 hostId: key.hostId, command: .getSecretToStore(sessionId: key.sessionId, approvalId: request.requestId))
             else { throw HerderError.Local(detail: "the machine did not hand over the value") }
             _ = try await client.send(
-                hostId: vault.hostId,
+                hostId: hub.hostId,
                 command: .putSecret(set: set, name: secret.name, description: secret.description, value: value, assertion: nil))
             _ = try await client.send(
                 hostId: key.hostId,
@@ -625,18 +625,18 @@ public final class Fleet {
     }
 
     /// Answers `request`, an agent's `request_secret` of `secret`, with `value` the owner typed,
-    /// stored in `set`: a set the vault lacks is created first. The value goes from this device
-    /// to the host's vault alone, as its owner, never to the host, its journal or the agent,
-    /// which learns only that it was stored. Whether the vault stored it; a refusal is kept to
+    /// stored in `set`: a set the hub lacks is created first. The value goes from this device
+    /// to the host's hub alone, as its owner, never to the host, its journal or the agent,
+    /// which learns only that it was stored. Whether the hub stored it; a refusal is kept to
     /// show on the card.
     func supplySecret(_ request: PendingRequest, _ secret: SecretRequest, value: SecretInput, in set: String) async -> Bool {
         let key = request.session.key
         do {
             if let problem = SecretRequestAsk.problem(value) { throw HerderError.Local(detail: problem) }
-            let (vault, held) = try await ownedVault(of: key.hostId, creating: set)
+            let (hub, held) = try await ownedHub(of: key.hostId, creating: set)
             let description = SecretRequestAsk.description(secret, set: set, held: held)
             _ = try await client.send(
-                hostId: vault.hostId,
+                hostId: hub.hostId,
                 command: .putSecret(set: set, name: secret.name, description: description, value: value.text, assertion: nil))
             _ = try await client.send(
                 hostId: key.hostId,

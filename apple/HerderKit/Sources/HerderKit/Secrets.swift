@@ -18,7 +18,7 @@ struct SecretInput: Equatable, CustomStringConvertible, CustomDebugStringConvert
     }
 
     /// The contents of the file at `url` as they are, newlines and all, as a PEM key needs
-    /// them: text of at most 64 KiB, which a vault keeps.
+    /// them: text of at most 64 KiB, which a hub keeps.
     init(contentsOf url: URL) throws {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -43,28 +43,28 @@ enum Load<T> {
     case failed(String)
 }
 
-/// A vault's secrets, for its owners: its sets with the hosts each is granted to, the secrets in
-/// each, and its latest fetches. Each change goes to the vault, then the lists are asked again.
+/// A hub's secrets, for its owners: its sets with the hosts each is granted to, the secrets in
+/// each, and its latest fetches. Each change goes to the hub, then the lists are asked again.
 /// No answer carries a value back, so replacing a secret is the only way to change one.
 @MainActor @Observable
-final class VaultSecrets {
+final class HubSecrets {
     typealias Send = @MainActor (CommandBody) async throws -> CommandResult
 
-    let vault: HostId
+    let hub: HostId
     private let send: Send
     private(set) var list: Load<(sets: [SecretSet], secrets: [SecretInfo])> = .asking
     /// Newest first.
     private(set) var audit: Load<[SecretAccess]> = .asking
 
-    init(vault: HostId, send: @escaping Send) {
-        self.vault = vault
+    init(hub: HostId, send: @escaping Send) {
+        self.hub = hub
         self.send = send
     }
 
-    /// The secrets of `vault`, sent through `fleet`.
-    convenience init(fleet: Fleet, vault: HostId) {
+    /// The secrets of `hub`, sent through `fleet`.
+    convenience init(fleet: Fleet, hub: HostId) {
         let client = fleet.client
-        self.init(vault: vault) { try await client.send(hostId: vault, command: $0) }
+        self.init(hub: hub) { try await client.send(hostId: hub, command: $0) }
     }
 
     var sets: [SecretSet] {
@@ -76,11 +76,11 @@ final class VaultSecrets {
         return list.secrets.filter { $0.set == set }
     }
 
-    /// Asks the vault for its sets and secrets, and its latest fetches.
+    /// Asks the hub for its sets and secrets, and its latest fetches.
     func reload() async {
         do {
             guard case .secrets(let sets, let secrets) = try await send(.listSecrets) else {
-                throw HerderError.Local(detail: "the vault did not list its secrets")
+                throw HerderError.Local(detail: "the hub did not list its secrets")
             }
             list = .loaded((sets, secrets))
         } catch {
@@ -88,7 +88,7 @@ final class VaultSecrets {
         }
         do {
             guard case .secretAudit(let entries) = try await send(.listSecretAudit(before: nil)) else {
-                throw HerderError.Local(detail: "the vault did not list its secrets' fetches")
+                throw HerderError.Local(detail: "the hub did not list its secrets' fetches")
             }
             audit = .loaded(entries)
         } catch {
@@ -122,17 +122,17 @@ final class VaultSecrets {
         await reload()
     }
 
-    /// The hosts a set can be granted to, each with its name if the vault lists it: the vault's
-    /// hosts, then any the set is granted to that the vault no longer lists.
-    static func hosts(of set: SecretSet?, vaultHosts: [FleetHost]) -> [(id: HostId, name: String?)] {
-        var hosts: [(id: HostId, name: String?)] = vaultHosts.map { ($0.hostId, $0.hostName) }
+    /// The hosts a set can be granted to, each with its name if the hub lists it: the hub's
+    /// hosts, then any the set is granted to that the hub no longer lists.
+    static func hosts(of set: SecretSet?, hubHosts: [FleetHost]) -> [(id: HostId, name: String?)] {
+        var hosts: [(id: HostId, name: String?)] = hubHosts.map { ($0.hostId, $0.hostName) }
         for granted in set?.hosts ?? [] where !hosts.contains(where: { $0.id == granted }) {
             hosts.append((granted, nil))
         }
         return hosts
     }
 
-    /// Why `name` cannot name a set, as the vault checks it: lowercase ASCII letters, digits and
+    /// Why `name` cannot name a set, as the hub checks it: lowercase ASCII letters, digits and
     /// single hyphens inside, at most 64.
     nonisolated static func setNameProblem(_ name: String) -> String? {
         let valid = (1...64).contains(name.count)
@@ -151,11 +151,11 @@ final class VaultSecrets {
 }
 
 /// Adding a secret to a set, or replacing one: its name, description and value. Saving takes the
-/// value out of the form before the command goes, so it is gone whether the vault keeps it or
+/// value out of the form before the command goes, so it is gone whether the hub keeps it or
 /// refuses it, and the user types it again.
 @MainActor @Observable
 final class SecretEditor {
-    let secrets: VaultSecrets
+    let secrets: HubSecrets
     let set: String
     /// Replacing a secret, whose name is then fixed; else adding one.
     let replacing: Bool
@@ -169,7 +169,7 @@ final class SecretEditor {
     private(set) var sending = false
 
     /// A new secret in `set`.
-    init(secrets: VaultSecrets, set: String) {
+    init(secrets: HubSecrets, set: String) {
         self.secrets = secrets
         self.set = set
         replacing = false
@@ -178,7 +178,7 @@ final class SecretEditor {
     }
 
     /// Replaces `secret`, keeping its description until changed.
-    init(secrets: VaultSecrets, replacing secret: SecretInfo) {
+    init(secrets: HubSecrets, replacing secret: SecretInfo) {
         self.secrets = secrets
         set = secret.set
         replacing = true
@@ -206,7 +206,7 @@ final class SecretEditor {
     /// What is wrong with the form, or `nil` when it can be sent.
     var problem: String? {
         let description = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !VaultSecrets.isValidSecretName(name.trimmingCharacters(in: .whitespaces)) {
+        if !HubSecrets.isValidSecretName(name.trimmingCharacters(in: .whitespaces)) {
             return "A secret's name is an environment variable's: A-Z, 0-9 and _, such as API_KEY."
         }
         if description.isEmpty { return "Say what the secret is for: agents read it to pick one." }
@@ -220,7 +220,7 @@ final class SecretEditor {
         return nil
     }
 
-    /// Sends the secret; whether the vault kept it. The value is cleared first either way.
+    /// Sends the secret; whether the hub kept it. The value is cleared first either way.
     func save() async -> Bool {
         if let problem {
             error = problem

@@ -74,12 +74,12 @@ struct FixRequest: Equatable {
     }
 
     /// Whether Fix with AI is offered for a job: a failed install or update, herder update or
-    /// vault setup, on a machine this device owns. Logins and sign-ins wait on the user, so
+    /// hub setup, on a machine this device owns. Logins and sign-ins wait on the user, so
     /// a shell cannot fix them.
     static func offered(_ kind: JobKind, progress: JobProgress, role: Role?) -> Bool {
         guard role == .owner, case .failed = progress else { return false }
         switch kind {
-        case .install, .updateHerder, .vault: return true
+        case .install, .updateHerder, .hub: return true
         case .add, .relogin, .awsSignIn: return false
         }
     }
@@ -139,7 +139,7 @@ extension Fleet {
             let name = ModelCatalog.providerName(provider)
             return activity[key]?.before == nil ? "Installing the \(name) CLI failed" : "Updating the \(name) CLI failed"
         case .updateHerder: return "Updating herder failed"
-        case .vault: return "Setting up a herder vault failed"
+        case .hub: return "Setting up a herder hub failed"
         case .add, .relogin, .awsSignIn: return "A login failed"
         }
     }

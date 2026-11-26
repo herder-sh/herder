@@ -37,7 +37,7 @@ pub(crate) async fn fork(
         .iter()
         .find(|machine| machine.saved.host_id == source_id);
     let view = source.map(|source| source.view());
-    // A vault lists sessions of other hosts; a daemon's are its own.
+    // A hub lists sessions of other hosts; a daemon's are its own.
     let host_id = view
         .as_ref()
         .and_then(|view| listed(view, &session_id))
@@ -47,7 +47,7 @@ pub(crate) async fn fork(
         return send(&destination, fork(None)).await;
     }
     // Any connected machine that lists the session of that host relays it: the source first,
-    // then the session's own machine, then a vault.
+    // then the session's own machine, then a hub.
     let mut relays = machines
         .iter()
         .filter(|machine| machine.saved.host_id != destination.saved.host_id)
@@ -95,7 +95,7 @@ pub(crate) async fn fork(
         ErrorCode::NotFound,
         format!(
             "{} is offline, and no other machine you are signed in to holds the session; sign \
-             in to its vault to fork it from there",
+             in to its hub to fork it from there",
             head_name(view.as_ref(), &source_id)
         ),
     ))
@@ -136,7 +136,7 @@ async fn read(
                 Ok(CommandResult::Attachment { data, .. }) => {
                     kept.push((attachment.clone(), data));
                 }
-                // One its machine lost is left out, as a vault copy leaves it out.
+                // One its machine lost is left out, as a hub copy leaves it out.
                 Err(Error::Rejected { info }) if info.code == ErrorCode::NotFound => {}
                 Err(err) => return Err(err),
                 Ok(_) => return Err(unexpected(source)),

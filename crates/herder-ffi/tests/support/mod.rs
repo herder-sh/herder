@@ -26,7 +26,7 @@ use herder_daemon::skills::{Skills, SkillsSink};
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
-use herder_daemon::{Config, Hub, session};
+use herder_daemon::{Config, Fanout, session};
 use herder_protocol::{AccountId, CommandBody, HostId, Provider, Role, TurnId};
 use herder_store::Store;
 use tempfile::TempDir;
@@ -137,7 +137,7 @@ impl FakeDaemon {
 
         let tls = Tls::load_or_create(&dir.join("tls"), name)?;
         let auth = Arc::new(Auth::open(&dir)?);
-        let hub = Arc::new(Hub::default());
+        let fanout = Arc::new(Fanout::default());
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
         let mut adapters = Adapters::new();
         let mut accounts = Accounts::new();
@@ -171,7 +171,7 @@ impl FakeDaemon {
             store,
             adapters,
             accounts,
-            sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+            sink: Arc::clone(&fanout) as Arc<dyn session::EventSink>,
             turn_ids: Box::new(move || {
                 TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
             }),
@@ -190,7 +190,7 @@ impl FakeDaemon {
         let skills = Arc::new(Skills::open(
             &dir,
             &sessions.providers(),
-            Arc::clone(&hub) as Arc<dyn SkillsSink>,
+            Arc::clone(&fanout) as Arc<dyn SkillsSink>,
         )?);
         skills
             .command(CommandBody::SetSkillsRepo { url: library })
@@ -210,8 +210,8 @@ impl FakeDaemon {
         ));
         sessions.use_mcp_servers(settings.mcp_servers())?;
         tokio::spawn({
-            let (hub, shutdown) = (Arc::clone(&hub), shutdown.clone());
-            async move { admission.run(&hub, shutdown).await }
+            let (fanout, shutdown) = (Arc::clone(&fanout), shutdown.clone());
+            async move { admission.run(&fanout, shutdown).await }
         });
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let link = FleetLink {
@@ -227,7 +227,7 @@ impl FakeDaemon {
             enroll(&auth, OWNER, Role::Owner),
             enroll(&auth, MEMBER, Role::Member),
         );
-        let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
+        let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
         let logins = Logins::new(
             HashMap::from([(Provider::Opencode, fake_login())]),
             dir.join("daemon.toml"),
@@ -243,7 +243,7 @@ impl FakeDaemon {
         let server = Server::new(
             tls,
             Arc::clone(&auth),
-            hub,
+            fanout,
             sessions,
             terminals,
             logins,

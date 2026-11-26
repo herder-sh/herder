@@ -1,12 +1,11 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 983
 expression: terminal.backend()
 ---
 " herder        inbox 0 « │  chat   tasks   prs   term                                                                │ ○ docs                             idle  "
-"                         │                                                                                           │ herder/docs · vault · ~/src/app          "
+"                         │                                                                                           │ herder/docs · hub · ~/src/app            "
 " machines     by machine │                                                                                           │ claude-main · claude-opus · ask          "
-"  ○ vault                │                                                                                           │                                          "
+"  ○ hub                  │                                                                                           │                                          "
 "    ├ ○ devbox           │                                                                                           │                                          "
 "    │ ├ ○ app · api      │                                                                                           │                                          "
 "    │ └ ○ app · login    │                                                                                           │                                          "
@@ -42,4 +41,4 @@ expression: terminal.backend()
 " ─────────────────────── │  laptop is offline · F fork                                                               │                                          "
 " + new            ≡ menu │                                                                            claude-main    │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────── "
-" esc close                                                                                                                                             ● vault  "
+" esc close                                                                                                                                               ● hub  "

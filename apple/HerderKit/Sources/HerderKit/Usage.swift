@@ -181,7 +181,7 @@ extension Fleet {
     /// never answers it, so without a limit the screen would wait forever.
     static let usageTimeout: Duration = .seconds(10)
 
-    /// The machines asked for their usage: the connected ones; a vault runs no sessions.
+    /// The machines asked for their usage: the connected ones; a hub runs no sessions.
     private var usageMachines: [Machine] {
         machines.filter { $0.connection == .connected && $0.hosts.isEmpty }
     }

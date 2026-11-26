@@ -2,8 +2,8 @@ import Foundation
 import Herder
 import Observation
 
-/// A session on a machine. `hostId` is the machine the app is connected to, which for a vault
-/// is the vault, not the host the session runs on.
+/// A session on a machine. `hostId` is the machine the app is connected to, which for a hub
+/// is the hub, not the host the session runs on.
 struct SessionKey: Hashable, Sendable {
     let hostId: HostId
     let sessionId: SessionId
@@ -162,7 +162,7 @@ struct SessionModel {
         return lastSeq > other.lastSeq
     }
 
-    /// The same state as another copy of the session: a vault's of its host's, or the reverse.
+    /// The same state as another copy of the session: a hub's of its host's, or the reverse.
     /// Both fold the one journal.
     func keyed(_ key: SessionKey) -> SessionModel {
         var model = self

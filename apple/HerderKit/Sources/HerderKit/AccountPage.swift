@@ -92,7 +92,7 @@ struct AccountPage: View {
     @State private var movedTo: String?
     @State private var endpoint = ""
     @State private var key = ""
-    /// Whether the owner chose to type a key in place of the vault's.
+    /// Whether the owner chose to type a key in place of the hub's.
     @State private var typingKey = false
     @FocusState private var editingEndpoint: Bool
     @State private var setup: ProvidersView.Setup?
@@ -123,7 +123,7 @@ struct AccountPage: View {
             }
         } content: {
             if let login, let url = login.endpoint {
-                endpointSection(url, fromVault: login.keyFromVault).detailSection("Endpoint")
+                endpointSection(url, fromHub: login.keyFromHub).detailSection("Endpoint")
                 usage(login).detailSection(period.title)
                 machines(login, rows: rows).detailSection("Machines")
                 settings(login, rows: rows).detailSection("Settings")
@@ -134,15 +134,15 @@ struct AccountPage: View {
                         DetailRow(label: row.place.name, value: row.account?.accountId ?? "", mono: true)
                     }
                 }
-            } else if let login, let name = login.vaultLogin {
+            } else if let login, let name = login.hubLogin {
                 limits(login).detailSection("Limits")
                 usage(login).detailSection(period.title)
                 machines(login, rows: rows).detailSection("Machines")
-                fromVault(login, rows: rows).detailSection("Vault")
+                fromHub(login, rows: rows).detailSection("Hub")
                 AboutSection {
                     DetailRow(label: "Provider", value: ModelCatalog.providerName(login.provider))
                     if let email = login.email { DetailRow(label: "Email", value: email) }
-                    DetailRow(label: "Vault login", value: name, mono: true)
+                    DetailRow(label: "Hub login", value: name, mono: true)
                     ForEach(rows.filter { $0.account != nil }) { row in
                         DetailRow(label: row.place.name, value: row.account?.accountId ?? "", mono: true)
                     }
@@ -165,8 +165,8 @@ struct AccountPage: View {
         }
         .task { await fleet.refreshUsage(over: period) }
         .task(id: login?.endpoint) {
-            // Whether each machine reaches the vault's logins at this endpoint, to offer its key.
-            if login?.endpoint != nil { await fleet.refreshVaultLogins(on: editable(rows).map(\.0)) }
+            // Whether each machine reaches the hub's logins at this endpoint, to offer its key.
+            if login?.endpoint != nil { await fleet.refreshHubLogins(on: editable(rows).map(\.0)) }
         }
         .onAppear { reset() }
         .onChange(of: loginId) { movedTo = nil; reset() }
@@ -204,32 +204,32 @@ struct AccountPage: View {
         let rotation = login.fallbackOn.isEmpty ? "primary"
             : login.fallbackOn.count == login.on.count ? "fallback"
             : "fallback on \(login.fallbackOn.map(\.name).joined(separator: ", "))"
-        let kind = login.vaultLogin != nil ? "vault login"
-            : login.endpoint == nil ? nil : login.keyFromVault ? "vault logins" : "endpoint"
+        let kind = login.hubLogin != nil ? "hub login"
+            : login.endpoint == nil ? nil : login.keyFromHub ? "hub logins" : "endpoint"
         let parts: [String?] = [ModelCatalog.providerName(login.provider), login.subtitle, kind, on, rotation]
         return parts.compactMap(\.self).joined(separator: " · ")
     }
 
-    // MARK: Vault login
+    // MARK: Hub login
 
-    /// Where a vault login's name and fallback mark are set: on the vault, once for every host.
-    /// Its owners get a link to the vault's Logins tab; a member only reads where they are.
-    @ViewBuilder private func fromVault(_ login: ProviderAccounts.Login, rows: [AccountMachine]) -> some View {
-        let vault = Self.vault(of: rows.compactMap { $0.account == nil ? nil : $0.place.hostId }, in: fleet.machines)
+    /// Where a hub login's name and fallback mark are set: on the hub, once for every host.
+    /// Its owners get a link to the hub's Logins tab; a member only reads where they are.
+    @ViewBuilder private func fromHub(_ login: ProviderAccounts.Login, rows: [AccountMachine]) -> some View {
+        let hub = Self.hub(of: rows.compactMap { $0.account == nil ? nil : $0.place.hostId }, in: fleet.machines)
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(vault.map { "From the vault \($0.name)" } ?? "From the vault")
+                Text(hub.map { "From the hub \($0.name)" } ?? "From the hub")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                Text(Self.vaultNote(owner: vault?.role == .owner))
+                Text(Self.hubNote(owner: hub?.role == .owner))
                     .font(.caption).foregroundStyle(Theme.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            if let vault, vault.role == .owner {
+            if let hub, hub.role == .owner {
                 PillButton(title: "Open Logins", symbol: "arrow.up.right", prominent: true) {
-                    pages.open(.vault(vault.hostId, tab: .logins))
+                    pages.open(.hub(hub.hostId, tab: .logins))
                 }
-                .accessibilityIdentifier("account-vault-logins")
+                .accessibilityIdentifier("account-hub-logins")
             }
         }
         .padding(.horizontal, 14)
@@ -239,26 +239,26 @@ struct AccountPage: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
     }
 
-    /// What a vault login's page says about where it is changed.
-    nonisolated static func vaultNote(owner: Bool) -> String {
+    /// What a hub login's page says about where it is changed.
+    nonisolated static func hubNote(owner: Bool) -> String {
         owner
-            ? "Its name and fallback mark are the vault’s, the same on every host. Change them in the vault’s Logins tab."
-            : "Its name and fallback mark are the vault’s, the same on every host. The vault’s owners change them."
+            ? "Its name and fallback mark are the hub’s, the same on every host. Change them in the hub’s Logins tab."
+            : "Its name and fallback mark are the hub’s, the same on every host. The hub’s owners change them."
     }
 
-    /// The vault that serves `hosts`: the one listing the first of them as its host.
-    nonisolated static func vault(of hosts: [HostId], in machines: [Machine]) -> Machine? {
-        machines.first { vault in vault.hosts.contains { hosts.contains($0.hostId) } }
+    /// The hub that serves `hosts`: the one listing the first of them as its host.
+    nonisolated static func hub(of hosts: [HostId], in machines: [Machine]) -> Machine? {
+        machines.first { hub in hub.hosts.contains { hosts.contains($0.hostId) } }
     }
 
     // MARK: Endpoint
 
     /// Where an endpoint account runs, in place of limits: the server behind it holds them.
-    private func endpointSection(_ url: String, fromVault: Bool) -> some View {
+    private func endpointSection(_ url: String, fromHub: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(url).font(Theme.mono).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
                 .textSelection(.enabled)
-            Text(ProviderAccounts.Login.endpointNote(fromVault: fromVault))
+            Text(ProviderAccounts.Login.endpointNote(fromHub: fromHub))
                 .font(.caption).foregroundStyle(Theme.tertiary)
         }
         .padding(.horizontal, 14)
@@ -355,8 +355,8 @@ struct AccountPage: View {
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
             GridRow {
                 Text("Machine")
-                Text(login.endpoint == nil && login.vaultLogin == nil ? "Login" : "State")
-                Text(login.endpoint == nil && login.vaultLogin == nil ? "Config directory" : "Account")
+                Text(login.endpoint == nil && login.hubLogin == nil ? "Login" : "State")
+                Text(login.endpoint == nil && login.hubLogin == nil ? "Config directory" : "Account")
                 Text("Sessions").gridColumnAlignment(.trailing)
                 Text("")
             }
@@ -410,7 +410,7 @@ struct AccountPage: View {
     @ViewBuilder private func state(_ row: AccountMachine) -> some View {
         switch row.state {
         case .signedIn:
-            let ready = row.account?.endpoint == nil && row.account?.vaultLogin == nil ? "Signed in" : "Ready"
+            let ready = row.account?.endpoint == nil && row.account?.hubLogin == nil ? "Signed in" : "Ready"
             StatusChip(text: row.place.connected ? ready : "Not connected",
                        urgency: row.place.connected ? .done : .quiet)
         case .signedOut(let since):
@@ -426,7 +426,7 @@ struct AccountPage: View {
     /// directory and it needs no login.
     private func directory(_ row: AccountMachine) -> String {
         guard let account = row.account else { return "" }
-        if account.endpoint != nil || account.vaultLogin != nil { return account.accountId }
+        if account.endpoint != nil || account.hubLogin != nil { return account.accountId }
         return account.configDir ?? "default"
     }
 
@@ -444,9 +444,9 @@ struct AccountPage: View {
                 more(row)
             }
         case .signedIn:
-            // An endpoint account, or a vault login, has no login here to sign in to, nor a
+            // An endpoint account, or a hub login, has no login here to sign in to, nor a
             // directory to choose.
-            if row.account?.endpoint == nil && row.account?.vaultLogin == nil { more(row) }
+            if row.account?.endpoint == nil && row.account?.hubLogin == nil { more(row) }
         }
     }
 
@@ -507,14 +507,14 @@ struct AccountPage: View {
                         .accessibilityIdentifier("account-endpoint")
                 }
                 RowDivider()
-                SettingRow(label: "Key", hint: Self.keyHint(fromVault: login.keyFromVault, typing: typingKey),
+                SettingRow(label: "Key", hint: Self.keyHint(fromHub: login.keyFromHub, typing: typingKey),
                            saved: saves["Key"]) {
                     HStack(spacing: 8) {
-                        if login.keyFromVault && !typingKey {
+                        if login.keyFromHub && !typingKey {
                             PillButton(title: "Use own key") { typingKey = true }
-                                .accessibilityIdentifier("account-key-vault")
+                                .accessibilityIdentifier("account-key-hub")
                         } else {
-                            SecureField(login.keyFromVault ? "Type a key" : "Unchanged", text: $key)
+                            SecureField(login.keyFromHub ? "Type a key" : "Unchanged", text: $key)
                                 .textFieldStyle(.plain)
                                 .foregroundStyle(Theme.text)
                                 .multilineTextAlignment(.trailing)
@@ -523,10 +523,10 @@ struct AccountPage: View {
                                 .frame(maxWidth: 240, minHeight: 32)
                                 .background(.card, in: .rect(cornerRadius: 7))
                                 .accessibilityIdentifier("account-key")
-                            if login.keyFromVault {
+                            if login.keyFromHub {
                                 PillButton(title: "Cancel") { typingKey = false; key = "" }
-                            } else if canUseVaultKey(login, rows: rows) {
-                                PillButton(title: "Use the vault’s") { useVaultKey(rows) }
+                            } else if canUseHubKey(login, rows: rows) {
+                                PillButton(title: "Use the hub’s") { useHubKey(rows) }
                             }
                         }
                     }
@@ -550,16 +550,16 @@ struct AccountPage: View {
         .disabled(!canManage)
     }
 
-    static func keyHint(fromVault: Bool, typing: Bool) -> String {
-        if fromVault && !typing { return "Key from the vault, each machine’s own" }
-        return fromVault ? "Kept on each machine in place of the vault’s" : "Never shown; type a new one to replace it"
+    static func keyHint(fromHub: Bool, typing: Bool) -> String {
+        if fromHub && !typing { return "Key from the hub, each machine’s own" }
+        return fromHub ? "Kept on each machine in place of the hub’s" : "Never shown; type a new one to replace it"
     }
 
-    /// Whether every machine the owner can change reaches its vault's logins at the login's
-    /// endpoint, so the vault's key works there.
-    private func canUseVaultKey(_ login: ProviderAccounts.Login, rows: [AccountMachine]) -> Bool {
+    /// Whether every machine the owner can change reaches its hub's logins at the login's
+    /// endpoint, so the hub's key works there.
+    private func canUseHubKey(_ login: ProviderAccounts.Login, rows: [AccountMachine]) -> Bool {
         let editable = editable(rows)
-        return !editable.isEmpty && editable.allSatisfy { fleet.vaultLogins(on: $0.0) == login.endpoint }
+        return !editable.isEmpty && editable.allSatisfy { fleet.hubLogins(on: $0.0) == login.endpoint }
     }
 
     private func rotationHint(_ login: ProviderAccounts.Login) -> String {
@@ -653,9 +653,9 @@ struct AccountPage: View {
         }
     }
 
-    /// Has the login's accounts fetch each machine's key from its vault, in place of the key
+    /// Has the login's accounts fetch each machine's key from its hub, in place of the key
     /// they hold.
-    private func useVaultKey(_ rows: [AccountMachine]) {
+    private func useHubKey(_ rows: [AccountMachine]) {
         let changed = editable(rows).filter { $0.1.endpoint != nil && $0.1.keySecret == nil }
         guard !changed.isEmpty else { return }
         key = ""
@@ -663,7 +663,7 @@ struct AccountPage: View {
             await saves.save("Key") {
                 for (hostId, account) in changed {
                     _ = try await fleet.client.send(hostId: hostId, command: account.settings(
-                        label: account.label, configDir: nil, fallback: nil, keySecret: AccountDraft.vaultKeySecret))
+                        label: account.label, configDir: nil, fallback: nil, keySecret: AccountDraft.hubKeySecret))
                 }
             }
         }

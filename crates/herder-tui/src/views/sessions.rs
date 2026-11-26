@@ -1,6 +1,6 @@
 //! The sidebar, as Herdr's: the brand with the inbox count and `«`; *projects*, the chats,
 //! then the tree of each project's sessions and their tasks across machines, grouped as the
-//! Mac app groups them (or with `v` each machine's, a vault's under each host), every row
+//! Mac app groups them (or with `v` each machine's, a hub's under each host), every row
 //! with its rolled-up state; *attention*, every session with something
 //! going on, the most pressing first; and a footer with `+ new` and `≡ menu`.
 //!
@@ -403,7 +403,7 @@ fn tree_items(app: &App, rows: &[Row], roomy: bool, prs: bool) -> Vec<Item<'stat
         .collect()
 }
 
-/// Each row's level in the tree: projects and machines at 0, a vault's hosts at 1, sessions
+/// Each row's level in the tree: projects and machines at 0, a hub's hosts at 1, sessions
 /// under them, tasks under their session.
 fn levels(rows: &[Row]) -> Vec<usize> {
     let mut base = 0;
@@ -485,11 +485,11 @@ fn row_text(
             };
             (Span::styled(name, ui.text()), Line::from(right))
         }
-        Row::Host { vault, host } => {
+        Row::Host { hub, host } => {
             let host = app
                 .machines
                 .iter()
-                .find(|m| m.host_id == *vault)
+                .find(|m| m.host_id == *hub)
                 .and_then(|m| m.hosts.iter().find(|h| h.host_id == *host));
             let Some(host) = host else {
                 return (Span::raw(""), Line::default());
@@ -549,9 +549,9 @@ fn session_text(
     if machine {
         right.push(Span::styled(app.session_machine(key), ui.muted()));
     }
-    // A vault's read-only copy, standing in for a host paired here but not reachable.
-    if app.vault_copy(key) {
-        push_spaced(&mut right, vec![Span::styled("vault", ui.muted())]);
+    // A hub's read-only copy, standing in for a host paired here but not reachable.
+    if app.hub_copy(key) {
+        push_spaced(&mut right, vec![Span::styled("hub", ui.muted())]);
     }
     if let Some(to) = app.moved_to(key) {
         right.push(Span::styled(
@@ -676,7 +676,7 @@ fn divider(frame: &mut Frame, area: Rect, ui: Ui) {
     );
 }
 
-/// How long ago the vault last heard from `host`.
+/// How long ago the hub last heard from `host`.
 pub(super) fn ago(host: &FleetHost) -> String {
     let secs = Timestamp::now().duration_since(host.last_seen).as_secs();
     account_screen::until(secs)
