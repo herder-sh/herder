@@ -189,8 +189,11 @@ order, the page has:
 - **Hub and machines** (`MachinesView`, from `SetupStructure`): the page's centre, drawn as
   the structure it is.
   - The **hub** is one card (`HubCard`): its name, whether this device is connected to it,
-    and two lines: "Reachable from anywhere" (it has a public address) or "Reachable on its
-    network only", and what it keeps, "Keeps copies of 7 sessions, your secrets and provider
+    and two lines. The first says how far it is reached and at which address, whatever
+    exposes that address (a port forward, a reverse proxy, a tunnel, a VPN): "Reachable from
+    anywhere, at hub.example.com", "Reachable over your VPN, at hub.tail1234.ts.net" or
+    "Reachable on its network only" (`AddressScope`, by what its addresses name). The second
+    says what it keeps, "Keeps copies of 7 sessions, your secrets and provider
     logins". It opens the hub's page. A hub your machines sync to that this device has not
     signed in to is the same card, saying who syncs to it, with **Sign In**.
   - The **machines that sync to it** hang under the card from a thin rail (`HubRail`), one
