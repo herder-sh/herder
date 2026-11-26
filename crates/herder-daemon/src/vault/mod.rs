@@ -13,6 +13,11 @@
 //! connection, so one silent for [`LIVENESS_TIMEOUT`] is taken for a host that is gone and
 //! closed.
 //!
+//! The vault also forwards: a client paired with it reaches a host that replicates to it
+//! through a relay stream, whose bytes the vault copies and cannot read ([`relay`]). With
+//! `tunnel` set it takes the connections `cloudflared` delivers, as a daemon does, so one
+//! public hostname reaches the vault and, through it, every host.
+//!
 //! A host whose config has a `[vault]` table runs a [`Replicator`], which streams every
 //! session's journal there under [`herder_protocol::replication`], resuming from the cursors
 //! in the vault's hello. An owner links a host to a vault, or unlinks it, from a client while
@@ -40,6 +45,7 @@ mod host_secrets;
 pub mod install;
 mod link;
 pub mod pin;
+mod relay;
 mod replicator;
 mod retention;
 mod secrets;
@@ -68,7 +74,7 @@ use crate::hub::Hub;
 use crate::listen;
 use crate::login::Logins;
 use crate::terminal::{self, Terminals};
-use crate::ws::{self, Host, Tls};
+use crate::ws::{self, Host, Tls, tunnel};
 use crate::{Config, DataDir};
 use fleet::Fleet;
 
@@ -101,6 +107,10 @@ struct Shared {
     secrets_key: Option<Arc<SecretsKey>>,
     /// The CLIProxyAPI hosts get client keys for, when the vault has one and keeps secrets.
     cliproxyapi: OnceLock<Arc<ClientKeys>>,
+    /// The relay streams between clients and hosts.
+    relays: Arc<relay::Relays>,
+    /// Counts the tunneled connections not authenticated yet.
+    tunnel_gate: Arc<tunnel::Gate>,
 }
 
 impl Shared {
@@ -132,11 +142,13 @@ impl Server {
         let store = Arc::new(Mutex::new(store));
         let hub = Arc::new(Hub::default());
         let secrets_key = secrets_key.map(Arc::new);
+        let relays = Arc::new(relay::Relays::default());
         let fleet = Fleet::new(
             Arc::clone(&store),
             Arc::clone(&hub),
             Arc::clone(&auth),
             secrets_key.clone(),
+            Arc::clone(&relays),
         );
         // No session has a worktree here, so no terminal ever opens.
         let terminals = Terminals::new(Arc::clone(&hub), terminal::login_shell());
@@ -162,6 +174,11 @@ impl Server {
                 superseded: tokio::sync::broadcast::channel(16).0,
                 secrets_key,
                 cliproxyapi: OnceLock::new(),
+                relays,
+                tunnel_gate: tunnel::Gate::new(
+                    tunnel::UNAUTHENTICATED,
+                    tunnel::UNAUTHENTICATED_PER_CLIENT,
+                ),
             }),
         }
     }
@@ -201,6 +218,16 @@ impl Server {
     /// Accepts hosts and clients on every one of `listeners`, and prunes archived sessions,
     /// until `shutdown`, which also closes every connection.
     pub async fn run(self, listeners: Vec<TcpListener>, shutdown: CancellationToken) {
+        self.run_tunneled(listeners, None, shutdown).await;
+    }
+
+    /// [`Server::run`], also accepting the connections `cloudflared` delivers on `tunnel`.
+    pub async fn run_tunneled(
+        self,
+        listeners: Vec<TcpListener>,
+        tunnel: Option<TcpListener>,
+        shutdown: CancellationToken,
+    ) {
         match listen::local_addrs(&listeners) {
             Ok(listen) => self.shared.clients.listening_on(listen),
             Err(err) => warn!("cannot tell the addresses the vault listens on: {err}"),
@@ -231,15 +258,17 @@ impl Server {
         });
         let mut acceptor = listen::Acceptor::default();
         loop {
-            let accepted = tokio::select! {
+            let (accepted, tunneled) = tokio::select! {
                 () = shutdown.cancelled() => break,
-                accepted = acceptor.accept(&listeners) => accepted,
+                accepted = acceptor.accept(&listeners) => (accepted, false),
+                accepted = listen::accept_tunneled(tunnel.as_ref()) => (accepted, true),
             };
             match accepted {
                 Ok((stream, peer)) => {
-                    debug!(%peer, "connection accepted");
+                    debug!(%peer, tunneled, "connection accepted");
                     let shared = Arc::clone(&self.shared);
-                    tokio::spawn(conn::run(stream, peer, shared, shutdown.child_token()));
+                    let cancel = shutdown.child_token();
+                    tokio::spawn(conn::run(stream, peer, tunneled, shared, cancel));
                 }
                 Err(err) => {
                     // Usually out of file descriptors; back off instead of spinning.
@@ -277,6 +306,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     }
     let listeners = listen::bind(&config.listen).await?;
     let listen = listen::local_addrs(&listeners)?;
+    let tunnel = listen::bind_tunnel(config.tunnel).await?;
     let fingerprint = tls.fingerprint().to_owned();
     let server = Server::new(
         tls,
@@ -316,11 +346,12 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     info!(
         data_dir = %data_dir.root().display(),
         listen = ?listen,
+        tunnel = ?config.tunnel,
         tls_fingerprint = fingerprint,
         archive_retention_days = config.retention.archive_days,
         "herder vault started"
     );
-    server.run(listeners, shutdown).await;
+    server.run_tunneled(listeners, tunnel, shutdown).await;
     info!("herder vault stopped");
     Ok(())
 }

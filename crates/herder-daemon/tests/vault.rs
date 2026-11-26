@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use herder_client_core::auth::client_config;
+use herder_client_core::auth::{DeviceKey, client_config};
 use herder_client_core::{Client, Error, Machine, SessionSubscription};
 use herder_daemon::Hub;
 use herder_daemon::auth::authenticator::{Authenticator, Join};
@@ -30,9 +30,9 @@ use herder_protocol::{
     AccountId, Attachment, AttachmentId, ClientHello, ClientMessage, Command, CommandBody,
     CommandId, CommandResult, Cursor, ErrorCode, Event, EventBody, HostHello, HostId, HostMessage,
     HostSecretsState, Item, ItemBody, ItemId, JournalRecord, PROTOCOL_VERSION, PermissionMode,
-    Provider, REPLICATION_VERSION, ReplicationErrorCode, SecretError, SecretErrorCode, SecretRef,
-    SecretValue, ServerMessage, SessionId, SessionStatus, SessionSummary, Timestamp, TurnId,
-    UserId, VaultMessage,
+    Provider, RELAY_VERSION, REPLICATION_VERSION, RelayAnswer, RelayErrorCode, RelayHello,
+    ReplicationErrorCode, SecretError, SecretErrorCode, SecretRef, SecretValue, ServerMessage,
+    SessionId, SessionStatus, SessionSummary, Timestamp, TurnId, UserId, VaultMessage,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -90,6 +90,8 @@ impl Drop for Runtime {
 struct Vault {
     runtime: Runtime,
     addr: SocketAddr,
+    /// Where the vault takes tunneled connections, as `cloudflared` delivers them.
+    tunnel: SocketAddr,
     fingerprint: String,
     auth: Arc<Auth>,
     admin: Admin,
@@ -121,6 +123,8 @@ impl Vault {
                 let store = VaultStore::open(dir.join("vault.db")).unwrap();
                 let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
                 let addr = listener.local_addr().unwrap();
+                let tunnel_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let tunnel = tunnel_listener.local_addr().unwrap();
                 let fingerprint = tls.fingerprint().to_owned();
                 let host = Host {
                     id: HostId::new("vault"),
@@ -139,16 +143,23 @@ impl Vault {
                     server.use_cliproxyapi(keys).unwrap();
                 }
                 started
-                    .send((addr, fingerprint, auth, server.admin()))
+                    .send((addr, tunnel, fingerprint, auth, server.admin()))
                     .ok()
                     .unwrap();
-                server.run(vec![listener], CancellationToken::new()).await;
+                server
+                    .run_tunneled(
+                        vec![listener],
+                        Some(tunnel_listener),
+                        CancellationToken::new(),
+                    )
+                    .await;
             }
         });
-        let (addr, fingerprint, auth, admin) = ready.await.unwrap();
+        let (addr, tunnel, fingerprint, auth, admin) = ready.await.unwrap();
         Self {
             runtime,
             addr,
+            tunnel,
             fingerprint,
             auth,
             admin,
@@ -167,13 +178,13 @@ impl Vault {
 
     /// Signs `client` in as the vault's owner, the person `alice`, who claims it first.
     async fn join(&self, client: &Client) -> (Authenticator, Machine) {
+        self.join_at(client, self.addr.to_string()).await
+    }
+
+    /// [`Vault::join`], reaching the vault at `address`.
+    async fn join_at(&self, client: &Client, address: String) -> (Authenticator, Machine) {
         Join::open(&self.auth, herder_protocol::Role::Owner)
-            .join(
-                client,
-                vec![self.addr.to_string()],
-                &self.fingerprint,
-                "alice",
-            )
+            .join(client, vec![address], &self.fingerprint, "alice")
             .await
     }
 
@@ -870,8 +881,12 @@ type Ws = tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<Tcp
 
 /// A WebSocket to the vault with the device key of the host in `host_dir`.
 async fn dial(vault: &Vault, host_dir: &Path) -> Ws {
-    let device = Replicator::device_key(host_dir).unwrap();
-    let config = client_config(&vault.fingerprint, &device).unwrap();
+    dial_as(vault, &Replicator::device_key(host_dir).unwrap()).await
+}
+
+/// A WebSocket to the vault with the key `device`.
+async fn dial_as(vault: &Vault, device: &DeviceKey) -> Ws {
+    let config = client_config(&vault.fingerprint, device).unwrap();
     let tcp = TcpStream::connect(vault.addr).await.unwrap();
     let tls = TlsConnector::from(Arc::new(config))
         .connect(ServerName::try_from("herder").unwrap(), tcp)
@@ -2514,4 +2529,305 @@ async fn an_owner_lists_the_logins_in_the_vaults_cliproxyapi() {
         "{refused:?}"
     );
     bare.runtime.kill().await;
+}
+
+/// Says `message` on `ws` as a JSON text frame.
+async fn say(ws: &mut Ws, message: &impl serde::Serialize) {
+    let text = serde_json::to_string(message).unwrap();
+    ws.send(Message::text(text)).await.unwrap();
+}
+
+/// A host's replication connection to `vault` after the hellos: the host in `host_dir`,
+/// which pairs the first time, saying whether it takes relayed connections.
+async fn replicating(vault: &Vault, host_dir: &Path, relay: bool) -> Ws {
+    std::fs::create_dir_all(host_dir).unwrap();
+    let mut ws = dial(vault, host_dir).await;
+    let hello = HostMessage::Hello(HostHello {
+        replication_version: REPLICATION_VERSION,
+        host_id: host_id(),
+        host_name: "devbox".into(),
+        build: "test".into(),
+        pairing_code: Some(vault.auth.mint_host("devbox", PAIRING_TTL).unwrap().code),
+        attachments_cap: None,
+        relay,
+    });
+    say(&mut ws, &hello).await;
+    assert!(matches!(
+        next_message(&mut ws).await,
+        VaultMessage::Hello(_)
+    ));
+    ws
+}
+
+/// A device paired with `vault` as a client, as a phone signed in to it is.
+fn phone(vault: &Vault) -> DeviceKey {
+    let device = DeviceKey::generate().unwrap();
+    vault.auth.legacy_user(
+        "phone",
+        herder_protocol::Role::Member,
+        &device.fingerprint(),
+    );
+    device
+}
+
+/// Opens a relay connection as `device` saying `hello`; the connection and the vault's answer.
+async fn relay(vault: &Vault, device: &DeviceKey, hello: &RelayHello) -> (Ws, RelayAnswer) {
+    let mut ws = dial_as(vault, device).await;
+    say(&mut ws, hello).await;
+    let answer = loop {
+        match tokio::time::timeout(TIMEOUT, ws.next()).await.unwrap() {
+            Some(Ok(Message::Text(text))) => break serde_json::from_str(&text).unwrap(),
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+            other => panic!("no answer from the vault: {other:?}"),
+        }
+    };
+    (ws, answer)
+}
+
+fn connect_to(host: &str) -> RelayHello {
+    RelayHello::Connect {
+        relay_version: RELAY_VERSION,
+        host_id: HostId::new(host),
+    }
+}
+
+/// The code the vault refused `hello` from `device` with.
+async fn relay_refusal(vault: &Vault, device: &DeviceKey, hello: &RelayHello) -> RelayErrorCode {
+    let (mut ws, answer) = relay(vault, device, hello).await;
+    let RelayAnswer::Refused { error } = answer else {
+        panic!("the vault opened a stream for {hello:?}");
+    };
+    // A refusal is the last thing the vault says.
+    assert!(until_closed(&mut ws).await.is_empty());
+    error.code
+}
+
+/// Opens a stream from `device` to the host replicating on `replication`, which opens its
+/// end as the host in `host_dir`: the device's end and the host's.
+async fn stream(
+    vault: &Vault,
+    device: &DeviceKey,
+    host_dir: &Path,
+    replication: &mut Ws,
+) -> (Ws, Ws) {
+    let mut client = dial_as(vault, device).await;
+    say(&mut client, &connect_to("host-1")).await;
+    let VaultMessage::RelayOpen { stream_id, .. } = next_message(replication).await else {
+        panic!("the vault did not ask the host to open the stream");
+    };
+    let accept = RelayHello::Accept {
+        relay_version: RELAY_VERSION,
+        stream_id,
+    };
+    let host_key = Replicator::device_key(host_dir).unwrap();
+    let (host, answer) = relay(vault, &host_key, &accept).await;
+    assert_eq!(answer, RelayAnswer::Ready);
+    let Some(Ok(Message::Text(text))) = client.next().await else {
+        panic!("no answer for the device");
+    };
+    let ready: RelayAnswer = serde_json::from_str(&text).unwrap();
+    assert_eq!(ready, RelayAnswer::Ready);
+    (client, host)
+}
+
+/// The next `len` bytes `ws` carries as binary frames.
+async fn bytes(ws: &mut Ws, len: usize) -> Vec<u8> {
+    let mut got = Vec::new();
+    while got.len() < len {
+        match tokio::time::timeout(TIMEOUT, ws.next()).await.unwrap() {
+            Some(Ok(Message::Binary(data))) => got.extend_from_slice(&data),
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+            other => panic!("the stream ended after {} bytes: {other:?}", got.len()),
+        }
+    }
+    got
+}
+
+/// Whether `ws` ends without carrying anything more.
+async fn ended(ws: &mut Ws) -> bool {
+    loop {
+        match tokio::time::timeout(TIMEOUT, ws.next()).await.unwrap() {
+            Some(Ok(Message::Close(_)) | Err(_)) | None => return true,
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+            Some(Ok(_)) => return false,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_vault_forwards_a_stream_between_a_device_and_a_host_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    let vault = Vault::start(&vault_dir, 0).await;
+    let mut replication = replicating(&vault, &host_dir, true).await;
+    let device = phone(&vault);
+
+    // Clients are told the vault relays to the host while it is connected.
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    vault.join(&client).await;
+    machine_when(&client, |m| m.hosts.iter().any(|h| h.relay)).await;
+
+    let (mut near, mut far) = stream(&vault, &device, &host_dir, &mut replication).await;
+    // Every byte arrives, in order, whatever the frames: small ones, and one far bigger
+    // than a socket buffer.
+    let big: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+    let sent = [b"hello".to_vec(), Vec::new(), vec![0, 255, 7], big].concat();
+    let sending = tokio::spawn({
+        let sent = sent.clone();
+        async move {
+            for chunk in [&sent[..5], &sent[5..8], &sent[8..]] {
+                near.send(Message::binary(chunk.to_vec())).await.unwrap();
+            }
+            near
+        }
+    });
+    assert!(bytes(&mut far, sent.len()).await == sent, "bytes changed");
+    let mut near = sending.await.unwrap();
+    far.send(Message::binary(b"and back".to_vec()))
+        .await
+        .unwrap();
+    assert_eq!(bytes(&mut near, 8).await, b"and back");
+
+    // Either end closing ends the stream for the other.
+    near.close(None).await.unwrap();
+    assert!(ended(&mut far).await);
+    let (mut near, mut far) = stream(&vault, &device, &host_dir, &mut replication).await;
+    far.close(None).await.unwrap();
+    assert!(ended(&mut near).await);
+    // And so does a host that just goes away.
+    let (mut near, far) = stream(&vault, &device, &host_dir, &mut replication).await;
+    drop(far);
+    assert!(ended(&mut near).await);
+
+    // Without its replication connection the host is not relayed to any more.
+    drop(replication);
+    machine_when(&client, |m| m.hosts.iter().all(|h| !h.relay && !h.online)).await;
+    vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_vault_refuses_the_streams_it_may_not_forward() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    let vault = Vault::start(&vault_dir, 0).await;
+    let device = phone(&vault);
+    let host_key = {
+        std::fs::create_dir_all(&host_dir).unwrap();
+        Replicator::device_key(&host_dir).unwrap()
+    };
+    let to_host = connect_to("host-1");
+    let refusal = |device, hello| relay_refusal(&vault, device, hello);
+
+    // A host that takes no relayed connections is not one the vault forwards to.
+    let replication = replicating(&vault, &host_dir, false).await;
+    assert_eq!(
+        refusal(&device, &to_host).await,
+        RelayErrorCode::UnknownHost
+    );
+    let nowhere = connect_to("nope");
+    assert_eq!(
+        refusal(&device, &nowhere).await,
+        RelayErrorCode::UnknownHost
+    );
+    drop(replication);
+
+    let mut replication = replicating(&vault, &host_dir, true).await;
+    // Only a device paired with the vault as a client gets a stream: not a stranger, and
+    // not a host's device, which reads nothing here.
+    let stranger = DeviceKey::generate().unwrap();
+    assert_eq!(
+        refusal(&stranger, &to_host).await,
+        RelayErrorCode::Forbidden
+    );
+    assert_eq!(
+        refusal(&host_key, &to_host).await,
+        RelayErrorCode::Forbidden
+    );
+    let other_version = RelayHello::Connect {
+        relay_version: RELAY_VERSION + 1,
+        host_id: host_id(),
+    };
+    assert_eq!(
+        refusal(&device, &other_version).await,
+        RelayErrorCode::Unsupported
+    );
+    // Only the host a stream waits for may open its end, and only a stream that waits.
+    let accept = RelayHello::Accept {
+        relay_version: RELAY_VERSION,
+        stream_id: "no-such-stream".into(),
+    };
+    assert_eq!(
+        refusal(&host_key, &accept).await,
+        RelayErrorCode::BadRequest
+    );
+    assert_eq!(refusal(&device, &accept).await, RelayErrorCode::Forbidden);
+    let proxy = RelayHello::Proxy {
+        relay_version: RELAY_VERSION,
+    };
+    assert_eq!(refusal(&host_key, &proxy).await, RelayErrorCode::Forbidden);
+
+    // A device gets no more streams than its share, whether or not the host opened them.
+    let mut open = Vec::new();
+    for _ in 0..32 {
+        let mut ws = dial_as(&vault, &device).await;
+        say(&mut ws, &to_host).await;
+        assert!(matches!(
+            next_message(&mut replication).await,
+            VaultMessage::RelayOpen { .. }
+        ));
+        open.push(ws);
+    }
+    assert_eq!(refusal(&device, &to_host).await, RelayErrorCode::Busy);
+    // One that ends makes room for another.
+    drop(open.pop());
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    while refusal(&device, &to_host).await == RelayErrorCode::Busy {
+        assert!(tokio::time::Instant::now() < deadline, "no room was made");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(open);
+
+    // A host that is not connected is given a moment, then the device is told to try again.
+    drop(replication);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        refusal(&device, &to_host).await,
+        RelayErrorCode::HostOffline
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(2),
+        "the host got no time"
+    );
+    vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_reaches_the_vault_through_its_tunnel_listener() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 1, 2);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    caught_up(&host_dir, &vault_dir).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    // As `cloudflared` delivers a client that reached the vault's public hostname.
+    let address = format!("ws://{}", vault.tunnel);
+    let (_, machine) = vault.join_at(&client, address.clone()).await;
+    let machine = machine_when(&client, |m| {
+        m.host_id == machine.host_id && !m.sessions.is_empty()
+    })
+    .await;
+    assert_eq!(machine.address, Some(address));
+    assert_eq!(machine.hosts.len(), 1);
+    host.runtime.kill().await;
+    vault.runtime.kill().await;
 }

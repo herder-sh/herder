@@ -20,6 +20,10 @@ data:
     mode = "vault"
     # One address or a list, e.g. ["127.0.0.1:7447", "10.0.0.4:7447"]; every interface here.
     listen = "0.0.0.0:7447"
+    # Where cloudflared delivers the connections that reach the vault's public hostname, so
+    # apps and hosts reach it, and through it every host, from any network. Only cloudflared
+    # may connect: the NetworkPolicy below sees to it. See README.md, "A public hostname".
+    tunnel = "0.0.0.0:7448"
     # A subdirectory, so the vault creates it private to itself.
     data_dir = "/data/herder"
 
@@ -96,6 +100,49 @@ spec:
     - name: cliproxyapi
       port: 8317
       targetPort: cliproxyapi
+---
+# The tunnel listener, for cloudflared only: `service: http://herder-vault-tunnel.herder:7448`
+# in its ingress. Not on the load balancer.
+apiVersion: v1
+kind: Service
+metadata:
+  name: herder-vault-tunnel
+  labels:
+    app.kubernetes.io/name: herder-vault
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: herder-vault
+  ports:
+    - name: tunnel
+      port: 7448
+      targetPort: tunnel
+---
+# Only pods of the cloudflared namespace reach the tunnel listener: it trusts the client
+# address its peer names. The other ports stay open to everyone, as without a policy.
+# Change the namespace's name here if your cloudflared runs in another.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: herder-vault
+  labels:
+    app.kubernetes.io/name: herder-vault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: herder-vault
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: 7447
+        - port: 8317
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cloudflared
+      ports:
+        - port: 7448
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -180,6 +227,8 @@ spec:
           ports:
             - name: replication
               containerPort: 7447
+            - name: tunnel
+              containerPort: 7448
           readinessProbe:
             tcpSocket:
               port: replication

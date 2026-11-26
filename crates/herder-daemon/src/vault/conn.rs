@@ -1,5 +1,7 @@
-//! One connection to the vault: TLS with the peer's device certificate, the WebSocket upgrade
-//! and the first message, which tells a host from a client. A client is served by the
+//! One connection to the vault, direct or delivered by `cloudflared` inside a tunnel's
+//! frames: TLS with the peer's device certificate, the WebSocket upgrade and the first
+//! message, which tells a host from a client from an end of a relay stream ([`relay`]). A
+//! client is served by the
 //! daemon's client server over the fleet view; a host gets the hellos, then its messages are
 //! handled one at a time: an image is durable before the next is read, and a batch is
 //! acknowledged once durable. An image the host's cap leaves no room for is dropped, never
@@ -22,25 +24,32 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::store::{self, Kept, Outcome, SecretUse};
-use super::{BUILD, Shared, blocking, cliproxyapi, secrets};
+use super::{BUILD, Shared, blocking, cliproxyapi, relay, secrets};
 use crate::auth::DeviceRole;
-use crate::ws::{self, Ws};
+use crate::ws::{self, Transport, Ws, tunnel};
 
 /// Time a peer gets for the TLS and WebSocket handshakes, and again for its hello.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Serves a connection accepted on a listen address, or, with `tunneled`, on the tunnel
+/// listener, where it first takes `cloudflared`'s WebSocket upgrade.
 pub(super) async fn run(
     stream: TcpStream,
     peer: SocketAddr,
+    tunneled: bool,
     shared: Arc<Shared>,
     cancel: CancellationToken,
 ) {
     let _ = stream.set_nodelay(true);
+    // A relay stream's peer that is gone must not hold the other end's connection open.
+    if let Err(err) = ws::notice_a_gone_peer(&stream) {
+        debug!(%peer, "cannot set the socket's keepalive: {err}");
+    }
     let ws = tokio::select! {
         () = cancel.cancelled() => return,
-        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, ws::handshake(&shared.tls, stream.into())) => ws,
+        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared, stream, tunneled)) => ws,
     };
-    let (mut ws, device) = match ws {
+    let (mut ws, device, pass) = match ws {
         Ok(Ok(ws)) => ws,
         Ok(Err(err)) => return info!(%peer, "handshake failed: {err:#}"),
         Err(_) => return info!(%peer, "handshake timed out"),
@@ -55,17 +64,42 @@ pub(super) async fn run(
         Ok(Err(err)) => return info!(%peer, "no hello: {err:#}"),
         Err(_) => return info!(%peer, "no hello within {HANDSHAKE_TIMEOUT:?}"),
     };
+    if relay::is_hello(&first) {
+        return relay::serve(ws, &first, &shared, &device, pass, peer, cancel).await;
+    }
     if !is_host(&first) {
-        return shared.clients.serve(ws, device, first, peer, cancel).await;
+        return shared
+            .clients
+            .serve(ws, device, first, pass, peer, cancel)
+            .await;
     }
     let result = tokio::select! {
         () = cancel.cancelled() => Ok(()),
-        result = serve(&mut ws, &first, &shared, &device, &cancel) => result,
+        result = serve(&mut ws, &first, &shared, &device, pass, &cancel) => result,
     };
     if let Err(err) = result {
         info!(%peer, "host connection failed: {err:#}");
     }
     let _ = tokio::time::timeout(Duration::from_secs(1), ws.close(None)).await;
+}
+
+/// The handshakes of a connection: on a tunneled one, the upgrade from `cloudflared` first,
+/// which also gets it a pass through the tunnel's gate.
+async fn open(
+    shared: &Shared,
+    stream: TcpStream,
+    tunneled: bool,
+) -> Result<(Ws, String, Option<tunnel::Pass>)> {
+    let (transport, pass) = if tunneled {
+        let (frames, pass, _) = tunnel::accept(stream, &shared.tunnel_gate)
+            .await
+            .context("the tunnel's WebSocket upgrade")?;
+        (Transport::Tunnel(Box::new(frames)), Some(pass))
+    } else {
+        (Transport::Tcp(stream), None)
+    };
+    let (ws, device) = ws::handshake(&shared.tls, transport).await?;
+    Ok((ws, device, pass))
 }
 
 /// The first text frame, or `None` when the peer closes first.
@@ -90,12 +124,13 @@ fn is_host(first: &str) -> bool {
 }
 
 /// Handles the host's messages after its hello, `first`, until it closes the connection,
-/// breaks the protocol or falls silent.
+/// breaks the protocol or falls silent; `pass` counts a tunneled one until it authenticated.
 async fn serve(
     ws: &mut Ws,
     first: &str,
     shared: &Shared,
     device: &str,
+    pass: Option<tunnel::Pass>,
     cancel: &CancellationToken,
 ) -> Result<()> {
     let hello = match serde_json::from_str(first) {
@@ -119,6 +154,7 @@ async fn serve(
             return fail(ws, error).await;
         }
     };
+    drop(pass);
     if hello.replication_version != REPLICATION_VERSION {
         send(ws, hello_message(Vec::new(), None)).await?;
         bail!(
@@ -186,10 +222,13 @@ async fn serve(
     };
     send(ws, hello_message(cursors, proxy)).await?;
 
+    // Before the host is shown online, so it is never online without its relay.
+    let mut relay = hello.relay.then(|| shared.relays.host_connected(&host));
     let presence = shared.fleet.presence();
     presence.connected(&host);
     shared.fleet.refresh_hosts().await;
-    let result = receive(ws, shared, &host, cap, logins).await;
+    let result = receive(ws, shared, &host, cap, logins, &mut relay).await;
+    drop(relay);
     let seen = presence.disconnected(&host);
     let device = identity.device_id.clone();
     blocking(&shared.store, move |store| store.seen(&device, seen)).await?;
@@ -201,13 +240,15 @@ async fn serve(
 /// Handles the host's messages once it is connected, keeping at most `cap` bytes of its
 /// images, until another host takes over one of its sessions: then the connection is
 /// dropped, so the host reconnects and stops that session. Sends the host `logins` as they
-/// are listed, the current ones first.
+/// are listed, the current ones first, and asks it to open its end of each stream `relay`
+/// gives.
 async fn receive(
     ws: &mut Ws,
     shared: &Shared,
     host: &HostId,
     cap: Option<u64>,
     mut logins: Option<watch::Receiver<Option<Vec<ProviderLogin>>>>,
+    relay: &mut Option<relay::HostEnd>,
 ) -> Result<()> {
     let mut superseded = shared.superseded.subscribe();
     if let Some(logins) = &mut logins {
@@ -219,6 +260,11 @@ async fn receive(
         let frame = tokio::select! {
             listed = next_logins(&mut logins) => {
                 send(ws, VaultMessage::ProviderLogins { logins: listed }).await?;
+                continue;
+            }
+            open = next_open(relay) => {
+                let relay::Open { stream_id, device_id } = open;
+                send(ws, VaultMessage::RelayOpen { stream_id, device_id }).await?;
                 continue;
             }
             frame = tokio::time::timeout_at(deadline, ws.next()) => frame,
@@ -363,6 +409,14 @@ async fn receive(
             Err(err) => return fail(ws, bad(&err)).await,
         };
         send(ws, reply).await?;
+    }
+}
+
+/// The next stream the host is to open its end of; never, for a host that takes none.
+async fn next_open(relay: &mut Option<relay::HostEnd>) -> relay::Open {
+    match relay {
+        Some(relay) => relay.next().await,
+        None => std::future::pending().await,
     }
 }
 

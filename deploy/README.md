@@ -148,6 +148,30 @@ kubectl rollout status -n herder statefulset/herder-vault
 kubectl get -n herder service herder-vault   # the address hosts connect to
 ```
 
+### A public hostname
+
+The vault can be the one thing you expose: apps and hosts reach it at a public hostname
+through a Cloudflare Tunnel, and reach every host through it (`docs/vault-relay.md`). The
+manifest already sets `tunnel = "0.0.0.0:7448"`, serves it as the Service
+`herder-vault-tunnel`, and lets only the `cloudflared` namespace connect to it. Add the
+hostname to your `cloudflared`'s ingress, ahead of its catch-all rule:
+
+```yaml
+ingress:
+  - hostname: vault.example.com
+    service: http://herder-vault-tunnel.herder.svc.cluster.local:7448
+```
+
+and route its DNS to the tunnel (`cloudflared tunnel route dns <tunnel> vault.example.com`,
+or a public hostname in the Zero Trust dashboard). `http://` is right: every connection
+runs its own TLS inside, pinned to the vault's certificate and carrying the device's, so
+Cloudflare relays ciphertext. Leave the hostname outside Cloudflare Access.
+
+On a machine, set `tunnel = "127.0.0.1:7448"` in the vault's `daemon.toml` and point the
+machine's own `cloudflared` at it, as for a daemon (`docs/public-access.md`).
+
+Clients then add `wss://vault.example.com` to the vault's addresses.
+
 ## Pair a host
 
 Mint a one-time host code on the vault, named after the host:

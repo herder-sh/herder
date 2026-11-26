@@ -16,7 +16,10 @@
 //! a public hostname through a Cloudflare Tunnel (`service: http://127.0.0.1:7448` in its
 //! ingress). It must be a loopback address, since only `cloudflared` may connect to it, and
 //! no `listen` address. Each client still authenticates as on a direct connection: see
-//! `docs/public-access.md`.
+//! `docs/public-access.md`. A vault takes tunneled connections the same way, hosts' as well
+//! as clients', and may name any address, since in a cluster its `cloudflared` is another
+//! pod: there a network policy must keep everything else from the port
+//! (`docs/vault-relay.md`).
 //!
 //! ```toml
 //! listen = "127.0.0.1:7447"  # no direct listener on the network
@@ -560,14 +563,19 @@ enum Listen {
     Many(Vec<SocketAddr>),
 }
 
-/// `tunnel`, checked: loopback, since only `cloudflared` on this machine may reach it, and no
-/// address `listen` binds too.
-fn resolve_tunnel(tunnel: Option<SocketAddr>, listen: &[SocketAddr]) -> Result<Option<SocketAddr>> {
+/// `tunnel`, checked: loopback on a host, since only `cloudflared` on this machine may reach
+/// it, and no address `listen` binds too. A vault's may be any address: in a cluster its
+/// `cloudflared` is another pod, and the cluster's network policy says who reaches the port.
+fn resolve_tunnel(
+    tunnel: Option<SocketAddr>,
+    listen: &[SocketAddr],
+    mode: Mode,
+) -> Result<Option<SocketAddr>> {
     let Some(tunnel) = tunnel else {
         return Ok(None);
     };
     ensure!(
-        tunnel.ip().is_loopback(),
+        mode == Mode::Vault || tunnel.ip().is_loopback(),
         "`tunnel` must be a loopback address such as 127.0.0.1:7448, not {tunnel}: only \
          cloudflared on this machine may connect to it"
     );
@@ -818,7 +826,7 @@ fn resolve(
         None => xdg_dir(env, "XDG_DATA_HOME", ".local/share")?.join("herder"),
     };
     let listen = resolve_listen(file.listen)?;
-    let tunnel = resolve_tunnel(file.tunnel, &listen)?;
+    let tunnel = resolve_tunnel(file.tunnel, &listen, file.mode)?;
     file.resources.validate()?;
     let accounts = resolve_accounts(file.accounts, env)?;
     let projects = resolve_projects(file.projects, file.project, &accounts, env)?;
@@ -2575,6 +2583,11 @@ mod tests {
             let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();
             assert!(format!("{err:#}").contains(error), "{text}: {err:#}");
         }
+
+        // A vault's cloudflared is another pod in a cluster, so its tunnel may be any address.
+        let path = write(tmp.path(), "mode = \"vault\"\ntunnel = \"0.0.0.0:7448\"\n");
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap();
+        assert_eq!(config.tunnel, Some("0.0.0.0:7448".parse().unwrap()));
     }
 
     #[test]

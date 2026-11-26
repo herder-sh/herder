@@ -11,7 +11,7 @@ mod conn;
 #[cfg(test)]
 mod tests;
 mod tls;
-mod tunnel;
+pub(crate) mod tunnel;
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -28,7 +28,7 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-pub(crate) use conn::handshake;
+pub(crate) use conn::{handshake, notice_a_gone_peer};
 pub use tls::{Tls, fingerprint};
 pub(crate) use tunnel::Transport;
 
@@ -1025,18 +1025,19 @@ impl<B: Backend> Server<B> {
     }
 
     /// Serves one client whose handshakes are done and whose first text frame, `first`, was
-    /// already read: for the vault, whose port takes hosts and clients alike. The caller runs
-    /// the hub's flusher.
+    /// already read: for the vault, whose port takes hosts and clients alike. `pass` counts a
+    /// tunneled one until it authenticated. The caller runs the hub's flusher.
     pub(crate) async fn serve(
         &self,
         ws: Ws,
         device: String,
         first: String,
+        pass: Option<tunnel::Pass>,
         peer: SocketAddr,
         cancel: CancellationToken,
     ) {
         let shared = Arc::clone(&self.shared);
-        conn::serve(ws, device, Some(first), None, peer, shared, cancel).await;
+        conn::serve(ws, device, Some(first), pass, peer, shared, cancel).await;
     }
 
     /// Accepts connections on every one of `listeners` until `shutdown`, which also closes
@@ -1066,7 +1067,7 @@ impl<B: Backend> Server<B> {
             let (accepted, tunneled) = tokio::select! {
                 () = shutdown.cancelled() => break,
                 accepted = acceptor.accept(&listeners) => (accepted, false),
-                accepted = accept_tunneled(tunnel.as_ref()) => (accepted, true),
+                accepted = listen::accept_tunneled(tunnel.as_ref()) => (accepted, true),
             };
             match accepted {
                 Ok((stream, peer)) => {
@@ -1088,15 +1089,5 @@ impl<B: Backend> Server<B> {
             }
         }
         let _ = flusher.await;
-    }
-}
-
-/// The next connection on the tunnel listener; never ready without one.
-async fn accept_tunneled(
-    tunnel: Option<&TcpListener>,
-) -> std::io::Result<(tokio::net::TcpStream, SocketAddr)> {
-    match tunnel {
-        Some(tunnel) => tunnel.accept().await,
-        None => std::future::pending().await,
     }
 }

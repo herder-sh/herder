@@ -413,6 +413,16 @@ impl VaultStore {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The host `device` replicates here as, if it ever did.
+    pub fn host_of_device(&self, device: &DeviceId) -> Result<Option<HostId>> {
+        let host = self
+            .conn
+            .prepare_cached("SELECT host_id FROM hosts WHERE device_id = ?1")?
+            .query_row([device.as_str()], |row| row.get::<_, String>(0))
+            .optional()?;
+        Ok(host.map(HostId::new))
+    }
+
     /// Every device that ever replicated here as `host`.
     pub fn devices_of(&self, host: &HostId) -> Result<Vec<DeviceId>> {
         let mut stmt = self
