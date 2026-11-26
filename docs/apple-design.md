@@ -55,7 +55,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 | **Projects** | every project with its sessions, children under parents | sidebar *projects* tree | `ProjectsView` (iPhone), `ProjectSessions` (Mac/iPad) |
 | **Usage** | tokens and API-equivalent dollars over a period, per account and model | — | `UsageView` |
 | **Skills** | the skill library on every machine, and a session's project skills | — | `SkillsView` |
-| **Setup** | what needs you, each with its fix; you; the machines with the vault as a row; the people | fleet + accounts | `SetupView` |
+| **Setup** | what needs you, each with its fix; the hub with the machines that sync to it; your devices; the people | fleet + accounts | `SetupView` |
 | Vault (inside Setup) | a vault's hosts, how current each is, and its secrets | fleet, host grouping | `VaultPage` |
 | **Session** | one session: transcript, request, composer | session pane, chat tab | `SessionView` |
 | Terminal | owner-only shells in the session's worktree | term tab | `TerminalPane` |
@@ -169,33 +169,50 @@ on its row.
 
 ### 4.4 Setup and vault (`SetupView`, `MachinesView`, `VaultPage`)
 
-Setup is one page for your machines, your devices and the people on them: the sidebar's
-**Setup** row under Workspace and the iPhone's fourth tab, both badged amber with how many
-things need you (`SetupCount`). Its header reads "2 need you · 5 machines · 3 devices", or
-"Everything is set up · …", and has two actions: **Add a Device** (`AddDeviceSheet`) and
-**Add a Machine** (Add a Machine's sheet), with AWS Sign-in while a machine has a profile. In
+Setup shows how your herder is put together, in the words herder.sh uses: your **devices**
+(the apps) reach your **machines**, and the **hub** keeps what should outlive any one machine.
+It is the sidebar's **Setup** row under Workspace and the iPhone's fourth tab, badged amber
+with how many things need you (`SetupCount`). Every element is something you act on or need to
+understand your setup; what only diagnoses a machine is on that machine's page (§8.7).
+
+Its header reads "2 need you" or "Everything is set up", and has **Add a Device**
+(`AddDeviceSheet`) and **Add a Machine**, with AWS Sign-in while a machine has a profile. In
 order, the page has:
 
 - **Needs you** (`NeedsYouSection`), only while something does: a card per item, its mark in
-  amber or, for a suggestion, blue, what happened in a line, and the one button that fixes it,
-  beside the text on the Mac and under it on the iPhone (`NeedsYouCard`). `SetupProblem.found`
-  derives them from what the app already knows: a machine not connected (Reconnect), machines
-  that still know you by an earlier setup (Approve…, which opens Claim your machines), your
-  other Mac or iPhone missing from a machine you own (Add a Device), an account signed out on a
-  machine you own (Sign In…, its Account page), then the suggestions: an older herder on
-  machines you own (Update All, as each machine's Update) and CLI updates (Update All).
-- **You**: one row with your role and passkey and how many devices you have, opening the You
-  page (`YouPage`: your devices, Add a device).
-- **Machines**: one `SortableTable` (`MachineLine`) of the machines that run sessions
-  (`MachineRow`) and the vaults among them, a vault marked as one. The first column has the
-  name, then "this Mac" and the address in monospace, or what a vault backs up. Then Status
-  ("Connected", "Connecting…", "Offline", with the round trip on hover), Running, Load (CPU as a
-  `UsageBar`, memory on hover), CLIs ("Up to date" or "N updates"), Accounts (an amber dot
-  while one is signed out), Backup (how current the machine's backup is, "Up to date" or "6 h
-  behind"; for a vault, its host furthest behind) and You (your role there). A row opens the
-  machine's or the vault's page. On compact width only machine, status and running show.
-  A vault that connected machines back up to (`get_vault_link`) but this device is not paired
-  with is a row too, "Not on this device yet", with Add.
+  amber, what happened in a line, and the one button that fixes it, beside the text on the Mac
+  and under it on the iPhone (`NeedsYouCard`). Only real actions are here, and only they count
+  in the badge (`SetupProblem.found`): machines that still know you by an earlier setup
+  (Approve…), your other Mac or iPhone missing from a machine you own (Add a Device), an
+  account signed out on a machine you own (Sign In…, its Account page). A machine that is
+  offline needs nothing.
+- **Hub and machines** (`MachinesView`, from `SetupStructure`): the page's centre, drawn as
+  the structure it is.
+  - The **hub** is one card (`HubCard`): its name, whether this device is connected to it,
+    and two lines. The first says how far it is reached and at which address, whatever
+    exposes that address (a port forward, a reverse proxy, a tunnel, a VPN): "Reachable from
+    anywhere, at hub.example.com", "Reachable over your VPN, at hub.tail1234.ts.net" or
+    "Reachable on its network only" (`AddressScope`, by what its addresses name). The second
+    says what it keeps, "Keeps copies of 7 sessions, your secrets and provider
+    logins". It opens the hub's page. A hub your machines sync to that this device has not
+    signed in to is the same card, saying who syncs to it, with **Sign In**.
+  - The **machines that sync to it** hang under the card from a thin rail (`HubRail`), one
+    row each (`MachineCard`): the name, "this Mac" on the one this app runs on, "Member"
+    where you are not an owner, and how this device reaches it, said quietly with a small
+    mark: **Direct** (green dot), **Connecting…**, **On another network** (the hub hears
+    from it, this device does not) or **Offline** (a grey ring, never red: a laptop asleep is
+    expected). A machine with sessions running says "3 running". A row opens the machine's
+    page.
+  - **Other machines** follow, without the rail, with one line under them: they don't sync
+    to the hub, and an owner turns it on from the machine's page.
+  - With no hub, the section is **Machines**, and one line says what a hub would add, with
+    **Add a hub…**.
+- **Updates** (`UpdatesSection`), only while there are any: a quiet row each for a newer
+  herder ("herder 0.21.0 is out", Update) and newer provider CLIs ("Claude and Codex have
+  updates", Update All). An update never needs you, so it is not a card and not in the badge.
+- **Your devices**: a row per Mac, iPhone and terminal signed in as you, this one marked
+  "This device", each with how many machines it is on. The rows open the You page (§8.9),
+  where passkeys, sign-out and recovery are.
 - **People** (`PeopleSection`, `PeopleView`): one row per person, you first, with the line that
   says where they can do what ("Owner of every machine", "Owner on draugelis · member
   elsewhere") and a role menu: Owner on all my machines, Member on all my machines, Different
@@ -205,12 +222,22 @@ order, the page has:
   is signed with your passkey (§8.4 Face ID). A machine's page opens its own people
   (`PeoplePage`), the same rows narrowed to it.
 
-There is no who-can-do-what grid and no "Add a device…" row at the foot of the machines.
-On iPhone, Skills, Providers and Integrations are rows at the foot of Setup. Screenshots:
-`setup-mac.png`, `setup-person-mac.png`, `setup-needs-you-iphone.png`
-(`SetupScreenshotTests`), `machines.png`, `vault-page.png` (`MachinesScreenshotTests`), and the
-app's `mac-machines.png`, `ios-machines.png`, `mac-person-sheet.png`, `ios-person-sheet.png`
-(`ScreenshotTests`).
+What Setup no longer shows, and where it is instead: a machine's address, round trip, CPU
+load, CLI versions and account count (its page: the header, Connection, Provider CLIs,
+Accounts); how far a machine's copy lags (the hub's page, with its "Why?"); your role on every
+row (only "Member" is said, as it is what limits you); the You row (you are the first row of
+People); machine and device counts in the header. The machines are a structure, not a
+collection to sort, so they are not a `SortableTable` (§8.4). There is no who-can-do-what grid
+and no "Add a device…" row at the foot of the machines.
+
+Still to come with the hub's relay (P24): **Through the hub** as a way a machine is reached,
+in place of "On another network", once the client says a connection is relayed.
+
+On iPhone the page is the same, in one column, with "Everything is set up" at its top when
+nothing needs you, and Skills, Providers and Integrations are rows at its foot. Screenshots: `setup-mac.png`, `setup-iphone.png`, `setup-no-hub-iphone.png`,
+`setup-person-mac.png`, `setup-needs-you-iphone.png` (`SetupScreenshotTests`), `machines.png`,
+`vault-page.png` (`MachinesScreenshotTests`), and the app's `mac-machines.png`,
+`ios-machines.png`, `mac-person-sheet.png`, `ios-person-sheet.png` (`ScreenshotTests`).
 
 The vault's page (`VaultPage`) reads "Connected · backing up 2 hosts · last batch 3 min. ago".
 Its owners get two tabs: **Overview** and **Secrets** (the sets, their grants and secrets, and the
@@ -945,8 +972,8 @@ session onto its default model, and the model menu picks the model.
 
 ### 8.9 You page (P22.7)
 
-`YouPage` replaces People › You: Setup's You row (your role, passkey and how many devices)
-and your row in People open it (`Page.you`). Top to bottom:
+`YouPage` replaces People › You: Setup's Your devices rows and your row in People open it
+(`Page.you`). Top to bottom:
 
 - **Header** (`YouHeader`): your avatar, name and what you are on the machines ("Owner of 5
   machines", "Owner of 3 machines · member of 2").

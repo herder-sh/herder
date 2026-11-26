@@ -29,7 +29,11 @@ struct SetupTests {
         #expect(found[1].title == "Claude · ops is signed out on trash-can-01")
         #expect(found[2].title == "herder 0.21.0 is out" && found[2].detail == "trash-can-01 runs 0.20.0.")
         #expect(found[2].fix == .updateHerder(["h-can"]) && found[2].action == "Update")
-        #expect(found[3].title.hasSuffix("CLI updates") && found[3].detail.hasSuffix("on trash-can-01."))
+        #expect(found[3].title == "Claude and Codex have updates" && found[3].detail == "On trash-can-01.")
+        // Only the problems need you; an update never does.
+        #expect(found.needingYou.map(\.id) == ["claim", "signed-out.h-can/ops"])
+        #expect(found.updates.map(\.id) == ["herder-update", "cli-updates"])
+        #expect(SetupProblem.status(found) == "2 need you")
         // Nothing in the UI says "claim".
         #expect(found.allSatisfy { !"\($0.title) \($0.detail) \($0.action)".lowercased().contains("claim") })
     }
@@ -52,8 +56,19 @@ struct SetupTests {
         machines[1].providers = machines[0].providers
         let found = SetupProblem.found(machines: machines, overview: overview(machines), unclaimed: false, directory: nil)
         #expect(found.isEmpty)
-        #expect(SetupProblem.status(found, machines: machines, directory: Directory.demo(now: now))
-            == "Everything is set up · 3 machines · 3 devices")
+        #expect(SetupProblem.status(found) == "Everything is set up")
+    }
+
+    /// An update stops nothing, so it is not in the badge's count or the header's line.
+    @Test func anUpdateNeverNeedsYou() {
+        var machines = sampleFleetMachines(now: now)
+        machines[1].accounts = machines[1].accounts.map { var account = $0; account.needsLogin = nil; return account }
+        machines[0].herderVersion = "0.21.0"
+        machines[1].herderVersion = "0.20.0"
+        let found = SetupProblem.found(machines: machines, overview: overview(machines), unclaimed: false, directory: nil)
+        #expect(found.map(\.id) == ["herder-update", "cli-updates"])
+        #expect(found.needingYou.isEmpty)
+        #expect(SetupProblem.status(found) == "Everything is set up")
     }
 
     @Test func aDeviceMissingFromAMachineYouOwnNeedsYou() {
@@ -62,8 +77,7 @@ struct SetupTests {
         // The iPhone is not on draugelis; this Mac is on every one, and a terminal is on its own.
         #expect(missing.map(\.title) == ["Your iPhone isn’t on draugelis yet"])
         #expect(missing[0].fix == .addDevice)
-        #expect(SetupProblem.status(missing, machines: sampleFleetMachines(now: now), directory: directory)
-            == "1 needs you · 3 machines · 3 devices")
+        #expect(SetupProblem.status(missing) == "1 needs you")
     }
 
     @Test func aTeammatesDevicesAreTheirsAndNeverThisOne() async throws {
@@ -84,16 +98,10 @@ struct SetupTests {
         let directory = Directory.demo(now: now)
         #expect(PersonSheet.summary(directory, directory.teammates[1]) == "Different per machine · 2 devices")
         #expect(PersonSheet.summary(directory, directory.teammates[0]) == "Member on all your machines")
-        #expect(SetupView.you(directory) == "Owner of every machine · passkey in iCloud Keychain")
     }
 
-    @Test func machinesAndVaultsShareOneTable() throws {
-        let machines = sampleFleetMachines(now: now)
-        let vault = try #require(VaultStats(machine: machines[3], sessions: [:], now: now))
-        // work-mbp has not reached the vault for six hours; trash-can-01 is current.
-        #expect(MachinesView.backups([vault]) == ["h-mbp": "6 h behind", "h-can": "Up to date"])
-        let line = MachineLine.vault(.paired(vault))
-        #expect(line.id == "paired.h-vault" && line.running == -1 && line.role == "owner")
-        #expect(MachinesView.status(.connected) == "Connected")
+    @Test func aDeviceSaysHowManyMachinesItIsOn() {
+        let devices = Directory.demo(now: now).devices
+        #expect(devices.map(DevicesSection.summary) == ["On 3 machines", "On 2 machines", "Signed in with herder login"])
     }
 }

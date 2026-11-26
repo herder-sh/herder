@@ -1,8 +1,9 @@
 import Herder
 import SwiftUI
 
-/// Something on your machines that needs you, with the one button that fixes it. A problem
-/// needs you (amber); a suggestion, such as an update, does not stop anything (blue).
+/// Something on your machines with the one button that deals with it. A problem needs you: it
+/// is a card at the top of Setup and counts in its badge. A suggestion, which is an update,
+/// stops nothing: it is a quiet row under the machines, and counts nowhere.
 struct SetupProblem: Identifiable, Equatable {
     enum Fix: Equatable {
         /// Add a Device's code, which another device of yours scans.
@@ -24,12 +25,18 @@ struct SetupProblem: Identifiable, Equatable {
     let detail: String
     let action: String
     let fix: Fix
+}
 
-    var tint: Color { suggestion ? Theme.action : Urgency.needsYou.color }
+extension [SetupProblem] {
+    /// What needs you: the cards, and the badge's count.
+    var needingYou: [SetupProblem] { filter { !$0.suggestion } }
+
+    /// The updates, which never need you.
+    var updates: [SetupProblem] { filter(\.suggestion) }
 }
 
 extension SetupProblem {
-    /// Everything that needs you across `machines`, problems first, then suggestions: machines
+    /// Everything to deal with across `machines`, problems first, then suggestions: machines
     /// that know you by an earlier setup, a device of yours missing from
     /// a machine you own, a signed-out account, then herder and CLI updates. `directory` is nil
     /// until the machines list their people.
@@ -70,10 +77,11 @@ extension SetupProblem {
         if !clis.isEmpty {
             let providers = Directory.list(Array(Set(clis.map { ModelCatalog.providerName($0.provider) })).sorted())
             let hosts = Directory.list(Array(Set(clis.map(\.machine))).sorted())
+            let names = Set(clis.map(\.provider)).count
             found.append(SetupProblem(
                 id: "cli-updates", suggestion: true, symbol: "arrow.down.circle",
-                title: clis.count == 1 ? "1 CLI update" : "\(clis.count) CLI updates",
-                detail: "\(providers) on \(hosts).", action: "Update All", fix: .updateCLIs))
+                title: "\(providers) \(clis.count == 1 ? "has an update" : names == 1 ? "has updates" : "have updates")",
+                detail: "On \(hosts).", action: clis.count == 1 ? "Update" : "Update All", fix: .updateCLIs))
         }
         return found
     }
@@ -98,17 +106,13 @@ extension SetupProblem {
         }
     }
 
-    /// The Setup header's line: "2 need you · 5 machines · 3 devices", or "Everything is set
-    /// up · …" with nothing to fix.
-    static func status(_ problems: [SetupProblem], machines: [Machine], directory: Directory?) -> String {
-        let hosts = machines.filter { $0.hosts.isEmpty && $0.vault == nil }.count
-        var parts = [problems.isEmpty ? "Everything is set up"
-            : problems.count == 1 ? "1 needs you" : "\(problems.count) need you"]
-        parts.append(hosts == 1 ? "1 machine" : "\(hosts) machines")
-        if let devices = directory?.devices.count, devices > 0 {
-            parts.append(devices == 1 ? "1 device" : "\(devices) devices")
+    /// The Setup header's line: "2 need you", or "Everything is set up" with nothing to fix.
+    static func status(_ problems: [SetupProblem]) -> String {
+        switch problems.needingYou.count {
+        case 0: "Everything is set up"
+        case 1: "1 needs you"
+        case let count: "\(count) need you"
         }
-        return parts.joined(separator: " · ")
     }
 }
 
@@ -120,7 +124,7 @@ struct SetupCount<Content: View>: View {
     @ViewBuilder let content: (Int) -> Content
 
     var body: some View {
-        content(SetupProblem.found(fleet: fleet, directory: people.directory(fleet.machines)).count)
+        content(SetupProblem.found(fleet: fleet, directory: people.directory(fleet.machines)).needingYou.count)
     }
 }
 
@@ -137,8 +141,7 @@ struct SetupPane: View {
         let machines = fleet.machines
         let directory = people.directory(machines)
         let problems = SetupProblem.found(fleet: fleet, directory: directory)
-        Pane(fleet: fleet, title: "Setup", status: SetupProblem.status(problems, machines: machines, directory: directory),
-             switcher: switcher) {
+        Pane(fleet: fleet, title: "Setup", status: SetupProblem.status(problems), switcher: switcher) {
             SetupView(fleet: fleet, people: people, sheet: $sheet)
         } actions: {
             if !AwsSignIn.machines(machines).isEmpty {
@@ -153,15 +156,16 @@ struct SetupPane: View {
     }
 }
 
-/// Setup: one page for your machines, your devices and the people on them. In order: what
-/// needs you, each with its fix (hidden when nothing does); you; the machines, a vault among
-/// them; and the people. On iPhone, also the way to Skills, Providers and Integrations.
+/// Setup: how your herder is put together. In order: what needs you, each with its fix
+/// (hidden when nothing does); the hub and the machines that sync to it, then the other
+/// machines; updates, when there are any; your devices; and the people. On iPhone, also the
+/// way to Skills, Providers and Integrations.
 struct SetupView: View {
     let fleet: Fleet
     let people: FleetPeople
     @Binding var sheet: AppSheet?
     /// Leads to Skills, Providers and Integrations, where they have no section of their own,
-    /// and puts the header's line at the top.
+    /// and says at the top that everything is set up, when it is.
     var showsSections = false
     @Environment(\.pages) private var pages
 
@@ -171,20 +175,23 @@ struct SetupView: View {
         let problems = SetupProblem.found(fleet: fleet, directory: directory)
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                if showsSections {
-                    Text(SetupProblem.status(problems, machines: machines, directory: directory))
+                // Needs you says its own count; only "Everything is set up" is worth a line.
+                if showsSections, problems.needingYou.isEmpty {
+                    Text(SetupProblem.status(problems))
                         .font(.subheadline).foregroundStyle(Theme.secondary)
                 }
                 // A device with no machines shows Welcome instead.
-                if !problems.isEmpty {
-                    NeedsYouSection(problems: problems, fix: fix)
+                if !problems.needingYou.isEmpty {
+                    NeedsYouSection(problems: problems.needingYou, fix: fix)
                 }
-                youSection(directory)
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionHeading(title: "Machines", count: machines.count)
-                    MachinesView(fleet: fleet, sheet: $sheet)
+                MachinesView(fleet: fleet, sheet: $sheet)
+                if !problems.updates.isEmpty {
+                    UpdatesSection(updates: problems.updates, fix: fix)
                 }
                 if let directory {
+                    if !directory.devices.isEmpty {
+                        DevicesSection(devices: directory.devices) { pages.open(.you) }
+                    }
                     PeopleSection(fleet: fleet, people: people, directory: directory, sheet: $sheet)
                 } else if !people.failures.isEmpty {
                     Text(people.failures.values.sorted().joined(separator: "\n"))
@@ -220,34 +227,6 @@ struct SetupView: View {
         }
     }
 
-    /// You, in one row: your role and passkey, and how many devices you have; it opens You.
-    private func youSection(_ directory: Directory?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading(title: "You")
-            SettingsGroup {
-                let me = directory?.me
-                let devices = directory?.devices.count ?? 0
-                SummaryRow(title: me?.name ?? "You",
-                           summary: directory.map(Self.you) ?? "",
-                           value: devices == 0 ? "" : devices == 1 ? "1 device" : "\(devices) devices",
-                           open: { pages.open(.you) },
-                           leading: { Avatar(name: me?.name ?? "You", id: me?.id ?? "", size: 30) },
-                           accessory: { EmptyView() })
-                    .accessibilityIdentifier("setup-you")
-            }
-        }
-    }
-
-    /// "Owner of every machine · passkey in iCloud Keychain".
-    nonisolated static func you(_ directory: Directory) -> String {
-        let passkey: String? = switch directory.passkey {
-        case .none: "no passkey yet"
-        case .stored(let keychain?): "passkey in \(keychain)"
-        case .stored(nil): nil
-        }
-        return ([directory.scope(directory.me)] + [passkey].compactMap(\.self)).joined(separator: " · ")
-    }
-
     private func fix(_ fix: SetupProblem.Fix) {
         switch fix {
         case .addDevice: sheet = .addDevice
@@ -277,8 +256,8 @@ struct NeedsYouSection: View {
     }
 }
 
-/// One thing that needs you: its mark in amber, or blue for a suggestion, what happened and
-/// what to do, and its fix, beside it where there is room and under it where there is not.
+/// One thing that needs you: its mark in amber, what happened and what to do, and its fix,
+/// beside it where there is room and under it where there is not.
 struct NeedsYouCard: View {
     let problem: SetupProblem
     let action: () -> Void
@@ -310,9 +289,9 @@ struct NeedsYouCard: View {
     private var mark: some View {
         Image(systemName: problem.symbol)
             .font(.callout.weight(.semibold))
-            .foregroundStyle(problem.tint)
+            .foregroundStyle(Urgency.needsYou.color)
             .frame(width: 32, height: 32)
-            .background(problem.tint.opacity(0.16), in: .circle)
+            .background(Urgency.needsYou.color.opacity(0.16), in: .circle)
     }
 
     private var text: some View {
@@ -326,6 +305,71 @@ struct NeedsYouCard: View {
 
     private var button: some View {
         SettingsButton(title: problem.action, style: .primary, action: action).fixedSize()
+    }
+}
+
+/// The updates that are out, a quiet row each with its button: a newer herder, newer provider
+/// CLIs. Nothing here needs you.
+struct UpdatesSection: View {
+    let updates: [SetupProblem]
+    let fix: (SetupProblem.Fix) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeading(title: "Updates")
+            SettingsGroup {
+                ForEach(Array(updates.enumerated()), id: \.element.id) { index, update in
+                    if index > 0 { RowDivider() }
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(update.title).font(Theme.body.weight(.medium)).foregroundStyle(Theme.text)
+                            Text(update.detail).font(.caption).foregroundStyle(Theme.secondary)
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        SettingsButton(title: update.action) { fix(update.fix) }.fixedSize()
+                    }
+                    .padding(.horizontal, Theme.cellPadding)
+                    .padding(.vertical, 9)
+                    .frame(minHeight: Theme.tallRowHeight)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("update-\(update.id)")
+                }
+            }
+        }
+        .accessibilityIdentifier("setup-updates")
+    }
+}
+
+/// Your devices: a row per Mac, iPhone and terminal signed in as you, this one marked, each
+/// with how many machines it is on. A row opens You, where a device is signed out.
+struct DevicesSection: View {
+    let devices: [Directory.Device]
+    let open: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeading(title: "Your devices", count: devices.count)
+            SettingsGroup {
+                ForEach(Array(devices.enumerated()), id: \.element.id) { index, device in
+                    if index > 0 { RowDivider() }
+                    Button(action: open) {
+                        YouRow(symbol: device.symbol, title: YouSections.name(device),
+                               tag: device.current ? "This device" : nil, summary: Text(Self.summary(device))) {
+                            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.tertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("setup-device-\(device.id)")
+                }
+            }
+        }
+    }
+
+    /// "On 3 machines"; a terminal is signed in to the one it runs on.
+    nonisolated static func summary(_ device: Directory.Device) -> String {
+        device.kind == .terminal ? "Signed in with herder login" : device.reach
     }
 }
 
