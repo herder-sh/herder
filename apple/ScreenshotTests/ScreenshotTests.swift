@@ -134,7 +134,7 @@ final class ScreenshotTests: XCTestCase {
             }
         }
 
-        // Setup: what needs you, you, the machines with the vault among them, and the people.
+        // Setup: what needs you, the hub with its machines under it, your devices, and the people.
         if section("Setup") {
             settle()
             #if os(macOS)
