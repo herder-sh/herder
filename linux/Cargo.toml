@@ -1,0 +1,28 @@
+[package]
+name = "herder-gtk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# GTK and libadwaita only on Linux, so the workspace builds on a Mac without them; there the
+# binary only says where it runs.
+[target.'cfg(target_os = "linux")'.dependencies]
+adw.workspace = true
+gtk.workspace = true
+herder-client-core.workspace = true
+herder-protocol.workspace = true
+serde_json.workspace = true
+similar.workspace = true
+tokio.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+herder-adapters.workspace = true
+herder-daemon = { workspace = true, features = ["test-authenticator"] }
+herder-store.workspace = true
+tempfile.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true
