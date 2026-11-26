@@ -4,6 +4,8 @@
 
 Install on Linux (x86_64 or arm64) or an Apple silicon Mac: `curl -fsSL https://herder.sh/install | sh`, then `herder service install` to run the daemon at boot. Bare `herder` opens the terminal UI; `herder pair` pairs the Mac and iPhone apps.
 
+How it connects: the apps reach a machine's daemon directly on the same network, encrypted end to end with mutual TLS and pinned certificates. Each machine keeps one outbound connection to the hub, which keeps a copy of every session and the fleet's secrets. Reaching machines from anywhere through the hub, behind a Cloudflare Tunnel, is coming soon.
+
 ## Docs
 
 - [Full description for LLMs](https://herder.sh/llms-full.txt): what herder does, install, features, scripting and FAQ in one file

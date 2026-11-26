@@ -32,6 +32,10 @@ The Mac app is a zip on the latest GitHub release (https://github.com/herder-sh/
 2. Make the machine yours: `herder service install` prints a link and QR code, and `herder claim` prints them again. Scan it with the iPhone app or paste the link into the Mac app's Add to Fleet, and approve with Face ID. A terminal on another computer signs in with `herder login`.
 3. Add an account: Add Account in the app, or `n` in the terminal UI. The vendor's own login runs in a terminal on the machine; herder only shows you that terminal.
 
+## How it connects
+
+The iPhone app, the Mac app and the terminal UI connect straight to a machine's daemon on the same network, over mutual TLS with pinned certificates, so traffic is encrypted end to end between app and machine. Each machine keeps one outbound connection to the hub, which keeps a durable copy of every session and the fleet's secrets; a CLIProxyAPI beside it holds the provider logins the machines share. Coming soon: the apps reach every machine from anywhere through the hub behind a Cloudflare Tunnel, with the hub and Cloudflare forwarding only ciphertext.
+
 ## Features
 
 - Failover across accounts: when a session hits a usage limit, herder moves it to another account of the same provider that has room left. It only switches after a limit is hit, never pre-emptively. With no account left and a known reset time, the session waits for the reset and retries by itself.
