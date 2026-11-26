@@ -34,7 +34,7 @@ The Mac app is a zip on the latest GitHub release (https://github.com/herder-sh/
 
 ## How it connects
 
-The iPhone app, the Mac app and the terminal UI connect straight to a machine's daemon on the same network, over mutual TLS with pinned certificates, so traffic is encrypted end to end between app and machine. Each machine keeps one outbound connection to the hub, which keeps a durable copy of every session and the fleet's secrets; a CLIProxyAPI beside it holds the provider logins the machines share. Coming soon: the apps reach every machine from anywhere through the hub behind a Cloudflare Tunnel, with the hub and Cloudflare forwarding only ciphertext.
+The iPhone app, the Mac app and the terminal UI connect straight to a machine's daemon on the same network, over mutual TLS with pinned certificates, so traffic is encrypted end to end between app and machine. Each machine keeps one outbound connection to the hub, which keeps a durable copy of every session and the fleet's secrets; a CLIProxyAPI beside it holds the provider logins the machines share. Coming soon: the apps reach every machine from anywhere through the hub, which the owner exposes however suits them (a Cloudflare Tunnel, a port forward, a reverse proxy or a VPN), with the hub and anything in between forwarding only ciphertext.
 
 ## Features
 
