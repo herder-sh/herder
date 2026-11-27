@@ -2243,14 +2243,15 @@ async fn first_seen(seen: &Seen, wanted: impl Fn(&EventBody) -> bool) -> Instant
 }
 
 /// An app watching 500 sessions comes back over a link with a 450 ms round trip, and the user
-/// sends a prompt the moment it shows the machine connected, while the daemon replays what
-/// the sessions did meanwhile, a megabyte and more. Nothing waits before the prompt goes
-/// out: the daemon applies it and starts its turn half a round trip after the send. Printed
-/// is when each step happened; the answer still waits behind the catch-up on its way back.
+/// sends a prompt the moment it shows the machine connected, while the daemon resumes every
+/// subscription and replays the megabyte and a half one session did meanwhile. Nothing
+/// waits before the prompt goes out: the daemon applies it and starts its turn half a round
+/// trip after the send. Printed is when each step happened; the answer still waits behind
+/// the catch-up on its way back.
 #[test]
 fn a_prompt_during_a_catch_up_is_applied_in_half_a_round_trip() {
     run(async {
-        let mut world = World::start(41, 1, None).await;
+        let mut world = World::start(41, 2, Some(1_500_000)).await;
         let mut watched = Vec::new();
         for _ in 0..500 {
             let session_id = created(&world.truth, &world.host, create_chat()).await;
@@ -2258,21 +2259,20 @@ fn a_prompt_during_a_catch_up_is_applied_in_half_a_round_trip() {
             watched.push(sub.unwrap());
         }
         world.app.synced(world.host.clone()).await.unwrap();
-        let sessions = world.machine().sessions;
 
-        // Away while every session moves on.
+        // Away while a turn adds a megabyte and a half to the session.
         world.excuse(Instant::now(), Instant::now() + secs(3600));
         world.app.suspend();
         world.net.kill(None, Kill::Silent);
-        for round in 0..8 {
-            for session in &sessions {
-                let rename = CommandBody::RenameSession {
-                    session_id: session.session_id.clone(),
-                    title: format!("{round} {}", "t".repeat(70)),
-                };
-                world.truth.send(world.host.clone(), rename).await.unwrap();
-            }
-        }
+        let sent = world
+            .truth
+            .send(world.host.clone(), prompt(&world.session, 1));
+        assert_eq!(sent.await.unwrap(), CommandResult::Applied);
+        let mut ended = world.real.ended.subscribe();
+        tokio::time::timeout(secs(30), ended.wait_for(|ended| *ended == 1))
+            .await
+            .expect("the turn did not end")
+            .unwrap();
         world.trouble(Trouble::Link(HALF_SECOND)).await;
         tokio::time::sleep(secs(20)).await;
         let before = world.net.carried.load(Ordering::SeqCst);
@@ -2281,15 +2281,20 @@ fn a_prompt_during_a_catch_up_is_applied_in_half_a_round_trip() {
         world.shows(secs(30), "a connection", connected).await;
         let shown = woken.elapsed();
 
-        let user_message = |body: &EventBody| {
-            matches!(body, EventBody::ItemAdded { item }
-                if matches!(item.body, ItemBody::UserMessage { .. }))
+        let user_message = |body: &EventBody| match body {
+            EventBody::ItemAdded { item } => {
+                matches!(&item.body, ItemBody::UserMessage { text, .. } if text == "Prompt 2.")
+            }
+            _ => false,
         };
-        let turn_started = |body: &EventBody| matches!(body, EventBody::TurnStarted { .. });
+        let turn_started = |body: &EventBody| match body {
+            EventBody::TurnStarted { turn_id } => turn_id.as_str() == "turn-2",
+            _ => false,
+        };
         let sent = Instant::now();
         let ((answer, answered), applied, started, shows_sent, shows_started) = tokio::join!(
             async {
-                let prompt = prompt(&world.session, 1);
+                let prompt = prompt(&world.session, 2);
                 let answer = world.app.send(world.host.clone(), prompt).await;
                 (answer, Instant::now())
             },
