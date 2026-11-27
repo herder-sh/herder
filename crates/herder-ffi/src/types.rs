@@ -966,6 +966,9 @@ pub enum CommandBody {
         #[uniffi(default = None)]
         key_secret: Option<SecretRef>,
     },
+    RemoveAccount {
+        account_id: AccountId,
+    },
     InstallProvider {
         provider: Provider,
         cols: u16,

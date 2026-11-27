@@ -2017,6 +2017,27 @@ async fn endpoint_account_commands_go_to_the_accounts_never_echoing_the_key() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_owners_remove_an_account_and_it_goes_to_the_accounts() {
+    let daemon = Daemon::start().await;
+    let remove = || CommandBody::RemoveAccount {
+        account_id: AccountId::new("work"),
+    };
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
+    member.hello(Vec::new()).await;
+    let error = rejected(&mut member, "c1", remove()).await;
+    assert_eq!(error.code, ErrorCode::Forbidden, "{}", error.message);
+
+    // This daemon has no accounts to change (`Logins::default`): the owner's reaches them,
+    // not the session backend; login.rs covers its effect.
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    let error = rejected(&mut owner, "c2", remove()).await;
+    assert_eq!(error.code, ErrorCode::Unsupported, "{}", error.message);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn only_owners_change_the_skill_library() {
     let daemon = Daemon::start().await;
     let device = daemon.member("bob");

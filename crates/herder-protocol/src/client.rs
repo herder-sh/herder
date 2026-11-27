@@ -507,6 +507,17 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key_secret: Option<SecretRef>,
     },
+    /// Remove an account from this daemon: drop it from the daemon's config and its account
+    /// list; owners only. Its config dir stays on disk as it is: herder never reads, moves or
+    /// deletes a provider's login. Answered with `applied` and `accounts`. Refused with
+    /// `forbidden` for members, `bad_request` for an unknown account or one of the hub's
+    /// logins, which leaves when its login is removed on the hub, and `conflict`, naming
+    /// them, while unarchived sessions run on it or while a project, a bot or the titles
+    /// name it in the config.
+    RemoveAccount {
+        /// Account to remove.
+        account_id: AccountId,
+    },
     /// Install or update a provider's CLI on this host, in a terminal this connection is
     /// attached to; owners only. The command is the vendor's documented installer or updater.
     /// Refused with `forbidden` for members, `unsupported` when this OS has no recipe, and

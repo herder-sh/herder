@@ -1,5 +1,6 @@
 //! The single herder binary: `herder daemon` runs the daemon, bare `herder` opens the TUI.
 
+mod account;
 mod dev;
 mod doctor;
 mod fork;
@@ -54,6 +55,8 @@ enum Command {
     Login(login::Args),
     /// Create, prompt, wait on and archive sessions from scripts.
     Session(session::Args),
+    /// Manage a paired machine's provider accounts.
+    Account(account::Args),
     /// Fork a session onto this host: its history goes on in a new session here.
     Fork(fork::Args),
     /// Use the secrets this host's hub grants it, from a session herder runs.
@@ -137,6 +140,7 @@ fn main() -> ExitCode {
         Some(Command::Claim { config }) => pair::claim(config).map(|()| ExitCode::SUCCESS),
         Some(Command::Login(args)) => login::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Session(args)) => session::run(args),
+        Some(Command::Account(args)) => account::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Fork(args)) => fork::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Secret { command }) => secret::run(command).map(|()| ExitCode::SUCCESS),
         Some(Command::Hub { command }) => hub::run(command).map(|()| ExitCode::SUCCESS),
@@ -355,6 +359,30 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
         }
+    }
+
+    #[test]
+    fn parses_account_remove() {
+        for args in [
+            &["herder", "account", "remove", "work"][..],
+            &[
+                "herder",
+                "account",
+                "remove",
+                "Work account",
+                "--machine",
+                "box",
+            ],
+        ] {
+            assert!(
+                matches!(
+                    Cli::try_parse_from(args).map(|cli| cli.command),
+                    Ok(Some(Command::Account(_)))
+                ),
+                "{args:?}"
+            );
+        }
+        assert!(Cli::try_parse_from(["herder", "account", "remove"]).is_err());
     }
 
     #[test]
