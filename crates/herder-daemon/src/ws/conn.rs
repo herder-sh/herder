@@ -685,7 +685,7 @@ async fn replay<B: Backend>(
         match next {
             Replay::Subscribe(cursor) => subscribe(&shared, &outbox, cursor).await,
             Replay::Unsubscribe(session_id) => shared.fanout.unsubscribe(&outbox, &session_id),
-            Replay::Sync(token) => outbox.push(ServerMessage::Synced { token }),
+            Replay::Sync(token) => outbox.catch_up([ServerMessage::Synced { token }]),
         }
     }
 }
@@ -735,7 +735,7 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
             last = event.seq;
         }
         // Bodies from a newer build cannot be sent; their seqs still advance the cursor.
-        outbox.push_all(
+        outbox.catch_up(
             page.into_iter()
                 .filter(|event| !matches!(event.body, EventBody::Unknown))
                 .map(ServerMessage::Event),
@@ -743,6 +743,12 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
         if !full {
             break;
         }
+    }
+    // Live events go ahead of a catch-up: the session's must wait for the last of its replay
+    // to be written, or they would reach the client before the events they follow.
+    outbox.wait_below(1).await;
+    if outbox.state() != OutboxState::Open {
+        return;
     }
     shared.fanout.go_live(outbox, &session_id, last);
 }

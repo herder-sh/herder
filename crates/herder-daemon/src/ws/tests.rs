@@ -1261,6 +1261,7 @@ async fn a_long_replay_to_a_slow_client_does_not_hold_up_its_commands() {
     .unwrap();
     slow.hello(vec![cursor(&session, 0)]).await;
     // The replay is stuck on the client, which reads nothing; its command still applies.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     slow.send(&ClientMessage::Command(Command {
         id: CommandId::new("c1"),
         body: CommandBody::SendPrompt {
@@ -1279,17 +1280,23 @@ async fn a_long_replay_to_a_slow_client_does_not_hold_up_its_commands() {
     .await
     .expect("the command waited for the replay");
 
-    // Once the client reads, it gets the whole replay and the answer.
-    let mut answered = false;
-    while !answered || slow.view.last_seq() < 1 + CHUNKS as Seq {
+    // Once the client reads, the answer comes ahead of the rest of the replay: behind only
+    // what its socket and the daemon's held when it was queued.
+    let mut answered = None;
+    while answered.is_none() || slow.view.last_seq() < 1 + CHUNKS as Seq {
         match slow.recv().await {
             ServerMessage::CommandAccepted { command_id, .. } => {
                 assert_eq!(command_id, CommandId::new("c1"));
-                answered = true;
+                answered = Some(slow.view.last_seq());
             }
             message => slow.view.apply(message),
         }
     }
+    let replayed = answered.unwrap();
+    assert!(
+        replayed < 16,
+        "answered after {replayed} of {CHUNKS} replayed events"
+    );
 }
 
 fn latest(session: &SessionId) -> CommandBody {
