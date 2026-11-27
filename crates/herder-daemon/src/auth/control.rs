@@ -310,7 +310,7 @@ async fn tunnel_request(remote_access: &RemoteAccessHub, request: Request) -> Re
                 .await
         }
         Request::TunnelRemove => remote_access.set_tunnel(None, None, None).await,
-        _ => Ok(remote_access.get(true).await),
+        _ => Ok(remote_access.get(true, false).await),
     };
     match answer {
         Ok(access) => Response::Tunnel {

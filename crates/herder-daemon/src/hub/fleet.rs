@@ -340,6 +340,60 @@ impl Backend for Fleet {
         self.heads().await
     }
 
+    async fn device_command(
+        &self,
+        identity: &crate::ws::Identity,
+        command: CommandBody,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let remote_access = self.remote_access.get();
+        let enrolled = || self.auth.wireguard_of(&identity.device_id);
+        match command {
+            CommandBody::GetRemoteAccess => {
+                let remote_access = match remote_access {
+                    Some(remote_access) => {
+                        let owner = identity.role == Role::Owner;
+                        remote_access.get(owner, enrolled().is_some()).await
+                    }
+                    None => RemoteAccess::default(),
+                };
+                Ok(CommandResult::RemoteAccess {
+                    remote_access: Box::new(remote_access),
+                })
+            }
+            CommandBody::EnrollWireGuard { public_key } => {
+                let off = || {
+                    error(
+                        ErrorCode::Unsupported,
+                        "herder's WireGuard is off on this hub: its owner turns it on in the \
+                         Hub tab's Remote access"
+                            .into(),
+                    )
+                };
+                let wireguard = remote_access.ok_or_else(off)?.wireguard();
+                wireguard.settings().await.ok_or_else(off)?;
+                if public_key.parse::<herder_wireguard::Key>().is_err() {
+                    return Err(error(
+                        ErrorCode::BadRequest,
+                        "a WireGuard public key is 32 bytes in base64".into(),
+                    ));
+                }
+                let address = self
+                    .auth
+                    .enroll_wireguard(&identity.device_id, &public_key)?;
+                let enrollment = wireguard.enrollment(address).await.ok_or_else(off)?;
+                Ok(CommandResult::WireGuardEnrolled { enrollment })
+            }
+            CommandBody::UnenrollWireGuard => {
+                self.auth.unenroll_wireguard(&identity.device_id)?;
+                Ok(CommandResult::Applied)
+            }
+            _ => Err(error(
+                ErrorCode::BadRequest,
+                "not a command for this device".into(),
+            )),
+        }
+    }
+
     fn accounts(&self) -> Vec<Account> {
         Vec::new()
     }
@@ -368,7 +422,7 @@ impl Backend for Fleet {
 
     async fn command(
         &self,
-        user_id: &UserId,
+        _: &UserId,
         _: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
@@ -390,18 +444,6 @@ impl Backend for Fleet {
             }
             CommandBody::PairHubHost { host_name } => return self.pair_host(&host_name),
             CommandBody::RevokeHubHost { host_id } => return self.revoke_host(host_id).await,
-            CommandBody::GetRemoteAccess => {
-                let remote_access = match self.remote_access.get() {
-                    Some(remote_access) => {
-                        let owner = self.auth.role(user_id) == Some(Role::Owner);
-                        remote_access.get(owner).await
-                    }
-                    None => RemoteAccess::default(),
-                };
-                return Ok(CommandResult::RemoteAccess {
-                    remote_access: Box::new(remote_access),
-                });
-            }
             CommandBody::SetRemoteAccess { settings } => {
                 let Some(remote_access) = self.remote_access.get() else {
                     return Err(error(
@@ -413,14 +455,10 @@ impl Backend for Fleet {
                     remote_access: Box::new(remote_access.set(*settings).await?),
                 });
             }
-            CommandBody::EnrollWireGuard { .. }
-            | CommandBody::UnenrollWireGuard
-            | CommandBody::GetRelayToken => {
+            CommandBody::GetRelayToken => {
                 return Err(error(
                     ErrorCode::Unsupported,
-                    "this hub's version of herder offers no WireGuard or Cloudflare relay \
-                     yet"
-                    .into(),
+                    "this hub's Cloudflare relay is not up".into(),
                 ));
             }
             CommandBody::LinkHub { .. }

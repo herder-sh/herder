@@ -305,14 +305,16 @@ pub(crate) struct Tunnels {
 
 struct Up {
     tunnel: Arc<Tunnel>,
-    /// The config it was opened with: one imported again since opens it afresh.
-    config: Imported,
+    /// What it was opened with, keys included: one imported or enrolled again since opens it
+    /// afresh.
+    opened_with: String,
     /// Since when no connection used it.
     idle_since: Option<Instant>,
 }
 
 impl Tunnels {
-    /// The tunnels of the configs imported in `config_dir`.
+    /// The tunnels of the configs imported in `config_dir`, and of the hubs enrolled with in
+    /// its profile.
     pub(crate) fn new(config_dir: PathBuf) -> Self {
         Self {
             config_dir,
@@ -333,41 +335,89 @@ impl Tunnels {
             .into_iter()
             .find(|tunnel| tunnel.id == id)
             .with_context(|| format!("no WireGuard tunnel {id} is imported on this device"))?;
+        let opened_with = serde_json::to_string(&config)?;
+        self.reach(id.to_owned(), opened_with, tunnel_config(&config)?, address)
+            .await
+    }
+
+    /// A connection to `address`, `ip:port`, through the WireGuard of the hub `hub`, which
+    /// this device enrolled with.
+    pub(crate) async fn connect_hub(
+        &self,
+        hub: &HostId,
+        address: &str,
+    ) -> anyhow::Result<TcpStream> {
+        let enrollment = crate::profile::load(&self.config_dir)
+            .map_err(|err| anyhow!("{err}"))?
+            .into_iter()
+            .find(|machine| machine.host_id == *hub)
+            .and_then(|machine| machine.wireguard)
+            .with_context(|| format!("this device uses no WireGuard of the hub {hub}"))?;
+        let opened_with = serde_json::to_string(&enrollment)?;
+        let key = |text: &str| text.parse::<Key>().map_err(|err| anyhow!(err));
+        let config = TunnelConfig {
+            private_key: key(&enrollment.private_key)?,
+            peer_public_key: key(&enrollment.hub_public_key)?,
+            preshared_key: None,
+            endpoint: enrollment.endpoint.clone(),
+            addresses: vec![(
+                enrollment
+                    .address
+                    .parse()
+                    .with_context(|| format!("{} is not an IP address", enrollment.address))?,
+                32,
+            )],
+        };
+        self.reach(hub_key(hub), opened_with, config, address).await
+    }
+
+    /// A connection to `address` through the tunnel `key`, opened with `config` unless it is
+    /// up with the same `opened_with`.
+    async fn reach(
+        &self,
+        key: String,
+        opened_with: String,
+        config: TunnelConfig,
+        address: &str,
+    ) -> anyhow::Result<TcpStream> {
         let remote: SocketAddr = address
             .parse()
             .with_context(|| format!("{address} is not an IP address and port"))?;
         let held = {
             let up = self.lock();
-            up.get(id)
-                .filter(|held| held.config == config)
+            up.get(&key)
+                .filter(|held| held.opened_with == opened_with)
                 .map(|held| Arc::clone(&held.tunnel))
         };
         let tunnel = match held {
             Some(tunnel) => tunnel,
             None => {
-                let tunnel = Arc::new(Tunnel::open(tunnel_config(&config)?).await.with_context(
-                    || format!("opening the WireGuard tunnel to {}", config.endpoint),
-                )?);
+                let endpoint = config.endpoint.clone();
+                let tunnel = Arc::new(
+                    Tunnel::open(config)
+                        .await
+                        .with_context(|| format!("opening the WireGuard tunnel to {endpoint}"))?,
+                );
                 let mut up = self.lock();
                 // Another connection may have opened it meanwhile: the first one stays.
                 let held = up
-                    .entry(id.to_owned())
+                    .entry(key.clone())
                     .and_modify(|held| {
-                        if held.config != config {
+                        if held.opened_with != opened_with {
                             held.tunnel = Arc::clone(&tunnel);
-                            held.config = config.clone();
+                            held.opened_with.clone_from(&opened_with);
                         }
                     })
                     .or_insert_with(|| Up {
                         tunnel: Arc::clone(&tunnel),
-                        config: config.clone(),
+                        opened_with: opened_with.clone(),
                         idle_since: None,
                     });
                 Arc::clone(&held.tunnel)
             }
         };
         let stream = tunnel.connect(remote).await;
-        if let Some(held) = self.lock().get_mut(id) {
+        if let Some(held) = self.lock().get_mut(&key) {
             held.idle_since = None;
         }
         Ok(stream?)
@@ -386,10 +436,21 @@ impl Tunnels {
         });
     }
 
-    /// Whether the tunnel `id` is up.
+    /// Whether the imported tunnel `id` is up.
     pub(crate) fn is_up(&self, id: &str) -> bool {
         self.lock().contains_key(id)
     }
+
+    /// Whether the tunnel to the hub `hub`'s WireGuard is up.
+    pub(crate) fn is_hub_up(&self, hub: &HostId) -> bool {
+        self.lock().contains_key(&hub_key(hub))
+    }
+}
+
+/// What names the tunnel to the hub `hub`'s WireGuard among the tunnels up: no imported id
+/// has a `/`.
+fn hub_key(hub: &HostId) -> String {
+    format!("{HUB}/{hub}")
 }
 
 /// What `herder-wireguard` opens a tunnel with, from an imported config.

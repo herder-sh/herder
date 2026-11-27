@@ -76,7 +76,8 @@ endpoint on one UDP port, and devices enable it with one toggle.
   `endpoint` devices send to (`home.example.net:51820`, the router's public name and the
   forwarded port). The hub generates its WireGuard key once, in its data dir. No pod
   privileges: a UDP socket, no TUN, no `NET_ADMIN`. The router forwards that one UDP port
-  to the hub (`deploy/hub.yaml` gets it on the Service).
+  to the hub (`deploy/hub.yaml` has it on the Service; `deploy/README.md`, herder's
+  WireGuard, has the steps and the patch for a hub already running).
 - **Enrolled through pairing**: the device's toggle has client-core generate an X25519 key
   on the device and send its public key with `EnrollWireGuard` on its ordinary,
   authenticated connection to the hub (at home, or through the tunnel URL). The hub stores
@@ -256,7 +257,7 @@ Durable Object relay when granted one), `HubHello::relay_grant: Option<RelayGran
 | `route_kind(address) -> RouteKind` (`HomeNetwork`, `OwnVpn { tunnel }`, `Direct`, `SystemVpn`, `HubWireGuard`, `Tunnel`, `Hub { hub }`, `CloudflareRelay`) | done | P27.3, P27.5 add their forms to `normalize` |
 | `Client::set_route(host_id, address, RouteChoice)` (`Auto`, `Pinned`, `Disabled`), `Machine::pinned_address`, `Machine::disabled_addresses` | done | |
 | `Client::import_wireguard(name, config) -> WireGuardTunnel`, `wireguard_tunnels()`, `remove_wireguard(id)`; `WireGuardTunnel { id, name, endpoint, allowed_ips, kind, up }` | parse, validate, store | P27.3: the tunnel, its routes, `up` |
-| `Client::set_hub_wireguard(host_id, enabled)` | `Local` error "not available yet" | P27.4 |
+| `Client::set_hub_wireguard(host_id, enabled)` | `Local` error "not available yet" | P27.4: done |
 
 ## Crates
 

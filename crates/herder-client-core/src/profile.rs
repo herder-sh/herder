@@ -44,12 +44,31 @@ pub(crate) struct SavedMachine {
     /// Which of `addresses` the user pinned or disabled.
     #[serde(default, skip_serializing_if = "Routes::is_empty")]
     pub(crate) routes: Routes,
+    /// This device's enrollment with the machine's WireGuard endpoint, a hub's
+    /// ([`crate::Client::set_hub_wireguard`]); secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) wireguard: Option<HubEnrollment>,
     /// This device's key for the machine, as PEM; secret.
     pub(crate) device_key: String,
     /// The machine's token for its Cloudflare relay, for a hub that has one: what this
     /// device's `relay+wss://` routes through it send; secret.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) relay_grant: Option<herder_protocol::RelayGrant>,
+}
+
+/// This device's enrollment with a hub's WireGuard endpoint, as saved.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct HubEnrollment {
+    /// This device's private key for it, base64; secret, never sent anywhere.
+    pub(crate) private_key: String,
+    /// The hub's public key, base64.
+    pub(crate) hub_public_key: String,
+    /// Where the device sends to, `host:port`.
+    pub(crate) endpoint: String,
+    /// The device's address inside the tunnel.
+    pub(crate) address: String,
+    /// The hub's herder port inside the tunnel, `ip:port`.
+    pub(crate) hub_address: String,
 }
 
 /// Which of a machine's addresses the user pinned or disabled
@@ -227,6 +246,7 @@ mod tests {
             advertised: Vec::new(),
             headers: Default::default(),
             routes: Default::default(),
+            wireguard: None,
             device_key: "secret".into(),
             relay_grant: None,
         }

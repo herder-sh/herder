@@ -932,13 +932,35 @@ impl Client {
     /// The WireGuard tunnels herder's connections may run through: the imported ones, in the
     /// order they were imported, then each hub's that this device enrolled with.
     pub fn wireguard_tunnels(&self) -> Result<Vec<WireGuardTunnel>, Error> {
-        Ok(wireguard::load(&self.inner.config_dir)?
+        let mut tunnels: Vec<WireGuardTunnel> = wireguard::load(&self.inner.config_dir)?
             .iter()
             .map(|tunnel| {
                 let up = self.inner.tunnels.is_up(&tunnel.id);
                 tunnel.view(up)
             })
-            .collect())
+            .collect();
+        // Read from the profile: a supervisor holds the machine as it was when it started.
+        for saved in profile::load(&self.inner.config_dir)? {
+            let Some(enrollment) = &saved.wireguard else {
+                continue;
+            };
+            let hub_ip = enrollment
+                .hub_address
+                .rsplit_once(':')
+                .map_or(enrollment.hub_address.as_str(), |(ip, _)| ip);
+            tunnels.push(WireGuardTunnel {
+                id: wireguard::HUB.to_owned(),
+                name: saved.name.clone(),
+                endpoint: enrollment.endpoint.clone(),
+                addresses: vec![format!("{}/32", enrollment.address)],
+                allowed_ips: vec![format!("{hub_ip}/32")],
+                kind: WireGuardKind::Hub {
+                    host_id: saved.host_id.clone(),
+                },
+                up: self.inner.tunnels.is_hub_up(&saved.host_id),
+            });
+        }
+        Ok(tunnels)
     }
 
     /// Removes the imported tunnel `id`, and its private key with it. Refused with
@@ -966,10 +988,56 @@ impl Client {
     pub async fn set_hub_wireguard(&self, host_id: HostId, enabled: bool) -> Result<(), Error> {
         self.live()?;
         self.machine(&host_id)?;
-        // P27.4 fills this in (docs/remote-access.md).
-        let _ = enabled;
-        Err(Error::Local {
-            message: "herder's WireGuard on a hub is not available in this version yet".to_owned(),
+        let local = |message: String| Error::Local { message };
+        if !enabled {
+            // The hub drops the key when it hears of it; the device forgets it either way.
+            if let Err(err) = self
+                .send(host_id.clone(), CommandBody::UnenrollWireGuard)
+                .await
+            {
+                warn!(hub = %host_id, "the hub did not hear that this device stops using its WireGuard: {err}");
+            }
+            return self.update(|all| {
+                let machine = saved_mut(all, &host_id)?;
+                machine.wireguard = None;
+                machine.addresses.retain(|address| {
+                    !matches!(address::wireguard(address), Some((tunnel, _)) if tunnel == wireguard::HUB)
+                });
+                let kept = machine.addresses.clone();
+                machine.routes.keep(&kept);
+                machine.headers.retain(|address, _| kept.contains(address));
+                Ok(())
+            });
+        }
+        let key = herder_wireguard::Key::generate().map_err(local)?;
+        let enrolled = self
+            .send(
+                host_id.clone(),
+                CommandBody::EnrollWireGuard {
+                    public_key: key.public().to_base64(),
+                },
+            )
+            .await?;
+        let CommandResult::WireGuardEnrolled { enrollment } = enrolled else {
+            return Err(local(format!(
+                "the hub answered enroll_wireguard with {enrolled:?}"
+            )));
+        };
+        let route = address::through_tunnel(wireguard::HUB, &enrollment.hub_address);
+        self.update(|all| {
+            let machine = saved_mut(all, &host_id)?;
+            machine.wireguard = Some(profile::HubEnrollment {
+                private_key: key.to_base64(),
+                hub_public_key: enrollment.hub_public_key,
+                endpoint: enrollment.endpoint,
+                address: enrollment.address,
+                hub_address: enrollment.hub_address,
+            });
+            machine.addresses.retain(|address| {
+                !matches!(address::wireguard(address), Some((tunnel, _)) if tunnel == wireguard::HUB)
+            });
+            address::insert_ranked(&mut machine.addresses, route);
+            Ok(())
         })
     }
 
@@ -1858,6 +1926,7 @@ pub(crate) fn unsaved(
         advertised: Vec::new(),
         headers: Default::default(),
         routes: Default::default(),
+        wireguard: None,
         device_key: device.to_pem().to_owned(),
         relay_grant: None,
     };
@@ -1920,6 +1989,7 @@ mod tests {
             advertised: Vec::new(),
             headers: Default::default(),
             routes: Default::default(),
+            wireguard: None,
             device_key: DeviceKey::generate().unwrap().to_pem().to_owned(),
             relay_grant: None,
         };

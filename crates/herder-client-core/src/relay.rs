@@ -76,6 +76,11 @@ impl Via {
         self.tunnels.as_deref()
     }
 
+    /// The machine whose addresses these are; none while signing in.
+    pub(crate) fn machine(&self) -> Option<&HostId> {
+        self.machine.as_ref()
+    }
+
     /// What `address` sends on its upgrade, a tunnel's.
     pub(crate) fn headers(&self, address: &str) -> &tunnel::Sent {
         self.headers.get(address).unwrap_or(&tunnel::NONE)
@@ -112,7 +117,7 @@ impl Via {
         let connector = TlsConnector::from(Arc::new(client_config(&saved.fingerprint, &device)?));
         // The hub's own routes: its tunnels' headers, and this client's WireGuard tunnels.
         let via = Self {
-            machine: None,
+            machine: Some(hub.clone()),
             machines: Weak::new(),
             headers: saved.headers,
             tunnels: self.tunnels.clone(),

@@ -123,6 +123,23 @@ pub trait Backend: Send + Sync + 'static {
         session_id: &SessionId,
     ) -> impl Future<Output = Result<PathBuf, ErrorInfo>> + Send;
 
+    /// Applies a command that acts for the device it comes from, as `identity`: what a hub
+    /// offers this device away from home, and enrolling its own WireGuard key. A daemon that
+    /// is not a hub refuses them.
+    fn device_command(
+        &self,
+        identity: &Identity,
+        command: CommandBody,
+    ) -> impl Future<Output = Result<CommandResult, ErrorInfo>> + Send {
+        let _ = (identity, command);
+        std::future::ready(Err(ErrorInfo {
+            code: ErrorCode::Unsupported,
+            message: "this machine is not a hub: herder's WireGuard and the Cloudflare relay \
+                      and tunnel are set up on the hub it is linked to"
+                .to_owned(),
+        }))
+    }
+
     /// The paired devices hosts replicate to this hub from, which a claim makes hosts of
     /// when they are all a user's; a daemon has none.
     fn replicated(&self) -> impl Future<Output = anyhow::Result<Vec<DeviceId>>> + Send {
@@ -439,6 +456,11 @@ impl<B: Backend> Shared<B> {
                         message: "this hub's Cloudflare relay is not up".to_owned(),
                     }),
                 };
+            }
+            command @ (CommandBody::GetRemoteAccess
+            | CommandBody::EnrollWireGuard { .. }
+            | CommandBody::UnenrollWireGuard) => {
+                return self.backend.device_command(identity, command).await;
             }
             command => return self.run(&identity.user_id, command_id, command).await,
         }
