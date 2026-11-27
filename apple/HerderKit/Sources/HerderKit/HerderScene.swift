@@ -40,7 +40,7 @@ public struct HerderScene: Scene {
                     } else {
                         FleetView(fleet: fleet)
                             .safeAreaInset(edge: .bottom, spacing: 0) {
-                                if DiagnosticsSwitch.shared.shouldAsk {
+                                if DiagnosticsSwitch.shared.shouldAsk() {
                                     DiagnosticsAsk { DiagnosticsSwitch.shared.set($0) }
                                 }
                             }
