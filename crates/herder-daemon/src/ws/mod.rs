@@ -28,6 +28,8 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+#[cfg(target_os = "linux")]
+pub(crate) use conn::hold_back_unsent;
 pub(crate) use conn::{notice_a_gone_peer, secure, ws_config};
 pub use tls::{Tls, fingerprint};
 pub(crate) use tunnel::Transport;

@@ -26,7 +26,7 @@ use ratatui::widgets::Widget;
 use super::markdown::{self, wrap, wrap_joined};
 use super::tools;
 use crate::action::Action;
-use crate::app::{App, Focus};
+use crate::app::{App, Focus, Latest};
 use crate::chat::{Chat, ChatAct};
 use crate::mouse::{Click, Hits, Wheel};
 use crate::session::{Delivery, Entry, Session, SessionKey, Tone, first_line};
@@ -712,8 +712,13 @@ fn cached(app: &mut App, key: SessionKey, width: u16) {
     {
         return;
     }
-    let Some(session) = app.sessions.get(&key) else {
-        return;
+    // By field, not through [`App::shown`]: the selection is reset below.
+    let (session, latest) = match app.latest.get(&key) {
+        Some(Latest::Shown(latest)) => (&**latest, true),
+        _ => match app.sessions.get(&key) {
+            Some(session) => (session, false),
+            None => return,
+        },
     };
     // A selection is kept across rows built again as a turn streams, but not onto another
     // session or width, whose rows are others.
@@ -725,7 +730,11 @@ fn cached(app: &mut App, key: SessionKey, width: u16) {
     {
         app.selection = None;
     }
-    let (rows, items) = rows(app, session, width);
+    let (mut rows, items) = rows(app, session, width);
+    if latest {
+        let loading = Line::styled("loading earlier messages…", app.ui().muted());
+        rows.insert(0, Row::new(loading));
+    }
     app.transcript = Cache {
         built: Some(Built::of(app, key, width)),
         rows,
@@ -740,7 +749,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
     let Some((key, loaded)) = app
         .open
         .clone()
-        .and_then(|key| Some((key.clone(), app.sessions.get(&key)?.loaded)))
+        .and_then(|key| Some((key.clone(), app.shown(&key)?.0.loaded)))
     else {
         let hint = Line::styled("Select a session and press Enter.", ui.muted());
         frame.render_widget(hint.centered(), super::centered(area, area.width, 1));

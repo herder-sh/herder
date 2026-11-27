@@ -62,8 +62,8 @@ use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Fanout, session};
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, Event, EventBody, FailoverSettings, FleetHost, HostId,
-    HostResources, ItemBody, ItemId, PermissionMode, Project, ProjectId, Provider, SessionId,
-    TurnId,
+    HostResources, ItemBody, ItemId, LATEST_EVENTS_BYTES, PermissionMode, Project, ProjectId,
+    Provider, SessionId, TurnId,
 };
 use herder_store::Store;
 use serde_json::json;
@@ -2341,5 +2341,100 @@ fn a_prompt_during_a_catch_up_is_applied_in_half_a_round_trip() {
         );
         drop(watched);
         world.nothing_wrong();
+    });
+}
+
+/// A device new to a long session opens it on a link of 25 kB a second: the session's full
+/// replay takes over a minute and a half, but the latest events, asked for as the session
+/// opens, arrive within seconds, ahead of the replay queued before them. The replay still
+/// arrives whole, in order and once.
+#[test]
+fn opening_a_long_session_on_a_slow_link_shows_its_latest_events_first() {
+    run(async {
+        let world = World::start(21, 3, Some(2_000_000)).await;
+        for number in 1..=3 {
+            let sent = world
+                .truth
+                .send(world.host.clone(), prompt(&world.session, number))
+                .await;
+            assert_eq!(sent.unwrap(), CommandResult::Applied);
+            let mut ended = world.real.ended.subscribe();
+            tokio::time::timeout(secs(60), ended.wait_for(|ended| *ended == number))
+                .await
+                .expect("the turn did not end")
+                .unwrap();
+        }
+        let seen = world.real.events().last().unwrap().seq;
+        let dir = world.tmp.path().join("phone").display().to_string();
+        let phone = Client::open(dir, "herder-test/0".into()).unwrap();
+        let through = world.net.addrs.iter().map(ToString::to_string).collect();
+        let (auth, fingerprint) = (&world.daemon.auth, &world.daemon.fingerprint);
+        authenticator::sign_in(auth, &phone, through, fingerprint, "alice")
+            .await
+            .unwrap();
+        world.net.link.send_replace(Link {
+            latency_ms: 150,
+            jitter_ms: 40,
+            rate: Some(25_000),
+            ..Link::CLEAN
+        });
+
+        let opened = Instant::now();
+        let sub = phone
+            .subscribe_session(world.host.clone(), world.session.clone())
+            .unwrap();
+        let (head_tx, head_rx) = tokio::sync::oneshot::channel::<u64>();
+        let replay = async move {
+            let mut next_seq = 1;
+            let mut head = head_rx;
+            let mut until = None;
+            while let Some(update) = sub.next().await {
+                for event in &update.events {
+                    assert_eq!(event.seq, next_seq, "the replay skipped or repeated");
+                    next_seq += 1;
+                }
+                if until.is_none() {
+                    until = head.try_recv().ok();
+                }
+                if until.is_some_and(|head| next_seq > head) {
+                    return opened.elapsed();
+                }
+            }
+            panic!("the subscription ended");
+        };
+        let replay = tokio::spawn(tokio::time::timeout(secs(600), replay));
+        // As an app does once it shows the session.
+        tokio::time::sleep(ms(50)).await;
+        let latest = CommandBody::GetLatestEvents {
+            session_id: world.session.clone(),
+        };
+        let CommandResult::LatestEvents { events } =
+            phone.send(world.host.clone(), latest).await.unwrap()
+        else {
+            panic!("expected the latest events");
+        };
+        let shown = opened.elapsed();
+        let seqs: Vec<u64> = events.iter().map(|event| event.seq).collect();
+        let head = *seqs.last().unwrap();
+        assert!(head >= seen, "{seqs:?}");
+        head_tx.send(head).unwrap();
+        assert!(
+            seqs.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "{seqs:?}"
+        );
+        let bytes: usize = events
+            .iter()
+            .map(|event| serde_json::to_vec(event).unwrap().len())
+            .sum();
+        assert!(bytes <= LATEST_EVENTS_BYTES, "{bytes} bytes");
+        let replayed = replay.await.unwrap().expect("the replay never ended");
+        eprintln!(
+            "head {head}: the latest {} events after {shown:?}, the whole replay after {replayed:?}",
+            events.len()
+        );
+        // What the link holds already, the message on its way and the answer itself: about
+        // ten seconds here, however long the session.
+        assert!(shown < secs(15), "the latest events took {shown:?}");
+        assert!(replayed > secs(60), "the replay was no load: {replayed:?}");
     });
 }

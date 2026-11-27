@@ -71,6 +71,8 @@ pub struct SessionView {
     prs: gtk::Box,
     toasts: adw::ToastOverlay,
     scroller: gtk::ScrolledWindow,
+    /// Says the earlier messages load, over the latest ones shown meanwhile.
+    earlier: gtk::Box,
     /// The durable entries, one widget each.
     transcript: gtk::Box,
     /// Streaming items and queued prompts, redrawn on every update.
@@ -143,6 +145,8 @@ struct State {
     compact: bool,
     sender: Option<Sender>,
     opener: Option<Rc<dyn Fn(SessionKey)>>,
+    /// Whether `session` is only the latest events, the earlier ones on their way.
+    latest: bool,
 }
 
 impl SessionView {
@@ -165,12 +169,23 @@ impl SessionView {
         prs.add_css_class("pr-strip");
         prs.set_visible(false);
 
+        let earlier = hbox(8);
+        earlier.set_halign(gtk::Align::Center);
+        earlier.set_margin_top(12);
+        let loading = gtk::Spinner::new();
+        loading.start();
+        earlier.append(&loading);
+        let earlier_label = gtk::Label::new(Some("Loading earlier messages"));
+        earlier_label.add_css_class("meta");
+        earlier.append(&earlier_label);
+        earlier.set_visible(false);
         let transcript = vbox(0);
         transcript.add_css_class("transcript");
         let streaming = vbox(0);
         streaming.add_css_class("transcript");
         streaming.set_margin_top(-18);
         let column = vbox(0);
+        column.append(&earlier);
         column.append(&transcript);
         column.append(&streaming);
         let scroller = gtk::ScrolledWindow::builder()
@@ -214,6 +229,7 @@ impl SessionView {
                 expanded: Rc::default(),
                 full: Rc::default(),
                 drawn_prs: None,
+                latest: false,
                 pending: Vec::new(),
                 attached: Vec::new(),
                 gallery: Gallery::new(Rc::new(move |attachment_id| {
@@ -299,6 +315,7 @@ impl SessionView {
             prs,
             toasts,
             scroller,
+            earlier,
             transcript,
             streaming,
             status_line,
@@ -350,18 +367,23 @@ impl SessionView {
     }
 
     /// Shows `session` of `machine` as `key`, keeping what is drawn when it is the session
-    /// shown already. `recent` are the models to offer.
+    /// shown already. `recent` are the models to offer. With `latest`, `session` is only the
+    /// latest events of a session whose earlier ones are on their way.
     pub fn show(
         &self,
         key: &SessionKey,
         session: &Session,
         machine: &Machine,
         recent: Vec<String>,
+        latest: bool,
     ) {
         {
             let mut state = self.state.borrow_mut();
-            if state.key.as_ref() != Some(key) {
+            // The latest events and the whole session are drawn each from the start.
+            if state.key.as_ref() != Some(key) || state.latest != latest {
                 state.key = Some(key.clone());
+                state.latest = latest;
+                self.earlier.set_visible(latest);
                 state.drawn.clear();
                 state.pending.clear();
                 state.request = None;
@@ -1583,6 +1605,11 @@ impl SessionView {
     #[cfg(test)]
     pub fn bottom_child(&self) -> Option<String> {
         self.bottom.visible_child_name().map(Into::into)
+    }
+
+    #[cfg(test)]
+    pub fn loading_earlier(&self) -> bool {
+        self.earlier.is_visible()
     }
 
     #[cfg(test)]

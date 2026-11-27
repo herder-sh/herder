@@ -85,6 +85,14 @@ private struct SessionPane: View {
                 // estimated heights, and with a row resizing as it lands, on rows the stack never
                 // draws, blank until the reader scrolls.
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    if fleet.loadingEarlier(key) {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small).tint(Theme.secondary)
+                            Text("Loading earlier messages").foregroundStyle(Theme.tertiary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .accessibilityIdentifier("loadingEarlier")
+                    }
                     if model?.loaded != true && blocks.isEmpty {
                         ProgressView().tint(Theme.secondary).frame(maxWidth: .infinity).padding(40)
                     } else if blocks.isEmpty && model?.status != .waitingForCapacity {
@@ -159,6 +167,7 @@ private struct SessionPane: View {
             fleet.watch(opened)
         }
         .onAppear { fleet.watch(opened) }
+        .task(id: key) { await fleet.showLatest(key) }
         .onDisappear { fleet.unwatch(opened) }
         .navigationDestination(isPresented: Binding(
             get: { pushedFork != nil }, set: { if !$0 { pushedFork = nil } }

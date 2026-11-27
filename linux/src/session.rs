@@ -53,6 +53,8 @@ pub struct Session {
     added: HashMap<ItemId, Timestamp>,
     /// When its latest event happened; `None` before its first.
     pub last_at: Option<Timestamp>,
+    /// Seq of the latest event folded in; 0 before any.
+    pub seq: u64,
 }
 
 /// An approval request waiting for an answer.
@@ -166,6 +168,7 @@ impl Default for Session {
             prs: Vec::new(),
             added: HashMap::new(),
             last_at: None,
+            seq: 0,
         }
     }
 }
@@ -176,6 +179,7 @@ impl Session {
         self.loaded = true;
         for event in &update.events {
             self.last_at = Some(self.last_at.map_or(event.at, |last| last.max(event.at)));
+            self.seq = event.seq;
             self.event(event);
         }
         self.streaming.clone_from(&update.streaming);

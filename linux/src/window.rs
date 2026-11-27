@@ -13,7 +13,8 @@ use adw::prelude::*;
 use gtk::glib;
 use herder_client_core::{ConnectionState, Machine, SessionUpdate};
 use herder_protocol::{
-    Answer, ApprovalDecision, CommandBody, HostId, ProjectId, SessionStatus, Timestamp,
+    Answer, ApprovalDecision, CommandBody, CommandResult, Event, HostId, ProjectId, SessionStatus,
+    Timestamp,
 };
 
 use crate::lists::{self, Lists, Request, RequestKind, Section, SessionKey, Task};
@@ -74,6 +75,17 @@ struct State {
     queued: bool,
     sender: Option<Sender>,
     ops: Option<Rc<dyn MachineOps>>,
+    /// The latest events asked for of sessions opened before their journal had replayed that
+    /// far; see [`MainWindow::ask_latest`].
+    latest: HashMap<SessionKey, Latest>,
+}
+
+/// Where the latest events asked for of a session stand.
+enum Latest {
+    /// Asked for, or shown until the replay reached them: they are not asked for again.
+    Asked,
+    /// Folded on their own, the session view shows them until the replay reaches them.
+    Shown(Box<Session>),
 }
 
 impl MainWindow {
@@ -450,6 +462,7 @@ impl MainWindow {
         if !self.show_session(key) {
             return;
         }
+        self.ask_latest(key);
         if self.main.visible_child_name().as_deref() != Some("tasks") {
             let section = self.state.borrow().section.clone();
             if section == Section::Machines {
@@ -479,7 +492,10 @@ impl MainWindow {
             return false;
         }
         let empty = Session::default();
-        let session = state.sessions.get(key).unwrap_or(&empty);
+        let (session, latest) = match state.latest.get(key) {
+            Some(Latest::Shown(latest)) => (&**latest, true),
+            _ => (state.sessions.get(key).unwrap_or(&empty), false),
+        };
         // The models this app's sessions of the same provider use.
         let mut recent: Vec<String> = state
             .sessions
@@ -490,8 +506,71 @@ impl MainWindow {
             .collect();
         recent.sort();
         recent.dedup();
-        self.session_view.show(key, session, machine, recent);
+        self.session_view
+            .show(key, session, machine, recent, latest);
         true
+    }
+
+    /// Asks once for the latest events of `key` while its journal is still on its way. A
+    /// session this app holds little of replays from its start, which takes minutes for a long
+    /// one on a slow link, and its latest messages come last: the view shows them meanwhile.
+    fn ask_latest(&self, key: &SessionKey) {
+        let sender = {
+            let mut state = self.state.borrow_mut();
+            if state.latest.contains_key(key) {
+                return;
+            }
+            let held = state.sessions.get(key).map_or(0, |session| session.seq);
+            let head = state
+                .machines
+                .iter()
+                .find(|machine| machine.host_id == key.host_id)
+                .and_then(|machine| {
+                    machine
+                        .sessions
+                        .iter()
+                        .find(|head| head.session_id == key.session_id)
+                })
+                .map_or(0, |head| head.head_seq);
+            let Some(sender) = state.sender.clone().filter(|_| held < head) else {
+                return;
+            };
+            state.latest.insert(key.clone(), Latest::Asked);
+            sender
+        };
+        let command = CommandBody::GetLatestEvents {
+            session_id: key.session_id.clone(),
+        };
+        let reply = sender(key.host_id.clone(), command);
+        let (window, key) = (self.clone(), key.clone());
+        glib::spawn_future_local(async move {
+            // Not shown when it fails: the replay brings them in any case.
+            if let Ok(CommandResult::LatestEvents { events }) = reply.await {
+                window.show_latest(&key, events);
+            }
+        });
+    }
+
+    /// Shows `events`, the latest of `key`, until the replay reaches them.
+    pub fn show_latest(&self, key: &SessionKey, events: Vec<Event>) {
+        {
+            let mut state = self.state.borrow_mut();
+            let held = state.sessions.get(key).map_or(0, |session| session.seq);
+            if !events.last().is_some_and(|last| last.seq > held) {
+                return;
+            }
+            let mut latest = Session::default();
+            latest.apply(&SessionUpdate {
+                events,
+                streaming: Vec::new(),
+            });
+            state
+                .latest
+                .insert(key.clone(), Latest::Shown(Box::new(latest)));
+        }
+        if self.session_view.key().as_ref() == Some(key) {
+            self.show_session(key);
+        }
     }
 
     /// Takes the client's machines, keeping what is open, and drops what the subscriptions
@@ -536,7 +615,15 @@ impl MainWindow {
             if !listed {
                 return;
             }
-            state.sessions.entry(key.clone()).or_default().apply(update);
+            let session = state.sessions.entry(key.clone()).or_default();
+            session.apply(update);
+            let held = session.seq;
+            // The replay reached the latest events shown meanwhile.
+            if let Some(Latest::Shown(latest)) = state.latest.get(key)
+                && held >= latest.seq
+            {
+                state.latest.insert(key.clone(), Latest::Asked);
+            }
         }
         if self.session_view.key().as_ref() == Some(key) {
             self.show_session(key);
@@ -1438,6 +1525,89 @@ mod tests {
             &update("s4", vec![created("/src/api", "herder/old")]),
         );
         window.flush();
+    }
+
+    /// A session opened before its journal replayed as far as its machine lists asks once for
+    /// its latest events and shows them, saying the earlier ones load, until the replay
+    /// reaches them; then the whole transcript shows, each message once.
+    #[gtk::test]
+    fn a_session_opened_mid_replay_shows_its_latest_events_until_the_replay_reaches_them() {
+        adw::init().expect("libadwaita initializes");
+        let window = MainWindow::new(None);
+        let said = |text: &str| {
+            crate::session::tests::item(
+                "m40",
+                herder_protocol::ItemBody::AssistantMessage {
+                    text: text.to_owned(),
+                },
+            )
+        };
+        // The whole journal: the session's start, 38 answers, then the latest.
+        let mut bodies = vec![created("/src/api", "herder/api")];
+        bodies.extend((2..40).map(|n| {
+            crate::session::tests::item(
+                &format!("m{n}"),
+                herder_protocol::ItemBody::AssistantMessage {
+                    text: format!("Answer {n}."),
+                },
+            )
+        }));
+        bodies.push(said("The latest answer."));
+        let journal = update("s1", bodies);
+        let latest = journal.events[38..].to_vec();
+        let sent = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&sent);
+        window.set_sender(Rc::new(move |_, command| {
+            log.borrow_mut().push(command);
+            let events = latest.clone();
+            Box::pin(async move { Ok(CommandResult::LatestEvents { events }) })
+        }));
+        window.present();
+        let (mut machines, _) = fleet();
+        machines[0].sessions[0].head_seq = 40;
+        window.show_machines(&machines);
+        let s1 = key("h1", "s1");
+        window.apply(
+            &s1,
+            &SessionUpdate {
+                events: journal.events[..1].to_vec(),
+                streaming: Vec::new(),
+            },
+        );
+        window.open(&s1);
+        settle(Duration::from_millis(50));
+        let asked = CommandBody::GetLatestEvents {
+            session_id: s1.session_id.clone(),
+        };
+        assert_eq!(*sent.borrow(), std::slice::from_ref(&asked));
+        let view = window.session_view();
+        assert!(view.loading_earlier());
+        let texts = view.transcript_texts();
+        assert!(
+            texts.iter().any(|t| t.contains("The latest answer.")),
+            "{texts:?}"
+        );
+        assert!(!texts.iter().any(|t| t.contains("Answer 38.")), "{texts:?}");
+
+        window.apply(
+            &s1,
+            &SessionUpdate {
+                events: journal.events[1..].to_vec(),
+                streaming: Vec::new(),
+            },
+        );
+        window.open(&s1);
+        settle(Duration::from_millis(50));
+        assert!(!view.loading_earlier());
+        let texts = view.transcript_texts();
+        let latest = texts
+            .iter()
+            .filter(|t| t.contains("The latest answer."))
+            .count();
+        assert_eq!(latest, 1, "{texts:?}");
+        assert!(texts.iter().any(|t| t.contains("Answer 38.")), "{texts:?}");
+        // Asked once.
+        assert_eq!(*sent.borrow(), [asked]);
     }
 
     #[gtk::test]

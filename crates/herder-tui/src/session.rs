@@ -76,6 +76,8 @@ pub struct Session {
     /// Images its prompts carried that its machine does not have, as fetching them told:
     /// the hub never got them, so a session recovered from it lacks them.
     pub not_backed_up: HashSet<AttachmentId>,
+    /// Seq of the latest event folded in; 0 before any.
+    pub seq: u64,
 }
 
 /// A prompt sent from this TUI, shown until the daemon journals it.
@@ -275,6 +277,7 @@ impl Session {
             outbox: Vec::new(),
             prs: Vec::new(),
             not_backed_up: HashSet::new(),
+            seq: 0,
         }
     }
 
@@ -282,6 +285,7 @@ impl Session {
     pub fn apply(&mut self, update: SessionUpdate) {
         self.loaded = true;
         for event in update.events {
+            self.seq = event.seq;
             self.event(event);
         }
         self.streaming = update.streaming;

@@ -2559,3 +2559,63 @@ fn the_details_panel_wraps_long_lines_at_words() {
         assert!(!text.contains('…'), "{text}");
     }
 }
+
+/// A session opened before its journal replayed as far as its machine lists asks once for its
+/// latest events and shows them, under a line that says the earlier ones load, until the
+/// replay reaches them; then the whole transcript shows, each message once.
+#[test]
+fn a_session_opened_mid_replay_shows_its_latest_events_until_the_replay_reaches_them() {
+    use crate::app::Latest;
+    use crate::compose::Origin;
+    use herder_protocol::{CommandBody, CommandResult, EventBody, SessionStatus};
+
+    let mut app = fake::tree();
+    let s2 = fake::key("h1", "s2");
+    for machine in &mut app.machines {
+        for head in &mut machine.sessions {
+            if head.session_id == s2.session_id {
+                head.head_seq = 40;
+            }
+        }
+    }
+    let asked = Effect::Send {
+        host_id: s2.host_id.clone(),
+        command: CommandBody::GetLatestEvents {
+            session_id: s2.session_id.clone(),
+        },
+        origin: Origin::Latest(s2.clone()),
+    };
+    let effects = app.update(key(KeyCode::Enter));
+    assert_eq!(app.open.as_ref(), Some(&s2));
+    assert!(effects.contains(&asked), "{effects:?}");
+    let again = app.update(Msg::Tick(std::time::Instant::now()));
+    assert!(!again.contains(&asked), "asked twice");
+
+    let latest = vec![
+        added("i39", assistant("The latest answer.")),
+        fake::status(SessionStatus::Idle),
+    ];
+    app.update(Msg::Sent {
+        origin: Origin::Latest(s2.clone()),
+        result: Ok(CommandResult::LatestEvents {
+            events: update("s2", 39, latest, Vec::new()).events,
+        }),
+    });
+    let shown = screen(&render(&mut app, 100, 20));
+    assert!(shown.contains("loading earlier messages…"), "{shown}");
+    assert!(shown.contains("The latest answer."), "{shown}");
+
+    let replay: Vec<EventBody> = (3..=38)
+        .map(|n| added(&format!("i{n}"), assistant(&format!("Answer {n}."))))
+        .chain([
+            added("i39", assistant("The latest answer.")),
+            fake::status(SessionStatus::Idle),
+        ])
+        .collect();
+    fake::feed(&mut app, "h1", "s2", update("s2", 3, replay, Vec::new()));
+    assert!(matches!(app.latest.get(&s2), Some(Latest::Asked)));
+    let shown = screen(&render(&mut app, 100, 20));
+    assert!(!shown.contains("loading earlier"), "{shown}");
+    assert_eq!(shown.matches("The latest answer.").count(), 1, "{shown}");
+    assert!(shown.contains("Answer 38."), "{shown}");
+}
