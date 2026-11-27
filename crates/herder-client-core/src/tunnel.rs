@@ -30,6 +30,8 @@ use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Bytes, Message};
 
+use crate::front_door;
+
 /// A byte stream: a TCP socket, outer TLS on one, or a tunnel's frames.
 pub(crate) trait Io: AsyncRead + AsyncWrite + Send + Unpin {}
 
@@ -46,6 +48,12 @@ static WEB_PKI: LazyLock<Result<Arc<rustls::ClientConfig>, String>> = LazyLock::
         .map(|builder| Arc::new(builder.with_root_certificates(roots).with_no_client_auth()))
         .map_err(|err| err.to_string())
 });
+
+/// The public web PKI's TLS config, as the outer TLS of a `wss://` tunnel and a front door's
+/// login use it.
+pub(crate) fn web_pki() -> Result<&'static Arc<rustls::ClientConfig>, &'static String> {
+    WEB_PKI.as_ref()
+}
 
 /// The headers a tunnel's upgrade carries, by name, as this device keeps them.
 pub(crate) type Sent = BTreeMap<String, String>;
@@ -127,6 +135,15 @@ fn refused(err: tokio_tungstenite::tungstenite::Error, headers: &Sent) -> anyhow
         return anyhow::Error::new(err).context("the tunnel's WebSocket upgrade");
     };
     let status = response.status();
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok());
+    if front_door::wants_sign_in(status.as_u16(), location, headers) {
+        return anyhow::Error::new(front_door::SignInWanted).context(format!(
+            "the tunnel answered {status} to the WebSocket upgrade"
+        ));
+    }
     let by_proxy = status.is_redirection() || status.as_u16() == 401 || status.as_u16() == 403;
     let check = match (by_proxy, headers.is_empty()) {
         (false, _) => String::new(),

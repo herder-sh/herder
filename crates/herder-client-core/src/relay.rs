@@ -46,23 +46,54 @@ pub(crate) struct Via {
     machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
     /// What each tunnel address of the machine sends on its upgrade.
     headers: tunnel::Headers,
+    /// The machine's tunnel addresses whose login proxy turned the upgrade away to its login.
+    front_doors: FrontDoors,
 }
+
+/// A machine's tunnel addresses whose login proxy last turned the upgrade away to its login,
+/// so the person signs in with a browser ([`crate::front_door`]).
+pub(crate) type FrontDoors = Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>;
 
 /// A relay stream through a hub: the frames of a connection to it, whose upgrade may not be
 /// answered yet.
 pub(crate) type Stream = Frames<Upgrading<TlsStream<Watched>>>;
 
 impl Via {
-    /// The routes of `machine`, one of `machines`, whose tunnels want `headers`.
+    /// The routes of `machine`, one of `machines`, whose tunnels want `headers`, noting in
+    /// `front_doors` which ones' login proxy wants a sign-in.
     pub(crate) fn new(
         machine: HostId,
         machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
         headers: tunnel::Headers,
+        front_doors: FrontDoors,
     ) -> Self {
         Self {
             machine: Some(machine),
             machines,
             headers,
+            front_doors,
+        }
+    }
+
+    /// Notes whether the login proxy in front of `address` turned its upgrade away to its
+    /// login, from how reaching it went.
+    pub(crate) fn note<T>(&self, address: &str, reached: &anyhow::Result<T>) {
+        if !address::is_tunnel(address) {
+            return;
+        }
+        let wanted = reached.as_ref().err().is_some_and(|err| {
+            err.chain()
+                .any(|cause| cause.is::<crate::front_door::SignInWanted>())
+        });
+        // Every write is a single insert or remove, so a poisoned set is consistent.
+        let mut doors = self
+            .front_doors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if wanted {
+            doors.insert(address.to_owned());
+        } else if reached.is_ok() {
+            doors.remove(address);
         }
     }
 
