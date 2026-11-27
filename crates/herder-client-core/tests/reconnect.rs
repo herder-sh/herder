@@ -1387,6 +1387,8 @@ struct Relay {
     stall: tokio::sync::watch::Sender<u64>,
     swallowing: Arc<AtomicBool>,
     accepted: Arc<AtomicU64>,
+    /// Bytes a slow relay passed on to the daemon.
+    uploaded: Arc<AtomicU64>,
 }
 
 impl Relay {
@@ -1412,14 +1414,16 @@ impl Relay {
         let stall = tokio::sync::watch::Sender::new(0);
         let swallowing = Arc::new(AtomicBool::new(false));
         let accepted = Arc::new(AtomicU64::new(0));
+        let uploaded = Arc::new(AtomicU64::new(0));
         let (cuts, stalls, count) = (cut.clone(), stall.clone(), Arc::clone(&accepted));
-        let swallows = Arc::clone(&swallowing);
+        let (swallows, uploads) = (Arc::clone(&swallowing), Arc::clone(&uploaded));
         tokio::spawn(async move {
             while let Ok((mut inbound, _)) = listener.accept().await {
                 let mut cut = cuts.subscribe();
                 let mut stall = stalls.subscribe();
                 let swallowed = swallows.load(Ordering::SeqCst);
                 let count = Arc::clone(&count);
+                let uploads = Arc::clone(&uploads);
                 tokio::spawn(async move {
                     if !is_clients(&inbound).await {
                         return;
@@ -1440,7 +1444,7 @@ impl Relay {
                         let (mut from_client, mut to_client) = inbound.split();
                         let (mut from_daemon, mut to_daemon) = outbound.split();
                         tokio::select! {
-                            () = trickle(&mut from_client, &mut to_daemon, rate) => {}
+                            () = trickle(&mut from_client, &mut to_daemon, rate, &uploads) => {}
                             _ = tokio::io::copy(&mut from_daemon, &mut to_client) => {}
                         }
                     };
@@ -1459,6 +1463,7 @@ impl Relay {
             stall,
             swallowing,
             accepted,
+            uploaded,
         }
     }
 
@@ -1476,6 +1481,11 @@ impl Relay {
     /// Silently stops every connection through the relay now; new ones work.
     fn stall(&self) {
         self.stall.send_modify(|version| *version += 1);
+    }
+
+    /// How many bytes a slow relay passed on to the daemon.
+    fn uploaded(&self) -> u64 {
+        self.uploaded.load(Ordering::SeqCst)
     }
 
     /// How many of the client's connections the relay accepted.
@@ -1496,11 +1506,13 @@ async fn is_clients(inbound: &TcpStream) -> bool {
     clients
 }
 
-/// Copies `from` to `to` at no more than `rate` bytes a second.
+/// Copies `from` to `to` at no more than `rate` bytes a second, adding what it copied to
+/// `copied`.
 async fn trickle(
     from: &mut (impl AsyncRead + Unpin),
     to: &mut (impl AsyncWrite + Unpin),
     rate: u64,
+    copied: &AtomicU64,
 ) {
     let mut chunk = vec![0; 64 * 1024];
     loop {
@@ -1511,6 +1523,7 @@ async fn trickle(
         if to.write_all(&chunk[..read]).await.is_err() {
             return;
         }
+        copied.fetch_add(read as u64, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_micros(read as u64 * 1_000_000 / rate)).await;
     }
 }
@@ -2474,11 +2487,9 @@ async fn a_slow_upload_holds_up_neither_reading_nor_a_wake() {
         sent = &mut sending => panic!("the prompt was through too soon to tell: {sent:?}"),
         () = wait_machine(&client, |m| m.resources == Some(host_resources(4))) => {}
     }
-    assert!(
-        started.elapsed() < Duration::from_secs(3),
-        "{:?}",
-        started.elapsed()
-    );
+    // Read mid-upload, not behind it: on a busy machine encoding the prompt takes seconds of
+    // real time, but the relay has not carried half of it yet.
+    let uploaded = relay.uploaded();
 
     // The probe gets five seconds, and its pong comes only once the prompt is through.
     client.wake();
@@ -2486,6 +2497,11 @@ async fn a_slow_upload_holds_up_neither_reading_nor_a_wake() {
         .await
         .expect("the prompt got no answer");
     assert!(matches!(sent, Err(Error::Rejected { .. })), "{sent:?}");
+    assert!(
+        uploaded < relay.uploaded() / 2,
+        "{uploaded} of {} bytes were uploaded",
+        relay.uploaded()
+    );
     assert!(
         started.elapsed() > Duration::from_secs(8),
         "{:?}",
@@ -3787,8 +3803,9 @@ async fn slow_down(target: SocketAddr, rate: u64) -> (SocketAddr, Arc<AtomicU64>
                 let mut outbound = TcpStream::connect(target).await.unwrap();
                 let (mut from_client, mut to_client) = inbound.split();
                 let (mut from_daemon, mut to_daemon) = outbound.split();
+                let downloaded = AtomicU64::new(0);
                 tokio::select! {
-                    () = trickle(&mut from_daemon, &mut to_client, rate) => {}
+                    () = trickle(&mut from_daemon, &mut to_client, rate, &downloaded) => {}
                     _ = tokio::io::copy(&mut from_client, &mut to_daemon) => {}
                 }
             });
