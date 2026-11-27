@@ -393,7 +393,7 @@ pub enum HubMessage {
         logins: Vec<crate::ProviderLogin>,
     },
     /// A client asked the hub for a stream to this host: open a relay connection to the
-    /// hub and say [`crate::RelayHello::Accept`] with this `stream_id`. Sent only to a host
+    /// hub for [`crate::RelayRoute::Stream`] with this `stream_id`. Sent only to a host
     /// whose hello set `relay`. The hub waits a few seconds for it, then refuses the client;
     /// a host that will not take the stream just does not answer.
     RelayOpen {
@@ -432,7 +432,7 @@ pub struct HubHello {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cliproxyapi: Option<String>,
     /// Whether the hub forwards this host to its CLIProxyAPI over relay connections
-    /// ([`crate::RelayHello::Proxy`]); sent, without `cliproxyapi`, by a hub that runs one,
+    /// ([`crate::RelayRoute::Proxy`]); sent, without `cliproxyapi`, by a hub that runs one,
     /// holds this host's client key and is configured with no address hosts reach the proxy
     /// at. The host then points its CLIs at a listener of its own on loopback, which forwards
     /// each connection through the hub, and runs the hub's provider logins as it does with

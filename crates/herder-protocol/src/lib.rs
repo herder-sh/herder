@@ -57,7 +57,7 @@ pub use people::{
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use provider_logins::{ProviderLogin, ProviderLoginState};
-pub use relay::{RELAY_VERSION, RelayAnswer, RelayError, RelayErrorCode, RelayHello, RelayRoute};
+pub use relay::{RelayError, RelayErrorCode, RelayRoute};
 pub use replication::{
     AttachmentData, Batch, HostHello, HostMessage, HostSecretFetch, HubHello, HubMessage,
     JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION, RawEventBody, RejectReason,
@@ -154,17 +154,7 @@ pub fn hub_schema() -> schemars::Schema {
     schemars::schema_for!(HubMessage)
 }
 
-/// JSON Schema for the first message of a relay connection to the hub.
-pub fn relay_hello_schema() -> schemars::Schema {
-    schemars::schema_for!(RelayHello)
-}
-
 /// JSON Schema for the body of the hub's refusal of a relay connection.
 pub fn relay_error_schema() -> schemars::Schema {
     schemars::schema_for!(RelayError)
-}
-
-/// JSON Schema for the hub's answer to a relay connection's first message.
-pub fn relay_answer_schema() -> schemars::Schema {
-    schemars::schema_for!(RelayAnswer)
 }

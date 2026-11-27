@@ -168,8 +168,13 @@ impl<S> Frames<S> {
     }
 }
 
+/// The error a failed frame read or write is: the transport's own, as it said it, or the
+/// WebSocket's.
 fn broken(err: tokio_tungstenite::tungstenite::Error) -> io::Error {
-    io::Error::other(err)
+    match err {
+        tokio_tungstenite::tungstenite::Error::Io(err) => err,
+        err => io::Error::other(err),
+    }
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for Frames<S> {

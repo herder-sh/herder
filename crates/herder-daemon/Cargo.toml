@@ -22,6 +22,7 @@ herder-protocol.workspace = true
 herder-store.workspace = true
 herder-tasktools.workspace = true
 http-body-util.workspace = true
+httparse.workspace = true
 hyper.workspace = true
 hyper-rustls.workspace = true
 hyper-util.workspace = true

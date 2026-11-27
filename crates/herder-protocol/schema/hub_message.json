@@ -175,7 +175,7 @@
       ]
     },
     {
-      "description": "A client asked the hub for a stream to this host: open a relay connection to the\nhub and say [`crate::RelayHello::Accept`] with this `stream_id`. Sent only to a host\nwhose hello set `relay`. The hub waits a few seconds for it, then refuses the client;\na host that will not take the stream just does not answer.",
+      "description": "A client asked the hub for a stream to this host: open a relay connection to the\nhub for [`crate::RelayRoute::Stream`] with this `stream_id`. Sent only to a host\nwhose hello set `relay`. The hub waits a few seconds for it, then refuses the client;\na host that will not take the stream just does not answer.",
       "type": "object",
       "properties": {
         "device_id": {
@@ -269,7 +269,7 @@
           ]
         },
         "cliproxyapi_relay": {
-          "description": "Whether the hub forwards this host to its CLIProxyAPI over relay connections\n([`crate::RelayHello::Proxy`]); sent, without `cliproxyapi`, by a hub that runs one,\nholds this host's client key and is configured with no address hosts reach the proxy\nat. The host then points its CLIs at a listener of its own on loopback, which forwards\neach connection through the hub, and runs the hub's provider logins as it does with\n`cliproxyapi`.",
+          "description": "Whether the hub forwards this host to its CLIProxyAPI over relay connections\n([`crate::RelayRoute::Proxy`]); sent, without `cliproxyapi`, by a hub that runs one,\nholds this host's client key and is configured with no address hosts reach the proxy\nat. The host then points its CLIs at a listener of its own on loopback, which forwards\neach connection through the hub, and runs the hub's provider logins as it does with\n`cliproxyapi`.",
           "type": "boolean"
         },
         "replication_version": {

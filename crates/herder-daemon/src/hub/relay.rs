@@ -1,9 +1,11 @@
 //! Relay streams: the hub forwards bytes between a client and a host that both reach it,
 //! so the client reaches a host it cannot dial ([`herder_protocol::relay`]).
 //!
-//! A client device asks for a stream to a host. The hub asks the host, on its replication
-//! connection, to open its end, waits for that connection, then copies every binary frame's
-//! bytes from each to the other until one of them closes. It reads nothing of them: inside,
+//! A client device asks for a stream to a host by its upgrade request's path, and may send
+//! the stream's first frames behind it. The hub asks the host, on its replication
+//! connection, to open its end, waits for that connection holding the client's frames
+//! unread, answers both upgrades, then copies every binary frame's bytes from each to the
+//! other until one of them closes. It reads nothing of them: inside,
 //! the client and the host run the TLS of a direct connection, which the hub has no key
 //! to.
 //!
@@ -22,9 +24,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use herder_protocol::{
-    DeviceId, HostId, RELAY_VERSION, RelayAnswer, RelayError, RelayErrorCode, RelayHello,
-};
+use herder_protocol::{DeviceId, HostId, RelayError, RelayErrorCode, RelayRoute};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
@@ -42,9 +42,10 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use super::conn::Upgrade;
 use super::{Shared, blocking, cliproxyapi};
 use crate::auth::DeviceRole;
-use crate::ws::Ws;
+use crate::ws;
 use crate::ws::tunnel::{Frames, Pass};
 
 /// How long a host that is not connected gets to connect before its client is refused: after
@@ -88,8 +89,9 @@ pub(super) struct Open {
     pub(super) device_id: DeviceId,
 }
 
-/// The host's end of a stream: its connection, and what cancels it.
-type End = (Ws, CancellationToken);
+/// The host's end of a stream: its connection, its upgrade not answered yet, and what
+/// cancels it.
+type End = (Upgrade, CancellationToken);
 
 /// What the hub's connections share about relay streams.
 pub(super) struct Relays {
@@ -373,45 +375,25 @@ impl Drop for Waiting {
     }
 }
 
-/// Whether a first message is a relay hello: only that one carries a relay version.
-pub(super) fn is_hello(first: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(first)
-        .is_ok_and(|hello| hello.get("relay_version").is_some())
-}
-
-/// Serves a relay connection whose first message is `first`, from the device with
+/// Serves a relay connection whose upgrade request names `route`, from the device with
 /// certificate `device`; `pass` counts a tunneled one until it authenticated.
 pub(super) async fn serve(
-    mut ws: Ws,
-    first: &str,
+    upgrade: Upgrade,
+    route: RelayRoute,
     shared: &Shared,
     device: &str,
     pass: Option<Pass>,
     peer: SocketAddr,
     cancel: CancellationToken,
 ) {
-    let hello = match serde_json::from_str::<RelayHello>(first) {
-        Ok(hello) => hello,
-        Err(err) => {
-            let error = refusal(RelayErrorCode::BadRequest, format!("invalid hello: {err}"));
-            return refuse(&mut ws, peer, error).await;
+    let result = match route {
+        RelayRoute::Machine(host_id) => {
+            connect(upgrade, shared, device, pass, &host_id, peer, cancel).await
         }
-    };
-    let (RelayHello::Connect { relay_version, .. }
-    | RelayHello::Accept { relay_version, .. }
-    | RelayHello::Proxy { relay_version }) = &hello;
-    if *relay_version != RELAY_VERSION {
-        let message = format!("this hub speaks relay {RELAY_VERSION}, not {relay_version}");
-        return refuse(&mut ws, peer, refusal(RelayErrorCode::Unsupported, message)).await;
-    }
-    let result = match hello {
-        RelayHello::Connect { host_id, .. } => {
-            connect(ws, shared, device, pass, &host_id, peer, cancel).await
+        RelayRoute::Stream(stream_id) => {
+            accept(upgrade, shared, device, pass, &stream_id, peer, cancel).await
         }
-        RelayHello::Accept { stream_id, .. } => {
-            accept(ws, shared, device, pass, &stream_id, peer, cancel).await
-        }
-        RelayHello::Proxy { .. } => proxy(ws, shared, device, pass, peer, cancel).await,
+        RelayRoute::Proxy => proxy(upgrade, shared, device, pass, peer, cancel).await,
     };
     if let Err(err) = result {
         info!(%peer, "relay connection failed: {err:#}");
@@ -421,7 +403,7 @@ pub(super) async fn serve(
 /// A client's end: checks that the hub forwards for it to `host`, has the host open its
 /// end, then forwards until either end closes.
 async fn connect(
-    mut ws: Ws,
+    upgrade: Upgrade,
     shared: &Shared,
     device: &str,
     pass: Option<Pass>,
@@ -437,7 +419,7 @@ async fn connect(
             Ok(identity) => identity,
             Err(error) => {
                 let error = refusal(RelayErrorCode::Forbidden, error.message);
-                refuse(&mut ws, peer, error).await;
+                refuse(upgrade, peer, error).await;
                 return Ok(());
             }
         };
@@ -457,7 +439,7 @@ async fn connect(
         None
     };
     if let Some(error) = error {
-        refuse(&mut ws, peer, error).await;
+        refuse(upgrade, peer, error).await;
         return Ok(());
     }
     let Some(_slot) = relays.reserve(&device, host) else {
@@ -465,14 +447,14 @@ async fn connect(
             "too many relay streams are open: at most {} per device and {} per host",
             relays.per_device, relays.per_host
         );
-        refuse(&mut ws, peer, refusal(RelayErrorCode::Busy, message)).await;
+        refuse(upgrade, peer, refusal(RelayErrorCode::Busy, message)).await;
         return Ok(());
     };
     let opened = tokio::select! {
         () = cancel.cancelled() => return Ok(()),
         opened = relays.open(&device, host) => opened,
     };
-    let Some((mut host_ws, host_cancel)) = opened else {
+    let Some((host_end, host_cancel)) = opened else {
         let error = if presence.online(host) && !relays.takes(host) {
             no_relay(host)
         } else {
@@ -481,11 +463,12 @@ async fn connect(
                 format!("the host {host} is not connected to this hub, or did not answer"),
             )
         };
-        refuse(&mut ws, peer, error).await;
+        refuse(upgrade, peer, error).await;
         return Ok(());
     };
-    answer(&mut host_ws, &RelayAnswer::Ready).await?;
-    answer(&mut ws, &RelayAnswer::Ready).await?;
+    let host_ws = host_end.accept(ws::ws_config()).await?;
+    // The client's frames that waited behind its request go first.
+    let ws = upgrade.accept(ws::ws_config()).await?;
     info!(%peer, device_id = %device, host_id = %host, "relay stream opened");
     let started = Instant::now();
     let ended = tokio::select! {
@@ -505,7 +488,7 @@ async fn connect(
 
 /// A host's end: hands the connection to the client waiting for `stream_id`, which forwards.
 async fn accept(
-    mut ws: Ws,
+    upgrade: Upgrade,
     shared: &Shared,
     device: &str,
     pass: Option<Pass>,
@@ -520,7 +503,7 @@ async fn accept(
         Ok(identity) => identity,
         Err(error) => {
             let error = refusal(RelayErrorCode::Forbidden, error.message);
-            refuse(&mut ws, peer, error).await;
+            refuse(upgrade, peer, error).await;
             return Ok(());
         }
     };
@@ -529,7 +512,7 @@ async fn accept(
     let host = blocking(&shared.store, move |store| store.host_of_device(&device)).await?;
     let Some(host) = host else {
         let message = "this device replicates to this hub as no host".to_owned();
-        refuse(&mut ws, peer, refusal(RelayErrorCode::Forbidden, message)).await;
+        refuse(upgrade, peer, refusal(RelayErrorCode::Forbidden, message)).await;
         return Ok(());
     };
     let gone = || {
@@ -539,12 +522,12 @@ async fn accept(
         )
     };
     let Some(waiting) = shared.relays.accept(stream_id, &host) else {
-        refuse(&mut ws, peer, gone()).await;
+        refuse(upgrade, peer, gone()).await;
         return Ok(());
     };
     // The client's task answers and forwards from here; it gave up if it is gone.
-    if let Err((mut ws, _)) = waiting.send((ws, cancel)) {
-        refuse(&mut ws, peer, gone()).await;
+    if let Err((upgrade, _)) = waiting.send((upgrade, cancel)) {
+        refuse(upgrade, peer, gone()).await;
     }
     Ok(())
 }
@@ -552,7 +535,7 @@ async fn accept(
 /// A host's stream to the hub's CLIProxyAPI: serves the HTTP the host's CLIs speak on it,
 /// forwarding each request to the proxy, until the host closes it.
 async fn proxy(
-    mut ws: Ws,
+    upgrade: Upgrade,
     shared: &Shared,
     device: &str,
     pass: Option<Pass>,
@@ -566,7 +549,7 @@ async fn proxy(
         Ok(identity) => identity,
         Err(error) => {
             let error = refusal(RelayErrorCode::Forbidden, error.message);
-            refuse(&mut ws, peer, error).await;
+            refuse(upgrade, peer, error).await;
             return Ok(());
         }
     };
@@ -582,7 +565,7 @@ async fn proxy(
     });
     let (Some(host), Some(upstream)) = (host, forwarder) else {
         let message = "this hub forwards this device to no CLIProxyAPI".to_owned();
-        refuse(&mut ws, peer, refusal(RelayErrorCode::Forbidden, message)).await;
+        refuse(upgrade, peer, refusal(RelayErrorCode::Forbidden, message)).await;
         return Ok(());
     };
     let Some(_slot) = shared.relays.reserve_proxy(&host) else {
@@ -590,18 +573,18 @@ async fn proxy(
             "too many streams to the CLIProxyAPI are open: at most {PROXY_STREAMS_PER_HOST} \
              per host"
         );
-        refuse(&mut ws, peer, refusal(RelayErrorCode::Busy, message)).await;
+        refuse(upgrade, peer, refusal(RelayErrorCode::Busy, message)).await;
         return Ok(());
     };
     let client = match shared.relays.proxy_client() {
         Ok(client) => client,
         Err(err) => {
             let message = format!("the hub cannot reach its CLIProxyAPI: {err:#}");
-            refuse(&mut ws, peer, refusal(RelayErrorCode::Internal, message)).await;
+            refuse(upgrade, peer, refusal(RelayErrorCode::Internal, message)).await;
             return Ok(());
         }
     };
-    answer(&mut ws, &RelayAnswer::Ready).await?;
+    let ws = upgrade.accept(ws::ws_config()).await?;
     let service = service_fn(move |request| forward(client.clone(), upstream.clone(), request));
     let serving = http1::Builder::new().serve_connection(TokioIo::new(Frames::new(ws)), service);
     tokio::select! {
@@ -673,20 +656,10 @@ fn no_relay(host: &HostId) -> RelayError {
     )
 }
 
-async fn answer(ws: &mut Ws, answer: &RelayAnswer) -> Result<()> {
-    let text = serde_json::to_string(answer)?;
-    ws.send(Message::text(text)).await?;
-    Ok(())
-}
-
-/// Tells the peer why it gets no stream, and closes the connection.
-async fn refuse(ws: &mut Ws, peer: SocketAddr, error: RelayError) {
+/// Tells the peer why it gets no stream, answering its upgrade, and closes the connection.
+async fn refuse(upgrade: Upgrade, peer: SocketAddr, error: RelayError) {
     debug!(%peer, code = ?error.code, "relay refused: {}", error.message);
-    let refused = async {
-        answer(ws, &RelayAnswer::Refused { error }).await?;
-        ws.close(None).await?;
-        anyhow::Ok(())
-    };
+    let refused = upgrade.refuse(error.code.status(), Some(&error));
     let _ = tokio::time::timeout(CLOSE_TIMEOUT, refused).await;
 }
 

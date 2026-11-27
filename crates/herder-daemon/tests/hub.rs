@@ -30,17 +30,20 @@ use herder_protocol::{
     AccountId, Attachment, AttachmentId, ClientHello, ClientMessage, Command, CommandBody,
     CommandId, CommandResult, Cursor, ErrorCode, Event, EventBody, HostHello, HostId, HostMessage,
     HostSecretsState, HubMessage, Item, ItemBody, ItemId, JournalRecord, PROTOCOL_VERSION,
-    PermissionMode, Provider, RELAY_VERSION, REPLICATION_VERSION, RelayAnswer, RelayErrorCode,
-    RelayHello, ReplicationErrorCode, SecretError, SecretErrorCode, SecretRef, SecretValue,
-    ServerMessage, SessionId, SessionStatus, SessionSummary, Timestamp, TurnId, UserId,
+    PermissionMode, Provider, REPLICATION_VERSION, RelayError, RelayErrorCode, RelayRoute,
+    ReplicationErrorCode, SecretError, SecretErrorCode, SecretRef, SecretValue, ServerMessage,
+    SessionId, SessionStatus, SessionSummary, Timestamp, TurnId, UserId,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio_rustls::TlsConnector;
+use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_util::sync::CancellationToken;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -2565,59 +2568,93 @@ fn phone(hub: &Hub) -> DeviceKey {
     device
 }
 
-/// Opens a relay connection as `device` saying `hello`; the connection and the hub's answer.
-async fn relay(hub: &Hub, device: &DeviceKey, hello: &RelayHello) -> (Ws, RelayAnswer) {
-    let mut ws = dial_as(hub, device).await;
-    say(&mut ws, hello).await;
-    let answer = loop {
-        match tokio::time::timeout(TIMEOUT, ws.next()).await.unwrap() {
-            Some(Ok(Message::Text(text))) => break serde_json::from_str(&text).unwrap(),
-            Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-            other => panic!("no answer from the hub: {other:?}"),
-        }
-    };
-    (ws, answer)
-}
-
-fn connect_to(host: &str) -> RelayHello {
-    RelayHello::Connect {
-        relay_version: RELAY_VERSION,
-        host_id: HostId::new(host),
+/// TLS to `hub` as `device`, with an upgrade request for `path` sent and `first` right
+/// behind it, as one binary frame unless empty, before any answer: as a client asks for a
+/// stream.
+async fn ask(
+    hub: &Hub,
+    device: &DeviceKey,
+    path: &str,
+    first: &[u8],
+) -> tokio_rustls::client::TlsStream<TcpStream> {
+    let config = client_config(&hub.fingerprint, device).unwrap();
+    let tcp = TcpStream::connect(hub.addr).await.unwrap();
+    let mut tls = TlsConnector::from(Arc::new(config))
+        .connect(ServerName::try_from("herder").unwrap(), tcp)
+        .await
+        .unwrap();
+    let mut sent = format!(
+        "GET {path} HTTP/1.1\r\nHost: herder\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+         Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+    )
+    .into_bytes();
+    if !first.is_empty() {
+        // A masked binary frame, with a mask of zeros.
+        assert!(first.len() < 126);
+        sent.extend_from_slice(&[0x82, 0x80 | first.len() as u8, 0, 0, 0, 0]);
+        sent.extend_from_slice(first);
     }
+    tls.write_all(&sent).await.unwrap();
+    tls.flush().await.unwrap();
+    tls
 }
 
-/// The code the hub refused `hello` from `device` with.
-async fn relay_refusal(hub: &Hub, device: &DeviceKey, hello: &RelayHello) -> RelayErrorCode {
-    let (mut ws, answer) = relay(hub, device, hello).await;
-    let RelayAnswer::Refused { error } = answer else {
-        panic!("the hub opened a stream for {hello:?}");
-    };
-    // A refusal is the last thing the hub says.
-    assert!(until_closed(&mut ws).await.is_empty());
-    error.code
+/// The hub's answer to a request [`ask`] sent: the stream, or the code it refused with,
+/// which the refusal's status agrees with.
+async fn answer(mut tls: tokio_rustls::client::TlsStream<TcpStream>) -> Result<Ws, RelayErrorCode> {
+    let mut head = Vec::new();
+    let mut byte = [0; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        let read = tokio::time::timeout(TIMEOUT, tls.read(&mut byte))
+            .await
+            .expect("no answer from the hub")
+            .unwrap();
+        assert_eq!(read, 1, "the hub closed the connection without an answer");
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8(head).unwrap();
+    let status: u16 = head[9..12].parse().unwrap();
+    if status == 101 {
+        assert!(head.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
+        return Ok(WebSocketStream::from_raw_socket(tls, Role::Client, None).await);
+    }
+    let mut body = String::new();
+    tls.read_to_string(&mut body).await.unwrap();
+    let error: RelayError = serde_json::from_str(&body).unwrap();
+    assert_eq!(error.code.status(), status, "{head}{body}");
+    Err(error.code)
+}
+
+/// Opens a relay connection as `device` for `route`: the stream, or the code the hub
+/// refused it with.
+async fn relay(hub: &Hub, device: &DeviceKey, route: &RelayRoute) -> Result<Ws, RelayErrorCode> {
+    answer(ask(hub, device, &route.path(), &[]).await).await
+}
+
+fn connect_to(host: &str) -> RelayRoute {
+    RelayRoute::Machine(HostId::new(host))
+}
+
+/// The code the hub refused `route` from `device` with.
+async fn relay_refusal(hub: &Hub, device: &DeviceKey, route: &RelayRoute) -> RelayErrorCode {
+    match relay(hub, device, route).await {
+        Ok(_) => panic!("the hub opened a stream for {route:?}"),
+        Err(code) => code,
+    }
 }
 
 /// Opens a stream from `device` to the host replicating on `replication`, which opens its
 /// end as the host in `host_dir`: the device's end and the host's.
 async fn stream(hub: &Hub, device: &DeviceKey, host_dir: &Path, replication: &mut Ws) -> (Ws, Ws) {
-    let mut client = dial_as(hub, device).await;
-    say(&mut client, &connect_to("host-1")).await;
+    let asked = ask(hub, device, &connect_to("host-1").path(), &[]).await;
     let HubMessage::RelayOpen { stream_id, .. } = next_message(replication).await else {
         panic!("the hub did not ask the host to open the stream");
     };
-    let accept = RelayHello::Accept {
-        relay_version: RELAY_VERSION,
-        stream_id,
-    };
     let host_key = Replicator::device_key(host_dir).unwrap();
-    let (host, answer) = relay(hub, &host_key, &accept).await;
-    assert_eq!(answer, RelayAnswer::Ready);
-    let Some(Ok(Message::Text(text))) = client.next().await else {
-        panic!("no answer for the device");
-    };
-    let ready: RelayAnswer = serde_json::from_str(&text).unwrap();
-    assert_eq!(ready, RelayAnswer::Ready);
-    (client, host)
+    let host = relay(hub, &host_key, &RelayRoute::Stream(stream_id))
+        .await
+        .unwrap();
+    (answer(asked).await.unwrap(), host)
 }
 
 /// The next `len` bytes `ws` carries as binary frames.
@@ -2699,6 +2736,40 @@ async fn the_hub_forwards_a_stream_between_a_device_and_a_host_unchanged() {
     hub.runtime.kill().await;
 }
 
+/// A device sends the first bytes of its stream right behind its request: the hub holds
+/// them until the host opened its end, and they reach the host first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_bytes_a_device_sends_before_the_stream_opens_reach_the_host_first() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, hub_dir) = (tmp.path().join("host"), tmp.path().join("hub"));
+    let hub = Hub::start(&hub_dir, 0).await;
+    let mut replication = replicating(&hub, &host_dir, true).await;
+    let device = phone(&hub);
+
+    let asked = ask(&hub, &device, &connect_to("host-1").path(), b"client hello").await;
+    let HubMessage::RelayOpen { stream_id, .. } = next_message(&mut replication).await else {
+        panic!("the hub did not ask the host to open the stream");
+    };
+    // The host takes its time: the bytes wait at the hub.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let host_key = Replicator::device_key(&host_dir).unwrap();
+    let mut far = relay(&hub, &host_key, &RelayRoute::Stream(stream_id))
+        .await
+        .unwrap();
+    let mut near = answer(asked).await.unwrap();
+    assert_eq!(bytes(&mut far, 12).await, b"client hello");
+    far.send(Message::binary(b"server hello".to_vec()))
+        .await
+        .unwrap();
+    assert_eq!(bytes(&mut near, 12).await, b"server hello");
+
+    // A host that never connects: the device is refused, its bytes dropped unread.
+    drop(replication);
+    let asked = ask(&hub, &device, &connect_to("host-1").path(), b"client hello").await;
+    assert_eq!(answer(asked).await.err(), Some(RelayErrorCode::HostOffline));
+    hub.runtime.kill().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_hub_refuses_the_streams_it_may_not_forward() {
     let tmp = tempfile::tempdir().unwrap();
@@ -2710,7 +2781,7 @@ async fn the_hub_refuses_the_streams_it_may_not_forward() {
         Replicator::device_key(&host_dir).unwrap()
     };
     let to_host = connect_to("host-1");
-    let refusal = |device, hello| relay_refusal(&hub, device, hello);
+    let refusal = |device, route| relay_refusal(&hub, device, route);
 
     // A host that takes no relayed connections is not one the hub forwards to.
     let replication = replicating(&hub, &host_dir, false).await;
@@ -2737,34 +2808,27 @@ async fn the_hub_refuses_the_streams_it_may_not_forward() {
         refusal(&host_key, &to_host).await,
         RelayErrorCode::Forbidden
     );
-    let other_version = RelayHello::Connect {
-        relay_version: RELAY_VERSION + 1,
-        host_id: host_id(),
-    };
-    assert_eq!(
-        refusal(&device, &other_version).await,
-        RelayErrorCode::Unsupported
-    );
+    // A path the hub does not know.
+    let mut unknown = ask(&hub, &device, "/machines", &[]).await;
+    let mut answered = String::new();
+    unknown.read_to_string(&mut answered).await.unwrap();
+    assert!(answered.starts_with("HTTP/1.1 404 "), "{answered}");
     // Only the host a stream waits for may open its end, and only a stream that waits.
-    let accept = RelayHello::Accept {
-        relay_version: RELAY_VERSION,
-        stream_id: "no-such-stream".into(),
-    };
+    let accept = RelayRoute::Stream("no-such-stream".into());
     assert_eq!(
         refusal(&host_key, &accept).await,
         RelayErrorCode::BadRequest
     );
     assert_eq!(refusal(&device, &accept).await, RelayErrorCode::Forbidden);
-    let proxy = RelayHello::Proxy {
-        relay_version: RELAY_VERSION,
-    };
-    assert_eq!(refusal(&host_key, &proxy).await, RelayErrorCode::Forbidden);
+    assert_eq!(
+        refusal(&host_key, &RelayRoute::Proxy).await,
+        RelayErrorCode::Forbidden
+    );
 
     // A device gets no more streams than its share, whether or not the host opened them.
     let mut open = Vec::new();
     for _ in 0..32 {
-        let mut ws = dial_as(&hub, &device).await;
-        say(&mut ws, &to_host).await;
+        let ws = ask(&hub, &device, &to_host.path(), &[]).await;
         assert!(matches!(
             next_message(&mut replication).await,
             HubMessage::RelayOpen { .. }
@@ -2931,12 +2995,9 @@ async fn a_host_reaches_the_hubs_cliproxyapi_through_the_hub() {
     assert_eq!(requests.lock().unwrap().len(), 2);
 
     // Only a host the hub forwards may come this way: not a client's device.
-    let proxy = RelayHello::Proxy {
-        relay_version: RELAY_VERSION,
-    };
     let device = phone(&hub);
     assert_eq!(
-        relay_refusal(&hub, &device, &proxy).await,
+        relay_refusal(&hub, &device, &RelayRoute::Proxy).await,
         RelayErrorCode::Forbidden
     );
     host.runtime.kill().await;
@@ -2974,12 +3035,9 @@ async fn a_hub_that_names_its_proxys_address_forwards_no_host_to_it() {
         (hello.cliproxyapi.as_deref(), hello.cliproxyapi_relay),
         (Some("https://cpa.example.com:8317"), false)
     );
-    let proxy = RelayHello::Proxy {
-        relay_version: RELAY_VERSION,
-    };
     let host_key = Replicator::device_key(&host_dir).unwrap();
     assert_eq!(
-        relay_refusal(&hub, &host_key, &proxy).await,
+        relay_refusal(&hub, &host_key, &RelayRoute::Proxy).await,
         RelayErrorCode::Forbidden
     );
     hub.runtime.kill().await;
