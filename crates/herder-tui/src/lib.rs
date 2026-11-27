@@ -253,6 +253,9 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                             let _ = tx.send(Msg::Notice(format!("routes: {err}")));
                         }
                     }
+                    Effect::FrontDoorSignIn { host_id, address } => {
+                        front_door_sign_in(&client, host_id, address, tx.clone());
+                    }
                     Effect::AttachTerminal { host_id, target } => attach = Some((host_id, target)),
                     Effect::Mouse(on) => modes.mouse = mouse::report(on).is_ok() && on,
                     Effect::Save => {
@@ -565,6 +568,40 @@ fn log_in(
             }
         };
         let _ = tx.send(Msg::SignedIn(result.map(Box::new)));
+    });
+}
+
+/// Signs in with a browser to the login proxy in front of `address`, a tunnel of machine
+/// `host_id`, as `cloudflared access login` does: opens its login page, or shows its URL where
+/// there is no browser, and says how it went.
+fn front_door_sign_in(
+    client: &Client,
+    host_id: herder_protocol::HostId,
+    address: String,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    let client = client.clone();
+    tokio::spawn(async move {
+        let sign_in = match client
+            .begin_front_door_sign_in(host_id, address.clone())
+            .await
+        {
+            Ok(sign_in) => sign_in,
+            Err(err) => {
+                let _ = tx.send(Msg::Notice(format!("signing in to {address}: {err}")));
+                return;
+            }
+        };
+        let url = sign_in.url();
+        let _ = tx.send(Msg::Notice(format!(
+            "sign in to {address} in a browser, at {url}"
+        )));
+        open_url(url, tx.clone());
+        let done = match sign_in.finish().await {
+            Ok(()) => format!("signed in to {address}"),
+            Err(err) => format!("signing in to {address}: {err}"),
+        };
+        let _ = tx.send(Msg::Notice(done));
     });
 }
 

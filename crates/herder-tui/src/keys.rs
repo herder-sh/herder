@@ -654,7 +654,7 @@ pub const FLEET: &[Keys] = &[
     ),
     keys(
         &[ch('o')],
-        "the machine's routes on this device: space pins or disables one, J/K move it",
+        "the machine's routes on this device: space pins or disables one, J/K move it, s signs in to a login proxy in front of it",
     ),
     keys(
         &[ch('t')],

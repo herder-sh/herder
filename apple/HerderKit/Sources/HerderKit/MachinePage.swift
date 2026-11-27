@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Herder
 import SwiftUI
 
@@ -83,6 +84,9 @@ struct MachinePage: View {
     @State private var connectFailure: AddressStatus.Failure?
     /// The tunnel address whose proxy headers a sheet sets.
     @State private var headers: HeaderTarget?
+    /// The tunnel address a browser sign-in to its login proxy is under way for.
+    @State private var signingIn: String?
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
 
     var body: some View {
         let machine = fleet.machines.first { $0.hostId == hostId }
@@ -486,6 +490,7 @@ struct MachinePage: View {
                     .padding(.leading, 17)
                     .help("Headers a proxy in front of this tunnel wants, such as a Cloudflare Access service token")
                     .accessibilityIdentifier("address-headers-open")
+                    frontDoor(machine, address)
                 }
             }
             HStack(spacing: 10) {
@@ -499,6 +504,52 @@ struct MachinePage: View {
                 .frame(width: 120)
                 .disabled(newAddress.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+        }
+    }
+
+    /// What the row of `address`, a tunnel, says of the login proxy in front of it: a button
+    /// to sign in with a browser, or that this device is signed in.
+    @ViewBuilder
+    private func frontDoor(_ machine: Machine, _ address: String) -> some View {
+        if let door = FrontDoorPrompt.door(of: address, in: machine) {
+            if signingIn == address {
+                Text("Waiting for you to sign in in the browser…")
+                    .font(.caption).foregroundStyle(Theme.secondary)
+                    .padding(.leading, 17)
+            } else if let title = FrontDoorPrompt.action(door) {
+                Button(title) { signIn(through: address) }
+                    .font(.caption)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.accent)
+                    .padding(.leading, 17)
+                    .help("Sign in to the login proxy in front of this tunnel, such as Cloudflare Access")
+                    .accessibilityIdentifier("front-door-sign-in")
+            } else {
+                Text("Signed in to its login proxy")
+                    .font(.caption).foregroundStyle(Theme.tertiary)
+                    .padding(.leading, 17)
+            }
+        }
+    }
+
+    /// Signs in to the login proxy in front of `address` in a web authentication session,
+    /// closed once the machine has the token.
+    private func signIn(through address: String) {
+        signingIn = address
+        connectFailure = nil
+        let session = webAuthenticationSession
+        Task {
+            do {
+                try await fleet.signInToFrontDoor(hostId, address: address) { url in
+                    // The proxy sends the browser back to the tunnel, never to herder, so the
+                    // session ends when the sign-in does, cancelled.
+                    _ = try? await session.authenticate(using: url, callbackURLScheme: "herder",
+                                                        preferredBrowserSession: .ephemeral)
+                }
+            } catch {
+                connectFailure = .init(address: address, message: describe(error))
+            }
+            signingIn = nil
         }
     }
 

@@ -26,3 +26,12 @@ struct AddressHeadersTests {
             == "Sends cf-access-client-id, cf-access-client-secret")
     }
 }
+
+struct FrontDoorTests {
+    @Test func aLoginProxyAsksToSignInThenAgainOnceItsTokenIsRefused() {
+        let address = "wss://hub.example.com"
+        #expect(FrontDoorPrompt.action(FrontDoor(address: address, expiresAt: nil, signIn: true)) == "Sign In…")
+        #expect(FrontDoorPrompt.action(FrontDoor(address: address, expiresAt: "2096-10-02T07:06:40Z", signIn: false)) == nil)
+        #expect(FrontDoorPrompt.action(FrontDoor(address: address, expiresAt: "2096-10-02T07:06:40Z", signIn: true)) == "Sign In Again…")
+    }
+}

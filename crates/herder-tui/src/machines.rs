@@ -16,7 +16,9 @@
 //!
 //! Anyone ranks the selected machine's routes on this device: `o` lists its addresses in the
 //! order they are tried, each named by what carries it; space pins one (the only one dialled),
-//! disables it (never dialled) or puts it back in the race, and `J`/`K` move it.
+//! disables it (never dialled) or puts it back in the race, and `J`/`K` move it. On a tunnel
+//! behind a login proxy, such as Cloudflare Access, `s` signs in with a browser: the TUI opens
+//! the proxy's login page, or shows its URL, and connects once the person signed in there.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -314,6 +316,8 @@ pub enum Input {
     Earlier,
     /// Try the selected route later.
     Later,
+    /// Sign in with a browser to the login proxy in front of the selected route.
+    SignIn,
     /// Pick the previous choice.
     Left,
     /// Pick the next choice.
@@ -366,6 +370,7 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Char(' ') | KeyCode::Enter => Input::Submit,
             KeyCode::Char('K') => Input::Earlier,
             KeyCode::Char('J') => Input::Later,
+            KeyCode::Char('s') => Input::SignIn,
             _ => return None,
         },
         None => return panel_key(key, panel),
@@ -466,9 +471,36 @@ fn routes_input(machine: &Machine, at: &mut usize, input: Input) -> Vec<Effect> 
             *at += 1;
             return vec![effect];
         }
+        Input::SignIn => {
+            if let Some(address) = addresses.get(*at).filter(|address| is_tunnel(address)) {
+                return vec![Effect::FrontDoorSignIn {
+                    host_id,
+                    address: address.clone(),
+                }];
+            }
+        }
         _ => {}
     }
     Vec::new()
+}
+
+/// Whether `address` is a tunnel's URL, which a login proxy may sit in front of.
+fn is_tunnel(address: &str) -> bool {
+    address.starts_with("wss://") || address.starts_with("ws://")
+}
+
+/// What the routes list says of `address`'s login proxy: whether to sign in, or that this
+/// device is signed in; `None` for an address without one.
+pub fn front_door(machine: &Machine, address: &str) -> Option<&'static str> {
+    let door = machine
+        .front_doors
+        .iter()
+        .find(|door| door.address == address)?;
+    Some(match (door.sign_in, door.expires_at) {
+        (true, None) => "sign in with s",
+        (true, Some(_)) => "sign in again with s",
+        (false, _) => "signed in",
+    })
 }
 
 impl App {
@@ -935,6 +967,44 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert_eq!(edit(&app), None);
         assert!(app.machine_panel.is_some());
+    }
+
+    #[test]
+    fn a_tunnel_behind_a_login_proxy_is_signed_in_to_from_the_routes() {
+        use herder_client_core::FrontDoor;
+
+        let mut app = App::default();
+        let mut box1 = machine("h1", "box", &[]);
+        let tunnel = "wss://box.example.com".to_owned();
+        box1.addresses = vec!["192.168.1.5:7447".into(), tunnel.clone()];
+        box1.front_doors = vec![FrontDoor {
+            address: tunnel.clone(),
+            expires_at: None,
+            sign_in: true,
+        }];
+        app.update(Msg::Machines(vec![box1.clone()]));
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Char('o'));
+        assert_eq!(front_door(&box1, &tunnel), Some("sign in with s"));
+        assert_eq!(front_door(&box1, "192.168.1.5:7447"), None);
+        // Not on an address of the machine's own network.
+        assert!(press(&mut app, KeyCode::Char('s')).is_empty());
+        press(&mut app, KeyCode::Down);
+        assert_eq!(
+            press(&mut app, KeyCode::Char('s')),
+            [Effect::FrontDoorSignIn {
+                host_id: HostId::new("h1"),
+                address: tunnel.clone(),
+            }]
+        );
+
+        // Signed in, then turned away again: sign in again.
+        let expires = Some(herder_protocol::Timestamp::from_second(4_000_000_000).unwrap());
+        box1.front_doors[0].expires_at = expires;
+        box1.front_doors[0].sign_in = false;
+        assert_eq!(front_door(&box1, &tunnel), Some("signed in"));
+        box1.front_doors[0].sign_in = true;
+        assert_eq!(front_door(&box1, &tunnel), Some("sign in again with s"));
     }
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Effect> {
