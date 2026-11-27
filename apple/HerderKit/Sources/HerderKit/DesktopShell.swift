@@ -15,6 +15,8 @@ struct DesktopShell: View {
     /// Everyone on the machines, for Hub and what needs you there.
     let people: FleetPeople
     let opened: (SessionKey) -> Void
+    /// Carries out a command, as the menu bar does.
+    let perform: (AppCommand) -> Void
     @AppStorage("sidebarCollapsed") private var sidebarCollapsed = true
     @AppStorage(ProjectOrder.sortKey) private var projectSort = ProjectSort.manual
     @AppStorage(ProjectOrder.manualKey) private var projectOrder = ""
@@ -212,18 +214,8 @@ struct DesktopShell: View {
         }
     }
 
-    /// ⌘N: a chat in Chats; a draft in the project pane's project, on the machine it would
-    /// pick; elsewhere, even beside an open session in a project, the picker.
-    private func newSession() {
-        if item == .chats, let draft = Draft.chat(fleet: fleet) {
-            self.draft = draft
-        } else if let projectId = fleet.lists.project(for: item),
-           let draft = Draft.inProject(projectId, fleet: fleet) {
-            self.draft = draft
-        } else {
-            sheet = .newSession
-        }
-    }
+    /// ⌘N, as the menu bar's New Session.
+    private func newSession() { perform(.newSession) }
 
     private var order: ProjectOrder { ProjectOrder(sort: projectSort, stored: projectOrder) }
 
@@ -475,12 +467,10 @@ struct Sidebar: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Spacer()
-                IconButton(symbol: "sidebar.left", help: "Collapse the sidebar") { collapsed = true }
-                    .keyboardShortcut("\\", modifiers: [.command, .shift])
-                IconButton(symbol: "arrow.clockwise", help: "Reconnect") { fleet.wake() }
-                    .keyboardShortcut("r")
-                IconButton(symbol: "square.and.pencil", help: "New Session", action: newSession)
-                    .keyboardShortcut("n")
+                // Their keys are the menu bar's (`HerderCommands`).
+                IconButton(symbol: "sidebar.left", help: "Collapse the sidebar (⇧⌘\\)") { collapsed = true }
+                IconButton(symbol: "arrow.clockwise", help: "Reconnect (⌘R)") { fleet.wake() }
+                IconButton(symbol: "square.and.pencil", help: "New Session (⌘N)", action: newSession)
             }
             // Room for the window's traffic lights on the Mac.
             .frame(height: Self.topBar)
@@ -608,10 +598,8 @@ private struct SidebarRail: View {
         let lists = fleet.lists
         VStack(spacing: 10) {
             Spacer().frame(height: Sidebar.topBar - 8)
-            IconButton(symbol: "sidebar.left", help: "Expand the sidebar") { collapsed = false }
-                .keyboardShortcut("\\", modifiers: [.command, .shift])
-            IconButton(symbol: "square.and.pencil", help: "New Session", action: newSession)
-                .keyboardShortcut("n")
+            IconButton(symbol: "sidebar.left", help: "Expand the sidebar (⇧⌘\\)") { collapsed = false }
+            IconButton(symbol: "square.and.pencil", help: "New Session (⌘N)", action: newSession)
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("checklist", "Board", .board)
             rail(Switcher.chatSymbol, "Chats", .chats)
