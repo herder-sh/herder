@@ -699,6 +699,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
             key: None,
             key_secret: Some("CLIPROXYAPI_KEY".parse().unwrap()),
         }),
+        command(CommandBody::RemoveAccount {
+            account_id: AccountId::new("claude-work"),
+        }),
         command(CommandBody::InstallProvider {
             provider: Provider::Cursor,
             cols: 120,

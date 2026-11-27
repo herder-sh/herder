@@ -297,7 +297,33 @@ impl Logins {
             .await
     }
 
-    /// Adds endpoint account `account_id`: `provider`'s CLI runs against `endpoint` with
+    /// Removes account `account_id` from the daemon config and from the accounts sessions may
+    /// run on, announcing the new list; see [`SessionManager::remove_account`]. Its config dir
+    /// stays on disk, unread.
+    pub(crate) async fn remove(&self, account_id: &AccountId) -> Result<(), ErrorInfo> {
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            error(
+                ErrorCode::Unsupported,
+                "this daemon removes no accounts".into(),
+            )
+        })?;
+        inner
+            .sessions
+            .remove_account(account_id, || {
+                let _saving = inner.saving.lock().unwrap_or_else(PoisonError::into_inner);
+                config::remove_account(&inner.config_file, account_id).map_err(|err| {
+                    error(
+                        ErrorCode::Conflict,
+                        format!("cannot remove account {account_id}: {err:#}"),
+                    )
+                })
+            })
+            .await?;
+        info!(%account_id, config_file = %inner.config_file.display(), "account removed");
+        Ok(())
+    }
+
+    /// Adds endpoint account `account_id`:`provider`'s CLI runs against `endpoint` with
     /// `key`, in a config dir herder creates, needing no login. Saved to the daemon config,
     /// then offered to sessions and announced to clients. A login running for the same id
     /// fails to save once it ends.
@@ -964,6 +990,10 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(refused.code, ErrorCode::BadRequest, "{refused:?}");
+        let refused = f.logins.remove(&id).await.unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest, "{refused:?}");
+        assert!(refused.message.contains("hub's Logins page"), "{refused:?}");
+        assert!(f.sessions.account(&id).is_some());
         assert!(!std::fs::exists(f.home.path().join("daemon.toml")).unwrap());
 
         f.sessions.set_hub_logins(&[], &proxy, &dir);
@@ -1629,5 +1659,143 @@ mod tests {
             f.sessions.accounts()[0].config_dir.as_deref(),
             Some("/tmp/new-login")
         );
+    }
+
+    #[tokio::test]
+    async fn a_removed_account_leaves_the_config_and_the_list_but_keeps_its_dir() {
+        let f = fixture().await;
+        let outbox = Arc::new(crate::fanout::Outbox::default());
+        f.fanout.connect(&outbox, herder_protocol::Role::Owner);
+        let dir = f.home.path().join("work");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("logged-in"), "").unwrap();
+        f.account("work", Provider::Codex, Some(dir.clone()));
+        while outbox.pop().is_some() {}
+        let path = f.home.path().join("daemon.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "# my daemon\n[[accounts]]\nid = 'codex'\nprovider = 'codex' # the default\n\n\
+                 [[accounts]]\nid = 'work'\nprovider = 'codex'\nconfig_dir = '{}'\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+
+        f.logins.remove(&AccountId::new("work")).await.unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# my daemon\n[[accounts]]\nid = 'codex'\nprovider = 'codex' # the default\n"
+        );
+        assert!(f.sessions.account(&AccountId::new("work")).is_none());
+        let Some(herder_protocol::ServerMessage::Accounts { accounts, .. }) = outbox.pop() else {
+            panic!("the new account list was not sent to the connected client");
+        };
+        let ids: Vec<_> = accounts.iter().map(|a| a.account_id.as_str()).collect();
+        assert_eq!(ids, ["codex"]);
+        // The provider's login is left as it was.
+        assert!(std::fs::exists(dir.join("logged-in")).unwrap());
+
+        let again = f.logins.remove(&AccountId::new("work")).await.unwrap_err();
+        assert_eq!(again.code, ErrorCode::BadRequest, "{again:?}");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_account_is_not_removed() {
+        let f = fixture().await;
+        let path = f.home.path().join("daemon.toml");
+        let saved = "[[accounts]]\nid = 'codex'\nprovider = 'codex'\n";
+        std::fs::write(&path, saved).unwrap();
+        let err = f
+            .logins
+            .remove(&AccountId::new("missing"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::BadRequest, "{err:?}");
+        assert!(err.message.contains("missing"), "{err:?}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        assert_eq!(f.sessions.accounts().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_account_a_project_defaults_to_is_not_removed() {
+        let f = fixture().await;
+        let path = f.home.path().join("daemon.toml");
+        let saved = "[[accounts]]\nid = 'codex'\nprovider = 'codex'\n\n\
+                     [[project]]\npaths = ['/a']\ndefault_account = 'codex'\n";
+        std::fs::write(&path, saved).unwrap();
+        let err = f.logins.remove(&AccountId::new("codex")).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::Conflict, "{err:?}");
+        assert!(err.message.contains("default_account"), "{err:?}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        assert!(f.sessions.account(&AccountId::new("codex")).is_some());
+    }
+
+    #[tokio::test]
+    async fn unarchived_sessions_on_an_account_block_its_removal_and_are_named() {
+        use herder_protocol::{EventBody, PermissionMode, SessionId, SessionStatus, Timestamp};
+        use herder_store::NewEvent;
+        let f = fixture().await;
+        let path = f.home.path().join("daemon.toml");
+        let saved = "[[accounts]]\nid = 'codex'\nprovider = 'codex'\n";
+        std::fs::write(&path, saved).unwrap();
+        let mut store = Store::open(f.home.path().join("herder.db")).unwrap();
+        let event = |session: &str, body| NewEvent {
+            session_id: SessionId::new(session),
+            at: Timestamp::now(),
+            by: None,
+            body,
+        };
+        let created = |account: &str| EventBody::SessionCreated {
+            repo: "/test".into(),
+            worktree: "/test-wt".into(),
+            branch: Some("test".into()),
+            provider: Provider::Codex,
+            account_id: AccountId::new(account),
+            model: "fake".into(),
+            permission_mode: PermissionMode::Ask,
+            parent: None,
+            parent_host: None,
+            task: None,
+            failover_pin: None,
+            chat: false,
+            origin: None,
+        };
+        let archived = || EventBody::SessionStatusChanged {
+            status: SessionStatus::Archived,
+            retry_at: None,
+        };
+        store.append(event("live", created("codex"))).unwrap();
+        store
+            .append(event(
+                "live",
+                EventBody::TitleChanged {
+                    title: "Fix the login".into(),
+                    source: herder_protocol::TitleSource::User,
+                },
+            ))
+            .unwrap();
+        store.append(event("bare", created("codex"))).unwrap();
+        store.append(event("done", created("codex"))).unwrap();
+        store.append(event("done", archived())).unwrap();
+        store.append(event("other", created("elsewhere"))).unwrap();
+        let account = AccountId::new("codex");
+
+        let err = f.logins.remove(&account).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::Conflict, "{err:?}");
+        assert_eq!(
+            err.message,
+            "2 unarchived sessions run on account codex; archive them first: bare, \
+             \"Fix the login\" (live)"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        assert!(f.sessions.account(&account).is_some());
+
+        store.append(event("live", archived())).unwrap();
+        store.append(event("bare", archived())).unwrap();
+        f.logins.remove(&account).await.unwrap();
+        assert!(f.sessions.account(&account).is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
     }
 }

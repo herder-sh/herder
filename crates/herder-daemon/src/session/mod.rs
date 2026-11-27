@@ -450,7 +450,7 @@ impl Inner {
     }
 
     fn accounts_lock(&self) -> std::sync::RwLockReadGuard<'_, Accounts> {
-        // Every update is one insert, so a poisoned map is consistent.
+        // Every update is one insert or removal, so a poisoned map is consistent.
         self.accounts.read().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -464,8 +464,9 @@ pub struct SessionManager {
 struct Inner {
     journal: Journal,
     adapters: Adapters,
-    /// Grows as accounts are added ([`SessionManager::add_account`]), and follows the hub's
-    /// logins ([`SessionManager::use_hub_logins`]): only those ever leave it.
+    /// Grows as accounts are added ([`SessionManager::add_account`]), shrinks as an owner
+    /// removes them ([`SessionManager::remove_account`]), and follows the hub's logins
+    /// ([`SessionManager::use_hub_logins`]).
     accounts: RwLock<Accounts>,
     /// The accounts that are the hub's logins, with each login's name on the hub.
     hub_logins: RwLock<BTreeMap<AccountId, String>>,
@@ -1054,6 +1055,7 @@ impl SessionManager {
             | CommandBody::SetAccountSettings { .. }
             | CommandBody::AddAccount { .. }
             | CommandBody::AddEndpointAccount { .. }
+            | CommandBody::RemoveAccount { .. }
             | CommandBody::InstallProvider { .. }
             | CommandBody::LogInAccount { .. }
             | CommandBody::ListAwsProfiles
@@ -2253,6 +2255,79 @@ impl SessionManager {
         self.skill_accounts();
         self.refresh_skills();
         true
+    }
+
+    /// Drops `account_id` from the accounts sessions may run on, once `save` dropped it from the
+    /// daemon config, and forgets its usage; then announces the new account list. Refused, calling no `save`, for an unknown account,
+    /// one of the hub's logins, and while unarchived sessions run on it; those are named.
+    /// Serialized with new and unarchived sessions, so none starts on it meanwhile.
+    pub(crate) async fn remove_account(
+        &self,
+        account_id: &AccountId,
+        save: impl FnOnce() -> Result<(), ErrorInfo>,
+    ) -> Result<(), ErrorInfo> {
+        let inner = &self.inner;
+        let _settings = inner.account_settings.lock().await;
+        if inner.account(account_id).is_none() {
+            return Err(error(
+                ErrorCode::BadRequest,
+                format!("account {account_id} does not exist"),
+            ));
+        }
+        if inner
+            .hub_logins
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(account_id)
+        {
+            return Err(error(
+                ErrorCode::BadRequest,
+                format!(
+                    "account {account_id} is one of the hub's logins: remove the login on the \
+                     hub's Logins page"
+                ),
+            ));
+        }
+        let using: Vec<String> = inner
+            .journal
+            .sessions()
+            .await
+            .map_err(internal)?
+            .into_iter()
+            .filter(|session| {
+                session.account_id == *account_id
+                    && session.status != herder_protocol::SessionStatus::Archived
+            })
+            .map(|session| match session.title {
+                Some(title) => format!("{title:?} ({})", session.session_id),
+                None => session.session_id.to_string(),
+            })
+            .collect();
+        if !using.is_empty() {
+            return Err(error(
+                ErrorCode::Conflict,
+                format!(
+                    "{} unarchived session{} run{} on account {account_id}; archive {} first: {}",
+                    using.len(),
+                    if using.len() == 1 { "" } else { "s" },
+                    if using.len() == 1 { "s" } else { "" },
+                    if using.len() == 1 { "it" } else { "them" },
+                    using.join(", "),
+                ),
+            ));
+        }
+        save()?;
+        inner
+            .accounts
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(account_id);
+        inner.usage.forget(account_id);
+        inner.journal.sink().accounts_changed(&self.accounts());
+        inner.refresh_usage.stale();
+        self.skill_accounts();
+        self.refresh_skills();
+        Ok(())
     }
 
     /// Starts probing every account's usage ([`crate::usage`]) until the manager's shutdown.

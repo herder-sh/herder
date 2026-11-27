@@ -538,6 +538,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::DeleteBotFact { .. }
         | CommandBody::ClearBotMemory { .. }
         | CommandBody::AddAccount { .. }
+        | CommandBody::RemoveAccount { .. }
         | CommandBody::InstallProvider { .. }
         | CommandBody::LogInAccount { .. }
         | CommandBody::ListAwsProfiles

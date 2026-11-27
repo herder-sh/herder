@@ -1318,6 +1318,7 @@
                   "open_terminal",
                   "add_account",
                   "add_endpoint_account",
+                  "remove_account",
                   "install_provider",
                   "log_in_account",
                   "list_aws_profiles",

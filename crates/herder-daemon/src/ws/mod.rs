@@ -613,6 +613,10 @@ impl<B: Backend> Shared<B> {
                 self.logins.set_settings(&account_id, &settings).await?;
                 Ok(CommandResult::Applied)
             }
+            CommandBody::RemoveAccount { account_id } => {
+                self.logins.remove(&account_id).await?;
+                Ok(CommandResult::Applied)
+            }
             CommandBody::ListAwsProfiles => Ok(CommandResult::AwsProfiles {
                 profiles: self.aws()?.profiles()?,
             }),

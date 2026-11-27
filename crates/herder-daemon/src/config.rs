@@ -162,7 +162,8 @@
 //!
 //! Accounts added from a client ([`crate::login`]) are appended to this file as new
 //! `[[accounts]]` entries, which creates it when it does not exist yet; the rest of the file is
-//! kept as written.
+//! kept as written. An account removed from a client ([`remove_account`]) loses its entry the
+//! same way, unless a project, a bot or the titles still name it; its config dir stays.
 //!
 //! `config_dir` is handed to the CLI as its config dir variable (`CLAUDE_CONFIG_DIR`,
 //! `CODEX_HOME`, ...); without one the variable is not set and the CLI uses its default. It may
@@ -1612,6 +1613,29 @@ pub(crate) fn set_account_settings(
     );
     write_atomically(path, text.as_bytes())?;
     Ok(account)
+}
+
+/// Removes the `[[accounts]]` entry of `account_id` from the config file at `path`, keeping the
+/// rest of the file as written; its config dir is left alone. Only a file that still loads
+/// replaces it, so an account a project, a bot or the titles name stays, failing.
+pub(crate) fn remove_account(path: &Path, account_id: &AccountId) -> Result<()> {
+    edit_file(path, |doc, _| {
+        let entries = doc
+            .get_mut("accounts")
+            .and_then(toml_edit::Item::as_array_of_tables_mut)
+            .with_context(|| format!("{} has no [[accounts]] entries", path.display()))?;
+        let before = entries.len();
+        entries.retain(|entry| {
+            entry.get("id").and_then(toml_edit::Item::as_str) != Some(account_id.as_str())
+        });
+        ensure!(
+            entries.len() < before,
+            "{} has no account {account_id}",
+            path.display()
+        );
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// The `[projects]` table and `[[project]]` entries of the config file at `path`, resolved as

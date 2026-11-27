@@ -1397,7 +1397,9 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     }
     if matches!(
         command,
-        CommandBody::SetAccountSettings { .. } | CommandBody::AddEndpointAccount { .. }
+        CommandBody::SetAccountSettings { .. }
+            | CommandBody::AddEndpointAccount { .. }
+            | CommandBody::RemoveAccount { .. }
     ) && role != Role::Owner
     {
         return Err(forbidden(
@@ -1941,6 +1943,9 @@ mod tests {
                 endpoint: "http://127.0.0.1:8317".into(),
                 key: Some(herder_protocol::SecretValue::new("cpa_client_key").unwrap()),
                 key_secret: None,
+            },
+            CommandBody::RemoveAccount {
+                account_id: herder_protocol::AccountId::new("work"),
             },
         ];
         for command in commands {

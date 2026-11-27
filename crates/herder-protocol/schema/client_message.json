@@ -1537,6 +1537,24 @@
           ]
         },
         {
+          "description": "Remove an account from this daemon: drop it from the daemon's config and its account\nlist; owners only. Its config dir stays on disk as it is: herder never reads, moves or\ndeletes a provider's login. Answered with `applied` and `accounts`. Refused with\n`forbidden` for members, `bad_request` for an unknown account or one of the hub's\nlogins, which leaves when its login is removed on the hub, and `conflict`, naming\nthem, while unarchived sessions run on it or while a project, a bot or the titles\nname it in the config.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "Account to remove.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_account"
+            }
+          },
+          "required": [
+            "type",
+            "account_id"
+          ]
+        },
+        {
           "description": "Install or update a provider's CLI on this host, in a terminal this connection is\nattached to; owners only. The command is the vendor's documented installer or updater.\nRefused with `forbidden` for members, `unsupported` when this OS has no recipe, and\n`bad_request` for a provider herder cannot run.",
           "type": "object",
           "properties": {

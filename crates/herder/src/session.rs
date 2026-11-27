@@ -177,6 +177,21 @@ pub fn run(args: Args) -> Result<ExitCode> {
         },
         _ => None,
     };
+    connected(args.machine.as_deref(), args.json, |cli| async move {
+        cli.run(args.command, prompt).await
+    })
+}
+
+/// Runs `then` with a client of the paired machine `machine`, by name or host id, or the only
+/// one paired, once it holds the machine's session and account lists.
+pub(crate) fn connected<T, F>(
+    machine: Option<&str>,
+    json: bool,
+    then: impl FnOnce(Cli) -> F,
+) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
     let config_dir = herder_tui::config_dir()?
         .into_os_string()
         .into_string()
@@ -187,13 +202,14 @@ pub fn run(args: Args) -> Result<ExitCode> {
             config_dir,
             format!("herder-cli/{}", env!("CARGO_PKG_VERSION")),
         )?;
-        let machine = pick(&client.machines(), args.machine.as_deref())?;
+        let machine = pick(&client.machines(), machine)?;
         let cli = Cli {
             client,
             machine,
-            json: args.json,
+            json,
         };
-        cli.run(args.command, prompt).await
+        cli.sync().await?;
+        then(cli).await
     })
 }
 
@@ -236,15 +252,15 @@ fn pick(machines: &[Machine], wanted: Option<&str>) -> Result<Machine> {
     }
 }
 
-struct Cli {
+/// A client of one paired machine, as the CLI's commands drive it.
+pub(crate) struct Cli {
     client: Client,
-    machine: Machine,
+    pub(crate) machine: Machine,
     json: bool,
 }
 
 impl Cli {
     async fn run(&self, command: Command, prompt: Option<String>) -> Result<ExitCode> {
-        self.sync().await?;
         match command {
             Command::New {
                 repo,
@@ -451,7 +467,7 @@ impl Cli {
 
     /// The account named `wanted`, by id or label, or the machine's only one; `None` leaves
     /// the choice to the project's default account.
-    fn account(&self, wanted: Option<&str>) -> Result<Option<AccountId>> {
+    pub(crate) fn account(&self, wanted: Option<&str>) -> Result<Option<AccountId>> {
         let accounts = self.current().map(|m| m.accounts).unwrap_or_default();
         let names = accounts
             .iter()
@@ -472,7 +488,7 @@ impl Cli {
         }
     }
 
-    async fn send(&self, command: CommandBody) -> Result<CommandResult> {
+    pub(crate) async fn send(&self, command: CommandBody) -> Result<CommandResult> {
         Ok(self
             .client
             .send(self.machine.host_id.clone(), command)
@@ -597,7 +613,11 @@ impl Cli {
     }
 
     /// Prints `value` as JSON with `--json`, else the text `text` makes.
-    fn print<T: Serialize>(&self, value: &T, text: impl FnOnce() -> String) -> Result<()> {
+    pub(crate) fn print<T: Serialize>(
+        &self,
+        value: &T,
+        text: impl FnOnce() -> String,
+    ) -> Result<()> {
         if self.json {
             println!("{}", serde_json::to_string(value)?);
         } else {
