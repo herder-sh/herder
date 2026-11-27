@@ -1,0 +1,64 @@
+name: snap
+
+# Builds the Linux app's snap (snap/snapcraft.yaml) for amd64 and arm64 and uploads each as an
+# artifact. Runs on PRs that change the app, its packaging or its dependencies, apart from the
+# required ci check, and is called by release.yml on a tag.
+
+on:
+  pull_request:
+    paths:
+      - "linux/**"
+      - "snap/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - ".github/workflows/snap.yml"
+  workflow_call:
+
+concurrency:
+  group: snap-${{ github.workflow_ref }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  snap:
+    name: snap ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint the launcher
+        if: matrix.arch == 'amd64'
+        run: shellcheck linux/packaging/snap/shared-profile
+      - uses: snapcore/action-build@v1
+        id: build
+      - name: Check the snap holds the app, its desktop entry and icon
+        env:
+          SNAP_FILE: ${{ steps.build.outputs.snap }}
+        run: |
+          unsquashfs -l "$SNAP_FILE" | tee contents.txt
+          for path in bin/herder-gtk bin/shared-profile meta/gui/herder-gtk.desktop \
+            usr/share/icons/hicolor/scalable/apps/sh.herder.Herder.svg; do
+            grep -qx "squashfs-root/$path" contents.txt || { echo "::error::missing $path"; exit 1; }
+          done
+          unsquashfs -cat "$SNAP_FILE" meta/snap.yaml
+          unsquashfs -cat "$SNAP_FILE" meta/gui/herder-gtk.desktop
+          mkdir dist
+          mv "$SNAP_FILE" dist/
+          cd dist
+          sha256sum "$SNAP_FILE" > "$SNAP_FILE.sha256"
+          cat "$SNAP_FILE.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: herder-snap-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
