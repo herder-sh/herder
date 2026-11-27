@@ -156,10 +156,73 @@ a network plugin that enforces NetworkPolicy: k3s's does, unless started with
 ### A public hostname
 
 The hub can be the one thing you expose: apps and hosts reach it at a public hostname
-through a Cloudflare Tunnel, and reach every host through it (`docs/hub-relay.md`). The
-manifest already sets `tunnel = "0.0.0.0:7448"`, serves it as the Service
-`herder-hub-tunnel`, and lets only the `cloudflared` namespace connect to it. Add the
-hostname to your `cloudflared`'s ingress, ahead of its catch-all rule:
+through a Cloudflare Tunnel, and reach every host through it (`docs/hub-relay.md`).
+
+#### The managed tunnel
+
+The hub can make the tunnel and the hostname in your Cloudflare account itself, and run
+`cloudflared` for them in its own container, so there is nothing else to deploy
+(`docs/remote-access.md`). You need a zone on Cloudflare (`example.com`), the account's id
+(on its overview page in the dashboard), and an API token: **My Profile → API Tokens →
+Create Token → Create Custom Token**, with
+
+- Account · Cloudflare Tunnel · Edit
+- Zone · Zone · Read, and Zone · DNS · Edit, for the zone
+
+The hub keeps the token as one of its secrets, so it needs its secrets key
+(`HERDER_HUB_SECRETS_KEY`, see [Secrets](#secrets)). Then, in the pod:
+
+```sh
+kubectl exec -it -n herder herder-hub-0 -c hub -- /herder hub tunnel set-up \
+  --account-id <account id> --hostname hub.example.com
+```
+
+It asks for the token (or reads `CLOUDFLARE_API_TOKEN`) and puts it as the hub secret
+`cloudflare/CLOUDFLARE_API_TOKEN`; an owner can do the same from the apps, putting the
+token as a secret and choosing it in the hub's remote access settings
+(`set_remote_access`). For the zone the hostname is in, the hub creates a tunnel
+`herder-hub.example.com`, routes the hostname to its tunnel listener, points the hostname at
+the tunnel with a proxied CNAME, downloads the `cloudflared` release herder pins (checked
+against its SHA-256) onto its volume, and runs it with the tunnel's token, giving it nothing
+else of its environment. While it runs, the hub adds `wss://hub.example.com` to the
+addresses it names to devices, which pick it up when they next connect: nothing to add under
+**Public addresses**. The tunnel's token is kept in `/data/herder/cloudflare/tunnel.json`,
+readable by the hub only; neither token ever goes to a client.
+
+Each time the hub starts, it runs `cloudflared` at once and checks the tunnel with
+Cloudflare, making again whatever was deleted: the tunnel, its route, the DNS record. It
+tries again every five minutes while that fails, and says why in the hub's remote access
+status and in `herder hub tunnel status`. Run `set-up` again with another `--hostname` to
+move it (Enter keeps the token), and `remove` to stop `cloudflared` and delete the tunnel and
+the DNS record:
+
+```sh
+kubectl exec -n herder herder-hub-0 -c hub -- /herder hub tunnel status
+kubectl exec -n herder herder-hub-0 -c hub -- /herder hub tunnel remove
+```
+
+`set-up` refuses a hostname that already has a record of another kind; a CNAME to another
+tunnel, such as a hand-made one for the same hostname, it points at its own, so you can move
+from a hand-run `cloudflared` and then delete that one.
+
+Cloudflare Access in front of the hostname is yours to add, and never needed for security:
+every connection is authenticated by the hub inside the tunnel. Make a self-hosted Access
+application for the hostname with a Service Auth policy and a service token, then enter its
+two headers once on each device under **Proxy headers…** of the hub's `wss://` address
+(`docs/public-access.md`). A device behind Access signs in to the hub at another address
+first.
+
+The hub needs `tunnel` set (the manifest's `0.0.0.0:7448`; `cloudflared` in the pod reaches
+it on `127.0.0.1`), and egress to `api.cloudflare.com`, `github.com` (once, for the
+download) and Cloudflare's edge on port 7844. On a machine, set `tunnel = "127.0.0.1:7449"`
+in `hub.toml`, run `herder hub install` again, and use `herder hub tunnel --config
+~/.local/share/herder-hub/hub.toml set-up …`.
+
+#### Your own cloudflared
+
+The manifest also serves the tunnel listener as the Service `herder-hub-tunnel`, and lets
+only the `cloudflared` namespace connect to it. Add the hostname to your `cloudflared`'s
+ingress, ahead of its catch-all rule:
 
 ```yaml
 ingress:
@@ -175,8 +238,8 @@ Cloudflare relays ciphertext. Leave the hostname outside Cloudflare Access.
 On a machine, set `tunnel = "127.0.0.1:7448"` in the hub's `daemon.toml` and point the
 machine's own `cloudflared` at it, as for a daemon (`docs/public-access.md`).
 
-Then add `https://hub.example.com` once under **Public addresses** on the hub's page in the
-app (or `public_addresses = ["wss://hub.example.com"]` in the hub's config): every device
+With your own `cloudflared`, add `https://hub.example.com` once under **Public addresses**
+on the hub's page in the app (or `public_addresses = ["wss://hub.example.com"]` in the hub's config): every device
 picks it up when it next connects. A port forward or a TCP proxy works as well as a tunnel
 (`docs/public-access.md`). A host that is not
 always on the hub's network, a laptop for one, sets `address = "wss://hub.example.com"`

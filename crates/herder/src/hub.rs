@@ -11,6 +11,7 @@ use herder_daemon::auth::control::{self, Request, Response};
 use herder_daemon::hub::install::cliproxyapi::{self, Proxy, Tls};
 use herder_daemon::hub::install::{self as hub_install, LocalHub};
 use herder_daemon::service::{self, Service};
+use herder_protocol::{RouteState, SecretValue};
 
 use crate::pair;
 
@@ -44,6 +45,37 @@ pub enum Command {
         #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
         config: Option<PathBuf>,
     },
+    /// Reach the hub from anywhere at a hostname of yours through a Cloudflare Tunnel that
+    /// herder creates, and runs cloudflared for, itself.
+    Tunnel {
+        #[command(subcommand)]
+        command: TunnelCommand,
+        /// Hub config file, to find its data dir [default: $XDG_CONFIG_HOME/herder/daemon.toml].
+        #[arg(long, value_name = "PATH", env = "HERDER_CONFIG", global = true)]
+        config: Option<PathBuf>,
+    },
+}
+
+/// `herder hub tunnel`.
+#[derive(clap::Subcommand)]
+pub enum TunnelCommand {
+    /// Create the tunnel and the hostname in Cloudflare, and run cloudflared for them; run
+    /// again to change the hostname or the token. Asks for a Cloudflare API token, kept as a
+    /// hub secret, unless CLOUDFLARE_API_TOKEN holds one; Enter keeps the one given before.
+    SetUp {
+        /// The hostname to reach the hub at, in a zone of the account, such as
+        /// hub.example.com.
+        #[arg(long)]
+        hostname: String,
+        /// The Cloudflare account id, from the account's overview in the dashboard. Only the
+        /// first time, or to change it.
+        #[arg(long, value_name = "ID")]
+        account_id: Option<String>,
+    },
+    /// Stop cloudflared and delete the tunnel and the hostname's DNS record.
+    Remove,
+    /// Show the tunnel and whether it is up.
+    Status,
 }
 
 /// How `herder hub install` sets up the CLIProxyAPI next to the hub. Pass the same flags
@@ -106,6 +138,7 @@ pub fn run(command: Command) -> Result<()> {
         Command::Install { port, cliproxyapi } => install(port, cliproxyapi.proxy()?),
         Command::Uninstall { purge } => uninstall(purge),
         Command::ForgetHost { host, config } => forget_host(host, config),
+        Command::Tunnel { command, config } => tunnel(command, config),
     }
 }
 
@@ -202,4 +235,83 @@ fn forget_host(host: String, config: Option<PathBuf>) -> Result<()> {
         Response::Error { message } => bail!("{message}"),
         _ => bail!("the hub sent an unexpected answer"),
     }
+}
+
+/// `herder hub tunnel`: asks the running hub, which talks to Cloudflare and runs cloudflared,
+/// and waits for it to finish.
+fn tunnel(command: TunnelCommand, config: Option<PathBuf>) -> Result<()> {
+    let config = herder_daemon::Config::load(config.as_deref())?;
+    let (request, removing) = match command {
+        TunnelCommand::SetUp {
+            hostname,
+            account_id,
+        } => (
+            Request::TunnelSetUp {
+                account_id,
+                hostname,
+                api_token: api_token()?,
+            },
+            false,
+        ),
+        TunnelCommand::Remove => (Request::TunnelRemove, true),
+        TunnelCommand::Status => (Request::TunnelStatus, false),
+    };
+    let mut answer = control::request(&config.data_dir, &request)?;
+    // The hub works in the background; a set-up takes a dozen calls to Cloudflare.
+    for _ in 0..180 {
+        match &answer {
+            Response::Tunnel {
+                tunnel: Some(status),
+            } if status.state == RouteState::SettingUp => {}
+            Response::Tunnel { tunnel: Some(_) } if removing => {}
+            _ => break,
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        answer = control::request(&config.data_dir, &Request::TunnelStatus)?;
+    }
+    match answer {
+        Response::Tunnel { tunnel: None } => {
+            println!("this hub has no managed tunnel");
+            Ok(())
+        }
+        Response::Tunnel {
+            tunnel: Some(status),
+        } => {
+            let url = status.url.replacen("wss://", "https://", 1);
+            match status.state {
+                RouteState::Up => {
+                    println!(
+                        "the hub is reached at {url}; devices get it with their next connection"
+                    );
+                }
+                RouteState::SettingUp => println!("the hub is still setting up {url}"),
+                RouteState::Failed => bail!(
+                    "{url} is not up: {}",
+                    status.error.as_deref().unwrap_or("no reason given")
+                ),
+            }
+            Ok(())
+        }
+        Response::Error { message } => bail!("{message}"),
+        _ => bail!("the hub sent an unexpected answer"),
+    }
+}
+
+/// The Cloudflare API token to give the hub: `CLOUDFLARE_API_TOKEN`, else asked for; `None`
+/// keeps the one the hub holds.
+fn api_token() -> Result<Option<SecretValue>> {
+    use std::io::{BufRead, IsTerminal};
+
+    let token = match std::env::var("CLOUDFLARE_API_TOKEN") {
+        Ok(token) => token,
+        Err(_) if std::io::stdin().is_terminal() => rpassword::prompt_password(
+            "Cloudflare API token (Enter keeps the one the hub holds): ",
+        )?,
+        Err(_) => {
+            let mut line = String::new();
+            std::io::stdin().lock().read_line(&mut line)?;
+            line
+        }
+    };
+    Ok(SecretValue::new(token.trim().to_owned()))
 }

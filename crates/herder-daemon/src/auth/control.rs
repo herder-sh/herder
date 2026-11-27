@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use herder_protocol::{DeviceId, Role, Timestamp, UserInfo};
+use herder_protocol::{DeviceId, Role, RouteStatus, SecretValue, Timestamp, UserInfo};
 use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::{Auth, DeviceRole, PAIRING_TTL, Pairing};
+use crate::hub::remote_access::RemoteAccessHub;
 use crate::hub::{Admin, Forgot};
 use crate::settings::PublicAddresses;
 
@@ -64,6 +65,19 @@ pub enum Request {
     /// Open the window in which a daemon takes a new owner though it has owners (`herder
     /// claim`), for someone who lost every device.
     Claim,
+    /// Set the hub's managed Cloudflare Tunnel up, or change it (`herder hub tunnel set-up`).
+    TunnelSetUp {
+        /// The Cloudflare account; the one set before, if not given.
+        account_id: Option<String>,
+        /// The hostname.
+        hostname: String,
+        /// The API token, put as a hub secret; the one named before, if not given.
+        api_token: Option<SecretValue>,
+    },
+    /// Delete the hub's managed tunnel (`herder hub tunnel remove`).
+    TunnelRemove,
+    /// Show the hub's managed tunnel (`herder hub tunnel status`).
+    TunnelStatus,
 }
 
 /// The daemon's answer.
@@ -90,6 +104,11 @@ pub enum Response {
     ForgotHost(Forgot),
     /// The window for a first owner is open.
     Own(OwnInfo),
+    /// The hub's managed tunnel as it is now.
+    Tunnel {
+        /// `None` when there is none.
+        tunnel: Option<RouteStatus>,
+    },
     /// The request failed.
     Error {
         /// Why.
@@ -141,6 +160,8 @@ pub struct Daemon {
     /// What it holds, when it is a hub: the only daemon hosts pair with, and that forgets
     /// them.
     pub hub: Option<Admin>,
+    /// How a hub is reached from outside.
+    pub remote_access: Option<Arc<RemoteAccessHub>>,
 }
 
 impl Daemon {
@@ -264,6 +285,39 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
             None => Response::Error {
                 message: "only a hub forgets hosts; run this on the hub".to_owned(),
             },
+        },
+        request @ (Request::TunnelSetUp { .. } | Request::TunnelRemove | Request::TunnelStatus) => {
+            match &daemon.remote_access {
+                Some(remote_access) => tunnel_request(remote_access, request).await,
+                None => Response::Error {
+                    message: "only a hub runs a managed tunnel; run this on the hub".to_owned(),
+                },
+            }
+        }
+    }
+}
+
+/// Answers a request about the hub's managed tunnel, through its `remote_access`.
+async fn tunnel_request(remote_access: &RemoteAccessHub, request: Request) -> Response {
+    let answer = match request {
+        Request::TunnelSetUp {
+            account_id,
+            hostname,
+            api_token,
+        } => {
+            remote_access
+                .set_tunnel(account_id, Some(hostname), api_token)
+                .await
+        }
+        Request::TunnelRemove => remote_access.set_tunnel(None, None, None).await,
+        _ => Ok(remote_access.get(true).await),
+    };
+    match answer {
+        Ok(access) => Response::Tunnel {
+            tunnel: access.tunnel,
+        },
+        Err(err) => Response::Error {
+            message: err.message,
         },
     }
 }
@@ -475,6 +529,7 @@ mod tests {
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
             public: Arc::default(),
             hub: None,
+            remote_access: None,
         };
         let shutdown = CancellationToken::new();
         let server = tokio::spawn(serve(listener, auth, daemon, shutdown.clone()));
@@ -519,6 +574,7 @@ mod tests {
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
             public: Arc::default(),
             hub: None,
+            remote_access: None,
         };
         auth.legacy_user("alice", Role::Owner, "fp-a");
         let Response::Error { message } = handle(Request::Own, &auth, &daemon).await else {
@@ -543,6 +599,7 @@ mod tests {
             listen: vec!["192.0.2.10:7447".parse().unwrap()],
             public: Arc::new(public),
             hub: None,
+            remote_access: None,
         };
         let Response::Own(info) = handle(Request::Own, &auth, &daemon).await else {
             panic!("a daemon with no owner opens the window");
@@ -564,6 +621,7 @@ mod tests {
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
             public: Arc::default(),
             hub: Some(hub_admin(tmp.path(), &auth)),
+            remote_access: None,
         };
         let pair_host = Request::PairHost {
             host: "devbox".into(),
@@ -621,6 +679,7 @@ mod tests {
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
             public: Arc::default(),
             hub: None,
+            remote_access: None,
         };
         let forget = || Request::ForgetHost {
             host: "devbox".into(),
