@@ -237,6 +237,20 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                             let _ = tx.send(Msg::Notice(format!("forgetting: {err}")));
                         }
                     }
+                    Effect::SetRoute {
+                        host_id,
+                        address,
+                        choice,
+                    } => {
+                        if let Err(err) = client.set_route(host_id, address, choice) {
+                            let _ = tx.send(Msg::Notice(format!("routes: {err}")));
+                        }
+                    }
+                    Effect::SetAddresses { host_id, addresses } => {
+                        if let Err(err) = client.set_addresses(host_id, addresses) {
+                            let _ = tx.send(Msg::Notice(format!("routes: {err}")));
+                        }
+                    }
                     Effect::AttachTerminal { host_id, target } => attach = Some((host_id, target)),
                     Effect::Mouse(on) => modes.mouse = mouse::report(on).is_ok() && on,
                     Effect::Save => {
