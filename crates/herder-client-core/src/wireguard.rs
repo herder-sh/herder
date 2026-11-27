@@ -12,10 +12,17 @@
 //! Configs are kept in `<config_dir>/wireguard.json`, private to the user as the device keys
 //! are ([`crate::profile`]). The private key never leaves this device.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::net::IpAddr;
-use std::path::Path;
+use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use anyhow::{Context as _, anyhow};
+use herder_wireguard::{Key, TcpStream, Tunnel, TunnelConfig};
+use tokio::time::Instant;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -286,6 +293,147 @@ pub(crate) fn update<T>(
     Ok(changed)
 }
 
+/// How long a tunnel no connection uses stays up: long enough for a reconnect to find it.
+const IDLE: Duration = Duration::from_secs(30);
+
+/// The tunnels up now, opened by the first connection through each and closed once none has
+/// used it for [`IDLE`]: nothing of a tunnel runs while no route through it is in use.
+pub(crate) struct Tunnels {
+    config_dir: PathBuf,
+    up: Mutex<HashMap<String, Up>>,
+}
+
+struct Up {
+    tunnel: Arc<Tunnel>,
+    /// The config it was opened with: one imported again since opens it afresh.
+    config: Imported,
+    /// Since when no connection used it.
+    idle_since: Option<Instant>,
+}
+
+impl Tunnels {
+    /// The tunnels of the configs imported in `config_dir`.
+    pub(crate) fn new(config_dir: PathBuf) -> Self {
+        Self {
+            config_dir,
+            up: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Up>> {
+        // Every change leaves the map whole.
+        self.up.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A connection to `address`, `host:port`, through the imported tunnel `id`, which is
+    /// opened if it is not up.
+    pub(crate) async fn connect(&self, id: &str, address: &str) -> anyhow::Result<TcpStream> {
+        let config = load(&self.config_dir)
+            .map_err(|err| anyhow!("{err}"))?
+            .into_iter()
+            .find(|tunnel| tunnel.id == id)
+            .with_context(|| format!("no WireGuard tunnel {id} is imported on this device"))?;
+        let remote: SocketAddr = address
+            .parse()
+            .with_context(|| format!("{address} is not an IP address and port"))?;
+        let held = {
+            let up = self.lock();
+            up.get(id)
+                .filter(|held| held.config == config)
+                .map(|held| Arc::clone(&held.tunnel))
+        };
+        let tunnel = match held {
+            Some(tunnel) => tunnel,
+            None => {
+                let tunnel = Arc::new(Tunnel::open(tunnel_config(&config)?).await.with_context(
+                    || format!("opening the WireGuard tunnel to {}", config.endpoint),
+                )?);
+                let mut up = self.lock();
+                // Another connection may have opened it meanwhile: the first one stays.
+                let held = up
+                    .entry(id.to_owned())
+                    .and_modify(|held| {
+                        if held.config != config {
+                            held.tunnel = Arc::clone(&tunnel);
+                            held.config = config.clone();
+                        }
+                    })
+                    .or_insert_with(|| Up {
+                        tunnel: Arc::clone(&tunnel),
+                        config: config.clone(),
+                        idle_since: None,
+                    });
+                Arc::clone(&held.tunnel)
+            }
+        };
+        let stream = tunnel.connect(remote).await;
+        if let Some(held) = self.lock().get_mut(id) {
+            held.idle_since = None;
+        }
+        Ok(stream?)
+    }
+
+    /// Closes each tunnel no connection has used for [`IDLE`].
+    pub(crate) fn close_idle(&self) {
+        let now = Instant::now();
+        self.lock().retain(|_, held| {
+            if held.tunnel.connections() > 0 {
+                held.idle_since = None;
+                return true;
+            }
+            let since = *held.idle_since.get_or_insert(now);
+            now.duration_since(since) < IDLE
+        });
+    }
+
+    /// Whether the tunnel `id` is up.
+    pub(crate) fn is_up(&self, id: &str) -> bool {
+        self.lock().contains_key(id)
+    }
+}
+
+/// What `herder-wireguard` opens a tunnel with, from an imported config.
+fn tunnel_config(config: &Imported) -> anyhow::Result<TunnelConfig> {
+    let key = |text: &str| text.parse::<Key>().map_err(|err| anyhow!(err));
+    let addresses = config
+        .addresses
+        .iter()
+        .map(|cidr| parse_cidr(cidr).with_context(|| format!("{cidr} is not CIDR")))
+        .collect::<anyhow::Result<_>>()?;
+    Ok(TunnelConfig {
+        private_key: key(&config.private_key)?,
+        peer_public_key: key(&config.peer_public_key)?,
+        preshared_key: config.preshared_key.as_deref().map(key).transpose()?,
+        endpoint: config.endpoint.clone(),
+        addresses,
+    })
+}
+
+/// `cidr`, as saved: `ip/prefix`.
+pub(crate) fn parse_cidr(cidr: &str) -> Option<(IpAddr, u8)> {
+    let (ip, prefix) = cidr.split_once('/')?;
+    Some((ip.parse().ok()?, prefix.parse().ok()?))
+}
+
+/// Whether `ip` is inside `cidr`, as saved.
+pub(crate) fn covers(cidr: &str, ip: IpAddr) -> bool {
+    let Some((net, prefix)) = parse_cidr(cidr) else {
+        return false;
+    };
+    let (net, ip, bits) = match (net, ip) {
+        (IpAddr::V4(net), IpAddr::V4(ip)) => (
+            u128::from(u32::from(net)) << 96,
+            u128::from(u32::from(ip)) << 96,
+            32,
+        ),
+        (IpAddr::V6(net), IpAddr::V6(ip)) => (u128::from(net), u128::from(ip), 128),
+        _ => return false,
+    };
+    let prefix = u32::from(prefix.min(bits));
+    let mask = u128::MAX.checked_shl(128 - prefix).unwrap_or(0);
+    net & mask == ip & mask
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
@@ -347,6 +495,19 @@ PersistentKeepalive = 25
             refused("home", &UNIFI.replace("192.168.3.2/32", "192.168.3.2/33")).contains("prefix")
         );
         assert!(refused("home", "PrivateKey = x").contains("before [Interface]"));
+    }
+
+    #[test]
+    fn cidrs_cover_their_addresses() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        assert!(covers("192.168.1.0/24", ip("192.168.1.5")));
+        assert!(!covers("192.168.1.0/24", ip("192.168.2.5")));
+        assert!(covers("0.0.0.0/0", ip("10.0.0.1")));
+        assert!(!covers("0.0.0.0/0", ip("fd00::1")));
+        assert!(covers("::/0", ip("fd00::1")));
+        assert!(covers("10.0.0.7/32", ip("10.0.0.7")));
+        assert!(!covers("10.0.0.7/32", ip("10.0.0.8")));
+        assert!(covers("fd00::/8", ip("fd12::1")));
     }
 
     #[test]

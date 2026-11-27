@@ -60,6 +60,18 @@ pub(crate) fn normalize(text: &str) -> Result<String, String> {
         }
         return Ok(text.to_owned());
     }
+    if let Some(rest) = text.strip_prefix(WIREGUARD) {
+        let invalid = || format!("{text} is not wg://<tunnel>/<host:port>");
+        let (tunnel, inner) = rest.split_once('/').ok_or_else(invalid)?;
+        let valid_tunnel = !tunnel.is_empty()
+            && tunnel
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !valid_tunnel || inner.contains("://") {
+            return Err(invalid());
+        }
+        return Ok(through_tunnel(tunnel, &normalize(inner)?));
+    }
     if text.contains("://") {
         return normalize_url(text);
     }
@@ -322,6 +334,55 @@ pub(crate) fn relay(address: &str) -> Option<String> {
     address
         .strip_prefix(RELAY_PLAIN)
         .map(|host| format!("ws://{host}"))
+}
+
+/// The address of the route to `address`, `host:port`, through the WireGuard tunnel
+/// `tunnel`.
+pub(crate) fn through_tunnel(tunnel: &str, address: &str) -> String {
+    format!("{WIREGUARD}{tunnel}/{address}")
+}
+
+/// Keeps `addresses`' routes through the imported WireGuard `tunnels` (each its id and
+/// `AllowedIPs`) in step with them: each home network address that is an IP inside a tunnel's
+/// `AllowedIPs` gets a route through that tunnel, after the home network addresses, and each
+/// route through an imported tunnel that no longer covers its address, or is gone, leaves.
+/// Whether anything changed.
+pub(crate) fn vpn_routes(addresses: &mut Vec<String>, tunnels: &[(String, Vec<String>)]) -> bool {
+    let mut wanted: Vec<String> = Vec::new();
+    for address in addresses.iter() {
+        if kind(address) != RouteKind::HomeNetwork {
+            continue;
+        }
+        let Ok(ip) = host(address).parse::<IpAddr>() else {
+            continue;
+        };
+        for (tunnel, allowed) in tunnels {
+            if allowed
+                .iter()
+                .any(|cidr| crate::wireguard::covers(cidr, ip))
+            {
+                wanted.push(through_tunnel(tunnel, address));
+            }
+        }
+    }
+    let count = addresses.len();
+    addresses.retain(|address| match wireguard(address) {
+        Some((tunnel, _)) if tunnel != crate::wireguard::HUB => wanted.contains(address),
+        _ => true,
+    });
+    let mut changed = addresses.len() != count;
+    for route in wanted {
+        if addresses.contains(&route) {
+            continue;
+        }
+        let at = addresses
+            .iter()
+            .rposition(|held| rank(held) <= rank(&route))
+            .map_or(0, |last| last + 1);
+        addresses.insert(at, route);
+        changed = true;
+    }
+    changed
 }
 
 /// The tunnel and the `host:port` inside it, for the address of a route through a WireGuard
@@ -595,6 +656,48 @@ mod tests {
             kind("relay+ws://127.0.0.1:8787"),
             RouteKind::CloudflareRelay
         );
+    }
+
+    #[test]
+    fn routes_through_an_imported_tunnel_follow_its_allowed_ips() {
+        let strings = |all: &[&str]| all.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        let mut addresses = strings(&[
+            "192.168.1.5:7447",
+            "box.local:7447",
+            "10.9.0.5:7447",
+            "100.101.102.103:7447",
+            "hub://h",
+        ]);
+        let home = ("home".to_owned(), strings(&["192.168.1.0/24"]));
+        assert!(vpn_routes(&mut addresses, std::slice::from_ref(&home)));
+        assert_eq!(
+            addresses,
+            [
+                "192.168.1.5:7447",
+                "box.local:7447",
+                "10.9.0.5:7447",
+                "wg://home/192.168.1.5:7447",
+                "100.101.102.103:7447",
+                "hub://h",
+            ]
+        );
+        assert!(!vpn_routes(&mut addresses, std::slice::from_ref(&home)));
+        // Gone, its routes go; a hub's own WireGuard route stays.
+        addresses.push("wg://hub/10.247.0.1:7447".into());
+        assert!(vpn_routes(&mut addresses, &[]));
+        assert!(!addresses.iter().any(|a| a.starts_with("wg://home/")));
+        assert!(addresses.contains(&"wg://hub/10.247.0.1:7447".to_owned()));
+    }
+
+    #[test]
+    fn a_wireguard_route_is_normalized_inside() {
+        assert_eq!(
+            normalize(" wg://home/192.168.1.5 ").unwrap(),
+            "wg://home/192.168.1.5:7447"
+        );
+        assert!(normalize("wg://Home/192.168.1.5").is_err());
+        assert!(normalize("wg://home").is_err());
+        assert!(normalize("wg://home/wss://box.example.com").is_err());
     }
 
     #[test]

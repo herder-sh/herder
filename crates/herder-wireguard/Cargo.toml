@@ -1,0 +1,22 @@
+[package]
+name = "herder-wireguard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+boringtun.workspace = true
+ring.workspace = true
+smoltcp.workspace = true
+tokio = { workspace = true, features = ["net", "sync", "time"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "test-util"] }

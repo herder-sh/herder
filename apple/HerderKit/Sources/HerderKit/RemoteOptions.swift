@@ -366,3 +366,10 @@ extension Fleet {
             value: token.trimmingCharacters(in: .whitespacesAndNewlines), assertion: nil))
     }
 }
+
+/// Whether `text`, such as a scanned QR code's, is a WireGuard config: a router's QR code for
+/// a peer holds the `wg-quick` text itself.
+func isWireGuardConfig(_ text: String) -> Bool {
+    let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+    return lines.contains("[interface]") && lines.contains("[peer]")
+}

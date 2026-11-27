@@ -26,6 +26,15 @@ func homeTunnel(up: Bool = false) -> RemoteOptions.Tunnel {
 @MainActor struct RemoteOptionsTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    /// A router's QR code for a peer holds the config's text; anything else scanned is not one.
+    @Test func aScannedWireGuardConfigIsTold() {
+        let config = "[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nAddress = 192.168.3.2/32\n\n"
+            + "[Peer]\r\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nEndpoint = home.example.net:51820\n"
+        #expect(isWireGuardConfig(config))
+        #expect(!isWireGuardConfig("herder://fleet?m=box"))
+        #expect(!isWireGuardConfig("[Interface]\nPrivateKey = x"))
+    }
+
     /// With nothing of herder's set up, each option says so, and offers its set-up to an owner
     /// only; the Hub tab's row reads as before.
     @Test func nothingSetUpIsQuiet() {

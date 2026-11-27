@@ -492,6 +492,8 @@ struct Inner {
     authenticator: Option<Arc<dyn Authenticator>>,
     machines: Arc<Mutex<Vec<Arc<Supervisor>>>>,
     library: Arc<skills::Library>,
+    /// The WireGuard tunnels up now.
+    tunnels: Arc<wireguard::Tunnels>,
     changed: Arc<watch::Sender<u64>>,
     stop: CancellationToken,
     /// Whether this is a demo ([`Client::open_demo`]): no profile, nothing sent.
@@ -546,6 +548,7 @@ impl Client {
         let stop = CancellationToken::new();
         // Each machine is given the list, to reach another through: a hub relays to it.
         let machines = Arc::new(Mutex::new(Vec::new()));
+        let tunnels = Arc::new(wireguard::Tunnels::new(config_dir.clone()));
         let started = saved
             .into_iter()
             .map(|saved| {
@@ -557,6 +560,7 @@ impl Client {
                     Arc::clone(&changed),
                     stop.child_token(),
                     Arc::downgrade(&machines),
+                    Arc::clone(&tunnels),
                 )
             })
             .collect::<Result<_, _>>()?;
@@ -574,6 +578,7 @@ impl Client {
             authenticator,
             machines,
             library,
+            tunnels,
             changed,
             stop,
             demo: false,
@@ -606,6 +611,7 @@ impl Client {
                 authenticator: None,
                 machines: Arc::new(Mutex::new(machines)),
                 library: Arc::default(),
+                tunnels: Arc::new(wireguard::Tunnels::new(PathBuf::new())),
                 changed,
                 stop,
                 demo: true,
@@ -697,12 +703,14 @@ impl Client {
                 let hosts: Vec<String> = saved
                     .addresses
                     .into_iter()
-                    // A route through a hub, or its Cloudflare relay, is this client's own: the
-                    // device that takes the link gets its own once it is signed in to the hub.
+                    // A route through a hub, its Cloudflare relay or a WireGuard tunnel is this
+                    // client's own: the device that takes the link gets its own once it is
+                    // signed in to the hub.
                     .filter(|host| {
                         !address::is_loopback(host)
                             && address::hub(host).is_none()
                             && address::relay(host).is_none()
+                            && address::wireguard(host).is_none()
                     })
                     .collect();
                 (!hosts.is_empty()).then_some(FleetMachine {
@@ -926,7 +934,10 @@ impl Client {
     pub fn wireguard_tunnels(&self) -> Result<Vec<WireGuardTunnel>, Error> {
         Ok(wireguard::load(&self.inner.config_dir)?
             .iter()
-            .map(|tunnel| tunnel.view(false))
+            .map(|tunnel| {
+                let up = self.inner.tunnels.is_up(&tunnel.id);
+                tunnel.view(up)
+            })
             .collect())
     }
 
@@ -1542,6 +1553,40 @@ impl Inner {
         }
     }
 
+    /// Keeps each machine's routes through the imported WireGuard tunnels in step with them
+    /// ([`address::vpn_routes`]).
+    fn keep_vpn_routes(&self, machines: &mut Vec<Arc<Supervisor>>) {
+        let tunnels: Vec<(String, Vec<String>)> = match wireguard::load(&self.config_dir) {
+            Ok(tunnels) => tunnels
+                .into_iter()
+                .map(|tunnel| (tunnel.id, tunnel.allowed_ips))
+                .collect(),
+            Err(err) => {
+                warn!("reading the WireGuard tunnels: {err}");
+                return;
+            }
+        };
+        let stale = machines.iter().any(|machine| {
+            let mut addresses = machine.saved().addresses;
+            address::vpn_routes(&mut addresses, &tunnels)
+        });
+        if !stale {
+            return;
+        }
+        let kept = self.update(machines, |all| {
+            for machine in all.iter_mut() {
+                if address::vpn_routes(&mut machine.addresses, &tunnels) {
+                    let kept = &machine.addresses;
+                    machine.routes.keep(kept);
+                }
+            }
+            Ok(())
+        });
+        if let Err(err) = kept {
+            warn!("saving the routes through a WireGuard tunnel: {err}");
+        }
+    }
+
     /// Saves where each machine's daemon said in its latest hello it is reached, when that
     /// changed: its addresses follow ([`address::follow`]), so a public address an owner set
     /// on the daemon is dialled here with nothing to type, and one removed is dropped.
@@ -1620,6 +1665,7 @@ impl Inner {
                 Arc::clone(&self.changed),
                 self.stop.child_token(),
                 Arc::downgrade(&self.machines),
+                Arc::clone(&self.tunnels),
             ) {
                 Ok(machine) => machines.push(machine),
                 Err(err) => warn!(machine = %name, "skipping a saved machine: {err}"),
@@ -1662,6 +1708,8 @@ async fn follow_profile(inner: Weak<Inner>, stop: CancellationToken) {
         inner.add_hub_routes(&mut machines);
         inner.add_relay_routes(&mut machines);
         inner.follow_advertised(&mut machines);
+        inner.keep_vpn_routes(&mut machines);
+        inner.tunnels.close_idle();
         renew_relay_tokens(&inner, &machines);
     }
 }

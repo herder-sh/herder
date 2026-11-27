@@ -103,6 +103,7 @@ use crate::profile::{Routes, SavedMachine};
 use crate::relay::Via;
 use crate::terminal::{TerminalEvent, TerminalStream};
 use crate::tunnel::{self, Io};
+use crate::wireguard::Tunnels;
 use crate::{ConnectionQuality, ConnectionState, Error, Machine, SessionUpdate, new_command_id};
 
 /// Time one address gets for TCP, TLS and the WebSocket upgrade.
@@ -337,6 +338,8 @@ pub(crate) struct Supervisor {
     demo: Option<Vec<DemoAnswer>>,
     /// The client's machines, among them the hub a `hub://` address goes through.
     machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
+    /// The client's WireGuard tunnels; none for a demo machine.
+    tunnels: Option<Arc<Tunnels>>,
 }
 
 #[derive(Default)]
@@ -592,6 +595,9 @@ impl Supervisor {
     /// Starts the task that keeps `saved` connected until `stop`. The task first reads what
     /// the offline cache in `config_dir` has for it, off the async runtime, and holds that
     /// until the daemon says otherwise.
+    // Each is a separate piece of the client the task needs; a struct to hold them would be
+    // built here and taken apart at once.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
         saved: SavedMachine,
         config_dir: PathBuf,
@@ -600,6 +606,7 @@ impl Supervisor {
         changed: Arc<watch::Sender<u64>>,
         stop: CancellationToken,
         machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
+        tunnels: Arc<Tunnels>,
     ) -> Result<Arc<Self>, Error> {
         let device = DeviceKey::from_pem(&saved.device_key).map_err(|err| Error::Local {
             message: format!("the device key of {}: {err:#}", saved.name),
@@ -626,6 +633,7 @@ impl Supervisor {
             loaded: watch::Sender::new(false),
             demo: None,
             machines,
+            tunnels: Some(tunnels),
         });
         tokio::spawn(run(Arc::clone(&supervisor), device, queue));
         Ok(supervisor)
@@ -705,6 +713,7 @@ impl Supervisor {
             loaded: watch::Sender::new(true),
             demo: Some(answers),
             machines: Weak::new(),
+            tunnels: None,
         })
     }
 
@@ -1324,7 +1333,12 @@ impl Supervisor {
     /// headers its tunnels' want.
     fn via(&self) -> Via {
         let headers = self.lock().headers.clone();
-        Via::new(self.saved.host_id.clone(), self.machines.clone(), headers)
+        Via::new(
+            self.saved.host_id.clone(),
+            self.machines.clone(),
+            headers,
+            self.tunnels.clone(),
+        )
     }
 
     /// Dials as `routes` say from the next connection on; dials again at once if it is not
@@ -2714,7 +2728,7 @@ async fn reach(address: &str, connector: &TlsConnector, via: &Via) -> anyhow::Re
                 let stream = via.relay_stream(address).await?;
                 upgrade(secure(Box::new(stream), connector).await?, None).await
             }
-            None => direct(address, via.headers(address), connector, None).await,
+            None => direct(address, via, connector, None).await,
         }
     };
     tokio::time::timeout(CONNECT_TIMEOUT, reaching)
@@ -2726,22 +2740,28 @@ async fn reach(address: &str, connector: &TlsConnector, via: &Via) -> anyhow::Re
 /// `headers`, up to its WebSocket upgrade, with the WebSocket configured as `config` says.
 pub(crate) async fn direct(
     address: &str,
-    headers: &tunnel::Sent,
+    via: &Via,
     connector: &TlsConnector,
     config: Option<WebSocketConfig>,
 ) -> anyhow::Result<Ws> {
-    upgrade(dial(address, headers, connector).await?, config).await
+    upgrade(dial(address, via, connector).await?, config).await
 }
 
-/// A connection to the daemon at `address`, its own or a tunnel's (sending `headers` on the
-/// tunnel's upgrade), up to its TLS, pinned through `connector`.
+/// A connection to the daemon at `address`, its own, a tunnel's (sending the headers `via`
+/// holds for it on the tunnel's upgrade) or through one of `via`'s WireGuard tunnels, up to
+/// its TLS, pinned through `connector`.
 pub(crate) async fn dial(
     address: &str,
-    headers: &tunnel::Sent,
+    via: &Via,
     connector: &TlsConnector,
 ) -> anyhow::Result<TlsStream<Watched>> {
-    let stream: Box<dyn Io> = if address::is_tunnel(address) {
-        Box::new(tunnel::open(address, headers).await?)
+    let stream: Box<dyn Io> = if let Some((tunnel, inner)) = address::wireguard(address) {
+        let tunnels = via
+            .tunnels()
+            .context("a machine is first signed in to at an address of its own")?;
+        Box::new(tunnels.connect(tunnel, inner).await?)
+    } else if address::is_tunnel(address) {
+        Box::new(tunnel::open(address, via.headers(address)).await?)
     } else {
         let tcp = TcpStream::connect(address).await.context("connecting")?;
         tcp.set_nodelay(true)?;

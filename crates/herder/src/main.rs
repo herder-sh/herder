@@ -11,6 +11,7 @@ mod secret;
 mod service;
 mod session;
 mod update;
+mod vpn;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -88,6 +89,11 @@ enum Command {
         #[arg(long)]
         allow_downgrade: bool,
     },
+    /// Reach your machines through your own WireGuard server, for herder only.
+    Vpn {
+        #[command(subcommand)]
+        command: vpn::Command,
+    },
     /// Tools for developing herder itself.
     Dev {
         #[command(subcommand)]
@@ -146,6 +152,7 @@ fn main() -> ExitCode {
             allow_downgrade,
         })
         .map(|()| ExitCode::SUCCESS),
+        Some(Command::Vpn { command }) => vpn::run(command).map(|()| ExitCode::SUCCESS),
         Some(Command::Dev { command }) => dev::run(command),
         Some(Command::Mcp { data_dir, session }) => {
             herder_daemon::mcp::run_shim(&data_dir, herder_protocol::SessionId::new(session))
