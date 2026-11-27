@@ -17,6 +17,7 @@ pub struct Event {
     /// Position in the session's journal, gap-free from 1.
     pub seq: Seq,
     /// When the daemon recorded the event.
+    #[schemars(with = "crate::TimestampSchema")]
     pub at: Timestamp,
     /// User whose command caused the event; absent when the agent or the daemon caused it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,6 +90,7 @@ pub enum EventBody {
         /// When a usage-limited turn is retried. Present only while waiting_for_capacity
         /// means waiting for an account's limit reset rather than host admission.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Option<crate::TimestampSchema>")]
         retry_at: Option<Timestamp>,
     },
     /// The agent started working on a prompt.
@@ -299,6 +301,7 @@ pub enum EventBody {
         url: Option<String>,
         /// When `url` stops working; absent when it never expires or there is no `url`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Option<crate::TimestampSchema>")]
         expires_at: Option<Timestamp>,
     },
     /// A chat thread was linked to the session, `by` the user who linked it; absent when a

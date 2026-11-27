@@ -60,6 +60,7 @@ pub struct SkillsStatus {
     pub head: Option<String>,
     /// When the daemon last pulled the library, successfully or not; absent until it tried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::TimestampSchema>")]
     pub last_pull: Option<Timestamp>,
     /// Why the last pull failed; absent when it succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]

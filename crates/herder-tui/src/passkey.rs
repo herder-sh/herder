@@ -860,6 +860,29 @@ mod tests {
     }
 
     #[test]
+    fn a_file_sealed_by_argon2_0_5_still_opens() {
+        // Written by herder 0.25, which stretched the passphrase with argon2 0.5.
+        let passkey: LocalPasskey = serde_json::from_str(
+            r#"{
+              "person_id": "0191f3a0-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+              "name": "alice",
+              "credential_id": "YfMIMQ_gxRmDx7PF0Mgf6Q",
+              "public_key": "pQECAyYgASFYIFg6UqnM41erWjVj2rjCej_w3G6XtSzXlQpRC8QUKV13IlggIQaUTnDKsJ3xJL5btkJnYo7-JVjZc8UCEgvAw4b1RaU",
+              "salt": "3Gd-1MTCPcPMSn9Ob8_3ag",
+              "nonce": "jaDBMjzA5w4tPwWe",
+              "sealed": "8SJ5U84wROdCE6k4M1y0U1y_i0RwkqdQbqnspHMfS4Y5tJ1-KKHF7KAsVTjRwtNxMx6CQxbzmRmNDCzl-vpMjJb6cDJHGqknKVB-dBuwuKFIRCi7kZgRt-uq7zq35n5IzRWgxd7Pn3sBn51vMbDlo8EBXc4FRHXz2RuZauJ-Da5UOeBfWL19xm2co-y79uw3nbkcD66ZFBqX9A"
+            }"#,
+        )
+        .unwrap();
+        let key = passkey.unlock("correct horse").unwrap().key;
+        assert_eq!(cose_key(&key), decode(&passkey.public_key).unwrap());
+        assert_eq!(
+            passkey.unlock("correct horsf").err().unwrap().to_string(),
+            "wrong passphrase"
+        );
+    }
+
+    #[test]
     fn the_file_holds_no_key_in_the_clear() {
         let dir = tempfile::tempdir().unwrap();
         let (passkey, _) = LocalPasskey::create(&creation(), "alice", "correct horse").unwrap();

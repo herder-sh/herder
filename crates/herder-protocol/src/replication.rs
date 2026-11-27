@@ -180,6 +180,7 @@ pub struct SessionSummary {
     /// Seq of the session's latest event on the host; the hub is caught up once it holds it.
     pub head_seq: Seq,
     /// `at` of the session's latest event.
+    #[schemars(with = "crate::TimestampSchema")]
     pub updated_at: Timestamp,
     /// The bot that started the session; absent when the apps or an agent did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -240,6 +241,7 @@ pub struct JournalRecord {
     /// Position in the session's journal, gap-free from 1.
     pub seq: Seq,
     /// When the host recorded the event.
+    #[schemars(with = "crate::TimestampSchema")]
     pub at: Timestamp,
     /// User whose command caused the event; absent when the agent or the daemon caused it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

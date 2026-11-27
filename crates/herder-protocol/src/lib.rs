@@ -107,6 +107,33 @@ pub type Seq = u64;
 /// Point in time on the wire, an RFC 3339 UTC timestamp.
 pub type Timestamp = jiff::Timestamp;
 
+/// Schema of a [`Timestamp`] field, named with `#[schemars(with = "TimestampSchema")]`.
+///
+/// schemars implements `JsonSchema` only for jiff 0.2, so this spells out the same inline
+/// schema it gives that `Timestamp`, keeping the published schema unchanged.
+pub struct TimestampSchema;
+
+impl schemars::JsonSchema for TimestampSchema {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Timestamp".into()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        "jiff::Timestamp".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "format": "date-time"
+        })
+    }
+}
+
 /// JSON Schema for every message a client sends.
 pub fn client_schema() -> schemars::Schema {
     schemars::schema_for!(ClientMessage)

@@ -48,6 +48,7 @@ pub struct ProviderLogin {
     pub state: ProviderLoginState,
     /// When a login in `cooling_down` is tried again, as far as the proxy knows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::TimestampSchema>")]
     pub until: Option<Timestamp>,
     /// What the proxy says about it, such as why it is cooling down or failing.
     #[serde(default, skip_serializing_if = "Option::is_none")]

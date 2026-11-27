@@ -181,6 +181,7 @@ pub enum BotState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BotError {
     /// When it happened.
+    #[schemars(with = "crate::TimestampSchema")]
     pub at: Timestamp,
     /// Human-readable detail.
     pub message: String,
@@ -251,6 +252,7 @@ pub struct BotFact {
     /// The fact: one line, at most [`MAX_BOT_FACT_CHARS`].
     pub text: String,
     /// When it was learned, or last changed.
+    #[schemars(with = "crate::TimestampSchema")]
     pub learned_at: Timestamp,
     /// The thread it was learned in; absent for one an owner set.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -3,7 +3,7 @@
 use herder_protocol::{Event, EventBody, HostId, PullRequest, SessionId, SessionStatus};
 use rusqlite::{Transaction, params};
 
-use crate::{Result, tag};
+use crate::{Result, SqlTime, tag};
 
 /// Applies `event` to the `sessions`, `session_prs`, `session_branches` and `session_threads`
 /// read models.
@@ -46,7 +46,7 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
                 task,
                 tag(&SessionStatus::Idle)?,
                 event.seq,
-                event.at,
+                SqlTime(event.at),
                 chat,
                 origin,
             ])?;
@@ -155,7 +155,7 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
         | EventBody::Unknown => {}
     }
     tx.prepare_cached("UPDATE sessions SET last_seq = ?2, updated_at = ?3 WHERE session_id = ?1")?
-        .execute(params![id, event.seq, event.at])?;
+        .execute(params![id, event.seq, SqlTime(event.at)])?;
     Ok(())
 }
 
