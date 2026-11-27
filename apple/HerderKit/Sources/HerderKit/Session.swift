@@ -170,6 +170,23 @@ struct SessionModel {
         return model
     }
 
+    /// The state the lists show of it, where its machine lists `head`: what is folded once it
+    /// has reached the listing, else the listing's status, as the TUI lists a session. Its
+    /// journal replays a page at a time, and nothing of it arrives before the first: half
+    /// folded, an archived session reads as it ran before it was archived, and would be
+    /// listed with the live ones. Archived, it has nothing open: the requests a page shows
+    /// were answered or voided further on.
+    func listed(as head: SessionHead) -> SessionModel {
+        guard !loaded || lastSeq < head.headSeq else { return self }
+        var model = self
+        model.status = head.status
+        if head.status == .archived {
+            model.approvals = []
+            model.questions = []
+        }
+        return model
+    }
+
     /// Takes from `kept`, the same journal folded as far, what only this device knows: the
     /// prompts it sent that the journal has yet to show, and a failure card closed here.
     mutating func keepLocal(of kept: SessionModel) {

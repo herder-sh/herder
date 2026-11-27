@@ -143,6 +143,40 @@ struct ListsTests {
         #expect(project.live[2].children == 2)
     }
 
+    /// A journal replays a page at a time, nothing of it before the first page: an archived
+    /// session stays in Archived while it does, as its machine lists it, though the page
+    /// folded so far shows it running and asking. Once folded as far as listed, the journal
+    /// says where it stands.
+    @Test func archivedSessionsStayArchivedWhileTheirJournalReplays() {
+        let unloaded = Script("01A")
+        var paged = Script("01B")
+        var caughtUp = Script("01C")
+        let ask = EventBody.questionAsked(questionId: "q", turnId: "t1", text: "Which?", choices: [], multiSelect: false,
+                                          routedTo: .user, reason: nil)
+        let sessions = [
+            paged.key: paged.model([
+                created(task: "First page"), .sessionStatusChanged(status: .running, retryAt: nil),
+                .turnStarted(turnId: "t1"), ask,
+            ]),
+            // Unarchived since it was listed: what is folded is newer than the listing.
+            caughtUp.key: caughtUp.model([created(task: "Brought back"), .sessionStatusChanged(status: .idle, retryAt: nil)]),
+        ]
+        var host = machine("host-a", name: "a", sessions: [unloaded.key.sessionId, paged.key.sessionId, caughtUp.key.sessionId])
+        for index in host.sessions.indices {
+            host.sessions[index].projectId = "github.com/acme/app"
+            host.sessions[index].status = .archived
+            host.sessions[index].headSeq = 20
+        }
+        host.sessions[2].headSeq = 1
+        let lists = Lists(machines: [host], sessions: sessions)
+        let project = lists.projects[0]
+        #expect(project.live.map(\.key) == [caughtUp.key])
+        #expect(Set(project.archived.map(\.key)) == [unloaded.key, paged.key])
+        #expect(project.archived.allSatisfy { $0.state == .archived })
+        // The question the first page asks was answered or voided further on.
+        #expect(lists.requests.isEmpty)
+    }
+
     @Test func archivingAParentKeepsItsChildrenUnderIt() {
         var parent = Script("01A")
         var child = Script("01B")
