@@ -1945,7 +1945,10 @@ impl Actor {
                         self.adapter = Some(adapter);
                         left_out = servers_left_out;
                     }
-                    Err(error) => {
+                    // The account's key could not be had from an unreachable hub, or its login
+                    // has yet to come from the hub: the prompt fails over as for an endpoint
+                    // that cannot be reached.
+                    Err(error) if error.class == ErrorClass::Unreachable => {
                         if let Err(err) = self.user_message(&turn_id, &original).await {
                             warn!("cannot journal prompt: {err:#}");
                             self.queue.push_front(original);
@@ -1957,13 +1960,20 @@ impl Actor {
                             turn_id: turn_id.clone(),
                         })
                         .await;
-                        // The account's key could not be had from an unreachable hub: the
-                        // prompt fails over as for an endpoint that cannot be reached.
-                        if error.class == ErrorClass::Unreachable {
-                            self.turn = Some(turn_id.clone());
-                            self.prompt = Some(original);
-                            return Box::pin(self.limit_reached(turn_id, error)).await;
-                        }
+                        self.turn = Some(turn_id.clone());
+                        self.prompt = Some(original);
+                        return Box::pin(self.limit_reached(turn_id, error)).await;
+                    }
+                    // The CLI cannot start, so the prompt never reached the agent: it stays
+                    // first in the queue, with every prompt behind it, until what stops the
+                    // CLI is put right. A prompt is never used up by a turn that could not run.
+                    Err(error) => {
+                        self.started.remove(&prompt_id);
+                        self.queue.push_front(original);
+                        self.log(EventBody::TurnStarted {
+                            turn_id: turn_id.clone(),
+                        })
+                        .await;
                         let summary = failed(&error);
                         self.log(EventBody::TurnFailed {
                             turn_id: turn_id.clone(),
@@ -1971,11 +1981,9 @@ impl Actor {
                         })
                         .await;
                         self.permit = None;
-                        if self.queue.is_empty() {
-                            self.set_status(SessionStatus::NeedsYou).await;
-                        }
+                        self.set_status(SessionStatus::NeedsYou).await;
                         self.report(turn_id, summary, false).await;
-                        continue;
+                        return;
                     }
                 }
             }
@@ -2186,7 +2194,7 @@ impl Actor {
         let account = self
             .inner
             .account(&session.account_id)
-            .ok_or_else(|| fatal(format!("account {} is not configured", session.account_id)))?;
+            .ok_or_else(|| self.inner.missing_account(&session.account_id))?;
         let account = self
             .inner
             .ready_to_start(&session.account_id, account)

@@ -2620,9 +2620,12 @@ impl Switching {
         let shutdown = CancellationToken::new();
         let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
         let repo = dir.join("app");
-        std::fs::create_dir(&repo).unwrap();
-        git(&repo, &["init", "--quiet", "--initial-branch=main"]);
-        git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "init"]);
+        // A manager opened again over `dir`, as after a restart, finds its repository there.
+        if !repo.exists() {
+            std::fs::create_dir(&repo).unwrap();
+            git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+            git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "init"]);
+        }
         Self {
             manager,
             repo,
@@ -4200,6 +4203,149 @@ async fn an_endpoint_key_the_hub_cannot_be_reached_for_fails_over_to_a_login_acc
         .unwrap();
     // Clients see which secret the key is, never a value.
     assert_eq!(hub.key_secret, Some("CLIPROXYAPI_KEY".parse().unwrap()));
+    daemon.shutdown.cancel();
+}
+
+/// The texts queued on `session_id`, in order, as the manager lists the session.
+async fn queued(daemon: &Switching, session_id: &SessionId) -> Vec<String> {
+    let heads = daemon.manager.sessions().await.unwrap();
+    let head = heads
+        .iter()
+        .find(|head| head.session_id == *session_id)
+        .unwrap();
+    head.queue
+        .iter()
+        .map(|prompt| prompt.text.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_prompt_whose_cli_cannot_start_stays_queued_with_those_behind_it_until_it_can() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failed_start_queue.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[("claude-login", Provider::Claude)],
+        Vec::new(),
+    )
+    .await;
+    // Its key is a hub secret on a host linked to no hub: its CLI cannot start.
+    let account = AccountConfig {
+        provider: Provider::Claude,
+        label: "Hub".into(),
+        config_dir: Some(dir.path().join("hub")),
+        fallback: false,
+        endpoint: Some(Endpoint {
+            url: "https://hub.example.com:8317".into(),
+            key: EndpointKey::Secret("CLIPROXYAPI_KEY".parse().unwrap()),
+        }),
+    };
+    assert!(daemon.manager.add_account(AccountId::new("hub"), account));
+    let session = daemon.create("hub").await;
+    daemon.send(&session, "First.").await;
+    daemon.settled(&session, SessionStatus::NeedsYou).await;
+    daemon.send(&session, "Second.").await;
+    daemon.settled(&session, SessionStatus::NeedsYou).await;
+
+    // Neither reached the agent, so neither is used up: both wait, in order.
+    assert_eq!(queued(&daemon, &session).await, ["First.", "Second."]);
+    assert!(claude.starts().is_empty());
+
+    // Once the session can run, both run, in order, once each.
+    assert_eq!(
+        daemon
+            .handle(switch_account(&session, "claude-login"))
+            .await,
+        Ok(CommandResult::Applied)
+    );
+    let journal = daemon.settled(&session, SessionStatus::Idle).await;
+    assert_eq!(
+        from_first_turn(&journal),
+        [
+            "-: status Running",
+            "-: turn_started turn-1",
+            "-: turn_failed turn-1 Fatal",
+            "-: status NeedsYou",
+            "-: status Running",
+            "-: turn_started turn-2",
+            "-: turn_failed turn-2 Fatal",
+            "-: status NeedsYou",
+            "alice: account_switched claude-login",
+            "-: status Running",
+            "alice: user turn-3 First.",
+            "-: turn_started turn-3",
+            "-: assistant turn-3 One.",
+            "-: turn_completed turn-3",
+            "alice: user turn-4 Second.",
+            "-: turn_started turn-4",
+            "-: assistant turn-4 Two.",
+            "-: turn_completed turn-4",
+            "-: status Idle",
+        ]
+    );
+    assert!(queued(&daemon, &session).await.is_empty());
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_hub_login_the_host_has_yet_to_have_from_its_hub_waits_and_retries_instead_of_failing() {
+    let dir = tempfile::tempdir().unwrap();
+    let login = "vault-claude-ada";
+    let daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, Scripted::new(&[]))],
+        &[(login, Provider::Claude)],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create(login).await;
+    daemon.shutdown.cancel();
+    drop(daemon);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Started again, linked to a hub that has yet to send its logins.
+    let claude = Scripted::new(&[]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[],
+        Vec::new(),
+    )
+    .await;
+    let secrets = Arc::new(herder_daemon::hub::HostSecrets::default());
+    secrets.set_linked(true);
+    daemon.manager.use_secrets(secrets).unwrap();
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let EventBody::SessionStatusChanged { retry_at, .. } = daemon
+        .until(|body| {
+            matches!(
+                body,
+                EventBody::SessionStatusChanged {
+                    status: SessionStatus::WaitingForCapacity,
+                    ..
+                }
+            )
+        })
+        .await
+    else {
+        unreachable!();
+    };
+    assert!(
+        retry_at.is_some(),
+        "it retries once the hub may have sent it"
+    );
+    let journal = daemon.manager.read_since(&session, 0, 1000).await.unwrap();
+    let failures: Vec<_> = journal
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::TurnFailed { error, .. } => Some(error.class),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(failures, [ErrorClass::Unreachable]);
+    assert!(claude.starts().is_empty());
     daemon.shutdown.cancel();
 }
 
