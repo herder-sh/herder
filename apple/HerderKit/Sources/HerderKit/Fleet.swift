@@ -644,7 +644,14 @@ public final class Fleet {
     /// Sends a command about a session; a refusal is kept to show with it.
     func send(_ command: CommandBody, about key: SessionKey) async {
         do {
-            _ = try await client.send(hostId: key.hostId, command: command)
+            // In a span of the app's while it shares diagnostics, which the client core's and
+            // the machine's join.
+            _ = try await AppSentry.traced(DiagnosticsSwitch.name(of: command)) { trace in
+                if let trace {
+                    return try await client.sendTraced(hostId: key.hostId, command: command, trace: trace)
+                }
+                return try await client.send(hostId: key.hostId, command: command)
+            }
             refusals[key] = nil
         } catch {
             refusals[key] = describe(error)

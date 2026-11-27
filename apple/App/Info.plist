@@ -13,6 +13,10 @@
 			</array>
 		</dict>
 	</array>
+	<key>HerderSentryDSN</key>
+	<string>$(HERDER_SENTRY_DSN)</string>
+	<key>HerderPostHogToken</key>
+	<string>$(HERDER_POSTHOG_TOKEN)</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

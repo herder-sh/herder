@@ -1,6 +1,13 @@
 # The iPhone app's App Store listing, which apple/scripts/app-store-listing.py uploads: the
 # copy (en-US), the categories, the age rating, the App Review notes, and the screenshots that
 # apple/scripts/listing-screenshots.py frames with their captions.
+#
+# App Privacy, which App Store Connect takes only in its web form (App Store Connect → the app
+# → App Privacy), as apple/App/PrivacyInfo.xcprivacy declares it: Data Collected, all "Not
+# Linked to You", none "Used to Track You", each for App Functionality and Analytics, and only
+# once the person turns on sharing diagnostics:
+# - Diagnostics → Crash Data, Performance Data, Other Diagnostic Data (Sentry).
+# - Usage Data → Product Interaction (PostHog: which features are used, and how often).
 
 app = "6819734090"
 platform = "IOS"

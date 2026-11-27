@@ -8,12 +8,16 @@
 # Needs what build-ffi.sh builds for that platform, XcodeGen, Xcode with its Metal toolchain,
 # and in the environment: APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH (the key's .p8
 # file) and BUILD_NUMBER, which must be higher than that of every earlier upload of the same
-# version.
+# version. The write-only keys the app shares diagnostics with once its person turns them on,
+# SENTRY_DSN_IOS or SENTRY_DSN_MACOS and POSTHOG_PROJECT_TOKEN, go into its Info.plist when set;
+# with SENTRY_AUTH_TOKEN and SENTRY_ORG, its dSYMs go to Sentry.
 set -euo pipefail
 
 case "${1:-}" in
-  ios) scheme=herder-iOS destination=iOS entitlements=apple/App/herder-iOS.entitlements ;;
-  macos) scheme=herder-macOS destination=macOS entitlements=apple/App/herder.entitlements ;;
+  ios) scheme=herder-iOS destination=iOS entitlements=apple/App/herder-iOS.entitlements
+    dsn=${SENTRY_DSN_IOS:-} ;;
+  macos) scheme=herder-macOS destination=macOS entitlements=apple/App/herder.entitlements
+    dsn=${SENTRY_DSN_MACOS:-} ;;
   *) echo "usage: upload-testflight.sh ios|macos" >&2; exit 64 ;;
 esac
 platform=$1
@@ -33,7 +37,8 @@ xcodebuild archive -quiet -skipPackagePluginValidation -project apple/herder.xco
   -scheme "$scheme" -configuration Release -destination "generic/platform=$destination" \
   -archivePath "$work/herder.xcarchive" COMPILER_INDEX_STORE_ENABLE=NO \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-  CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+  CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+  HERDER_SENTRY_DSN="$dsn" HERDER_POSTHOG_TOKEN="${POSTHOG_PROJECT_TOKEN:-}"
 # The export signs with the entitlements it finds in the archived app's signature, and an
 # unsigned app has none: without this ad-hoc signature carrying them, the app lacks
 # webcredentials:herder.sh and every passkey approval fails as "not associated with domain"
@@ -57,3 +62,4 @@ PLIST
 xcodebuild -exportArchive -archivePath "$work/herder.xcarchive" \
   -exportOptionsPlist "$work/ExportOptions.plist" -exportPath "$work/export" "${auth[@]}"
 echo "uploaded herder $version ($BUILD_NUMBER) for $platform to App Store Connect"
+apple/scripts/upload-dsyms.sh "$dsn" "$work/herder.xcarchive"
