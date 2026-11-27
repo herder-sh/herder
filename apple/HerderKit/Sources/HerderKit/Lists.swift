@@ -122,7 +122,7 @@ struct Lists: Equatable {
             for head in machine.sessions {
                 let key = SessionKey(hostId: machine.hostId, sessionId: head.sessionId)
                 if shadowed.contains(key) { continue }
-                var model = sessions[key] ?? SessionModel(key: key)
+                var model = (sessions[key] ?? SessionModel(key: key)).listed(as: head)
                 if archiving.contains(key) { model.status = .archived }
                 entries.append(Entry(machine: machine, head: head, model: model, done: done.contains(key)))
             }

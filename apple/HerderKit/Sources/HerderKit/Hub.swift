@@ -127,10 +127,8 @@ struct HubStats: Hashable, Identifiable {
         let entries = machine.sessions.map { head in
             let key = SessionKey(hostId: machine.hostId, sessionId: head.sessionId)
             // A copy whose host is connected here is followed on that host instead.
-            var model = sessions[key] ?? head.hostId.flatMap { sessions[SessionKey(hostId: $0, sessionId: head.sessionId)] }
-                ?? SessionModel(key: key)
-            // Until its events arrive, the hub's listing says what state it is in.
-            if !model.loaded { model.status = head.status }
+            let model = (sessions[key] ?? head.hostId.flatMap { sessions[SessionKey(hostId: $0, sessionId: head.sessionId)] }
+                ?? SessionModel(key: key)).listed(as: head)
             return Lists.Entry(machine: machine, head: head, model: model)
         }
 
