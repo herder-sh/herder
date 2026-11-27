@@ -363,6 +363,7 @@ public final class Fleet {
         watching.insert(key)
         done.remove(key)
         for copy in copies.others[key] ?? [] { done.remove(copy) }
+        showSessions(of: key.hostId)
     }
 
     /// Whether a session view shows `key` or another copy of its session.
@@ -373,6 +374,14 @@ public final class Fleet {
     /// A session view stopped showing `key`.
     func unwatch(_ key: SessionKey) {
         watching.remove(key)
+        showSessions(of: key.hostId)
+    }
+
+    /// Tells the client which sessions of `hostId` the views show: after a reconnect, they
+    /// catch up ahead of the others.
+    private func showSessions(of hostId: HostId) {
+        let shown = watching.filter { $0.hostId == hostId }.map(\.sessionId)
+        try? client.showSessions(hostId: hostId, sessionIds: shown)
     }
 
     /// Follows the client's changes until it stops; runs for as long as the fleet is shown.

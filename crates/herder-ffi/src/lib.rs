@@ -545,6 +545,16 @@ impl Client {
         self.inner.wake();
     }
 
+    /// Says which sessions of a machine the app shows now, replacing what it said before;
+    /// empty when it shows none. After a reconnect they catch up first.
+    pub fn show_sessions(
+        &self,
+        host_id: HostId,
+        session_ids: Vec<SessionId>,
+    ) -> Result<(), HerderError> {
+        Ok(self.inner.show_sessions(host_id, session_ids)?)
+    }
+
     /// Streams a session, cached state first, across reconnects.
     pub fn subscribe_session(
         &self,

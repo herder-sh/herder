@@ -55,6 +55,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use herder_client_core::{Client, FleetMachine};
+use herder_protocol::{HostId, SessionId};
 use ratatui::crossterm::event::{self, Event, MouseEventKind};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -629,15 +630,32 @@ fn forward_input(tx: mpsc::UnboundedSender<Msg>, raw: terminal::RawInput) -> Res
     Ok(())
 }
 
-/// One task per subscribed session, forwarding its updates to the loop.
+/// One task per subscribed session, forwarding its updates to the loop, and the session the
+/// client was told is open.
 #[derive(Default)]
-struct Subscriptions(HashMap<SessionKey, JoinHandle<()>>);
+struct Subscriptions {
+    tasks: HashMap<SessionKey, JoinHandle<()>>,
+    shown: Option<SessionKey>,
+}
 
 impl Subscriptions {
-    /// Subscribes to the sessions the app wants and drops the ones it no longer lists.
+    /// Subscribes to the sessions the app wants and drops the ones it no longer lists, then
+    /// tells the client which one is open: after a reconnect, it catches up first.
     fn sync(&mut self, client: &Client, app: &App, tx: &mpsc::UnboundedSender<Msg>) {
+        self.subscribe(client, app, tx);
+        let open = app.open.as_ref().filter(|key| self.tasks.contains_key(key));
+        if open != self.shown.as_ref() {
+            for (host_id, session_ids) in shown_changes(self.shown.as_ref(), open) {
+                // A machine forgotten meanwhile has nothing to be told.
+                let _ = client.show_sessions(host_id, session_ids);
+            }
+            self.shown = open.cloned();
+        }
+    }
+
+    fn subscribe(&mut self, client: &Client, app: &App, tx: &mpsc::UnboundedSender<Msg>) {
         let wanted = app.wanted();
-        self.0.retain(|key, task| {
+        self.tasks.retain(|key, task| {
             let keep = wanted.contains(key);
             if !keep {
                 // Dropping the task drops the subscription, which unsubscribes.
@@ -646,7 +664,7 @@ impl Subscriptions {
             keep
         });
         for key in wanted {
-            if self.0.contains_key(&key) {
+            if self.tasks.contains_key(&key) {
                 continue;
             }
             let Ok(subscription) =
@@ -668,9 +686,27 @@ impl Subscriptions {
                     }
                 }
             });
-            self.0.insert(key, task);
+            self.tasks.insert(key, task);
         }
     }
+}
+
+/// What to tell the client when the open session goes from `before` to `now`: each machine
+/// whose shown sessions change, with the ones it shows now.
+fn shown_changes(
+    before: Option<&SessionKey>,
+    now: Option<&SessionKey>,
+) -> Vec<(HostId, Vec<SessionId>)> {
+    let mut changes = Vec::new();
+    if let Some(before) = before
+        && now.is_none_or(|now| now.host_id != before.host_id)
+    {
+        changes.push((before.host_id.clone(), Vec::new()));
+    }
+    if let Some(now) = now {
+        changes.push((now.host_id.clone(), vec![now.session_id.clone()]));
+    }
+    changes
 }
 
 /// The client profile's directory: `$XDG_CONFIG_HOME/herder`, else `~/.config/herder`.
@@ -686,5 +722,36 @@ pub fn config_dir() -> Result<PathBuf> {
     match absolute("HOME") {
         Some(home) => Ok(home.join(".config/herder")),
         None => bail!("cannot find the config dir: HOME is not set to an absolute path"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(host: &str, session: &str) -> SessionKey {
+        SessionKey {
+            host_id: HostId::new(host),
+            session_id: SessionId::new(session),
+        }
+    }
+
+    #[test]
+    fn the_open_session_is_shown_and_a_machine_left_shows_none() {
+        let (a1, a2, b1) = (key("a", "1"), key("a", "2"), key("b", "1"));
+        let shows = |host: &str, sessions: &[&str]| {
+            let sessions = sessions.iter().map(|id| SessionId::new(*id)).collect();
+            (HostId::new(host), sessions)
+        };
+        assert_eq!(shown_changes(None, Some(&a1)), vec![shows("a", &["1"])]);
+        assert_eq!(
+            shown_changes(Some(&a1), Some(&a2)),
+            vec![shows("a", &["2"])]
+        );
+        assert_eq!(
+            shown_changes(Some(&a2), Some(&b1)),
+            vec![shows("a", &[]), shows("b", &["1"])]
+        );
+        assert_eq!(shown_changes(Some(&b1), None), vec![shows("b", &[])]);
     }
 }
