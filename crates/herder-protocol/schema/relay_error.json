@@ -22,17 +22,12 @@
       "description": "Kind of refusal of a relay stream.",
       "oneOf": [
         {
-          "description": "The hello was malformed, or names a stream the hub did not ask for or no longer\nwaits for.",
+          "description": "The route names a stream the hub did not ask for or no longer waits for.",
           "type": "string",
           "const": "bad_request"
         },
         {
-          "description": "The hello's `relay_version` is not the hub's.",
-          "type": "string",
-          "const": "unsupported"
-        },
-        {
-          "description": "The device is not paired with the hub, or not as what this hello needs: a client for\n[`RelayHello::Connect`], the host itself for the others.",
+          "description": "The device is not paired with the hub, or not as what the route needs: a client for\n[`RelayRoute::Machine`], the host itself for the others.",
           "type": "string",
           "const": "forbidden"
         },

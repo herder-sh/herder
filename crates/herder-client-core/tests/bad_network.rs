@@ -1726,6 +1726,49 @@ fn moving_between_the_machines_addresses_is_never_seen() {
     });
 }
 
+/// How many round trips of the app's link a connect costs, directly or through a hub whose
+/// host is on a clean link of its own: the time `reconnect` takes on the paused clock over a
+/// link with no jitter, in units of its round trip. The relay listens on loopback, so TCP's
+/// own handshake costs nothing here; on a real network it adds one to both.
+fn connect_round_trips(relayed: bool) -> f64 {
+    let link = Link {
+        latency_ms: 100,
+        jitter_ms: 0,
+        rate: None,
+    };
+    let mut round_trips = 0.0;
+    run(async {
+        let mut world = World::start_on(16, 4, None, relayed).await;
+        world.trouble(Trouble::Link(link)).await;
+        tokio::time::sleep(secs(2)).await;
+        let mut measured = Vec::new();
+        for _ in 0..3 {
+            let started = Instant::now();
+            world.app.reconnect(world.host.clone()).await.unwrap();
+            measured
+                .push(started.elapsed().as_secs_f64() / (2.0 * ms(link.latency_ms).as_secs_f64()));
+            tokio::time::sleep(secs(2)).await;
+        }
+        measured.sort_by(f64::total_cmp);
+        round_trips = measured[1];
+        world.trouble(Trouble::Link(Link::CLEAN)).await;
+    });
+    round_trips
+}
+
+/// A connect through the hub costs one round trip of the app's link more than a direct one:
+/// the upgrade to the hub and the TLS to the machine share one.
+#[test]
+fn a_relayed_connect_costs_one_round_trip_more_than_a_direct_one() {
+    let direct = connect_round_trips(false);
+    let relayed = connect_round_trips(true);
+    eprintln!("connect round trips: direct {direct:.2}, through the hub {relayed:.2}");
+    assert!(
+        relayed - direct < 1.4,
+        "a relayed connect costs {relayed:.2} round trips, a direct one {direct:.2}"
+    );
+}
+
 /// The app is suspended and woken over and over, for seconds and for minutes, its socket
 /// silently killed meanwhile or not, while turns go on: each time it is back within a bound
 /// and shows what the daemon has, with no event twice or missing.

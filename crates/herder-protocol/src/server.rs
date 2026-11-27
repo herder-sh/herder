@@ -253,7 +253,7 @@ pub struct FleetHost {
     pub usage: Option<HostUsage>,
     /// Whether the hub relays clients to the host now: it is online and takes relayed
     /// connections. A client paired with both then reaches the host through the hub, with
-    /// [`crate::RelayHello::Connect`] (see [`crate::relay`]).
+    /// [`crate::RelayRoute::Machine`] (see [`crate::relay`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub relay: bool,
 }

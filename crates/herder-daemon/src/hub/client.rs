@@ -13,17 +13,17 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
-    ClientHello, ClientMessage, PROTOCOL_VERSION, RELAY_VERSION, RelayAnswer, RelayHello,
-    ServerMessage, SessionHead,
+    ClientHello, ClientMessage, PROTOCOL_VERSION, RelayError, RelayRoute, ServerMessage,
+    SessionHead,
 };
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::{self, Message};
 
 use super::BUILD;
 use crate::config::HubConfig;
@@ -53,26 +53,38 @@ const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Opens a WebSocket to the hub over TLS, pinned through `connector`.
 pub(super) async fn dial(hub: &HubConfig, connector: &TlsConnector) -> Result<Ws> {
-    Ok(dial_with(hub, connector, None).await?.0)
+    Ok(dial_with(hub, connector, "/", None).await?.0)
 }
 
-/// [`dial`] with the WebSocket configured as `config` says; also the address of the socket's
-/// peer: the hub, or the edge of the tunnel to it.
+/// [`dial`] to `path`, with the WebSocket configured as `config` says; also the address of
+/// the socket's peer: the hub, or the edge of the tunnel to it. A refused upgrade fails
+/// with the hub's reason.
 async fn dial_with(
     hub: &HubConfig,
     connector: &TlsConnector,
+    path: &str,
     config: Option<WebSocketConfig>,
 ) -> Result<(Ws, SocketAddr)> {
     let (stream, peer) = reach(&hub.address).await?;
     // The certificate is pinned by fingerprint, so the name is never checked.
     let name = ServerName::try_from("herder").context("the TLS server name")?;
     let tls = connector.connect(name, stream).await.context("TLS")?;
-    // The hub reads nothing of the URL.
-    let request = "wss://herder/".into_client_request()?;
-    let (ws, _) = tokio_tungstenite::client_async_with_config(request, tls, config)
-        .await
-        .context("the WebSocket upgrade")?;
-    Ok((ws, peer))
+    // The hub reads only the path of the URL.
+    let request = format!("wss://herder{path}").into_client_request()?;
+    match tokio_tungstenite::client_async_with_config(request, tls, config).await {
+        Ok((ws, _)) => Ok((ws, peer)),
+        Err(tungstenite::Error::Http(response)) => {
+            let refusal = response
+                .body()
+                .as_deref()
+                .and_then(|body| serde_json::from_slice::<RelayError>(body).ok());
+            match refusal {
+                Some(error) => bail!("the hub refused: {}", error.message),
+                None => bail!("the hub refused the upgrade: {}", response.status()),
+            }
+        }
+        Err(err) => Err(err).context("the WebSocket upgrade"),
+    }
 }
 
 /// The byte stream to the hub at `address`: a TCP socket to `host:port`, or, for the URL of
@@ -122,50 +134,29 @@ pub(super) async fn accept_relay(
     connector: &TlsConnector,
     stream_id: &str,
 ) -> Result<(Box<dyn Io>, SocketAddr)> {
-    let accept = RelayHello::Accept {
-        relay_version: RELAY_VERSION,
-        stream_id: stream_id.to_owned(),
-    };
-    open_relay(hub, connector, &accept).await
+    open_relay(hub, connector, &RelayRoute::Stream(stream_id.to_owned())).await
 }
 
 /// Opens a stream to the hub's CLIProxyAPI, for a host the hub forwards there: it
 /// carries the HTTP a CLI speaks to the proxy.
 pub(super) async fn open_proxy(hub: &HubConfig, connector: &TlsConnector) -> Result<Box<dyn Io>> {
-    let proxy = RelayHello::Proxy {
-        relay_version: RELAY_VERSION,
-    };
-    let opening = open_relay(hub, connector, &proxy);
+    let opening = open_relay(hub, connector, &RelayRoute::Proxy);
     let (stream, _) = tokio::time::timeout(RELAY_TIMEOUT, opening)
         .await
         .map_err(|_| anyhow!("no answer from the hub in {RELAY_TIMEOUT:?}"))??;
     Ok(stream)
 }
 
-/// A relay connection to the hub that says `hello`: the stream the hub opened for it,
-/// and the address of the socket's peer.
+/// A relay connection to the hub for `route`: the stream the hub opened for it, and the
+/// address of the socket's peer.
 async fn open_relay(
     hub: &HubConfig,
     connector: &TlsConnector,
-    hello: &RelayHello,
+    route: &RelayRoute,
 ) -> Result<(Box<dyn Io>, SocketAddr)> {
     // Each frame goes out as written: what runs inside decides what to batch.
-    let (mut ws, peer) = dial_with(hub, connector, Some(tunnel::config())).await?;
-    ws.send(Message::text(serde_json::to_string(hello)?))
-        .await?;
-    loop {
-        let text = match ws.next().await {
-            Some(Ok(Message::Text(text))) => text,
-            Some(Ok(Message::Close(_))) | None => bail!("the hub closed the connection"),
-            Some(Ok(_)) => continue,
-            Some(Err(err)) => return Err(err.into()),
-        };
-        return match serde_json::from_str(&text)? {
-            RelayAnswer::Ready => Ok((Box::new(Frames::new(ws)), peer)),
-            RelayAnswer::Refused { error } => Err(anyhow!("the hub refused: {}", error.message)),
-            RelayAnswer::Unknown => Err(anyhow!("the hub's answer is not one this host knows")),
-        };
-    }
+    let (ws, peer) = dial_with(hub, connector, &route.path(), Some(tunnel::config())).await?;
+    Ok((Box::new(Frames::new(ws)), peer))
 }
 
 /// Every session the hub holds, each on the host that has it now, read as `device`.

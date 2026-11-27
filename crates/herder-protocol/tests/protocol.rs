@@ -4184,56 +4184,9 @@ fn replication_fixtures_cover_every_variant_and_enum_value() {
     assert_covered(&hub_schema(), &hub_fixtures());
 }
 
-fn relay_hello_fixtures() -> Vec<RelayHello> {
-    vec![
-        RelayHello::Connect {
-            relay_version: RELAY_VERSION,
-            host_id: HostId::new("01J9HOST"),
-        },
-        RelayHello::Accept {
-            relay_version: RELAY_VERSION,
-            stream_id: "01J9STREAM".into(),
-        },
-        RelayHello::Proxy {
-            relay_version: RELAY_VERSION,
-        },
-    ]
-}
-
-fn relay_answer_fixtures() -> Vec<RelayAnswer> {
-    let codes = [
-        RelayErrorCode::BadRequest,
-        RelayErrorCode::Unsupported,
-        RelayErrorCode::Forbidden,
-        RelayErrorCode::UnknownHost,
-        RelayErrorCode::HostOffline,
-        RelayErrorCode::Busy,
-        RelayErrorCode::Internal,
-    ];
-    let mut answers = vec![RelayAnswer::Ready];
-    answers.extend(codes.into_iter().map(|code| RelayAnswer::Refused {
-        error: RelayError {
-            code,
-            message: "detail".into(),
-        },
-    }));
-    answers
-}
-
-#[test]
-fn every_relay_message_round_trips_and_matches_its_schema() {
-    relay_hello_fixtures().iter().for_each(assert_round_trips);
-    relay_answer_fixtures().iter().for_each(assert_round_trips);
-    assert_valid(&relay_hello_schema(), &relay_hello_fixtures());
-    assert_valid(&relay_answer_schema(), &relay_answer_fixtures());
-    assert_covered(&relay_hello_schema(), &relay_hello_fixtures());
-    assert_covered(&relay_answer_schema(), &relay_answer_fixtures());
-}
-
 fn relay_error_fixtures() -> Vec<RelayError> {
     [
         RelayErrorCode::BadRequest,
-        RelayErrorCode::Unsupported,
         RelayErrorCode::Forbidden,
         RelayErrorCode::UnknownHost,
         RelayErrorCode::HostOffline,
@@ -4305,25 +4258,6 @@ fn a_relay_route_is_named_by_its_path() {
 #[test]
 fn relay_schemas_match_their_snapshots() {
     assert_schema_snapshot("relay_error.json", &relay_error_schema());
-    assert_schema_snapshot("relay_hello.json", &relay_hello_schema());
-    assert_schema_snapshot("relay_answer.json", &relay_answer_schema());
-}
-
-#[test]
-fn a_relay_hello_is_told_from_the_others_by_its_version() {
-    // The hub reads the first message's `relay_version`, as it reads a host's
-    // `replication_version`: neither a client's hello nor a host's carries one.
-    for hello in relay_hello_fixtures() {
-        let value = serde_json::to_value(&hello).unwrap();
-        assert_eq!(value["relay_version"], RELAY_VERSION);
-        assert!(value.get("replication_version").is_none());
-    }
-    for message in host_fixtures() {
-        let value = serde_json::to_value(&message).unwrap();
-        assert!(value.get("relay_version").is_none());
-    }
-    let answer: RelayAnswer = serde_json::from_str(r#"{"type":"moved","to":"x"}"#).unwrap();
-    assert_eq!(answer, RelayAnswer::Unknown);
 }
 
 #[test]

@@ -2467,7 +2467,7 @@ async fn reach(address: &str, connector: &TlsConnector, via: &Via) -> anyhow::Re
         match address::hub(address) {
             Some(hub) => {
                 let stream = via.stream(&hub).await?;
-                secure(Box::new(stream), connector, None).await
+                upgrade(secure(Box::new(stream), connector).await?, None).await
             }
             None => direct(address, connector, None).await,
         }
@@ -2484,6 +2484,15 @@ pub(crate) async fn direct(
     connector: &TlsConnector,
     config: Option<WebSocketConfig>,
 ) -> anyhow::Result<Ws> {
+    upgrade(dial(address, connector).await?, config).await
+}
+
+/// A connection to the daemon at `address`, its own or a tunnel's, up to its TLS, pinned
+/// through `connector`.
+pub(crate) async fn dial(
+    address: &str,
+    connector: &TlsConnector,
+) -> anyhow::Result<TlsStream<Watched>> {
     let stream: Box<dyn Io> = if address::is_tunnel(address) {
         Box::new(tunnel::open(address).await?)
     } else {
@@ -2491,22 +2500,24 @@ pub(crate) async fn direct(
         tcp.set_nodelay(true)?;
         Box::new(tcp)
     };
-    secure(stream, connector, config).await
+    secure(stream, connector).await
 }
 
-/// The TLS, pinned through `connector`, and the WebSocket upgrade of a connection to a
-/// daemon on `stream`.
+/// The TLS, pinned through `connector`, of a connection to a daemon on `stream`.
 async fn secure(
     stream: Box<dyn Io>,
     connector: &TlsConnector,
-    config: Option<WebSocketConfig>,
-) -> anyhow::Result<Ws> {
+) -> anyhow::Result<TlsStream<Watched>> {
     // The certificate is pinned by fingerprint, so the name is never checked.
     let name = ServerName::try_from("herder").context("the TLS server name")?;
-    let tls = connector
+    connector
         .connect(name, Watched::new(stream))
         .await
-        .context("TLS")?;
+        .context("TLS")
+}
+
+/// The WebSocket upgrade of a connection to a daemon, configured as `config` says.
+async fn upgrade(tls: TlsStream<Watched>, config: Option<WebSocketConfig>) -> anyhow::Result<Ws> {
     // The daemon reads nothing of the URL: inside a tunnel, its own address is as good.
     let request = "wss://herder/".into_client_request()?;
     let (ws, _) = tokio_tungstenite::client_async_with_config(request, tls, config)

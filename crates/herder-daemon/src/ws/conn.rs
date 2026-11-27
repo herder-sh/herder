@@ -247,6 +247,16 @@ pub(super) async fn serve<B: Backend>(
 
 /// The TLS and WebSocket handshakes; returns the fingerprint of the peer's device certificate.
 pub(crate) async fn handshake(tls: &Tls, stream: Transport) -> Result<(Ws, String)> {
+    let (tls, device) = secure(tls, stream).await?;
+    let ws = tokio_tungstenite::accept_async_with_config(tls, Some(ws_config())).await?;
+    Ok((ws, device))
+}
+
+/// The TLS handshake; returns the fingerprint of the peer's device certificate.
+pub(crate) async fn secure(
+    tls: &Tls,
+    stream: Transport,
+) -> Result<(tokio_rustls::server::TlsStream<Transport>, String)> {
     let tls = tls.acceptor().accept(stream).await?;
     // The verifier makes a client certificate mandatory; this only guards against a change there.
     let device = tls
@@ -256,11 +266,14 @@ pub(crate) async fn handshake(tls: &Tls, stream: Transport) -> Result<(Ws, Strin
         .and_then(|certs| certs.first())
         .map(|cert| fingerprint(cert))
         .context("the peer sent no device certificate")?;
-    let config = WebSocketConfig::default()
+    Ok((tls, device))
+}
+
+/// The WebSocket config of a connection to a daemon or a hub.
+pub(crate) fn ws_config() -> WebSocketConfig {
+    WebSocketConfig::default()
         .max_message_size(Some(READ_LIMIT))
-        .max_frame_size(Some(READ_LIMIT));
-    let ws = tokio_tungstenite::accept_async_with_config(tls, Some(config)).await?;
-    Ok((ws, device))
+        .max_frame_size(Some(READ_LIMIT))
 }
 
 /// Handles the messages of the client at `peer`, whose certificate is `device`'s, until it

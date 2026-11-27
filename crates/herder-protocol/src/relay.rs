@@ -38,9 +38,7 @@
 //! it has one.
 //!
 //! The paths are the contract: a route that changes shape gets a new path, and a hub
-//! answers one it does not know with `404`. [`RelayHello`], [`RelayAnswer`] and
-//! [`RELAY_VERSION`], the first message that named the route before, go once hubs and
-//! clients route by path (P26.8).
+//! answers one it does not know with `404`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -126,53 +124,6 @@ fn decode(segment: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// Relay protocol version, sent in every [`RelayHello`]; the hub refuses another one as
-/// [`RelayErrorCode::Unsupported`].
-pub const RELAY_VERSION: u32 = 1;
-
-/// First message of a relay connection to the hub.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum RelayHello {
-    /// From a client device: open a stream to a host.
-    Connect {
-        /// Must equal the hub's [`RELAY_VERSION`].
-        relay_version: u32,
-        /// The host to reach; one that replicates to this hub.
-        host_id: HostId,
-    },
-    /// From a host: this connection is its end of the stream the hub asked it to open.
-    Accept {
-        /// Must equal the hub's [`RELAY_VERSION`].
-        relay_version: u32,
-        /// The stream, as [`crate::HubMessage::RelayOpen`] named it.
-        stream_id: String,
-    },
-    /// From a host: open a stream to the hub's CLIProxyAPI. Only a host the hub told it
-    /// forwards to the proxy ([`crate::HubHello::cliproxyapi_relay`]) may.
-    Proxy {
-        /// Must equal the hub's [`RELAY_VERSION`].
-        relay_version: u32,
-    },
-}
-
-/// The hub's one answer to a [`RelayHello`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum RelayAnswer {
-    /// The stream is open: from here on the connection carries its bytes as binary frames.
-    Ready,
-    /// The hub opened no stream, and closes the connection.
-    Refused {
-        /// Why.
-        error: RelayError,
-    },
-    /// An answer newer than this build; taken as a refusal.
-    #[serde(other, skip_serializing)]
-    #[schemars(skip)]
-    Unknown,
-}
-
 /// Why the hub opened no stream: the body of its refusal, as JSON, under the code's HTTP
 /// status.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -187,13 +138,10 @@ pub struct RelayError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RelayErrorCode {
-    /// The hello was malformed, or names a stream the hub did not ask for or no longer
-    /// waits for.
+    /// The route names a stream the hub did not ask for or no longer waits for.
     BadRequest,
-    /// The hello's `relay_version` is not the hub's.
-    Unsupported,
-    /// The device is not paired with the hub, or not as what this hello needs: a client for
-    /// [`RelayHello::Connect`], the host itself for the others.
+    /// The device is not paired with the hub, or not as what the route needs: a client for
+    /// [`RelayRoute::Machine`], the host itself for the others.
     Forbidden,
     /// No host with that id replicates to this hub, or it takes no relayed connections.
     UnknownHost,
@@ -209,7 +157,7 @@ impl RelayErrorCode {
     /// The HTTP status the hub refuses an upgrade with for this code.
     pub fn status(self) -> u16 {
         match self {
-            Self::BadRequest | Self::Unsupported => 400,
+            Self::BadRequest => 400,
             Self::Forbidden => 403,
             Self::UnknownHost => 404,
             Self::Busy => 429,
