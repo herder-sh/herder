@@ -19,6 +19,7 @@ on:
       - "apple/scripts/import-mac-cert.sh"
       - "apple/scripts/developer-id-profile.py"
       - "linux/packaging/flatpak/check-metainfo-release.sh"
+      - "linux/packaging/flatpak/ci-unlayer-flatpak.sh"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -175,6 +176,8 @@ jobs:
           fi
           linux/packaging/flatpak/check-metainfo-release.sh
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Copy the image's flatpak installation into the container layer
+        run: linux/packaging/flatpak/ci-unlayer-flatpak.sh
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: linux/packaging/flatpak/sh.herder.Herder.yml
