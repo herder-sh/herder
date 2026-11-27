@@ -567,6 +567,8 @@ pub mod tests {
             update: None,
             approvals: Vec::new(),
             address_headers: Default::default(),
+            pinned_address: None,
+            disabled_addresses: Vec::new(),
         }
     }
 

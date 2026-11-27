@@ -291,6 +291,10 @@
           "description": "Build name and version, for logs, e.g. `herder/0.1.0`.",
           "type": "string"
         },
+        "cloudflare_relay": {
+          "description": "Whether the host takes streams through the hub's Durable Object relay too, when the\nhub has one: the hub then sends it [`HubHello::relay_grant`] and\n[`HubMessage::RelayGrant`]. Absent from a host that does not.",
+          "type": "boolean"
+        },
         "host_id": {
           "description": "The host; must be the host this connection's device was paired as.",
           "$ref": "#/$defs/HostId"

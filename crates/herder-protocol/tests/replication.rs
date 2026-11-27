@@ -83,6 +83,7 @@ impl Host {
             pairing_code: None,
             attachments_cap: None,
             relay: false,
+            cloudflare_relay: false,
         })
     }
 
@@ -137,6 +138,7 @@ impl Host {
             // touch the journals.
             HubMessage::SecretList { .. }
             | HubMessage::RelayOpen { .. }
+            | HubMessage::RelayGrant { .. }
             | HubMessage::ProviderLogins { .. }
             | HubMessage::SecretValues { .. }
             | HubMessage::SecretsRefused { .. }
@@ -240,6 +242,7 @@ impl Hub {
                 acked,
                 cliproxyapi: None,
                 cliproxyapi_relay: false,
+                relay_grant: None,
             })];
         }
         let Some(host) = link.host.clone() else {

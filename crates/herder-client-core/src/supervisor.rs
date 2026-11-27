@@ -99,7 +99,7 @@ use crate::auth::{DeviceKey, client_config};
 use crate::cache::SessionLog;
 use crate::demo::{self, DemoAnswer, DemoMachine};
 use crate::offline::{self, Cached};
-use crate::profile::SavedMachine;
+use crate::profile::{Routes, SavedMachine};
 use crate::relay::Via;
 use crate::terminal::{TerminalEvent, TerminalStream};
 use crate::tunnel::{self, Io};
@@ -346,6 +346,8 @@ struct State {
     addresses: Vec<String>,
     /// The headers each tunnel address sends on its upgrade.
     headers: tunnel::Headers,
+    /// Which addresses the user pinned or disabled.
+    routes: Routes,
     /// What the daemon's latest hello named, as saved ([`address::advertised`]), until the
     /// client follows it ([`Supervisor::take_advertised`]).
     advertised: Option<Vec<String>>,
@@ -601,6 +603,7 @@ impl Supervisor {
         let state = State {
             addresses: saved.addresses.clone(),
             headers: saved.headers.clone(),
+            routes: saved.routes.clone(),
             adopted: saved.advertised.clone(),
             ..State::default()
         };
@@ -681,6 +684,7 @@ impl Supervisor {
                 fingerprint: machine.fingerprint,
                 advertised: Vec::new(),
                 headers: Default::default(),
+                routes: Default::default(),
                 device_key: String::new(),
             },
             state: Mutex::new(state),
@@ -798,6 +802,7 @@ impl Supervisor {
         }
         saved.addresses.clone_from(&state.addresses);
         saved.headers.clone_from(&state.headers);
+        saved.routes.clone_from(&state.routes);
         saved
     }
 
@@ -874,6 +879,8 @@ impl Supervisor {
                 .iter()
                 .map(|(address, sent)| (address.clone(), sent.keys().cloned().collect()))
                 .collect(),
+            pinned_address: state.routes.pinned.clone(),
+            disabled_addresses: state.routes.disabled.clone(),
         }
     }
 
@@ -1281,10 +1288,11 @@ impl Supervisor {
     }
 
     /// The machine's addresses in the order to dial them: the one that answered last, unless
-    /// it is a hub's route, then the rest in their order.
+    /// it is a hub's route, then the rest in their order; only the pinned one when the user
+    /// pinned one, and none the user disabled.
     fn dial_order(&self) -> Vec<String> {
         let state = self.lock();
-        let mut addresses = state.addresses.clone();
+        let mut addresses = state.routes.dialled(&state.addresses);
         let answered = state.answered.as_ref();
         let answered = answered.filter(|address| address::hub(address).is_none());
         if let Some(index) = answered.and_then(|a| addresses.iter().position(|b| a == b)) {
@@ -1298,6 +1306,14 @@ impl Supervisor {
     fn via(&self) -> Via {
         let headers = self.lock().headers.clone();
         Via::new(self.saved.host_id.clone(), self.machines.clone(), headers)
+    }
+
+    /// Dials as `routes` say from the next connection on; dials again at once if it is not
+    /// connected, and drops a connection on an address it may no longer dial.
+    pub(crate) fn set_routes(&self, routes: Routes) {
+        self.lock().routes = routes;
+        self.notify();
+        let _ = self.ops.send(Op::Readdress);
     }
 
     /// Sends `headers` on the upgrades of this machine's tunnel addresses from the next
@@ -1344,7 +1360,7 @@ impl Supervisor {
             let state = self.lock();
             let current = state.address.as_ref()?;
             let index = state.addresses.iter().position(|a| a == current)?;
-            state.addresses[..index].to_vec()
+            state.routes.dialled(&state.addresses[..index])
         };
         if better.is_empty() {
             return None;
@@ -2105,6 +2121,13 @@ async fn converse(
                         {
                             return Ended::Dropped(format!(
                                 "{address} is no longer one of the machine's addresses"
+                            ));
+                        }
+                        if let Some(address) = &state.address
+                            && !state.routes.dialled(&state.addresses).contains(address)
+                        {
+                            return Ended::Dropped(format!(
+                                "{address} is disabled, or another address is pinned"
                             ));
                         }
                         continue;

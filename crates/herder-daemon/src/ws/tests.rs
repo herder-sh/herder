@@ -2000,6 +2000,50 @@ async fn only_owners_change_the_skill_library() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_owners_set_how_a_hub_is_reached_from_outside() {
+    let daemon = Daemon::start().await;
+    let device = daemon.member("bob");
+    let mut member = daemon.client_on(&device, None).await;
+    member.hello(Vec::new()).await;
+    let set = || CommandBody::SetRemoteAccess {
+        settings: Box::default(),
+    };
+    let ServerMessage::CommandRejected { error, .. } = member.command("m1", set()).await else {
+        panic!("expected a rejection");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+    // What a hub offers, and enrolling a device's own key, are for every client device.
+    for (n, body) in [
+        CommandBody::GetRemoteAccess,
+        CommandBody::EnrollWireGuard {
+            public_key: "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=".into(),
+        },
+        CommandBody::UnenrollWireGuard,
+        CommandBody::GetRelayToken,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let ServerMessage::CommandRejected { error, .. } =
+            member.command(&format!("m{}", n + 2), body).await
+        else {
+            panic!("expected the test backend's rejection");
+        };
+        assert_eq!(error.code, ErrorCode::Unsupported);
+    }
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 4);
+
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    let ServerMessage::CommandRejected { error, .. } = owner.command("o1", set()).await else {
+        panic!("expected the test backend's rejection");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn browsing_folders_is_for_owners_only_and_never_remembered() {
     let daemon = Daemon::start().await;
     let device = daemon.member("bob");

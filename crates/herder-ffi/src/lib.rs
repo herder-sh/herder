@@ -25,7 +25,8 @@ use std::sync::Arc;
 
 use herder_client_core as client_core;
 use herder_client_core::{
-    FleetLink, LoginUri, Machine, NewAccount, OwnUri, SessionUpdate, TerminalEvent,
+    FleetLink, LoginUri, Machine, NewAccount, OwnUri, RouteChoice, RouteKind, SessionUpdate,
+    TerminalEvent, WireGuardTunnel,
 };
 use herder_protocol::{
     AccountId, AwsProfile, CommandBody, CommandResult, ErrorInfo, HostId, PasskeyAssertion,
@@ -244,6 +245,13 @@ pub fn parse_fleet_link(link: String) -> Result<FleetLink, HerderError> {
     Ok(link.parse::<FleetLink>()?)
 }
 
+/// What carries a connection to `address`, one of a machine's addresses, for naming the
+/// route.
+#[uniffi::export]
+pub fn route_kind(address: String) -> RouteKind {
+    client_core::route_kind(address)
+}
+
 /// Formats a fleet link as `herder://fleet?…`, for a QR code.
 #[uniffi::export]
 pub fn fleet_link_to_string(link: FleetLink) -> String {
@@ -445,6 +453,50 @@ impl Client {
         headers: HashMap<String, String>,
     ) -> Result<(), HerderError> {
         Ok(self.inner.set_address_headers(host_id, address, headers)?)
+    }
+
+    /// Pins one of a machine's addresses (the only one dialled), disables it (never
+    /// dialled), or puts it back in the race.
+    pub fn set_route(
+        &self,
+        host_id: HostId,
+        address: String,
+        choice: RouteChoice,
+    ) -> Result<(), HerderError> {
+        Ok(self.inner.set_route(host_id, address, choice)?)
+    }
+
+    /// Imports a WireGuard config (a `.conf` file's text or its QR code's) as the tunnel
+    /// `name`, for herder's own connections only.
+    pub fn import_wireguard(
+        &self,
+        name: String,
+        config: String,
+    ) -> Result<WireGuardTunnel, HerderError> {
+        Ok(self.inner.import_wireguard(name, config)?)
+    }
+
+    /// The WireGuard tunnels herder's connections may run through.
+    pub fn wireguard_tunnels(&self) -> Result<Vec<WireGuardTunnel>, HerderError> {
+        Ok(self.inner.wireguard_tunnels()?)
+    }
+
+    /// Removes an imported WireGuard tunnel and its key.
+    pub fn remove_wireguard(&self, id: String) -> Result<(), HerderError> {
+        Ok(self.inner.remove_wireguard(id)?)
+    }
+
+    /// Turns herder's own WireGuard on a hub on or off for this device.
+    pub async fn set_hub_wireguard(
+        &self,
+        host_id: HostId,
+        enabled: bool,
+    ) -> Result<(), HerderError> {
+        let client = self.inner.clone();
+        call(&self.handle, async move {
+            client.set_hub_wireguard(host_id, enabled).await
+        })
+        .await
     }
 
     /// Drops a machine's connection and connects again at once, racing its addresses in

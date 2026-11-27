@@ -1365,6 +1365,35 @@
         }
       ]
     },
+    "CloudflareSettings": {
+      "description": "What a hub sets up in its owner's Cloudflare account, through the API.",
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "description": "The Cloudflare account.",
+          "type": "string"
+        },
+        "api_token": {
+          "description": "The hub secret holding the API token, put with `put_secret`: the hub reads it, and it\nnever goes back to a client nor to a host.",
+          "$ref": "#/$defs/SecretRef"
+        },
+        "relay": {
+          "description": "Whether the hub deploys and runs the Durable Object relay, on the account's\n`workers.dev` subdomain.",
+          "type": "boolean"
+        },
+        "tunnel_hostname": {
+          "description": "The hostname of the managed tunnel to the hub, in one of the account's zones, such as\n`hub.example.com`; no tunnel when absent. Once up it is one of the hub's public\naddresses.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "account_id",
+        "api_token"
+      ]
+    },
     "CommandId": {
       "description": "Client-chosen idempotency key of a command; a ULID string, opaque to the daemon.",
       "type": "string"
@@ -2093,6 +2122,60 @@
           "required": [
             "type",
             "entries"
+          ]
+        },
+        {
+          "description": "What a hub offers devices away from home, answering `get_remote_access` and\n`set_remote_access`.",
+          "type": "object",
+          "properties": {
+            "remote_access": {
+              "description": "The offer, and for owners the settings.",
+              "$ref": "#/$defs/RemoteAccess"
+            },
+            "type": {
+              "type": "string",
+              "const": "remote_access"
+            }
+          },
+          "required": [
+            "type",
+            "remote_access"
+          ]
+        },
+        {
+          "description": "This device's enrollment with the hub's WireGuard endpoint, answering\n`enroll_wireguard`.",
+          "type": "object",
+          "properties": {
+            "enrollment": {
+              "description": "What the device needs, with the private key it kept, to reach the hub.",
+              "$ref": "#/$defs/WireGuardEnrollment"
+            },
+            "type": {
+              "type": "string",
+              "const": "wire_guard_enrolled"
+            }
+          },
+          "required": [
+            "type",
+            "enrollment"
+          ]
+        },
+        {
+          "description": "A token for the hub's Durable Object relay, answering `get_relay_token`.",
+          "type": "object",
+          "properties": {
+            "grant": {
+              "description": "The relay and the token.",
+              "$ref": "#/$defs/RelayGrant"
+            },
+            "type": {
+              "type": "string",
+              "const": "relay_token"
+            }
+          },
+          "required": [
+            "type",
+            "grant"
           ]
         }
       ]
@@ -4778,6 +4861,108 @@
         "label"
       ]
     },
+    "RelayGrant": {
+      "description": "A token for the Durable Object relay, answering `get_relay_token`, or sent to a host on\nits replication connection.\n\nThe token is sent as `Authorization: Bearer <token>` on every upgrade to the relay. It is\n`v1.<claims>.<mac>`: `claims` is base64url (no padding) of the JSON object\n`{\"sub\": <device or host id>, \"kind\": \"client\" | \"host\", \"exp\": <unix seconds>}`, and\n`mac` is base64url (no padding) of HMAC-SHA256, keyed with the relay's secret, over\n`v1.<claims>`. The relay refuses with 401 a token that is malformed, expired or wrongly\nsigned, a `client` token anywhere but `/machines/<host id>`, and a `host` token whose\n`sub` is not the host its path names.",
+      "type": "object",
+      "properties": {
+        "expires_at": {
+          "description": "When the token expires; renew it before.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "token": {
+          "description": "The token.",
+          "type": "string"
+        },
+        "url": {
+          "description": "The relay, as `https://<worker host>`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "token",
+        "expires_at"
+      ]
+    },
+    "RemoteAccess": {
+      "description": "What a hub offers devices away from home, answering `get_remote_access` and\n`set_remote_access`.",
+      "type": "object",
+      "properties": {
+        "relay": {
+          "description": "The Durable Object relay, when it is set up or being set up.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settings": {
+          "description": "The hub's settings; sent to owners only.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteAccessSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tunnel": {
+          "description": "The managed Cloudflare Tunnel, when it is set up or being set up.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wireguard": {
+          "description": "herder's WireGuard on the hub, when it is on.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireGuardOffer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "RemoteAccessSettings": {
+      "description": "How a hub is reached from outside, as its owners set it.",
+      "type": "object",
+      "properties": {
+        "cloudflare": {
+          "description": "What the hub sets up in the owner's Cloudflare account; nothing when absent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudflareSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wireguard": {
+          "description": "herder's WireGuard endpoint; off when absent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireGuardSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "ResourceSettings": {
       "description": "The `[resources]` table.",
       "type": "object",
@@ -4911,6 +5096,51 @@
           "type": "string",
           "const": "user"
         }
+      ]
+    },
+    "RouteState": {
+      "description": "How far something a hub sets up got.",
+      "oneOf": [
+        {
+          "description": "The hub is creating, updating or repairing it.",
+          "type": "string",
+          "const": "setting_up"
+        },
+        {
+          "description": "It is up and serving.",
+          "type": "string",
+          "const": "up"
+        },
+        {
+          "description": "It is not up; `error` says why. The hub tries again on its own.",
+          "type": "string",
+          "const": "failed"
+        }
+      ]
+    },
+    "RouteStatus": {
+      "description": "Something a hub set up in its owner's Cloudflare account.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "Why it failed, in Cloudflare's or the hub's words, when it did.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "How far it got.",
+          "$ref": "#/$defs/RouteState"
+        },
+        "url": {
+          "description": "Where devices reach it: the relay's `https://` URL, or the tunnel's `wss://` one.\nEmpty until it is known.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "state"
       ]
     },
     "SecretAccess": {
@@ -6180,6 +6410,73 @@
         "name",
         "role",
         "devices"
+      ]
+    },
+    "WireGuardEnrollment": {
+      "description": "A device's enrollment with a hub's WireGuard endpoint, answering `enroll_wireguard`: with\nthe private key it kept, a complete WireGuard peer config.",
+      "type": "object",
+      "properties": {
+        "address": {
+          "description": "The device's address inside the tunnel, such as `10.247.0.2`.",
+          "type": "string"
+        },
+        "endpoint": {
+          "description": "Where the device sends to, as `host:port`.",
+          "type": "string"
+        },
+        "hub_address": {
+          "description": "The hub's herder port inside the tunnel, as `ip:port`, such as `10.247.0.1:7447`:\nthe only thing the tunnel reaches.",
+          "type": "string"
+        },
+        "hub_public_key": {
+          "description": "The hub's WireGuard public key, base64 as WireGuard writes keys.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "endpoint",
+        "hub_public_key",
+        "address",
+        "hub_address"
+      ]
+    },
+    "WireGuardOffer": {
+      "description": "herder's WireGuard on a hub, as a device sees it.",
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "description": "Where devices send to, as `host:port`.",
+          "type": "string"
+        },
+        "enrolled": {
+          "description": "Whether the device asking has a key enrolled.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "endpoint",
+        "enrolled"
+      ]
+    },
+    "WireGuardSettings": {
+      "description": "herder's WireGuard endpoint on a hub.",
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "description": "Where devices send to from outside, as `host:port`: the router's public name or IP\nand the port it forwards, such as `home.example.net:51820`.",
+          "type": "string"
+        },
+        "port": {
+          "description": "The UDP port the endpoint binds, on every interface; [`DEFAULT_WIREGUARD_PORT`] as a\nrule. The router forwards it to the hub.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "port",
+        "endpoint"
       ]
     }
   }

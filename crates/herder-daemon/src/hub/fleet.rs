@@ -379,6 +379,23 @@ impl Backend for Fleet {
             }
             CommandBody::PairHubHost { host_name } => return self.pair_host(&host_name),
             CommandBody::RevokeHubHost { host_id } => return self.revoke_host(host_id).await,
+            // Nothing is offered yet (docs/remote-access.md, P27.4 to P27.6).
+            CommandBody::GetRemoteAccess => {
+                return Ok(CommandResult::RemoteAccess {
+                    remote_access: Box::default(),
+                });
+            }
+            CommandBody::SetRemoteAccess { .. }
+            | CommandBody::EnrollWireGuard { .. }
+            | CommandBody::UnenrollWireGuard
+            | CommandBody::GetRelayToken => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this hub's version of herder offers no WireGuard or Cloudflare relay \
+                     yet"
+                    .into(),
+                ));
+            }
             CommandBody::LinkHub { .. }
             | CommandBody::SetHubLink { .. }
             | CommandBody::UnlinkHub
@@ -481,6 +498,11 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::SetProjectIcon { .. }
         | CommandBody::GetProjectIcon { .. }
         | CommandBody::GetHubLink
+        | CommandBody::GetRemoteAccess
+        | CommandBody::SetRemoteAccess { .. }
+        | CommandBody::EnrollWireGuard { .. }
+        | CommandBody::UnenrollWireGuard
+        | CommandBody::GetRelayToken
         | CommandBody::GetUsageSummary { .. }
         | CommandBody::LinkHub { .. }
         | CommandBody::SetHubLink { .. }

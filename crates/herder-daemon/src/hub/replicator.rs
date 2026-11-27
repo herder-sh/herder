@@ -280,6 +280,7 @@ impl Replicator {
             pairing_code: self.hub.pairing_code.clone(),
             attachments_cap: self.hub.images_cap(),
             relay: self.hub.relay,
+            cloudflare_relay: false,
         });
         ws.send(Message::text(serde_json::to_string(&hello)?))
             .await?;
@@ -501,6 +502,8 @@ impl Link {
             // Taken by the connection's loop, for the host's secrets and its relayed clients.
             HubMessage::ProviderLogins { .. }
             | HubMessage::RelayOpen { .. }
+            // This host does not take streams through the Durable Object relay yet (P27.5).
+            | HubMessage::RelayGrant { .. }
             | HubMessage::Hello(_)
             | HubMessage::Unknown => {}
         }

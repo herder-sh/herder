@@ -18,7 +18,7 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::{
     Client, ConnectionState, Error, FleetLink, FleetPerson, LoginUri, Machine, NewAccount,
-    SessionSubscription, SessionUpdate, TerminalEvent, TerminalStream,
+    RouteChoice, SessionSubscription, SessionUpdate, TerminalEvent, TerminalStream, WireGuardKind,
 };
 use herder_daemon::auth::Auth;
 use herder_daemon::auth::authenticator::{self, Authenticator};
@@ -1176,6 +1176,137 @@ async fn reconnect_dials_the_first_address_and_falls_back_when_it_is_dead() {
             host_id: HostId::new("nope")
         })
     );
+}
+
+/// A pinned address is the only one dialled, though it comes last; a disabled one is never
+/// dialled, though it comes first and answers; both choices are saved and shown.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pinned_route_is_dialled_alone_and_a_disabled_one_never() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let config_dir = tmp.path().join("client").display().to_string();
+    let client = Client::open(config_dir.clone(), "herder-test/0".into()).unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+    let live = daemon.addr.to_string();
+    let relay = Relay::start(daemon.addr).await;
+    let via_relay = relay.addr.to_string();
+    client
+        .set_addresses(host.clone(), vec![live.clone(), via_relay.clone()])
+        .unwrap();
+
+    client
+        .set_route(host.clone(), via_relay.clone(), RouteChoice::Pinned)
+        .unwrap();
+    assert_eq!(client.reconnect(host.clone()).await, Ok(via_relay.clone()));
+    let machine = client.machines()[0].clone();
+    assert_eq!(machine.pinned_address.as_deref(), Some(via_relay.as_str()));
+    // Pinned, a dead address is not fallen back from.
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead = closed.local_addr().unwrap().to_string();
+    drop(closed);
+    client
+        .set_addresses(host.clone(), vec![live.clone(), dead.clone()])
+        .unwrap();
+    client
+        .set_route(host.clone(), dead.clone(), RouteChoice::Pinned)
+        .unwrap();
+    match client.reconnect(host.clone()).await {
+        Err(Error::Unreachable { message }) => {
+            // Each address that failed is named as `address: why`.
+            assert!(message.contains(&format!("{dead}: ")), "{message}");
+            assert!(!message.contains(&format!("{live}: ")), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // Disabled, the first address is passed over for the next; the pin went with its
+    // address.
+    client
+        .set_addresses(host.clone(), vec![live.clone(), via_relay.clone()])
+        .unwrap();
+    assert_eq!(client.machines()[0].pinned_address, None);
+    client
+        .set_route(host.clone(), live.clone(), RouteChoice::Disabled)
+        .unwrap();
+    assert_eq!(client.reconnect(host.clone()).await, Ok(via_relay.clone()));
+    assert_eq!(
+        client.machines()[0].disabled_addresses,
+        std::slice::from_ref(&live)
+    );
+    assert!(matches!(
+        client.set_route(host.clone(), via_relay.clone(), RouteChoice::Disabled),
+        Err(Error::Local { .. })
+    ));
+    assert!(matches!(
+        client.set_route(host.clone(), "10.9.9.9:1".into(), RouteChoice::Pinned),
+        Err(Error::Local { .. })
+    ));
+
+    // The choices are saved.
+    drop(client);
+    let client = Client::open(config_dir, "herder-test/0".into()).unwrap();
+    assert_eq!(
+        client.machines()[0].disabled_addresses,
+        std::slice::from_ref(&live)
+    );
+    client
+        .set_route(host.clone(), live.clone(), RouteChoice::Auto)
+        .unwrap();
+    assert_eq!(client.reconnect(host.clone()).await, Ok(live));
+    assert!(client.machines()[0].disabled_addresses.is_empty());
+}
+
+/// A WireGuard config a router exports is imported once, kept on this device and listed
+/// without its keys; one herder cannot use is refused with why.
+#[tokio::test]
+async fn a_wireguard_config_is_imported_listed_and_removed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config_dir = tmp.path().join("client");
+    let client = Client::open(config_dir.display().to_string(), "herder-test/0".into()).unwrap();
+    let config = "[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n\
+                  Address = 192.168.3.2/32\n\n[Peer]\n\
+                  PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\n\
+                  AllowedIPs = 192.168.1.0/24\nEndpoint = home.example.net:51820\n";
+    let tunnel = client
+        .import_wireguard("Home".into(), config.into())
+        .unwrap();
+    assert_eq!(tunnel.id, "home");
+    assert_eq!(tunnel.kind, WireGuardKind::Imported);
+    assert_eq!(tunnel.allowed_ips, ["192.168.1.0/24"]);
+    assert!(!tunnel.up);
+    // Imported again under the same name, it replaces the first.
+    client
+        .import_wireguard("Home".into(), config.into())
+        .unwrap();
+    assert_eq!(client.wireguard_tunnels().unwrap(), [tunnel]);
+    let saved = std::fs::read_to_string(config_dir.join("wireguard.json")).unwrap();
+    assert!(saved.contains("yAnz5TF+"), "the key stays on this device");
+    assert!(matches!(
+        client.import_wireguard("home".into(), "[Interface]\n".into()),
+        Err(Error::Local { .. })
+    ));
+    client.remove_wireguard("home".into()).unwrap();
+    assert!(client.wireguard_tunnels().unwrap().is_empty());
+    assert!(
+        !std::fs::read_to_string(config_dir.join("wireguard.json"))
+            .unwrap()
+            .contains("yAnz5TF+")
+    );
+    assert!(matches!(
+        client.remove_wireguard("home".into()),
+        Err(Error::Local { .. })
+    ));
 }
 
 /// A connection that works is kept: a wake, as every network change sends one, does not move

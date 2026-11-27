@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 23;
+pub const CLIENT_API_VERSION: u32 = 24;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -48,7 +48,30 @@ pub struct Machine {
     pub update: Option<UpdateStage>,
     pub approvals: Vec<ApprovalRequest>,
     pub address_headers: HashMap<String, Vec<String>>,
+    pub pinned_address: Option<String>,
+    pub disabled_addresses: Vec<String>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RouteKind {
+    HomeNetwork,
+    OwnVpn { tunnel: String },
+    Direct,
+    SystemVpn,
+    HubWireGuard,
+    Tunnel,
+    Hub { hub: HostId },
+    CloudflareRelay,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RouteChoice {
+    Auto,
+    Pinned,
+    Disabled,
+}
+
+pub fn route_kind(address: String) -> RouteKind {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionState {
@@ -138,6 +161,39 @@ impl Client {
         host_id: HostId,
         address: String,
         headers: HashMap<String, String>,
+    ) -> Result<(), Error> {}
+}
+
+impl Client {
+    pub fn set_route(
+        &self,
+        host_id: HostId,
+        address: String,
+        choice: RouteChoice,
+    ) -> Result<(), Error> {}
+}
+
+impl Client {
+    pub fn import_wireguard(
+        &self,
+        name: String,
+        config: String,
+    ) -> Result<WireGuardTunnel, Error> {}
+}
+
+impl Client {
+    pub fn wireguard_tunnels(&self) -> Result<Vec<WireGuardTunnel>, Error> {}
+}
+
+impl Client {
+    pub fn remove_wireguard(&self, id: String) -> Result<(), Error> {}
+}
+
+impl Client {
+    pub async fn set_hub_wireguard(
+        &self,
+        host_id: HostId,
+        enabled: bool,
     ) -> Result<(), Error> {}
 }
 
@@ -472,3 +528,20 @@ impl TerminalStream {
 }
 
 impl Drop for TerminalStream {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireGuardTunnel {
+    pub id: String,
+    pub name: String,
+    pub endpoint: String,
+    pub addresses: Vec<String>,
+    pub allowed_ips: Vec<String>,
+    pub kind: WireGuardKind,
+    pub up: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireGuardKind {
+    Imported,
+    Hub { host_id: HostId },
+}

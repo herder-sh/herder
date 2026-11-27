@@ -6,29 +6,32 @@ use std::collections::HashMap;
 
 use herder_client_core::{
     ConnectionQuality, ConnectionState, FleetLink, FleetMachine, FleetPerson, LoginUri, Machine,
-    NewAccount, OwnUri, SessionUpdate, TerminalEvent,
+    NewAccount, OwnUri, RouteChoice, RouteKind, SessionUpdate, TerminalEvent, WireGuardKind,
+    WireGuardTunnel,
 };
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
     ApprovalId, ApprovalOutcome, ApprovalRequest, AssertionResponse, Attachment, AttachmentId,
     AwsDeviceCode, AwsProfile, BackupSettings, Bot, BotDefaults, BotError, BotFact, BotId, BotKind,
     BotMemory, BotPlace, BotState, BotStatus, BotUser, Bytes, ChannelBinding, CiStatus,
-    CommandBody, CommandResult, Constraint, Container, ContainerState, DaemonSettings, DeviceId,
-    DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FactId,
-    FailoverSettings, FailoverTotal, FleetHost, FollowUp, FollowUpReason, FollowUpSettings,
-    HistoryPart, HostId, HostReplication, HostResources, HostUsage, HubStatus, HubVolume, Image,
-    Item, ItemBody, ItemId, LeftoverDecision, LibrarySkill, LinkedHub, LogFormat, LogSettings,
-    McpServerSettings, McpTransport, Mergeable, NewPerson, PasskeyAssertion, PasskeyChallenge,
-    PasskeyCreation, PasskeyKey, PasskeyRegistration, PermissionMode, PersonCard, PersonId,
-    PersonInfo, PersonPasskey, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile,
-    PromptId, Provider, ProviderBinary, ProviderLogin, ProviderLoginState, ProviderReload,
-    ProviderStatus, PullRequest, QuestionId, QueuedPrompt, RefusedPasskey, RegistrationResponse,
-    Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretRef,
+    CloudflareSettings, CommandBody, CommandResult, Constraint, Container, ContainerState,
+    DaemonSettings, DeviceId, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason,
+    Event, EventBody, FactId, FailoverSettings, FailoverTotal, FleetHost, FollowUp, FollowUpReason,
+    FollowUpSettings, HistoryPart, HostId, HostReplication, HostResources, HostUsage, HubStatus,
+    HubVolume, Image, Item, ItemBody, ItemId, LeftoverDecision, LibrarySkill, LinkedHub, LogFormat,
+    LogSettings, McpServerSettings, McpTransport, Mergeable, NewPerson, PasskeyAssertion,
+    PasskeyChallenge, PasskeyCreation, PasskeyKey, PasskeyRegistration, PermissionMode, PersonCard,
+    PersonId, PersonInfo, PersonPasskey, PrState, Pressure, Project, ProjectDiscovery, ProjectId,
+    PromptFile, PromptId, Provider, ProviderBinary, ProviderLogin, ProviderLoginState,
+    ProviderReload, ProviderStatus, PullRequest, QuestionId, QueuedPrompt, RefusedPasskey,
+    RegistrationResponse, Relay, RelayGrant, RemoteAccess, RemoteAccessSettings, ResourceSettings,
+    ReviewStatus, Role, Route, RouteState, RouteStatus, SecretAccess, SecretInfo, SecretRef,
     SecretRequest, SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId,
     SessionOrigin, SessionSkill, SessionStatus, SessionUsage, SignIn, SignInRefusal, SkillFile,
     SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink,
     Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen,
-    UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId, UserInfo,
+    UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId, UserInfo, WireGuardEnrollment,
+    WireGuardOffer, WireGuardSettings,
 };
 use serde_json::Value as Json;
 
@@ -146,6 +149,46 @@ pub struct Machine {
     pub approvals: Vec<ApprovalRequest>,
     #[uniffi(default)]
     pub address_headers: HashMap<String, Vec<String>>,
+    #[uniffi(default = None)]
+    pub pinned_address: Option<String>,
+    #[uniffi(default)]
+    pub disabled_addresses: Vec<String>,
+}
+
+#[uniffi::remote(Enum)]
+pub enum RouteKind {
+    HomeNetwork,
+    OwnVpn { tunnel: String },
+    Direct,
+    SystemVpn,
+    HubWireGuard,
+    Tunnel,
+    Hub { hub: HostId },
+    CloudflareRelay,
+}
+
+#[uniffi::remote(Enum)]
+pub enum RouteChoice {
+    Auto,
+    Pinned,
+    Disabled,
+}
+
+#[uniffi::remote(Record)]
+pub struct WireGuardTunnel {
+    pub id: String,
+    pub name: String,
+    pub endpoint: String,
+    pub addresses: Vec<String>,
+    pub allowed_ips: Vec<String>,
+    pub kind: WireGuardKind,
+    pub up: bool,
+}
+
+#[uniffi::remote(Enum)]
+pub enum WireGuardKind {
+    Imported,
+    Hub { host_id: HostId },
 }
 
 #[uniffi::remote(Enum)]
@@ -971,6 +1014,15 @@ pub enum CommandBody {
         terminal_id: TerminalId,
         data: Bytes,
     },
+    GetRemoteAccess,
+    SetRemoteAccess {
+        settings: Box<RemoteAccessSettings>,
+    },
+    EnrollWireGuard {
+        public_key: String,
+    },
+    UnenrollWireGuard,
+    GetRelayToken,
 }
 
 #[uniffi::remote(Record)]
@@ -1120,6 +1172,15 @@ pub enum CommandResult {
         account_id: AccountId,
         forked_from: SessionId,
         from_host_id: HostId,
+    },
+    RemoteAccess {
+        remote_access: Box<RemoteAccess>,
+    },
+    WireGuardEnrolled {
+        enrollment: WireGuardEnrollment,
+    },
+    RelayToken {
+        grant: RelayGrant,
     },
 }
 
@@ -1427,6 +1488,78 @@ pub struct SecretStoreRequest {
     pub name: String,
     pub description: String,
     pub delete_file_after: bool,
+}
+
+#[uniffi::remote(Record)]
+pub struct RemoteAccess {
+    #[uniffi(default = None)]
+    pub settings: Option<RemoteAccessSettings>,
+    #[uniffi(default = None)]
+    pub wireguard: Option<WireGuardOffer>,
+    #[uniffi(default = None)]
+    pub relay: Option<RouteStatus>,
+    #[uniffi(default = None)]
+    pub tunnel: Option<RouteStatus>,
+}
+
+#[uniffi::remote(Record)]
+pub struct RemoteAccessSettings {
+    #[uniffi(default = None)]
+    pub wireguard: Option<WireGuardSettings>,
+    #[uniffi(default = None)]
+    pub cloudflare: Option<CloudflareSettings>,
+}
+
+#[uniffi::remote(Record)]
+pub struct WireGuardSettings {
+    pub port: u16,
+    pub endpoint: String,
+}
+
+#[uniffi::remote(Record)]
+pub struct CloudflareSettings {
+    pub account_id: String,
+    pub api_token: SecretRef,
+    #[uniffi(default = false)]
+    pub relay: bool,
+    #[uniffi(default = None)]
+    pub tunnel_hostname: Option<String>,
+}
+
+#[uniffi::remote(Record)]
+pub struct WireGuardOffer {
+    pub endpoint: String,
+    pub enrolled: bool,
+}
+
+#[uniffi::remote(Record)]
+pub struct RouteStatus {
+    pub url: String,
+    pub state: RouteState,
+    #[uniffi(default = None)]
+    pub error: Option<String>,
+}
+
+#[uniffi::remote(Enum)]
+pub enum RouteState {
+    SettingUp,
+    Up,
+    Failed,
+}
+
+#[uniffi::remote(Record)]
+pub struct WireGuardEnrollment {
+    pub endpoint: String,
+    pub hub_public_key: String,
+    pub address: String,
+    pub hub_address: String,
+}
+
+#[uniffi::remote(Record)]
+pub struct RelayGrant {
+    pub url: String,
+    pub token: String,
+    pub expires_at: Timestamp,
 }
 
 #[uniffi::remote(Record)]

@@ -141,6 +141,11 @@ pub struct HostHello {
     /// Absent from a host that takes none, which the hub sends no such message.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub relay: bool,
+    /// Whether the host takes streams through the hub's Durable Object relay too, when the
+    /// hub has one: the hub then sends it [`HubHello::relay_grant`] and
+    /// [`HubMessage::RelayGrant`]. Absent from a host that does not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloudflare_relay: bool,
 }
 
 /// A session as the fleet index lists it.
@@ -404,6 +409,13 @@ pub enum HubMessage {
         /// certificate it presents inside the stream, never by this.
         device_id: DeviceId,
     },
+    /// A fresh token for the hub's Durable Object relay, or `None` once the relay is gone;
+    /// sent to a host whose hello set `cloudflare_relay`, before the one it holds expires and
+    /// whenever the relay changes.
+    RelayGrant {
+        /// The relay and the token.
+        grant: Option<crate::RelayGrant>,
+    },
     /// A message type newer than this build; skip it.
     #[serde(other, skip_serializing)]
     #[schemars(skip)]
@@ -439,6 +451,12 @@ pub struct HubHello {
     /// `cliproxyapi`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cliproxyapi_relay: bool,
+    /// A token for the hub's Durable Object relay, sent to a host whose hello set
+    /// `cloudflare_relay` while the relay is up: the host keeps a control WebSocket to it,
+    /// `<url>/hosts/<host id>`, and opens `<url>/streams/<stream id>` for each stream it
+    /// asks for (`docs/remote-access.md`). Renewed with [`HubMessage::RelayGrant`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_grant: Option<crate::RelayGrant>,
 }
 
 /// Why the hub refused a batch.

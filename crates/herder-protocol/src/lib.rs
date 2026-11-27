@@ -23,6 +23,7 @@ mod people;
 mod project;
 mod provider_logins;
 pub mod relay;
+pub mod remote;
 pub mod replication;
 mod resources;
 mod secrets;
@@ -61,6 +62,10 @@ pub use people::{
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use provider_logins::{ProviderLogin, ProviderLoginState};
 pub use relay::{RelayError, RelayErrorCode, RelayRoute};
+pub use remote::{
+    CloudflareSettings, DEFAULT_WIREGUARD_PORT, RelayGrant, RemoteAccess, RemoteAccessSettings,
+    RouteState, RouteStatus, WireGuardEnrollment, WireGuardOffer, WireGuardSettings,
+};
 pub use replication::{
     AttachmentData, Batch, HostHello, HostMessage, HostSecretFetch, HubHello, HubMessage,
     JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION, RawEventBody, RejectReason,
