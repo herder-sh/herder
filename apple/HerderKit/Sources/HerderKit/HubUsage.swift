@@ -156,7 +156,7 @@ struct HubUsageSection: View {
     @State private var open: Set<String>
 
     init(usage: HubUsage, logins: HubLogins, hostNames: [HostId: String], open: Set<String> = []) {
-        self.usage = usage
+        _usage = Bindable(usage)
         self.logins = logins
         self.hostNames = hostNames
         _open = State(initialValue: open)
@@ -240,7 +240,8 @@ private struct HubUsageRow: View {
     let toggle: () -> Void
 
     var body: some View {
-        let windows = login.login.map { HubLogins.windows($0) } ?? (nil, nil)
+        let windows: (session: WindowLeft?, weekly: WindowLeft?) =
+            login.login.map { HubLogins.windows($0) } ?? (session: nil, weekly: nil)
         VStack(alignment: .leading, spacing: 8) {
             Button(action: toggle) {
                 VStack(alignment: .leading, spacing: 6) {
