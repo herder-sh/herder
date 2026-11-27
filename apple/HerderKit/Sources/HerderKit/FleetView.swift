@@ -346,6 +346,11 @@ struct FleetView: View {
             if item != next { session = nil }
             item = next
             tab = CompactTab(next)
+            if case .project(let id) = next { projectsPath = [.project(id)] }
+        case .session(let key):
+            linkProblem = nil
+            linked = key
+            resolveLink()
         case .reconnect:
             fleet.wake()
         case .wait:
