@@ -3,9 +3,14 @@
 //! A real daemon with the fake adapter, the client under test and a second client that reaches
 //! the daemon directly all run on one thread, on tokio's paused clock: hundreds of seconds of
 //! network trouble take a few real ones. Between the client under test and the daemon sits
-//! [`Net`], a relay over real sockets with latency, jitter, a bandwidth limit, freezes, cuts
-//! in the middle of a frame, resets, connections gone silent with no FIN, routes that refuse
-//! or lose new connections, and two addresses that go in and out of reach.
+//! [`Net`], a relay over real sockets with latency, jitter, a bandwidth limit, lost packets,
+//! a radio that idles, freezes, cuts in the middle of a frame, resets, connections gone silent
+//! with no FIN, routes that refuse or lose new connections, and two addresses that go in and
+//! out of reach.
+//!
+//! [`slow_network`] runs the app on real slow networks: EDGE, 3G, an 800 ms round trip, 2%
+//! loss and bufferbloat. A connection that carries everything late must never be taken for
+//! dead there; a client that waited a fixed second or two for a pong fails them.
 //!
 //! While a session streams turns and a user sends prompts and commands, [`watch_machine`] and
 //! [`watch_session`] read what the public `Client` API shows, as an app does, and note
@@ -132,13 +137,25 @@ struct Link {
     jitter_ms: u64,
     /// Bytes a second; `None` for no limit.
     rate: Option<u64>,
+    /// Percent of the pieces lost on the way. TCP sends a lost piece again once its
+    /// retransmission timer fires, a round trip and 200 ms, twice as long each time it is lost
+    /// again; whatever was sent after it waits for it.
+    loss: u64,
+    /// How long a phone's radio that went idle ([`RADIO_IDLE`]) takes to come up again for the
+    /// next piece either way, as a 3G or EDGE radio's does.
+    wake_ms: u64,
 }
+
+/// How long a radio carries nothing before it goes idle, and has to come up for the next piece.
+const RADIO_IDLE: Duration = secs(5);
 
 impl Link {
     const CLEAN: Self = Self {
         latency_ms: 2,
         jitter_ms: 0,
         rate: None,
+        loss: 0,
+        wake_ms: 0,
     };
 
     /// Whether making a connection over it takes most of the five seconds a drop is ridden
@@ -245,6 +262,8 @@ impl Net {
 /// Carries one connection of the client to the daemon until it ends or is killed.
 async fn carry(net: Arc<Net>, path: usize, mut inbound: TcpStream, mut rng: Rng) {
     let mut kills = net.kills.subscribe();
+    // When a piece last went either way: the phone's radio.
+    let radio = Mutex::new(Instant::now());
     let torn = AtomicBool::new(false);
     let mut outbound = None;
     let kill = {
@@ -273,8 +292,8 @@ async fn carry(net: Arc<Net>, path: usize, mut inbound: TcpStream, mut rng: Rng)
             let (from_daemon, to_daemon) = daemon.split();
             let (up, down) = (Rng::new(rng.next()), Rng::new(rng.next()));
             tokio::select! {
-                () = pipe(&net, from_client, to_daemon, up, None) => {}
-                () = pipe(&net, from_daemon, to_client, down, Some(&torn)) => {}
+                () = pipe(&net, &radio, from_client, to_daemon, up, None) => {}
+                () = pipe(&net, &radio, from_daemon, to_client, down, Some(&torn)) => {}
             }
             Kill::Fin
         };
@@ -321,12 +340,14 @@ async fn carry(net: Arc<Net>, path: usize, mut inbound: TcpStream, mut rng: Rng)
 }
 
 /// Carries bytes one way as the link does: read at its rate, delivered after its latency and
-/// jitter in the order they were sent, and held while the network is frozen. A limited link
+/// jitter in the order they were sent, late when lost or the radio idled, and held while the
+/// network is frozen. A limited link
 /// passes them on in pieces a twentieth of a second long, so bytes keep coming, and what it
 /// has not read yet waits in the sender's socket. With `torn` set, the next piece is cut in
 /// half and the connection ends there.
 async fn pipe(
     net: &Net,
+    radio: &Mutex<Instant>,
     mut from: ReadHalf<'_>,
     mut to: WriteHalf<'_>,
     mut rng: Rng,
@@ -350,7 +371,18 @@ async fn pipe(
                 tokio::time::sleep(Duration::from_micros(read as u64 * 1_000_000 / rate)).await;
             }
             let link = *net.link.borrow();
-            let delay = link.latency_ms + rng.range(0, link.jitter_ms);
+            let mut delay = link.latency_ms + rng.range(0, link.jitter_ms);
+            let now = Instant::now();
+            let idled = now - std::mem::replace(&mut *radio.lock().unwrap(), now) > RADIO_IDLE;
+            if idled {
+                delay += link.wake_ms;
+            }
+            // Checked only on a lossy link, so that the jitter of any other stays its seed's.
+            let mut retransmit = 2 * link.latency_ms + link.jitter_ms + 200;
+            while link.loss > 0 && rng.chance(link.loss) {
+                delay += retransmit;
+                retransmit *= 2;
+            }
             last = last.max(Instant::now() + ms(delay));
             if queue.send((last, bytes)).is_err() {
                 return;
@@ -1492,6 +1524,7 @@ const MOBILE: Link = Link {
     latency_ms: 60,
     jitter_ms: 20,
     rate: Some(200_000),
+    ..Link::CLEAN
 };
 
 /// Every kind of short drop, one after another in the middle of streaming turns: the app
@@ -1624,6 +1657,7 @@ fn a_slow_link_carrying_a_big_replay_is_kept() {
             latency_ms: 150,
             jitter_ms: 40,
             rate: Some(25_000),
+            ..Link::CLEAN
         };
         world.trouble(Trouble::Link(slow)).await;
         let woken = Instant::now();
@@ -1745,22 +1779,129 @@ fn suspend_and_wake_cycles_resume_where_the_daemon_is() {
     });
 }
 
+/// EDGE: a 120 kbit/s link with a round trip of 600 to 900 ms, whose radio takes a second to
+/// come up after it idled.
+const EDGE: Link = Link {
+    latency_ms: 300,
+    jitter_ms: 150,
+    rate: Some(15_000),
+    loss: 0,
+    wake_ms: 1000,
+};
+
+/// 3G: 500 kbit/s with a round trip of 250 to 400 ms, whose radio takes two seconds to come
+/// up after it idled, as one that dropped to a low-power state does.
+const THREE_G: Link = Link {
+    latency_ms: 125,
+    jitter_ms: 75,
+    rate: Some(60_000),
+    loss: 0,
+    wake_ms: 2000,
+};
+
+/// A link with a round trip of 800 ms and up to 400 ms more, as across the world or over a
+/// satellite.
+const FAR: Link = Link {
+    latency_ms: 400,
+    jitter_ms: 200,
+    rate: None,
+    loss: 0,
+    wake_ms: 0,
+};
+
+/// A 3G link losing 2% of what it carries, each loss held up for a retransmission.
+const LOSSY: Link = Link { loss: 2, ..THREE_G };
+
+/// A phone's link while another app fills the buffers on the way: what herder sends waits
+/// behind seconds of someone else's bytes, a round trip of 2.4 to 3.6 s.
+const BLOATED: Link = Link {
+    latency_ms: 1200,
+    jitter_ms: 600,
+    rate: Some(50_000),
+    loss: 0,
+    wake_ms: 0,
+};
+
+/// A user works over a slow network for a few turns, then leaves the app open on it with
+/// nothing going on but its pings; the network changes to the next of `links` every 15 s. No
+/// connection is taken for dead while it carries what it is sent, however late, and the app
+/// never shows the machine without one. A drop on it is then mended, a connection made over
+/// it too.
+async fn slow_network(seed: u64, links: &[Link]) {
+    let mut world = World::start(seed, 6, None).await;
+    world.spawn_user(seed, 6);
+    world.trouble(Trouble::Link(links[0])).await;
+    let kept = world.net.accepted();
+    for step in 1..=10 {
+        tokio::time::sleep(secs(15)).await;
+        let link = links[step % links.len()];
+        if link != *world.net.link.borrow() {
+            world.trouble(Trouble::Link(link)).await;
+        }
+    }
+    assert_eq!(
+        world.net.accepted(),
+        kept,
+        "at {:.3} s a connection that carried what it was sent was replaced",
+        world.at()
+    );
+    world.nothing_wrong();
+    assert_eq!(world.seen.shows(), 0);
+
+    world.trouble(Trouble::Kill(Kill::Fin)).await;
+    world
+        .shows(secs(20), "a new connection", |machine| {
+            machine.quality.reconnects == 1
+        })
+        .await;
+    tokio::time::sleep(secs(30)).await;
+    world.finish().await;
+}
+
+#[test]
+fn an_edge_link_is_kept() {
+    run(slow_network(31, &[EDGE]));
+}
+
+#[test]
+fn a_3g_link_is_kept() {
+    run(slow_network(32, &[THREE_G]));
+}
+
+#[test]
+fn a_link_with_an_800_ms_round_trip_is_kept() {
+    run(slow_network(33, &[FAR]));
+}
+
+#[test]
+fn a_link_that_loses_2_percent_is_kept() {
+    run(slow_network(34, &[LOSSY]));
+}
+
+#[test]
+fn a_bloated_link_is_kept() {
+    run(slow_network(35, &[MOBILE, BLOATED]));
+}
+
 fn random_link(rng: &mut Rng) -> Link {
     match rng.range(1, 10) {
         1..=4 => Link {
             latency_ms: rng.range(2, 40),
             jitter_ms: rng.range(0, 10),
             rate: None,
+            ..Link::CLEAN
         },
         5..=7 => Link {
             latency_ms: rng.range(40, 150),
             jitter_ms: rng.range(0, 30),
             rate: Some(rng.range(20_000, 300_000)),
+            ..Link::CLEAN
         },
         _ => Link {
             latency_ms: rng.range(180, 350),
             jitter_ms: rng.range(0, 120),
             rate: Some(rng.range(5_000, 20_000)),
+            ..Link::CLEAN
         },
     }
 }
