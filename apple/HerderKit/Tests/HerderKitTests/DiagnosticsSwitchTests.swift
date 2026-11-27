@@ -30,6 +30,15 @@ struct DiagnosticsSwitchTests {
         #expect(diagnostics.diagnostics == nil)
     }
 
+    @Test func itAsksOnceAndNeverOverATestsProfileOrFakeFleet() {
+        let (diagnostics, _, _) = fresh()
+        #expect(diagnostics.shouldAsk(environment: [:]))
+        #expect(!diagnostics.shouldAsk(environment: ["HERDER_PROFILE": "/tmp/profile"]))
+        #expect(!diagnostics.shouldAsk(environment: ["HERDER_FAKE_FLEET": "herder://fleet#x"]))
+        diagnostics.set(false)
+        #expect(!diagnostics.shouldAsk(environment: [:]))
+    }
+
     @Test func turningItOnSharesWithOneInstallIdAndOffSharesNothing() throws {
         let (diagnostics, shared, defaults) = fresh()
         diagnostics.set(true)
