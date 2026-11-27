@@ -566,6 +566,7 @@ pub mod tests {
             session_skills: Default::default(),
             update: None,
             approvals: Vec::new(),
+            address_headers: Default::default(),
         }
     }
 

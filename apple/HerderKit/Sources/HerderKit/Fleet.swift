@@ -1099,6 +1099,13 @@ public final class Fleet {
         update(client.machines())
     }
 
+    /// Sends `headers` on the upgrade of `address`, one of the machine's tunnel URLs, for a
+    /// proxy in front of it; none removes them. Kept on this device only.
+    func setAddressHeaders(_ hostId: HostId, address: String, to headers: [String: String]) throws {
+        try client.setAddressHeaders(hostId: hostId, address: address, headers: headers)
+        update(client.machines())
+    }
+
     /// Connects to a machine at `addresses`, first to last in order of preference.
     func setAddresses(_ hostId: HostId, to addresses: [String]) throws {
         try client.setAddresses(hostId: hostId, addresses: addresses)

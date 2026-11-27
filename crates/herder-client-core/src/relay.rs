@@ -24,26 +24,38 @@ use crate::auth::{DeviceKey, client_config};
 use crate::supervisor::{self, Supervisor, Watched};
 use crate::tunnel::{self, Frames};
 
-/// Where a machine's `hub://` address leads: the machine it is of, and the client's
-/// machines, the hub among them.
+/// How a machine's addresses are reached: where its `hub://` address leads (the machine it
+/// is of, and the client's machines, the hub among them), and the headers its tunnels want.
 #[derive(Clone, Default)]
 pub(crate) struct Via {
     /// The machine to reach; `None` for one that is being signed in to, which no hub
     /// relays to yet.
     machine: Option<HostId>,
     machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
+    /// What each tunnel address of the machine sends on its upgrade.
+    headers: tunnel::Headers,
 }
 
 /// A relay stream through a hub: the frames of a connection to it.
 pub(crate) type Stream = Frames<TlsStream<Watched>>;
 
 impl Via {
-    /// The routes of `machine`, one of `machines`.
-    pub(crate) fn new(machine: HostId, machines: Weak<Mutex<Vec<Arc<Supervisor>>>>) -> Self {
+    /// The routes of `machine`, one of `machines`, whose tunnels want `headers`.
+    pub(crate) fn new(
+        machine: HostId,
+        machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
+        headers: tunnel::Headers,
+    ) -> Self {
         Self {
             machine: Some(machine),
             machines,
+            headers,
         }
+    }
+
+    /// What `address` sends on its upgrade, a tunnel's.
+    pub(crate) fn headers(&self, address: &str) -> &tunnel::Sent {
+        self.headers.get(address).unwrap_or(&tunnel::NONE)
     }
 
     /// A stream to the machine through `hub`, one of the client's machines: the hub is
@@ -73,10 +85,14 @@ impl Via {
             .collect();
         let device = DeviceKey::from_pem(&saved.device_key)?;
         let connector = TlsConnector::from(Arc::new(client_config(&saved.fingerprint, &device)?));
+        let headers = Arc::new(saved.headers);
         let reaching = |address: String| {
-            let connector = connector.clone();
-            // Each frame goes out as written: the TLS inside decides what to batch.
-            async move { supervisor::direct(&address, &connector, Some(tunnel::config())).await }
+            let (connector, headers) = (connector.clone(), Arc::clone(&headers));
+            async move {
+                let sent = headers.get(&address).unwrap_or(&tunnel::NONE);
+                // Each frame goes out as written: the TLS inside decides what to batch.
+                supervisor::direct(&address, sent, &connector, Some(tunnel::config())).await
+            }
         };
         let (mut ws, _) = supervisor::race(&addresses, reaching)
             .await

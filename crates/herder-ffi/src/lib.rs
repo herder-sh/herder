@@ -19,6 +19,7 @@
 
 mod types;
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -433,6 +434,17 @@ impl Client {
         addresses: Vec<String>,
     ) -> Result<(), HerderError> {
         Ok(self.inner.set_addresses(host_id, addresses)?)
+    }
+
+    /// Sends `headers` on the WebSocket upgrade of `address`, one of the machine's tunnel
+    /// URLs, for a proxy in front of it; none removes them. Kept on this device only.
+    pub fn set_address_headers(
+        &self,
+        host_id: HostId,
+        address: String,
+        headers: HashMap<String, String>,
+    ) -> Result<(), HerderError> {
+        Ok(self.inner.set_address_headers(host_id, address, headers)?)
     }
 
     /// Drops a machine's connection and connects again at once, racing its addresses in

@@ -144,6 +144,8 @@ pub struct Machine {
     pub update: Option<UpdateStage>,
     #[uniffi(default)]
     pub approvals: Vec<ApprovalRequest>,
+    #[uniffi(default)]
+    pub address_headers: HashMap<String, Vec<String>>,
 }
 
 #[uniffi::remote(Enum)]

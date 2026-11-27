@@ -600,6 +600,196 @@ async fn a_public_address_set_on_the_daemon_reaches_every_device() {
     wait_machines(&phone, |m| m[0].addresses == [at_home.clone()]).await;
 }
 
+/// A proxy in front of the daemon's tunnel listener that lets an upgrade through only with
+/// `headers`, as Cloudflare Access does with a service token, and passes on the request without
+/// them; anything else gets 403.
+struct HeaderGate {
+    addr: SocketAddr,
+    /// Whether a request it passed on still carried one of the headers.
+    leaked: Arc<AtomicBool>,
+}
+
+impl HeaderGate {
+    async fn start(tunnel: SocketAddr, headers: &[(&str, &str)]) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let leaked = Arc::new(AtomicBool::new(false));
+        let wanted: Vec<String> = headers
+            .iter()
+            .map(|(name, value)| format!("{}: {value}", name.to_ascii_lowercase()))
+            .collect();
+        let leaks = Arc::clone(&leaked);
+        tokio::spawn(async move {
+            while let Ok((mut inbound, _)) = listener.accept().await {
+                let (wanted, leaks) = (wanted.clone(), Arc::clone(&leaks));
+                tokio::spawn(async move {
+                    let mut head = Vec::new();
+                    while !head.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        if inbound.read_exact(&mut byte).await.is_err() {
+                            return;
+                        }
+                        head.push(byte[0]);
+                    }
+                    let head = String::from_utf8_lossy(&head).into_owned();
+                    let lines: Vec<String> = head
+                        .split("\r\n")
+                        .map(|line| match line.split_once(':') {
+                            Some((name, value)) => {
+                                format!("{}: {}", name.to_ascii_lowercase(), value.trim())
+                            }
+                            None => line.to_owned(),
+                        })
+                        .collect();
+                    if !wanted.iter().all(|header| lines.contains(header)) {
+                        let refusal = "HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n";
+                        let _ = inbound.write_all(refusal.as_bytes()).await;
+                        return;
+                    }
+                    let passed: Vec<&String> =
+                        lines.iter().filter(|line| !wanted.contains(line)).collect();
+                    let names: Vec<&str> =
+                        wanted.iter().filter_map(|h| h.split(':').next()).collect();
+                    if passed
+                        .iter()
+                        .any(|line| names.iter().any(|name| line.starts_with(name)))
+                    {
+                        leaks.store(true, Ordering::SeqCst);
+                    }
+                    let passed = passed.iter().map(|line| line.as_str()).collect::<Vec<_>>();
+                    let mut outbound = TcpStream::connect(tunnel).await.unwrap();
+                    outbound
+                        .write_all(passed.join("\r\n").as_bytes())
+                        .await
+                        .unwrap();
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                });
+            }
+        });
+        Self { addr, leaked }
+    }
+}
+
+/// A machine whose tunnel sits behind a proxy that wants headers: without them, or with
+/// wrong ones, the machine says the proxy refused and what to check; with them it connects
+/// and streams, and they go to the proxy only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tunnel_behind_a_proxy_that_wants_headers_gets_them_from_this_device_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
+        .await
+        .unwrap()
+        .host_id;
+    let token = [
+        ("CF-Access-Client-Id", "abc.access"),
+        ("CF-Access-Client-Secret", "s3cret"),
+    ];
+    let gate = HeaderGate::start(daemon.tunnel, &token).await;
+    let url = format!("ws://{}", gate.addr);
+    client
+        .set_addresses(host.clone(), vec![url.clone()])
+        .unwrap();
+    let unreachable = |result: Result<String, Error>| match result {
+        Err(Error::Unreachable { message }) => message,
+        other => panic!("{other:?}"),
+    };
+
+    let message = unreachable(client.reconnect(host.clone()).await);
+    assert!(message.contains("403 Forbidden"), "{message}");
+    assert!(message.contains("set them for this address"), "{message}");
+
+    let headers = |secret: &str| {
+        HashMap::from([
+            (token[0].0.to_owned(), token[0].1.to_owned()),
+            (token[1].0.to_owned(), secret.to_owned()),
+        ])
+    };
+    client
+        .set_address_headers(host.clone(), url.clone(), headers("wrong"))
+        .unwrap();
+    let message = unreachable(client.reconnect(host.clone()).await);
+    assert!(
+        message.contains(
+            "refused the headers set for this address (cf-access-client-id, \
+             cf-access-client-secret)"
+        ),
+        "{message}"
+    );
+    assert!(
+        !message.contains("wrong"),
+        "a header's value shows: {message}"
+    );
+
+    client
+        .set_address_headers(host.clone(), url.clone(), headers("s3cret"))
+        .unwrap();
+    assert_eq!(client.reconnect(host.clone()).await, Ok(url.clone()));
+    client.synced(host.clone()).await.unwrap();
+    let machine = client.machines().remove(0);
+    assert_eq!(
+        machine.address_headers,
+        HashMap::from([(
+            url.clone(),
+            vec![
+                "cf-access-client-id".to_owned(),
+                "cf-access-client-secret".to_owned()
+            ]
+        )])
+    );
+    assert!(!gate.leaked.load(Ordering::SeqCst));
+
+    // Not shared: a link to the machine names its addresses only.
+    let shared = std::fs::read_to_string(tmp.path().join("client/machines.json")).unwrap();
+    assert!(shared.contains("s3cret"), "the profile keeps them");
+    let link = FleetLink {
+        person: FleetPerson {
+            name: "alice".into(),
+            passkeys: Vec::new(),
+        },
+        machines: vec![herder_client_core::FleetMachine {
+            hosts: machine.addresses.clone(),
+            fingerprint: machine.fingerprint.clone(),
+            name: None,
+        }],
+    };
+    assert!(!link.to_string().contains("s3cret"));
+
+    // Refused: what is not a header, one the upgrade sets itself, and an address that is
+    // not one of its tunnels.
+    for (address, name) in [
+        (url.as_str(), "Sec-WebSocket-Key"),
+        (url.as_str(), "not a name"),
+        ("ws://elsewhere.example.com", "X-Token"),
+    ] {
+        let one = HashMap::from([(name.to_owned(), "x".to_owned())]);
+        let refused = client.set_address_headers(host.clone(), address.to_owned(), one);
+        assert!(
+            matches!(refused, Err(Error::Local { .. })),
+            "{name}: {refused:?}"
+        );
+    }
+    // Removing the address drops its headers.
+    client
+        .set_addresses(host.clone(), vec![daemon.addr.to_string()])
+        .unwrap();
+    assert!(client.machines()[0].address_headers.is_empty());
+    let saved = std::fs::read_to_string(tmp.path().join("client/machines.json")).unwrap();
+    assert!(!saved.contains("s3cret"), "{saved}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn synced_waits_for_the_lists_and_the_replay() {
     let tmp = tempfile::tempdir().unwrap();

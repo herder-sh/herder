@@ -190,13 +190,18 @@ public address (`DaemonSettings::public_addresses`, P26.1) arrives with the next
 
 ### A proxy that wants a header (optional, never required)
 
-An owner can also put the hostname behind a proxy that admits only requests carrying a
-header, such as Cloudflare Access with a service token (`CF-Access-Client-Id`,
-`CF-Access-Client-Secret`). The client would send those headers on the outer upgrade only,
-never to the daemon. That needs per-address headers in the client profile and a
-client-core API to set them (P26.2, which replaces P23.7). Without it, leave the hostname
-outside Access (or bypass it): the inner mutual TLS already authenticates every
-connection.
+The hostname may also sit behind a proxy that admits only requests carrying a header:
+Cloudflare Access with a service token (`CF-Access-Client-Id`, `CF-Access-Client-Secret`),
+or an nginx or Caddy that checks one of your own. On each device, open the machine's page,
+then **Proxy headers…** under the tunnel address, and enter them one per line as
+`Name: value` (`Client::set_address_headers`, P26.2). The device sends them on the outer
+upgrade only. They stay in its profile next to its device keys: herder never sends them to
+the daemon (its tunnel listener ignores what a proxy passes on) nor in a link to another
+device. A proxy that refuses says so in the address's error, naming the headers sent.
+
+Such a proxy is never required: the inner mutual TLS already authenticates every
+connection. Leaving the hostname outside it (or bypassing it) also lets a new device sign in
+through the tunnel; one behind it signs in at another address first.
 
 ## Contracts
 
@@ -207,7 +212,7 @@ connection.
 | Claim attempt limit (P23.2), pre-auth cap (P23.5) | No. |
 | Daemon advertising its public URL in `ServerHello.addresses`, invites, `OwnershipClaim` (P23.6) | **Yes**: herder-protocol documents those `addresses` as `host:port`. Older clients would reject a link carrying a URL. |
 | An owner sets the public addresses once (P26.1) | **Yes**: `DaemonSettings::public_addresses`, optional, so `PROTOCOL_VERSION` stays. Clients follow `ServerHello.addresses` with no client-core API change. |
-| Headers a fronting proxy needs (P26.2, replacing P23.7's Cloudflare-only token) | **Yes**: new client-core API and profile field. |
+| Headers a fronting proxy needs (P26.2, replacing P23.7's Cloudflare-only token) | **Yes**: `Client::set_address_headers` and `Machine::address_headers`; `CLIENT_API_VERSION` 23. |
 
 ## Todos
 

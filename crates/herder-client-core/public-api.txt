@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 22;
+pub const CLIENT_API_VERSION: u32 = 23;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -47,6 +47,7 @@ pub struct Machine {
     pub session_skills: HashMap<SessionId, Vec<SessionSkill>>,
     pub update: Option<UpdateStage>,
     pub approvals: Vec<ApprovalRequest>,
+    pub address_headers: HashMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +129,15 @@ impl Client {
         &self,
         host_id: HostId,
         addresses: Vec<String>,
+    ) -> Result<(), Error> {}
+}
+
+impl Client {
+    pub fn set_address_headers(
+        &self,
+        host_id: HostId,
+        address: String,
+        headers: HashMap<String, String>,
     ) -> Result<(), Error> {}
 }
 

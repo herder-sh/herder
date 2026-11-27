@@ -81,6 +81,8 @@ struct MachinePage: View {
     @State private var connecting: String?
     /// The address the last Connect failed on, and why.
     @State private var connectFailure: AddressStatus.Failure?
+    /// The tunnel address whose proxy headers a sheet sets.
+    @State private var headers: HeaderTarget?
 
     var body: some View {
         let machine = fleet.machines.first { $0.hostId == hostId }
@@ -133,6 +135,7 @@ struct MachinePage: View {
             }
         }
         .sheet(isPresented: $addingAccount) { AddAccountSheet(fleet: fleet, hostId: hostId) }
+        .sheet(item: $headers) { target in AddressHeadersSheet(fleet: fleet, target: target) }
         .sheet(item: $setup) { setup in
             AddAccountSheet(fleet: fleet, hostId: hostId, initialProvider: setup.draft.provider, initialDraft: setup.draft)
         }
@@ -471,6 +474,19 @@ struct MachinePage: View {
                            connect: { connect(through: address) },
                            move: { move(addresses, from: index, to: $0) },
                            remove: { perform { try fleet.setAddresses(hostId, to: addresses.filter { $0 != address }) } })
+                if AddressHeaders.takesHeaders(address) {
+                    let names = machine.addressHeaders[address] ?? []
+                    Button {
+                        headers = HeaderTarget(hostId: hostId, address: address, names: names)
+                    } label: {
+                        Text(AddressHeaders.summary(names) ?? "Proxy headers…")
+                            .font(.caption).foregroundStyle(Theme.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 17)
+                    .help("Headers a proxy in front of this tunnel wants, such as a Cloudflare Access service token")
+                    .accessibilityIdentifier("address-headers-open")
+                }
             }
             HStack(spacing: 10) {
                 InputBox(placeholder: "Host or IP, e.g. box.tailnet.ts.net", text: $newAddress, mono: true)

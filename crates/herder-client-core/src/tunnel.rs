@@ -5,7 +5,14 @@
 //! its ordinary connection: TLS pinning the daemon's certificate and presenting the device's,
 //! the WebSocket and the hello. The tunnel relays only ciphertext, and the daemon knows the
 //! device as on a direct connection.
+//!
+//! A proxy in front of the tunnel may admit only requests that carry some header, as
+//! Cloudflare Access does with a service token. The device keeps such headers per address
+//! ([`Headers`]) and sends them on the outer upgrade only: they never reach the daemon, which
+//! sees only what runs inside, nor a link shared with another device. A refused upgrade says
+//! so, and what to check.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
@@ -19,6 +26,7 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Bytes, Message};
 
@@ -39,9 +47,44 @@ static WEB_PKI: LazyLock<Result<Arc<rustls::ClientConfig>, String>> = LazyLock::
         .map_err(|err| err.to_string())
 });
 
-/// Opens the tunnel at `url`, a saved `wss://` or `ws://` address: the frames to run the
-/// daemon connection in.
-pub(crate) async fn open(url: &str) -> anyhow::Result<Frames> {
+/// The headers a tunnel's upgrade carries, by name, as this device keeps them.
+pub(crate) type Sent = BTreeMap<String, String>;
+
+/// The headers each tunnel address of a machine sends on its upgrade, by address.
+pub(crate) type Headers = BTreeMap<String, Sent>;
+
+/// No headers.
+pub(crate) static NONE: Sent = BTreeMap::new();
+
+/// Headers a request needs to be a WebSocket upgrade at all, which the client sets itself.
+const RESERVED: [&str; 6] = [
+    "host",
+    "connection",
+    "upgrade",
+    "content-length",
+    "transfer-encoding",
+    "origin",
+];
+
+/// `name: value` as a header a tunnel's upgrade may carry: a valid HTTP header, and none the
+/// upgrade sets itself; the name as sent, lowercase.
+pub(crate) fn header(name: &str, value: &str) -> Result<(String, String), String> {
+    let name = name.trim();
+    let parsed = HeaderName::from_bytes(name.as_bytes())
+        .map_err(|_| format!("{name:?} is not a header name"))?;
+    let lower = parsed.as_str();
+    if RESERVED.contains(&lower) || lower.starts_with("sec-websocket-") {
+        return Err(format!("{name} is set by herder itself"));
+    }
+    let value = value.trim();
+    HeaderValue::from_str(value)
+        .map_err(|_| format!("the value of {name} is not a header value"))?;
+    Ok((lower.to_owned(), value.to_owned()))
+}
+
+/// Opens the tunnel at `url`, a saved `wss://` or `ws://` address, sending `headers` on its
+/// upgrade: the frames to run the daemon connection in.
+pub(crate) async fn open(url: &str, headers: &Sent) -> anyhow::Result<Frames> {
     let parsed = url::Url::parse(url).context("the tunnel URL")?;
     let host = parsed.host_str().context("the tunnel URL names no host")?;
     let port = parsed
@@ -63,11 +106,44 @@ pub(crate) async fn open(url: &str) -> anyhow::Result<Frames> {
     } else {
         Box::new(tcp)
     };
-    let request = url.into_client_request()?;
+    let mut request = url.into_client_request()?;
+    for (name, value) in headers {
+        request.headers_mut().insert(
+            HeaderName::from_bytes(name.as_bytes())?,
+            HeaderValue::from_str(value)?,
+        );
+    }
     let (ws, _) = tokio_tungstenite::client_async_with_config(request, io, Some(config()))
         .await
-        .context("the tunnel's WebSocket upgrade")?;
+        .map_err(|err| refused(err, headers))?;
     Ok(Frames::new(ws))
+}
+
+/// Why the tunnel did not take the upgrade, which sent `headers`: what a proxy in front of
+/// it that refused says, and what to check.
+fn refused(err: tokio_tungstenite::tungstenite::Error, headers: &Sent) -> anyhow::Error {
+    use tokio_tungstenite::tungstenite::Error;
+    let Error::Http(response) = err else {
+        return anyhow::Error::new(err).context("the tunnel's WebSocket upgrade");
+    };
+    let status = response.status();
+    let by_proxy = status.is_redirection() || status.as_u16() == 401 || status.as_u16() == 403;
+    let check = match (by_proxy, headers.is_empty()) {
+        (false, _) => String::new(),
+        (true, true) => ": a proxy in front of it wants something this device does not send; \
+                         if it takes headers, such as a Cloudflare Access service token, set \
+                         them for this address"
+            .to_owned(),
+        (true, false) => {
+            let names: Vec<&str> = headers.keys().map(String::as_str).collect();
+            format!(
+                ": the proxy in front of it refused the headers set for this address ({}); \
+                 check them",
+                names.join(", ")
+            )
+        }
+    };
+    anyhow!("the tunnel answered {status} to the WebSocket upgrade{check}")
 }
 
 /// Each frame goes out as soon as it is written, as the TLS inside decides what to batch.
@@ -144,5 +220,58 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for Frames<S> {
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.ws).poll_close(cx).map_err(broken)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_header_is_valid_http_and_none_the_upgrade_sets_itself() {
+        assert_eq!(
+            header(" CF-Access-Client-Id ", " abc.access "),
+            Ok(("cf-access-client-id".into(), "abc.access".into()))
+        );
+        for (name, value, why) in [
+            ("Host", "x", "set by herder"),
+            ("Origin", "https://evil", "set by herder"),
+            ("Sec-WebSocket-Protocol", "x", "set by herder"),
+            ("bad name", "x", "not a header name"),
+            ("", "x", "not a header name"),
+            ("X-Token", "line\nbreak", "not a header value"),
+        ] {
+            let err = header(name, value).unwrap_err();
+            assert!(err.contains(why), "{name}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_refused_upgrade_says_what_to_check() {
+        use tokio_tungstenite::tungstenite::Error;
+        use tokio_tungstenite::tungstenite::http::Response;
+        let answered = |status: u16| {
+            Error::Http(Box::new(
+                Response::builder().status(status).body(None).unwrap(),
+            ))
+        };
+        let sent = Sent::from([("cf-access-client-id".to_owned(), "id".to_owned())]);
+        let none = format!("{:#}", refused(answered(403), &NONE));
+        assert!(
+            none.contains("403 Forbidden") && none.contains("set them for this address"),
+            "{none}"
+        );
+        let wrong = format!("{:#}", refused(answered(302), &sent));
+        assert!(
+            wrong.contains("302")
+                && wrong.contains("refused the headers set for this address (cf-access-client-id)"),
+            "{wrong}"
+        );
+        // A tunnel that cannot reach the daemon is no matter of headers.
+        let down = format!("{:#}", refused(answered(502), &sent));
+        assert_eq!(
+            down,
+            "the tunnel answered 502 Bad Gateway to the WebSocket upgrade"
+        );
     }
 }

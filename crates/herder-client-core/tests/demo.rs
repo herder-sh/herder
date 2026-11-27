@@ -38,6 +38,7 @@ fn demo() -> Demo {
         session_skills: HashMap::new(),
         update: None,
         approvals: Vec::new(),
+        address_headers: Default::default(),
     };
     let created = Event {
         session_id: SessionId::new("s1"),
