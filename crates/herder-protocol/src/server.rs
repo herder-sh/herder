@@ -629,6 +629,14 @@ pub enum CommandResult {
         /// The image's or file's bytes.
         data: Bytes,
     },
+    /// A session's latest events, answering `get_latest_events`: oldest first, the last
+    /// [`crate::LATEST_EVENTS`] at most, as many of them as fit [`crate::LATEST_EVENTS_BYTES`]
+    /// of JSON but always the latest. Their seqs are the journal's, so a client folds them
+    /// as the replay reaches them; an event this daemon cannot encode is left out.
+    LatestEvents {
+        /// The events.
+        events: Vec<Event>,
+    },
     /// A folder's entries, answering `list_directory`.
     Directory {
         /// The folder, as an absolute path with `~` expanded.

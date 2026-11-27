@@ -645,6 +645,13 @@ impl Outbox {
         self.wake();
     }
 
+    /// Queues a message ahead of every message waiting, as for an answer the client waits
+    /// on to show anything; it must not be dropped either.
+    pub(crate) fn push_first(&self, message: ServerMessage) {
+        self.lock().push_first(message);
+        self.wake();
+    }
+
     pub(crate) fn push_all(&self, messages: impl IntoIterator<Item = ServerMessage>) {
         let mut inner = self.lock();
         for message in messages {
@@ -749,6 +756,17 @@ impl Inner {
         {
             self.peak = self.peak.max(self.queue.len());
         }
+    }
+
+    fn push_first(&mut self, message: ServerMessage) {
+        if self.state != OutboxState::Open {
+            return;
+        }
+        if self.queue.len() >= MAX_BACKLOG {
+            self.overflow();
+            return;
+        }
+        self.queue.push_front(message);
     }
 
     fn overflow(&mut self) {

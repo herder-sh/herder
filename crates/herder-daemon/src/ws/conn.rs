@@ -10,9 +10,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use herder_protocol::{
-    ClientHello, ClientMessage, Command, CommandId, CommandResult, Cursor, DeviceId, ErrorCode,
-    ErrorInfo, EventBody, MAX_MESSAGE_BYTES, PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, ServerHello,
-    ServerMessage, SessionId, SignIn,
+    ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor, DeviceId,
+    ErrorCode, ErrorInfo, EventBody, LATEST_EVENTS, LATEST_EVENTS_BYTES, MAX_MESSAGE_BYTES,
+    PASSKEY_CHALLENGE_SECS, PROTOCOL_VERSION, Seq, ServerHello, ServerMessage, SessionId, SignIn,
 };
 use serde::Deserialize;
 use tokio::net::TcpStream;
@@ -460,6 +460,11 @@ async fn handle<B: Backend>(
                 });
                 return;
             }
+            if let CommandBody::GetLatestEvents { session_id } = &body {
+                // Ahead of the replays queued: it is what an app shows first.
+                outbox.push_first(answered(id, latest_events(shared, session_id).await));
+                return;
+            }
             let waiting = match shared.approval(identity, &hello.client, hello.passkey, &body) {
                 Ok(waiting) => waiting,
                 Err(error) => {
@@ -681,6 +686,52 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
         }
     }
     shared.fanout.go_live(outbox, &session_id, last);
+}
+
+/// The session's latest events, as `get_latest_events` answers: read from the journal like a
+/// replay, so a hub answers with its copy.
+async fn latest_events<B: Backend>(
+    shared: &Shared<B>,
+    session_id: &SessionId,
+) -> Result<CommandResult, ErrorInfo> {
+    let internal = |message: &str| ErrorInfo {
+        code: ErrorCode::Internal,
+        message: message.to_owned(),
+    };
+    let sessions = shared.backend.sessions().await.map_err(|err| {
+        warn!("cannot list sessions: {err:#}");
+        internal("cannot list sessions")
+    })?;
+    let Some(head) = sessions.iter().find(|s| s.session_id == *session_id) else {
+        return Err(ErrorInfo {
+            code: ErrorCode::NotFound,
+            message: format!("session {session_id} does not exist"),
+        });
+    };
+    let after = head.head_seq.saturating_sub(LATEST_EVENTS as Seq);
+    let page = shared
+        .backend
+        .read_since(session_id, after, LATEST_EVENTS)
+        .await
+        .map_err(|err| {
+            warn!(%session_id, "cannot read the journal: {err:#}");
+            internal("cannot read the journal")
+        })?;
+    let mut events = Vec::new();
+    let mut bytes = 0;
+    for event in page.into_iter().rev() {
+        // Bodies from a newer build cannot be sent.
+        if matches!(event.body, EventBody::Unknown) {
+            continue;
+        }
+        bytes += serde_json::to_vec(&event).map_or(0, |json| json.len());
+        if bytes > LATEST_EVENTS_BYTES && !events.is_empty() {
+            break;
+        }
+        events.push(event);
+    }
+    events.reverse();
+    Ok(CommandResult::LatestEvents { events })
 }
 
 fn error(outbox: &Outbox, code: ErrorCode, message: &str) {

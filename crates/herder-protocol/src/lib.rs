@@ -95,6 +95,15 @@ pub const PROTOCOL_VERSION: u32 = 6;
 /// one: it fails the command it carries instead. A daemon sent one refuses it unread.
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
+/// Most events `get_latest_events` answers with: enough for an app's first screen of a
+/// session.
+pub const LATEST_EVENTS: usize = 100;
+
+/// Most bytes of JSON the events `get_latest_events` answers with take together, unless the
+/// latest alone takes more: a few screenfuls, which a link of 25 kB a second carries in under
+/// three seconds.
+pub const LATEST_EVENTS_BYTES: usize = 64 * 1024;
+
 /// Most characters a session title may have.
 pub const MAX_TITLE_CHARS: usize = 80;
 

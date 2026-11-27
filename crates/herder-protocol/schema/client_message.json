@@ -994,6 +994,24 @@
           ]
         },
         {
+          "description": "Fetch the session's latest events, for an app to show the end of a long session at\nonce while its journal replays from the start; answered with `latest_events`, ahead\nof the replays the connection has queued. It changes nothing, so a resend is answered\nafresh.",
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "description": "The session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "get_latest_events"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ]
+        },
+        {
           "description": "Stop the running turn.",
           "type": "object",
           "properties": {

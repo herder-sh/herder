@@ -450,6 +450,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::UnarchiveSession { session_id }
         | CommandBody::SendPrompt { session_id, .. }
         | CommandBody::GetAttachment { session_id, .. }
+        | CommandBody::GetLatestEvents { session_id }
         | CommandBody::Interrupt { session_id }
         | CommandBody::RemoveQueued { session_id, .. }
         | CommandBody::MoveQueued { session_id, .. }

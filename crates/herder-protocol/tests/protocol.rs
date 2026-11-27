@@ -276,6 +276,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
             session_id: session_id(),
             attachment_id: AttachmentId::new("01J9ATTACHMENT"),
         }),
+        command(CommandBody::GetLatestEvents {
+            session_id: session_id(),
+        }),
         command(CommandBody::UnarchiveSession {
             session_id: session_id(),
         }),
@@ -1108,6 +1111,21 @@ fn server_fixtures() -> Vec<ServerMessage> {
             result: CommandResult::Attachment {
                 media_type: "image/png".into(),
                 data: Bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::LatestEvents {
+                events: vec![Event {
+                    session_id: SessionId::new("01J9SESSION"),
+                    seq: 4210,
+                    at: at(),
+                    by: None,
+                    body: EventBody::TurnCompleted {
+                        turn_id: TurnId::new("01J9TURN"),
+                        usage: None,
+                    },
+                }],
             },
         },
         ServerMessage::CommandAccepted {
