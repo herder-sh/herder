@@ -37,12 +37,6 @@ final class ScreenshotTests: XCTestCase {
         settle()
         #if os(macOS)
         shoot("mac-home")
-        // The machines footer's popover, which the window's own screenshot leaves out.
-        if openMachines() {
-            shoot("mac-sidebar-machines", screen: true)
-            app.typeKey(.escape, modifierFlags: [])
-            settle()
-        }
         #else
         shoot("ios-home")
         #endif
@@ -572,8 +566,7 @@ final class ScreenshotTests: XCTestCase {
                 closeActivity()
             }
         }
-        let machine = app.descendants(matching: .any)["sidebar-machine-devbox"].firstMatch
-        if openMachines(), wait(machine, "devbox in the machines popover") {
+        if let machine = hubMachine("devbox") {
             press(machine)
             settle()
             shoot("mac-machine-settings")
@@ -597,8 +590,7 @@ final class ScreenshotTests: XCTestCase {
             back()
         }
         // laptop, where the user is a member: no account, CLI or limit to change.
-        let laptop = app.descendants(matching: .any)["sidebar-machine-laptop"].firstMatch
-        if openMachines(), wait(laptop, "laptop in the machines popover") {
+        if let laptop = hubMachine("laptop") {
             press(laptop)
             settle()
             shoot("mac-machine-member")
@@ -974,13 +966,13 @@ final class ScreenshotTests: XCTestCase {
         settle()
     }
 
-    /// Opens the sidebar's machines popover.
-    private func openMachines() -> Bool {
-        let footer = app.descendants(matching: .any)["sidebar-machines"].firstMatch
-        guard wait(footer, "machines footer") else { return false }
-        press(footer)
-        settle()
-        return true
+    /// Hub's row for the machine named `name`, scrolled into sight.
+    private func hubMachine(_ name: String) -> XCUIElement? {
+        guard section("Hub") else { return nil }
+        let machine = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        guard wait(machine, "\(name) in Hub") else { return nil }
+        reveal(machine)
+        return machine
     }
     #endif
 

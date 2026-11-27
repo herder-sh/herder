@@ -389,7 +389,8 @@ struct Lists: Equatable {
                     sessions: machine.sessions.filter { $0.hostId == host.hostId }.count)
             },
             pinned: machine.failover.pin,
-            hub: !machine.hosts.isEmpty || machine.hub != nil)
+            hub: !machine.hosts.isEmpty || machine.hub != nil,
+            openWork: own.filter { [.running, .waiting, .needsYou].contains($0.model.state) }.count)
     }
 
     /// A usage window's name as the TUI labels it (crates/herder-tui/src/account_screen.rs).

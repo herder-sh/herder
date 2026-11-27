@@ -15,9 +15,9 @@ private func project(
                         recency: recency, quiet: quiet)
 }
 
-private func summary(_ name: String, _ connection: ConnectionState, running: Int = 0) -> MachineSummary {
+private func summary(_ name: String, _ connection: ConnectionState, openWork: Int = 0, hub: Bool = false) -> MachineSummary {
     MachineSummary(hostId: name, name: name, connection: connection, role: .owner, cpu: nil, memory: nil,
-                   running: running, sessions: 0, accounts: [], hosts: [], pinned: false)
+                   running: 0, sessions: 0, accounts: [], hosts: [], pinned: false, hub: hub, openWork: openWork)
 }
 
 struct ProjectOrderTests {
@@ -93,21 +93,24 @@ struct ProjectOrderTests {
         #expect(project("idle", recency: 0, states: [.idle, .done]).needsYou == 0)
     }
 
-    @Test func theMachinesFooterSaysHowManyAreNotWell() {
-        #expect(MachinesFooter.summary([]) == "No machines")
-        #expect(MachinesFooter.summary([summary("a", .connected)]) == "1 machine")
-        #expect(MachinesFooter.summary([
-            summary("a", .connected), summary("b", .disconnected(error: "gone")), summary("c", .connecting),
-            summary("d", .connected),
-        ]) == "4 machines · 1 offline · 1 connecting")
-        // A hub is no machine: counted only once it is offline.
-        var hub = summary("v", .connected)
-        hub.hub = true
-        #expect(MachinesFooter.summary([summary("a", .connected), hub]) == "1 machine")
-        hub = summary("v", .disconnected(error: "gone"))
-        hub.hub = true
-        #expect(MachinesFooter.summary([summary("a", .connected), hub]) == "1 machine · hub offline")
-        #expect(MachinesFooter.status(summary("a", .connected, running: 2)) == "2 running")
-        #expect(MachinesFooter.status(summary("a", .connected)) == "Idle")
+    @Test func stalledWorkSaysNothingWhileAllIsWell() {
+        let offline = ConnectionState.disconnected(error: "gone")
+        #expect(StalledWork.line([]) == nil)
+        #expect(StalledWork.line([summary("a", .connected, openWork: 3)]) == nil)
+        // Asleep with nothing open, still connecting, or a hub: nothing to act on.
+        #expect(StalledWork.line([summary("laptop", offline)]) == nil)
+        #expect(StalledWork.line([summary("a", .connecting, openWork: 2)]) == nil)
+        #expect(StalledWork.line([summary("hub", offline, openWork: 2, hub: true)]) == nil)
+    }
+
+    @Test func stalledWorkNamesTheOfflineMachineOpenWorkWaitsOn() {
+        let offline = ConnectionState.disconnected(error: "gone")
+        let devbox = summary("devbox", offline, openWork: 2)
+        #expect(StalledWork.line([summary("studio", .connected, openWork: 1), devbox])
+            == "devbox is offline · 2 sessions wait on it")
+        #expect(StalledWork.line([summary("devbox", offline, openWork: 1)]) == "devbox is offline · 1 session waits on it")
+        #expect(StalledWork.line([devbox, summary("studio", offline, openWork: 3), summary("laptop", offline)])
+            == "2 machines are offline · 5 sessions wait on them")
+        #expect(StalledWork.stalled([devbox, summary("laptop", offline)]).map(\.hostId) == ["devbox"])
     }
 }
