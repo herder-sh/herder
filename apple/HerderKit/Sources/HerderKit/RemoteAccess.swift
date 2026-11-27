@@ -1,10 +1,11 @@
 import Foundation
 import Herder
 
-/// How this fleet is reached from outside home, route by route, read only from what the app
-/// already has: the machines' addresses and connections, the hub's public address and its check
-/// (`PublicCheck`), and this device's own network interfaces. herder runs no VPN: each route is
-/// one the owner set up, or did not, which is a choice, never a problem.
+/// How this fleet is reached from outside home, route by route, read from what the app already
+/// has: the machines' addresses and connections, the hub's public address and its check
+/// (`PublicCheck`), this device's own network interfaces, and the options herder sets up itself
+/// (`RemoteOptions`). Each route is one the owner set up, or did not, which is a choice, never a
+/// problem.
 struct RemoteAccess: Equatable {
     /// How a route stands.
     enum State: Hashable {
@@ -82,19 +83,26 @@ struct RemoteAccess: Equatable {
     var homeSubnets: [String]
     /// What this device saw working from outside just now, for `RemoteSightings` to remember.
     var sightings: [String]
+    /// The options herder sets up: an imported VPN config, the hub's WireGuard, Cloudflare.
+    var options: RemoteOptions
     let now: Date
+
+    /// The hub with a public address, else the first; nil with none.
+    static func hub(among machines: [Machine]) -> Machine? {
+        let hubs = machines.filter(\.isHub)
+        return hubs.first(where: { $0.addresses.contains { AddressScope($0) == .anywhere } }) ?? hubs.first
+    }
 
     /// `resolved` is what each name looked up resolved to (`HostLookup`), `interfaces` this
     /// device's (`NetworkInterface.current()`), `seen` when each route last worked
     /// (`RemoteSightings`).
     init(machines: [Machine], resolved: [String: [String]] = [:], interfaces: [NetworkInterface] = [],
-         seen: [String: Date] = [:], now: Date = .now) {
+         seen: [String: Date] = [:], options: RemoteOptions = RemoteOptions(), now: Date = .now) {
         self.now = now
+        self.options = options
         var sightings: [String] = []
 
-        // The hub with a public address, else the first.
-        let hubs = machines.filter(\.isHub)
-        if let pick = hubs.first(where: { $0.addresses.contains { AddressScope($0) == .anywhere } }) ?? hubs.first {
+        if let pick = Self.hub(among: machines) {
             let address = pick.addresses.first { AddressScope($0) == .anywhere }
             let check = address.map { PublicCheck(address: $0, of: pick, resolved: resolved) } ?? .unchecked
             let key = address.map { "hub:\($0)" }
@@ -178,9 +186,12 @@ struct RemoteAccess: Equatable {
         default: break
         }
         var others: [String] = []
+        if options.hubWireGuardState == .working { others.append("herder’s WireGuard") }
+        if options.ownVpnState == .working { others.append("your VPN") }
         if tailscaleState == .working { others.append("Tailscale") }
         if router.state == .working { others.append("your router’s VPN") }
-        if !others.isEmpty { return "Reachable over \(others.joined(separator: " and "))" }
+        if options.relayState == .working { others.append("the Cloudflare relay") }
+        if !others.isEmpty { return "Reachable over \(Self.joined(others))" }
         if hub.state == .unseen { return "The hub has a public address, not seen working from outside yet" }
         if tailscaleState == .unseen { return "Machines have Tailscale addresses, not seen answering on them yet" }
         return "Reached at home only · set up access from anywhere"
@@ -190,7 +201,8 @@ struct RemoteAccess: Equatable {
     /// does not and nothing else does.
     var overall: State {
         if hub.state == .wontWork { return .wontWork }
-        let states = [hub.state, tailscaleState, router.state]
+        let states = [hub.state, tailscaleState, router.state, options.ownVpnState, options.hubWireGuardState,
+                      options.relayState]
         if states.contains(.working) { return .working }
         return states.contains(.unseen) ? .unseen : .notSetUp
     }
@@ -201,10 +213,20 @@ struct RemoteAccess: Equatable {
         let state: State
     }
 
-    /// Each route by its short name, with its state: the Hub tab's row.
+    /// Each route by its short name, with its state: the Hub tab's row. herder's own options
+    /// join it once set up, so a fleet that uses none of them reads as before.
     var routes: [RouteState] {
-        [RouteState(name: "Hub", state: hub.state), RouteState(name: "Tailscale", state: tailscaleState),
-         RouteState(name: "Router VPN", state: router.state)]
+        let own = [RouteState(name: "Your VPN", state: options.ownVpnState),
+                   RouteState(name: "WireGuard", state: options.hubWireGuardState),
+                   RouteState(name: "Relay", state: options.relayState)]
+        return [RouteState(name: "Hub", state: hub.state), RouteState(name: "Tailscale", state: tailscaleState),
+                RouteState(name: "Router VPN", state: router.state)] + own.filter { $0.state != .notSetUp }
+    }
+
+    /// "A", "A and B", "A, B and C".
+    static func joined(_ names: [String]) -> String {
+        guard let last = names.last, names.count > 1 else { return names.first ?? "" }
+        return names.dropLast().joined(separator: ", ") + " and " + last
     }
 
     /// The hub's route in a line: "hub.example.com · connected through it now".

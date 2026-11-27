@@ -5,16 +5,40 @@ import SwiftUI
 /// interfaces as connections change, and remembers what it saw working (`RemoteSightings`).
 struct RemoteAccessReader<Content: View>: View {
     let fleet: Fleet
-    @ViewBuilder var content: (RemoteAccess) -> Content
+    @ViewBuilder var content: (RemoteAccess, RemoteActions) -> Content
     @State private var resolved: [String: [String]] = [:]
     @State private var interfaces: [NetworkInterface] = []
+    @State private var offer: RemoteOptions?
+    @State private var tunnels: [RemoteOptions.Tunnel] = []
+    /// Bumped after a change, so the hub is asked again.
+    @State private var changes = 0
     @AppStorage(RemoteSightings.key) private var sightings = ""
 
     var body: some View {
         let machines = fleet.machines
+        let hub = RemoteAccess.hub(among: machines)
+        var options = offer ?? RemoteOptions()
+        options.hub = hub?.hostId
+        options.owner = hub?.role == .owner
+        options.tunnels = tunnels
         let access = RemoteAccess(machines: machines, resolved: resolved, interfaces: interfaces,
-                                  seen: RemoteSightings.decode(sightings))
-        content(access)
+                                  seen: RemoteSightings.decode(sightings), options: options)
+        return content(access, actions(hub: hub?.hostId))
+            // Read this device's WireGuard configs again as connections change, and after each change.
+            .task(id: "\(machines.map { $0.address ?? "" }) \(changes)") {
+                tunnels = fleet.wireGuardTunnels()
+            }
+            // Ask the hub what it offers when it connects, and after each change.
+            .task(id: "\(hub?.hostId ?? "") \(hub?.connection == .connected) \(changes)") {
+                guard let hub, hub.connection == .connected else { return }
+                var asked = RemoteOptions()
+                do {
+                    asked.read(try await fleet.remoteAccess(of: hub.hostId))
+                } catch {
+                    asked.problem = RemoteOptions.explain(error)
+                }
+                offer = asked
+            }
             .task(id: access.hub.lookup) {
                 guard let name = access.hub.lookup, resolved[name] == nil else { return }
                 resolved[name] = await HostLookup.addresses(of: name)
@@ -27,6 +51,32 @@ struct RemoteAccessReader<Content: View>: View {
                 guard !access.sightings.isEmpty else { return }
                 sightings = RemoteSightings.recording(access.sightings, at: .now, in: sightings)
             }
+    }
+
+    /// What the page does, through the fleet; each change to the hub asks it again.
+    private func actions(hub: HostId?) -> RemoteActions {
+        let fleet = fleet
+        let changed = { changes += 1 }
+        return RemoteActions(
+            setRoute: { try fleet.setRoute($0, address: $1, to: $2) },
+            setAddresses: { try fleet.setAddresses($0, to: $1) },
+            importConfig: { try fleet.importWireGuard(name: $0, config: $1); changed() },
+            removeTunnel: { try fleet.removeWireGuard($0); changed() },
+            useHubWireGuard: { on in
+                guard let hub else { return }
+                try await fleet.setHubWireGuard(hub, enabled: on)
+                changed()
+            },
+            setSettings: { settings in
+                guard let hub else { return }
+                var applied = RemoteOptions()
+                applied.read(try await fleet.setRemoteAccess(of: hub, to: settings))
+                offer = applied
+            },
+            putToken: { token in
+                guard let hub else { return }
+                try await fleet.putCloudflareToken(token, on: hub)
+            })
     }
 }
 
@@ -79,8 +129,9 @@ struct RemoteAccessPage: View {
     @Environment(\.pages) private var pages
 
     var body: some View {
-        RemoteAccessReader(fleet: fleet) { access in
-            RemoteAccessView(access: access) { pages.open(.machine($0)) }
+        RemoteAccessReader(fleet: fleet) { access, actions in
+            RemoteAccessView(access: access, machines: fleet.machines.map { MachineRoutes($0, among: fleet.machines) },
+                             actions: actions) { pages.open(.machine($0)) }
         }
         .navigationTitle("Remote access")
     }
@@ -90,19 +141,43 @@ struct RemoteAccessPage: View {
 /// addresses and proxy headers are set.
 struct RemoteAccessView: View {
     let access: RemoteAccess
+    /// Each machine's routes, for the route in use and the user's ranking.
+    var machines: [MachineRoutes] = []
+    var actions = RemoteActions()
     let openMachine: (HostId) -> Void
 
-    static let intro = "herder runs no VPN of its own: your devices reach your machines over what you already have. Every connection is end-to-end encrypted to the machine, whatever carries it, and none of these is required."
+    static let intro = "Your devices reach your machines over what you already have, or over what herder sets up for you here. Every connection is end-to-end encrypted to the machine, whatever carries it, and none of these is required."
 
     var body: some View {
+        let options = access.options
         DetailPage(title: "Remote access", status: access.summary) {
             Text(Self.intro).font(.footnote).foregroundStyle(Theme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+            if !machines.isEmpty {
+                MachineRoutesCard(machines: machines, actions: actions)
+            }
             RouteCard(title: "Through the hub", symbol: "point.3.connected.trianglepath.dotted", state: access.hub.state,
                       line: access.hubLine, options: SetupOption.hub(access)) {
                 hubFacts
             }
             .accessibilityIdentifier("remote-access-hub")
+            RouteCard(title: "Your VPN, in herder", symbol: "key.horizontal", state: options.ownVpnState,
+                      line: options.ownVpnLine, options: []) {
+                OwnVpnFacts(options: options, actions: actions)
+            }
+            .accessibilityIdentifier("remote-access-own-vpn")
+            if options.hub != nil {
+                RouteCard(title: "herder’s WireGuard on the hub", symbol: "network.badge.shield.half.filled",
+                          state: options.hubWireGuardState, line: options.hubWireGuardLine, options: []) {
+                    HubWireGuardFacts(options: options, actions: actions)
+                }
+                .accessibilityIdentifier("remote-access-hub-wireguard")
+                RouteCard(title: "Cloudflare, set up by the hub", symbol: "cloud", state: options.cloudflareState,
+                          line: options.cloudflareLine, options: []) {
+                    CloudflareFacts(options: options, actions: actions)
+                }
+                .accessibilityIdentifier("remote-access-cloudflare")
+            }
             RouteCard(title: "Tailscale", symbol: "lock.shield", state: access.tailscaleState,
                       line: access.tailscaleLine, options: SetupOption.tailscale) {
                 ForEach(access.tailscale) { machine in
@@ -165,8 +240,8 @@ struct RemoteAccessView: View {
 }
 
 /// A route's card: its name over a box with its mark, state and line, its facts, and **How
-/// to set it up**, open while the route does not work yet.
-private struct RouteCard<Facts: View>: View {
+/// to set it up** when it has steps, open while the route does not work yet.
+struct RouteCard<Facts: View>: View {
     let title: String
     let symbol: String
     let state: RemoteAccess.State
@@ -204,32 +279,38 @@ private struct RouteCard<Facts: View>: View {
                 }
                 .padding(Theme.cellPadding)
                 facts
-                RowDivider()
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { showsSteps.toggle() }
-                } label: {
-                    HStack {
-                        Text("How to set it up").font(.subheadline.weight(.medium)).foregroundStyle(Theme.action)
-                        Spacer(minLength: 8)
-                        Image(systemName: showsSteps ? "chevron.up" : "chevron.down")
-                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                    }
-                    .padding(.horizontal, Theme.cellPadding)
-                    .frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("setup-steps-toggle")
-                if showsSteps {
-                    SetupSteps(options: options)
+                if !options.isEmpty {
+                    steps
                 }
             }
+        }
+    }
+
+    @ViewBuilder private var steps: some View {
+        RowDivider()
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { showsSteps.toggle() }
+        } label: {
+            HStack {
+                Text("How to set it up").font(.subheadline.weight(.medium)).foregroundStyle(Theme.action)
+                Spacer(minLength: 8)
+                Image(systemName: showsSteps ? "chevron.up" : "chevron.down")
+                    .font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+            }
+            .padding(.horizontal, Theme.cellPadding)
+            .frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("setup-steps-toggle")
+        if showsSteps {
+            SetupSteps(options: options)
         }
     }
 }
 
 /// A label and its value in a route's card.
-private struct FactRow<Value: View>: View {
+struct FactRow<Value: View>: View {
     let label: String
     @ViewBuilder var value: Value
 
