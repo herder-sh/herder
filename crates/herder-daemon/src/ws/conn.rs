@@ -91,7 +91,7 @@ pub(super) async fn run<B: Backend>(
         () = cancel.cancelled() => return,
         ws = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
-            open(&shared.tls, &shared.tunnel_gate, stream, peer, tunneled),
+            open(&shared.tls, &shared.gates, stream, peer, tunneled),
         ) => ws,
     };
     let (ws, device, pass) = match ws {
@@ -120,7 +120,8 @@ pub(super) async fn run_relayed<B: Backend>(
     cancel: CancellationToken,
 ) {
     let Some(pass) = shared
-        .tunnel_gate
+        .gates
+        .tunnel
         .enter(Some(&format!("hub device {device}")))
     else {
         warn!(%peer, %device, "refused a relayed connection: too many are not signed in yet");
@@ -130,7 +131,7 @@ pub(super) async fn run_relayed<B: Backend>(
         () = cancel.cancelled() => return,
         ws = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
-            handshake(&shared.tls, Transport::Relay(stream)),
+            handshake(&shared.tls, pass.meter(Transport::Relay(stream))),
         ) => ws,
     };
     let (ws, device) = match ws {
@@ -138,28 +139,28 @@ pub(super) async fn run_relayed<B: Backend>(
         Ok(Err(err)) => return info!(%peer, "relayed handshake failed: {err:#}"),
         Err(_) => return info!(%peer, "relayed handshake timed out"),
     };
-    serve(ws, device, None, Some(pass), peer, shared, cancel).await;
+    serve(ws, device, None, pass, peer, shared, cancel).await;
 }
 
-/// The handshakes of a connection: on a tunneled one, the upgrade from `cloudflared` first.
-/// A tunneled connection also gets its pass through the tunnel's gate.
+/// The handshakes of a connection, once a gate lets it in: on a tunneled one, the upgrade
+/// from `cloudflared` first.
 async fn open(
     tls: &Tls,
-    gate: &Arc<tunnel::Gate>,
+    gates: &tunnel::Gates,
     stream: TcpStream,
     peer: SocketAddr,
     tunneled: bool,
-) -> Result<(Ws, String, Option<tunnel::Pass>)> {
+) -> Result<(Ws, String, tunnel::Pass)> {
     let (transport, pass) = if tunneled {
-        let (frames, pass, client) = tunnel::accept(stream, gate)
+        let (frames, pass, client) = tunnel::accept(stream, &gates.tunnel)
             .await
             .context("the tunnel's WebSocket upgrade")?;
         debug!(%peer, client = client.as_deref().unwrap_or("unknown"), "tunnel opened");
-        (Transport::Tunnel(Box::new(frames)), Some(pass))
+        (Transport::Tunnel(Box::new(frames)), pass)
     } else {
-        (Transport::Tcp(stream), None)
+        (Transport::Tcp(stream), gates.direct(peer)?)
     };
-    let (ws, device) = handshake(tls, transport).await?;
+    let (ws, device) = handshake(tls, pass.meter(transport)).await?;
     Ok((ws, device, pass))
 }
 
@@ -199,13 +200,13 @@ struct Who {
 }
 
 /// Serves a connection whose handshakes are done; `first` is its first text frame when the
-/// caller already read it, and `pass` counts a tunneled one until it authenticated. Logs why
+/// caller already read it, and `pass` counts it until it authenticated. Logs why
 /// the connection ended.
 pub(super) async fn serve<B: Backend>(
     ws: Ws,
     device: String,
     first: Option<String>,
-    pass: Option<tunnel::Pass>,
+    pass: tunnel::Pass,
     peer: SocketAddr,
     shared: Arc<Shared<B>>,
     cancel: CancellationToken,
@@ -283,7 +284,7 @@ pub(super) async fn serve<B: Backend>(
 }
 
 /// The TLS and WebSocket handshakes; returns the fingerprint of the peer's device certificate.
-pub(crate) async fn handshake(tls: &Tls, stream: Transport) -> Result<(Ws, String)> {
+pub(crate) async fn handshake(tls: &Tls, stream: tunnel::Metered) -> Result<(Ws, String)> {
     let (tls, device) = secure(tls, stream).await?;
     let ws = tokio_tungstenite::accept_async_with_config(tls, Some(ws_config())).await?;
     Ok((ws, device))
@@ -292,8 +293,8 @@ pub(crate) async fn handshake(tls: &Tls, stream: Transport) -> Result<(Ws, Strin
 /// The TLS handshake; returns the fingerprint of the peer's device certificate.
 pub(crate) async fn secure(
     tls: &Tls,
-    stream: Transport,
-) -> Result<(tokio_rustls::server::TlsStream<Transport>, String)> {
+    stream: tunnel::Metered,
+) -> Result<(tokio_rustls::server::TlsStream<tunnel::Metered>, String)> {
     let tls = tls.acceptor().accept(stream).await?;
     // The verifier makes a client certificate mandatory; this only guards against a change there.
     let device = tls
@@ -317,7 +318,7 @@ pub(crate) fn ws_config() -> WebSocketConfig {
 /// closes the connection.
 async fn read<B: Backend>(
     mut stream: SplitStream<Ws>,
-    (first, pass): (Option<String>, Option<tunnel::Pass>),
+    (first, pass): (Option<String>, tunnel::Pass),
     shared: &Arc<Shared<B>>,
     (outbox, deflate): (&Arc<Outbox>, &AtomicBool),
     (peer, device): (SocketAddr, &str),
@@ -366,7 +367,7 @@ async fn read<B: Backend>(
             bail!("device {device} refused");
         }
     };
-    // Authenticated: no longer one of the strangers the tunnel's gate counts.
+    // Authenticated: no longer one of the strangers a gate counts, nor limited in what it sends.
     drop(pass);
     info!(
         %peer,
@@ -979,4 +980,124 @@ async fn write(
     let _ = tokio::time::timeout(CLOSE_TIMEOUT, sink.send(Message::Close(Some(frame)))).await;
     cancel.cancel();
     close.2.map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    /// Fuzz targets, run briefly by `cargo test`, at length with `PROPTEST_CASES`: what the
+    /// daemon decodes of a peer before it is authenticated.
+    mod fuzz {
+        use herder_protocol::{
+            ClientHello, ClientMessage, Cursor, NewPerson, PROTOCOL_VERSION, PersonPasskey,
+            SessionId, SignIn,
+        };
+        use proptest::prelude::*;
+
+        use super::super::{command_id, decode};
+        use crate::auth::authenticator::Authenticator;
+        use crate::auth::passkeys::Passkeys;
+
+        /// What a stranger sends before it is authenticated, as a herder client encodes it: a
+        /// hello, then a sign-in by each method.
+        fn samples() -> Vec<String> {
+            let passkeys = Passkeys::new().unwrap();
+            let (passkey, registration) =
+                Authenticator::register("tomas", &passkeys.creation().unwrap());
+            let person = NewPerson {
+                name: "Tomas".into(),
+                passkey: PersonPasskey::Register { registration },
+            };
+            let assertion = passkey.assert(&passkeys.challenge().unwrap());
+            [
+                ClientMessage::Hello(ClientHello {
+                    protocol_version: PROTOCOL_VERSION,
+                    client: "herder-tui/1.0".into(),
+                    resume: vec![Cursor {
+                        session_id: SessionId::new("01JABCDEFGHJKMNPQRSTVWXYZ0"),
+                        after_seq: 42,
+                    }],
+                    pairing_code: Some("ABCDE-FGHJK".into()),
+                    sign_in: true,
+                    passkey: true,
+                    deflate: true,
+                }),
+                ClientMessage::SignIn(SignIn::Passkey { assertion }),
+                ClientMessage::SignIn(SignIn::ClaimOwnership {
+                    code: "ABC-DEF".into(),
+                    person: person.clone(),
+                }),
+                ClientMessage::SignIn(SignIn::AcceptInvite {
+                    invite: "ABCDE-FGHJK-MNPQR-STVWX".into(),
+                    person,
+                }),
+                ClientMessage::SignIn(SignIn::StartLogin),
+            ]
+            .iter()
+            .map(|message| serde_json::to_string(message).unwrap())
+            .collect()
+        }
+
+        proptest! {
+            /// Any text: decoded or refused, never a panic.
+            #[test]
+            fn fuzz_any_text(text in "\\PC{0,512}") {
+                let _ = decode(&text);
+                let _ = command_id(&text);
+            }
+
+            /// A herder client's message with bytes of it changed: decoded or refused, never a
+            /// panic.
+            #[test]
+            fn fuzz_a_message_changed(
+                sample in any::<prop::sample::Index>(),
+                edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..8),
+            ) {
+                let samples = samples();
+                let mut bytes = samples[sample.index(samples.len())].clone().into_bytes();
+                for (at, byte) in edits {
+                    let at = at.index(bytes.len());
+                    bytes[at] = byte;
+                }
+                let text = String::from_utf8_lossy(&bytes);
+                let _ = decode(&text);
+                let _ = command_id(&text);
+            }
+
+            /// Any hello reads back as sent.
+            #[test]
+            fn fuzz_a_hello(
+                client in "\\PC{0,64}",
+                code in proptest::option::of("\\PC{0,16}"),
+                resume in prop::collection::vec(("\\PC{1,30}", any::<u64>()), 0..8),
+                flags in any::<(bool, bool, bool)>(),
+            ) {
+                let hello = ClientMessage::Hello(ClientHello {
+                    protocol_version: PROTOCOL_VERSION,
+                    client,
+                    resume: resume
+                        .into_iter()
+                        .map(|(id, seq)| Cursor { session_id: SessionId::new(id), after_seq: seq })
+                        .collect(),
+                    pairing_code: code,
+                    sign_in: flags.0,
+                    passkey: flags.1,
+                    deflate: flags.2,
+                });
+                let text = serde_json::to_string(&hello).unwrap();
+                prop_assert_eq!(decode(&text).ok(), Some(hello));
+            }
+
+            /// Any compressed frame inflates to at most the limit, or is refused.
+            #[test]
+            fn fuzz_inflate(
+                frame in prop::collection::vec(any::<u8>(), 0..1024),
+                zeros in 0usize..1 << 16,
+            ) {
+                let _ = herder_protocol::deflate::inflate(&frame, 4096);
+                let bomb = herder_protocol::deflate::deflate([&*"0".repeat(zeros)]);
+                let inflated = herder_protocol::deflate::inflate(&bomb, 4096);
+                prop_assert_eq!(inflated.is_ok(), zeros <= 4096);
+            }
+        }
+    }
 }

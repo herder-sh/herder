@@ -1486,6 +1486,88 @@ async fn an_unpaired_device_is_refused() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stranger_may_send_only_so_much_before_it_is_authenticated() {
+    let daemon = Daemon::start().await;
+    let hello = |client: String| {
+        ClientMessage::Hello(ClientHello {
+            protocol_version: PROTOCOL_VERSION,
+            client,
+            resume: Vec::new(),
+            pairing_code: None,
+            sign_in: false,
+            passkey: false,
+            deflate: false,
+        })
+    };
+    let stranger = DeviceKey::generate().unwrap();
+    // A hello over the share is never read whole: the connection closes on it unanswered.
+    let mut client = daemon.client_on(&stranger, None).await;
+    let text = serde_json::to_string(&hello("x".repeat(tunnel::UNAUTHENTICATED_BYTES))).unwrap();
+    let _ = client.ws.send(Message::text(text)).await;
+    assert_eq!(client.try_recv().await, None);
+    // One within it is read, and the stranger refused.
+    let mut client = daemon.client_on(&stranger, None).await;
+    client
+        .send(&hello("x".repeat(tunnel::UNAUTHENTICATED_BYTES / 2)))
+        .await;
+    let ServerMessage::Error { error, .. } = client.recv().await else {
+        panic!("expected the stranger refused");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    // Authenticated, a device is no longer limited.
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    let token = "x".repeat(2 * tunnel::UNAUTHENTICATED_BYTES);
+    owner
+        .send(&ClientMessage::Sync {
+            token: token.clone(),
+        })
+        .await;
+    assert_eq!(owner.recv().await, ServerMessage::Synced { token });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn direct_strangers_are_capped_before_tls_but_signed_in_devices_are_not() {
+    let daemon = Daemon::start().await;
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    // Strangers that connect and say nothing fill their address's share.
+    let mut strangers = Vec::new();
+    for _ in 0..tunnel::UNAUTHENTICATED_PER_PEER {
+        strangers.push(TcpStream::connect(daemon.addr).await.unwrap());
+    }
+    let connect = || Client::connect(daemon.addr, &daemon.fingerprint, &daemon.owner, None, None);
+    // Once the daemon took every one of them, a device not signed in yet is refused before
+    // its TLS starts.
+    tokio::time::timeout(TIMEOUT, async {
+        while connect().await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // The device that signed in before them is untouched.
+    owner.send(&ClientMessage::Sync { token: "t".into() }).await;
+    assert_eq!(
+        owner.recv().await,
+        ServerMessage::Synced { token: "t".into() }
+    );
+    // A stranger gone frees its place.
+    drop(strangers.pop());
+    let mut device = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            match connect().await {
+                Ok(device) => return device,
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(device.hello(Vec::new()).await.role, Role::Owner);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_listen_address_serves_clients() {
     let daemon = Daemon::start().await;
     for addr in [daemon.other, daemon.addr] {

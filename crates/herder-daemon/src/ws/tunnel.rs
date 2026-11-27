@@ -15,11 +15,16 @@
 //! daemon through it as one peer. A [`Gate`] caps the connections that have not authenticated
 //! yet, per client address as Cloudflare names it and in all, so that a flood of strangers
 //! can neither exhaust the daemon nor bury a person's apps in login requests; one past a cap
-//! is refused (429) before its TLS starts.
+//! is refused (429) before its TLS starts. Direct connections pass a gate of their own, per
+//! peer address, so that strangers flooding one way in do not lock everyone out of the other.
+//!
+//! Until it authenticates, a connection may read only [`UNAUTHENTICATED_BYTES`]: a stranger
+//! gets no more of the daemon's memory than a sign-in takes, however large a message it sends.
 
 use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll, ready};
 
@@ -60,7 +65,48 @@ pub(crate) const UNAUTHENTICATED: usize = 64;
 /// household signing in at once, with room for their retries.
 pub(crate) const UNAUTHENTICATED_PER_CLIENT: usize = 8;
 
-/// Counts the tunneled connections that have not authenticated yet.
+/// Direct connections not yet authenticated from one peer address. Wider than a tunnel
+/// client's: a peer may be a router or a cluster node that every device behind it comes
+/// through.
+pub(crate) const UNAUTHENTICATED_PER_PEER: usize = 32;
+
+/// Bytes a connection may read before it authenticates. Its TLS handshake, upgrade and hello,
+/// or a sign-in with a new passkey, take a few kilobytes; a hello resuming a thousand sessions
+/// some 60 KiB.
+pub(crate) const UNAUTHENTICATED_BYTES: usize = 256 * 1024;
+
+/// The largest frame, and message, the tunnel listener reads. Each frame carries one write of
+/// the client's TLS, a record of at most about 16 KiB; a larger one is held in memory whole
+/// before any of its bytes count against [`UNAUTHENTICATED_BYTES`].
+const TUNNEL_FRAME_BYTES: usize = 256 * 1024;
+
+/// The gates of a daemon's or a hub's connections: tunneled ones, by the client address
+/// Cloudflare names, and direct ones, by peer address.
+pub(crate) struct Gates {
+    pub(crate) tunnel: Arc<Gate>,
+    pub(crate) direct: Arc<Gate>,
+}
+
+impl Gates {
+    pub(crate) fn new() -> Self {
+        Self {
+            tunnel: Gate::new(UNAUTHENTICATED, UNAUTHENTICATED_PER_CLIENT),
+            direct: Gate::new(UNAUTHENTICATED, UNAUTHENTICATED_PER_PEER),
+        }
+    }
+
+    /// A pass for a direct connection from `peer`, unless that would pass a cap.
+    pub(crate) fn direct(&self, peer: std::net::SocketAddr) -> anyhow::Result<Pass> {
+        let peer = peer.ip().to_string();
+        let pass = self.direct.enter(Some(&peer));
+        if pass.is_none() {
+            warn!(%peer, "refused a connection: too many from it are not signed in yet");
+        }
+        pass.context("too many connections are not signed in yet")
+    }
+}
+
+/// Counts the connections that have not authenticated yet.
 pub(crate) struct Gate {
     total: usize,
     per_client: usize,
@@ -96,19 +142,32 @@ impl Gate {
         Some(Pass {
             gate: Arc::clone(self),
             client,
+            budget: Budget(Arc::new(AtomicUsize::new(UNAUTHENTICATED_BYTES))),
         })
     }
 }
 
-/// One unauthenticated connection, counted until it is dropped: once the connection
-/// authenticated, or ended.
+/// One unauthenticated connection, counted, and its reads limited, until it is dropped: once
+/// the connection authenticated, or ended.
 pub(crate) struct Pass {
     gate: Arc<Gate>,
     client: String,
+    budget: Budget,
+}
+
+impl Pass {
+    /// `transport`, reading at most [`UNAUTHENTICATED_BYTES`] until this pass is dropped.
+    pub(crate) fn meter(&self, transport: Transport) -> Metered {
+        Metered {
+            transport,
+            budget: self.budget.clone(),
+        }
+    }
 }
 
 impl Drop for Pass {
     fn drop(&mut self) {
+        self.budget.lift();
         let mut open = self
             .gate
             .open
@@ -159,7 +218,10 @@ pub(crate) async fn accept(
         }
         Ok(response)
     };
-    let ws = tokio_tungstenite::accept_hdr_async_with_config(stream, check, Some(config())).await?;
+    let config = config()
+        .max_frame_size(Some(TUNNEL_FRAME_BYTES))
+        .max_message_size(Some(TUNNEL_FRAME_BYTES));
+    let ws = tokio_tungstenite::accept_hdr_async_with_config(stream, check, Some(config)).await?;
     let pass = pass.context("the upgrade was taken without a pass")?;
     Ok((Frames::new(ws), pass, client))
 }
@@ -293,6 +355,70 @@ impl AsyncWrite for Transport {
     }
 }
 
+/// What a connection may still read before it authenticates; [`Budget::LIFTED`] once it did.
+#[derive(Clone)]
+struct Budget(Arc<AtomicUsize>);
+
+impl Budget {
+    const LIFTED: usize = usize::MAX;
+
+    /// Takes `bytes` off what is left; false when that is less.
+    fn spend(&self, bytes: usize) -> bool {
+        self.0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| match left {
+                Self::LIFTED => Some(left),
+                _ => left.checked_sub(bytes),
+            })
+            .is_ok()
+    }
+
+    fn lift(&self) {
+        self.0.store(Self::LIFTED, Ordering::Relaxed);
+    }
+}
+
+/// A connection's [`Transport`], whose reads its [`Pass`] limits until it is dropped.
+pub(crate) struct Metered {
+    transport: Transport,
+    budget: Budget,
+}
+
+impl AsyncRead for Metered {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let before = buf.filled().len();
+        ready!(Pin::new(&mut self.transport).poll_read(cx, buf))?;
+        if !self.budget.spend(buf.filled().len() - before) {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("over {UNAUTHENTICATED_BYTES} bytes sent before signing in"),
+            )));
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncWrite for Metered {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.transport).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.transport).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.transport).poll_shutdown(cx)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +438,55 @@ mod tests {
         let unknown = gate.enter(None).unwrap();
         drop(unknown);
         assert!(!gate.open.lock().unwrap().by_client.contains_key("unknown"));
+    }
+
+    #[test]
+    fn a_pass_limits_what_is_read_until_it_is_dropped() {
+        let gate = Gate::new(2, 2);
+        let pass = gate.enter(Some("a")).unwrap();
+        let budget = pass.budget.clone();
+        assert!(budget.spend(UNAUTHENTICATED_BYTES - 1));
+        assert!(budget.spend(1));
+        assert!(!budget.spend(1), "past the budget");
+        drop(pass);
+        assert!(budget.spend(usize::MAX - 1), "authenticated: no limit");
+    }
+
+    /// Fuzz target, run briefly by `cargo test`, at length with `PROPTEST_CASES`: the gate
+    /// against a model of it, over any order of strangers coming and going.
+    mod fuzz {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        proptest! {
+            #[test]
+            fn fuzz_the_gate(
+                total in 1usize..8,
+                per_client in 1usize..4,
+                steps in prop::collection::vec((any::<bool>(), proptest::option::of(0u8..4), any::<prop::sample::Index>()), 0..64),
+            ) {
+                let gate = Gate::new(total, per_client);
+                let mut passes: Vec<(Option<u8>, Pass)> = Vec::new();
+                for (enter, client, which) in steps {
+                    if enter || passes.is_empty() {
+                        let name = client.map(|client| client.to_string());
+                        let from = passes.iter().filter(|(of, _)| *of == client).count();
+                        let fits = passes.len() < total && from < per_client;
+                        let pass = gate.enter(name.as_deref());
+                        prop_assert_eq!(pass.is_some(), fits);
+                        if let Some(pass) = pass {
+                            passes.push((client, pass));
+                        }
+                    } else {
+                        passes.swap_remove(which.index(passes.len()));
+                    }
+                }
+                drop(passes);
+                let open = gate.open.lock().unwrap();
+                prop_assert_eq!(open.total, 0);
+                prop_assert!(open.by_client.is_empty());
+            }
+        }
     }
 }

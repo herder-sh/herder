@@ -30,7 +30,7 @@ use crate::auth::DeviceRole;
 use crate::ws::{self, Transport, Ws, tunnel};
 
 /// A connection whose upgrade request is read and not answered yet.
-pub(super) type Upgrade = Upgrading<tokio_rustls::server::TlsStream<Transport>>;
+pub(super) type Upgrade = Upgrading<tokio_rustls::server::TlsStream<tunnel::Metered>>;
 
 /// Time a peer gets for the TLS and WebSocket handshakes, and again for its hello.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -55,7 +55,7 @@ pub(super) async fn run(
     }
     let opened = tokio::select! {
         () = cancel.cancelled() => return,
-        opened = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared, stream, tunneled)) => opened,
+        opened = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared, stream, peer, tunneled)) => opened,
     };
     let (upgrade, device, pass) = match opened {
         Ok(Ok(opened)) => opened,
@@ -106,22 +106,22 @@ pub(super) async fn run(
 }
 
 /// The handshakes of a connection up to its upgrade request, which is read and not answered
-/// yet: on a tunneled one, the upgrade from `cloudflared` first, which also gets it a pass
-/// through the tunnel's gate.
+/// yet, once a gate lets it in: on a tunneled one, the upgrade from `cloudflared` first.
 async fn open(
     shared: &Shared,
     stream: TcpStream,
+    peer: SocketAddr,
     tunneled: bool,
-) -> Result<(Upgrade, String, Option<tunnel::Pass>)> {
+) -> Result<(Upgrade, String, tunnel::Pass)> {
     let (transport, pass) = if tunneled {
-        let (frames, pass, _) = tunnel::accept(stream, &shared.tunnel_gate)
+        let (frames, pass, _) = tunnel::accept(stream, &shared.gates.tunnel)
             .await
             .context("the tunnel's WebSocket upgrade")?;
-        (Transport::Tunnel(Box::new(frames)), Some(pass))
+        (Transport::Tunnel(Box::new(frames)), pass)
     } else {
-        (Transport::Tcp(stream), None)
+        (Transport::Tcp(stream), shared.gates.direct(peer)?)
     };
-    let (tls, device) = ws::secure(&shared.tls, transport).await?;
+    let (tls, device) = ws::secure(&shared.tls, pass.meter(transport)).await?;
     let upgrade = upgrade::read(tls).await?;
     Ok((upgrade, device, pass))
 }
@@ -142,9 +142,14 @@ async fn first_text(ws: &mut Ws) -> Result<Option<String>> {
 }
 
 /// Whether a first message is a host's hello: only that one carries a replication version.
+/// Read without building the message: it comes from a peer not authenticated yet, and JSON
+/// parsed into a tree takes many times its size in memory.
 fn is_host(first: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(first)
-        .is_ok_and(|hello| hello.get("replication_version").is_some())
+    #[derive(serde::Deserialize)]
+    struct Hello {
+        replication_version: Option<serde::de::IgnoredAny>,
+    }
+    serde_json::from_str::<Hello>(first).is_ok_and(|hello| hello.replication_version.is_some())
 }
 
 /// Handles the host's messages after its hello, `first`, until it closes the connection,
@@ -154,7 +159,7 @@ async fn serve(
     first: &str,
     shared: &Shared,
     device: &str,
-    pass: Option<tunnel::Pass>,
+    pass: tunnel::Pass,
     cancel: &CancellationToken,
 ) -> Result<()> {
     let hello = match serde_json::from_str(first) {
@@ -498,4 +503,94 @@ async fn fail(ws: &mut Ws, error: ReplicationError) -> Result<()> {
     let message = error.message.clone();
     send(ws, HubMessage::Error { error }).await?;
     bail!("{message}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_host;
+
+    #[test]
+    fn a_host_is_told_by_its_replication_version_alone() {
+        assert!(is_host(r#"{"type":"hello","replication_version":3}"#));
+        assert!(!is_host(r#"{"type":"hello","protocol_version":3}"#));
+        assert!(!is_host(r#"{"replication_version":null}"#));
+        assert!(!is_host("not json"));
+    }
+
+    /// Fuzz targets, run briefly by `cargo test`, at length with `PROPTEST_CASES`: the hub
+    /// reads the first message of a peer it has not authenticated to tell a host from a client.
+    mod fuzz {
+        use herder_protocol::{HostHello, HostId, HostMessage, REPLICATION_VERSION};
+        use proptest::prelude::*;
+        use serde_json::Value;
+
+        use super::is_host;
+
+        /// JSON of any shape, a few levels deep.
+        fn json() -> impl Strategy<Value = Value> {
+            let leaf = prop_oneof![
+                Just(Value::Null),
+                any::<bool>().prop_map(Value::Bool),
+                any::<i64>().prop_map(Value::from),
+                "\\PC{0,16}".prop_map(Value::String),
+            ];
+            leaf.prop_recursive(4, 64, 8, |inner| {
+                prop_oneof![
+                    prop::collection::vec(inner.clone(), 0..8).prop_map(Value::Array),
+                    prop::collection::btree_map("\\PC{0,12}", inner, 0..8)
+                        .prop_map(|map| Value::Object(map.into_iter().collect())),
+                ]
+            })
+        }
+
+        proptest! {
+            /// Any object is a host's exactly when it names a replication version.
+            #[test]
+            fn fuzz_any_object(
+                fields in prop::collection::btree_map("\\PC{0,12}", json(), 0..8),
+                version in proptest::option::of(json()),
+            ) {
+                let mut object: serde_json::Map<String, Value> = fields.into_iter().collect();
+                object.remove("replication_version");
+                if let Some(version) = &version {
+                    object.insert("replication_version".into(), version.clone());
+                }
+                let named = version.is_some_and(|version| !version.is_null());
+                prop_assert_eq!(is_host(&Value::Object(object).to_string()), named);
+            }
+
+            /// Any text: a host or not, and a host's hello decoded or refused, never a panic.
+            #[test]
+            fn fuzz_any_text(text in "\\PC{0,512}") {
+                if is_host(&text) {
+                    let _ = serde_json::from_str::<HostMessage>(&text);
+                }
+            }
+
+            /// A host's hello with bytes of it changed: never a panic.
+            #[test]
+            fn fuzz_a_hello_changed(
+                edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..8),
+            ) {
+                let hello = HostMessage::Hello(HostHello {
+                    replication_version: REPLICATION_VERSION,
+                    host_id: HostId::new("01JABCDEFGHJKMNPQRSTVWXYZ0"),
+                    host_name: "box".into(),
+                    build: "1.0".into(),
+                    pairing_code: Some("ABCDE-FGHJK".into()),
+                    attachments_cap: Some(1 << 30),
+                    relay: true,
+                });
+                let mut bytes = serde_json::to_vec(&hello).unwrap();
+                for (at, byte) in edits {
+                    let at = at.index(bytes.len());
+                    bytes[at] = byte;
+                }
+                let text = String::from_utf8_lossy(&bytes);
+                if is_host(&text) {
+                    let _ = serde_json::from_str::<HostMessage>(&text);
+                }
+            }
+        }
+    }
 }

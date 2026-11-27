@@ -376,13 +376,13 @@ impl Drop for Waiting {
 }
 
 /// Serves a relay connection whose upgrade request names `route`, from the device with
-/// certificate `device`; `pass` counts a tunneled one until it authenticated.
+/// certificate `device`; `pass` counts it until it authenticated.
 pub(super) async fn serve(
     upgrade: Upgrade,
     route: RelayRoute,
     shared: &Shared,
     device: &str,
-    pass: Option<Pass>,
+    pass: Pass,
     peer: SocketAddr,
     cancel: CancellationToken,
 ) {
@@ -406,7 +406,7 @@ async fn connect(
     upgrade: Upgrade,
     shared: &Shared,
     device: &str,
-    pass: Option<Pass>,
+    pass: Pass,
     host: &HostId,
     peer: SocketAddr,
     cancel: CancellationToken,
@@ -491,7 +491,7 @@ async fn accept(
     upgrade: Upgrade,
     shared: &Shared,
     device: &str,
-    pass: Option<Pass>,
+    pass: Pass,
     stream_id: &str,
     peer: SocketAddr,
     cancel: CancellationToken,
@@ -538,7 +538,7 @@ async fn proxy(
     upgrade: Upgrade,
     shared: &Shared,
     device: &str,
-    pass: Option<Pass>,
+    pass: Pass,
     peer: SocketAddr,
     cancel: CancellationToken,
 ) -> Result<()> {

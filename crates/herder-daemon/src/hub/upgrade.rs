@@ -134,6 +134,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Upgrade<S> {
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::DuplexStream;
+
     use super::*;
 
     const REQUEST: &[u8] = b"GET /machines/h1 HTTP/1.1\r\nHost: herder\r\nConnection: Upgrade\r\n\
@@ -183,5 +185,127 @@ mod tests {
         let head = format!("GET / HTTP/1.1\r\nX: {}\r\n", "a".repeat(MAX_HEAD));
         let _ = client.write_all(head.as_bytes()).await;
         assert!(reading.await.unwrap().is_err());
+    }
+
+    /// Fuzz targets, run briefly by `cargo test`, at length with `PROPTEST_CASES`: the
+    /// parser reads what any peer sends before it is authenticated.
+    mod fuzz {
+        use herder_protocol::RelayRoute;
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// `sent` read off a stream it arrives on in pieces cut at `cuts`, after which the peer
+        /// closes; with the upgrade, the rest of the stream.
+        fn read_sent(sent: &[u8], cuts: &[usize]) -> Result<(Upgrade<DuplexStream>, Vec<u8>)> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let (mut client, server) = tokio::io::duplex(sent.len() + 1);
+                let sent = sent.to_vec();
+                let mut cuts = cuts.to_vec();
+                let writing = tokio::spawn(async move {
+                    let mut rest = &sent[..];
+                    // A request refused part way closes the stream under the rest.
+                    for cut in cuts.drain(..) {
+                        let (piece, after) = rest.split_at(cut.min(rest.len()));
+                        if client.write_all(piece).await.is_err() {
+                            return;
+                        }
+                        rest = after;
+                        tokio::task::yield_now().await;
+                    }
+                    let _ = client.write_all(rest).await;
+                });
+                let read = read(server).await;
+                writing.await.unwrap();
+                let mut upgrade = read?;
+                let mut rest = Vec::new();
+                upgrade.stream.read_to_end(&mut rest).await.unwrap();
+                Ok((upgrade, rest))
+            })
+        }
+
+        /// A herder client's upgrade request for `path`, with `headers` beside its own.
+        fn request(path: &str, headers: &[(String, String)]) -> Vec<u8> {
+            let mut request = format!(
+                "GET {path} HTTP/1.1\r\nHost: herder\r\nConnection: Upgrade\r\n\
+                 Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+                 Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            );
+            for (name, value) in headers {
+                request.push_str(&format!("{name}: {value}\r\n"));
+            }
+            request.push_str("\r\n");
+            request.into_bytes()
+        }
+
+        fn cuts() -> impl Strategy<Value = Vec<usize>> {
+            prop::collection::vec(0usize..3000, 0..8)
+        }
+
+        proptest! {
+            /// Any bytes: refused or read, never a panic, never more than a head's worth held,
+            /// and what follows an accepted request neither lost nor reordered.
+            #[test]
+            fn fuzz_any_bytes(sent in prop::collection::vec(any::<u8>(), 0..3 * MAX_HEAD), cuts in cuts()) {
+                if let Ok((upgrade, rest)) = read_sent(&sent, &cuts) {
+                    let head = sent.len() - upgrade.tail.len() - rest.len();
+                    prop_assert!(sent[..head].windows(4).any(|word| word == b"GET "));
+                    prop_assert!(head <= MAX_HEAD + 2048, "a head of {head} bytes");
+                    prop_assert_eq!([&sent[..head], &upgrade.tail[..], &rest[..]].concat(), sent);
+                }
+            }
+
+            /// A herder client's request with bytes of it changed: refused or read as above.
+            #[test]
+            fn fuzz_a_request_changed(
+                edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..6),
+                tail in prop::collection::vec(any::<u8>(), 0..512),
+                cuts in cuts(),
+            ) {
+                let mut sent = request("/machines/h1", &[]);
+                for (at, byte) in edits {
+                    let at = at.index(sent.len());
+                    sent[at] = byte;
+                }
+                sent.extend_from_slice(&tail);
+                if let Ok((upgrade, rest)) = read_sent(&sent, &cuts) {
+                    let head = sent.len() - upgrade.tail.len() - rest.len();
+                    prop_assert_eq!([&sent[..head], &upgrade.tail[..], &rest[..]].concat(), sent);
+                }
+            }
+
+            /// Any route, any extra headers, any first frames behind the request: the route's
+            /// path read back as sent, and the frames kept whole and in order.
+            #[test]
+            fn fuzz_a_route_and_its_first_frames(
+                id in ".{1,40}",
+                stream in any::<bool>(),
+                headers in prop::collection::vec(("[A-Za-z][A-Za-z0-9-]{0,20}", "[ -~]{0,100}"), 0..16),
+                tail in prop::collection::vec(any::<u8>(), 0..4096),
+                cuts in cuts(),
+            ) {
+                let route = match stream {
+                    true => RelayRoute::Stream(id),
+                    false => RelayRoute::Machine(herder_protocol::HostId::new(id)),
+                };
+                let mut sent = request(&route.path(), &headers);
+                let head = sent.len();
+                sent.extend_from_slice(&tail);
+                let (upgrade, rest) = read_sent(&sent, &cuts).unwrap();
+                prop_assert_eq!(RelayRoute::parse(upgrade.path()), Some(route));
+                prop_assert_eq!([&upgrade.tail[..], &rest[..]].concat(), &sent[head..]);
+            }
+
+            /// Any path: a route or none, never a panic; a route reads back as its own path.
+            #[test]
+            fn fuzz_any_path(path in "(/(machines|streams|proxy)(/[^?]{0,30})?)?\\PC{0,40}") {
+                if let Some(route) = RelayRoute::parse(&path) {
+                    prop_assert_eq!(RelayRoute::parse(&route.path()), Some(route));
+                }
+            }
+        }
     }
 }

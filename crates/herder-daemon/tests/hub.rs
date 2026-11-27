@@ -919,6 +919,31 @@ async fn until_closed(ws: &mut Ws) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stranger_may_send_the_hub_only_so_much_before_it_is_authenticated() {
+    let tmp = tempfile::tempdir().unwrap();
+    let hub = Hub::start(&tmp.path().join("hub"), 0).await;
+    let stranger = DeviceKey::generate().unwrap();
+    let hello = |name_len: usize| {
+        serde_json::json!({
+            "type": "hello",
+            "replication_version": REPLICATION_VERSION,
+            "host_id": "h1",
+            "host_name": "x".repeat(name_len),
+            "build": "test",
+        })
+    };
+    // A first message over the share is never read whole: the hub closes on it unanswered.
+    let mut ws = dial_as(&hub, &stranger).await;
+    let _ = ws.send(Message::text(hello(256 * 1024).to_string())).await;
+    assert_eq!(until_closed(&mut ws).await, Vec::<String>::new());
+    // One within it is read, and the stranger refused.
+    let mut ws = dial_as(&hub, &stranger).await;
+    say(&mut ws, &hello(128 * 1024)).await;
+    let refused = until_closed(&mut ws).await;
+    assert!(refused[0].contains("forbidden"), "{refused:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let (host_dir, hub_dir) = (tmp.path().join("host"), tmp.path().join("hub"));

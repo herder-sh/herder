@@ -51,7 +51,8 @@ impl Relayed {
 }
 
 /// A connection after the TLS and WebSocket handshakes.
-pub(crate) type Ws = tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<Transport>>;
+pub(crate) type Ws =
+    tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<tunnel::Metered>>;
 
 use crate::auth::control::advertised;
 use crate::auth::{self, Auth};
@@ -208,8 +209,8 @@ struct Shared<B> {
     aws: OnceLock<Aws>,
     /// What a person's devices approve for each other, and the terminals each device had.
     approvals: Approvals,
-    /// Counts the tunneled connections not authenticated yet.
-    tunnel_gate: Arc<tunnel::Gate>,
+    /// Count the connections not authenticated yet.
+    gates: tunnel::Gates,
 }
 
 impl<B: Backend> Shared<B> {
@@ -994,10 +995,7 @@ impl<B: Backend> Server<B> {
                 providers: OnceLock::new(),
                 aws: OnceLock::new(),
                 approvals: Approvals::new(APPROVAL_TTL),
-                tunnel_gate: tunnel::Gate::new(
-                    tunnel::UNAUTHENTICATED,
-                    tunnel::UNAUTHENTICATED_PER_CLIENT,
-                ),
+                gates: tunnel::Gates::new(),
             }),
         }
     }
@@ -1066,14 +1064,14 @@ impl<B: Backend> Server<B> {
     }
 
     /// Serves one client whose handshakes are done and whose first text frame, `first`, was
-    /// already read: for the hub, whose port takes hosts and clients alike. `pass` counts a
-    /// tunneled one until it authenticated. The caller runs the fanout's flusher.
+    /// already read: for the hub, whose port takes hosts and clients alike. `pass` counts it
+    /// until it authenticated. The caller runs the fanout's flusher.
     pub(crate) async fn serve(
         &self,
         ws: Ws,
         device: String,
         first: String,
-        pass: Option<tunnel::Pass>,
+        pass: tunnel::Pass,
         peer: SocketAddr,
         cancel: CancellationToken,
     ) {
