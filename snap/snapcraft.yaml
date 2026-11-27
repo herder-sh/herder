@@ -49,6 +49,8 @@ parts:
     plugin: rust
     source: .
     rust-path: [linux]
+    # rustup installs the toolchain rust-toolchain.toml pins.
+    build-snaps: [rustup]
     # The gnome extension's LDFLAGS point the linker at the GNOME SDK's libraries.
     rust-inherit-ldflags: true
     override-pull: |
