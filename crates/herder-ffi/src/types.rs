@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use herder_client_core::{
     ConnectionQuality, ConnectionState, Diagnostics, FleetLink, FleetMachine, FleetPerson,
-    LoginUri, Machine, NewAccount, OwnUri, RouteChoice, RouteKind, SessionUpdate, TerminalEvent,
-    WireGuardKind, WireGuardTunnel,
+    FrontDoor, LoginUri, Machine, NewAccount, OwnUri, RouteChoice, RouteKind, SessionUpdate,
+    TerminalEvent, WireGuardKind, WireGuardTunnel,
 };
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
@@ -153,6 +153,15 @@ pub struct Machine {
     pub pinned_address: Option<String>,
     #[uniffi(default)]
     pub disabled_addresses: Vec<String>,
+    #[uniffi(default)]
+    pub front_doors: Vec<FrontDoor>,
+}
+
+#[uniffi::remote(Record)]
+pub struct FrontDoor {
+    pub address: String,
+    pub expires_at: Option<Timestamp>,
+    pub sign_in: bool,
 }
 
 #[uniffi::remote(Enum)]

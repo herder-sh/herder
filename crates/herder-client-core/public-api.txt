@@ -50,6 +50,25 @@ pub struct Machine {
     pub address_headers: HashMap<String, Vec<String>>,
     pub pinned_address: Option<String>,
     pub disabled_addresses: Vec<String>,
+    pub front_doors: Vec<FrontDoor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrontDoor {
+    pub address: String,
+    pub expires_at: Option<Timestamp>,
+    pub sign_in: bool,
+}
+
+// opaque: private fields
+pub struct FrontDoorSignIn {}
+
+impl FrontDoorSignIn {
+    pub fn url(&self) -> String {}
+}
+
+impl FrontDoorSignIn {
+    pub async fn finish(&self) -> Result<(), Error> {}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -137,6 +156,14 @@ impl Client {
         fingerprint: String,
         shown: impl FnOnce(&str, Timestamp) + Send,
     ) -> Result<Machine, Error> {}
+}
+
+impl Client {
+    pub async fn begin_front_door_sign_in(
+        &self,
+        host_id: HostId,
+        address: String,
+    ) -> Result<FrontDoorSignIn, Error> {}
 }
 
 impl Client {

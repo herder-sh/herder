@@ -100,11 +100,14 @@ use crate::cache::SessionLog;
 use crate::demo::{self, DemoAnswer, DemoMachine};
 use crate::offline::{self, Cached};
 use crate::profile::{Routes, SavedMachine};
-use crate::relay::Via;
+use crate::relay::{FrontDoors, Via};
 use crate::terminal::{TerminalEvent, TerminalStream};
 use crate::tunnel::{self, Io};
 use crate::wireguard::Tunnels;
-use crate::{ConnectionQuality, ConnectionState, Error, Machine, SessionUpdate, new_command_id};
+use crate::{
+    ConnectionQuality, ConnectionState, Error, FrontDoor, Machine, SessionUpdate, front_door,
+    new_command_id,
+};
 
 /// Time one address gets for TCP, TLS and the WebSocket upgrade.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -340,6 +343,8 @@ pub(crate) struct Supervisor {
     machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
     /// The client's WireGuard tunnels; none for a demo machine.
     tunnels: Option<Arc<Tunnels>>,
+    /// The tunnel addresses whose login proxy last turned the upgrade away to its login.
+    front_doors: FrontDoors,
 }
 
 #[derive(Default)]
@@ -634,6 +639,7 @@ impl Supervisor {
             demo: None,
             machines,
             tunnels: Some(tunnels),
+            front_doors: FrontDoors::default(),
         });
         tokio::spawn(run(Arc::clone(&supervisor), device, queue));
         Ok(supervisor)
@@ -715,6 +721,7 @@ impl Supervisor {
             demo: Some(answers),
             machines: Weak::new(),
             tunnels: None,
+            front_doors: FrontDoors::default(),
         })
     }
 
@@ -868,6 +875,42 @@ impl Supervisor {
         self.notify();
     }
 
+    /// The set of this machine's tunnel addresses whose login proxy wants a sign-in, shared
+    /// with routes that go through this machine.
+    pub(crate) fn front_doors_set(&self) -> FrontDoors {
+        Arc::clone(&self.front_doors)
+    }
+
+    /// The machine's tunnel addresses behind a login proxy, as `state` has them: those
+    /// signed in to with a browser, and those whose proxy wants a sign-in.
+    fn front_doors(&self, state: &State) -> Vec<FrontDoor> {
+        let wanted = self
+            .front_doors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let now = Timestamp::now();
+        state
+            .addresses
+            .iter()
+            .filter(|address| address::is_tunnel(address))
+            .filter_map(|address| {
+                let token = state
+                    .headers
+                    .get(address)
+                    .and_then(|sent| sent.get(front_door::TOKEN_HEADER));
+                let expires_at = token.and_then(|token| front_door::expires_at(token));
+                let expired = token.is_some() && expires_at.is_none_or(|at| at <= now);
+                let sign_in = wanted.contains(address) || expired;
+                (token.is_some() || sign_in).then(|| FrontDoor {
+                    address: address.clone(),
+                    expires_at,
+                    sign_in,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn view(&self) -> Machine {
         let state = self.lock();
         Machine {
@@ -907,6 +950,7 @@ impl Supervisor {
                 .iter()
                 .map(|(address, sent)| (address.clone(), sent.keys().cloned().collect()))
                 .collect(),
+            front_doors: self.front_doors(&state),
             pinned_address: state.routes.pinned.clone(),
             disabled_addresses: state.routes.disabled.clone(),
         }
@@ -1339,6 +1383,7 @@ impl Supervisor {
             self.machines.clone(),
             headers,
             self.tunnels.clone(),
+            Arc::clone(&self.front_doors),
         )
     }
 
@@ -2776,9 +2821,11 @@ async fn reach(address: &str, connector: &TlsConnector, via: &Via) -> anyhow::Re
             None => direct(address, via, connector, None).await,
         }
     };
-    tokio::time::timeout(CONNECT_TIMEOUT, reaching)
+    let reached = tokio::time::timeout(CONNECT_TIMEOUT, reaching)
         .await
-        .unwrap_or_else(|_| Err(anyhow!("no answer in {CONNECT_TIMEOUT:?}")))
+        .unwrap_or_else(|_| Err(anyhow!("no answer in {CONNECT_TIMEOUT:?}")));
+    via.note(address, &reached);
+    reached
 }
 
 /// A connection to the daemon at `address`, its own or a tunnel's whose upgrade carries

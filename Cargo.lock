@@ -1211,6 +1211,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto_box"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16182b4f39a82ec8a6851155cc4c0cda3065bb1db33651726a29e1951de0f009"
+dependencies = [
+ "aead",
+ "crypto_secretbox",
+ "curve25519-dalek",
+ "salsa20",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "crypto_secretbox"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9d6cf87adf719ddf43a805e92c6870a531aedda35ff640442cbaf8674e141e1"
+dependencies = [
+ "aead",
+ "cipher",
+ "generic-array",
+ "poly1305",
+ "salsa20",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "csscolorparser"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2460,6 +2489,7 @@ version = "0.25.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "crypto_box",
  "futures-util",
  "herder-adapters",
  "herder-daemon",
@@ -2467,7 +2497,10 @@ dependencies = [
  "herder-store",
  "herder-telemetry",
  "herder-wireguard",
+ "http-body-util",
  "httparse",
+ "hyper",
+ "hyper-util",
  "jiff 1.0.3",
  "prettyplease",
  "rcgen",
