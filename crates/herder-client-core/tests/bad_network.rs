@@ -610,7 +610,14 @@ fn script(dir: &Path, rng: &mut Rng, turns: u64, big: Option<usize>) -> PathBuf 
         steps.push(json!({"emit": {"type": "turn_started", "turn_id": turn}}));
         if let Some(bytes) = big.filter(|_| number == 1) {
             for part in 0..40 {
-                let item = message(&format!("big-{part}"), &turn, &"x".repeat(bytes / 40));
+                // Random text, which compression barely shrinks, as the files and logs an
+                // agent reads do not shrink much either.
+                const LETTERS: &[u8] =
+                    b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .";
+                let text: String = (0..bytes / 40)
+                    .map(|_| char::from(rng.pick(LETTERS)))
+                    .collect();
+                let item = message(&format!("big-{part}"), &turn, &text);
                 steps.push(json!({"emit": {"type": "item_completed", "item": item}}));
                 steps.push(json!({"sleep_ms": 20}));
             }
@@ -1640,7 +1647,7 @@ fn a_long_outage_shows_once_and_recovers() {
 #[test]
 fn a_slow_link_carrying_a_big_replay_is_kept() {
     run(async {
-        let mut world = World::start(13, 4, Some(2_000_000)).await;
+        let mut world = World::start(13, 4, Some(3_000_000)).await;
         // Until the probe that subscribing sent is answered: a connection that fails a probe
         // is replaced at once, suspended or not.
         tokio::time::sleep(secs(2)).await;

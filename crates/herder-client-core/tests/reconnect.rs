@@ -318,6 +318,21 @@ async fn wait_connection(client: &Client, wanted: impl Fn(&ConnectionState) -> b
     .expect("the connection did not get there in time");
 }
 
+/// `len` characters of text that compression barely shrinks: the daemon compresses what it
+/// sends, and a test that needs a slow transfer must not have it undone.
+fn noise_text(len: usize) -> String {
+    const LETTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .";
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    (0..len)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            char::from(LETTERS[usize::from(state.to_le_bytes()[0]) % LETTERS.len()])
+        })
+        .collect()
+}
+
 fn connected(state: &ConnectionState) -> bool {
     *state == ConnectionState::Connected
 }
@@ -3733,8 +3748,8 @@ async fn a_slow_link_carrying_a_long_replay_is_not_taken_for_dead() {
         .unwrap()
         .host_id;
     let session_id = create_session(&desktop, &host, repo).await;
-    // Three megabytes of journal, in one event.
-    let text = "replayed ".repeat(350_000);
+    // Five megabytes of journal, in one event; some four compressed.
+    let text = noise_text(5_000_000);
     let prompt = CommandBody::SendPrompt {
         session_id: session_id.clone(),
         text: text.clone(),
@@ -3746,7 +3761,7 @@ async fn a_slow_link_carrying_a_long_replay_is_not_taken_for_dead() {
         CommandResult::Applied
     );
 
-    // 250 kB a second: the replay takes over twelve seconds.
+    // 250 kB a second: the replay takes some sixteen seconds.
     let (slow, accepted) = slow_down(daemon.addr, 250_000).await;
     let phone = Client::open(
         tmp.path().join("phone").display().to_string(),
