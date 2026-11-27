@@ -202,18 +202,45 @@ struct SetupStructure: Equatable {
         /// How far its furthest-reaching address reaches, and that address's host.
         var scope = AddressScope.network
         var address: String?
+        /// Whether that address, a public one, was seen to reach the hub from outside.
+        var check = PublicCheck.unchecked
         /// The sessions it keeps a copy of.
         var sessions = 0
         let machines: [MachineRow]
 
         /// "Reachable from anywhere, at hub.example.com": how far it reaches and through which
         /// address, however that address is exposed.
+        /// A public address says so only as far as it was checked: through it now, a name
+        /// that resolves to the LAN alone or to nothing, or not checked from outside yet.
         var reachability: String {
-            switch (scope, address) {
-            case (.anywhere, let address?): "Reachable from anywhere, at \(address)"
-            case (.vpn, let address?): "Reachable over your VPN, at \(address)"
+            switch (scope, address, check) {
+            case (.anywhere, let address?, .connected):
+                "Reachable from anywhere, at \(address): connected through it now"
+            case (.anywhere, let address?, .localOnly(let found)):
+                "\(address) resolves only to your local network (\(found.joined(separator: ", "))), so devices away from it cannot reach the hub there"
+            case (.anywhere, let address?, .unresolved):
+                "\(address) does not resolve, so no device reaches the hub there"
+            case (.anywhere, let address?, .unchecked):
+                "Public address \(address), not yet seen working from outside its network"
+            case (.vpn, let address?, _): "Reachable over your VPN, at \(address)"
             default: "Reachable on its network only"
             }
+        }
+
+        /// The mark beside `reachability`.
+        var reachSymbol: String {
+            switch (scope, check) {
+            case (.anywhere, .localOnly), (.anywhere, .unresolved): "exclamationmark.triangle"
+            case (.anywhere, _): "globe"
+            case (.vpn, _): "lock.shield"
+            default: "house"
+            }
+        }
+
+        /// The name of its public address, to look up; nil when it has none or it is an IP.
+        var lookup: String? {
+            guard scope == .anywhere, let address, HostLookup.needsLookup(address) else { return nil }
+            return address
         }
 
         /// "Keeps copies of 7 sessions, your secrets and provider logins".
@@ -242,8 +269,9 @@ struct SetupStructure: Equatable {
 
     /// `unpaired` are the hubs the machines sync to that this device has not signed in to,
     /// which name their machines.
+    /// `resolved` is what each public address's name resolved to here (`HostLookup`).
     init(machines: [Machine], summaries: [MachineSummary], unpaired: [UnpairedHub] = [],
-         localNames: Set<String> = MachineRow.localNames) {
+         localNames: Set<String> = MachineRow.localNames, resolved: [String: [String]] = [:]) {
         let paired = machines.filter(\.isHub)
         // Only a hub connected here says who it hears from now.
         let heard = Set(paired.filter { $0.connection == .connected }.flatMap { $0.hosts.filter(\.online).map(\.hostId) })
@@ -259,9 +287,10 @@ struct SetupStructure: Equatable {
             // Of the addresses that reach furthest, the one preferred.
             let scope = hub.addresses.map(AddressScope.init).max() ?? .network
             let furthest = hub.addresses.first { AddressScope($0) == scope }
+            let check = furthest.map { PublicCheck(address: $0, of: hub, resolved: resolved) } ?? .unchecked
             return Hub(id: "paired.\(hub.hostId)", name: hub.name, hostId: hub.hostId, connection: hub.connection,
-                       scope: scope, address: furthest.map(AddressScope.host(of:)), sessions: hub.sessions.count,
-                       machines: take { hosts.contains($0.hostId) })
+                       scope: scope, address: furthest.map(AddressScope.host(of:)), check: check,
+                       sessions: hub.sessions.count, machines: take { hosts.contains($0.hostId) })
         }
         let notSignedIn: [Hub] = unpaired.map { hub in
             Hub(id: "unpaired.\(hub.fingerprint)", name: hub.name, unpaired: hub,
@@ -279,10 +308,13 @@ struct MachinesView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
     @State private var unpaired: [UnpairedHub] = []
+    /// What each hub's public address's name resolves to here.
+    @State private var resolved: [String: [String]] = [:]
     @Environment(\.pages) private var pages
 
     var body: some View {
-        let structure = SetupStructure(machines: fleet.liveMachines, summaries: fleet.lists.machines, unpaired: unpaired)
+        let structure = SetupStructure(machines: fleet.liveMachines, summaries: fleet.lists.machines, unpaired: unpaired,
+                                       resolved: resolved)
         VStack(alignment: .leading, spacing: 8) {
             SectionHeading(title: structure.hubs.isEmpty ? "Machines" : "Hub and machines", count: structure.machines)
             ForEach(structure.hubs) { hub in
@@ -322,6 +354,12 @@ struct MachinesView: View {
         // Asked again as machines connect, and as a hub gets signed in to.
         .task(id: fleet.machines.filter { $0.connection == .connected }.map(\.hostId)) {
             unpaired = await fleet.unpairedHubs()
+        }
+        // Each hub's public name, looked up once it shows, and again when it changes.
+        .task(id: structure.hubs.compactMap(\.lookup)) {
+            for name in structure.hubs.compactMap(\.lookup) where resolved[name] == nil {
+                resolved[name] = await HostLookup.addresses(of: name)
+            }
         }
     }
 
@@ -414,7 +452,7 @@ private struct HubCard: View {
                 if let invitation = hub.invitation {
                     fact("person.badge.key", invitation)
                 } else {
-                    fact(hub.scope == .anywhere ? "globe" : hub.scope == .vpn ? "lock.shield" : "house", hub.reachability)
+                    fact(hub.reachSymbol, hub.reachability)
                     fact("tray.full", hub.keeps)
                 }
             }

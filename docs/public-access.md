@@ -24,7 +24,9 @@ public_addresses = ["home.example.net:7447", "wss://hub.example.com"]
 The daemon names its public addresses after its own in its hello, invites and claim links,
 so every device, yours and everyone's you invite, picks them up when it next connects,
 with nothing to type, and drops one you remove. Devices try LAN addresses first and
-tunnels last, so at home nothing changes. The port is the daemon's `listen` port:
+tunnels last, so at home nothing changes. The Hub tab then says what it knows of the hub's public
+address: reachable once this device is connected through it, a name that resolves only to
+your local network or to nothing as such, and otherwise not yet seen working from outside. The port is the daemon's `listen` port:
 7447 for `herder daemon`, 7448 for a hub `herder hub install` set up.
 
 **Port forward.** On the router, forward a TCP port to the machine's port. Use a fixed
