@@ -2,7 +2,8 @@ name: release
 
 # A `v*` tag builds static musl binaries, an Apple silicon macOS binary and the macOS app, signed
 # with the Developer ID and notarized, and publishes them as a GitHub Release; it also uploads
-# the iOS and macOS apps to TestFlight. workflow_dispatch runs the same, without publishing the
+# the iOS and macOS apps to TestFlight, and pushes the Linux app's PKGBUILD to the AUR once the
+# AUR_SSH_PRIVATE_KEY secret exists. workflow_dispatch runs the same, without publishing the
 # GitHub Release. PRs that change this file or the app's release script run the builds only,
 # without the TestFlight upload; from a fork, which gets no secrets, the macOS app is signed ad hoc.
 
@@ -212,3 +213,35 @@ jobs:
             --title "herder ${GITHUB_REF_NAME#v}" \
             --generate-notes \
             $prerelease
+
+  aur:
+    name: update the AUR package
+    needs: publish
+    # pkgver cannot hold the dash of a prerelease tag; those stay off the AUR.
+    if: github.ref_type == 'tag' && !contains(github.ref_name, '-')
+    runs-on: ubuntu-24.04
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Skip without the AUR key
+        if: env.AUR_SSH_PRIVATE_KEY == ''
+        run: echo "::notice::AUR_SSH_PRIVATE_KEY is not set, so the AUR package is not updated (linux/packaging/aur/README.md)"
+      - uses: actions/checkout@v7
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+      - name: Set the version
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        run: |
+          sed -i -e "s/^pkgver=.*/pkgver=${GITHUB_REF_NAME#v}/" -e "s/^pkgrel=.*/pkgrel=1/" \
+            linux/packaging/aur/PKGBUILD
+      # In an Arch container: updates the checksum of the tag's tarball, regenerates .SRCINFO
+      # and pushes both to the AUR.
+      - uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        with:
+          pkgname: herder-gtk
+          pkgbuild: linux/packaging/aur/PKGBUILD
+          updpkgsums: true
+          commit_username: github-actions[bot]
+          commit_email: 41898282+github-actions[bot]@users.noreply.github.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: Update to ${{ github.ref_name }}
