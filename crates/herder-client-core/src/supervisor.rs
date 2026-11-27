@@ -1634,6 +1634,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
             pairing_code: None,
             sign_in: false,
             passkey: supervisor.passkey,
+            deflate: false,
         };
         let via = supervisor.via();
         async move { connect(&addresses, &saved.fingerprint, device, hello, &turn, &via).await }

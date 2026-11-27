@@ -648,6 +648,10 @@
           "description": "Client name and version, for logs, e.g. `herder-tui/0.1.0`.",
           "type": "string"
         },
+        "deflate": {
+          "description": "Set by a client that reads binary frames of compressed messages\n([`crate::deflate`]). Once the daemon's hello says `deflate` too, each side may send\nthem, and the daemon sends its first after its hello.",
+          "type": "boolean"
+        },
         "pairing_code": {
           "description": "One-time code from `herder pair`, sent by a device that is not paired yet; ignored once\nit is.",
           "type": [

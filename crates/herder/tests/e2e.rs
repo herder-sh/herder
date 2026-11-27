@@ -372,6 +372,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             pairing_code: None,
             sign_in: true,
             passkey: false,
+            deflate: false,
         }))
         .await;
     let ServerMessage::SignInChallenge { registration, .. } = client.recv().await else {

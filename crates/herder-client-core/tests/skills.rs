@@ -230,6 +230,7 @@ impl Fake {
             person_id: None,
             herder_version: None,
             addresses: Vec::new(),
+            deflate: false,
         });
         let mut changed = self.changed.subscribe();
         changed.mark_changed();

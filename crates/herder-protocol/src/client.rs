@@ -62,6 +62,11 @@ pub struct ClientHello {
     /// an `approval_request`, and answers the command once they do.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub passkey: bool,
+    /// Set by a client that reads binary frames of compressed messages
+    /// ([`crate::deflate`]). Once the daemon's hello says `deflate` too, each side may send
+    /// them, and the daemon sends its first after its hello.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deflate: bool,
 }
 
 impl CommandBody {

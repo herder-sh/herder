@@ -501,6 +501,7 @@ impl Client {
                 pairing_code: None,
                 sign_in: claim.is_some(),
                 passkey: false,
+                deflate: false,
             }))
             .await;
         if let Some(code) = claim {

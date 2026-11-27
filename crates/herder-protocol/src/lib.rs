@@ -1,7 +1,9 @@
 //! Wire and protocol types shared by every herder component, and the JSON Schema generated from them.
 //!
 //! One WebSocket carries JSON text frames: [`ClientMessage`] from client to daemon and
-//! [`ServerMessage`] from daemon to client. Both are internally tagged on `"type"`.
+//! [`ServerMessage`] from daemon to client. Both are internally tagged on `"type"`. Peers that
+//! both say `deflate` in their hellos may also send binary frames of compressed messages, as
+//! [`deflate`] describes.
 //!
 //! Evolution rules (protocol version 5):
 //! - Adding a variant, or an optional field, is compatible and keeps [`PROTOCOL_VERSION`].
@@ -14,6 +16,7 @@ mod attachment;
 mod bots;
 mod bytes;
 mod client;
+pub mod deflate;
 mod event;
 mod ids;
 mod people;

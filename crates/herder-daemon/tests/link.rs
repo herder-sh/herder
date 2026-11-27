@@ -804,6 +804,7 @@ where
         pairing_code: None,
         sign_in: false,
         passkey: false,
+        deflate: false,
     });
     ws.send(Message::text(serde_json::to_string(&hello).unwrap()))
         .await

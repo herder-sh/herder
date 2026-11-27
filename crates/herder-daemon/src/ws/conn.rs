@@ -371,6 +371,7 @@ async fn read<B: Backend>(
         person_id: identity.person_id.clone(),
         herder_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
         addresses: shared.advertised().unwrap_or_default(),
+        deflate: false,
     }));
     shared.fanout.connect(outbox, identity.role);
     let person = shared.auth.resolve(&identity.user_id);

@@ -156,6 +156,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             pairing_code: None,
             sign_in: false,
             passkey: false,
+            deflate: false,
         }),
         ClientMessage::Hello(ClientHello {
             protocol_version: PROTOCOL_VERSION,
@@ -164,6 +165,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             pairing_code: Some("ABCDE-FGHJK".into()),
             sign_in: false,
             passkey: false,
+            deflate: false,
         }),
         ClientMessage::Hello(ClientHello {
             protocol_version: PROTOCOL_VERSION,
@@ -172,6 +174,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             pairing_code: None,
             sign_in: true,
             passkey: true,
+            deflate: true,
         }),
         ClientMessage::SignIn(SignIn::Passkey {
             assertion: assertion(),
@@ -897,6 +900,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             person_id: Some(person_id()),
             herder_version: Some("0.14.0".into()),
             addresses: vec!["10.0.4.17:7447".into(), "[fd00::17]:7447".into()],
+            deflate: true,
         }),
         ServerMessage::SignInChallenge {
             challenge: PasskeyChallenge {
@@ -2152,6 +2156,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         person_id: None,
         herder_version: None,
         addresses: Vec::new(),
+        deflate: false,
     }));
     messages
 }
