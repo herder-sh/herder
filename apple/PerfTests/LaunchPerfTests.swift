@@ -59,7 +59,7 @@ final class LaunchPerfTests: PerfTestCase {
         Thread.sleep(forTimeInterval: 30)
         measured {
             app.activate()
-            XCTAssertTrue(loaded.waitForExistence(timeout: 120), "the Board did not come back")
+            XCTAssertTrue(board.waitForExistence(timeout: 120), "the Board did not come back")
             Thread.sleep(forTimeInterval: 10)
         }
     }
@@ -69,14 +69,15 @@ final class LaunchPerfTests: PerfTestCase {
     /// their silence, arrive after it.
     private static let aftermath: TimeInterval = 20
 
-    /// A session of the loaded machine on the Board.
-    private var loaded: XCUIElement {
-        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", Load session ")).firstMatch
-    }
+    /// The Board's first row: the busy fleet's session that keeps streaming, the newest on the
+    /// Board whether its machine answers or the Board is the one saved last time. Not a row of
+    /// the loaded machine: its journal is written before the app is built, so its sessions sort
+    /// below a dozen of the demo's, under an iPhone's fold, where the list does not draw them.
+    private var board: XCUIElement { row("A long transcript, still streaming") }
 
-    /// Launches the app and waits for the Board to list the loaded machine's sessions.
+    /// Launches the app and waits for the Board to show its sessions.
     private func launch() {
         app.launch()
-        XCTAssertTrue(loaded.waitForExistence(timeout: 180), "the Board did not load")
+        XCTAssertTrue(board.waitForExistence(timeout: 180), "the Board did not load")
     }
 }
