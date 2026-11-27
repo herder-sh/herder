@@ -30,10 +30,18 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends libgtk-4-dev libadwaita-1-dev xvfb
+      # Only main saves the cache; branches restore main's. Per-branch caches pushed the
+      # repo past GitHub's 10 GB cache limit and evicted main's.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@nextest
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: xvfb-run -a cargo test --workspace
+      # nextest runs the test binaries in parallel; cargo test ran them one after another.
+      # It skips doctests, so those run separately.
+      - run: xvfb-run -a cargo nextest run --workspace
+      - run: cargo test --workspace --doc
       - name: Lint install.sh
         run: shellcheck --shell=sh install.sh
 
@@ -47,5 +55,7 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --locked -p herder -- -D warnings
       - run: cargo test --locked -p herder --bin herder
