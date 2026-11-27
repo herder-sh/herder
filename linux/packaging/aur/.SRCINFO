@@ -1,0 +1,23 @@
+pkgbase = herder-gtk
+	pkgdesc = Watch and steer coding agents across your machines (GTK app)
+	pkgver = 0.25.0
+	pkgrel = 1
+	url = https://github.com/herder-sh/herder
+	arch = x86_64
+	arch = aarch64
+	license = Apache-2.0
+	makedepends = cargo
+	depends = gdk-pixbuf2
+	depends = glib2
+	depends = glibc
+	depends = graphene
+	depends = gtk4
+	depends = hicolor-icon-theme
+	depends = libadwaita
+	depends = libgcc
+	depends = pango
+	options = !lto
+	source = herder-0.25.0.tar.gz::https://github.com/herder-sh/herder/archive/refs/tags/v0.25.0.tar.gz
+	sha256sums = 50f8e2fe116df732f2bfe1b145d6c163f67ee5833aae954c701d0e09ebd0c813
+
+pkgname = herder-gtk
