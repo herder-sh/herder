@@ -3,6 +3,8 @@
 //! forget); a hub's hosts under it. **Add a Machine** signs this device in to the machines
 //! of a `herder://fleet` link an app of yours shares, or to one machine by its address and
 //! fingerprint, as `herder login` does: an app of yours approves this device with its passkey.
+//! Each card lists the machine's provider accounts; an owner removes one there, unless the
+//! machine's hub gives it.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,7 +13,7 @@ use std::str::FromStr;
 use adw::prelude::*;
 use gtk::glib;
 use herder_client_core::{ConnectionState, FleetLink, FleetMachine, LoginUri, Machine};
-use herder_protocol::{HostId, Role, SessionStatus};
+use herder_protocol::{Account, AccountId, HostId, Role, SessionStatus};
 
 use crate::lists;
 
@@ -47,7 +49,11 @@ struct State {
     machines: Vec<Machine>,
     ops: Option<Rc<dyn MachineOps>>,
     add: Option<Rc<dyn Fn()>>,
+    remove_account: Option<RemoveAccount>,
 }
+
+/// Removes an account from a machine; a refusal shows where commands' refusals do.
+pub type RemoveAccount = Rc<dyn Fn(HostId, AccountId)>;
 
 impl MachinesPage {
     pub fn new() -> Self {
@@ -108,6 +114,11 @@ impl MachinesPage {
     /// What the header's Add a Machine does.
     pub fn set_add(&self, add: Rc<dyn Fn()>) {
         self.state.borrow_mut().add = Some(add);
+    }
+
+    /// What a confirmed Remove Account does.
+    pub fn set_remove_account(&self, remove: RemoveAccount) {
+        self.state.borrow_mut().remove_account = Some(remove);
     }
 
     /// Redraws the machines, when they changed.
@@ -241,7 +252,93 @@ impl MachinesPage {
             line.append(&name);
             card.append(&line);
         }
+        if !machine.accounts.is_empty() {
+            let heading = gtk::Label::builder()
+                .label("Accounts")
+                .xalign(0.0)
+                .margin_top(6)
+                .build();
+            heading.add_css_class("meta");
+            card.append(&heading);
+            let owner = machine.role == Some(Role::Owner);
+            for account in &machine.accounts {
+                card.append(&self.account_row(machine, account, owner));
+            }
+        }
         card
+    }
+
+    /// An account of `machine`: its label, provider and login, and for an owner a remove
+    /// button, which a hub's login has not: it is removed on the hub.
+    fn account_row(&self, machine: &Machine, account: &Account, owner: bool) -> gtk::Box {
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        line.set_margin_start(18);
+        let label = gtk::Label::builder()
+            .label(&account.label)
+            .xalign(0.0)
+            .build();
+        line.append(&label);
+        let mut about = vec![account.provider.as_str().to_owned()];
+        if let Some(email) = &account.email {
+            about.push(email.clone());
+        }
+        let about = gtk::Label::builder()
+            .label(about.join(" · "))
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        about.add_css_class("meta");
+        line.append(&about);
+        if account.hub_login.is_some() {
+            let hub = gtk::Label::new(Some("hub"));
+            hub.add_css_class("chip");
+            line.append(&hub);
+        }
+        line.append(&gtk::Box::builder().hexpand(true).build());
+        if owner && account.hub_login.is_none() {
+            let remove = gtk::Button::builder()
+                .icon_name("user-trash-symbolic")
+                .tooltip_text("Remove Account…")
+                .build();
+            remove.add_css_class("flat");
+            let page = self.clone();
+            let host_id = machine.host_id.clone();
+            let machine = machine.name.clone();
+            let (account_id, label) = (account.account_id.clone(), account.label.clone());
+            remove.connect_clicked(move |button| {
+                page.remove_account(button, &host_id, &machine, &account_id, &label);
+            });
+            line.append(&remove);
+        }
+        line
+    }
+
+    /// Asks before removing `account_id` from `host_id`: the daemon refuses while its
+    /// sessions are unarchived, and keeps its login.
+    fn remove_account(
+        &self,
+        anchor: &gtk::Button,
+        host_id: &HostId,
+        machine: &str,
+        account_id: &AccountId,
+        label: &str,
+    ) {
+        let Some(remove) = self.state.borrow().remove_account.clone() else {
+            return;
+        };
+        let dialog = adw::AlertDialog::builder()
+            .heading(format!("Remove {label} from {machine}?"))
+            .body("Its sessions must be archived first. The login stays in its config dir.")
+            .default_response("cancel")
+            .close_response("cancel")
+            .build();
+        dialog.add_responses(&[("cancel", "Cancel"), ("remove", "Remove")]);
+        dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+        let (host_id, account_id) = (host_id.clone(), account_id.clone());
+        dialog.connect_response(Some("remove"), move |_, _| {
+            remove(host_id.clone(), account_id.clone());
+        });
+        dialog.present(Some(anchor));
     }
 
     fn act(&self, anchor: &gtk::Button, act: Act, host_id: &HostId, name: &str) {
