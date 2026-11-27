@@ -21,6 +21,9 @@
 
 mod project;
 mod schema;
+mod sql_time;
+
+pub use sql_time::SqlTime;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -246,7 +249,7 @@ impl Store {
         .execute(params![
             stored.session_id.as_str(),
             stored.seq,
-            stored.at,
+            SqlTime(stored.at),
             stored.by.as_ref().map(UserId::as_str),
             event_type,
             body.to_string(),
@@ -306,7 +309,7 @@ impl Store {
                     })?;
                 Ok(JournalRecord {
                     seq: row.get(0)?,
-                    at: row.get(1)?,
+                    at: row.get::<_, SqlTime>(1)?.0,
                     by: row.get::<_, Option<String>>(2)?.map(UserId::new),
                     body,
                 })
@@ -537,7 +540,7 @@ impl Store {
                 prompt.text,
                 serde_json::to_string(&prompt.attachments)?,
                 prompt.retry,
-                prompt.retry_at,
+                prompt.retry_at.map(SqlTime),
                 prompt
                     .agent_message
                     .as_ref()
@@ -692,7 +695,7 @@ impl Store {
              WHERE account_id IS NOT NULL
              GROUP BY account_id ORDER BY account_id",
         )?;
-        let rows = stmt.query_map(params![early, since.as_millisecond()], |row| {
+        let rows = stmt.query_map(params![SqlTime(early), since.as_millisecond()], |row| {
             Ok(FailoverTotal {
                 account_id: AccountId::new(row.get::<_, String>(0)?),
                 limit_hits: row.get(1)?,
@@ -722,7 +725,7 @@ impl Store {
             Ok(BotFact {
                 id: FactId::new(row.get::<_, String>(0)?),
                 text: row.get(1)?,
-                learned_at: row.get(2)?,
+                learned_at: row.get::<_, SqlTime>(2)?.0,
                 thread: get_json(row, 3)?,
                 place: get_json(row, 4)?,
                 by: row.get(5)?,
@@ -752,7 +755,7 @@ impl Store {
                     fact.id.as_str(),
                     clamp(position),
                     fact.text,
-                    fact.learned_at,
+                    SqlTime(fact.learned_at),
                     thread.transpose()?,
                     place.transpose()?,
                     fact.by,
@@ -785,7 +788,7 @@ fn queued_prompt(row: &Row<'_>) -> rusqlite::Result<QueuedPrompt> {
             rusqlite::Error::FromSqlConversionFailure(2, Type::Text, Box::new(err))
         })?,
         retry: row.get(3)?,
-        retry_at: row.get(4)?,
+        retry_at: row.get::<_, Option<SqlTime>>(4)?.map(|at| at.0),
     })
 }
 
@@ -805,7 +808,7 @@ fn read_event(row: &Row<'_>) -> rusqlite::Result<Event> {
     Ok(Event {
         session_id: SessionId::new(row.get::<_, String>(0)?),
         seq: row.get(1)?,
-        at: row.get(2)?,
+        at: row.get::<_, SqlTime>(2)?.0,
         by: row.get::<_, Option<String>>(3)?.map(UserId::new),
         body: serde_json::from_str(&body).unwrap_or(EventBody::Unknown),
     })
@@ -825,7 +828,7 @@ fn read_session(row: &Row<'_>) -> rusqlite::Result<Session> {
         task: row.get(9)?,
         status: get_tag(row, 10)?,
         last_seq: row.get(11)?,
-        updated_at: row.get(12)?,
+        updated_at: row.get::<_, SqlTime>(12)?.0,
         title: row.get(13)?,
         title_source: get_tag(row, 14)?,
         parent_host: row.get::<_, Option<String>>(15)?.map(HostId::new),

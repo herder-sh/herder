@@ -230,6 +230,7 @@ pub struct SecretInfo {
     /// What it is for, on one line.
     pub description: String,
     /// When its value was last set.
+    #[schemars(with = "crate::TimestampSchema")]
     pub updated_at: Timestamp,
 }
 
@@ -253,6 +254,7 @@ pub struct SecretAccess {
     /// Position in the hub's audit log, increasing; for `list_secret_audit`'s `before`.
     pub id: u64,
     /// When the hub handed the value out.
+    #[schemars(with = "crate::TimestampSchema")]
     pub at: Timestamp,
     /// The host that fetched it.
     pub host_id: HostId,

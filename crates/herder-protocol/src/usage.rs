@@ -4,7 +4,7 @@
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
-use jiff::{SignedDuration, Zoned};
+use jiff::{SignedDuration, ZonedDateTime};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -59,9 +59,9 @@ impl UsagePeriod {
             Self::Week => back(7 * 24),
             Self::ThirtyDays => back(30 * 24),
             Self::Month => {
-                let today = Zoned::new(now, TimeZone::UTC).date();
+                let today = ZonedDateTime::new(now, TimeZone::UTC).date();
                 Date::new(today.year(), today.month(), 1)
-                    .and_then(|first| first.to_zoned(TimeZone::UTC))
+                    .and_then(|first| first.to_zoned_datetime(TimeZone::UTC))
                     .map_or(Timestamp::MIN, |first| first.timestamp())
             }
         }

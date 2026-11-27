@@ -32,6 +32,7 @@ use herder_protocol::{
     MAX_FILE_BYTES, MAX_IMAGE_BYTES, RawEventBody, RejectReason, Seq, SessionHead, SessionId,
     SessionStatus, SessionSummary, Timestamp, UserId,
 };
+use herder_store::SqlTime;
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
@@ -378,7 +379,7 @@ impl HubStore {
                 device.as_str(),
                 host.as_str(),
                 host_name,
-                Timestamp::now(),
+                SqlTime(Timestamp::now()),
                 attachments_cap
             ],
         )?;
@@ -397,7 +398,7 @@ impl HubStore {
             Ok(HostRecord {
                 host_id: HostId::new(row.get::<_, String>(0)?),
                 host_name: row.get(1)?,
-                seen_at: row.get(2)?,
+                seen_at: row.get::<_, SqlTime>(2)?.0,
                 attachments_cap: row.get(3)?,
                 sessions: row.get(4)?,
                 attachment_bytes: row.get(5)?,
@@ -438,7 +439,7 @@ impl HubStore {
     pub fn seen(&mut self, device: &DeviceId, at: Timestamp) -> Result<()> {
         self.conn
             .prepare_cached("UPDATE hosts SET seen_at = ?2 WHERE device_id = ?1")?
-            .execute(params![device.as_str(), at])?;
+            .execute(params![device.as_str(), SqlTime(at)])?;
         Ok(())
     }
 
@@ -519,7 +520,7 @@ impl HubStore {
             Ok((
                 HostId::new(row.get::<_, String>(0)?),
                 row.get::<_, u64>(1)?,
-                row.get::<_, Timestamp>(2)?,
+                row.get::<_, SqlTime>(2)?.0,
             ))
         })?;
         for row in rows {
@@ -591,7 +592,7 @@ impl HubStore {
             tx.prepare_cached(
                 "INSERT INTO recovered (host_id, session_id, to_host, at) VALUES (?1, ?2, ?3, ?4)",
             )?
-            .execute(params![other, session_id, host_id, now])?;
+            .execute(params![other, session_id, host_id, SqlTime(now)])?;
         }
         tx.commit()?;
         Ok(others.into_iter().map(HostId::new).collect())
@@ -690,7 +691,7 @@ impl HubStore {
                     })?;
                 Ok(JournalRecord {
                     seq: row.get(0)?,
-                    at: row.get(1)?,
+                    at: row.get::<_, SqlTime>(1)?.0,
                     by: row.get::<_, Option<String>>(2)?.map(UserId::new),
                     body,
                 })
@@ -870,7 +871,7 @@ impl HubStore {
                  WHERE host_id = ?1 AND session_id = ?2 AND seq = ?3",
             )?;
             for record in resent {
-                let (at, by, body): (Timestamp, Option<String>, String) = select
+                let (SqlTime(at), by, body): (SqlTime, Option<String>, String) = select
                     .query_row(params![host_id, session_id, record.seq], |row| {
                         Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                     })?;
@@ -894,7 +895,7 @@ impl HubStore {
                     host_id,
                     session_id,
                     record.seq,
-                    record.at,
+                    SqlTime(record.at),
                     record.by.as_ref().map(UserId::as_str),
                     record.body.event_type(),
                     serde_json::to_string(record.body.as_json())?,

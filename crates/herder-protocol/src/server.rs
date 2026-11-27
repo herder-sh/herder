@@ -21,6 +21,7 @@ pub struct ApprovalRequest {
     /// The device asking, by its client, e.g. `herder-tui/0.17.0`.
     pub client: String,
     /// When the request expires, refused.
+    #[schemars(with = "crate::TimestampSchema")]
     pub expires_at: Timestamp,
 }
 
@@ -58,6 +59,7 @@ pub enum ServerMessage {
         /// The code, `XXX-XXX`.
         code: String,
         /// When the request expires.
+        #[schemars(with = "crate::TimestampSchema")]
         expires_at: Timestamp,
     },
     /// Every session on this daemon; sent after hello and whenever a session is created or
@@ -244,6 +246,7 @@ pub struct FleetHost {
     pub online: bool,
     /// When the hub last heard from the host; for an online host, as of when it connected
     /// or the list was last sent.
+    #[schemars(with = "crate::TimestampSchema")]
     pub last_seen: Timestamp,
     /// What the host's copies take on the hub; absent from a hub that does not say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,6 +324,7 @@ pub struct HostReplication {
     /// When the newest event held of the host happened, by the host's clock; absent until one
     /// is held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::TimestampSchema>")]
     pub last_event_at: Option<Timestamp>,
     /// How far the hub was behind the host when it last stored a batch from it: the age of
     /// that batch's newest event, in milliseconds. Absent until the host sent a batch since
@@ -361,9 +365,11 @@ pub struct UserDevice {
     /// The client it paired with, from its hello, e.g. `herder-ios/0.6.0`.
     pub client: String,
     /// When it paired.
+    #[schemars(with = "crate::TimestampSchema")]
     pub paired_at: Timestamp,
     /// When it last connected; absent if it has not since the daemon started keeping track.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::TimestampSchema>")]
     pub last_seen: Option<Timestamp>,
     /// Whether it has a connection open now.
     pub online: bool,
@@ -511,6 +517,7 @@ pub struct Account {
     /// them to another account by itself. Cleared by logging in again, or by the next turn on
     /// it that completes; absent while the account works.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::TimestampSchema>")]
     pub needs_login: Option<Timestamp>,
 }
 
@@ -532,6 +539,7 @@ pub struct UsageWindow {
     pub used_percent: f64,
     /// When the window resets; absent when the provider does not say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::TimestampSchema>")]
     pub resets_at: Option<Timestamp>,
 }
 
@@ -664,6 +672,7 @@ pub enum CommandResult {
         /// The period asked for.
         period: UsagePeriod,
         /// When it starts, as [`UsagePeriod::start`] has it at the time of the answer.
+        #[schemars(with = "crate::TimestampSchema")]
         since: Timestamp,
         /// One total per account and model with a turn in the period, ordered by account,
         /// then model.
@@ -712,6 +721,7 @@ pub enum CommandResult {
         /// likely reachable first.
         addresses: Vec<String>,
         /// When the window closes.
+        #[schemars(with = "crate::TimestampSchema")]
         expires_at: Timestamp,
     },
     /// A challenge for the caller's passkey, answering `passkey_challenge`.
@@ -742,6 +752,7 @@ pub enum CommandResult {
         /// likely reachable first.
         addresses: Vec<String>,
         /// When the invite stops working.
+        #[schemars(with = "crate::TimestampSchema")]
         expires_at: Timestamp,
     },
     /// The caller's users became a person, answering `claim_users`.
@@ -766,6 +777,7 @@ pub enum CommandResult {
         /// The code, for `link_hub`.
         code: String,
         /// When the code stops working.
+        #[schemars(with = "crate::TimestampSchema")]
         expires_at: Timestamp,
     },
     /// A hub's secrets without their values, answering `list_secrets`.

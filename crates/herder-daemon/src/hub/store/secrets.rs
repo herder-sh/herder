@@ -8,6 +8,7 @@ use herder_protocol::{
     HostId, MAX_SECRET_AUDIT_ENTRIES, SecretAccess, SecretError, SecretErrorCode, SecretInfo,
     SecretRef, SecretSet, SessionId, Timestamp,
 };
+use herder_store::SqlTime;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::{HubStore, Result};
@@ -77,7 +78,7 @@ impl HubStore {
         let created = self
             .conn
             .prepare_cached("INSERT OR IGNORE INTO secret_sets (name, created_at) VALUES (?1, ?2)")?
-            .execute(params![set, at])?;
+            .execute(params![set, SqlTime(at)])?;
         Ok(created == 1)
     }
 
@@ -132,7 +133,7 @@ impl HubStore {
             description,
             sealed.nonce,
             sealed.ciphertext,
-            at
+            SqlTime(at)
         ])?;
         tx.commit()?;
         Ok(true)
@@ -272,7 +273,7 @@ impl HubStore {
                     set: row.get(0)?,
                     name: row.get(1)?,
                     description: row.get(2)?,
-                    updated_at: row.get(3)?,
+                    updated_at: row.get::<_, SqlTime>(3)?.0,
                 })
             })?
             .collect::<rusqlite::Result<_>>()?)
@@ -414,7 +415,14 @@ impl HubStore {
                 "INSERT INTO secret_audit (at, host_id, session_id, purpose, set_name, name)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?
-            .execute(params![at, host.as_str(), session, purpose, set, name])?;
+            .execute(params![
+                SqlTime(at),
+                host.as_str(),
+                session,
+                purpose,
+                set,
+                name
+            ])?;
         }
         tx.commit()?;
         Ok(())
@@ -432,7 +440,7 @@ impl HubStore {
             .query_map(params![before, MAX_SECRET_AUDIT_ENTRIES], |row| {
                 Ok(SecretAccess {
                     id: row.get(0)?,
-                    at: row.get(1)?,
+                    at: row.get::<_, SqlTime>(1)?.0,
                     host_id: HostId::new(row.get::<_, String>(2)?),
                     session_id: row.get::<_, Option<String>>(3)?.map(SessionId::new),
                     purpose: row.get(4)?,

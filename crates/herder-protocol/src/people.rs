@@ -125,6 +125,7 @@ pub struct PasskeyChallenge {
     /// The challenge, base64url.
     pub challenge: String,
     /// When the daemon stops accepting an assertion over it.
+    #[schemars(with = "crate::TimestampSchema")]
     pub expires_at: Timestamp,
     /// The passkeys the assertion may come from, as credential ids, base64url: the
     /// platform's `allowCredentials`. Empty for any passkey for [`PASSKEY_RP_ID`]. A daemon
@@ -146,6 +147,7 @@ pub struct PasskeyCreation {
     /// The WebAuthn user handle for `person_id`, base64url: the UUID's 16 bytes.
     pub user_handle: String,
     /// When the daemon stops accepting a registration from it.
+    #[schemars(with = "crate::TimestampSchema")]
     pub expires_at: Timestamp,
 }
 
@@ -220,6 +222,7 @@ pub struct PasskeyKey {
     pub aaguid: Option<String>,
     /// When it was first added to a daemon; absent for a passkey added before daemons kept it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::TimestampSchema>")]
     pub added_at: Option<Timestamp>,
 }
 

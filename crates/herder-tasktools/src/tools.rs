@@ -453,6 +453,7 @@ pub struct PublishOutput {
     pub url: Option<String>,
     /// When `url` stops working; absent when it never expires or there is no `url`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<herder_protocol::TimestampSchema>")]
     pub expires_at: Option<Timestamp>,
 }
 
