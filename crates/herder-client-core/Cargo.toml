@@ -37,6 +37,7 @@ herder-daemon = { workspace = true, features = ["test-authenticator"] }
 herder-store.workspace = true
 jiff.workspace = true
 prettyplease.workspace = true
+socket2.workspace = true
 syn.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

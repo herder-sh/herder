@@ -383,6 +383,13 @@ pub(crate) struct Metered {
     budget: Budget,
 }
 
+impl Metered {
+    /// The connection metered.
+    pub(crate) fn transport(&self) -> &Transport {
+        &self.transport
+    }
+}
+
 impl AsyncRead for Metered {
     fn poll_read(
         mut self: Pin<&mut Self>,

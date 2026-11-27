@@ -88,6 +88,19 @@ async fn dial_with(
     }
 }
 
+/// Keeps what a relay stream carries for a client in this host's outbox, where what the
+/// client waits on goes first, rather than in the socket's buffer: the hub reads only as fast
+/// as the client's link takes it, so megabytes of a catch-up would wait there, and an answer
+/// behind them.
+fn hold_back_unsent(tcp: &TcpStream) {
+    #[cfg(target_os = "linux")]
+    if let Err(err) = crate::ws::hold_back_unsent(tcp) {
+        tracing::debug!("cannot limit the socket's unsent bytes: {err}");
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = tcp;
+}
+
 /// The byte stream to the hub at `address`: a TCP socket to `host:port`, or, for the URL of
 /// a tunnel to the hub such as a Cloudflare Tunnel's public hostname, the frames of the
 /// WebSocket the tunnel relays, as clients reach a daemon behind one (`docs/public-access.md`).
@@ -95,6 +108,7 @@ async fn reach(address: &str) -> Result<(Box<dyn Io>, SocketAddr)> {
     if !address.contains("://") {
         let tcp = TcpStream::connect(address).await.context("connecting")?;
         tcp.set_nodelay(true)?;
+        hold_back_unsent(&tcp);
         let peer = tcp.peer_addr()?;
         return Ok((Box::new(tcp), peer));
     }
@@ -118,6 +132,7 @@ pub(super) async fn outer(url: &str, headers: &[(String, String)]) -> Result<(Ou
         .await
         .context("connecting")?;
     tcp.set_nodelay(true)?;
+    hold_back_unsent(&tcp);
     let peer = tcp.peer_addr()?;
     let stream: Box<dyn Io> = if parsed.scheme() == "wss" {
         let config = WEB_PKI.as_ref().map_err(|err| anyhow!("TLS: {err}"))?;
