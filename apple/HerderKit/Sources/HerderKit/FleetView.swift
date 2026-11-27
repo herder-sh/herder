@@ -434,6 +434,12 @@ struct FleetView: View {
             NavigationStack(path: $boardPath) {
                 BoardView(fleet: fleet, query: boardQuery)
                     .alwaysSearchable(text: $boardQuery, prompt: "Tasks")
+                    // Only while open work waits on an offline machine.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        BoardStalledWork(fleet: fleet) { hostId in
+                            if let hostId { openMachine(hostId) } else { tab = .hub }
+                        }
+                    }
                     .toolbar {
                         ActivityToolbarButton(fleet: fleet) { sheet = .activity }
                         BoardSortMenu()
