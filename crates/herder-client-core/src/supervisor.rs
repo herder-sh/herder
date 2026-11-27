@@ -7,7 +7,7 @@
 //! reconnects at once, and checks a connection that is up before trusting it: one silent for
 //! longer than a running task would have let it be (a suspension the OS may have killed it
 //! in, unnoticed) is replaced right away, any other is pinged and replaced if the daemon
-//! shows no sign of life within [`PROBE_TIMEOUT`].
+//! shows no sign of life within its silence limit.
 //!
 //! An app wakes the task on every network change too. A wake that finds it connecting races
 //! the addresses again beside the race under way, which may be stuck on the network there
@@ -28,10 +28,16 @@
 //!
 //! A connection is pinged as soon as it is up and every [`PING_INTERVAL`] after; each ping
 //! carries a fresh payload, so its pong gives the round trip, and a ping still unanswered when
-//! the next one is due counts as a missed pong. A connection whose daemon shows no sign of
-//! life within [`SILENCE_LIMIT`] of a ping is lost. What the user asks of a connection, a
-//! command or a session, probes it as a wake does: a dead one is found [`PROBE_TIMEOUT`]
-//! after it is asked, not only at its next ping.
+//! the next one is due counts as a missed pong and is not followed by another. A connection
+//! whose daemon shows no sign of life within its silence limit of a ping is lost. What the
+//! user asks of a connection, a command or a session, probes it as a wake does: a dead one is
+//! found a silence limit after it is asked, not only at its next ping.
+//!
+//! The silence limit follows the round trips the connection's pongs measured: a few of the
+//! slowest recent ones, never less than [`SILENCE_FLOOR`], what a good link is held to, nor
+//! more than [`SILENCE_CAP`], so that a link whose radio takes seconds to wake or whose
+//! buffers hold seconds of other traffic is not taken for dead, and a dead one is still
+//! found within a bound.
 //!
 //! A lost connection is ridden out: for [`QUIET`] the machine still shows as connected, with
 //! what its connection brought, while the task reconnects. A connection made within that
@@ -125,15 +131,21 @@ const RECENT_PONGS: usize = 20;
 /// How often a connection is pinged.
 const PING_INTERVAL: Duration = Duration::from_secs(10);
 
-/// Silence after a ping after which a connection is considered dead, though TCP has not
-/// noticed yet. Any byte the daemon sends or takes ends the silence, so a slow link that
-/// carries something is kept; one that carries nothing for this long is quicker replaced
-/// than waited for, and replacing it shows nowhere ([`QUIET`]).
-const SILENCE_LIMIT: Duration = Duration::from_secs(5);
+/// Least silence after a ping or a probe (which a wake and what the user asks for send) after
+/// which a connection is considered dead, though TCP has not noticed yet. Any byte the daemon
+/// sends or takes ends the silence, so a slow link that carries something is kept; one that
+/// carries nothing for this long is quicker replaced than waited for, and replacing it shows
+/// nowhere ([`QUIET`]). A link whose round trips take longer gets [`SILENCE_ROUND_TRIPS`] of
+/// its slowest.
+const SILENCE_FLOOR: Duration = Duration::from_secs(5);
 
-/// Silence after a probe, which a wake and what the user asks for send, after which a
-/// connection is replaced.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How many of its slowest recent round trips a connection gets to show a sign of life: the
+/// next may be slower, by a radio that went idle meanwhile or a lost packet sent again.
+const SILENCE_ROUND_TRIPS: u32 = 3;
+
+/// Most silence a connection is given, however slow its round trips were: a dead one is found
+/// within this of a ping.
+const SILENCE_CAP: Duration = Duration::from_secs(20);
 
 /// How long a lost connection still shows as connected while it is being replaced: a drop
 /// shorter than this is never seen.
@@ -486,6 +498,12 @@ impl Quality {
             self.rtts.pop_front();
         }
         self.rtts.push_back(rtt);
+    }
+
+    /// How long the daemon may stay silent after a ping before the connection counts as dead.
+    fn silence_limit(&self) -> Duration {
+        let slowest = self.rtts.iter().max().copied().unwrap_or_default();
+        (slowest * SILENCE_ROUND_TRIPS).clamp(SILENCE_FLOOR, SILENCE_CAP)
     }
 
     fn view(&self) -> ConnectionQuality {
@@ -1204,10 +1222,15 @@ impl Supervisor {
         }
     }
 
-    /// Records a pong that came back `rtt` after its ping.
-    fn pong(&self, rtt: Duration) {
-        self.lock().quality.pong(rtt);
+    /// Records a pong that came back `rtt` after its ping, and returns the connection's
+    /// silence limit with it.
+    fn pong(&self, rtt: Duration) -> Duration {
+        let mut state = self.lock();
+        state.quality.pong(rtt);
+        let limit = state.quality.silence_limit();
+        drop(state);
         self.notify();
+        limit
     }
 
     /// Records a ping whose pong did not come back before the next ping was due.
@@ -1920,6 +1943,8 @@ async fn converse(
     route_check.reset();
     // The payload of the ping a probe sent, and when it went out, until its pong comes back.
     let mut probe: Option<(String, Instant)> = None;
+    // A new connection has measured no round trip yet.
+    let mut silence = SILENCE_FLOOR;
     // A connection to an address before this one's, which new addresses start; once one
     // answers, this connection is replaced to move there.
     let mut better: Option<BoxFuture<'static, Result<String, String>>> = None;
@@ -1930,8 +1955,8 @@ async fn converse(
         let due = |ping: &Option<(String, Instant)>, limit: Duration| {
             ping.as_ref().map(|(_, sent)| heard.max(*sent) + limit)
         };
-        let probe_due = due(&probe, PROBE_TIMEOUT);
-        let dead = [probe_due, due(&pinged, SILENCE_LIMIT)]
+        let probe_due = due(&probe, silence);
+        let dead = [probe_due, due(&pinged, silence)]
             .into_iter()
             .flatten()
             .min();
@@ -1997,7 +2022,7 @@ async fn converse(
                     Some(Op::Wake) => {
                         *suspended = false;
                         // A running task would have found it dead by now.
-                        if alive.at().elapsed() > PING_INTERVAL + SILENCE_LIMIT {
+                        if alive.at().elapsed() > PING_INTERVAL + silence {
                             return Ended::Dropped(
                                 "the connection was silent through a suspension".to_owned(),
                             );
@@ -2059,10 +2084,13 @@ async fn converse(
                 continue;
             }
             _ = ping.tick() => {
+                // One still unanswered holds its place: the silence counts from it, and a
+                // limit longer than the interval would else never be reached.
                 if pinged.is_some() {
                     supervisor.missed_pong();
+                } else {
+                    pinged = Some(send_ping(outgoing));
                 }
-                pinged = Some(send_ping(outgoing));
                 continue;
             }
             frame = stream.next() => frame,
@@ -2100,7 +2128,7 @@ async fn converse(
                     .find(|(sent, _)| *payload == *sent.as_bytes())
                     .map(|(_, at)| *at);
                 if let Some(at) = answered {
-                    supervisor.pong(at.elapsed());
+                    silence = supervisor.pong(at.elapsed());
                     // A daemon with two pings to answer may answer only the later one: its
                     // pong answers the one sent before it too, which would else wait for a
                     // pong that never comes and take a healthy, idle connection for dead.
@@ -2670,6 +2698,33 @@ mod tests {
             }
             assert!(flap_wait(u32::MAX, replaced) >= BACKOFF_CAP / 2);
         }
+    }
+
+    #[test]
+    fn the_silence_limit_follows_the_slowest_recent_round_trip_within_bounds() {
+        let ms = Duration::from_millis;
+        let mut quality = Quality::default();
+        // Nothing measured yet, and a good link: held to the floor, found dead as soon.
+        assert_eq!(quality.silence_limit(), SILENCE_FLOOR);
+        for rtt in [40, 900, 1600] {
+            quality.pong(ms(rtt));
+            assert_eq!(quality.silence_limit(), SILENCE_FLOOR);
+        }
+        // A slow round trip gets three of itself, until it is no longer among the latest.
+        quality.pong(ms(4000));
+        assert_eq!(quality.silence_limit(), ms(12_000));
+        for _ in 1..RECENT_PONGS {
+            quality.pong(ms(100));
+        }
+        assert_eq!(quality.silence_limit(), ms(12_000));
+        quality.pong(ms(100));
+        assert_eq!(quality.silence_limit(), SILENCE_FLOOR);
+        // However slow, a dead link is found within the cap.
+        quality.pong(ms(60_000));
+        assert_eq!(quality.silence_limit(), SILENCE_CAP);
+        // A new connection starts again from the floor.
+        quality.connected();
+        assert_eq!(quality.silence_limit(), SILENCE_FLOOR);
     }
 
     #[test]
