@@ -17,14 +17,14 @@ import Testing
 
     /// Away from home: connected to the hub through its tunnel, trash-can-01 over Tailscale,
     /// work-mbp with a Tailscale address too; the router's VPN worked yesterday.
-    private var working: RemoteAccess {
+    private var working: FleetReach {
         var machines = remoteFleet(now: now)
         machines[3].address = "wss://hub.example.com"
         machines[0].addresses = ["172.20.10.5:7447", "100.101.1.2:7447"]
         machines[0].address = "hub://h-hub"
         var options = RemoteOptions(hub: "h-hub", owner: true, tunnels: [homeTunnel(up: true)])
         options.read(remoteOffer())
-        return RemoteAccess(machines: machines, seen: ["vpn:172.20.40.0/24": now.addingTimeInterval(-86400),
+        return FleetReach(machines: machines, seen: ["vpn:172.20.40.0/24": now.addingTimeInterval(-86400),
                                                        "vpn:172.20.10.0/24": now.addingTimeInterval(-86400)],
                             options: options, now: now)
     }
@@ -40,24 +40,24 @@ import Testing
     }
 
     /// Machines on the home network only, and no hub.
-    private var nothing: RemoteAccess {
+    private var nothing: FleetReach {
         let machines = Array(sampleFleetMachines(now: now).prefix(3)).map { machine in
             var machine = machine
             machine.addresses = ["172.20.40.\(machine.name.count):7447"]
             machine.address = machine.addresses.first
             return machine
         }
-        return RemoteAccess(machines: machines, now: now)
+        return FleetReach(machines: machines, now: now)
     }
 
     /// At home with a hub this device owns and nothing of herder's set up yet: each option's
     /// set-up offered.
-    private var offers: RemoteAccess {
+    private var offers: FleetReach {
         var machines = remoteFleet(now: now)
         machines[3].addresses = ["172.20.40.200:7448"]
         var options = RemoteOptions(hub: "h-hub", owner: true)
         options.answered = true
-        return RemoteAccess(machines: machines, options: options, now: now)
+        return FleetReach(machines: machines, options: options, now: now)
     }
 
     @Test func drawsTheHubTabsRow() async throws {

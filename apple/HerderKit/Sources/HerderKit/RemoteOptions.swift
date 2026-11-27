@@ -3,18 +3,18 @@ import Herder
 
 /// The remote access options herder sets up itself (docs/remote-access.md), beside the routes
 /// the owner runs: the WireGuard configs imported on this device, and what the hub offers and is
-/// set to (`get_remote_access`). Each option reads as a `RemoteAccess.State`, like a route the
+/// set to (`get_remote_access`). Each option reads as a `FleetReach.State`, like a route the
 /// owner runs.
 struct RemoteOptions: Equatable {
     /// How a route the hub runs in Cloudflare stands.
     struct Status: Equatable {
         /// "https://herder-relay.example.workers.dev", "wss://hub.example.com".
         var url: String
-        var state: RemoteAccess.State
+        var state: FleetReach.State
         /// Cloudflare's message, when it failed.
         var error: String?
 
-        init(url: String, state: RemoteAccess.State, error: String? = nil) {
+        init(url: String, state: FleetReach.State, error: String? = nil) {
             self.url = url
             self.state = state
             self.error = error
@@ -123,23 +123,23 @@ struct RemoteOptions: Equatable {
 
     /// Your VPN through herder: working while a connection runs through one of its configs, set
     /// up once one is imported.
-    var ownVpnState: RemoteAccess.State {
+    var ownVpnState: FleetReach.State {
         if imported.contains(where: \.up) { return .working }
         return imported.isEmpty ? .notSetUp : .unseen
     }
 
     /// herder's WireGuard on the hub, as this device uses it.
-    var hubWireGuardState: RemoteAccess.State {
+    var hubWireGuardState: FleetReach.State {
         guard hubWireGuard != nil else { return .notSetUp }
         if tunnels.contains(where: { $0.hub != nil && $0.up }) { return .working }
         return enrolled ? .unseen : .notSetUp
     }
 
-    var relayState: RemoteAccess.State { relay?.state ?? .notSetUp }
+    var relayState: FleetReach.State { relay?.state ?? .notSetUp }
 
     /// Cloudflare as one card: the worse of the tunnel and the relay when one failed, else the
     /// better.
-    var cloudflareState: RemoteAccess.State {
+    var cloudflareState: FleetReach.State {
         let states = [tunnelState, relayState]
         if states.contains(.wontWork) { return .wontWork }
         if states.contains(.working) { return .working }
@@ -162,7 +162,7 @@ struct RemoteOptions: Equatable {
         }
         return describe(error)
     }
-    var tunnelState: RemoteAccess.State { tunnel?.state ?? .notSetUp }
+    var tunnelState: FleetReach.State { tunnel?.state ?? .notSetUp }
 
     /// Your VPN's line: "home-udm · 192.168.1.0/24 · up now".
     var ownVpnLine: String {
@@ -234,8 +234,9 @@ struct RemoteOptions: Equatable {
                                   tunnelHostname: tunnelHostname.isEmpty ? nil : tunnelHostname)
     }
 
-    /// The hub secret the Cloudflare API token is kept in.
-    static let tokenSet = "remote-access"
+    /// The hub secret the Cloudflare API token is kept in, where `herder hub tunnel` puts it
+    /// too, so either finds the other's.
+    static let tokenSet = "cloudflare"
     static let tokenName = "CLOUDFLARE_API_TOKEN"
     static var tokenRef: SecretRef { "\(tokenSet)/\(tokenName)" }
 

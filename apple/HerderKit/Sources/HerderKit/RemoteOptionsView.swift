@@ -373,7 +373,7 @@ struct CloudflareFacts: View {
                                    style: options.cloudflare == nil ? .primary : .plain) {
                         account = options.cloudflareAccount
                         hostname = options.tunnelHostname
-                        relay = options.cloudflare == nil ? options.tunnelHostname.isEmpty : options.relayOn
+                        relay = options.relayOn
                         token = ""
                         editing = true
                     }
