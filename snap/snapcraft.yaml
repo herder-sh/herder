@@ -52,11 +52,9 @@ parts:
     source-type: git
     rust-path: [linux]
     # The gnome extension points LD_LIBRARY_PATH at the GNOME SDK's C library, on which rustup
-    # and cargo crash; the linker finds the SDK's libraries through pkg-config and LDFLAGS.
+    # and cargo crash; the linker finds the SDK's libraries through pkg-config.
     build-environment:
       - LD_LIBRARY_PATH: ""
-    # The gnome extension's LDFLAGS point the linker at the GNOME SDK's libraries.
-    rust-inherit-ldflags: true
     override-pull: |
       craftctl default
       craftctl set version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
