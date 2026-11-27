@@ -14,6 +14,7 @@ base64.workspace = true
 herder-client-core.workspace = true
 herder-protocol.workspace = true
 image.workspace = true
+jiff.workspace = true
 nix.workspace = true
 nucleo-matcher.workspace = true
 ratatui.workspace = true

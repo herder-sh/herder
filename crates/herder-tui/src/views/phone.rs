@@ -144,6 +144,12 @@ fn dialog_title(app: &App) -> &'static str {
         .is_some_and(|panel| panel.secrets.is_some())
     {
         "secrets"
+    } else if app
+        .machine_panel
+        .as_ref()
+        .is_some_and(|panel| panel.usage.is_some())
+    {
+        "usage"
     } else if app.machine_panel.is_some() {
         "fleet"
     } else if app.account_screen.is_some() {

@@ -62,6 +62,9 @@ pub(super) fn draw(
     if let Some(secrets) = &panel.secrets {
         return super::secrets::draw(frame, area, app, secrets, hits);
     }
+    if let Some(usage) = &panel.usage {
+        return super::hub_usage::draw(frame, area, app, usage, hits);
+    }
     list(frame, area, app, panel, hits);
     match (&panel.account, &panel.add, &panel.backup) {
         (Some(account), _, _) => account_dialog(frame, area, app, account),

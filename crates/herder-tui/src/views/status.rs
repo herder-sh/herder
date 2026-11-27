@@ -128,6 +128,21 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
         ]);
         return hints;
     }
+    if app
+        .machine_panel
+        .as_ref()
+        .is_some_and(|panel| panel.usage.is_some())
+        && app.mode().is_none()
+    {
+        return vec![
+            hint("j/k", "move"),
+            tap("enter", "open", KeyCode::Enter),
+            tap("p", "period", char('p')),
+            tap("r", "reload", char('r')),
+            tap("esc", "back", KeyCode::Esc),
+            help,
+        ];
+    }
     match app.mode() {
         // The fleet and the accounts are views, whose keys the bar shows.
         None if app.machine_panel.as_ref().is_some_and(|panel| {
@@ -135,6 +150,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                 && panel.account.is_none()
                 && panel.backup.is_none()
                 && panel.secrets.is_none()
+                && panel.usage.is_none()
         }) =>
         {
             match app
@@ -160,22 +176,28 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                     tap("J", "later", char('J')),
                     tap("esc", "done", KeyCode::Esc),
                 ],
-                None => vec![
-                    hint("j/k", "move"),
-                    tap("a", "add machine", char('a')),
-                    tap("n", "add account", char('n')),
-                    tap("e", "rename", char('e')),
-                    // A hub backs nothing up; its secrets are managed there.
+                None => {
+                    let mut hints = vec![
+                        hint("j/k", "move"),
+                        tap("a", "add machine", char('a')),
+                        tap("n", "add account", char('n')),
+                        tap("e", "rename", char('e')),
+                    ];
+                    // A hub backs nothing up; its secrets and its logins' usage are there.
                     if app.on_hub() {
-                        tap("s", "secrets", char('s'))
+                        hints.push(tap("s", "secrets", char('s')));
+                        hints.push(tap("u", "usage", char('u')));
                     } else {
-                        tap("b", "backup", char('b'))
-                    },
-                    tap("d", "forget", char('d')),
-                    tap("r", "reconnect", char('r')),
-                    tap("esc", "back", KeyCode::Esc),
-                    help,
-                ],
+                        hints.push(tap("b", "backup", char('b')));
+                    }
+                    hints.extend([
+                        tap("d", "forget", char('d')),
+                        tap("r", "reconnect", char('r')),
+                        tap("esc", "back", KeyCode::Esc),
+                        help,
+                    ]);
+                    hints
+                }
             }
         }
         None if app

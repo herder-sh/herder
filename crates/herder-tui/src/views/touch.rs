@@ -84,17 +84,34 @@ fn buttons(app: &App) -> Vec<Button> {
         && panel.account.is_none()
         && panel.backup.is_none()
         && panel.secrets.is_none()
+        && panel.usage.is_none()
     {
-        return vec![
+        let mut buttons = vec![
             button("a", "add", char('a')),
             button("n", "account", char('n')),
             button("e", "rename", char('e')),
             button("d", "forget", char('d')),
-            if app.on_hub() {
-                button("s", "secrets", char('s'))
-            } else {
-                button("b", "backup", char('b'))
-            },
+        ];
+        if app.on_hub() {
+            buttons.extend([
+                button("s", "secrets", char('s')),
+                button("u", "usage", char('u')),
+            ]);
+        } else {
+            buttons.push(button("b", "backup", char('b')));
+        }
+        buttons.push(esc());
+        return buttons;
+    }
+    if app
+        .machine_panel
+        .as_ref()
+        .is_some_and(|panel| panel.usage.is_some())
+    {
+        return vec![
+            button("⏎", "open", enter()),
+            button("p", "period", char('p')),
+            button("r", "reload", char('r')),
             esc(),
         ];
     }

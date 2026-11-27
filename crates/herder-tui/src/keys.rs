@@ -662,6 +662,7 @@ pub const FLEET: &[Keys] = &[
     keys(&[ch('d')], "forget the machine"),
     keys(&[ch('b')], "backups"),
     keys(&[ch('s')], "a hub's secrets"),
+    keys(&[ch('u')], "what a hub's logins used, on every machine"),
     keys(&[ch('r')], "reconnect"),
     keys(&[ch('?')], "this help"),
     keys(&[ESC, BACKSPACE, ch('m'), ch('q')], "close"),

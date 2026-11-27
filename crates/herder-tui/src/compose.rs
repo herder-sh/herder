@@ -83,6 +83,8 @@ pub enum Origin {
     Backup(crate::backup::Sent),
     /// A command of the secrets screen to a hub.
     Secrets(crate::secrets::Sent),
+    /// A command of the hub usage screen to a hub.
+    HubUsage(crate::hub_usage::Sent),
     /// Fetching a transcript's image: which one, its file name, and whether to open it or
     /// only save it.
     Image {
@@ -571,6 +573,7 @@ impl App {
             Origin::Public(sent) => return self.public_sent(sent, result),
             Origin::Diagnostics(sent) => return self.diagnostics_sent(sent, result),
             Origin::Secrets(sent) => return self.secrets_sent(sent, result),
+            Origin::HubUsage(sent) => self.hub_usage_sent(sent, result),
             Origin::Supply(sent) => return self.supply_sent(sent, result),
             Origin::Fork(host_id) => {
                 let forked = result.and_then(|result| match result {

@@ -51,6 +51,8 @@ pub struct MachinePanel {
     pub backup: Option<Backup>,
     /// The secrets screen of the selected hub, over the panel.
     pub secrets: Option<Secrets>,
+    /// The usage screen of the selected hub, over the panel.
+    pub usage: Option<crate::hub_usage::HubUsage>,
     /// Where each machine this client owns backs up, as it last said.
     pub links: Links,
     /// How full each hub's disk is, as it said with its link when the panel opened.
@@ -300,6 +302,8 @@ pub enum Input {
     Backup,
     /// Manage the secrets of the selected hub.
     Secrets,
+    /// See what the selected hub's logins used.
+    Usage,
     /// Edit the public addresses of the selected machine.
     Public,
     /// Rank the routes of the selected machine on this device.
@@ -337,6 +341,9 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
     }
     if let Some(screen) = &panel.secrets {
         return secrets::for_key(key, screen);
+    }
+    if panel.usage.is_some() {
+        return crate::hub_usage::for_key(key);
     }
     let input = match &panel.edit {
         Some(PanelEdit::Rename(_) | PanelEdit::Public(_)) => match key.code {
@@ -411,6 +418,7 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Char('d') => Input::Forget,
             KeyCode::Char('b') => Input::Backup,
             KeyCode::Char('s') => Input::Secrets,
+            KeyCode::Char('u') => Input::Usage,
             KeyCode::Char('p') => Input::Public,
             KeyCode::Char('o') => Input::Routes,
             KeyCode::Char('t') => Input::Diagnostics,
@@ -603,6 +611,7 @@ impl App {
                     panel.edit = Some(PanelEdit::Routes(0));
                 }
                 Input::Secrets => return self.open_secrets(),
+                Input::Usage => return self.open_hub_usage(),
                 Input::AddAccount => {
                     let Some(at) = panel.selected(&self.machines) else {
                         return Vec::new();
