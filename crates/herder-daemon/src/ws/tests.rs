@@ -12,10 +12,11 @@ use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Account, AccountId, AwsDeviceCode, AwsProfile, ClientHello, ClientMessage, Command,
     CommandBody, CommandId, CommandResult, Cursor, DaemonSettings, DeviceId, ErrorCode, ErrorInfo,
-    Event, EventBody, HostId, Item, ItemBody, ItemId, LeftoverDecision, MAX_MESSAGE_BYTES,
-    NewPerson, PROTOCOL_VERSION, PasskeyAssertion, PasskeyChallenge, PasskeyCreation, PasskeyKey,
-    PermissionMode, PersonId, PersonPasskey, Provider, Role, Seq, ServerHello, ServerMessage,
-    SessionHead, SessionId, SignIn, Terminal, TerminalPurpose, TurnId, UserId,
+    Event, EventBody, HostId, Item, ItemBody, ItemId, LATEST_EVENTS, LATEST_EVENTS_BYTES,
+    LeftoverDecision, MAX_MESSAGE_BYTES, NewPerson, PROTOCOL_VERSION, PasskeyAssertion,
+    PasskeyChallenge, PasskeyCreation, PasskeyKey, PermissionMode, PersonId, PersonPasskey,
+    Provider, Role, Seq, ServerHello, ServerMessage, SessionHead, SessionId, SignIn, Terminal,
+    TerminalPurpose, TurnId, UserId,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -1253,6 +1254,58 @@ async fn a_long_replay_to_a_slow_client_does_not_hold_up_its_commands() {
             message => slow.view.apply(message),
         }
     }
+}
+
+fn latest(session: &SessionId) -> CommandBody {
+    CommandBody::GetLatestEvents {
+        session_id: session.clone(),
+    }
+}
+
+fn latest_seqs(answer: ServerMessage) -> Vec<Seq> {
+    match answer {
+        ServerMessage::CommandAccepted {
+            result: CommandResult::LatestEvents { events },
+            ..
+        } => events.iter().map(|event| event.seq).collect(),
+        other => panic!("expected the latest events, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_latest_events_are_the_journals_last_within_their_bytes() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let mut head = 0;
+    for n in 0..2 * LATEST_EVENTS {
+        head = daemon
+            .append(&session, added(&format!("i{n}"), "short"))
+            .seq;
+    }
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    let seqs = latest_seqs(client.answer("c1", latest(&session)).await);
+    let first = head + 1 - LATEST_EVENTS as Seq;
+    assert_eq!(seqs, (first..=head).collect::<Vec<_>>());
+
+    // Fewer once they would take more bytes; the latest alone, however large.
+    let big = "y".repeat(LATEST_EVENTS_BYTES / 3);
+    for n in 0..4 {
+        head = daemon.append(&session, added(&format!("b{n}"), &big)).seq;
+    }
+    let seqs = latest_seqs(client.answer("c2", latest(&session)).await);
+    assert_eq!(seqs, vec![head - 1, head]);
+    let huge = "y".repeat(LATEST_EVENTS_BYTES + 1);
+    head = daemon.append(&session, added("h", &huge)).seq;
+    let seqs = latest_seqs(client.answer("c3", latest(&session)).await);
+    assert_eq!(seqs, vec![head]);
+
+    let ServerMessage::CommandRejected { error, .. } =
+        client.answer("c4", latest(&SessionId::new("gone"))).await
+    else {
+        panic!("a session that does not exist was answered");
+    };
+    assert_eq!(error.code, ErrorCode::NotFound);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

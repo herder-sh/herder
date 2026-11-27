@@ -1445,6 +1445,27 @@
           ]
         },
         {
+          "description": "A session's latest events, answering `get_latest_events`: oldest first, the last\n[`crate::LATEST_EVENTS`] at most, as many of them as fit [`crate::LATEST_EVENTS_BYTES`]\nof JSON but always the latest. Their seqs are the journal's, so a client folds them\nas the replay reaches them; an event this daemon cannot encode is left out.",
+          "type": "object",
+          "properties": {
+            "events": {
+              "description": "The events.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Event"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "latest_events"
+            }
+          },
+          "required": [
+            "type",
+            "events"
+          ]
+        },
+        {
           "description": "A folder's entries, answering `list_directory`.",
           "type": "object",
           "properties": {

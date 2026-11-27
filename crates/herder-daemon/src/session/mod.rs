@@ -1104,6 +1104,10 @@ impl SessionManager {
             | CommandBody::ClearBotMemory { .. } => {
                 return Err(error(ErrorCode::Unsupported, "this daemon holds no bots"));
             }
+            // Each connection answers it itself, ahead of its queued replays.
+            CommandBody::GetLatestEvents { .. } => {
+                return Err(error(ErrorCode::BadRequest, "not a command of a session"));
+            }
             // The daemon's hub link answers these ([`crate::hub::Link`]).
             CommandBody::GetHubLink
             | CommandBody::LinkHub { .. }
@@ -2679,6 +2683,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
     matches!(
         command,
         CommandBody::GetAttachment { .. }
+            | CommandBody::GetLatestEvents { .. }
             | CommandBody::ListDirectory { .. }
             | CommandBody::GetProjectIcon { .. }
             | CommandBody::GetHubLink

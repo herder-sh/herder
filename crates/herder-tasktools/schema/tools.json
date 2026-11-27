@@ -1300,6 +1300,7 @@
                   "upload_history",
                   "send_prompt",
                   "get_attachment",
+                  "get_latest_events",
                   "interrupt",
                   "remove_queued",
                   "move_queued",

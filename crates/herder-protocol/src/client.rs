@@ -286,6 +286,14 @@ pub enum CommandBody {
         /// The image or file, as the prompt's `user_message` names it.
         attachment_id: AttachmentId,
     },
+    /// Fetch the session's latest events, for an app to show the end of a long session at
+    /// once while its journal replays from the start; answered with `latest_events`, ahead
+    /// of the replays the connection has queued. It changes nothing, so a resend is answered
+    /// afresh.
+    GetLatestEvents {
+        /// The session.
+        session_id: SessionId,
+    },
     /// Stop the running turn.
     Interrupt {
         /// Target session.

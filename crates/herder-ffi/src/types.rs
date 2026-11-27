@@ -616,6 +616,9 @@ pub enum CommandBody {
         session_id: SessionId,
         attachment_id: AttachmentId,
     },
+    GetLatestEvents {
+        session_id: SessionId,
+    },
     Interrupt {
         session_id: SessionId,
     },
@@ -1015,6 +1018,9 @@ pub enum CommandResult {
     Attachment {
         media_type: String,
         data: Bytes,
+    },
+    LatestEvents {
+        events: Vec<Event>,
     },
     Directory {
         path: String,
