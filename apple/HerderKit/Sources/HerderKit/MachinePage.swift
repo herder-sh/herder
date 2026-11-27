@@ -61,7 +61,7 @@ struct MachineAttention: Equatable {
 }
 
 /// A machine's page: what needs fixing there first, then its accounts, provider CLIs, MCP
-/// servers, turn limit, backup, secrets, people and connection, its identifiers, and forgetting it. Each section
+/// servers, turn limit, backup, secrets, people, public addresses and connection, its identifiers, and forgetting it. Each section
 /// is its own view below, listed once in `body`.
 struct MachinePage: View {
     let fleet: Fleet
@@ -105,6 +105,9 @@ struct MachinePage: View {
                 }
                 if machine.connection == .connected {
                     PeopleLink(hostId: machine.hostId).detailSection("People")
+                }
+                if machine.role == .owner && machine.connection == .connected {
+                    PublicAddressesSection(fleet: fleet, machine: machine).detailSection("Public addresses")
                 }
                 connection(machine).detailSection("Connection")
                 if let error {

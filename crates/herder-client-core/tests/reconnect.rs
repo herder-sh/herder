@@ -25,6 +25,7 @@ use herder_daemon::auth::authenticator::{self, Authenticator};
 use herder_daemon::aws::Aws;
 use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
+use herder_daemon::settings::Settings;
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
@@ -188,6 +189,9 @@ impl Daemon {
                 _ => None,
             };
             server.manage_aws(Aws::from_env(env)).unwrap();
+            let config = herder_daemon::Config::load_file(&dir.join("daemon.toml")).unwrap();
+            let settings = Settings::new(&config, None, shutdown.clone());
+            server.manage_settings(Arc::new(settings)).unwrap();
             started
                 .send((addr, tunnel_addr, fingerprint, auth, fanout))
                 .ok()
@@ -512,6 +516,88 @@ async fn a_machine_reached_only_through_its_tunnel_streams_its_sessions() {
         update.events.first().map(|event| &event.body),
         Some(EventBody::SessionCreated { .. })
     ));
+}
+
+/// The owner sets the machine's public address once, as a port forward on the router; another
+/// device, signed in at home, picks it up from its next hello and connects through it once home
+/// is out of reach, with nothing typed. Removed on the daemon, it leaves the device too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_public_address_set_on_the_daemon_reaches_every_device() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let owner = Client::open(
+        tmp.path().join("owner").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&owner, "alice", daemon.addr)
+        .await
+        .unwrap()
+        .host_id;
+    // The device's way in at home, and the router's port forward.
+    let home = Relay::start(daemon.addr).await;
+    let forward = Relay::start(daemon.addr).await;
+    // 127.0.0.1 as a public address would be written: one not read as this device itself.
+    let public = format!("127.1:{}", forward.addr.port());
+    let phone = Client::open(
+        tmp.path().join("phone").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let at_home = home.addr.to_string();
+    daemon.sign_in(&phone, "bob", home.addr).await.unwrap();
+    phone.synced(host.clone()).await.unwrap();
+    assert_eq!(
+        phone.machines()[0].addresses,
+        std::slice::from_ref(&at_home)
+    );
+
+    let set_public = |addresses: Vec<String>| {
+        let (owner, host) = (&owner, host.clone());
+        async move {
+            let CommandResult::Settings { mut settings, .. } = owner
+                .send(host.clone(), CommandBody::GetSettings)
+                .await
+                .unwrap()
+            else {
+                panic!("expected the settings");
+            };
+            settings.public_addresses = addresses;
+            owner
+                .send(host, CommandBody::SetSettings { settings })
+                .await
+                .unwrap();
+        }
+    };
+    set_public(vec![public.clone()]).await;
+    assert_eq!(phone.reconnect(host.clone()).await, Ok(at_home.clone()));
+    wait_machines(&phone, |m| {
+        m[0].addresses == [at_home.clone(), public.clone()]
+    })
+    .await;
+
+    // Away from home: the home route takes connections and never answers.
+    home.swallow(true);
+    home.cut();
+    wait_machines(&phone, |m| {
+        m[0].connection == ConnectionState::Connected && m[0].address.as_ref() == Some(&public)
+    })
+    .await;
+    phone.synced(host.clone()).await.unwrap();
+
+    // Home again; the owner removes the port forward, and the device drops it.
+    home.swallow(false);
+    assert_eq!(phone.reconnect(host.clone()).await, Ok(at_home.clone()));
+    set_public(Vec::new()).await;
+    assert_eq!(phone.reconnect(host.clone()).await, Ok(at_home.clone()));
+    wait_machines(&phone, |m| m[0].addresses == [at_home.clone()]).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

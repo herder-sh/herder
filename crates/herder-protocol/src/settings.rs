@@ -15,6 +15,14 @@ pub struct DaemonSettings {
     /// Addresses the daemon listens on, as `ip:port`, at least one and none twice; each an IP
     /// of this machine, or `0.0.0.0` or `[::]` for all of them.
     pub listen: Vec<String>,
+    /// Where other devices reach the daemon from outside its own networks, which it cannot
+    /// tell from `listen`: the `host:port` of a port forward, TCP proxy or VPN address, or the
+    /// `wss://` URL of a tunnel that unwraps HTTPS, such as a Cloudflare Tunnel
+    /// (`docs/public-access.md`). The daemon advertises them after its `listen` addresses in
+    /// its hello, invites and claim links, so every device uses them with nothing to type. A
+    /// change applies at once. None from daemons before them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub public_addresses: Vec<String>,
     /// Logging.
     pub log: LogSettings,
     /// The CLI run per provider, where it is not the provider's own name on `PATH`.

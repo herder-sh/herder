@@ -100,6 +100,26 @@ fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel, hits: &m
                 ]);
             }
         }
+        Some(PanelEdit::Public(text)) => {
+            // The addresses being typed replace the details' heading.
+            if let Some(heading) = details.first_mut() {
+                *heading = match text {
+                    Some(text) => Line::from(vec![
+                        Span::styled(format!("{:<LABEL$}", "public"), ui.accent()),
+                        Span::styled(text.clone(), ui.strong()),
+                        Span::styled(ui.glyphs.cursor, ui.accent()),
+                    ]),
+                    None => Line::styled("Asking for its public addresses…", ui.muted()),
+                };
+                details.insert(
+                    1,
+                    Line::styled(
+                        "each a host:port or a tunnel's wss:// URL, spaces between",
+                        ui.muted(),
+                    ),
+                );
+            }
+        }
         Some(PanelEdit::Forget) => {
             if let Some(heading) = details.first_mut() {
                 let name = selected.map_or("", |at| app.machines[at].name.as_str());

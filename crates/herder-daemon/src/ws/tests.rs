@@ -2134,6 +2134,32 @@ async fn an_owner_changes_the_settings_which_apply_on_restart() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_hello_names_the_public_addresses_an_owner_sets_from_the_next_connection() {
+    let daemon = Daemon::start().await;
+    let mut client = daemon.client().await;
+    let listening = [daemon.addr.to_string(), daemon.other.to_string()];
+    assert_eq!(client.hello(Vec::new()).await.addresses, listening);
+    let (settings, _) = settings_answer(client.command("c1", CommandBody::GetSettings).await);
+    assert!(settings.public_addresses.is_empty());
+
+    let mut changed = settings.clone();
+    changed.public_addresses = vec!["https://box.example.com/".into()];
+    let set = CommandBody::SetSettings {
+        settings: Box::new(changed),
+    };
+    let (settings, restart_required) = settings_answer(client.command("c2", set).await);
+    assert_eq!(settings.public_addresses, ["wss://box.example.com"]);
+    assert!(!restart_required);
+
+    let mut next = daemon.client().await;
+    let hello = next.hello(Vec::new()).await;
+    assert_eq!(
+        hello.addresses,
+        [&listening[..], &["wss://box.example.com".to_owned()]].concat()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn settings_the_daemon_cannot_run_with_are_refused() {
     let daemon = Daemon::start().await;
     let mut client = daemon.client().await;

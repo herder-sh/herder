@@ -149,6 +149,10 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                 Some(PanelEdit::Forget) => {
                     vec![tap("y", "forget", char('y')), tap("n", "keep", char('n'))]
                 }
+                Some(PanelEdit::Public(_)) => vec![
+                    tap("enter", "save for every device", KeyCode::Enter),
+                    tap("esc", "cancel", KeyCode::Esc),
+                ],
                 None => vec![
                     hint("j/k", "move"),
                     tap("a", "add machine", char('a')),

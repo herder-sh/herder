@@ -226,10 +226,12 @@ pub struct ServerHello {
     /// before `update_daemon`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herder_version: Option<String>,
-    /// Addresses the daemon listens on, as `host:port`, and the `wss://` URL of its public
-    /// tunnel if it has one (`docs/public-access.md`), most likely reachable first, as its
-    /// invite links name them; a client saves them, so it follows the daemon to a new address.
-    /// Empty from a daemon that does not say.
+    /// Addresses the daemon listens on, as `host:port`, then its
+    /// [`crate::DaemonSettings::public_addresses`] (`host:port`, or a tunnel's `wss://` URL,
+    /// `docs/public-access.md`), as its invite links name them. A client adds each one new
+    /// since the last hello to the machine's addresses and drops each one the daemon stopped
+    /// naming, so it follows the daemon to a new address with nothing to type. Empty from a
+    /// daemon that does not say.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub addresses: Vec<String>,
 }

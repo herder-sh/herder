@@ -647,6 +647,10 @@ pub const FLEET: &[Keys] = &[
     keys(&[ch('a')], "add a machine"),
     keys(&[ch('n')], "add an account"),
     keys(&[ch('e')], "rename the machine on this device"),
+    keys(
+        &[ch('p')],
+        "the machine's public addresses, for every device",
+    ),
     keys(&[ch('d')], "forget the machine"),
     keys(&[ch('b')], "backups"),
     keys(&[ch('s')], "a hub's secrets"),

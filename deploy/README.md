@@ -170,7 +170,10 @@ Cloudflare relays ciphertext. Leave the hostname outside Cloudflare Access.
 On a machine, set `tunnel = "127.0.0.1:7448"` in the hub's `daemon.toml` and point the
 machine's own `cloudflared` at it, as for a daemon (`docs/public-access.md`).
 
-Clients then add `wss://hub.example.com` to the hub's addresses. A host that is not
+Then add `https://hub.example.com` once under **Public addresses** on the hub's page in the
+app (or `public_addresses = ["wss://hub.example.com"]` in the hub's config): every device
+picks it up when it next connects. A port forward or a TCP proxy works as well as a tunnel
+(`docs/public-access.md`). A host that is not
 always on the hub's network, a laptop for one, sets `address = "wss://hub.example.com"`
 in its `[hub]` table and reaches the hub there from anywhere. Clients paired with the
 hub and with a linked host then reach that host through the hub whenever they cannot
