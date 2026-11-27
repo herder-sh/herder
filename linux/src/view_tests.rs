@@ -521,3 +521,71 @@ fn the_list_goes_once_every_pr_is_unlinked() {
     assert!(view.pr_texts().is_empty());
     assert!(has(&view.transcript_texts(), "pull request #12 unlinked"));
 }
+
+#[gtk::test]
+fn an_owner_removes_an_account_after_confirming_and_sees_a_refusal() {
+    let (window, sent) = open("chat");
+    let mut fleet = machines(SessionStatus::Idle);
+    let mut hub = fleet[0].accounts[0].clone();
+    hub.account_id = AccountId::new("hub-claude");
+    hub.label = "Claude (hub)".to_owned();
+    hub.hub_login = Some("claude-team".to_owned());
+    fleet[0].accounts.push(hub);
+    window.show_machines(&fleet);
+    window.pick_for_test(crate::lists::Section::Machines);
+    window.root().present();
+    settle(Duration::from_millis(50));
+    let texts = window.machines_texts();
+    for wanted in ["Accounts", "Claude (work)", "codex", "Claude (hub)", "hub"] {
+        assert!(
+            texts.iter().any(|text| text == wanted),
+            "{wanted} in {texts:?}"
+        );
+    }
+    // The hub's login has no remove: it is removed on the hub.
+    let removes = window.machines_buttons("Remove Account…");
+    assert_eq!(removes.len(), 3);
+
+    // Cancelling sends nothing.
+    removes[2].emit_clicked();
+    settle(Duration::from_millis(50));
+    let texts = window.window_texts();
+    assert!(has(&texts, "Remove Codex from box?"), "{texts:?}");
+    assert!(
+        has(
+            &texts,
+            "Its sessions must be archived first. The login stays in its config dir."
+        ),
+        "{texts:?}"
+    );
+    window.respond("cancel");
+    settle(Duration::from_millis(50));
+    assert!(sent.borrow().is_empty());
+
+    removes[2].emit_clicked();
+    settle(Duration::from_millis(50));
+    window.respond("remove");
+    settle(Duration::from_millis(50));
+    assert_eq!(
+        *sent.borrow(),
+        [CommandBody::RemoveAccount {
+            account_id: AccountId::new("codex-work")
+        }]
+    );
+
+    // The daemon's refusal shows as the app's other refusals do.
+    let refusal = "1 unarchived session runs on account codex-work; archive it first: s-api";
+    window.set_sender(Rc::new(move |_, _| {
+        Box::pin(async move { Err(refusal.to_owned()) })
+    }));
+    removes[2].emit_clicked();
+    settle(Duration::from_millis(50));
+    window.respond("remove");
+    until("the refusal", || has(&window.window_texts(), refusal));
+
+    // A member sees the accounts but cannot remove them.
+    fleet[0].role = Some(herder_protocol::Role::Member);
+    window.show_machines(&fleet);
+    assert!(has(&window.machines_texts(), "Claude (work)"));
+    assert!(window.machines_buttons("Remove Account…").is_empty());
+}
