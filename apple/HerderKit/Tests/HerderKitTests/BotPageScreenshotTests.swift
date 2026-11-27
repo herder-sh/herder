@@ -29,7 +29,7 @@ import Testing
     private func shoot(width: CGFloat, named name: String) async throws {
         let (fleet, bots) = try sample()
         let view = VStack(spacing: 0) {
-            PageTrail(crumbs: ["Integrations", "trash-can"]) { _ in }
+            PageTrail(crumbs: ["Bots", "Bot Settings", "trash-can"]) { _ in }
             BotPage(fleet: fleet, bots: bots, botId: "trash-can")
         }
         .background(Theme.canvas)

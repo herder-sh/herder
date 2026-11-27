@@ -2,7 +2,7 @@ import Foundation
 import Herder
 import SwiftUI
 
-/// How this device reaches a machine, as Setup says it: quietly, as a laptop asleep is expected.
+/// How this device reaches a machine, as Hub says it: quietly, as a laptop asleep is expected.
 enum MachineReach: Hashable {
     /// Connected, at one of the machine's addresses.
     case direct
@@ -35,7 +35,7 @@ enum MachineReach: Hashable {
     }
 }
 
-/// A machine as a row of Setup: its name, how this device reaches it, and what limits you
+/// A machine as a row of Hub: its name, how this device reaches it, and what limits you
 /// there. What diagnoses it (address, round trip, load, CLIs, accounts) is on its page.
 struct MachineRow: Hashable, Identifiable {
     var id: HostId { hostId }
@@ -185,7 +185,7 @@ extension Machine {
     var isHub: Bool { !hosts.isEmpty || hub != nil }
 }
 
-/// Setup's structure: each hub with the machines that sync to it, then the machines that sync
+/// Hub's structure: each hub with the machines that sync to it, then the machines that sync
 /// to none.
 struct SetupStructure: Equatable {
     struct Hub: Hashable, Identifiable {
@@ -271,7 +271,7 @@ struct SetupStructure: Equatable {
     }
 }
 
-/// Setup's centre: each hub as a card with the machines that sync to it hanging under it, then
+/// Hub's centre: each hub as a card with the machines that sync to it hanging under it, then
 /// the machines that sync to none. A card or a row opens its page; a hub this device has not
 /// signed in to offers Sign In.
 struct MachinesView: View {

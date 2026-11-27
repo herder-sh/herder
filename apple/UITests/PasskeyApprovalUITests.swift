@@ -3,7 +3,7 @@ import XCTest
 /// Approves a new machine with a passkey: against `fake_daemon --own`, which waits for an owner
 /// as after `herder claim` (pass the link it prints as `TEST_RUNNER_HERDER_OWN_LINK`), opens its
 /// `herder://own` link, checks the code and the machine's name, approves with the app's software
-/// passkey (`-softwarePasskey`) and lands on the machine in Setup.
+/// passkey (`-softwarePasskey`) and lands on the machine in Hub.
 final class PasskeyApprovalUITests: XCTestCase {
     @MainActor
     func testApprovingAMachineWithAPasskeyOpensIt() throws {
@@ -24,8 +24,8 @@ final class PasskeyApprovalUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["fake-own is yours"].waitForExistence(timeout: 30), "the machine did not take the passkey")
         app.buttons["Open fake-own"].tap()
 
-        XCTAssertTrue(app.tabBars.buttons["Setup"].isSelected, "Open did not go to Setup")
-        XCTAssertTrue(app.textFields["machine-name"].waitForExistence(timeout: 15), "Setup did not open the machine")
+        XCTAssertTrue(app.tabBars.buttons["Hub"].isSelected, "Open did not go to Hub")
+        XCTAssertTrue(app.textFields["machine-name"].waitForExistence(timeout: 15), "Hub did not open the machine")
         XCTAssertEqual(app.textFields["machine-name"].placeholderValue, "fake-own")
     }
 }

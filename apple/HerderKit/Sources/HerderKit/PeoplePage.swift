@@ -189,7 +189,7 @@ final class FleetPeople {
     }
 }
 
-/// People as Setup and a machine's page list them: a row per person, each opening their
+/// People as Hub and a machine's page list them: a row per person, each opening their
 /// sheet, every change signed with your passkey; then the machines are asked again.
 struct PeopleSection: View {
     let fleet: Fleet

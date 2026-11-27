@@ -39,7 +39,7 @@ enum AppSheet: Identifiable, Hashable {
     /// Joining the machines of a teammate's `herder://invite` link, with a passkey of your own.
     case acceptInvite(InviteLink)
     /// Moving your machines' old per-machine users to your passkey, and the users that need a
-    /// decision: from People (Setup's Needs you), while a machine you own is not moved yet.
+    /// decision: from People (Hub's Needs you), while a machine you own is not moved yet.
     case claim(ClaimPlan)
 
     var id: Self { self }

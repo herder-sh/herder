@@ -216,7 +216,7 @@ extension Directory {
             devices: [
                 Device(id: "mac", kind: .mac, lastSeen: now, current: true,
                        paired: ["mac": ["d1"], "trash": ["d2"], "draugelis": ["d3"]]),
-                // Not on draugelis yet, which Setup says needs you.
+                // Not on draugelis yet, which Hub says needs you.
                 Device(id: "phone", kind: .phone, lastSeen: now.addingTimeInterval(-2 * 3600),
                        paired: ["mac": ["d4"], "trash": ["d5"]]),
                 Device(id: "terminal", kind: .terminal, host: "trash-can-01", lastSeen: Timestamp.date("2026-10-27T10:00:00Z"),

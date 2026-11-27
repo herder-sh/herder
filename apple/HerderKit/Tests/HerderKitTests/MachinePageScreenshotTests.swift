@@ -17,18 +17,18 @@ import Testing
         fleet.backupLinks["trash-can-01"] = .linked(LinkedHub(address: "10.0.0.9:7447", fingerprint: "ab12",
                                                                 backup: true, secrets: true))
         try await shoot(MachinePage(fleet: fleet, hostId: "trash-can-01", sheet: .constant(nil)),
-                        crumbs: ["Setup", "trash-can-01"], height: 1900, named: "machine-owner.png")
+                        crumbs: ["Hub", "trash-can-01"], height: 1900, named: "machine-owner.png")
     }
 
     @Test func drawsAnUnlinkedPage() async throws {
         let fleet = try sampleFleet()
         fleet.backupLinks["work-mbp"] = .nowhere(localHub: false)
         try await shoot(MachinePage(fleet: fleet, hostId: "work-mbp", sheet: .constant(nil)),
-                        crumbs: ["Setup", "work-mbp"], height: 1700, named: "machine-unlinked.png")
+                        crumbs: ["Hub", "work-mbp"], height: 1700, named: "machine-unlinked.png")
     }
 
     @Test func drawsAMembersPage() async throws {
-        try await shoot(MachinePage(fleet: try sampleFleet(), hostId: "team-box", sheet: .constant(nil)), crumbs: ["Setup", "team-box"],
+        try await shoot(MachinePage(fleet: try sampleFleet(), hostId: "team-box", sheet: .constant(nil)), crumbs: ["Hub", "team-box"],
                         height: 1000, named: "machine-member.png")
     }
 

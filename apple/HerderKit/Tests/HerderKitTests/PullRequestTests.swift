@@ -371,13 +371,23 @@ struct ProjectIconLookupTests {
 
 struct CompactTabTests {
     @Test func compactWidthReachesEverySidebarSection() {
-        #expect(CompactTab.allCases.map(\.title) == ["Board", "Chats", "Projects", "Setup"])
+        #expect(CompactTab.allCases.map(\.title) == ["Board", "Chats", "Projects", "Hub"])
         #expect(CompactTab(.project("p")) == .projects)
         #expect(CompactTab(.chats) == .chats)
         #expect(CompactTab(.board) == .board)
-        #expect(CompactTab(.skills) == .setup)
-        // Usage shows on Providers, inside Setup.
-        #expect(CompactTab(.providers) == .setup)
-        #expect(CompactTab(.setup) == .setup)
+        #expect(CompactTab(.skills) == .hub)
+        // Usage shows on Providers, inside Hub.
+        #expect(CompactTab(.providers) == .hub)
+        #expect(CompactTab(.hub) == .hub)
+        // Bots, and their settings with them, live under Chats, apart from your own chats.
+        #expect(CompactTab(.bots(nil)) == .chats)
+        #expect(CompactTab(.bots("devbox/trash-can")) == .chats)
+    }
+
+    @MainActor @Test func botSettingsIsNamedForTheBots() throws {
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            throw CancellationError()
+        }
+        #expect(Page.botSettings.title(in: fleet) == "Bot Settings")
     }
 }
