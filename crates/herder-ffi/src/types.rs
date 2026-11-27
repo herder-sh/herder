@@ -1673,6 +1673,7 @@ pub struct FailoverSettings {
 #[uniffi::remote(Record)]
 pub struct DaemonSettings {
     pub listen: Vec<String>,
+    pub public_addresses: Vec<String>,
     pub log: LogSettings,
     pub binaries: Vec<ProviderBinary>,
     pub failover: FailoverSettings,

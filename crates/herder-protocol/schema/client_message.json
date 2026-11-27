@@ -3359,6 +3359,13 @@
           "description": "Where projects are discovered.",
           "$ref": "#/$defs/ProjectDiscovery"
         },
+        "public_addresses": {
+          "description": "Where other devices reach the daemon from outside its own networks, which it cannot\ntell from `listen`: the `host:port` of a port forward, TCP proxy or VPN address, or the\n`wss://` URL of a tunnel that unwraps HTTPS, such as a Cloudflare Tunnel\n(`docs/public-access.md`). The daemon advertises them after its `listen` addresses in\nits hello, invites and claim links, so every device uses them with nothing to type. A\nchange applies at once. None from daemons before them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "resources": {
           "description": "What every session's CLI may use, and the budget turns are admitted within.",
           "$ref": "#/$defs/ResourceSettings"

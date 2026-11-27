@@ -10,7 +10,8 @@ import Testing
 /// (a signed-out account, two CLI updates, a login missing there, backing up to a hub) and
 /// for one they are a member on, and one they own linked to no hub, and attaches each; with
 /// `HERDER_SCREENSHOT_DIR` set, also writes them there as `machine-owner.png`,
-/// `machine-member.png` and `machine-unlinked.png`.
+/// `machine-member.png` and `machine-unlinked.png`, and an owner's public addresses as
+/// `machine-public-addresses.png`.
 @MainActor struct MachinePageScreenshotTests {
     @Test func drawsTheOwnersPage() async throws {
         let fleet = try sampleFleet()
@@ -30,6 +31,31 @@ import Testing
     @Test func drawsAMembersPage() async throws {
         try await shoot(MachinePage(fleet: try sampleFleet(), hostId: "team-box", sheet: .constant(nil)), crumbs: ["Hub", "team-box"],
                         height: 1000, named: "machine-member.png")
+    }
+
+    @Test func drawsThePublicAddresses() async throws {
+        let fleet = try sampleFleet()
+        let machine = try #require(fleet.machines.first { $0.hostId == "trash-can-01" })
+        let section = PublicAddressesSection(fleet: fleet, machine: machine,
+                                             addresses: ["home.example.net:7447", "wss://hub.example.com"])
+            .padding(24)
+            .frame(width: 720)
+            .background(Theme.canvas)
+            .environment(\.colorScheme, .dark)
+        let host = NSHostingView(rootView: section)
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.frame = NSRect(x: 0, y: 0, width: 720, height: 340)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let png = try #require(rep.representation(using: .png, properties: [:]))
+        Attachment.record(png, named: "machine-public-addresses.png")
+        if let dir = ProcessInfo.processInfo.environment["HERDER_SCREENSHOT_DIR"] {
+            try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("machine-public-addresses.png"))
+        }
     }
 
     private func shoot(_ page: MachinePage, crumbs: [String], height: CGFloat, named name: String) async throws {

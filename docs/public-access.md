@@ -1,13 +1,62 @@
-# Public access through a Cloudflare Tunnel
+# Reaching a machine from anywhere
 
-Goal: reach a machine at a public hostname, such as `wss://box.example.com`, from a phone
-that is on neither the machine's LAN nor Tailscale, with the same security as a direct
-connection.
+Goal: reach a machine, usually the hub, from a phone that is on neither its LAN nor its
+VPN, with the same security as a direct connection, through whatever the owner already
+has: a port forward, a TCP proxy, a VPN, or a tunnel such as Cloudflare Tunnel. herder is
+married to none of them.
 
-Basecamp: P23 · Public access through a Cloudflare Tunnel.
+Basecamp: P23 · Public access through a Cloudflare Tunnel; P26 · Reach anywhere, any way.
 
-To expose only the hub and reach every machine through it, see
-[hub-relay.md](hub-relay.md) (P24).
+Expose only the hub and every machine is reached through it ([hub-relay.md](hub-relay.md),
+P24).
+
+## Set it up
+
+Every connection is end-to-end mutual TLS between the device and the daemon, whatever
+carries it, so anything that gets the bytes there works. Pick one, then tell herder the
+address once: on the machine's page in the Mac or iPhone app, under **Public addresses**
+(owners only), or with `p` in the TUI's fleet view, or in `daemon.toml`:
+
+```toml
+public_addresses = ["home.example.net:7447", "wss://hub.example.com"]
+```
+
+The daemon names its public addresses after its own in its hello, invites and claim links,
+so every device, yours and everyone's you invite, picks them up when it next connects,
+with nothing to type, and drops one you remove. Devices try LAN addresses first and
+tunnels last, so at home nothing changes. The port is the daemon's `listen` port:
+7447 for `herder daemon`, 7448 for a hub `herder hub install` set up.
+
+**Port forward.** On the router, forward a TCP port to the machine's port. Use a fixed
+public IP or a dynamic DNS name. Public address: `home.example.net:7447`.
+
+**TCP proxy.** Any proxy that passes TCP through without terminating TLS: an nginx
+`stream` block, HAProxy in `mode tcp`, a cloud load balancer in TCP mode, or a cluster's
+LoadBalancer Service. Public address: the proxy's `host:port`.
+
+```nginx
+stream { server { listen 7447; proxy_pass 10.0.0.4:7447; } }
+```
+
+**Tunnel that unwraps HTTPS** (Cloudflare Tunnel, ngrok and similar, or a reverse proxy
+that terminates HTTPS). Set `tunnel = "127.0.0.1:7448"` in `daemon.toml` (any free
+loopback port; a hub may use any address), restart the daemon, and point the tunnel at
+`http://127.0.0.1:7448` with WebSockets on. With Cloudflare Tunnel:
+
+```sh
+cloudflared tunnel create box
+cloudflared tunnel route dns box hub.example.com
+# ~/.cloudflared/config.yml ingress: hostname hub.example.com → service http://127.0.0.1:7448
+cloudflared tunnel run box          # or: cloudflared service install
+```
+
+Public address: `https://hub.example.com` (saved as `wss://hub.example.com`). The tunnel
+sees only the inner TLS's ciphertext ([Design](#design-the-daemon-connection-inside-a-websocket)).
+
+**VPN** (WireGuard, Tailscale, ZeroTier, UniFi Teleport). Nothing to forward: the
+machine's VPN address is among the addresses it lists already when it listens on every
+interface. Add the VPN's DNS name as a public address if you'd rather devices use it.
+
 
 ## How a connection works today
 
@@ -107,7 +156,7 @@ from the inner TLS, and the hop runs on loopback.
 
 ### Clients
 
-A machine address is `host[:port]` as before, or a URL: `wss://host[:port][/path]` (or
+A machine address is `host[:port]`, or a URL: `wss://host[:port][/path]` (or
 `ws://` for a reverse proxy on a trusted network; the inner TLS protects the session either
 way). `herder-client-core` normalizes and saves addresses (`address.rs`) and races them
 (`supervisor.rs`):
@@ -120,8 +169,9 @@ way). `herder-client-core` normalizes and saves addresses (`address.rs`) and rac
 - sharing a fleet link includes tunnel URLs, which aren't loopback.
 
 The TUI and both Apple apps get this through client-core (the apps use it through
-`herder-ffi`; HerderKit has no networking of its own). Adding the URL to a machine works
-today through `Client::set_addresses`, which is the machine page's address list.
+`herder-ffi`; HerderKit has no networking of its own). A device adds an address by hand
+with `Client::set_addresses`, the machine page's address list; one the owner set as a
+public address (`DaemonSettings::public_addresses`, P26.1) arrives with the next hello.
 
 ## Is it safe on the public internet?
 
@@ -138,13 +188,14 @@ today through `Client::set_addresses`, which is the machine page's address list.
 | Provider login tokens | Untouched. Nothing here reads, stores or relays them. |
 | Terminals owner-only | Untouched. Roles come from the same auth. |
 
-### Cloudflare Access (optional, never required)
+### A proxy that wants a header (optional, never required)
 
-An owner can also put the hostname behind Cloudflare Access with a service-token policy.
-The client would then send `CF-Access-Client-Id` / `CF-Access-Client-Secret` on the outer
-upgrade only, never to the daemon. That needs a per-address secret in the client profile
-and a client-core API to set it, so it is a contract change (P23.7). Without it, leave the
-hostname outside Access (or bypass it): the inner mutual TLS already authenticates every
+An owner can also put the hostname behind a proxy that admits only requests carrying a
+header, such as Cloudflare Access with a service token (`CF-Access-Client-Id`,
+`CF-Access-Client-Secret`). The client would send those headers on the outer upgrade only,
+never to the daemon. That needs per-address headers in the client profile and a
+client-core API to set them (P26.2, which replaces P23.7). Without it, leave the hostname
+outside Access (or bypass it): the inner mutual TLS already authenticates every
 connection.
 
 ## Contracts
@@ -154,8 +205,9 @@ connection.
 | Daemon `tunnel` config key and listener (P23.3) | No: config and daemon internals. |
 | Client-core accepting URL addresses and connecting through them (P23.4) | No signature changes. `set_addresses` / link parsing accept more strings. The saved profile keeps `addresses: Vec<String>`. |
 | Claim attempt limit (P23.2), pre-auth cap (P23.5) | No. |
-| Daemon advertising its public URL in `ServerHello.addresses`, invites, `OwnershipClaim` (P23.6) | **Yes**: herder-protocol documents those `addresses` as `host:port`. Older clients would reject a link carrying a URL. Until it lands, add the URL from the machine page after the first connection. |
-| Cloudflare Access service tokens (P23.7) | **Yes**: new client-core API and profile field. |
+| Daemon advertising its public URL in `ServerHello.addresses`, invites, `OwnershipClaim` (P23.6) | **Yes**: herder-protocol documents those `addresses` as `host:port`. Older clients would reject a link carrying a URL. |
+| An owner sets the public addresses once (P26.1) | **Yes**: `DaemonSettings::public_addresses`, optional, so `PROTOCOL_VERSION` stays. Clients follow `ServerHello.addresses` with no client-core API change. |
+| Headers a fronting proxy needs (P26.2, replacing P23.7's Cloudflare-only token) | **Yes**: new client-core API and profile field. |
 
 ## Todos
 

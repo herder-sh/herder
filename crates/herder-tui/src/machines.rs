@@ -7,13 +7,18 @@
 //! shares, or type the machine's address and fingerprint; check the fingerprint; then an app
 //! of yours approves the code the dialog shows, as for `herder login`. Pasting a link anywhere
 //! in the TUI opens the dialog at that check.
+//!
+//! An owner edits the selected machine's public addresses in the panel too: where other
+//! devices reach it from outside its networks (a port forward, a TCP proxy, a VPN, a tunnel's
+//! `wss://` URL). They are the daemon's setting, so every device picks them up from its next
+//! connection.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 
 use herder_client_core::Machine;
 use herder_client_core::{FleetLink, FleetMachine};
-use herder_protocol::{HostId, HubVolume};
+use herder_protocol::{CommandBody, CommandResult, HostId, HubVolume, Role};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::accounts::{self, AddAccount};
@@ -55,6 +60,36 @@ pub enum PanelEdit {
     Rename(String),
     /// Asking before forgetting it.
     Forget,
+    /// Editing its public addresses, separated by spaces or commas: `None` until the machine
+    /// said what they are.
+    Public(Option<String>),
+}
+
+/// A step of editing a machine's public addresses, whose answer comes back to the panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublicSent {
+    /// Asking the machine what they are now.
+    Load(HostId),
+    /// Asking for its settings, to save them with these addresses.
+    Save(HostId, Vec<String>),
+    /// Saving them.
+    Set(HostId),
+}
+
+/// `text`, public addresses as typed: separated by spaces or commas.
+fn public_addresses(text: &str) -> Vec<String> {
+    text.split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|address| !address.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn send_public(host_id: HostId, command: CommandBody, sent: PublicSent) -> Effect {
+    Effect::Send {
+        host_id,
+        command,
+        origin: crate::compose::Origin::Public(sent),
+    }
 }
 
 impl MachinePanel {
@@ -220,6 +255,8 @@ pub enum Input {
     Backup,
     /// Manage the secrets of the selected hub.
     Secrets,
+    /// Edit the public addresses of the selected machine.
+    Public,
     /// Pick the previous choice.
     Left,
     /// Pick the next choice.
@@ -249,7 +286,7 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
         return secrets::for_key(key, screen);
     }
     let input = match &panel.edit {
-        Some(PanelEdit::Rename(_)) => match key.code {
+        Some(PanelEdit::Rename(_) | PanelEdit::Public(_)) => match key.code {
             KeyCode::Esc => Input::Close,
             KeyCode::Enter => Input::Submit,
             KeyCode::Backspace => Input::Backspace,
@@ -312,6 +349,7 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Char('d') => Input::Forget,
             KeyCode::Char('b') => Input::Backup,
             KeyCode::Char('s') => Input::Secrets,
+            KeyCode::Char('p') => Input::Public,
             KeyCode::Char('r') => return Some(Action::Reconnect),
             KeyCode::Char('?') => return Some(Action::ToggleHelp),
             _ => return None,
@@ -371,6 +409,21 @@ impl App {
                         .into_iter()
                         .collect();
                 }
+                (PanelEdit::Public(Some(text)), Input::Char(c)) => text.push(c),
+                (PanelEdit::Public(Some(text)), Input::Backspace) => {
+                    text.pop();
+                }
+                (PanelEdit::Public(Some(text)), Input::Clear) => text.clear(),
+                (PanelEdit::Public(Some(text)), Input::Submit) => {
+                    let addresses = public_addresses(text);
+                    return selected
+                        .map(|host_id| {
+                            let sent = PublicSent::Save(host_id.clone(), addresses);
+                            send_public(host_id, CommandBody::GetSettings, sent)
+                        })
+                        .into_iter()
+                        .collect();
+                }
                 (PanelEdit::Forget, Input::Submit) => {
                     panel.edit = None;
                     panel.chosen = None;
@@ -396,6 +449,21 @@ impl App {
                     }
                 }
                 Input::Backup => return self.open_backup(),
+                Input::Public => {
+                    let Some(at) = panel.selected(&self.machines) else {
+                        return Vec::new();
+                    };
+                    let machine = &self.machines[at];
+                    if machine.role != Some(Role::Owner) {
+                        self.notice =
+                            Some("public addresses: only the machine's owners set them".to_owned());
+                        return Vec::new();
+                    }
+                    panel.edit = Some(PanelEdit::Public(None));
+                    let host_id = machine.host_id.clone();
+                    let sent = PublicSent::Load(host_id.clone());
+                    return vec![send_public(host_id, CommandBody::GetSettings, sent)];
+                }
                 Input::Secrets => return self.open_secrets(),
                 Input::AddAccount => {
                     let Some(at) = panel.selected(&self.machines) else {
@@ -526,6 +594,65 @@ impl App {
     }
 }
 
+impl App {
+    /// Folds in a machine's answer to a step of editing its public addresses.
+    pub(crate) fn public_sent(
+        &mut self,
+        sent: PublicSent,
+        result: Result<CommandResult, String>,
+    ) -> Vec<Effect> {
+        let Some(panel) = &mut self.machine_panel else {
+            return Vec::new();
+        };
+        let editing = panel
+            .selected(&self.machines)
+            .map(|at| &self.machines[at].host_id);
+        let host_id = match &sent {
+            PublicSent::Load(host_id) | PublicSent::Save(host_id, _) | PublicSent::Set(host_id) => {
+                host_id
+            }
+        };
+        // The panel moved on: the answer is for an edit no longer open.
+        if editing != Some(host_id) || !matches!(panel.edit, Some(PanelEdit::Public(_))) {
+            return Vec::new();
+        }
+        let settings = match result {
+            Ok(CommandResult::Settings { settings, .. }) => Some(settings),
+            Ok(_) => None,
+            Err(error) => {
+                if matches!(sent, PublicSent::Load(_)) {
+                    panel.edit = None;
+                }
+                self.notice = Some(format!("public addresses: {error}"));
+                return Vec::new();
+            }
+        };
+        match (sent, settings) {
+            (PublicSent::Load(_), Some(settings)) => {
+                let text = settings.public_addresses.join(" ");
+                panel.edit = Some(PanelEdit::Public(Some(text)));
+            }
+            (PublicSent::Save(host_id, addresses), Some(mut settings)) => {
+                settings.public_addresses = addresses;
+                let set = CommandBody::SetSettings { settings };
+                return vec![send_public(host_id.clone(), set, PublicSent::Set(host_id))];
+            }
+            (PublicSent::Set(_), _) => {
+                panel.edit = None;
+                self.notice = Some(
+                    "public addresses saved: every device picks them up when it next connects"
+                        .to_owned(),
+                );
+            }
+            (_, None) => {
+                panel.edit = None;
+                self.notice = Some("public addresses: the machine sent no settings".to_owned());
+            }
+        }
+        Vec::new()
+    }
+}
+
 impl AddMachine {
     /// A whole link replaces the form and goes straight to checking its fingerprint; other
     /// text goes into the field being typed in, as one line.
@@ -640,6 +767,99 @@ mod tests {
             [Effect::ForgetMachine(HostId::new("h2"))]
         );
         assert!(app.machine_panel.is_some());
+    }
+
+    /// The settings `h1` answers with, holding `public`.
+    fn settings(public: &[&str]) -> Msg {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut settings = herder_daemon::Config::load_file(&tmp.path().join("none.toml"))
+            .unwrap()
+            .settings();
+        settings.public_addresses = public.iter().map(|a| (*a).to_owned()).collect();
+        Msg::Sent {
+            origin: crate::compose::Origin::Public(PublicSent::Load(HostId::new("h1"))),
+            result: Ok(CommandResult::Settings {
+                settings: Box::new(settings),
+                restart_required: false,
+                data_dir: "/data".into(),
+                is_hub: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn an_owner_sets_a_machines_public_addresses_for_every_device() {
+        let mut app = App::default();
+        let mut member = machine("h2", "laptop", &[]);
+        member.role = Some(Role::Member);
+        app.update(Msg::Machines(vec![machine("h1", "box", &[]), member]));
+        press(&mut app, KeyCode::Char('m'));
+        let load = |host: &str| Effect::Send {
+            host_id: HostId::new(host),
+            command: CommandBody::GetSettings,
+            origin: crate::compose::Origin::Public(PublicSent::Load(HostId::new(host))),
+        };
+        assert_eq!(press(&mut app, KeyCode::Char('p')), [load("h1")]);
+        let edit = |app: &App| app.machine_panel.as_ref().unwrap().edit.clone();
+        assert_eq!(edit(&app), Some(PanelEdit::Public(None)));
+        app.update(settings(&["203.0.113.7:7447"]));
+        assert_eq!(
+            edit(&app),
+            Some(PanelEdit::Public(Some("203.0.113.7:7447".into())))
+        );
+        typed(&mut app, ", https://box.example.com");
+        let Some(Effect::Send {
+            command, origin, ..
+        }) = press(&mut app, KeyCode::Enter).pop()
+        else {
+            panic!("expected the settings asked for");
+        };
+        assert_eq!(command, CommandBody::GetSettings);
+        let addresses = vec![
+            "203.0.113.7:7447".to_owned(),
+            "https://box.example.com".to_owned(),
+        ];
+        assert_eq!(
+            origin,
+            crate::compose::Origin::Public(PublicSent::Save(HostId::new("h1"), addresses.clone()))
+        );
+        // Saved over the settings as they are then, with only the addresses changed.
+        let Msg::Sent { result, .. } = settings(&[]) else {
+            unreachable!()
+        };
+        let mut effects = app.update(Msg::Sent { origin, result });
+        let Some(Effect::Send {
+            command: CommandBody::SetSettings { settings },
+            origin,
+            ..
+        }) = effects.pop()
+        else {
+            panic!("expected the settings saved");
+        };
+        assert_eq!(settings.public_addresses, addresses);
+        app.update(Msg::Sent {
+            origin,
+            result: Err("public_addresses: localhost:7447 is this machine itself".into()),
+        });
+        assert!(
+            app.notice
+                .as_deref()
+                .unwrap()
+                .contains("this machine itself")
+        );
+        assert!(matches!(edit(&app), Some(PanelEdit::Public(Some(_)))));
+        app.update(Msg::Sent {
+            origin: crate::compose::Origin::Public(PublicSent::Set(HostId::new("h1"))),
+            result: Ok(CommandResult::Applied),
+        });
+        assert_eq!(edit(&app), None);
+        assert!(app.notice.as_deref().unwrap().contains("every device"));
+
+        // A member is told, and asks nothing.
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(press(&mut app, KeyCode::Char('p')), []);
+        assert!(app.notice.as_deref().unwrap().contains("owners"));
+        assert_eq!(edit(&app), None);
     }
 
     #[test]

@@ -313,6 +313,7 @@ pub async fn serve(
         auth::control::Daemon {
             fingerprint: tls.fingerprint().to_owned(),
             listen: listen.clone(),
+            public: settings.public_addresses(),
             hub: None,
         },
         shutdown.clone(),
@@ -389,6 +390,7 @@ mod tests {
             path: tmp.path().join("daemon.toml"),
             listen: vec!["127.0.0.1:0".parse().unwrap()],
             tunnel: Some("127.0.0.1:0".parse().unwrap()),
+            public_addresses: Vec::new(),
             data_dir: tmp.path().join("data"),
             log: config::LogConfig::default(),
             accounts: session::Accounts::new(),

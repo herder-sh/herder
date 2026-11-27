@@ -2227,6 +2227,13 @@
           "description": "Where projects are discovered.",
           "$ref": "#/$defs/ProjectDiscovery"
         },
+        "public_addresses": {
+          "description": "Where other devices reach the daemon from outside its own networks, which it cannot\ntell from `listen`: the `host:port` of a port forward, TCP proxy or VPN address, or the\n`wss://` URL of a tunnel that unwraps HTTPS, such as a Cloudflare Tunnel\n(`docs/public-access.md`). The daemon advertises them after its `listen` addresses in\nits hello, invites and claim links, so every device uses them with nothing to type. A\nchange applies at once. None from daemons before them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "resources": {
           "description": "What every session's CLI may use, and the budget turns are admitted within.",
           "$ref": "#/$defs/ResourceSettings"
@@ -5081,7 +5088,7 @@
       "type": "object",
       "properties": {
         "addresses": {
-          "description": "Addresses the daemon listens on, as `host:port`, and the `wss://` URL of its public\ntunnel if it has one (`docs/public-access.md`), most likely reachable first, as its\ninvite links name them; a client saves them, so it follows the daemon to a new address.\nEmpty from a daemon that does not say.",
+          "description": "Addresses the daemon listens on, as `host:port`, then its\n[`crate::DaemonSettings::public_addresses`] (`host:port`, or a tunnel's `wss://` URL,\n`docs/public-access.md`), as its invite links name them. A client adds each one new\nsince the last hello to the machine's addresses and drops each one the daemon stopped\nnaming, so it follows the daemon to a new address with nothing to type. Empty from a\ndaemon that does not say.",
           "type": "array",
           "items": {
             "type": "string"

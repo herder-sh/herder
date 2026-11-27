@@ -1195,6 +1195,36 @@ impl Inner {
         }
     }
 
+    /// Saves where each machine's daemon said in its latest hello it is reached, when that
+    /// changed: its addresses follow ([`address::follow`]), so a public address an owner set
+    /// on the daemon is dialled here with nothing to type, and one removed is dropped.
+    fn follow_advertised(&self, machines: &mut Vec<Arc<Supervisor>>) {
+        let named: Vec<_> = machines
+            .iter()
+            .filter_map(|machine| {
+                let (now, using) = machine.take_advertised()?;
+                Some((machine.saved.host_id.clone(), now, using))
+            })
+            .collect();
+        if named.is_empty() {
+            return;
+        }
+        let followed = self.update(machines, |all| {
+            for (host_id, now, using) in named {
+                // Another client sharing the profile may have forgotten the machine since.
+                if let Some(machine) = all.iter_mut().find(|m| m.host_id == host_id) {
+                    let before = std::mem::take(&mut machine.advertised);
+                    address::follow(&mut machine.addresses, &before, &now, using.as_deref());
+                    machine.advertised = now;
+                }
+            }
+            Ok(())
+        });
+        if let Err(err) = followed {
+            warn!("saving the addresses a machine named: {err}");
+        }
+    }
+
     /// Matches `machines` to `saved`, the profile as the file holds it, keeping its order:
     /// starts a supervisor for each machine new to this client or paired again with a new key,
     /// renames and readdresses the others in place, and forgets the ones no longer saved.
@@ -1272,6 +1302,7 @@ async fn follow_profile(inner: Weak<Inner>, stop: CancellationToken) {
             }
         }
         inner.add_hub_routes(&mut machines);
+        inner.follow_advertised(&mut machines);
     }
 }
 
@@ -1344,6 +1375,7 @@ pub(crate) fn unsaved(
         name: String::new(),
         addresses: address::default_order(normalized),
         fingerprint: fingerprint.to_ascii_lowercase(),
+        advertised: Vec::new(),
         device_key: device.to_pem().to_owned(),
     };
     Ok((saved, device))
@@ -1401,6 +1433,7 @@ mod tests {
             // Nothing listens on port 1.
             addresses: vec!["127.0.0.1:1".to_owned()],
             fingerprint: "00".repeat(32),
+            advertised: Vec::new(),
             device_key: DeviceKey::generate().unwrap().to_pem().to_owned(),
         };
         profile::save(tmp.path(), &[machine]).unwrap();

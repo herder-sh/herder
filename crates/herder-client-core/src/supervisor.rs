@@ -308,6 +308,11 @@ struct State {
     name: Option<String>,
     /// Addresses in order of preference.
     addresses: Vec<String>,
+    /// What the daemon's latest hello named, as saved ([`address::advertised`]), until the
+    /// client follows it ([`Supervisor::take_advertised`]).
+    advertised: Option<Vec<String>>,
+    /// What the client last followed of what the daemon named.
+    adopted: Vec<String>,
     /// The address the current connection uses.
     address: Option<String>,
     /// The address that answered last, which the next connection tries first: it most likely
@@ -550,6 +555,7 @@ impl Supervisor {
         let (ops, queue) = mpsc::unbounded_channel();
         let state = State {
             addresses: saved.addresses.clone(),
+            adopted: saved.advertised.clone(),
             ..State::default()
         };
         let supervisor = Arc::new(Self {
@@ -627,6 +633,7 @@ impl Supervisor {
                 name: machine.name,
                 addresses: machine.addresses,
                 fingerprint: machine.fingerprint,
+                advertised: Vec::new(),
                 device_key: String::new(),
             },
             state: Mutex::new(state),
@@ -1241,6 +1248,18 @@ impl Supervisor {
             .is_some_and(|address| address::hub(address).is_some())
     }
 
+    /// What the daemon named in its latest hello, with the address the connection reached it
+    /// at, once: `None` when no hello since named anything new to the client.
+    pub(crate) fn take_advertised(&self) -> Option<(Vec<String>, Option<String>)> {
+        let mut state = self.lock();
+        let named = state.advertised.take()?;
+        if named == state.adopted {
+            return None;
+        }
+        state.adopted.clone_from(&named);
+        Some((named, state.address.clone()))
+    }
+
     /// The hosts this machine, a hub, says it relays clients to now.
     pub(crate) fn relays_to(&self) -> Vec<herder_protocol::HostId> {
         let state = self.lock();
@@ -1649,6 +1668,10 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                     state.user_id = Some(hello.user_id);
                     state.person_id = hello.person_id;
                     state.herder_version = hello.herder_version;
+                    // A daemon that names nothing does not say, so nothing is followed.
+                    if !hello.addresses.is_empty() {
+                        state.advertised = Some(address::advertised(&hello.addresses));
+                    }
                     state.address = Some(address.clone());
                     state.answered = Some(address.clone());
                     state.dirty = true;

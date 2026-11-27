@@ -927,6 +927,26 @@ public final class Fleet {
         _ = try await client.send(hostId: hostId, command: .setSettings(settings: settings))
     }
 
+    /// Where other devices reach a machine from outside its networks; owners only.
+    func publicAddresses(on hostId: HostId) async throws -> [String] {
+        guard case .settings(let settings, _, _, _) = try await client.send(hostId: hostId, command: .getSettings)
+        else { throw HerderError.Local(detail: "the machine did not send its settings") }
+        return settings.publicAddresses
+    }
+
+    /// Replaces a machine's public addresses, keeping its other settings; owners only. The
+    /// machine normalizes each (a host gets port 7447, https:// becomes wss://), refuses
+    /// loopback, duplicates and what is no address with `badRequest`, and names them from its
+    /// next hello on, so every device picks them up. The addresses as the machine saved them.
+    func setPublicAddresses(_ addresses: [String], on hostId: HostId) async throws -> [String] {
+        guard case .settings(var settings, _, _, _) = try await client.send(hostId: hostId, command: .getSettings)
+        else { throw HerderError.Local(detail: "the machine did not send its settings") }
+        settings.publicAddresses = addresses
+        guard case .settings(let saved, _, _, _) = try await client.send(hostId: hostId, command: .setSettings(settings: settings))
+        else { throw HerderError.Local(detail: "the machine did not send its settings") }
+        return saved.publicAddresses
+    }
+
     /// Replaces a project's settings on a machine; owners only.
     func setProjectSettings(
         _ projectId: ProjectId, on hostId: HostId, name: String, mode: PermissionMode?, account: AccountId?,

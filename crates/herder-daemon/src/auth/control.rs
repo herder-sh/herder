@@ -24,6 +24,7 @@ use tracing::{debug, warn};
 
 use super::{Auth, DeviceRole, PAIRING_TTL, Pairing};
 use crate::hub::{Admin, Forgot};
+use crate::settings::PublicAddresses;
 
 /// File name of the socket in the data dir.
 pub const SOCKET: &str = "control.sock";
@@ -135,9 +136,18 @@ pub struct Daemon {
     pub fingerprint: String,
     /// The addresses its WebSocket server is bound to, as configured.
     pub listen: Vec<SocketAddr>,
+    /// Where other devices reach it from outside its networks, advertised after `listen`'s.
+    pub public: Arc<PublicAddresses>,
     /// What it holds, when it is a hub: the only daemon hosts pair with, and that forgets
     /// them.
     pub hub: Option<Admin>,
+}
+
+impl Daemon {
+    /// Where the daemon tells devices to reach it ([`advertised`]).
+    fn advertised(&self) -> Vec<String> {
+        advertised(&self.listen, &self.public.get())
+    }
 }
 
 /// Binds the socket in `data_dir`, replacing a stale one; the caller holds the data-dir lock,
@@ -210,7 +220,7 @@ fn own(opened: anyhow::Result<(String, Timestamp)>, daemon: &Daemon) -> Response
             code,
             expires_at,
             fingerprint: daemon.fingerprint.clone(),
-            addresses: addresses(&daemon.listen),
+            addresses: daemon.advertised(),
         }),
         Err(err) => Response::Error {
             message: format!("{err:#}"),
@@ -232,7 +242,7 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
         },
         Request::Address => Response::Address {
             fingerprint: daemon.fingerprint.clone(),
-            addresses: addresses(&daemon.listen),
+            addresses: daemon.advertised(),
         },
         Request::Users => Response::Users {
             users: auth.users(),
@@ -266,7 +276,7 @@ fn paired(pairing: Pairing, daemon: &Daemon) -> Response {
         device_role: pairing.device_role,
         expires_at: pairing.expires_at,
         fingerprint: daemon.fingerprint.clone(),
-        addresses: addresses(&daemon.listen),
+        addresses: daemon.advertised(),
     })
 }
 
@@ -288,6 +298,18 @@ pub fn request(data_dir: &Path, request: &Request) -> Result<Response> {
         .read_line(&mut line)
         .context("reading the daemon's answer")?;
     serde_json::from_str(&line).context("the daemon sent an invalid answer")
+}
+
+/// What the daemon tells other devices to reach it at: the addresses `listen` accepts on
+/// ([`addresses`]), then `public`, where they reach it from outside its networks.
+pub(crate) fn advertised(listen: &[SocketAddr], public: &[String]) -> Vec<String> {
+    let mut all = addresses(listen);
+    for address in public {
+        if !all.contains(address) {
+            all.push(address.clone());
+        }
+    }
+    all
 }
 
 /// Name prefixes of container and VM bridges: other devices cannot reach their addresses.
@@ -451,6 +473,7 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
+            public: Arc::default(),
             hub: None,
         };
         let shutdown = CancellationToken::new();
@@ -494,6 +517,7 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
+            public: Arc::default(),
             hub: None,
         };
         auth.legacy_user("alice", Role::Owner, "fp-a");
@@ -510,12 +534,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claim_links_name_the_public_addresses_after_the_listen_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let auth = Auth::open(tmp.path()).unwrap();
+        let public = PublicAddresses::new(vec!["wss://box.example.com".into()]);
+        let daemon = Daemon {
+            fingerprint: "ab".repeat(32),
+            listen: vec!["192.0.2.10:7447".parse().unwrap()],
+            public: Arc::new(public),
+            hub: None,
+        };
+        let Response::Own(info) = handle(Request::Own, &auth, &daemon).await else {
+            panic!("a daemon with no owner opens the window");
+        };
+        assert_eq!(info.addresses, ["192.0.2.10:7447", "wss://box.example.com"]);
+        let Response::Address { addresses, .. } = handle(Request::Address, &auth, &daemon).await
+        else {
+            panic!("the daemon says where it is");
+        };
+        assert_eq!(addresses, ["192.0.2.10:7447", "wss://box.example.com"]);
+    }
+
+    #[tokio::test]
     async fn a_hub_pairs_hosts_and_lists_device_roles() {
         let tmp = tempfile::tempdir().unwrap();
         let auth = Arc::new(Auth::open(tmp.path()).unwrap());
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
+            public: Arc::default(),
             hub: Some(hub_admin(tmp.path(), &auth)),
         };
         let pair_host = Request::PairHost {
@@ -572,6 +619,7 @@ mod tests {
         let mut daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: vec!["127.0.0.1:7447".parse().unwrap()],
+            public: Arc::default(),
             hub: None,
         };
         let forget = || Request::ForgetHost {

@@ -15,6 +15,12 @@
 //! signed in to, which forwards the connection to the machine ([`crate::relay`]). The client
 //! adds it to a machine's addresses once the hub says it relays there; it sorts last of
 //! all, as it takes two hops, the hub's own route and the machine's to the hub.
+//!
+//! A daemon's hello names where it is reached: the addresses it listens on, then the public
+//! addresses its owner set (a port forward, a TCP proxy, a VPN, a tunnel's URL). The client
+//! follows them ([`follow`]): each one new since the last hello joins the machine's addresses
+//! in its kind's place, and each one the daemon stopped naming leaves them. Addresses the user
+//! added, and the ones the daemon still names, keep the user's order.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -129,6 +135,48 @@ pub(crate) fn default_order(addresses: Vec<String>) -> Vec<String> {
     unique
 }
 
+/// What of `named`, the addresses a daemon's hello names, other devices may dial, as saved:
+/// normalized, without loopback, routes through a hub, or anything that is no address.
+pub(crate) fn advertised(named: &[String]) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for address in named.iter().filter_map(|text| normalize(text).ok()) {
+        if hub(&address).is_none() && !is_loopback(&address) && !kept.contains(&address) {
+            kept.push(address);
+        }
+    }
+    kept
+}
+
+/// `addresses`, a machine's in order of preference, once its daemon names `now` where it last
+/// named `before`: each address of `now` not among them is added after the last of its kind
+/// or of one that sorts before it ([`default_order`]), first when there is none, and each of
+/// `before` the daemon no longer names is
+/// dropped, unless it is `using`, the address that reached it. Whether anything changed.
+pub(crate) fn follow(
+    addresses: &mut Vec<String>,
+    before: &[String],
+    now: &[String],
+    using: Option<&str>,
+) -> bool {
+    let count = addresses.len();
+    addresses.retain(|address| {
+        now.contains(address) || !before.contains(address) || using == Some(address.as_str())
+    });
+    let mut changed = addresses.len() != count;
+    for address in now.iter().filter(|a| !before.contains(a)) {
+        if addresses.contains(address) {
+            continue;
+        }
+        let at = addresses
+            .iter()
+            .rposition(|held| rank(held) <= rank(address))
+            .map_or(0, |last| last + 1);
+        addresses.insert(at, address.clone());
+        changed = true;
+    }
+    changed
+}
+
 /// Whether `address`, as `host:port`, is this device itself (`localhost`, `127.0.0.0/8`,
 /// `::1`), which no other device reaches it at.
 pub(crate) fn is_loopback(address: &str) -> bool {
@@ -205,6 +253,81 @@ fn rank(address: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hello_names_what_other_devices_may_dial_as_saved() {
+        let named = [
+            "192.168.1.5:7447",
+            "127.0.0.1:7447",
+            "https://Box.example.com/",
+            "hub://vault",
+            "not an address",
+            "wss://box.example.com",
+        ]
+        .map(String::from);
+        assert_eq!(
+            advertised(&named),
+            ["192.168.1.5:7447", "wss://box.example.com"]
+        );
+    }
+
+    #[test]
+    fn a_machine_follows_what_its_daemon_names() {
+        let strings = |all: &[&str]| all.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        // The user typed a Tailscale name and put it first; the hub route came by itself.
+        let mut addresses = strings(&["box.tail1234.ts.net:7447", "192.168.1.5:7447", "hub://h"]);
+        let before = strings(&["192.168.1.5:7447"]);
+
+        // The owner set a port forward and a tunnel: each joins in its kind's place.
+        let now = strings(&[
+            "192.168.1.5:7447",
+            "203.0.113.7:7447",
+            "wss://box.example.com",
+        ]);
+        assert!(follow(&mut addresses, &before, &now, None));
+        assert_eq!(
+            addresses,
+            [
+                "box.tail1234.ts.net:7447",
+                "192.168.1.5:7447",
+                "203.0.113.7:7447",
+                "wss://box.example.com",
+                "hub://h",
+            ]
+        );
+        // Named again, nothing moves.
+        assert!(!follow(&mut addresses, &now, &now, None));
+
+        // The owner removed the port forward and the lease changed: both go, the user's stay,
+        // and the new LAN address, with none left before it, goes first.
+        let later = strings(&["192.168.1.9:7447", "wss://box.example.com"]);
+        assert!(follow(&mut addresses, &now, &later, None));
+        assert_eq!(
+            addresses,
+            [
+                "192.168.1.9:7447",
+                "box.tail1234.ts.net:7447",
+                "wss://box.example.com",
+                "hub://h",
+            ]
+        );
+
+        // One the user removed stays removed while the daemon keeps naming it.
+        addresses.retain(|a| a != "wss://box.example.com");
+        assert!(!follow(&mut addresses, &later, &later, None));
+        assert!(!addresses.contains(&"wss://box.example.com".to_owned()));
+
+        // The address that reached the daemon is never dropped.
+        let mut addresses = strings(&["203.0.113.7:7447"]);
+        let before = strings(&["203.0.113.7:7447"]);
+        assert!(!follow(
+            &mut addresses,
+            &before,
+            &[],
+            Some("203.0.113.7:7447")
+        ));
+        assert_eq!(addresses, ["203.0.113.7:7447"]);
+    }
 
     #[test]
     fn typed_addresses_get_the_default_port() {

@@ -51,7 +51,7 @@ impl Relayed {
 /// A connection after the TLS and WebSocket handshakes.
 pub(crate) type Ws = tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<Transport>>;
 
-use crate::auth::control::addresses;
+use crate::auth::control::advertised;
 use crate::auth::{self, Auth};
 use crate::aws::Aws;
 use crate::bots::Bots;
@@ -193,7 +193,8 @@ struct Shared<B> {
     host: Host,
     /// The host's link to its hub, which answers the hub link commands; a hub has none.
     link: OnceLock<Arc<Link>>,
-    /// The addresses the server listens on, set once it does; `invite` advertises them.
+    /// The addresses the server listens on, set once it does; the hello and `invite`
+    /// advertise them.
     listen: OnceLock<Vec<SocketAddr>>,
     /// The daemon's settings, which answer the settings commands, once set.
     settings: OnceLock<Arc<Settings>>,
@@ -526,9 +527,21 @@ impl<B: Backend> Shared<B> {
         })
     }
 
+    /// Where the daemon tells devices to reach it: the addresses it listens on, then its
+    /// public addresses as the settings have them now; `None` until it listens.
+    pub(super) fn advertised(&self) -> Option<Vec<String>> {
+        let listen = self.listen.get()?;
+        let public = self
+            .settings
+            .get()
+            .map(|settings| settings.public_addresses().get())
+            .unwrap_or_default();
+        Some(advertised(listen, &public))
+    }
+
     /// An invite to join as a person with `role`, with this daemon's own addresses.
     fn invite(&self, role: Role) -> Result<CommandResult, ErrorInfo> {
-        let Some(listen) = self.listen.get() else {
+        let Some(addresses) = self.advertised() else {
             return Err(ErrorInfo {
                 code: ErrorCode::Internal,
                 message: "the daemon is not listening yet".to_owned(),
@@ -539,7 +552,7 @@ impl<B: Backend> Shared<B> {
             invite,
             role,
             fingerprint: self.tls.fingerprint().to_owned(),
-            addresses: addresses(listen),
+            addresses,
             expires_at,
         })
     }

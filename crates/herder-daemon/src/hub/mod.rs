@@ -327,11 +327,13 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
             "hosts get client keys for this CLIProxyAPI"
         );
     }
-    server.manage_settings(Arc::new(crate::settings::Settings::new(
+    let settings = Arc::new(crate::settings::Settings::new(
         config,
         None,
         shutdown.clone(),
-    )))?;
+    ));
+    let public = settings.public_addresses();
+    server.manage_settings(settings)?;
     let control = auth::control::bind(data_dir.root())?;
     tokio::spawn(auth::control::serve(
         control,
@@ -339,6 +341,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         auth::control::Daemon {
             fingerprint: fingerprint.clone(),
             listen: listen.clone(),
+            public,
             hub: Some(server.admin()),
         },
         shutdown.clone(),
@@ -386,6 +389,7 @@ mod tests {
             path: tmp.path().join("daemon.toml"),
             listen: vec!["127.0.0.1:0".parse().unwrap()],
             tunnel: None,
+            public_addresses: Vec::new(),
             data_dir: tmp.path().join("data"),
             log: Default::default(),
             accounts: Default::default(),

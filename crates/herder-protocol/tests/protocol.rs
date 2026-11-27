@@ -4610,6 +4610,20 @@ fn settings_without_mcp_servers_decode_with_none() {
 }
 
 #[test]
+fn settings_without_public_addresses_decode_with_none_and_none_are_left_out() {
+    let mut json = serde_json::to_value(settings()).unwrap();
+    assert_eq!(
+        json["public_addresses"],
+        json!(["203.0.113.7:7447", "wss://box.example.com"])
+    );
+    json.as_object_mut().unwrap().remove("public_addresses");
+    let decoded: DaemonSettings = serde_json::from_value(json).unwrap();
+    assert!(decoded.public_addresses.is_empty());
+    let encoded = serde_json::to_value(&decoded).unwrap();
+    assert!(encoded.get("public_addresses").is_none());
+}
+
+#[test]
 fn mcp_transports_are_tagged_by_type() {
     let json = serde_json::to_value(&settings().mcp_servers[0]).unwrap();
     assert_eq!(json["transport"]["type"], "stdio");
@@ -4727,6 +4741,7 @@ fn queue_edits_and_queues_have_their_wire_form() {
 fn settings() -> DaemonSettings {
     DaemonSettings {
         listen: vec!["127.0.0.1:7447".into(), "100.64.0.7:7447".into()],
+        public_addresses: vec!["203.0.113.7:7447".into(), "wss://box.example.com".into()],
         log: LogSettings {
             level: "herder_daemon=debug,info".into(),
             format: LogFormat::Pretty,

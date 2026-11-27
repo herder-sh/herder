@@ -884,6 +884,18 @@ fn the_machines_panel_shows_connections_and_fingerprints() {
 }
 
 #[test]
+fn an_owner_edits_a_machines_public_addresses_in_the_fleet() {
+    let mut app = fake::tree();
+    press(&mut app, KeyCode::Char('m'));
+    press(&mut app, KeyCode::Char('p'));
+    let panel = app.machine_panel.as_mut().unwrap();
+    panel.edit = Some(crate::machines::PanelEdit::Public(Some(
+        "203.0.113.7:7447 wss://box.example.com".into(),
+    )));
+    at_three_widths("public_addresses", &mut app);
+}
+
+#[test]
 fn a_hubs_disk_and_each_hosts_usage_with_a_warning_when_nearly_full() {
     let text = |app: &mut App, width| format!("{:?}", render(app, width, 30).backend());
     let mut app = fake::hub_storage(212.4);

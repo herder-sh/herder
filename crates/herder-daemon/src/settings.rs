@@ -2,15 +2,16 @@
 //! of its config file ([`crate::config::set_settings`]).
 //!
 //! A change is written to the file at once. The turn limit applies at once too, and so do the
-//! MCP servers, to each session's CLI from its next start; everything else applies when the
+//! public addresses, to the next hello, invite and claim link, and the MCP servers, to each
+//! session's CLI from its next start; everything else applies when the
 //! daemon next starts, which `restart_daemon` does without anyone at
 //! the machine. The answer says whether the file holds settings not in effect yet, whoever
 //! wrote them.
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use herder_protocol::{
@@ -50,6 +51,8 @@ pub struct Settings {
     admission: Option<Arc<Admission>>,
     /// The user's MCP servers sessions' CLIs get, which new ones replace.
     mcp_servers: Arc<UserServers>,
+    /// Where other devices reach the daemon from outside its networks, which new ones replace.
+    public_addresses: Arc<PublicAddresses>,
     /// Stops the daemon, for a restart.
     shutdown: CancellationToken,
     /// Updates the daemon's herder.
@@ -70,6 +73,7 @@ impl Settings {
             is_hub: config.mode == Mode::Hub,
             running: Mutex::new(config.settings()),
             mcp_servers: Arc::new(UserServers::new(config.mcp_servers.clone())),
+            public_addresses: Arc::new(PublicAddresses::new(config.public_addresses.clone())),
             updater: Arc::new(Updater::new(
                 config.self_update.clone(),
                 admission.clone(),
@@ -92,6 +96,11 @@ impl Settings {
     /// The user's MCP servers as the settings have them now, for sessions' CLIs.
     pub fn mcp_servers(&self) -> Arc<UserServers> {
         Arc::clone(&self.mcp_servers)
+    }
+
+    /// The public addresses as the settings have them now, for what advertises the daemon.
+    pub fn public_addresses(&self) -> Arc<PublicAddresses> {
+        Arc::clone(&self.public_addresses)
     }
 
     /// Answers `get_settings`, `set_settings`, `set_resource_limits` and `restart_daemon`.
@@ -140,7 +149,10 @@ impl Settings {
     }
 
     /// Writes `new` to the config file and applies what applies at once.
-    async fn set(&self, new: DaemonSettings) -> Result<CommandResult, ErrorInfo> {
+    async fn set(&self, mut new: DaemonSettings) -> Result<CommandResult, ErrorInfo> {
+        // Written as clients save them, so the file and every device agree on each one.
+        new.public_addresses = config::resolve_public_addresses(new.public_addresses)
+            .map_err(|err| error(ErrorCode::BadRequest, format!("{err:#}")))?;
         let mut running = self.running.lock().await;
         let file = self.load().await?;
         let old = file.settings();
@@ -192,6 +204,14 @@ impl Settings {
                 "the MCP servers changed; each session's CLI gets them from its next start"
             );
         }
+        if settings.public_addresses != running.public_addresses {
+            self.public_addresses.set(settings.public_addresses.clone());
+            running.public_addresses = settings.public_addresses.clone();
+            info!(
+                addresses = ?settings.public_addresses,
+                "the public addresses changed; devices get them on their next connection"
+            );
+        }
         info!("an owner changed the daemon's settings");
         Ok(self.answer(settings, &running))
     }
@@ -212,6 +232,31 @@ impl Settings {
             data_dir: self.data_dir.display().to_string(),
             is_hub: self.is_hub,
         }
+    }
+}
+
+/// Where other devices reach the daemon from outside its networks: `public_addresses`, as
+/// they are in effect now.
+#[derive(Debug, Default)]
+pub struct PublicAddresses(RwLock<Vec<String>>);
+
+impl PublicAddresses {
+    /// `addresses`, normalized as the config holds them.
+    pub fn new(addresses: Vec<String>) -> Self {
+        Self(RwLock::new(addresses))
+    }
+
+    /// The addresses now.
+    pub fn get(&self) -> Vec<String> {
+        // Every write replaces the list whole, so a poisoned one is consistent.
+        self.0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set(&self, addresses: Vec<String>) {
+        *self.0.write().unwrap_or_else(PoisonError::into_inner) = addresses;
     }
 }
 
@@ -257,6 +302,51 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "listen = \"203.0.113.9:7447\"\n\n[failover]\npin = true\n"
         );
+    }
+
+    #[tokio::test]
+    async fn public_addresses_apply_at_once_as_clients_save_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        std::fs::write(&path, "").unwrap();
+        let config = Config::load_file(&path).unwrap();
+        let settings = Settings::new(&config, None, CancellationToken::new());
+        let public = settings.public_addresses();
+        assert!(public.get().is_empty());
+        let mut new = config.settings();
+        new.public_addresses = vec!["https://box.example.com/".into(), "home.example.net".into()];
+        let set = CommandBody::SetSettings {
+            settings: Box::new(new.clone()),
+        };
+        let CommandResult::Settings {
+            settings: answered,
+            restart_required,
+            ..
+        } = settings.command(set).await.unwrap()
+        else {
+            panic!("set_settings answers with the settings");
+        };
+        let normalized = ["wss://box.example.com", "home.example.net:7447"];
+        assert_eq!(answered.public_addresses, normalized);
+        assert!(!restart_required);
+        assert_eq!(public.get(), normalized);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "public_addresses = [\"wss://box.example.com\", \"home.example.net:7447\"]\n"
+        );
+
+        new.public_addresses = vec!["127.0.0.1:7447".into()];
+        let set = CommandBody::SetSettings {
+            settings: Box::new(new),
+        };
+        let err = settings.command(set).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::BadRequest);
+        assert!(
+            err.message.contains("this machine itself"),
+            "{}",
+            err.message
+        );
+        assert_eq!(public.get(), normalized);
     }
 
     #[tokio::test]

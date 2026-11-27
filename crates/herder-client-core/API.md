@@ -55,7 +55,9 @@ says what exists, why, and how it maps to foreign languages.
   `get_attachment` fetches like a prompt's file, `EventBody::attachments`, and
   `Project.private_artifacts` with the `private_artifacts` of `SetProjectSettings`.
   MCP servers added, compatibly, `DaemonSettings.mcp_servers` (`McpServerSettings`,
-  `McpTransport`, `SecretRef`).
+  `McpTransport`, `SecretRef`). P26.1 added, compatibly, `DaemonSettings.public_addresses`,
+  which daemons name in `ServerHello.addresses`, invites and claim links; the client follows
+  them without an API change (see Daemon settings).
 
 ## Shape, and how it maps to UniFFI
 
@@ -700,6 +702,19 @@ place, and answers the same way; a value the daemon cannot run with is refused w
 reconnect as after any restart. Accounts, projects and the hub link keep their own commands.
 Only owners may do any of this. The wire change is additive (protocol 4) and this API is
 unchanged.
+
+`DaemonSettings.public_addresses` is where other devices reach the daemon from outside its
+networks: the `host:port` of a port forward, a TCP proxy or a VPN, or the `wss://` URL of a
+tunnel that unwraps HTTPS, such as a Cloudflare Tunnel (`docs/public-access.md`). An owner
+adds or removes one by sending `SetSettings` with the list changed; the daemon normalizes
+each as `Machine::addresses` holds them (a host gets port 7447, `https://` becomes `wss://`),
+refuses loopback, duplicates and anything else with `bad_request`, and applies the change at
+once, without `restart_required`. Its hello, invites and claim links name them after its
+`listen` addresses. A connected client follows what each hello names: an address new since
+the last hello joins `Machine::addresses` in its kind's place (LAN, other, Tailscale, tunnel,
+hub), one the daemon stopped naming leaves them unless the connection came in on it, and the
+ones the user added or removed stay as the user left them. So every device dials a public
+address an owner set once, with nothing to type.
 
 `DaemonSettings.mcp_servers` is the user's MCP servers, which every session's agent gets next
 to herder's own, whatever its provider and account: each a `McpServerSettings` with a `name`

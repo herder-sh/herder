@@ -26,6 +26,20 @@
 //! tunnel = "127.0.0.1:7448"
 //! ```
 //!
+//! `public_addresses` is where other devices reach the daemon from outside its networks,
+//! which it cannot tell from `listen`: the `host:port` of a port forward on the router, of a
+//! TCP proxy or of a VPN, or the URL of a tunnel that unwraps HTTPS, such as a Cloudflare
+//! Tunnel's hostname. The daemon names them after its `listen` addresses in its hello,
+//! invites and claim links, and every device adds them to the machine's addresses on its
+//! next connection (`docs/public-access.md`). An owner sets them from the apps too.
+//!
+//! ```toml
+//! public_addresses = ["home.example.net:7447", "wss://box.example.com"]
+//! ```
+//!
+//! A `host` without a port gets 7447; `https://` is read as `wss://` and `http://` as `ws://`.
+//! Loopback addresses, which no other device reaches, and duplicates are refused.
+//!
 //! # Accounts
 //!
 //! Each `[[accounts]]` entry is one provider login on this machine:
@@ -300,7 +314,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -332,6 +346,9 @@ pub struct Config {
     pub listen: Vec<SocketAddr>,
     /// The loopback address `cloudflared` delivers tunneled clients to, if any.
     pub tunnel: Option<SocketAddr>,
+    /// Where other devices reach the daemon from outside its networks, normalized: `host:port`,
+    /// or a tunnel's `wss://` or `ws://` URL.
+    pub public_addresses: Vec<String>,
     /// Directory holding everything the daemon persists.
     pub data_dir: PathBuf,
     /// Logging settings.
@@ -527,6 +544,7 @@ pub enum LogFormat {
 struct ConfigFile {
     listen: Listen,
     tunnel: Option<SocketAddr>,
+    public_addresses: Vec<String>,
     data_dir: Option<PathBuf>,
     log: LogConfig,
     accounts: Vec<AccountFile>,
@@ -551,6 +569,7 @@ impl Default for ConfigFile {
                 DEFAULT_PORT,
             ))),
             tunnel: None,
+            public_addresses: Vec::new(),
             data_dir: None,
             log: LogConfig::default(),
             accounts: Vec::new(),
@@ -601,6 +620,33 @@ fn resolve_tunnel(
         "`tunnel` and `listen` both name {tunnel}"
     );
     Ok(Some(tunnel))
+}
+
+/// `public_addresses`, each normalized ([`remote_address`]): none twice, and none loopback.
+pub(crate) fn resolve_public_addresses(addresses: Vec<String>) -> Result<Vec<String>> {
+    let mut resolved: Vec<String> = Vec::with_capacity(addresses.len());
+    for address in addresses {
+        let normalized =
+            remote_address(&address).map_err(|why| anyhow::anyhow!("public_addresses: {why}"))?;
+        let host = match url::Url::parse(&normalized) {
+            Ok(url) if normalized.contains("://") => url.host_str().map(str::to_owned),
+            _ => normalized.rsplit_once(':').map(|(host, _)| host.to_owned()),
+        }
+        .unwrap_or_default();
+        let host = host.trim_matches(['[', ']']);
+        let loopback = host.eq_ignore_ascii_case("localhost")
+            || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
+        ensure!(
+            !loopback,
+            "public_addresses: {address} is this machine itself, which no other device reaches"
+        );
+        ensure!(
+            !resolved.contains(&normalized),
+            "public_addresses: {address} is named twice"
+        );
+        resolved.push(normalized);
+    }
+    Ok(resolved)
 }
 
 /// The addresses `listen` names: at least one, none twice.
@@ -785,6 +831,7 @@ impl Config {
         let hub = self.hub.as_ref();
         DaemonSettings {
             listen: self.listen.iter().map(ToString::to_string).collect(),
+            public_addresses: self.public_addresses.clone(),
             log: LogSettings {
                 level: self.log.level.clone(),
                 format: match self.log.format {
@@ -843,6 +890,7 @@ fn resolve(
     };
     let listen = resolve_listen(file.listen)?;
     let tunnel = resolve_tunnel(file.tunnel, &listen, file.mode)?;
+    let public_addresses = resolve_public_addresses(file.public_addresses)?;
     file.resources.validate()?;
     let accounts = resolve_accounts(file.accounts, env)?;
     let projects = resolve_projects(file.projects, file.project, &accounts, env)?;
@@ -860,6 +908,7 @@ fn resolve(
         path,
         listen,
         tunnel,
+        public_addresses,
         data_dir,
         log: file.log,
         accounts,
@@ -1162,18 +1211,66 @@ fn hub_address(address: &str) -> Result<String> {
     if !address.contains("://") {
         return Ok(address.to_owned());
     }
-    let mut url = url::Url::parse(address)
-        .with_context(|| format!("hub.address {address} is not a tunnel URL"))?;
+    tunnel_url(address).map_err(|why| anyhow::anyhow!("hub.address {why}"))
+}
+
+/// `address`, where other devices reach a daemon, as written: `host:port`, a host that gets
+/// [`DEFAULT_PORT`], or the URL of a tunnel to it ([`tunnel_url`]); as clients save it.
+pub(crate) fn remote_address(address: &str) -> std::result::Result<String, String> {
+    let address = address.trim();
+    if address.contains("://") {
+        return tunnel_url(address);
+    }
+    if address.is_empty() || address.contains(|c: char| c.is_whitespace() || c == '/') {
+        return Err(format!("{address:?} is not a host:port or a wss:// URL"));
+    }
+    if let Ok(socket) = address.parse::<SocketAddr>() {
+        return Ok(socket.to_string());
+    }
+    if let Ok(ip) = address.trim_matches(['[', ']']).parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, DEFAULT_PORT).to_string());
+    }
+    match address.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() && !host.contains(':') => {
+            match port.parse::<u16>() {
+                Ok(port) if port > 0 => Ok(format!("{host}:{port}")),
+                _ => Err(format!("{address} has no valid port")),
+            }
+        }
+        Some(_) => Err(format!("{address:?} is not a host:port or a wss:// URL")),
+        None => Ok(format!("{address}:{DEFAULT_PORT}")),
+    }
+}
+
+/// `address`, the URL of a tunnel, with `https` read as `wss` and `http` as `ws` and no `/`
+/// path; refused when it names no host, or carries a user, query or fragment.
+fn tunnel_url(address: &str) -> std::result::Result<String, String> {
+    let mut url =
+        url::Url::parse(address).map_err(|err| format!("{address} is not a tunnel URL: {err}"))?;
     let scheme = match url.scheme() {
         "wss" | "https" => "wss",
         "ws" | "http" => "ws",
-        _ => bail!("hub.address {address} must be host:port, or start with wss:// or https://"),
+        _ => {
+            return Err(format!(
+                "{address} must be host:port, or start with wss:// or https://"
+            ));
+        }
     };
-    ensure!(
-        url.set_scheme(scheme).is_ok() && url.host_str().is_some_and(|host| !host.is_empty()),
-        "hub.address {address} names no host"
-    );
-    Ok(url.as_str().trim_end_matches('/').to_owned())
+    if url.set_scheme(scheme).is_err() || url.host_str().is_none_or(str::is_empty) {
+        return Err(format!("{address} names no host"));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(format!("{address} may not carry a user name or password"));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(format!("{address} may not have a query or fragment"));
+    }
+    let text = url.as_str();
+    Ok(if url.path() == "/" {
+        text.trim_end_matches('/').to_owned()
+    } else {
+        text.to_owned()
+    })
 }
 
 /// Validates the `[titles]` table.
@@ -1846,6 +1943,11 @@ pub fn set_settings(path: &Path, old: &DaemonSettings, new: &DaemonSettings) -> 
                 many => toml_edit::Array::from_iter(many).into(),
             };
             edit.set(&[], "listen", Some(listen))?;
+        }
+        if old.public_addresses != new.public_addresses {
+            let public = (!new.public_addresses.is_empty())
+                .then(|| toml_edit::Array::from_iter(&new.public_addresses).into());
+            edit.set(&[], "public_addresses", public)?;
         }
         if old.log.level != new.log.level {
             edit.set(&["log"], "level", Some(new.log.level.as_str().into()))?;
@@ -2594,6 +2696,83 @@ mod tests {
     }
 
     #[test]
+    fn public_addresses_are_normalized_as_clients_save_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write(
+            tmp.path(),
+            "public_addresses = [\"home.example.net\", \"203.0.113.7:443\", \
+             \"https://Box.example.com/\", \"wss://box.example.com/herder\", \"[2001:db8::1]\"]\n",
+        );
+        let config = Config::load_file(&path).unwrap();
+        assert_eq!(
+            config.public_addresses,
+            [
+                "home.example.net:7447",
+                "203.0.113.7:443",
+                "wss://box.example.com",
+                "wss://box.example.com/herder",
+                "[2001:db8::1]:7447",
+            ]
+        );
+        assert_eq!(config.settings().public_addresses, config.public_addresses);
+        let path = write(tmp.path(), "");
+        assert!(
+            Config::load_file(&path)
+                .unwrap()
+                .public_addresses
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn public_addresses_refuse_loopback_duplicates_and_what_is_no_address() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (addresses, why) in [
+            ("\"127.0.0.1:7447\"", "this machine itself"),
+            ("\"localhost\"", "this machine itself"),
+            ("\"wss://[::1]:8443\"", "this machine itself"),
+            (
+                "\"box.example.com\", \"box.example.com:7447\"",
+                "named twice",
+            ),
+            ("\"ftp://box.example.com\"", "wss:// or https://"),
+            ("\"wss://me:pw@box.example.com\"", "user name or password"),
+            ("\"box.example.com:0\"", "no valid port"),
+            ("\"box example\"", "not a host:port"),
+            ("\"\"", "not a host:port"),
+        ] {
+            let path = write(tmp.path(), &format!("public_addresses = [{addresses}]\n"));
+            let err = format!("{:#}", Config::load_file(&path).unwrap_err());
+            assert!(
+                err.contains("public_addresses") && err.contains(why),
+                "{addresses}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_addresses_are_set_and_cleared_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        std::fs::write(&path, "listen = \"0.0.0.0:7447\"\n").unwrap();
+        let old = Config::load_file(&path).unwrap().settings();
+        let mut new = old.clone();
+        new.public_addresses = vec!["wss://box.example.com".into(), "203.0.113.7:7447".into()];
+        let config = set_settings(&path, &old, &new).unwrap();
+        assert_eq!(config.public_addresses, new.public_addresses);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "listen = \"0.0.0.0:7447\"\n\
+             public_addresses = [\"wss://box.example.com\", \"203.0.113.7:7447\"]\n"
+        );
+        set_settings(&path, &new, &old).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "listen = \"0.0.0.0:7447\"\n"
+        );
+    }
+
+    #[test]
     fn tunnel_is_a_loopback_address_listen_does_not_name() {
         let tmp = tempfile::tempdir().unwrap();
         let path = write(
@@ -2684,6 +2863,7 @@ mod tests {
                 path: path.clone(),
                 listen: vec!["[::1]:8000".parse().unwrap()],
                 tunnel: None,
+                public_addresses: Vec::new(),
                 data_dir: PathBuf::from("/var/lib/herder"),
                 log: LogConfig {
                     level: "debug".to_owned(),

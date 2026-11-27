@@ -33,6 +33,10 @@ pub(crate) struct SavedMachine {
     pub(crate) addresses: Vec<String>,
     /// SHA-256 of the daemon's certificate, lowercase hex.
     pub(crate) fingerprint: String,
+    /// The addresses the daemon named in the latest hello that named any, as saved
+    /// ([`crate::address::advertised`]): what `addresses` follows ([`crate::address::follow`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) advertised: Vec<String>,
     /// This device's key for the machine, as PEM; secret.
     pub(crate) device_key: String,
 }
@@ -169,6 +173,7 @@ mod tests {
             name: "box".into(),
             addresses: vec!["127.0.0.1:7447".into()],
             fingerprint: "ab".repeat(32),
+            advertised: Vec::new(),
             device_key: "secret".into(),
         }
     }
