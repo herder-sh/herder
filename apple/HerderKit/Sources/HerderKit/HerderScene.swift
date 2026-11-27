@@ -20,6 +20,9 @@ public struct HerderScene: Scene {
 
     public init() {
         Hangs.watch()
+        #if os(macOS)
+        AppCommands.shared.followHotkey()
+        #endif
     }
 
     public var body: some Scene {
@@ -55,9 +58,8 @@ public struct HerderScene: Scene {
         #if os(macOS)
         // herder draws its own window: the sidebar runs up under the traffic lights.
         .windowStyle(.hiddenTitleBar)
-        // One window; ⌘N starts a session (the sidebar's button) instead of opening another.
-        .commands { CommandGroup(replacing: .newItem) {} }
         #endif
+        .commands { HerderCommands() }
         .onChange(of: scenePhase) { _, phase in
             guard case .opened(let fleet) = profile else { return }
             switch phase {
@@ -82,6 +84,9 @@ public struct HerderScene: Scene {
             return WindowPlacement(size: CGSize(width: screen.width * 0.9, height: screen.height * 0.9))
         }
         .windowToolbarStyle(.unified)
+        Settings {
+            HerderSettings().preferredColorScheme(.dark)
+        }
         #endif
     }
 }

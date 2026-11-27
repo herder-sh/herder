@@ -39,7 +39,7 @@ import Testing
         defer { UserDefaults.standard.removeObject(forKey: "sidebarCollapsed") }
         let view = DesktopShell(fleet: fleet, sheet: .constant(nil), item: .constant(item), pages: .constant(PageStack()),
                                 session: .constant(session), draft: .constant(nil), people: FleetPeople(fleet: fleet),
-                                opened: { _ in })
+                                opened: { _ in }, perform: { _ in })
             .environment(\.colorScheme, .dark)
         let host = NSHostingView(rootView: view)
         host.appearance = NSAppearance(named: .darkAqua)
