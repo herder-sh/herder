@@ -374,6 +374,9 @@ struct MachinePage: View {
     /// health since the app opened.
     private func connection(_ machine: Machine) -> some View {
         SettingsList(title: "Connection") {
+            ConnectionCard(fleet: fleet, hostId: machine.hostId, titled: false)
+                .padding(14)
+            RowDivider()
             SettingRow(label: "Name on this device", hint: "Only this device shows it", saved: saves["Name"]) {
                 TextField(machine.name, text: $name)
                     .textFieldStyle(.plain)

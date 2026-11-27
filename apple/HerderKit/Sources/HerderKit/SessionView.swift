@@ -29,6 +29,8 @@ private struct SessionPane: View {
     @State private var pushedFork: SessionKey?
     @State private var showsTerminal = false
     @State private var showsPRs = false
+    /// The connection card of the session's machine, opened from the status line.
+    @State private var showsConnection = false
     @AppStorage("listHidden") private var listHidden = false
     @Environment(\.pages) private var pages
     @AppStorage("inspectorShown") private var inspectorShown = false
@@ -218,22 +220,32 @@ private struct SessionPane: View {
                     .accessibilityAddTraits(.isHeader)
             }
             // One line, so a narrow header truncates where it runs on rather than wrapping
-            // its parts beside each other.
-            HStack(spacing: 6) {
-                StatusGlyph(state: model?.state ?? .idle, size: 7)
-                let detail = SessionHeading.detail(project: summary?.project, machine: summary?.machine,
-                                                   archiving: fleet.archiving.contains(key))
-                if model?.status == .needsLogin {
-                    NeedsSignInChip()
-                    if !detail.isEmpty { Text(detail).foregroundStyle(Theme.tertiary).lineLimit(1) }
-                } else {
-                    (Text(model?.stateLabel ?? "")
-                        .foregroundStyle(model?.state == .needsYou ? Theme.accent : Theme.secondary)
-                     + Text(detail.isEmpty ? "" : " · " + detail).foregroundStyle(Theme.tertiary))
-                        .lineLimit(1)
+            // its parts beside each other. A button: it opens the machine's connection card.
+            Button { showsConnection = true } label: {
+                HStack(spacing: 6) {
+                    StatusGlyph(state: model?.state ?? .idle, size: 7)
+                    let detail = SessionHeading.detail(project: summary?.project, machine: summary?.machine,
+                                                       archiving: fleet.archiving.contains(key))
+                    if model?.status == .needsLogin {
+                        NeedsSignInChip()
+                        if !detail.isEmpty { Text(detail).foregroundStyle(Theme.tertiary).lineLimit(1) }
+                    } else {
+                        (Text(model?.stateLabel ?? "")
+                            .foregroundStyle(model?.state == .needsYou ? Theme.accent : Theme.secondary)
+                         + Text(detail.isEmpty ? "" : " · " + detail).foregroundStyle(Theme.tertiary))
+                            .lineLimit(1)
+                    }
+                    if let machine = fleet.machines.first(where: { $0.hostId == key.hostId }) {
+                        SignalLabel(signal: ConnectionSignal(machine))
+                    }
                 }
+                .contentShape(.rect)
             }
+            .buttonStyle(.plain)
             .font(Theme.body.weight(.medium))
+            .help("How this device reaches the machine")
+            .accessibilityIdentifier("session-connection")
+            .connectionCard(isPresented: $showsConnection, fleet: fleet, hostId: key.hostId, pages: pages)
             if let branch = model?.branch {
                 Text(branch).font(Theme.monoSmall).foregroundStyle(Theme.tertiary).textSelection(.enabled)
                     .lineLimit(1).truncationMode(.middle)

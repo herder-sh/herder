@@ -4,8 +4,9 @@ import SwiftUI
 
 /// How this device reaches a machine, as Hub says it: quietly, as a laptop asleep is expected.
 enum MachineReach: Hashable {
-    /// Connected, at one of the machine's addresses.
-    case direct
+    /// Connected, at one of the machine's addresses, over the route of that name
+    /// (`MachineRoute.name`: "Tailscale", "Local network").
+    case direct(String)
     /// Connected through the hub of that name, as no address of its own answered.
     case through(String)
     case connecting
@@ -14,11 +15,11 @@ enum MachineReach: Hashable {
     case elsewhere
     case offline
 
-    /// `hub` names the hub the connection goes through, when it goes through one.
-    init(_ connection: ConnectionState, heardByHub: Bool, through hub: String? = nil) {
+    /// `route` is the connection's, when it has one.
+    init(_ connection: ConnectionState, heardByHub: Bool, route: MachineRoute? = nil) {
         switch connection {
         case .connected:
-            if let hub { self = .through(hub) } else { self = .direct }
+            if case .hub(let hub) = route?.kind { self = .through(hub) } else { self = .direct(route?.name ?? "Connected") }
         case .connecting: self = .connecting
         case .disconnected: self = heardByHub ? .elsewhere : .offline
         }
@@ -26,7 +27,7 @@ enum MachineReach: Hashable {
 
     var label: String {
         switch self {
-        case .direct: "Direct"
+        case .direct(let route): route
         case .through(let hub): "Through \(hub)"
         case .connecting: "Connecting…"
         case .elsewhere: "On another network"
@@ -58,7 +59,7 @@ struct MachineRow: Hashable, Identifiable {
             MachineRow(hostId: machine.hostId, name: machine.name, member: machine.role == .member,
                        local: machine.hostId == local,
                        reach: MachineReach(machine.connection, heardByHub: heard.contains(machine.hostId),
-                                           through: machine.address.flatMap { via($0, among: machines) }),
+                                           route: MachineRoute(machine, among: machines)),
                        running: summaries.first { $0.hostId == machine.hostId }?.running ?? 0)
         }
         .sorted { $0.name.lowercased() < $1.name.lowercased() }
@@ -560,14 +561,15 @@ extension ConnectionState {
         self == .connecting && addresses > 1 ? "Connecting… (trying \(addresses) addresses)" : label
     }
 
-    /// What a message sent to a machine in this state waits for, as the machine takes it only
-    /// once connected; `nil` while connected, when it is on its way.
-    func holdUp(addresses: Int) -> String? {
+    /// What a message sent to `machine` in this state waits for, as the machine takes it only
+    /// once connected; `nil` while connected, when it is on its way. Why it is offline is on
+    /// the connection card, a tap away.
+    func holdUp(machine: String, addresses: Int) -> String? {
         switch self {
         case .connected: nil
         case .connecting:
-            addresses > 1 ? "Connecting to the machine (trying \(addresses) addresses)…" : "Connecting to the machine…"
-        case .disconnected(let error): "The machine is offline (\(Self.explain(error))). Sends once it connects."
+            addresses > 1 ? "Waiting for \(machine): connecting (trying \(addresses) addresses)…" : "Waiting for \(machine): connecting…"
+        case .disconnected: "Waiting for \(machine): offline · sends when it is back"
         }
     }
 
