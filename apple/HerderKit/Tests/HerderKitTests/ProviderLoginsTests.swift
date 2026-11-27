@@ -15,7 +15,7 @@ import Testing
             switch command {
             case .listProviderLogins:
                 return .providerLogins(logins: logins)
-            case .startProviderLogin(let provider):
+            case .startProviderLogin(let provider, _):
                 return .providerLoginStarted(loginId: "state1", url: "https://\(provider).example/oauth?state=state1")
             case .completeProviderLogin(_, let address):
                 guard address.contains("code=good") else {
@@ -85,7 +85,7 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
         await adder.leave()
         #expect(hub.sent == [
             .listProviderLogins,
-            .startProviderLogin(provider: "claude"),
+            .startProviderLogin(provider: "claude", name: nil),
             .completeProviderLogin(loginId: "state1", redirectUrl: "http://localhost:54545/callback?state=state1"),
             .completeProviderLogin(loginId: "state1", redirectUrl: "http://localhost:54545/callback?code=good&state=state1"),
         ])
@@ -100,7 +100,7 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
         await adder.start()
         await adder.leave()
         await adder.leave()
-        #expect(hub.sent == [.startProviderLogin(provider: "codex"), .cancelProviderLogin(loginId: "state1")])
+        #expect(hub.sent == [.startProviderLogin(provider: "codex", name: nil), .cancelProviderLogin(loginId: "state1")])
     }
 
     @Test func removingALoginListsAgain() async throws {
