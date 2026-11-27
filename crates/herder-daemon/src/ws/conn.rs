@@ -74,6 +74,10 @@ pub(super) async fn run<B: Backend>(
     if let Err(err) = notice_a_gone_peer(&stream) {
         debug!(%peer, "cannot set the socket's keepalive: {err}");
     }
+    #[cfg(target_os = "linux")]
+    if let Err(err) = hold_back_unsent(&stream) {
+        debug!(%peer, "cannot limit the socket's unsent bytes: {err}");
+    }
     let ws = tokio::select! {
         () = cancel.cancelled() => return,
         ws = tokio::time::timeout(
@@ -165,6 +169,19 @@ pub(crate) fn notice_a_gone_peer(stream: &TcpStream) -> std::io::Result<()> {
     socket.set_tcp_user_timeout(Some(UNACKNOWLEDGED))?;
     Ok(())
 }
+
+/// Keeps what waits for a slow client in its [`Outbox`] rather than in the kernel: a socket
+/// takes another message only once less than [`UNSENT`] bytes of it wait to go out. Else a
+/// replay of megabytes fills the socket's buffer at once, and an answer the client waits on
+/// to show anything, which the outbox puts first, waits behind all of it.
+#[cfg(target_os = "linux")]
+pub(crate) fn hold_back_unsent(stream: &TcpStream) -> std::io::Result<()> {
+    socket2::SockRef::from(stream).set_tcp_notsent_lowat(UNSENT)
+}
+
+/// Unsent bytes a client's socket holds at most before it takes another message.
+#[cfg(target_os = "linux")]
+const UNSENT: u32 = 16 * 1024;
 
 /// The client a connection serves, known once its hello is accepted.
 struct Who {

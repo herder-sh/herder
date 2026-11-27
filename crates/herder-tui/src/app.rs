@@ -371,6 +371,18 @@ pub struct App {
     pub(crate) revision: u64,
     /// The open transcript's rows, as built at a [`App::revision`].
     pub(crate) transcript: crate::views::TranscriptCache,
+    /// The latest events asked for of sessions opened before their journal had replayed that
+    /// far; see [`App::ask_latest`].
+    pub(crate) latest: HashMap<SessionKey, Latest>,
+}
+
+/// Where the latest events asked for of a session stand.
+#[derive(Debug)]
+pub(crate) enum Latest {
+    /// Asked for, or shown until the replay reached them: they are not asked for again.
+    Asked,
+    /// Folded on their own, the transcript shows them until the replay reaches them.
+    Shown(Box<Session>),
 }
 
 impl Default for App {
@@ -419,6 +431,7 @@ impl Default for App {
             clock: None,
             revision: 0,
             transcript: crate::views::TranscriptCache::default(),
+            latest: HashMap::new(),
         }
     }
 }
@@ -450,6 +463,52 @@ impl App {
         if !self.keeps_transcript(&msg) {
             self.revision += 1;
         }
+        let mut effects = self.handle(msg);
+        effects.extend(self.ask_latest());
+        effects
+    }
+
+    /// Asks once for the latest events of the open session while its journal is still on its
+    /// way. A session this terminal holds little of replays from its start, which takes
+    /// minutes for a long one on a slow link, and its latest messages come last: the
+    /// transcript shows them meanwhile.
+    fn ask_latest(&mut self) -> Option<Effect> {
+        let key = self.open.as_ref()?;
+        if self.latest.contains_key(key) {
+            return None;
+        }
+        let held = self.sessions.get(key)?.seq;
+        let head = self
+            .machines
+            .iter()
+            .find(|machine| machine.host_id == key.host_id)?
+            .sessions
+            .iter()
+            .find(|head| head.session_id == key.session_id)?
+            .head_seq;
+        if held >= head {
+            return None;
+        }
+        self.latest.insert(key.clone(), Latest::Asked);
+        Some(Effect::Send {
+            host_id: key.host_id.clone(),
+            command: CommandBody::GetLatestEvents {
+                session_id: key.session_id.clone(),
+            },
+            origin: Origin::Latest(key.clone()),
+        })
+    }
+
+    /// The session whose transcript shows for `key`: its latest events while the replay has
+    /// yet to reach them, else the session; and whether it is the latest events.
+    pub(crate) fn shown(&self, key: &SessionKey) -> Option<(&Session, bool)> {
+        match self.latest.get(key) {
+            Some(Latest::Shown(latest)) => Some((latest, true)),
+            _ => self.sessions.get(key).map(|session| (session, false)),
+        }
+    }
+
+    fn handle(&mut self, msg: Msg) -> Vec<Effect> {
         match msg {
             Msg::Key(key) => {
                 self.notice = None;
@@ -495,6 +554,12 @@ impl App {
                 if let Some(session) = self.sessions.get_mut(&key) {
                     let (before, was_loaded) = (session.status, session.loaded);
                     session.apply(update);
+                    // The replay reached the latest events shown meanwhile.
+                    if let Some(Latest::Shown(latest)) = self.latest.get(&key)
+                        && session.seq >= latest.seq
+                    {
+                        self.latest.insert(key.clone(), Latest::Asked);
+                    }
                     self.observe(&key, before, was_loaded);
                 }
                 Vec::new()

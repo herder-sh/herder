@@ -85,6 +85,11 @@ public final class Fleet {
     /// history, in however many updates: this device holds the journals of a machine's newest
     /// sessions only, and the machine sends every other one from its start on each launch.
     @ObservationIgnored private var history: [SessionKey: UInt64] = [:]
+    /// The latest events of sessions a view shows before their journal has replayed that far,
+    /// folded on their own: the transcript shows them meanwhile; see `showLatest(_:)`.
+    private var latest: [SessionKey: SessionBox] = [:]
+    /// The sessions whose latest events were asked for, once each while the app runs.
+    @ObservationIgnored private var askedLatest: Set<SessionKey> = []
     /// Images of user messages, fetched once: by attachment id.
     private(set) var attachments: [String: Data] = [:]
     /// Project icons the machines list, read into pictures, by the icon's hash.
@@ -302,7 +307,27 @@ public final class Fleet {
     /// `key`'s transcript with each turn's work folded, as its view shows it; observed as
     /// `session(_:)` is, and built again only when the session or its queue changes.
     func transcript(_ key: SessionKey) -> [TranscriptBlock] {
-        boxes[key]?.transcript(queue: queue(of: key)) ?? []
+        if let latest = latest[key] { return latest.transcript(queue: []) }
+        return boxes[key]?.transcript(queue: queue(of: key)) ?? []
+    }
+
+    /// Whether `key`'s transcript shows only its latest events, while the earlier ones load.
+    func loadingEarlier(_ key: SessionKey) -> Bool { latest[key] != nil }
+
+    /// Shows the end of `key` at once while its journal is still on its way. A session this
+    /// device holds little of replays from its start, which takes minutes for a long one on a
+    /// slow link, and its latest messages come last: they are asked for on their own, once,
+    /// and the transcript shows them until the replay reaches them.
+    func showLatest(_ key: SessionKey) async {
+        guard !askedLatest.contains(key), let head = history[key],
+              (boxes[key]?.model.lastSeq ?? 0) < head else { return }
+        askedLatest.insert(key)
+        let asked = try? await client.send(hostId: key.hostId, command: .getLatestEvents(sessionId: key.sessionId))
+        guard case .latestEvents(let events)? = asked, let last = events.last?.seq,
+              let box = boxes[key], box.model.lastSeq < last else { return }
+        var model = SessionModel(key: key)
+        model.apply(SessionUpdate(events: events, streaming: []))
+        latest[key] = SessionBox(model)
     }
 
     /// Every session's state. A view that reads it redraws whenever any session changes: read
@@ -461,6 +486,7 @@ public final class Fleet {
             subscriptions[key] = nil
             history[key] = nil
             replays[key] = nil
+            latest[key] = nil
             retained.insert(key)
         }
         release(listing: heads)
@@ -577,6 +603,8 @@ public final class Fleet {
     /// Notes what an update did to `key`'s status, from its status and load before it.
     func observe(_ key: SessionKey, before: SessionStatus, wasLoaded: Bool) {
         guard let box = boxes[key] else { return }
+        // The replay reached the latest events shown meanwhile: the transcript is whole again.
+        if let shown = latest[key], box.model.lastSeq >= shown.model.lastSeq { latest[key] = nil }
         var news = wasLoaded
         if let head = history[key] {
             // An update that ends within the journal's history leaves the session where it once

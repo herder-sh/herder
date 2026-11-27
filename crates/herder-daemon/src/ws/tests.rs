@@ -1308,6 +1308,49 @@ async fn the_latest_events_are_the_journals_last_within_their_bytes() {
     assert_eq!(error.code, ErrorCode::NotFound);
 }
 
+/// The kernel holds little of what waits for a slow client, so the answer the outbox puts
+/// first overtakes a replay of megabytes. Linux only: elsewhere the kernel buffers as it will.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_latest_events_overtake_a_long_replay() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let text = "y".repeat(CHUNK);
+    for n in 0..CHUNKS {
+        daemon.append(&session, added(&format!("i{n}"), &text));
+    }
+    let mut slow = Client::connect(
+        daemon.addr,
+        &daemon.fingerprint,
+        &daemon.owner,
+        None,
+        Some(4096),
+    )
+    .await
+    .unwrap();
+    slow.hello(vec![cursor(&session, 0)]).await;
+    // The replay fills what the sockets hold before the client asks.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    slow.send(&ClientMessage::Command(Command {
+        id: CommandId::new("c1"),
+        body: latest(&session),
+    }))
+    .await;
+    let mut ahead = 0;
+    loop {
+        match slow.recv().await {
+            ServerMessage::CommandAccepted { command_id, .. } => {
+                assert_eq!(command_id, CommandId::new("c1"));
+                break;
+            }
+            ServerMessage::Event(_) => ahead += 1,
+            _ => {}
+        }
+    }
+    // Some 9.6 MB of replay waited; about 100 kB of it came first.
+    assert!(ahead < 40, "{ahead} events of {CHUNK} bytes came first");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_client_resumes_from_its_cursor_after_a_disconnect() {
     let daemon = Daemon::start().await;

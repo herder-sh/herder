@@ -49,6 +49,10 @@ pub(super) async fn run(
     if let Err(err) = ws::notice_a_gone_peer(&stream) {
         debug!(%peer, "cannot set the socket's keepalive: {err}");
     }
+    #[cfg(target_os = "linux")]
+    if let Err(err) = ws::hold_back_unsent(&stream) {
+        debug!(%peer, "cannot limit the socket's unsent bytes: {err}");
+    }
     let opened = tokio::select! {
         () = cancel.cancelled() => return,
         opened = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared, stream, tunneled)) => opened,

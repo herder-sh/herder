@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use herder_client_core::SessionUpdate;
 use herder_protocol::{
     Answer, ApprovalDecision, AttachmentId, CommandBody, CommandResult, HostId,
     IMAGE_NOT_BACKED_UP, Image, MAX_PROMPT_ATTACHMENT_BYTES, PermissionMode, SessionStatus,
@@ -19,7 +20,7 @@ use crate::action::Action;
 use crate::app::{App, Effect, Focus};
 use crate::attach::{self, Source};
 use crate::prompt::Recall;
-use crate::session::{Delivery, MODES, Outgoing, SessionKey, mode_name};
+use crate::session::{Delivery, MODES, Outgoing, Session, SessionKey, mode_name};
 
 /// A user action of this module; see [`Action::Compose`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +99,8 @@ pub enum Origin {
     AddAccount(HostId),
     /// The add-account dialog's question to this host of where it backs up.
     AccountHub(HostId),
+    /// Asking for a session's latest events, shown while its journal replays.
+    Latest(SessionKey),
     /// A step of editing a machine's public addresses.
     Public(crate::machines::PublicSent),
 }
@@ -531,6 +534,21 @@ impl App {
                 Err(error) => self.session_result(key, Some(error)),
             },
             Origin::Session(key) => self.session_result(key, result.err()),
+            // Not shown when it fails: the replay brings them in any case.
+            Origin::Latest(key) => {
+                if let Ok(CommandResult::LatestEvents { events }) = result
+                    && let Some(held) = self.sessions.get(&key)
+                    && events.last().is_some_and(|last| last.seq > held.seq)
+                {
+                    let mut latest = Session::new(key.session_id.clone());
+                    latest.apply(SessionUpdate {
+                        events,
+                        streaming: Vec::new(),
+                    });
+                    self.latest
+                        .insert(key, crate::app::Latest::Shown(Box::new(latest)));
+                }
+            }
             // Its echo shows a refusal; the daemon's item for it replaces it otherwise.
             Origin::Prompt(key, text) => {
                 if let Some(session) = self.sessions.get_mut(&key)
