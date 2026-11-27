@@ -13,6 +13,10 @@
 //! the addresses again beside the race under way, which may be stuck on the network there
 //! was before, or about to succeed: neither waits for the other.
 //!
+//! A connection that works carries on where it is: the route is picked again only when a
+//! connection is lost, and on a wake, which moves a connection through a hub to an address
+//! before the hub's that answers. Neither a timer nor new addresses move it mid-use.
+//!
 //! However many addresses and races there are, one connection says hello: the daemon lists
 //! everything and replays every session wanted for each hello it takes, so an address that
 //! lost the race is dropped before it said one.
@@ -26,12 +30,13 @@
 //! A connection the task gives up tells the daemon why as it closes, so the daemon's log
 //! shows what a client that keeps reconnecting saw.
 //!
-//! A connection is pinged as soon as it is up and every [`PING_INTERVAL`] after; each ping
-//! carries a fresh payload, so its pong gives the round trip, and a ping still unanswered when
-//! the next one is due counts as a missed pong and is not followed by another. A connection
-//! whose daemon shows no sign of life within its silence limit of a ping is lost. What the
-//! user asks of a connection, a command or a session, probes it as a wake does: a dead one is
-//! found a silence limit after it is asked, not only at its next ping.
+//! A connection is pinged as soon as it is up and every [`PING_INTERVAL`] after, or less
+//! often once idle ([`ping_interval`]); each ping carries a fresh payload, so its pong gives
+//! the round trip, and a ping still unanswered when the next one is due counts as a missed
+//! pong and is not followed by another. A connection whose daemon shows no sign of life
+//! within its silence limit of a ping is lost. What the user asks of a connection, a command
+//! or a session, probes it as a wake does: a dead one is found a silence limit after it is
+//! asked, not only at its next ping.
 //!
 //! The silence limit follows the round trips the connection's pongs measured: a few of the
 //! slowest recent ones, never less than [`SILENCE_FLOOR`], what a good link is held to, nor
@@ -78,7 +83,7 @@ use rustls::pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio::time::{Instant, MissedTickBehavior};
+use tokio::time::Instant;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
@@ -117,10 +122,6 @@ const INFLATE_LIMIT: usize = 64 << 20;
 /// addresses that were reached wait for it, so it is short.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How often a connection that runs through a hub checks whether an address that comes
-/// before the hub's answers again, to move there: a wake checks at once.
-const ROUTE_CHECK: Duration = Duration::from_secs(60);
-
 /// Head start each address gets over the next one when connecting; one that fails sooner
 /// starts the next at once.
 const HEAD_START: Duration = Duration::from_millis(300);
@@ -138,8 +139,17 @@ const BACKOFF_CAP: Duration = Duration::from_secs(30);
 /// How many of the latest round trips [`ConnectionQuality`] sums up.
 const RECENT_PONGS: usize = 20;
 
-/// How often a connection is pinged.
+/// How often a connection is pinged while the user uses it.
 const PING_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How long the user asks nothing of a connection (a command, a subscription, terminal
+/// input) and does not wake the app before it counts as idle.
+const IDLE_AFTER: Duration = Duration::from_secs(60);
+
+/// How often an idle connection is pinged, if its silence limit leaves room for it within
+/// [`DEAD_LINK`]: each ping wakes a phone's radio, which then stays up for seconds, and a
+/// carrier's NAT keeps a connection this quiet.
+const IDLE_PING_INTERVAL: Duration = Duration::from_secs(25);
 
 /// Least silence after a ping or a probe (which a wake and what the user asks for send) after
 /// which a connection is considered dead, though TCP has not noticed yet. Any byte the daemon
@@ -156,6 +166,10 @@ const SILENCE_ROUND_TRIPS: u32 = 3;
 /// Most silence a connection is given, however slow its round trips were: a dead one is found
 /// within this of a ping.
 const SILENCE_CAP: Duration = Duration::from_secs(20);
+
+/// Longest a dead link goes unnoticed by its pings, idle or not: an interval and the most
+/// silence after it.
+const DEAD_LINK: Duration = PING_INTERVAL.saturating_add(SILENCE_CAP);
 
 /// How long a lost connection still shows as connected while it is being replaced: a drop
 /// shorter than this is never seen.
@@ -340,8 +354,9 @@ struct State {
     /// The address the current connection uses.
     address: Option<String>,
     /// The address that answered last, which the next connection tries first: it most likely
-    /// answers again, whatever became of the ones before it. Forgotten when the user orders
-    /// the addresses or asks to reconnect, which both start from their order.
+    /// answers again, whatever became of the ones before it. A hub's route is not tried
+    /// first, so that a connection that is lost goes home when home answers. Forgotten when
+    /// the user orders the addresses or asks to reconnect, which both start from their order.
     answered: Option<String>,
     /// The connection as the machine shows it.
     connection: Option<ConnectionState>,
@@ -1265,12 +1280,13 @@ impl Supervisor {
         self.changed.send_modify(|version| *version += 1);
     }
 
-    /// The machine's addresses in the order to dial them: the one that answered last, then
-    /// the rest in their order.
+    /// The machine's addresses in the order to dial them: the one that answered last, unless
+    /// it is a hub's route, then the rest in their order.
     fn dial_order(&self) -> Vec<String> {
         let state = self.lock();
         let mut addresses = state.addresses.clone();
         let answered = state.answered.as_ref();
+        let answered = answered.filter(|address| address::hub(address).is_none());
         if let Some(index) = answered.and_then(|a| addresses.iter().position(|b| a == b)) {
             addresses[..=index].rotate_right(1);
         }
@@ -1964,22 +1980,22 @@ async fn converse(
     for message in messages {
         send(outgoing, &message);
     }
-    // Its first tick is now: the first round trip is known as soon as the connection is up.
-    let mut ping = tokio::time::interval(PING_INTERVAL);
-    ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    // When the latest ping or probe went out; `None` until one did, so that the first round
+    // trip is known as soon as the connection is up.
+    let mut last_ping: Option<Instant> = None;
+    // When the user last asked something of the connection or woke the app; a new
+    // connection is in use.
+    let mut asked = Instant::now();
     // The payload of the latest steady ping and when it went out, until its pong comes back.
     let mut pinged: Option<(String, Instant)> = None;
     let mut save = tokio::time::interval(SAVE_INTERVAL);
     save.reset();
-    let mut route_check = tokio::time::interval(ROUTE_CHECK);
-    route_check.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    route_check.reset();
     // The payload of the ping a probe sent, and when it went out, until its pong comes back.
     let mut probe: Option<(String, Instant)> = None;
     // A new connection has measured no round trip yet.
     let mut silence = SILENCE_FLOOR;
-    // A connection to an address before this one's, which new addresses start; once one
-    // answers, this connection is replaced to move there.
+    // A connection to an address before this one's, which a wake starts; once one answers,
+    // this connection is replaced to move there.
     let mut better: Option<BoxFuture<'static, Result<String, String>>> = None;
     loop {
         // When the connection counts as dead: each ping gives the daemon its time to show it
@@ -1993,6 +2009,8 @@ async fn converse(
             .into_iter()
             .flatten()
             .min();
+        let interval = ping_interval(asked.elapsed() >= IDLE_AFTER, silence);
+        let ping_due = last_ping.map(|at| at + interval);
         // In this order, so that a connection is found dead only with nothing left to read:
         // after a suspension, what the daemon sent meanwhile is read before the deadlines
         // that passed meanwhile are looked at.
@@ -2001,13 +2019,18 @@ async fn converse(
             () = supervisor.stop.cancelled() => return Ended::Stopped,
             error = &mut writing => return Ended::Lost(error),
             op = ops.recv() => {
+                if matches!(op, Some(Op::Subscribe(_) | Op::Command(..) | Op::Open(..) | Op::Once(_))) {
+                    asked = Instant::now();
+                }
                 // What the user asks for and waits to see probes the connection, unless the
                 // app is in the background, where a dead one would not be replaced anyway.
+                // The next steady ping is due an interval after it.
                 if matches!(op, Some(Op::Subscribe(_) | Op::Command(..) | Op::Open(..)))
                     && probe.is_none()
                     && !*suspended
                 {
                     probe = Some(send_ping(outgoing));
+                    last_ping = Some(Instant::now());
                 }
                 let message = match op {
                     None => return Ended::Stopped,
@@ -2055,20 +2078,26 @@ async fn converse(
                     Some(Op::Wake) => {
                         *suspended = false;
                         // A running task would have found it dead by now.
-                        if alive.at().elapsed() > PING_INTERVAL + silence {
+                        if alive.at().elapsed() > interval + silence {
                             return Ended::Dropped(
                                 "the connection was silent through a suspension".to_owned(),
                             );
                         }
+                        asked = Instant::now();
                         if probe.is_none() {
                             probe = Some(send_ping(outgoing));
+                            last_ping = Some(Instant::now());
                         }
                         // The network may have changed: the machine may answer itself again.
+                        // Only a wake, which every network change sends, looks for a route
+                        // before the one in use: one that works is never moved off mid-use.
                         if better.is_none() && supervisor.through_hub() {
                             better = supervisor.better();
                         }
                         continue;
                     }
+                    // The connection is kept while it works, on an address still listed: a
+                    // new order applies from the next connection on.
                     Some(Op::Readdress) => {
                         let state = supervisor.lock();
                         if let Some(address) = &state.address
@@ -2078,8 +2107,6 @@ async fn converse(
                                 "{address} is no longer one of the machine's addresses"
                             ));
                         }
-                        drop(state);
-                        better = supervisor.better();
                         continue;
                     }
                     Some(Op::Reconnect(reply)) => return Ended::Reconnect(reply),
@@ -2110,13 +2137,8 @@ async fn converse(
                 save_in_background(supervisor);
                 continue;
             }
-            _ = route_check.tick(), if !*suspended => {
-                if better.is_none() && supervisor.through_hub() {
-                    better = supervisor.better();
-                }
-                continue;
-            }
-            _ = ping.tick() => {
+            () = tokio::time::sleep_until(ping_due.unwrap_or_else(Instant::now)) => {
+                last_ping = Some(Instant::now());
                 // One still unanswered holds its place: the silence counts from it, and a
                 // limit longer than the interval would else never be reached.
                 if pinged.is_some() {
@@ -2285,6 +2307,18 @@ fn send(outgoing: &mpsc::UnboundedSender<Message>, message: &ClientMessage) {
     }
     // The queue closes only once writing failed, which ends the connection.
     let _ = outgoing.send(Message::text(text));
+}
+
+/// How often a connection is pinged: every [`PING_INTERVAL`] while in use; idle, every
+/// [`IDLE_PING_INTERVAL`], or less if its `silence` limit would then leave a dead link
+/// unnoticed for longer than [`DEAD_LINK`]. Nothing says whether the link is a phone's
+/// cellular one, so any idle connection is pinged less.
+fn ping_interval(idle: bool, silence: Duration) -> Duration {
+    if !idle {
+        return PING_INTERVAL;
+    }
+    let room = DEAD_LINK.saturating_sub(silence);
+    IDLE_PING_INTERVAL.min(room).max(PING_INTERVAL)
 }
 
 /// Queues a ping with a fresh payload: the payload, and when it went out.

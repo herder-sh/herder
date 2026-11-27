@@ -209,6 +209,8 @@ struct Net {
     accepted: AtomicU64,
     /// Bytes delivered, both ways.
     carried: AtomicU64,
+    /// When each piece the client sent was delivered.
+    sent: Mutex<Vec<Instant>>,
 }
 
 impl Net {
@@ -227,6 +229,7 @@ impl Net {
             kills: watch::Sender::new((0, None, Kill::Fin)),
             accepted: AtomicU64::new(0),
             carried: AtomicU64::new(0),
+            sent: Mutex::default(),
         });
         for (path, listener) in listeners.into_iter().enumerate() {
             let net = Arc::clone(&net);
@@ -412,6 +415,10 @@ async fn pipe(
                 return;
             }
             net.carried.fetch_add(bytes.len() as u64, Ordering::SeqCst);
+            // Only what goes to the daemon can be torn on the way back.
+            if torn.is_none() {
+                net.sent.lock().unwrap().push(Instant::now());
+            }
         }
     };
     tokio::pin!(writing);
@@ -1788,6 +1795,169 @@ fn moving_between_the_machines_addresses_is_never_seen() {
 
         assert_eq!((world.seen.shows(), world.may_show), (0, 0));
         world.settle().await;
+        world.finish().await;
+    });
+}
+
+/// A phone reaches its machine through the hub while home is out of reach. Home comes back in
+/// reach while the user works, and the app is told of new addresses: the route through the
+/// hub carries on, for minutes, as nothing tells the client the network changed. A wake, as a
+/// network change sends, moves it home. Away again, the connection that is lost comes back
+/// through the hub; home again and lost once more, it comes back home, though the hub's
+/// route answered last.
+#[test]
+fn a_route_that_works_is_kept_until_a_drop_or_a_wake() {
+    run(async {
+        let mut world = World::relayed(41, 80).await;
+        let route = world.machine().address.unwrap();
+        let home = Net::start(world.daemon.addr, 41 ^ 0x4040).await;
+        for path in &home.routes {
+            path.send_replace(Route::Lost);
+        }
+        let at_home = home.addrs[0].to_string();
+        world.spawn_user(41, 80);
+        let on = |address: &str| {
+            let address = address.to_owned();
+            move |machine: &Machine| machine.address.as_deref() == Some(address.as_str())
+        };
+        let reconnects = || world.machine().quality.reconnects;
+
+        // Home comes in reach, unnoticed, and the app adds it before the route.
+        tokio::time::sleep(secs(5)).await;
+        for path in &home.routes {
+            path.send_replace(Route::Up);
+        }
+        world
+            .app
+            .set_addresses(world.host.clone(), vec![at_home.clone(), route.clone()])
+            .unwrap();
+        let before = reconnects();
+        tokio::time::sleep(secs(180)).await;
+        assert!(on(&route)(&world.machine()), "{:#?}", world.machine());
+        assert_eq!(reconnects(), before);
+        assert_eq!(home.accepted(), 0, "home was dialled mid-use");
+        world.nothing_wrong();
+
+        // The network changed: home it is.
+        world.app.wake();
+        world.shows(secs(5), "home", on(&at_home)).await;
+
+        // Away: the connection home is lost and comes back through the hub.
+        tokio::time::sleep(secs(32)).await;
+        for path in &home.routes {
+            path.send_replace(Route::Lost);
+        }
+        home.kill(None, Kill::Fin);
+        world.allowed += 4;
+        world.shows(secs(5), "the hub's route", on(&route)).await;
+
+        // Home again, unnoticed, until the route through the hub is lost: home it is.
+        tokio::time::sleep(secs(32)).await;
+        for path in &home.routes {
+            path.send_replace(Route::Up);
+        }
+        tokio::time::sleep(secs(5)).await;
+        world.kill(Kill::Fin);
+        world.shows(secs(5), "home", on(&at_home)).await;
+
+        assert_eq!(world.seen.shows(), 0);
+        world.settle().await;
+        world.finish().await;
+    });
+}
+
+/// The bursts of what the client sent, between `from` and `to`: pieces less than a second
+/// apart are one burst, as a ping and the TLS records around it are.
+fn bursts(net: &Net, from: Instant, to: Instant) -> Vec<Instant> {
+    let sent = net.sent.lock().unwrap();
+    let mut bursts: Vec<Instant> = Vec::new();
+    for &at in sent.iter().filter(|at| (from..to).contains(*at)) {
+        if bursts.last().is_none_or(|last| at - *last >= secs(1)) {
+            bursts.push(at);
+        }
+    }
+    bursts
+}
+
+/// The longest and shortest gaps between `bursts`.
+fn gaps(bursts: &[Instant]) -> (Duration, Duration) {
+    let gaps = bursts.windows(2).map(|pair| pair[1] - pair[0]);
+    let longest = gaps.clone().max().unwrap();
+    (longest, gaps.min().unwrap())
+}
+
+/// The app is left open with nothing going on, as a phone on the desk: once idle its client
+/// pings every 25 s, not every 10 s, and a wake that finds the connection quiet for longer
+/// than 15 s since keeps it. The user acts again and the pings come every 10 s; idle once
+/// more, a connection that dies without a FIN is still found within 30 s, as in use.
+#[test]
+fn an_idle_connection_is_pinged_less_and_still_found_dead_in_time() {
+    run(async {
+        let mut world = World::start(42, 1, None).await;
+        world.trouble(Trouble::Link(MOBILE)).await;
+        let kept = world.net.accepted();
+        let started = Instant::now();
+        tokio::time::sleep(secs(240)).await;
+        let in_use = bursts(&world.net, started, started + secs(55));
+        let (longest, _) = gaps(&in_use);
+        assert!(longest <= secs(11), "in use, pinged {longest:?} apart");
+        let idle = bursts(&world.net, started + secs(90), Instant::now());
+        let (longest, shortest) = gaps(&idle);
+        assert!(
+            shortest >= secs(20) && longest <= secs(26),
+            "idle, pinged {shortest:?} to {longest:?} apart: {idle:?}"
+        );
+
+        // Quiet for longer than a connection in use is, and woken: it is kept.
+        let last = *bursts(&world.net, started, Instant::now()).last().unwrap();
+        tokio::time::sleep_until(last + secs(20)).await;
+        world.app.wake();
+        tokio::time::sleep(secs(10)).await;
+        assert_eq!(
+            world.net.accepted(),
+            kept,
+            "a quiet, healthy connection was replaced"
+        );
+
+        // The user acts, and the connection is in use again.
+        let rename = CommandBody::RenameSession {
+            session_id: world.others[0].clone(),
+            title: "Title 1".into(),
+        };
+        let renamed = world.app.send(world.host.clone(), rename).await;
+        assert_eq!(renamed.unwrap(), CommandResult::Applied);
+        world
+            .did
+            .renamed
+            .push((world.others[0].clone(), "Title 1".into()));
+        let acted = Instant::now();
+        tokio::time::sleep(secs(45)).await;
+        let (longest, _) = gaps(&bursts(&world.net, acted, Instant::now()));
+        assert!(
+            longest <= secs(11),
+            "in use again, pinged {longest:?} apart"
+        );
+
+        // Idle again; the link dies at the worst moment, just after a ping was answered.
+        tokio::time::sleep(secs(90)).await;
+        let last = *bursts(&world.net, started, Instant::now()).last().unwrap();
+        tokio::time::sleep_until(last + secs(1)).await;
+        world.trouble(Trouble::Kill(Kill::Silent)).await;
+        let died = Instant::now();
+        let found = async {
+            while world.net.accepted() == kept {
+                tokio::time::sleep(ms(100)).await;
+            }
+        };
+        tokio::time::timeout(secs(31), found)
+            .await
+            .expect("the dead idle connection was not found in time");
+        eprintln!(
+            "{:9.3} s: found dead after {:?}",
+            world.at(),
+            died.elapsed()
+        );
+        world.shows(secs(10), "a connection", connected).await;
         world.finish().await;
     });
 }

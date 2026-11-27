@@ -264,9 +264,10 @@ calls `wake()` on its reconnect key).
 - Suspended, the client keeps connections that are up for as long as the OS lets the process
   run, but neither probes one nor replaces or retries one it loses until `wake()`.
 - `wake()` reconnects disconnected machines at once. A connected one is checked: if it was
-  silent for longer than 15 s, as after a long suspension in which the OS may have killed the
-  socket without either end noticing, it is replaced right away; otherwise it is pinged and
-  replaced if the daemon shows no sign of life within 5 s. A healthy connection is kept.
+  silent for longer than its pings would have let it be (15 s on a good link in use, at most
+  30 s; see Connection quality), as after a long suspension in which the OS may have killed the socket without
+  either end noticing, it is replaced right away; otherwise it is pinged and replaced if the
+  daemon shows no sign of life within 5 s. A healthy connection is kept.
 - Subscriptions resume from the last seq held, so a suspension of any length shows no gap.
 
 ## Flaky networks
@@ -290,8 +291,9 @@ about:
   they were through a drop, until the daemon's snapshot of each replaces it or the event that
   ends it arrives. No update resets a transcript.
 - A dead connection is found by its pings within 15 s (one every 10 s, 5 s for any sign of
-  life), and within 5 s of the user asking something of it: a command and a subscription
-  probe the connection they are sent on. A slow link that still carries bytes is kept.
+  life), within 30 s on a slow link or once idle, and within 5 s of the user asking something
+  of it: a command and a subscription probe the connection they are sent on. A slow link that
+  still carries bytes is kept.
 - Commands wait out a drop and are resent with the same id on the next connection; the daemon
   applies an id once.
 - A connection that ends within 30 s of being made did not work. The first such is replaced as
@@ -332,9 +334,14 @@ them direct routes first: private network addresses (home, or a VPN into it such
 Teleport), then other addresses, then Tailscale ones (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`,
 `*.ts.net`). After that `set_addresses` sets the order, and nothing re-sorts it.
 
-A connection that works is kept: `wake()`, which an app also calls when the network changes,
-only checks it. `set_addresses` moves it to an address that comes before its own once one
-answers, and replaces at once one that uses an address it dropped.
+A connection that works is kept: the route is picked again only when a connection is lost,
+and on `wake()`, which an app also calls when the network changes. A wake only checks a
+direct connection, and moves one through a hub home when home answers (see Through a hub).
+`set_addresses` moves no connection that works, unless it dropped the connection's address,
+which it replaces at once; the new order applies from the next connection on. A connection
+that is lost is raced again with the address that answered last first, unless that is a
+hub's route: then the machine's own addresses come first, so a connection lost through the
+hub comes back home when home answers.
 
 ### Through a hub
 
@@ -352,9 +359,10 @@ reorder it like any address. `share` leaves it out of the link.
 
 The race above then gives the route its place: the machine's own addresses get their head
 start, and the hub answers when they do not. A connection through a hub is the one
-connection that is not just kept: on every `wake()` and once a minute the client checks
-whether an address before the route answers again, and moves there when one does. `address`
-names the route in use, so an app can say that a machine is reached through a hub.
+connection that is not just kept: on every `wake()` the client checks whether an address
+before the route answers again, and moves there when one does. Nothing else moves it while
+it works. `address` names the route in use, so an app can say that a machine is reached
+through a hub.
 
 `reconnect` replaces the connection now, whatever answers first: an app connects through a
 chosen address by putting it first with `set_addresses` and then calling `reconnect`. A
@@ -363,13 +371,18 @@ which address the connection ended up on.
 
 ## Connection quality
 
-A connection is pinged as soon as it is up and every 10 s after. Each ping carries a fresh
+A connection is pinged as soon as it is up and every 10 s after while in use. Once idle (no
+command, subscription, terminal input or `wake()` for a minute) it is pinged every 25 s, or
+more often on a slow link, whose pongs are waited for longer, so that its pings still find a
+dead link within 30 s; never more often than every 10 s. The client cannot tell a cellular
+link from any other, so this goes by idleness alone. What the user asks for next is a probe,
+and the pings come every 10 s again. Each ping carries a fresh
 payload and only its own pong answers it, so `Machine::quality` holds true round trips: the
 latest, and the mean, shortest and longest of the last 20, all cleared when the connection
 ends. A ping still unanswered when the next is due counts in `missed_pongs`; a probe, which a
 `wake()`, a command and a subscription send, counts its round trip too. `connected_since` and
 `reconnects` say how stable the connection is. Each pong updates the machine, so `Changes`
-fires about every 10 s per connected machine.
+fires about every 10 s per connected machine, or 25 s once idle.
 
 ## Fleet links
 

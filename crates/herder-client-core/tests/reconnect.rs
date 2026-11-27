@@ -1024,7 +1024,8 @@ async fn clients_sharing_a_profile_lose_no_pairing() {
 }
 
 /// A dead address before a live one costs a head start, not a connect timeout; the order the
-/// user sets holds, persists, and moves a connection that is up to an address that comes first.
+/// user sets holds and persists, and a connection that is up stays where it is until it is
+/// replaced, unless its address is dropped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn addresses_race_in_order_and_the_first_that_answers_wins() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1058,16 +1059,20 @@ async fn addresses_race_in_order_and_the_first_that_answers_wins() {
     assert_eq!(machine.addresses, [dead_addr.clone(), live.clone()]);
     assert_eq!(machine.address.as_deref(), Some(live.as_str()));
 
-    // A new first address that answers takes over the connection.
+    // A new first address that answers does not take over a connection that works: the
+    // next one uses it.
     let relay = Relay::start(daemon.addr).await;
     let via_relay = relay.addr.to_string();
     client
         .set_addresses(host.clone(), vec![via_relay.clone(), live.clone()])
         .unwrap();
-    wait_machine(&client, |machine| {
-        machine.address.as_deref() == Some(via_relay.as_str())
-    })
-    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client.synced(host.clone()).await.unwrap();
+    let machine = &client.machines()[0];
+    assert_eq!(machine.address.as_deref(), Some(live.as_str()));
+    assert_eq!(machine.quality.reconnects, 0);
+    assert_eq!(relay.accepted(), 0, "the new address was dialled mid-use");
+    assert_eq!(client.reconnect(host.clone()).await, Ok(via_relay.clone()));
     client.synced(host.clone()).await.unwrap();
 
     // Dropping the address in use moves the connection to one still listed.
@@ -3629,16 +3634,13 @@ async fn racing_addresses_say_one_hello() {
     }
     let said = logged.lines("client connected", name).len();
 
-    // An address put first that answers moves the connection there: finding out that it
-    // answers says no hello, the connection that moves there says one.
+    // An address put first that answers takes the next connection: the race there says one
+    // hello, though the lagging addresses answer too.
     let direct = daemon.addr.to_string();
     client
         .set_addresses(host.clone(), vec![direct.clone(), first, second])
         .unwrap();
-    wait_machine(&client, |machine| {
-        machine.address.as_deref() == Some(direct.as_str()) && connected(&machine.connection)
-    })
-    .await;
+    assert_eq!(client.reconnect(host.clone()).await, Ok(direct));
     client.synced(host).await.unwrap();
     tokio::time::sleep(lag * 3).await;
     let hellos = logged.lines("client connected", name);

@@ -714,8 +714,9 @@ impl Client {
     /// Connects to a machine at `addresses`, in this order of preference, from now on, and
     /// saves that. Each is a host name or an IP address, with an optional port (7447 by
     /// default), or the `wss://` (or `https://`) URL of a tunnel to the daemon, such as a
-    /// Cloudflare Tunnel's public hostname. A connection that is up stays up unless it uses an address no longer listed;
-    /// one that uses an address the new order puts after one that answers moves there.
+    /// Cloudflare Tunnel's public hostname. A connection that is up stays up unless it uses an
+    /// address no longer listed: the new order applies from the next connection on, which
+    /// [`Client::reconnect`] makes now.
     pub fn set_addresses(&self, host_id: HostId, addresses: Vec<String>) -> Result<(), Error> {
         let mut normalized: Vec<String> = Vec::new();
         for text in &addresses {
@@ -831,8 +832,10 @@ impl Client {
     /// machine now instead of after its backoff, and resumes retrying after
     /// [`Client::suspend`]. A machine that is connecting races its addresses again beside
     /// the attempt under way. Every connected machine is checked: its connection is replaced
-    /// at once if it was silent for longer than 15 s, else pinged and replaced if the daemon
-    /// shows no sign of life for 5 s.
+    /// at once if it was silent for longer than its pings would have let it be (15 s on a
+    /// good link in use, at most 30 s), else pinged and replaced if the daemon shows no sign
+    /// of life for 5 s. One that runs through a hub moves to an address before the hub's
+    /// route that answers.
     pub fn wake(&self) {
         for machine in self.lock().iter() {
             machine.wake();
