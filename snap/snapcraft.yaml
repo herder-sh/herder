@@ -52,9 +52,13 @@ parts:
     source-type: git
     rust-path: [linux]
     # The gnome extension points LD_LIBRARY_PATH at the GNOME SDK's C library, on which rustup
-    # and cargo crash; the linker finds the SDK's libraries through pkg-config.
+    # and cargo crash. Without it the linker finds libgtk-4 through pkg-config, but on arm64
+    # not what libgtk-4 links against in turn: rpath-link points it at the SDK's library dirs.
     build-environment:
       - LD_LIBRARY_PATH: ""
+      - RUSTFLAGS: >-
+          -C link-arg=-Wl,-rpath-link=/snap/gnome-46-2404-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR
+          -C link-arg=-Wl,-rpath-link=/snap/gnome-46-2404-sdk/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR
     override-pull: |
       craftctl default
       craftctl set version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
