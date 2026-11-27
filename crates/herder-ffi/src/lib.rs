@@ -174,6 +174,13 @@ pub fn client_api_version() -> u32 {
     client_core::CLIENT_API_VERSION
 }
 
+/// Turns sharing diagnostics on, with `Some`, or off, with `None`, for the whole process,
+/// as the app's one switch says; off until an app turns it on.
+#[uniffi::export]
+pub fn set_diagnostics(diagnostics: Option<client_core::Diagnostics>) {
+    client_core::set_diagnostics(diagnostics);
+}
+
 /// Most turns a host may be set to run at once, `herder_protocol::MAX_TURNS_LIMIT`.
 #[uniffi::export]
 pub fn max_turns_limit() -> u32 {
@@ -553,6 +560,21 @@ impl Client {
             &self.handle,
             async move { client.send(host_id, command).await },
         )
+        .await
+    }
+
+    /// `send` under the app's span: `trace` is its W3C `traceparent`, which goes to the daemon
+    /// only while the process shares diagnostics.
+    pub async fn send_traced(
+        &self,
+        host_id: HostId,
+        command: CommandBody,
+        trace: String,
+    ) -> Result<CommandResult, HerderError> {
+        let client = self.inner.clone();
+        call(&self.handle, async move {
+            client.send_traced(host_id, command, trace).await
+        })
         .await
     }
 

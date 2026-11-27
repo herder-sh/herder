@@ -986,10 +986,12 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
                 session_id: SessionId::new("s1"),
                 attachment_id: AttachmentId::new("a1"),
             },
+            trace: None,
         }),
         ClientMessage::Command(Command {
             id: CommandId::new("c2"),
             body: CommandBody::ListSecrets,
+            trace: None,
         }),
         ClientMessage::Sync {
             token: "read".into(),

@@ -115,6 +115,17 @@
 //! max_stall_nudges = 2  # most prompts a stalled agent gets before it is left to a user
 //! ```
 //!
+//! # Telemetry
+//!
+//! The daemon shares diagnostics only when its owner turns them on: traces and errors with
+//! Sentry, anonymous measurements with PostHog, as herder's privacy page lists them.
+//!
+//! ```toml
+//! [telemetry]
+//! enabled = false  # true shares them; false, the default, sends nothing at all
+//! dsn = "https://<key>@o0.ingest.de.sentry.io/0"  # Sentry DSN; this build's own when absent
+//! ```
+//!
 //! # MCP servers
 //!
 //! Each `[[mcp_servers]]` entry is an MCP server every session's CLI gets next to herder's own,
@@ -322,7 +333,7 @@ use herder_adapters::claude::Cli;
 use herder_protocol::{
     AccountId, BackupSettings, Bot, BotId, BotKind, DaemonSettings, FollowUpSettings, LogSettings,
     McpServerSettings, McpTransport, PermissionMode, ProjectDiscovery, ProjectId, Provider,
-    ProviderBinary, ResourceSettings, SecretRef, SecretValue, TitleSettings,
+    ProviderBinary, ResourceSettings, SecretRef, SecretValue, TelemetrySettings, TitleSettings,
     is_valid_mcp_server_name,
 };
 use serde::Deserialize;
@@ -365,6 +376,8 @@ pub struct Config {
     pub titles: TitlesConfig,
     /// When the daemon prompts an idle agent on its own.
     pub follow_ups: FollowUpsConfig,
+    /// Whether the daemon shares diagnostics, and where.
+    pub telemetry: TelemetryConfig,
     /// Limits for the systemd scopes sessions run in.
     pub resources: ResourcesConfig,
     /// Where projects are discovered, and their overrides.
@@ -509,6 +522,16 @@ impl Default for FollowUpsConfig {
     }
 }
 
+/// Whether the daemon shares diagnostics: the `[telemetry]` table.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TelemetryConfig {
+    /// Whether the daemon shares diagnostics; off by default.
+    pub enabled: bool,
+    /// Sentry DSN traces and errors go to; this build's own when absent.
+    pub dsn: Option<String>,
+}
+
 /// Logging settings: the `[log]` table.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -552,6 +575,7 @@ struct ConfigFile {
     failover: FailoverConfig,
     titles: TitlesFile,
     follow_ups: FollowUpsConfig,
+    telemetry: TelemetryConfig,
     resources: ResourcesConfig,
     projects: ProjectsFile,
     project: Vec<ProjectFile>,
@@ -577,6 +601,7 @@ impl Default for ConfigFile {
             failover: FailoverConfig::default(),
             titles: TitlesFile::default(),
             follow_ups: FollowUpsConfig::default(),
+            telemetry: TelemetryConfig::default(),
             resources: ResourcesConfig::default(),
             projects: ProjectsFile::default(),
             project: Vec::new(),
@@ -874,6 +899,10 @@ impl Config {
                 archive_retention_days: self.retention.archive_days,
             },
             mcp_servers: self.mcp_servers.clone(),
+            telemetry: TelemetrySettings {
+                enabled: self.telemetry.enabled,
+                dsn: self.telemetry.dsn.clone(),
+            },
         }
     }
 }
@@ -917,6 +946,7 @@ fn resolve(
         failover: file.failover,
         titles,
         follow_ups: file.follow_ups,
+        telemetry: file.telemetry,
         resources: file.resources,
         projects,
         mode: file.mode,
@@ -2011,6 +2041,13 @@ pub fn set_settings(path: &Path, old: &DaemonSettings, new: &DaemonSettings) -> 
             let nudges = int(is.max_stall_nudges)?;
             edit.set(&["follow_ups"], "max_stall_nudges", Some(nudges))?;
         }
+        let (was, is) = (&old.telemetry, &new.telemetry);
+        if was.enabled != is.enabled {
+            edit.set(&["telemetry"], "enabled", Some(is.enabled.into()))?;
+        }
+        if was.dsn != is.dsn {
+            edit.set(&["telemetry"], "dsn", is.dsn.as_deref().map(Into::into))?;
+        }
         let (was, is) = (&old.resources, &new.resources);
         for (key, changed, value) in [
             (
@@ -2902,6 +2939,7 @@ mod tests {
                 mcp_servers: Vec::new(),
                 bots: Vec::new(),
                 self_update: None,
+                telemetry: Default::default(),
             }
         );
     }
@@ -3194,6 +3232,46 @@ mod tests {
         assert!(settings.follow_ups.pr_events);
         assert_eq!(settings.follow_ups.stall_after_secs, 0);
         assert_eq!(settings.follow_ups.max_stall_nudges, 2);
+        assert_eq!(settings.telemetry, TelemetrySettings::default());
+        assert!(!settings.telemetry.enabled);
+    }
+
+    #[test]
+    fn the_telemetry_table_turns_diagnostics_on_and_names_a_dsn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write(
+            tmp.path(),
+            "[telemetry]\nenabled = true\ndsn = \"https://k@o1.ingest.de.sentry.io/2\"\n",
+        );
+        let settings = Config::load_file(&path).unwrap().settings();
+        assert_eq!(
+            settings.telemetry,
+            TelemetrySettings {
+                enabled: true,
+                dsn: Some("https://k@o1.ingest.de.sentry.io/2".into()),
+            }
+        );
+        let path = write(tmp.path(), "[telemetry]\nendpoint = \"x\"\n");
+        let err = Config::load_file(&path).unwrap_err();
+        assert!(format!("{err:#}").contains("unknown field"), "{err:#}");
+    }
+
+    #[test]
+    fn turning_telemetry_on_and_off_writes_its_table() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        std::fs::write(&path, "").unwrap();
+        let off = Config::load_file(&path).unwrap().settings();
+        let mut on = off.clone();
+        on.telemetry.enabled = true;
+        let config = set_settings(&path, &off, &on).unwrap();
+        assert_eq!(config.settings(), on);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[telemetry]\nenabled = true\n"
+        );
+        let config = set_settings(&path, &on, &off).unwrap();
+        assert_eq!(config.settings(), off);
     }
 
     #[test]

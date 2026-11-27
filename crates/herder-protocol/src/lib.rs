@@ -87,7 +87,7 @@ pub use server::{
 pub use settings::{
     BackupSettings, DaemonSettings, FollowUpSettings, HERDER_MCP_SERVER, LogFormat, LogSettings,
     McpServerSettings, McpTransport, ProjectDiscovery, ProviderBinary, ResourceSettings,
-    TitleSettings, UpdateStage, UpdateWhen, is_valid_mcp_server_name,
+    TelemetrySettings, TitleSettings, UpdateStage, UpdateWhen, is_valid_mcp_server_name,
 };
 pub use skills::{
     AccountSkills, LibrarySkill, MAX_SKILL_BYTES, MAX_SKILL_NAME_CHARS, ProviderReload,

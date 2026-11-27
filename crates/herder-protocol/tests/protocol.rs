@@ -163,6 +163,7 @@ fn command(body: CommandBody) -> ClientMessage {
     ClientMessage::Command(Command {
         id: CommandId::new("01J9COMMAND"),
         body,
+        trace: None,
     })
 }
 
@@ -3237,6 +3238,7 @@ fn skills_wire_shape() {
                 git_url: "u".into(),
                 path: None,
             },
+            trace: None,
         })
     );
     let file: SkillFile = serde_json::from_value(json!({"path": "a.md", "data": ""})).unwrap();
@@ -3975,6 +3977,7 @@ fn a_prompt_with_every_attachment_byte_fits_in_a_message() {
                 data: Bytes(vec![0; MAX_PROMPT_ATTACHMENT_BYTES]),
             }],
         },
+        trace: None,
     });
     let encoded = serde_json::to_vec(&prompt).unwrap().len();
     assert!(encoded + 1024 * 1024 < MAX_MESSAGE_BYTES, "{encoded}");
@@ -4778,6 +4781,70 @@ fn mcp_transports_are_tagged_by_type() {
     );
 }
 
+const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+fn traced_command() -> Command {
+    Command {
+        id: CommandId::new("01J9COMMAND"),
+        body: CommandBody::Interrupt {
+            session_id: SessionId::new("01J9SESSION"),
+        },
+        trace: Some(TRACEPARENT.into()),
+    }
+}
+
+#[test]
+fn a_traced_command_carries_its_traceparent() {
+    let message = ClientMessage::Command(traced_command());
+    let json = serde_json::to_value(&message).unwrap();
+    assert_eq!(json["trace"], TRACEPARENT);
+    assert_round_trips(&message);
+    assert_valid(&client_schema(), &[message]);
+}
+
+#[test]
+fn an_untraced_command_leaves_the_trace_out() {
+    let mut command = traced_command();
+    command.trace = None;
+    let json = serde_json::to_value(ClientMessage::Command(command)).unwrap();
+    assert!(json.get("trace").is_none(), "{json}");
+}
+
+#[test]
+fn a_command_from_a_client_before_traces_decodes_untraced() {
+    let decoded: ClientMessage = serde_json::from_value(json!({
+        "type": "command",
+        "id": "01J9COMMAND",
+        "body": {"type": "interrupt", "session_id": "01J9SESSION"}
+    }))
+    .unwrap();
+    let mut command = traced_command();
+    command.trace = None;
+    assert_eq!(decoded, ClientMessage::Command(command));
+}
+
+/// A peer ignores a field it does not know, as one before traces ignores `trace`; this
+/// build's own types show it by ignoring a field from after them.
+#[test]
+fn a_command_with_a_field_from_a_newer_client_still_decodes() {
+    let mut json = serde_json::to_value(ClientMessage::Command(traced_command())).unwrap();
+    json["baggage"] = json!("sampled=1");
+    let decoded: ClientMessage = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, ClientMessage::Command(traced_command()));
+}
+
+#[test]
+fn settings_without_telemetry_decode_with_it_off() {
+    let mut json = serde_json::to_value(settings()).unwrap();
+    assert_eq!(json["telemetry"]["enabled"], true);
+    json.as_object_mut().unwrap().remove("telemetry");
+    let decoded: DaemonSettings = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded.telemetry, TelemetrySettings::default());
+    assert!(!decoded.telemetry.enabled);
+    let encoded = serde_json::to_value(&decoded.telemetry).unwrap();
+    assert_eq!(encoded, json!({"enabled": false}));
+}
+
 #[test]
 fn settings_without_follow_ups_decode_with_their_defaults() {
     let mut json = serde_json::to_value(settings()).unwrap();
@@ -4950,6 +5017,10 @@ fn settings() -> DaemonSettings {
                 },
             },
         ],
+        telemetry: TelemetrySettings {
+            enabled: true,
+            dsn: Some("https://0123456789abcdef@o1.ingest.de.sentry.io/2".into()),
+        },
     }
 }
 

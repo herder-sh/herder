@@ -330,6 +330,7 @@ impl Client {
         let command = Command {
             id: id.clone(),
             body,
+            trace: None,
         };
         self.send(&ClientMessage::Command(command)).await;
         loop {

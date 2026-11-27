@@ -165,6 +165,7 @@ fn send(machine: &Arc<Supervisor>, body: CommandBody) {
         let command = Command {
             id: new_command_id(),
             body,
+            trace: None,
         };
         match machine.send(command).await {
             Ok(Ok(_)) | Err(_) => {}

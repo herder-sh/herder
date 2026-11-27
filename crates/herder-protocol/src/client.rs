@@ -127,6 +127,14 @@ pub struct Command {
     pub id: CommandId,
     /// What to do.
     pub body: CommandBody,
+    /// The W3C trace context of the client's span the command runs under, as a `traceparent`
+    /// header writes it (`00-<32 hex trace id>-<16 hex span id>-<2 hex flags>`): sent only by
+    /// a client that shares diagnostics, so that the daemon's work on the command, and the
+    /// turn a prompt starts, join the client's trace. A daemon that shares none, or before
+    /// this field, ignores it, as it does a value it cannot parse. It names no person, host
+    /// or content: two random ids and a sampling flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<String>,
 }
 
 /// Where a relayed history comes from: the host the client read it from.

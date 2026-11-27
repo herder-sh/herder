@@ -162,6 +162,7 @@ pub mod auth;
 mod cache;
 mod catalog;
 mod demo;
+mod diagnostics;
 mod fork;
 mod link;
 mod offline;
@@ -199,6 +200,7 @@ pub use catalog::{
     provider_catalog, provider_hints,
 };
 pub use demo::{Demo, DemoAnswer, DemoMachine};
+pub use diagnostics::{Diagnostics, set_diagnostics};
 pub use link::{FleetLink, FleetMachine, FleetPerson, LoginUri, OwnUri};
 use profile::SavedMachine;
 pub use sign_in::PendingSignIn;
@@ -1035,6 +1037,29 @@ impl Client {
         host_id: HostId,
         command: CommandBody,
     ) -> Result<CommandResult, Error> {
+        self.send_under(host_id, command, None).await
+    }
+
+    /// [`Client::send`], under the caller's trace: `trace` is the W3C `traceparent` of the
+    /// app's span, so that the client core's and the daemon's work on the command join it.
+    /// It goes to the daemon only while the process shares diagnostics
+    /// ([`set_diagnostics`]); otherwise this is `send`.
+    pub async fn send_traced(
+        &self,
+        host_id: HostId,
+        command: CommandBody,
+        trace: String,
+    ) -> Result<CommandResult, Error> {
+        let trace = diagnostics::shared_trace(trace);
+        self.send_under(host_id, command, trace).await
+    }
+
+    async fn send_under(
+        &self,
+        host_id: HostId,
+        command: CommandBody,
+        trace: Option<String>,
+    ) -> Result<CommandResult, Error> {
         let machine = self.machine(&host_id)?;
         if self.inner.demo {
             return machine.demo_answer(&command);
@@ -1049,10 +1074,12 @@ impl Client {
         let result = self
             .signed(&machine, command, |body| {
                 let machine = Arc::clone(&machine);
+                let trace = trace.clone();
                 async move {
                     let command = Command {
                         id: new_command_id(),
                         body,
+                        trace,
                     };
                     machine
                         .send(command)
@@ -1612,6 +1639,7 @@ async fn once(machine: &Supervisor, body: CommandBody) -> Result<CommandResult, 
     let command = Command {
         id: new_command_id(),
         body,
+        trace: None,
     };
     machine
         .send(command)
