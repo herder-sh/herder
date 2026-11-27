@@ -1,0 +1,23 @@
+#!/bin/sh
+# Runs before the app (snapcraft.yaml's command-chain). In the snap, $HOME and the config dir
+# are the snap's own, under ~/snap/herder; while the herder-profile plug is connected, point
+# the app's profile dir there at the real ~/.config/herder the herder command line uses.
+# Only that directory is linked, so everything else the app writes stays the snap's own.
+set -u
+
+private="${XDG_CONFIG_HOME:-$HOME/.config}/herder"
+shared="$SNAP_REAL_HOME/.config/herder"
+
+if snapctl is-connected herder-profile; then
+  if [ ! -L "$private" ] && [ -d "$private" ]; then
+    # Made while the plug was not connected: keep it, out of the way.
+    mv "$private" "$private.unshared-$(date +%Y%m%d%H%M%S)"
+  fi
+  mkdir -p "$shared" "$(dirname "$private")"
+  ln -sfn "$shared" "$private"
+elif [ -L "$private" ]; then
+  # Disconnected since: the link would only be denied, so the app keeps a profile of its own.
+  rm -f "$private"
+fi
+
+exec "$@"

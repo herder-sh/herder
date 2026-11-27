@@ -1,0 +1,114 @@
+name: snap
+
+# Builds the Linux app's snap (snap/snapcraft.yaml) for amd64 and arm64 and uploads each as an
+# artifact. Runs on PRs that change the app, its packaging or its dependencies, apart from the
+# required ci check, and is called by release.yml on a tag.
+
+on:
+  pull_request:
+    paths:
+      - "linux/**"
+      - "snap/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - ".github/workflows/snap.yml"
+  workflow_call:
+
+concurrency:
+  group: snap-${{ github.workflow_ref }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  snap:
+    name: snap ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint the launcher
+        if: matrix.arch == 'amd64'
+        run: shellcheck linux/packaging/snap/shared-profile
+      - uses: snapcore/action-build@v1
+        id: build
+      - name: Check the snap holds the app, its desktop entry and icon
+        env:
+          SNAP_FILE: ${{ steps.build.outputs.snap }}
+        run: |
+          unsquashfs -l "$SNAP_FILE" | tee contents.txt
+          for path in bin/herder-gtk bin/shared-profile meta/gui/herder-gtk.desktop \
+            usr/share/icons/hicolor/scalable/apps/sh.herder.Herder.svg; do
+            grep -qx "squashfs-root/$path" contents.txt || { echo "::error::missing $path"; exit 1; }
+          done
+          unsquashfs -cat "$SNAP_FILE" meta/snap.yaml
+          unsquashfs -cat "$SNAP_FILE" meta/gui/herder-gtk.desktop
+          mkdir dist
+          mv "$SNAP_FILE" dist/
+          cd dist
+          sha256sum "$SNAP_FILE" > "$SNAP_FILE.sha256"
+          cat "$SNAP_FILE.sha256"
+      # Installs it as a user would a snap from here (--dangerous: unsigned), opens the demo
+      # fleet, then the profile the herder command line shares, made with two machines nothing
+      # answers on: the window should say "2 machines · 2 offline".
+      - name: Install and open it
+        if: matrix.arch == 'amd64'
+        env:
+          SNAP_FILE: ${{ steps.build.outputs.snap }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends xvfb imagemagick openssl
+          sudo snap install --dangerous "dist/$SNAP_FILE"
+          sudo snap connect herder:herder-profile
+          snap connections herder
+
+          mkdir -p -m 700 ~/.config/herder
+          machine() {
+            openssl req -x509 -newkey ed25519 -nodes -subj /CN=herder-device -days 1 \
+              -keyout key.pem -out cert.pem 2>/dev/null
+            jq -n --arg id "$1" --arg name "$2" --arg pem "$(cat cert.pem key.pem)" \
+              '{host_id: $id, name: $name, addresses: ["127.0.0.1:1"],
+                fingerprint: ("00" * 32), device_key: $pem}'
+          }
+          jq -n --argjson a "$(machine "$(uuidgen)" shared-a)" \
+            --argjson b "$(machine "$(uuidgen)" shared-b)" '{machines: [$a, $b]}' \
+            > ~/.config/herder/machines.json
+          rm key.pem cert.pem
+
+          mkdir -p screenshots
+          Xvfb :99 -screen 0 1400x900x24 &
+          export DISPLAY=:99 GSK_RENDERER=cairo
+          sleep 3
+          shot() {
+            herder.herder-gtk "$@" > "screenshots/$name.log" 2>&1 &
+            pid=$!
+            sleep 25
+            import -window root "screenshots/$name.png"
+            kill "$pid" || { echo "::error::herder.herder-gtk $* exited early"; cat "screenshots/$name.log"; exit 1; }
+            cat "screenshots/$name.log"
+          }
+          name=demo shot --demo
+          name=profile shot
+          link=$(readlink ~/snap/herder/current/.config/herder)
+          echo "the snap's profile dir links to $link"
+          test "$link" = "$HOME/.config/herder"
+          sudo journalctl -k --no-pager | grep 'apparmor="DENIED"' | grep snap.herder || echo "no AppArmor denials"
+      - uses: actions/upload-artifact@v7
+        if: matrix.arch == 'amd64' && always()
+        with:
+          name: snap-screenshots
+          path: screenshots/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: herder-snap-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
