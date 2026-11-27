@@ -37,7 +37,7 @@
   ],
   "$defs": {
     "RelayError": {
-      "description": "Why the hub opened no stream.",
+      "description": "Why the hub opened no stream: the body of its refusal, as JSON, under the code's HTTP\nstatus.",
       "type": "object",
       "properties": {
         "code": {

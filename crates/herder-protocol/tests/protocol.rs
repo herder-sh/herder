@@ -4230,8 +4230,81 @@ fn every_relay_message_round_trips_and_matches_its_schema() {
     assert_covered(&relay_answer_schema(), &relay_answer_fixtures());
 }
 
+fn relay_error_fixtures() -> Vec<RelayError> {
+    [
+        RelayErrorCode::BadRequest,
+        RelayErrorCode::Unsupported,
+        RelayErrorCode::Forbidden,
+        RelayErrorCode::UnknownHost,
+        RelayErrorCode::HostOffline,
+        RelayErrorCode::Busy,
+        RelayErrorCode::Internal,
+    ]
+    .into_iter()
+    .map(|code| RelayError {
+        code,
+        message: "detail".into(),
+    })
+    .collect()
+}
+
+#[test]
+fn a_relay_refusal_round_trips_matches_its_schema_and_has_an_error_status() {
+    let refusals = relay_error_fixtures();
+    refusals.iter().for_each(assert_round_trips);
+    assert_valid(&relay_error_schema(), &refusals);
+    assert_covered(&relay_error_schema(), &refusals);
+    for refusal in &refusals {
+        assert!((400..600).contains(&refusal.code.status()), "{refusal:?}");
+    }
+    assert_eq!(RelayErrorCode::HostOffline.status(), 503);
+    assert_eq!(RelayErrorCode::UnknownHost.status(), 404);
+}
+
+#[test]
+fn a_relay_route_is_named_by_its_path() {
+    let routes = [
+        (
+            RelayRoute::Machine(HostId::new("01J9HOST")),
+            "/machines/01J9HOST",
+        ),
+        (
+            RelayRoute::Stream("01J9STREAM".into()),
+            "/streams/01J9STREAM",
+        ),
+        (RelayRoute::Proxy, "/proxy"),
+        // Any id makes one segment.
+        (
+            RelayRoute::Machine(HostId::new("a/b c%")),
+            "/machines/a%2Fb%20c%25",
+        ),
+        (RelayRoute::Stream("ü".into()), "/streams/%C3%BC"),
+    ];
+    for (route, path) in routes {
+        assert_eq!(route.path(), path);
+        assert_eq!(RelayRoute::parse(path), Some(route.clone()), "{path}");
+        assert_eq!(RelayRoute::parse(&format!("{path}?x=1")), Some(route));
+    }
+    for other in [
+        "/",
+        "",
+        "/machines/",
+        "/machines",
+        "/machines/a/b",
+        "/machines/%zz",
+        "/machines/%C3",
+        "/streams/",
+        "/proxy/",
+        "/proxyx",
+        "/other",
+    ] {
+        assert_eq!(RelayRoute::parse(other), None, "{other}");
+    }
+}
+
 #[test]
 fn relay_schemas_match_their_snapshots() {
+    assert_schema_snapshot("relay_error.json", &relay_error_schema());
     assert_schema_snapshot("relay_hello.json", &relay_hello_schema());
     assert_schema_snapshot("relay_answer.json", &relay_answer_schema());
 }
