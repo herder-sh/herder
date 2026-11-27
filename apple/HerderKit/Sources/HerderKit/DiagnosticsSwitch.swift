@@ -68,10 +68,11 @@ final class DiagnosticsSwitch {
         apply()
     }
 
-    /// Whether to ask on this launch: not yet answered, and not a test's or a developer's
-    /// profile (`HERDER_PROFILE`), whose screens must not change.
-    var shouldAsk: Bool {
-        !asked && ProcessInfo.processInfo.environment["HERDER_PROFILE"] == nil
+    /// Whether to ask on this launch: not yet answered, and neither a test's or a developer's
+    /// profile (`HERDER_PROFILE`) nor a UI test's fake fleet (`HERDER_FAKE_FLEET`), whose
+    /// screens must not change: the card would take the taps meant for the page under it.
+    func shouldAsk(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        !asked && environment["HERDER_PROFILE"] == nil && environment["HERDER_FAKE_FLEET"] == nil
     }
 
     /// What the client core shares with while the switch is on.
