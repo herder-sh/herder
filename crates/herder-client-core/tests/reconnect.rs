@@ -1917,6 +1917,59 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
     assert_eq!(relay.accepted(), 3);
 }
 
+/// In the background what the app asks for does not probe its connection, and one that dies
+/// there is not replaced until a wake, however long the suspension: on a phone that would only
+/// spend battery and data. The wake then replaces it at once.
+#[tokio::test]
+async fn a_suspended_client_replaces_no_connection_until_woken() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let relay = Relay::start(daemon.addr).await;
+    let phone = Client::open(
+        tmp.path().join("phone").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&phone, "alice", relay.addr)
+        .await
+        .unwrap()
+        .host_id;
+    phone.synced(host.clone()).await.unwrap();
+    // One connection paired, the other is the supervisor's.
+    assert_eq!(relay.accepted(), 2);
+
+    phone.suspend();
+    relay.stall();
+    // In the foreground, this would probe the connection and replace it 5 s later.
+    let sub = phone
+        .subscribe_session(host.clone(), SessionId::new("nope"))
+        .unwrap();
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(10 * 60)).await;
+    // The connection's pings find it dead, and nothing replaces it.
+    wait_connection(&phone, |state| {
+        matches!(state, ConnectionState::Disconnected { .. })
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(5 * 60)).await;
+    assert_eq!(relay.accepted(), 2);
+    tokio::time::resume();
+
+    phone.wake();
+    wait_connection(&phone, |state| *state == ConnectionState::Connected).await;
+    phone.synced(host).await.unwrap();
+    assert_eq!(relay.accepted(), 3);
+    drop(sub);
+}
+
 /// Waking with a connection up checks it: a healthy one is kept, a silently dead one replaced.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wake_keeps_a_healthy_connection_and_replaces_a_dead_one() {

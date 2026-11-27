@@ -3,7 +3,7 @@
 //! failure waits out a capped, jittered exponential backoff before trying again.
 //!
 //! While the app is in the background ([`Supervisor::suspend`]) the task keeps a connection
-//! that is up but does not retry a lost one. Back in the foreground ([`Supervisor::wake`]) it
+//! that is up but neither probes it nor replaces or retries one it loses. Back in the foreground ([`Supervisor::wake`]) it
 //! reconnects at once, and checks a connection that is up before trusting it: one silent for
 //! longer than a running task would have let it be (a suspension the OS may have killed it
 //! in, unnoticed) is replaced right away, any other is pinged and replaced if the daemon
@@ -1713,7 +1713,8 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                 let _ = reply.send(Err(error.clone()));
             }
         }
-        if wait.is_zero() {
+        // A suspended client replaces no connection until woken, unless asked to.
+        if wait.is_zero() && (!suspended || !reconnects.is_empty()) {
             continue;
         }
         let wait = tokio::time::sleep(wait);
@@ -1919,9 +1920,11 @@ async fn converse(
             () = supervisor.stop.cancelled() => return Ended::Stopped,
             error = &mut writing => return Ended::Lost(error),
             op = ops.recv() => {
-                // What the user asks for and waits to see probes the connection.
+                // What the user asks for and waits to see probes the connection, unless the
+                // app is in the background, where a dead one would not be replaced anyway.
                 if matches!(op, Some(Op::Subscribe(_) | Op::Command(..) | Op::Open(..)))
                     && probe.is_none()
+                    && !*suspended
                 {
                     probe = Some(send_ping(outgoing));
                 }
@@ -1964,6 +1967,8 @@ async fn converse(
                     }
                     Some(Op::Suspend) => {
                         *suspended = true;
+                        // The wake probes again.
+                        probe = None;
                         continue;
                     }
                     Some(Op::Wake) => {
@@ -2024,7 +2029,7 @@ async fn converse(
                 save_in_background(supervisor);
                 continue;
             }
-            _ = route_check.tick() => {
+            _ = route_check.tick(), if !*suspended => {
                 if better.is_none() && supervisor.through_hub() {
                     better = supervisor.better();
                 }
