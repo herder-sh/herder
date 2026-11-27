@@ -1,5 +1,5 @@
 //! The hub's relay Worker: a Cloudflare Worker and Durable Object in its owner's own
-//! account (`deploy/relay-worker/`), through which devices reach a hub that has no public
+//! account (`deploy/cloudflare-relay/`), through which devices reach a hub that has no public
 //! address, as through a tunnel (`docs/relay-worker.md`).
 //!
 //! The hub deploys it with an API token its owner gives once, keeps that token and what it
@@ -396,18 +396,18 @@ mod tests {
     }
 
     impl LocalWorker {
-        /// Starts it, or `None` where `npm ci` did not run in `deploy/relay-worker`; in CI
+        /// Starts it, or `None` where `npm ci` did not run in `deploy/cloudflare-relay`; in CI
         /// that fails the test instead.
         pub(crate) fn start(hub_key: &str) -> Option<Self> {
-            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/relay-worker");
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/cloudflare-relay");
             // workerd loads modules from below its working directory only.
             let dir = dir.canonicalize().unwrap();
             if !dir.join("node_modules/miniflare").exists() {
                 assert!(
                     std::env::var_os("CI").is_none(),
-                    "run `npm ci` in deploy/relay-worker: CI runs the relay Worker's tests"
+                    "run `npm ci` in deploy/cloudflare-relay: CI runs the relay Worker's tests"
                 );
-                eprintln!("skipped: no miniflare; run `npm ci` in deploy/relay-worker");
+                eprintln!("skipped: no miniflare; run `npm ci` in deploy/cloudflare-relay");
                 return None;
             }
             let mut child = Command::new("node")

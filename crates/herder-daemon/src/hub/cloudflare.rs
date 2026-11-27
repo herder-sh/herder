@@ -1,4 +1,4 @@
-//! Deploys herder's relay Worker (`deploy/relay-worker/worker.js`) to its owner's own
+//! Deploys herder's relay Worker (`deploy/cloudflare-relay/worker.js`) to its owner's own
 //! Cloudflare account through the Cloudflare API, updates it, and removes it.
 //!
 //! The Worker runs at `https://herder-relay.<account subdomain>.workers.dev`: no domain
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// The Worker's source, as deployed.
-pub(super) const WORKER: &str = include_str!("../../../../deploy/relay-worker/worker.js");
+pub(super) const WORKER: &str = include_str!("../../../../deploy/cloudflare-relay/worker.js");
 
 /// The script's name in the account, and the first label of its workers.dev hostname.
 pub(super) const SCRIPT: &str = "herder-relay";

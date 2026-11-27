@@ -1,12 +1,12 @@
 // Runs the relay Worker in a local workerd (miniflare) for herder's Rust end-to-end tests:
-// `node serve.mjs <hub key>` prints the URL it listens on, then serves until stdin closes.
+// `node serve.mjs <relay secret>` prints the URL it listens on, then serves until stdin closes.
 
 import { fileURLToPath } from "node:url";
 import { Miniflare } from "miniflare";
 
-const hubKey = process.argv[2];
-if (!hubKey) {
-  console.error("usage: node serve.mjs <hub key>");
+const secret = process.argv[2];
+if (!secret) {
+  console.error("usage: node serve.mjs <relay secret>");
   process.exit(2);
 }
 const mf = new Miniflare({
@@ -14,7 +14,7 @@ const mf = new Miniflare({
   scriptPath: fileURLToPath(new URL("./worker.js", import.meta.url)),
   compatibilityDate: "2026-07-01",
   durableObjects: { RELAY: { className: "Relay", useSQLite: true } },
-  bindings: { HUB_KEY: hubKey },
+  bindings: { RELAY_SECRET: secret },
   host: "127.0.0.1",
   port: 0,
 });

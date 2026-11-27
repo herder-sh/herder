@@ -115,7 +115,7 @@ route, for when nothing else works.
 
 ## Tests
 
-- `deploy/relay-worker/test/` runs the Worker in a local workerd (miniflare): unauthenticated
+- `deploy/cloudflare-relay/test/` runs the Worker in a local workerd (miniflare): unauthenticated
   and wrongly signed devices, the wrong hub key, browsers and a missing hub are refused;
   frames are held, then forwarded both ways; closing and unpairing close streams.
 - `crates/herder-daemon/src/hub/cloudflare.rs` deploys, updates and removes against a mocked
@@ -124,5 +124,5 @@ route, for when nothing else works.
   a paired device reaches the hub through it; a stranger, a device signing with another's
   certificate, and a device once revoked are refused by the Worker.
 
-The Worker's tests need Node 22 and `npm ci` in `deploy/relay-worker`; CI runs them in the
+The Worker's tests need Node 22 and `npm ci` in `deploy/cloudflare-relay`; CI runs them in the
 `ci` job.
