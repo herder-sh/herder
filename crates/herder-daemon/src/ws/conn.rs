@@ -493,7 +493,7 @@ async fn handle<B: Backend>(
         Ok(ClientMessage::Sync { token }) => {
             let _ = replays.send(Replay::Sync(token));
         }
-        Ok(ClientMessage::Command(Command { id, body })) => {
+        Ok(ClientMessage::Command(Command { id, body, .. })) => {
             if let Err(error) = auth::authorize(identity.role, &body) {
                 outbox.push(ServerMessage::CommandRejected {
                     command_id: id,

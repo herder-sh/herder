@@ -727,6 +727,13 @@
         "id": {
           "description": "Idempotency key: a resend with the same id is answered without being applied again.",
           "$ref": "#/$defs/CommandId"
+        },
+        "trace": {
+          "description": "The W3C trace context of the client's span the command runs under, as a `traceparent`\nheader writes it (`00-<32 hex trace id>-<16 hex span id>-<2 hex flags>`): sent only by\na client that shares diagnostics, so that the daemon's work on the command, and the\nturn a prompt starts, join the client's trace. A daemon that shares none, or before\nthis field, ignores it, as it does a value it cannot parse. It names no person, host\nor content: two random ids and a sampling flag.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -3496,6 +3503,13 @@
           "description": "What every session's CLI may use, and the budget turns are admitted within.",
           "$ref": "#/$defs/ResourceSettings"
         },
+        "telemetry": {
+          "description": "Whether the daemon shares diagnostics; off, as from daemons before it, until its owner\nturns it on.",
+          "$ref": "#/$defs/TelemetrySettings",
+          "default": {
+            "enabled": false
+          }
+        },
         "titles": {
           "description": "How sessions are titled.",
           "$ref": "#/$defs/TitleSettings"
@@ -5833,6 +5847,26 @@
       "required": [
         "path",
         "data"
+      ]
+    },
+    "TelemetrySettings": {
+      "description": "The `[telemetry]` table: whether the daemon shares diagnostics, traces and errors with\nSentry and anonymous measurements with PostHog, as herder's privacy page lists them. Off\nunless turned on; turning it off stops all of it at once.",
+      "type": "object",
+      "properties": {
+        "dsn": {
+          "description": "Sentry DSN traces and errors go to: a write-only client key. When absent, the one this\nbuild was made with, if any; with neither, nothing goes to Sentry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether the daemon shares diagnostics.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
       ]
     },
     "TerminalId": {

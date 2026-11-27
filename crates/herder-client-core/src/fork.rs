@@ -198,6 +198,7 @@ async fn send(machine: &Supervisor, body: CommandBody) -> Result<CommandResult, 
     let command = Command {
         id: new_command_id(),
         body,
+        trace: None,
     };
     machine
         .send(command)

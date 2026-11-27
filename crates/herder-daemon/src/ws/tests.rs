@@ -663,6 +663,7 @@ impl Client {
         self.send(&ClientMessage::Command(Command {
             id: CommandId::new(id),
             body,
+            trace: None,
         }))
         .await;
         self.recv().await
@@ -673,6 +674,7 @@ impl Client {
         self.send(&ClientMessage::Command(Command {
             id: CommandId::new(id),
             body,
+            trace: None,
         }))
         .await;
         loop {
@@ -941,6 +943,7 @@ async fn a_ping_is_answered_while_a_command_is_applied() {
         ClientMessage::Command(Command {
             id: CommandId::new(id),
             body,
+            trace: None,
         })
     };
     let prompt = CommandBody::SendPrompt {
@@ -1020,6 +1023,7 @@ async fn a_message_over_the_limit_is_refused_and_the_connection_stays() {
                     images: Vec::new(),
                     files: Vec::new(),
                 },
+                trace: None,
             }))
             .unwrap()
         };
@@ -1074,6 +1078,7 @@ async fn commands_are_answered_by_the_backend() {
         ClientMessage::Command(Command {
             id: CommandId::new(id),
             body,
+            trace: None,
         })
     };
     let prompt = CommandBody::SendPrompt {
@@ -1270,6 +1275,7 @@ async fn a_long_replay_to_a_slow_client_does_not_hold_up_its_commands() {
             images: Vec::new(),
             files: Vec::new(),
         },
+        trace: None,
     }))
     .await;
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -1377,6 +1383,7 @@ async fn the_latest_events_overtake_a_long_replay() {
     slow.send(&ClientMessage::Command(Command {
         id: CommandId::new("c1"),
         body: latest(&session),
+        trace: None,
     }))
     .await;
     let mut ahead = 0;
@@ -1784,6 +1791,7 @@ async fn terminals_are_for_owners_only() {
                 rows: 24,
                 assertion,
             },
+            trace: None,
         })
     };
     member.send(&open("c1", None)).await;
@@ -1802,6 +1810,7 @@ async fn terminals_are_for_owners_only() {
                 images: Vec::new(),
                 files: Vec::new(),
             },
+            trace: None,
         }))
         .await;
     assert!(matches!(
@@ -2166,6 +2175,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
         .send(&ClientMessage::Command(Command {
             id: CommandId::new("c1"),
             body: open,
+            trace: None,
         }))
         .await;
     let ServerMessage::Terminals { terminals } = client.recv().await else {
@@ -2193,6 +2203,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
         .send(&ClientMessage::Command(Command {
             id: CommandId::new("c2"),
             body: input("printf 'he%s\\n' llo"),
+            trace: None,
         }))
         .await;
     let mut seen = Vec::new();
@@ -2256,6 +2267,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
         .send(&ClientMessage::Command(Command {
             id: CommandId::new("c4"),
             body: input("exit 3"),
+            trace: None,
         }))
         .await;
     // The input's acceptance may arrive before or after the shell exits.
@@ -2966,6 +2978,7 @@ async fn aws_sso_login(
         .send(&ClientMessage::Command(Command {
             id: CommandId::new(id),
             body: login,
+            trace: None,
         }))
         .await;
     let (mut lists, mut opened, mut closed) = (Vec::new(), None, None);
@@ -4052,6 +4065,7 @@ async fn a_terminal_without_a_passkey_asks_the_phone_and_waits_for_it() {
             rows: 24,
             assertion: None,
         },
+        trace: None,
     }))
     .await;
     let request = until(&mut mac, |message| match message {
@@ -4098,6 +4112,7 @@ async fn a_terminal_without_a_passkey_asks_the_phone_and_waits_for_it() {
             set: "prod".into(),
             assertion: None,
         },
+        trace: None,
     }))
     .await;
     let request = until(&mut mac, |message| match message {
@@ -4130,6 +4145,7 @@ async fn a_terminal_without_a_passkey_asks_the_phone_and_waits_for_it() {
             rows: 24,
             assertion: None,
         },
+        trace: None,
     }))
     .await;
     let ServerMessage::CommandRejected { error, .. } = answer_to(&mut tui, "alone").await else {
@@ -4243,6 +4259,7 @@ async fn a_compressed_command_is_read_only_after_both_said_deflate() {
                 images: Vec::new(),
                 files: Vec::new(),
             },
+            trace: None,
         });
         let text = serde_json::to_string(&message).unwrap();
         Message::binary(herder_protocol::deflate::deflate([text.as_str()]))

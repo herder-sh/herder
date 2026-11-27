@@ -66,6 +66,9 @@ says what exists, why, and how it maps to foreign languages.
   `WireGuardEnrolled`, `RelayToken`) and types (`RemoteAccessSettings`, `WireGuardSettings`,
   `CloudflareSettings`, `WireGuardOffer`, `RouteStatus`, `RouteState`, `WireGuardEnrollment`,
   `RelayGrant`); see [Routes](#routes).
+  P29.1 added, compatibly, `Command.trace`, the W3C trace context a command runs under, and
+  `DaemonSettings.telemetry` (`TelemetrySettings`); this API grew `send_traced`,
+  `Diagnostics` and `set_diagnostics` without breaking anything (see Diagnostics).
 
 ## Shape, and how it maps to UniFFI
 
@@ -154,6 +157,10 @@ default), `models` (`CatalogModel`: `id`, `name`, `detail`). `ProviderHint` is `
 
 - `route_kind(address: String) -> RouteKind` — what carries a connection to one of a
   machine's addresses, for an app to name the route. See [Routes](#routes).
+### Diagnostics
+
+- `set_diagnostics(diagnostics: Option<Diagnostics>)` — turns sharing diagnostics on or off
+  for the whole process. See [Diagnostics](#diagnostics).
 
 ### `Client` (object)
 
@@ -184,6 +191,7 @@ everything stops once the last clone is dropped.
 | `wake()` | The app is in the foreground: reconnects every disconnected machine now and probes every connected one, replacing a dead connection. |
 | `subscribe_session(host_id: HostId, session_id: SessionId) -> Result<SessionSubscription, Error>` | Streams a session, cached state first, across reconnects. |
 | `async send(host_id: HostId, command: CommandBody) -> Result<CommandResult, Error>` | Sends a command and waits for the answer; resent with the same id after a reconnect. |
+| `async send_traced(host_id: HostId, command: CommandBody, trace: String) -> Result<CommandResult, Error>` | `send` under the app's span: `trace` is its W3C `traceparent`, which goes to the daemon only while the process shares diagnostics. See [Diagnostics](#diagnostics). |
 | `async open_terminal(host_id: HostId, session_id: SessionId, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Opens a shell in a session's worktree; owners only. |
 | `async add_account(host_id: HostId, account: NewAccount, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Runs a provider login in a login terminal; owners only. |
 | `async install_provider(host_id: HostId, provider: Provider, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Installs or updates a provider's CLI in a terminal; owners only. Refused when this OS has no recipe or the caller is a member. |
@@ -252,6 +260,9 @@ everything stops once the last clone is dropped.
   (each session's events, in seq order from its first), `answers: Vec<DemoAnswer>`.
 - `DemoAnswer` — `command: CommandBody`, `result: CommandResult`: a command that only reads
   and the daemon's answer.
+- `Diagnostics` — `install_id: String` (a random id the app made once for this install),
+  `sentry_dsn: Option<String>`, `posthog_token: Option<String>` (the write-only client keys
+  the app was built with; nothing goes to a service without its key).
 
 ### Enums
 
@@ -492,6 +503,26 @@ answers to the commands the apps send to read (`list_people`, `list_bots`, `get_
   `open_terminal`, `attach_terminal`, `reconnect`, `sign_in`, `log_in`, `rename`,
   `set_addresses` and `forget`, fail with `Error::Demo`, which the apps show as "This is a
   demo; nothing is sent". `synced` returns at once, and `share` fails with `Local`.
+
+## Diagnostics
+
+Sharing diagnostics is off until the person turns it on, with one switch in an app and
+`[telemetry]` in a daemon's `daemon.toml`. herder's privacy page lists exactly what is sent.
+
+- `set_diagnostics(Some(Diagnostics { install_id, sentry_dsn, posthog_token }))` turns it on
+  for the whole process, every `Client` in it; `set_diagnostics(None)` turns it off at once,
+  dropping whatever was not sent yet. The app keeps the switch and its install id, and calls
+  it at launch and whenever the switch moves.
+- One trace follows a command from the app through the client core and the network to the
+  daemon, the session and the agent CLI: `send_traced` takes the app's span as a W3C
+  `traceparent`, and the command carries it to the daemon as `Command.trace`. While the
+  process shares nothing, no command carries a trace. A daemon that shares nothing, or one
+  before traces, ignores it. A reply needs no trace of its own: it answers its command by id,
+  and the events a command causes are the session's, shared by every client and replayed
+  later, so they carry none; the daemon's spans for them join the command's trace.
+- A daemon's own sharing is `DaemonSettings.telemetry`: `enabled`, off by default, and `dsn`,
+  the Sentry DSN, the build's own when absent. An owner turns it on or off with
+  `SetSettings`; it applies at once, without `restart_required`.
 
 ## Passkeys
 
@@ -777,6 +808,10 @@ the last hello joins `Machine::addresses` in its kind's place (LAN, other, Tails
 hub), one the daemon stopped naming leaves them unless the connection came in on it, and the
 ones the user added or removed stay as the user left them. So every device dials a public
 address an owner set once, with nothing to type.
+
+`DaemonSettings.telemetry` is whether the daemon shares diagnostics (`enabled`, off by
+default) and the Sentry DSN it sends to (`dsn`, the build's own when absent); see
+[Diagnostics](#diagnostics). It applies at once, without `restart_required`.
 
 ### Headers a proxy in front of a tunnel wants
 

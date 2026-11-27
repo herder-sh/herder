@@ -954,6 +954,7 @@ impl Supervisor {
         let command = Command {
             id: new_command_id(),
             body,
+            trace: None,
         };
         if let Some(error) = too_large(&command) {
             return Err(error);
@@ -2471,6 +2472,7 @@ fn attach(
             terminal_id: terminal_id.clone(),
             assertion,
         },
+        trace: None,
     })
 }
 
@@ -2479,6 +2481,7 @@ fn once(body: CommandBody) -> ClientMessage {
     ClientMessage::Command(Command {
         id: new_command_id(),
         body,
+        trace: None,
     })
 }
 
@@ -2773,6 +2776,7 @@ mod tests {
                 images: Vec::new(),
                 files: Vec::new(),
             },
+            trace: None,
         };
         let empty = message_bytes(&command(String::new()));
         command("x".repeat(bytes - empty))
@@ -2791,6 +2795,7 @@ mod tests {
                 }],
                 files: Vec::new(),
             },
+            trace: None,
         };
         let sent = serde_json::to_string(&ClientMessage::Command(command.clone())).unwrap();
         assert_eq!(message_bytes(&command), sent.len());

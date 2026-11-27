@@ -44,6 +44,23 @@ pub struct DaemonSettings {
     /// order; none from daemons before them.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerSettings>,
+    /// Whether the daemon shares diagnostics; off, as from daemons before it, until its owner
+    /// turns it on.
+    #[serde(default)]
+    pub telemetry: TelemetrySettings,
+}
+
+/// The `[telemetry]` table: whether the daemon shares diagnostics, traces and errors with
+/// Sentry and anonymous measurements with PostHog, as herder's privacy page lists them. Off
+/// unless turned on; turning it off stops all of it at once.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TelemetrySettings {
+    /// Whether the daemon shares diagnostics.
+    pub enabled: bool,
+    /// Sentry DSN traces and errors go to: a write-only client key. When absent, the one this
+    /// build was made with, if any; with neither, nothing goes to Sentry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsn: Option<String>,
 }
 
 /// The `[log]` table.

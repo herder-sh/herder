@@ -5,9 +5,9 @@
 use std::collections::HashMap;
 
 use herder_client_core::{
-    ConnectionQuality, ConnectionState, FleetLink, FleetMachine, FleetPerson, LoginUri, Machine,
-    NewAccount, OwnUri, RouteChoice, RouteKind, SessionUpdate, TerminalEvent, WireGuardKind,
-    WireGuardTunnel,
+    ConnectionQuality, ConnectionState, Diagnostics, FleetLink, FleetMachine, FleetPerson,
+    LoginUri, Machine, NewAccount, OwnUri, RouteChoice, RouteKind, SessionUpdate, TerminalEvent,
+    WireGuardKind, WireGuardTunnel,
 };
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
@@ -28,10 +28,10 @@ use herder_protocol::{
     ReviewStatus, Role, Route, RouteState, RouteStatus, SecretAccess, SecretInfo, SecretRef,
     SecretRequest, SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId,
     SessionOrigin, SessionSkill, SessionStatus, SessionUsage, SignIn, SignInRefusal, SkillFile,
-    SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, ThreadLink,
-    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen,
-    UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId, UserInfo, WireGuardEnrollment,
-    WireGuardOffer, WireGuardSettings,
+    SkillReload, SkillSource, SkillsStatus, TelemetrySettings, Terminal, TerminalId,
+    TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource, TurnError, TurnId,
+    TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId,
+    UserInfo, WireGuardEnrollment, WireGuardOffer, WireGuardSettings,
 };
 use serde_json::Value as Json;
 
@@ -213,6 +213,13 @@ pub struct ConnectionQuality {
 pub struct SessionUpdate {
     pub events: Vec<Event>,
     pub streaming: Vec<Item>,
+}
+
+#[uniffi::remote(Record)]
+pub struct Diagnostics {
+    pub install_id: String,
+    pub sentry_dsn: Option<String>,
+    pub posthog_token: Option<String>,
 }
 
 #[uniffi::remote(Record)]
@@ -1824,6 +1831,13 @@ pub struct DaemonSettings {
     pub backup: BackupSettings,
     pub follow_ups: FollowUpSettings,
     pub mcp_servers: Vec<McpServerSettings>,
+    pub telemetry: TelemetrySettings,
+}
+
+#[uniffi::remote(Record)]
+pub struct TelemetrySettings {
+    pub enabled: bool,
+    pub dsn: Option<String>,
 }
 
 #[uniffi::remote(Record)]

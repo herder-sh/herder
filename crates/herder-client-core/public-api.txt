@@ -238,6 +238,15 @@ impl Client {
 }
 
 impl Client {
+    pub async fn send_traced(
+        &self,
+        host_id: HostId,
+        command: CommandBody,
+        trace: String,
+    ) -> Result<CommandResult, Error> {}
+}
+
+impl Client {
     pub async fn fork_session(
         &self,
         source: HostId,
@@ -439,6 +448,15 @@ pub struct DemoAnswer {
     pub command: CommandBody,
     pub result: CommandResult,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diagnostics {
+    pub install_id: String,
+    pub sentry_dsn: Option<String>,
+    pub posthog_token: Option<String>,
+}
+
+pub fn set_diagnostics(diagnostics: Option<Diagnostics>) {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FleetLink {

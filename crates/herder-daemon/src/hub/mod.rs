@@ -460,6 +460,7 @@ mod tests {
             mcp_servers: Vec::new(),
             bots: Vec::new(),
             self_update: None,
+            telemetry: Default::default(),
         }
     }
 

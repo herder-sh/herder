@@ -551,6 +551,7 @@ impl Client {
         self.send(&ClientMessage::Command(Command {
             id: id.clone(),
             body,
+            trace: None,
         }))
         .await;
         loop {
