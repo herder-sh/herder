@@ -4,8 +4,7 @@
 //! anything interactively.
 
 use anyhow::{Context, Result};
-use herder_protocol::{AccountId, CommandBody};
-use serde::Serialize;
+use herder_protocol::CommandBody;
 
 use crate::session;
 
@@ -14,9 +13,6 @@ pub struct Args {
     /// Paired machine, by name or host id [default: the only paired machine].
     #[arg(long, global = true, value_name = "NAME")]
     machine: Option<String>,
-    /// Print JSON on stdout instead of text.
-    #[arg(long, global = true)]
-    json: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -32,31 +28,18 @@ enum Command {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    session::connected(args.machine.as_deref(), args.json, |cli| async move {
+    session::connected(args.machine.as_deref(), false, |cli| async move {
         match args.command {
             Command::Remove { account } => {
                 let account_id = cli
                     .account(Some(&account))?
                     .context("name the account to remove")?;
-                cli.send(CommandBody::RemoveAccount {
-                    account_id: account_id.clone(),
-                })
-                .await?;
-                #[derive(Serialize)]
-                struct Removed<'a> {
-                    account_id: &'a AccountId,
-                }
-                cli.print(
-                    &Removed {
-                        account_id: &account_id,
-                    },
-                    || {
-                        format!(
-                            "removed account {account_id} from {}; its config dir is kept\n",
-                            cli.machine.name
-                        )
-                    },
-                )
+                cli.send(CommandBody::RemoveAccount { account_id }).await?;
+                println!(
+                    "the account is removed from {}; its config dir is kept",
+                    cli.machine.name
+                );
+                Ok(())
             }
         }
     })

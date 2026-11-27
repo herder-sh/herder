@@ -613,11 +613,7 @@ impl Cli {
     }
 
     /// Prints `value` as JSON with `--json`, else the text `text` makes.
-    pub(crate) fn print<T: Serialize>(
-        &self,
-        value: &T,
-        text: impl FnOnce() -> String,
-    ) -> Result<()> {
+    fn print<T: Serialize>(&self, value: &T, text: impl FnOnce() -> String) -> Result<()> {
         if self.json {
             println!("{}", serde_json::to_string(value)?);
         } else {

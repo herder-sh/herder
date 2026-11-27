@@ -366,7 +366,6 @@ mod tests {
                 "--machine",
                 "box",
             ],
-            &["herder", "account", "--json", "remove", "work"],
         ] {
             assert!(
                 matches!(
