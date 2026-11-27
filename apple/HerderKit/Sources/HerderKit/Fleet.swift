@@ -346,7 +346,16 @@ public final class Fleet {
 
     /// Follows `key`'s state from now on, when it isn't yet.
     private func track(_ key: SessionKey) {
-        if boxes[key] == nil { boxes[key] = SessionBox(SessionModel(key: key)) }
+        guard boxes[key] == nil else { return }
+        var model = SessionModel(key: key)
+        // What this device sent that another copy holds shows from this one too, should a view
+        // move to it.
+        for copy in copies.others[key] ?? [] {
+            for outgoing in boxes[copy]?.model.outbox ?? [] where !model.outbox.contains(where: { $0.id == outgoing.id }) {
+                model.outbox.append(outgoing)
+            }
+        }
+        boxes[key] = SessionBox(model)
     }
 
     /// A session view shows `key`: it is seen, and stays seen while shown.
@@ -466,7 +475,7 @@ public final class Fleet {
         }
         for machine in machines {
             for head in machine.sessions where !head.queue.isEmpty {
-                change(SessionKey(hostId: machine.hostId, sessionId: head.sessionId)) { $0.settle(head.queue) }
+                settle(SessionKey(hostId: machine.hostId, sessionId: head.sessionId), head.queue, head: head.headSeq)
             }
         }
         // A copy another copy stands for is not followed: a hub's copy of every session would
@@ -560,6 +569,9 @@ public final class Fleet {
             change(key) { $0.apply(update) }
         }
         observe(key, before: before.status, wasLoaded: before.loaded)
+        // A fold that caught up with its machine hands what it queued over to the tray.
+        let queue = queue(of: key)
+        if !queue.isEmpty { settle(key, queue, head: head(of: key)) }
         // The request lists show it at once too.
         if urgent { refreshLists() }
         return true
@@ -791,18 +803,41 @@ public final class Fleet {
                 about: key)
             return
         }
-        let outgoing = Outgoing(text: text, images: images, files: files)
-        change(key) { $0.outbox.append(outgoing) }
+        var outgoing = Outgoing(text: text, images: images, files: files)
+        outgoing.after = allCopies(of: key).compactMap { boxes[$0]?.model.lastSeq }.max() ?? 0
+        changeOutbox(of: key) { $0.append(outgoing) }
         await send(.sendPrompt(sessionId: key.sessionId, text: text, images: images, files: files), about: key)
         let state = refusals[key].map(Outgoing.State.failed) ?? .delivered
-        let queue = queue(of: key)
-        change(key) { session in
-            if let index = session.outbox.firstIndex(where: { $0.id == outgoing.id }) {
-                session.outbox[index].state = state
-            }
-            // The queue may have listed it before the machine answered.
-            session.settle(queue)
+        changeOutbox(of: key) { outbox in
+            if let index = outbox.firstIndex(where: { $0.id == outgoing.id }) { outbox[index].state = state }
         }
+        // The queue may have listed it before the machine answered.
+        settle(key, queue(of: key), head: head(of: key))
+    }
+
+    /// `key` and the other copies of its session.
+    private func allCopies(of key: SessionKey) -> [SessionKey] { [key] + (copies.others[key] ?? []) }
+
+    /// Changes what this device sent to `key`'s session on each copy of it this device holds:
+    /// the copy a view shows moves with the connections, and what was sent goes with it.
+    private func changeOutbox(of key: SessionKey, _ body: (inout [Outgoing]) -> Void) {
+        for copy in allCopies(of: key) { change(copy) { body(&$0.outbox) } }
+    }
+
+    /// Hands what was sent to `key` over to its machine's queue, on each copy; see
+    /// `SessionModel.settle`.
+    private func settle(_ key: SessionKey, _ queue: [QueuedPrompt], head: UInt64) {
+        guard let settled = boxes[key].map({ box in
+            let before = Set(box.model.outbox.map(\.id))
+            change(key) { $0.settle(queue, head: head) }
+            return before.subtracting(box.model.outbox.map(\.id))
+        }), !settled.isEmpty else { return }
+        changeOutbox(of: key) { $0.removeAll { settled.contains($0.id) } }
+    }
+
+    /// The journal's last event as `key`'s machine lists it.
+    private func head(of key: SessionKey) -> UInt64 {
+        current.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }?.headSeq ?? 0
     }
 
     /// The prompts waiting in a session's queue on its machine, in the order they will run.
@@ -1025,7 +1060,7 @@ public final class Fleet {
 
     /// Drops a prompt that failed to send.
     func discard(_ outgoing: Outgoing, from key: SessionKey) {
-        change(key) { $0.outbox.removeAll { $0.id == outgoing.id } }
+        changeOutbox(of: key) { $0.removeAll { $0.id == outgoing.id } }
     }
 
     func interrupt(_ key: SessionKey) async {
