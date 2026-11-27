@@ -241,6 +241,21 @@ jobs:
           for file in "$RUNNER_TEMP"/attachments/*.txt; do
             if [ -f "$file" ]; then echo "::group::$(basename "$file")"; cat "$file"; echo "::endgroup::"; fi
           done
+      # Shows each shard ran its tests, and how long each took, to rebalance the shards by
+      # (apple/scripts/ios-ui-shards.sh).
+      - name: Report the UI tests this shard ran
+        if: always()
+        run: |
+          bundle="$RUNNER_TEMP/ios-tests.xcresult"
+          [ -d "$bundle" ] || exit 0
+          {
+            echo "| UI test | result | time |"
+            echo "| --- | --- | --- |"
+            xcrun xcresulttool get test-results tests --path "$bundle" |
+              jq -r '.. | objects | select(.nodeType? == "Test Case") | "| \(.nodeIdentifier // .name) | \(.result) | \(.duration) |"'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          total=$(xcrun xcresulttool get test-results summary --path "$bundle" | jq '.totalTestCount')
+          [ "$total" -gt 0 ] || { echo "the shard ran no UI tests"; exit 1; }
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
