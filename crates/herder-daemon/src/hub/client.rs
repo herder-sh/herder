@@ -22,6 +22,7 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{self, Message};
 
@@ -97,10 +98,20 @@ async fn reach(address: &str) -> Result<(Box<dyn Io>, SocketAddr)> {
         let peer = tcp.peer_addr()?;
         return Ok((Box::new(tcp), peer));
     }
-    let url = url::Url::parse(address).context("the hub's tunnel URL")?;
-    let host = url.host_str().context("the tunnel URL names no host")?;
+    let (ws, peer) = outer(address, &[]).await?;
+    Ok((Box::new(Frames::new(ws)), peer))
+}
+
+/// A WebSocket that carries a connection to the hub in its binary frames.
+pub(super) type Outer = WebSocketStream<Box<dyn Io>>;
+
+/// Opens the WebSocket at `url` (`wss://` checked against the public web PKI, or `ws://`),
+/// with `headers` on its upgrade; also the address of the socket's peer.
+pub(super) async fn outer(url: &str, headers: &[(String, String)]) -> Result<(Outer, SocketAddr)> {
+    let parsed = url::Url::parse(url).context("the tunnel's URL")?;
+    let host = parsed.host_str().context("the tunnel URL names no host")?;
     let host = host.trim_matches(['[', ']']);
-    let port = url
+    let port = parsed
         .port_or_known_default()
         .context("the tunnel URL names no port")?;
     let tcp = TcpStream::connect((host, port))
@@ -108,7 +119,7 @@ async fn reach(address: &str) -> Result<(Box<dyn Io>, SocketAddr)> {
         .context("connecting")?;
     tcp.set_nodelay(true)?;
     let peer = tcp.peer_addr()?;
-    let outer: Box<dyn Io> = if url.scheme() == "wss" {
+    let stream: Box<dyn Io> = if parsed.scheme() == "wss" {
         let config = WEB_PKI.as_ref().map_err(|err| anyhow!("TLS: {err}"))?;
         let name = ServerName::try_from(host.to_owned()).context("the tunnel's server name")?;
         let tls = TlsConnector::from(Arc::clone(config))
@@ -119,12 +130,26 @@ async fn reach(address: &str) -> Result<(Box<dyn Io>, SocketAddr)> {
     } else {
         Box::new(tcp)
     };
-    let request = address.into_client_request()?;
-    let (ws, _) =
-        tokio_tungstenite::client_async_with_config(request, outer, Some(tunnel::config()))
-            .await
-            .context("the tunnel's WebSocket upgrade")?;
-    Ok((Box::new(Frames::new(ws)), peer))
+    let mut request = url.into_client_request()?;
+    for (name, value) in headers {
+        request.headers_mut().insert(
+            HeaderName::from_bytes(name.as_bytes()).context("a header name")?,
+            HeaderValue::from_str(value).context("a header value")?,
+        );
+    }
+    match tokio_tungstenite::client_async_with_config(request, stream, Some(tunnel::config())).await
+    {
+        Ok((ws, _)) => Ok((ws, peer)),
+        Err(tungstenite::Error::Http(response)) => {
+            let body = response.body().as_deref().unwrap_or_default();
+            bail!(
+                "{url} refused the WebSocket upgrade: {} {}",
+                response.status(),
+                String::from_utf8_lossy(body).trim()
+            )
+        }
+        Err(err) => Err(err).context("the tunnel's WebSocket upgrade"),
+    }
 }
 
 /// Opens this host's end of the relay stream `stream_id`, which the hub asked for: the

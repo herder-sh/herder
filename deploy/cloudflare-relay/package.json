@@ -1,0 +1,18 @@
+{
+  "name": "herder-cloudflare-relay",
+  "private": true,
+  "type": "module",
+  "description": "herder's Durable Object relay: tests and a local runtime for the Rust end-to-end test",
+  "scripts": {
+    "test": "node --test",
+    "check": "tsc -p jsconfig.json"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261127.1",
+    "miniflare": "4.20260730.0",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

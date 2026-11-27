@@ -46,6 +46,10 @@ pub(crate) struct SavedMachine {
     pub(crate) routes: Routes,
     /// This device's key for the machine, as PEM; secret.
     pub(crate) device_key: String,
+    /// The machine's token for its Cloudflare relay, for a hub that has one: what this
+    /// device's `relay+wss://` routes through it send; secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) relay_grant: Option<herder_protocol::RelayGrant>,
 }
 
 /// Which of a machine's addresses the user pinned or disabled
@@ -224,6 +228,7 @@ mod tests {
             headers: Default::default(),
             routes: Default::default(),
             device_key: "secret".into(),
+            relay_grant: None,
         }
     }
 

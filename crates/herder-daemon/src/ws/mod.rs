@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use herder_protocol::{
     Account, AccountId, CommandBody, CommandId, CommandResult, DeviceId, ErrorCode, ErrorInfo,
-    Event, HostId, LeftoverDecision, PasskeyAssertion, PersonId, Role, Seq, SessionHead, SessionId,
-    TerminalPurpose, UserId,
+    Event, HostId, LeftoverDecision, PasskeyAssertion, PersonId, RelayGrant, Role, Seq,
+    SessionHead, SessionId, TerminalPurpose, UserId,
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -211,7 +211,12 @@ struct Shared<B> {
     approvals: Approvals,
     /// Count the connections not authenticated yet.
     gates: tunnel::Gates,
+    /// Signs a device's tokens for the hub's Cloudflare relay, on a hub that has one.
+    relay_tokens: OnceLock<RelayTokens>,
 }
+
+/// A device's token for the hub's Cloudflare relay, while the relay is up.
+pub(crate) type RelayTokens = Arc<dyn Fn(&DeviceId) -> Option<RelayGrant> + Send + Sync>;
 
 impl<B: Backend> Shared<B> {
     /// Applies command `command_id` from the connection with `outbox`: terminal commands and
@@ -426,6 +431,15 @@ impl<B: Backend> Shared<B> {
                 self.auth.merge_person(&from, &person_id, &assertion)?;
             }
             CommandBody::RevokeDevice { device_id, .. } => self.revoke_device(&device_id)?,
+            CommandBody::GetRelayToken if let Some(tokens) = self.relay_tokens.get() => {
+                return match tokens(&identity.device_id) {
+                    Some(grant) => Ok(CommandResult::RelayToken { grant }),
+                    None => Err(ErrorInfo {
+                        code: ErrorCode::Unsupported,
+                        message: "this hub's Cloudflare relay is not up".to_owned(),
+                    }),
+                };
+            }
             command => return self.run(&identity.user_id, command_id, command).await,
         }
         Ok(CommandResult::Applied)
@@ -992,6 +1006,7 @@ impl<B: Backend> Server<B> {
                 listen: OnceLock::new(),
                 settings: OnceLock::new(),
                 bots: OnceLock::new(),
+                relay_tokens: OnceLock::new(),
                 providers: OnceLock::new(),
                 aws: OnceLock::new(),
                 approvals: Approvals::new(APPROVAL_TTL),
@@ -1035,6 +1050,14 @@ impl<B: Backend> Server<B> {
             .bots
             .set(bots)
             .map_err(|_| anyhow::anyhow!("the bots are managed already"))
+    }
+
+    /// Answers `get_relay_token` with `tokens`; once per server, on a hub.
+    pub(crate) fn issue_relay_tokens(&self, tokens: RelayTokens) -> anyhow::Result<()> {
+        self.shared
+            .relay_tokens
+            .set(tokens)
+            .map_err(|_| anyhow::anyhow!("the relay's tokens are issued already"))
     }
 
     /// What serves the clients that reach this host through its hub, each on the relay

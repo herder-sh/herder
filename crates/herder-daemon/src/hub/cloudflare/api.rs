@@ -213,10 +213,27 @@ impl Api {
     }
 
     /// Sends `method` to `path` with `body`: the answer's `result`, `None` for a 404.
-    fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Option<Value>> {
+    pub(super) fn call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Option<Value>> {
+        let body = body.map(|body| body.to_string()).unwrap_or_default();
+        self.send(method, path, "application/json", body.as_bytes())
+    }
+
+    /// Sends `method` to `path` with `body` of `content_type`: the answer's `result`, `None`
+    /// for a 404.
+    pub(super) fn send(
+        &self,
+        method: &str,
+        path: &str,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<Option<Value>> {
         let url = format!("{}{path}", self.base);
         let bearer = format!("Bearer {}", self.token.expose());
-        let body = body.map(|body| body.to_string()).unwrap_or_default();
         let response = match method {
             "GET" => self.agent.get(&url).header("Authorization", &bearer).call(),
             "DELETE" => self
@@ -228,13 +245,13 @@ impl Api {
                 .agent
                 .post(&url)
                 .header("Authorization", &bearer)
-                .header("Content-Type", "application/json")
+                .header("Content-Type", content_type)
                 .send(body),
             _ => self
                 .agent
                 .put(&url)
                 .header("Authorization", &bearer)
-                .header("Content-Type", "application/json")
+                .header("Content-Type", content_type)
                 .send(body),
         };
         let mut response = response.with_context(|| format!("cannot reach Cloudflare at {url}"))?;
@@ -252,7 +269,8 @@ impl Api {
             404 => Ok(None),
             401 | 403 => bail!(
                 "Cloudflare refused the API token for {method} {path} ({status}): {}; it needs \
-                 Cloudflare Tunnel Edit, Zone Read and DNS Edit",
+                 Cloudflare Tunnel Edit, Zone Read and DNS Edit for the tunnel, and Workers \
+                 Scripts Edit and Account Settings Read for the relay",
                 errors(&answer, &text)
             ),
             _ => bail!(
@@ -279,7 +297,7 @@ fn errors(answer: &Value, text: &str) -> String {
 }
 
 /// The string field `key` of `value`.
-fn string(value: &Value, key: &str) -> Result<String> {
+pub(super) fn string(value: &Value, key: &str) -> Result<String> {
     value[key]
         .as_str()
         .map(str::to_owned)

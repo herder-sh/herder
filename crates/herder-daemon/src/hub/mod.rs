@@ -41,6 +41,7 @@
 mod client;
 pub mod cliproxyapi;
 pub mod cloudflare;
+mod cloudflare_relay;
 mod conn;
 mod fleet;
 mod host_secrets;
@@ -115,6 +116,10 @@ struct Shared {
     relays: Arc<relay::Relays>,
     /// Count the connections not authenticated yet.
     gates: tunnel::Gates,
+    /// The hub itself, as its hosts' and clients' hellos name it.
+    host_id: HostId,
+    /// The Durable Object relay in the owner's Cloudflare account, once deployed.
+    cloudflare_relay: Arc<cloudflare_relay::Relay>,
 }
 
 impl Shared {
@@ -154,6 +159,8 @@ impl Server {
             secrets_key.clone(),
             Arc::clone(&relays),
         );
+        let host_id = host.id.clone();
+        let cloudflare_relay = Arc::new(cloudflare_relay::Relay::default());
         // No session has a worktree here, so no terminal ever opens.
         let terminals = Terminals::new(Arc::clone(&fanout), terminal::login_shell());
         let clients = ws::Server::new(
@@ -165,6 +172,17 @@ impl Server {
             Logins::default(),
             host,
         );
+        let tokens = Arc::clone(&cloudflare_relay);
+        let issued = clients.issue_relay_tokens(Arc::new(move |device| {
+            tokens.grant(
+                device.as_str(),
+                cloudflare_relay::Kind::Client,
+                cloudflare_relay::CLIENT_TTL,
+            )
+        }));
+        if let Err(err) = issued {
+            warn!("{err:#}");
+        }
         Self {
             shared: Arc::new(Shared {
                 tls,
@@ -180,6 +198,8 @@ impl Server {
                 cliproxyapi: OnceLock::new(),
                 relays,
                 gates: tunnel::Gates::new(),
+                host_id,
+                cloudflare_relay,
             }),
         }
     }
@@ -204,23 +224,45 @@ impl Server {
             .map_err(|_| anyhow::anyhow!("the hub uses one CLIProxyAPI"))
     }
 
-    /// Answers owners' remote access commands, running `tunnel`, with the settings kept in
-    /// `data_dir`; once per server.
+    /// Answers owners' remote access commands, running `tunnel` and the Durable Object relay
+    /// deployed through Cloudflare's API at `api`, with the settings kept in `data_dir`, until
+    /// `shutdown`; once per server.
     pub fn use_remote_access(
         &self,
         data_dir: &std::path::Path,
+        api: &str,
         tunnel: Arc<cloudflare::ManagedTunnel>,
+        shutdown: CancellationToken,
     ) -> Result<Arc<remote_access::RemoteAccessHub>> {
+        let relay = cloudflare::ManagedRelay::open(
+            data_dir,
+            api,
+            Arc::clone(&self.shared.cloudflare_relay),
+        )?;
+        relay.start(shutdown);
         let remote_access = remote_access::RemoteAccessHub::open(
             data_dir,
             Arc::clone(&self.shared.store),
             self.shared.secrets_key.clone(),
             tunnel,
+            relay,
         )?;
         self.shared
             .fleet
             .use_remote_access(Arc::clone(&remote_access));
         Ok(remote_access)
+    }
+
+    /// Uses the Durable Object relay deployed at `url`, whose Worker checks tokens signed with
+    /// `secret`, as this hub's: for tests against a local `workerd`.
+    #[doc(hidden)]
+    pub fn use_cloudflare_relay(&self, url: &str, secret: &str) {
+        self.shared
+            .cloudflare_relay
+            .set(Some(cloudflare_relay::Deployed {
+                url: url.trim_end_matches('/').to_owned(),
+                secret: secret.to_owned(),
+            }));
     }
 
     /// The store, for reading what hosts replicated.
@@ -266,6 +308,10 @@ impl Server {
                 shutdown.child_token(),
             ));
         }
+        tokio::spawn(take_relayed_streams(
+            Arc::clone(&self.shared),
+            shutdown.child_token(),
+        ));
         tokio::spawn({
             let fleet = self.shared.fleet.clone();
             let shutdown = shutdown.clone();
@@ -382,7 +428,8 @@ async fn serve_with(
             shutdown.clone(),
         )
         .await;
-    let remote_access = server.use_remote_access(data_dir.root(), managed)?;
+    let remote_access =
+        server.use_remote_access(data_dir.root(), cloudflare.api, managed, shutdown.clone())?;
     remote_access.start().await;
     let control = auth::control::bind(data_dir.root())?;
     tokio::spawn(auth::control::serve(
@@ -408,6 +455,54 @@ async fn serve_with(
     server.run_tunneled(listeners, tunnel, shutdown).await;
     info!("herder hub stopped");
     Ok(())
+}
+
+/// Keeps the hub itself connected to its Cloudflare relay while one is deployed, with tokens
+/// it signs itself, and serves each stream a device opens to it there as a tunneled
+/// connection, until `cancel`.
+async fn take_relayed_streams(shared: Arc<Shared>, cancel: CancellationToken) {
+    let relay = Arc::clone(&shared.cloudflare_relay);
+    let host_id = shared.host_id.clone();
+    let (grants, granted) = tokio::sync::watch::channel(None);
+    tokio::spawn({
+        let (relay, host_id, cancel) = (Arc::clone(&relay), host_id.clone(), cancel.clone());
+        async move {
+            let mut deployed = relay.subscribe();
+            loop {
+                let grant = relay.grant(
+                    host_id.as_str(),
+                    cloudflare_relay::Kind::Host,
+                    cloudflare_relay::HOST_TTL,
+                );
+                grants.send_replace(grant);
+                tokio::select! {
+                    () = cancel.cancelled() => return,
+                    changed = deployed.changed() => if changed.is_err() { return },
+                    () = tokio::time::sleep(cloudflare_relay::HOST_TTL / 2) => {}
+                }
+            }
+        }
+    });
+    let serving = Arc::clone(&shared);
+    let serve_cancel = cancel.clone();
+    let serve: Arc<dyn Fn(cloudflare_relay::Opened) + Send + Sync> = Arc::new(move |opened| {
+        let Some(pass) = serving.gates.tunnel.enter(opened.client.as_deref()) else {
+            return warn!(
+                client = opened.client.as_deref().unwrap_or("unknown"),
+                "refused a connection through the Cloudflare relay: too many are not signed \
+                 in yet"
+            );
+        };
+        let (shared, cancel) = (Arc::clone(&serving), serve_cancel.child_token());
+        tokio::spawn(conn::run_relayed(
+            opened.stream,
+            pass,
+            opened.peer,
+            shared,
+            cancel,
+        ));
+    });
+    cloudflare_relay::machine(host_id, granted, serve, cancel).await;
 }
 
 /// Runs `call` on the store on the blocking pool; a malformed batch comes back as

@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     Cursor, DeviceId, HostId, HostMessage, HubHello, HubMessage, ProviderLogin,
-    REPLICATION_VERSION, RelayRoute, ReplicationError, ReplicationErrorCode,
+    REPLICATION_VERSION, RelayGrant, RelayRoute, ReplicationError, ReplicationErrorCode,
 };
 use tokio::net::TcpStream;
 use tokio::sync::watch;
@@ -25,7 +25,7 @@ use tracing::{debug, info, warn};
 
 use super::store::{self, Kept, Outcome, SecretUse};
 use super::upgrade::{self, Upgrade as Upgrading};
-use super::{BUILD, Shared, blocking, cliproxyapi, relay, secrets};
+use super::{BUILD, Shared, blocking, cliproxyapi, cloudflare_relay, relay, secrets};
 use crate::auth::DeviceRole;
 use crate::ws::{self, Transport, Ws, tunnel};
 
@@ -57,6 +57,33 @@ pub(super) async fn run(
         () = cancel.cancelled() => return,
         opened = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared, stream, peer, tunneled)) => opened,
     };
+    serve_opened(opened, peer, shared, cancel).await;
+}
+
+/// Serves a connection the relay Worker delivered in `frames`, counted by `pass` until it
+/// authenticated, exactly as one from the tunnel listener.
+pub(super) async fn run_relayed(
+    frames: Box<dyn tunnel::Io>,
+    pass: tunnel::Pass,
+    peer: SocketAddr,
+    shared: Arc<Shared>,
+    cancel: CancellationToken,
+) {
+    let opening = secure(&shared, Transport::Relay(frames), pass);
+    let opened = tokio::select! {
+        () = cancel.cancelled() => return,
+        opened = tokio::time::timeout(HANDSHAKE_TIMEOUT, opening) => opened,
+    };
+    serve_opened(opened, peer, shared, cancel).await;
+}
+
+/// Serves a connection whose handshakes up to its upgrade request ended as `opened`.
+async fn serve_opened(
+    opened: Result<Result<(Upgrade, String, tunnel::Pass)>, tokio::time::error::Elapsed>,
+    peer: SocketAddr,
+    shared: Arc<Shared>,
+    cancel: CancellationToken,
+) {
     let (upgrade, device, pass) = match opened {
         Ok(Ok(opened)) => opened,
         Ok(Err(err)) => return info!(%peer, "handshake failed: {err:#}"),
@@ -121,6 +148,16 @@ async fn open(
     } else {
         (Transport::Tcp(stream), shared.gates.direct(peer)?)
     };
+    secure(shared, transport, pass).await
+}
+
+/// The TLS handshake on `transport` and the upgrade request after it, read and not answered
+/// yet.
+async fn secure(
+    shared: &Shared,
+    transport: Transport,
+    pass: tunnel::Pass,
+) -> Result<(Upgrade, String, tunnel::Pass)> {
     let (tls, device) = ws::secure(&shared.tls, pass.meter(transport)).await?;
     let upgrade = upgrade::read(tls).await?;
     Ok((upgrade, device, pass))
@@ -185,7 +222,7 @@ async fn serve(
     };
     drop(pass);
     if hello.replication_version != REPLICATION_VERSION {
-        send(ws, hello_message(Vec::new(), None, false)).await?;
+        send(ws, hello_message(Vec::new(), None, false, None)).await?;
         bail!(
             "host {} speaks replication {}, this hub {REPLICATION_VERSION}",
             hello.host_id,
@@ -252,14 +289,23 @@ async fn serve(
         Some(keys) if proxy.is_some() || proxy_relayed => Some(keys.management().subscribe()),
         _ => None,
     };
-    send(ws, hello_message(cursors, proxy, proxy_relayed)).await?;
+    // A host that takes streams through the Cloudflare relay holds a token for it, renewed
+    // on this connection.
+    let mut grants = hello
+        .cloudflare_relay
+        .then(|| shared.cloudflare_relay.subscribe());
+    let grant = grants.as_mut().and_then(|deployed| {
+        deployed.mark_unchanged();
+        host_grant(shared, &host)
+    });
+    send(ws, hello_message(cursors, proxy, proxy_relayed, grant)).await?;
 
     // Before the host is shown online, so it is never online without its relay.
     let mut relay = hello.relay.then(|| shared.relays.host_connected(&host));
     let presence = shared.fleet.presence();
     presence.connected(&host);
     shared.fleet.refresh_hosts().await;
-    let result = receive(ws, shared, &host, cap, logins, &mut relay).await;
+    let result = receive(ws, shared, &host, cap, logins, &mut relay, &mut grants).await;
     drop(relay);
     let seen = presence.disconnected(&host);
     let device = identity.device_id.clone();
@@ -281,8 +327,13 @@ async fn receive(
     cap: Option<u64>,
     mut logins: Option<watch::Receiver<Option<Vec<ProviderLogin>>>>,
     relay: &mut Option<relay::HostEnd>,
+    grants: &mut Option<watch::Receiver<Option<cloudflare_relay::Deployed>>>,
 ) -> Result<()> {
     let mut superseded = shared.superseded.subscribe();
+    let mut renew = tokio::time::interval_at(
+        tokio::time::Instant::now() + cloudflare_relay::HOST_TTL / 2,
+        cloudflare_relay::HOST_TTL / 2,
+    );
     if let Some(logins) = &mut logins {
         logins.mark_changed();
     }
@@ -297,6 +348,11 @@ async fn receive(
             open = next_open(relay) => {
                 let relay::Open { stream_id, device_id } = open;
                 send(ws, HubMessage::RelayOpen { stream_id, device_id }).await?;
+                continue;
+            }
+            () = next_grant(grants, &mut renew) => {
+                let grant = host_grant(shared, host);
+                send(ws, HubMessage::RelayGrant { grant }).await?;
                 continue;
             }
             frame = tokio::time::timeout_at(deadline, ws.next()) => frame,
@@ -444,6 +500,35 @@ async fn receive(
     }
 }
 
+/// Returns when a host that takes streams through the Cloudflare relay needs a new token:
+/// the relay was deployed, moved or removed, or the one it holds is half used. Never, for a
+/// host that takes none.
+async fn next_grant(
+    grants: &mut Option<watch::Receiver<Option<cloudflare_relay::Deployed>>>,
+    renew: &mut tokio::time::Interval,
+) {
+    let Some(deployed) = grants else {
+        return std::future::pending().await;
+    };
+    tokio::select! {
+        changed = deployed.changed() => {
+            if changed.is_err() {
+                std::future::pending::<()>().await;
+            }
+        }
+        _ = renew.tick() => {}
+    }
+}
+
+/// A token for `host` to take streams through the hub's Cloudflare relay, while it is up.
+fn host_grant(shared: &Shared, host: &HostId) -> Option<RelayGrant> {
+    shared.cloudflare_relay.grant(
+        host.as_str(),
+        cloudflare_relay::Kind::Host,
+        cloudflare_relay::HOST_TTL,
+    )
+}
+
 /// The next stream the host is to open its end of; never, for a host that takes none.
 async fn next_open(relay: &mut Option<relay::HostEnd>) -> relay::Open {
     match relay {
@@ -474,6 +559,7 @@ fn hello_message(
     acked: Vec<Cursor>,
     cliproxyapi: Option<String>,
     cliproxyapi_relay: bool,
+    relay_grant: Option<RelayGrant>,
 ) -> HubMessage {
     HubMessage::Hello(HubHello {
         replication_version: REPLICATION_VERSION,
@@ -481,7 +567,7 @@ fn hello_message(
         acked,
         cliproxyapi,
         cliproxyapi_relay,
-        relay_grant: None,
+        relay_grant,
     })
 }
 

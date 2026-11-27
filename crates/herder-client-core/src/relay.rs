@@ -95,7 +95,8 @@ impl Via {
             .routes
             .dialled(&saved.addresses)
             .into_iter()
-            .filter(|address| address::hub(address).is_none())
+            // The machine has a route of its own through the hub's Cloudflare relay.
+            .filter(|address| address::hub(address).is_none() && address::relay(address).is_none())
             .collect();
         let device = DeviceKey::from_pem(&saved.device_key)?;
         let connector = TlsConnector::from(Arc::new(client_config(&saved.fingerprint, &device)?));
@@ -131,6 +132,49 @@ impl Via {
         let ws =
             WebSocketStream::from_raw_socket(upgrading, Role::Client, Some(tunnel::config())).await;
         Ok(Frames::new(ws))
+    }
+}
+
+impl Via {
+    /// A stream to the machine through the Cloudflare relay `address` goes through, with the
+    /// token this device holds from the hub whose relay it is: the relay pairs it with the
+    /// machine's own connection to it, and forwards ciphertext only.
+    pub(crate) async fn relay_stream(&self, address: &str) -> anyhow::Result<Frames> {
+        let host_id = self
+            .machine
+            .clone()
+            .context("a machine is first signed in to at an address of its own")?;
+        let relay = address::relay(address).context("not a route through a relay")?;
+        let grant = self
+            .machines
+            .upgrade()
+            .and_then(|machines| {
+                // Every update leaves the list whole, so a poisoned list is consistent.
+                let machines = machines.lock().unwrap_or_else(PoisonError::into_inner);
+                machines.iter().find_map(|machine| {
+                    machine.relay_grant().filter(|grant| {
+                        address::through_relay(&grant.url).as_deref() == Some(address)
+                    })
+                })
+            })
+            .context(
+                "no hub this device is signed in to gave it a token for this relay; it gets \
+                 one once connected to its hub",
+            )?;
+        if grant.expires_at <= herder_protocol::Timestamp::now() {
+            anyhow::bail!(
+                "this device's token for the relay expired; it renews on the next connection \
+                 to the hub"
+            );
+        }
+        let mut headers = tunnel::Sent::new();
+        headers.insert(
+            "authorization".to_owned(),
+            format!("Bearer {}", grant.token),
+        );
+        tunnel::open(&format!("{relay}/machines/{host_id}"), &headers)
+            .await
+            .context("the Cloudflare relay")
     }
 }
 

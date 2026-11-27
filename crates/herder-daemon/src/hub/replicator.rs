@@ -26,8 +26,8 @@ use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Account, Attachment, AttachmentData, Batch, Cursor, DeviceId, Event, FetchedSecret, HostHello,
     HostMessage, HostSecretFetch, HubMessage, Item, ItemId, JournalRecord, MAX_BATCH_EVENTS,
-    REPLICATION_VERSION, RejectReason, SecretError, SecretFetch, SecretInfo, Seq, SessionHead,
-    SessionId, SessionStatus, SessionSummary,
+    REPLICATION_VERSION, RejectReason, RelayGrant, SecretError, SecretFetch, SecretInfo, Seq,
+    SessionHead, SessionId, SessionStatus, SessionSummary,
 };
 use tokio::sync::{Notify, oneshot};
 use tokio::time::Instant;
@@ -36,11 +36,11 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::BUILD;
 use super::client::{self, Ws};
 use super::host_secrets::{Ask, HostSecrets};
 use super::pin;
 use super::store::SecretUse;
+use super::{BUILD, cloudflare_relay};
 use crate::config::HubConfig;
 use crate::data_dir::write_private;
 use crate::session::{EventSink, SessionManager};
@@ -142,12 +142,23 @@ impl Replicator {
             Ok(config) => TlsConnector::from(Arc::new(config)),
             Err(err) => return warn!("cannot replicate to the hub: {err:#}"),
         };
+        // The hub's token for its Cloudflare relay, kept across connections to the hub: the
+        // relay reaches this host while the hub is down too.
+        let grants = tokio::sync::watch::Sender::new(None);
+        if self.hub.relay {
+            tokio::spawn(cloudflare_relay::machine(
+                self.host.id.clone(),
+                grants.subscribe(),
+                self.serve_relayed(),
+                shutdown.child_token(),
+            ));
+        }
         let mut attempt = 0;
         loop {
             let mut connected = false;
             let result = tokio::select! {
                 () = shutdown.cancelled() => return,
-                result = self.connection(&connector, &mut connected) => result,
+                result = self.connection(&connector, &mut connected, &grants) => result,
             };
             if connected {
                 attempt = 0;
@@ -174,19 +185,26 @@ impl Replicator {
     pub(super) async fn check(&self) -> Result<()> {
         let config = client_config(&self.hub.fingerprint, &self.device)?;
         let connector = TlsConnector::from(Arc::new(config));
-        let (mut ws, _) = tokio::time::timeout(CONNECT_TIMEOUT, self.connect(&connector))
+        let (mut ws, _, _) = tokio::time::timeout(CONNECT_TIMEOUT, self.connect(&connector))
             .await
             .map_err(|_| anyhow!("no answer in {CONNECT_TIMEOUT:?}"))??;
         let _ = ws.close(None).await;
         Ok(())
     }
 
-    /// One connection, until it fails; sets `connected` once the hub said hello.
-    async fn connection(&self, connector: &TlsConnector, connected: &mut bool) -> Result<()> {
-        let (mut ws, acked) = tokio::time::timeout(CONNECT_TIMEOUT, self.connect(connector))
+    /// One connection, until it fails; sets `connected` once the hub said hello, and
+    /// `grants` to each token the hub gives for its Cloudflare relay.
+    async fn connection(
+        &self,
+        connector: &TlsConnector,
+        connected: &mut bool,
+        grants: &tokio::sync::watch::Sender<Option<RelayGrant>>,
+    ) -> Result<()> {
+        let (mut ws, acked, grant) = tokio::time::timeout(CONNECT_TIMEOUT, self.connect(connector))
             .await
             .map_err(|_| anyhow!("no answer in {CONNECT_TIMEOUT:?}"))??;
         *connected = true;
+        grants.send_replace(grant);
         info!(hub = %self.hub.address, sessions = acked.len(), "replicating to the hub");
         // Sessions another host took over while this host was gone stop here before they
         // replicate again, retried on every keepalive until it worked; the hub drops this
@@ -228,6 +246,9 @@ impl Replicator {
                             HubMessage::RelayOpen { stream_id, device_id } => {
                                 self.open_relay(connector, stream_id, device_id);
                             }
+                            HubMessage::RelayGrant { grant } => {
+                                grants.send_replace(grant);
+                            }
                             message => link.receive(message)?,
                         },
                         Message::Close(_) => bail!("the hub closed the connection"),
@@ -256,6 +277,18 @@ impl Replicator {
         });
     }
 
+    /// Serves each client that reaches this host through the hub's Cloudflare relay as one the
+    /// hub relays, once the daemon's server is up.
+    fn serve_relayed(&self) -> Arc<dyn Fn(cloudflare_relay::Opened) + Send + Sync> {
+        let relayed = Arc::clone(&self.relayed);
+        Arc::new(move |opened| match relayed.get() {
+            Some(relayed) => {
+                relayed.serve(opened.stream, opened.peer, DeviceId::new(opened.device));
+            }
+            None => debug!("not serving a relayed client: this host serves none yet"),
+        })
+    }
+
     /// Makes this host's sessions that another host took over read-only; returns whether
     /// that worked.
     async fn release_recovered(&self) -> bool {
@@ -269,8 +302,12 @@ impl Replicator {
         }
     }
 
-    /// Connects and exchanges hellos; returns the hub's cursors.
-    async fn connect(&self, connector: &TlsConnector) -> Result<(Ws, Vec<Cursor>)> {
+    /// Connects and exchanges hellos; returns the hub's cursors, and its token for its
+    /// Cloudflare relay.
+    async fn connect(
+        &self,
+        connector: &TlsConnector,
+    ) -> Result<(Ws, Vec<Cursor>, Option<RelayGrant>)> {
         let mut ws = client::dial(&self.hub, connector).await?;
         let hello = HostMessage::Hello(HostHello {
             replication_version: REPLICATION_VERSION,
@@ -280,7 +317,7 @@ impl Replicator {
             pairing_code: self.hub.pairing_code.clone(),
             attachments_cap: self.hub.images_cap(),
             relay: self.hub.relay,
-            cloudflare_relay: false,
+            cloudflare_relay: self.hub.relay,
         });
         ws.send(Message::text(serde_json::to_string(&hello)?))
             .await?;
@@ -297,7 +334,7 @@ impl Replicator {
                         .cliproxyapi_relay
                         .then(|| pin::Through::new(self.hub.clone(), connector.clone()));
                     self.secrets.set_cliproxyapi(hello.cliproxyapi, through);
-                    Ok((ws, hello.acked))
+                    Ok((ws, hello.acked, hello.relay_grant))
                 }
                 HubMessage::Hello(hello) => Err(anyhow!(
                     "the hub speaks replication {}, this host {REPLICATION_VERSION}",
@@ -502,7 +539,6 @@ impl Link {
             // Taken by the connection's loop, for the host's secrets and its relayed clients.
             HubMessage::ProviderLogins { .. }
             | HubMessage::RelayOpen { .. }
-            // This host does not take streams through the Durable Object relay yet (P27.5).
             | HubMessage::RelayGrant { .. }
             | HubMessage::Hello(_)
             | HubMessage::Unknown => {}

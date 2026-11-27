@@ -30,6 +30,19 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends libgtk-4-dev libadwaita-1-dev xvfb
+      # The Durable Object relay (deploy/cloudflare-relay) runs in a local workerd, for its
+      # own tests and the Rust end-to-end tests through it.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: deploy/cloudflare-relay/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: deploy/cloudflare-relay
+      - run: npm run check
+        working-directory: deploy/cloudflare-relay
+      - run: npm test
+        working-directory: deploy/cloudflare-relay
       # Only main saves the cache; branches restore main's. Per-branch caches pushed the
       # repo past GitHub's 10 GB cache limit and evicted main's.
       - uses: Swatinem/rust-cache@v2
