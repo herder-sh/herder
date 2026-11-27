@@ -14,8 +14,11 @@ final class TextSelectionUITests: XCTestCase {
     private static let reply = "Reproduced on this Mac: WebKit failed 4 runs out of 20"
     /// A finished demo session, to send a prompt to.
     private static let idle = "Tidy the README badges"
-    /// The prompt the owner could not select.
-    private static let owners = "we are not merging smoking room to non-smoking room"
+    /// The prompt the owner could not select, tagged with this test's own word: the tests share one
+    /// fake daemon, so the same session holds the copies earlier tests sent, which the transcript
+    /// has scrolled out of the window by now.
+    private let owners = "we are not merging smoking room to non-smoking room "
+        + UUID().uuidString.prefix(8).lowercased()
 
     private var app: XCUIApplication!
 
@@ -39,14 +42,14 @@ final class TextSelectionUITests: XCTestCase {
     func testDraggingAcrossAPromptWithAPictureCopiesAllOfIt() throws {
         let prompt = sendOwnersPromptWithAPicture()
         drag(across: prompt)
-        XCTAssertEqual(copied(), "[Image #1] " + Self.owners)
+        XCTAssertEqual(copied(), "[Image #1] " + owners)
     }
 
     func testSelectAllInAPromptWithAPictureCopiesAllOfIt() throws {
         let prompt = sendOwnersPromptWithAPicture()
         prompt.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.7)).click()
         app.typeKey("a", modifierFlags: .command)
-        XCTAssertEqual(copied(), "[Image #1] " + Self.owners)
+        XCTAssertEqual(copied(), "[Image #1] " + owners)
     }
 
     /// A click on the chip, rather than a drag from it, still shows the picture.
@@ -131,9 +134,12 @@ final class TextSelectionUITests: XCTestCase {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([picture])
         app.typeKey("v", modifierFlags: .command)
-        composer.typeText(Self.owners)
+        composer.typeText(owners)
         app.typeKey(.return, modifierFlags: [])
-        return message(containing: Self.owners)
+        let prompt = message(containing: owners)
+        // The reply, and the prompt's delivery line, move it up as they come.
+        settle(prompt)
+        return prompt
     }
 
     private func message(_ text: String) -> XCUIElement {
