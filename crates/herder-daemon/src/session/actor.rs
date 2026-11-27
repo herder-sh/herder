@@ -2526,6 +2526,15 @@ impl Actor {
                     }
                     None => error,
                 };
+                // The login was refused before the agent had the prompt: it waits first in
+                // the queue, ahead of the prompts held behind it, and runs once the account is
+                // logged in again, instead of being used up by a turn that could not run.
+                if settled == SessionStatus::NeedsLogin
+                    && let Some(prompt) = self.prompt.take()
+                {
+                    self.queue.push_front(prompt);
+                    self.save_queue().await;
+                }
                 let summary = failed(&error);
                 let body = EventBody::TurnFailed {
                     turn_id: turn_id.clone(),

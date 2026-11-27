@@ -4705,7 +4705,7 @@ async fn a_logged_out_account_is_passed_over() {
 async fn an_account_logged_in_again_takes_part_in_failover_again() {
     let dir = tempfile::tempdir().unwrap();
     let claude = Scripted::new(&[
-        "failover_logged_out.jsonl",
+        "logged_out_then_logged_in.jsonl",
         "failover_limit_after_login.jsonl",
         "failover_retry_after_login.jsonl",
     ]);
@@ -4723,7 +4723,8 @@ async fn an_account_logged_in_again_takes_part_in_failover_again() {
     daemon.send(&first, "Refactor the parser.").await;
     daemon.settled(&first, SessionStatus::NeedsLogin).await;
 
-    // claude-a was logged in again from a client: the next limit rotates to it.
+    // claude-a was logged in again from a client: the failed turn's prompt runs there, and
+    // the next limit rotates to it.
     daemon.manager.logged_in_again(&AccountId::new("claude-a"));
     daemon.settled(&first, SessionStatus::Idle).await;
     let second = daemon.create("claude-b").await;
@@ -4734,7 +4735,7 @@ async fn an_account_logged_in_again_takes_part_in_failover_again() {
         lines.contains(&"-: account_switched claude-a".to_owned()),
         "{lines:?}"
     );
-    assert_eq!(lines[lines.len() - 2], "-: turn_completed turn-3");
+    assert_eq!(lines[lines.len() - 2], "-: turn_completed turn-4");
     assert_eq!(claude.starts().len(), 3);
     daemon.shutdown.cancel();
 }
@@ -4758,7 +4759,8 @@ async fn a_signed_out_account_holds_prompts_until_it_is_logged_in_again() {
     assert_eq!(daemon.manager.accounts(), accounts);
     daemon.until_status(SessionStatus::NeedsLogin).await;
 
-    // Prompts sent meanwhile are held in the queue: no turn starts, so none fails.
+    // The failed turn's prompt never reached the agent: it waits first, and prompts sent
+    // meanwhile are held behind it. No turn starts, so none fails.
     daemon.prompt(alice(), &session, "Add tests.").await;
     daemon.prompt(bob(), &session, "Update the docs.").await;
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -4766,12 +4768,15 @@ async fn a_signed_out_account_holds_prompts_until_it_is_logged_in_again() {
         .into_iter()
         .map(|(text, _)| text)
         .collect();
-    assert_eq!(queue, ["Add tests.", "Update the docs."]);
+    assert_eq!(
+        queue,
+        ["Refactor the parser.", "Add tests.", "Update the docs."]
+    );
     assert_eq!(daemon.commands.lock().unwrap().len(), 1);
     let head = daemon.manager.sessions().await.unwrap();
     assert_eq!(head[0].status, SessionStatus::NeedsLogin);
 
-    // Logged in again: the account is cleared and the held prompts run in the order sent.
+    // Logged in again: the account is cleared and every prompt runs in the order sent.
     daemon.manager.logged_in_again(&account());
     assert_eq!(daemon.next_accounts().await[0].needs_login, None);
     daemon.until_status(SessionStatus::Idle).await;
@@ -4784,14 +4789,18 @@ async fn a_signed_out_account_holds_prompts_until_it_is_logged_in_again() {
             "-: turn_failed turn-1 Auth",
             "-: status NeedsLogin",
             "-: status Running",
-            "alice: user turn-2 Add tests.",
+            "alice: user turn-2 Refactor the parser.",
             "-: turn_started turn-2",
-            "-: assistant turn-2 Added the tests.",
+            "-: assistant turn-2 Refactored the parser.",
             "-: turn_completed turn-2",
-            "bob: user turn-3 Update the docs.",
+            "alice: user turn-3 Add tests.",
             "-: turn_started turn-3",
-            "-: assistant turn-3 Updated the docs.",
+            "-: assistant turn-3 Added the tests.",
             "-: turn_completed turn-3",
+            "bob: user turn-4 Update the docs.",
+            "-: turn_started turn-4",
+            "-: assistant turn-4 Updated the docs.",
+            "-: turn_completed turn-4",
             "-: status Idle",
         ]
     );
@@ -4824,7 +4833,8 @@ async fn a_held_session_never_moves_account_by_itself_but_runs_on_the_one_it_is_
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(claude.starts().len(), 1);
 
-    // "Continue on another account" is the user's switch; the held prompt runs there.
+    // "Continue on another account" is the user's switch; the held prompts run there, the
+    // failed turn's first.
     let switched = daemon.handle(switch_account(&session, "claude-b")).await;
     assert_eq!(switched, Ok(CommandResult::Applied));
     let journal = daemon.settled(&session, SessionStatus::Idle).await;
@@ -4838,10 +4848,14 @@ async fn a_held_session_never_moves_account_by_itself_but_runs_on_the_one_it_is_
             "-: status NeedsLogin",
             "alice: account_switched claude-b",
             "-: status Running",
-            "alice: user turn-2 Add tests.",
+            "alice: user turn-2 Refactor the parser.",
             "-: turn_started turn-2",
-            "-: assistant turn-2 Added the tests.",
+            "-: assistant turn-2 Refactored the parser.",
             "-: turn_completed turn-2",
+            "alice: user turn-3 Add tests.",
+            "-: turn_started turn-3",
+            "-: assistant turn-3 Added the tests.",
+            "-: turn_completed turn-3",
             "-: status Idle",
         ]
     );

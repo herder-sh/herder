@@ -1,6 +1,10 @@
-# The prompt held while claude-a needed logging in, run once the user moved the session to
-# claude-b.
-{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Add tests."}}
+# The prompts held while claude-a needed logging in, the failed turn's first, run in order
+# once the user moved the session to claude-b.
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Refactor the parser."}}
 {"emit": {"type": "turn_started", "turn_id": "turn-2"}}
-{"emit": {"type": "item_completed", "item": {"id": "c-1", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Added the tests."}}}}
+{"emit": {"type": "item_completed", "item": {"id": "c-0", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Refactored the parser."}}}}
 {"emit": {"type": "turn_completed", "turn_id": "turn-2"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-3", "text": "Add tests."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-3"}}
+{"emit": {"type": "item_completed", "item": {"id": "c-1", "turn_id": "turn-3", "body": {"type": "assistant_message", "text": "Added the tests."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-3"}}
