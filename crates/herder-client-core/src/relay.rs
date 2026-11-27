@@ -4,25 +4,37 @@
 //!
 //! The client opens a connection to the hub as it always does, pinned to the hub's
 //! certificate and with this device's key for the hub, and asks for a stream to the machine
-//! ([`herder_protocol::relay`]). The hub forwards the stream's bytes to the machine, which
+//! by its upgrade request's path ([`herder_protocol::relay`]). It does not wait for the
+//! answer: its TLS to the machine starts right behind the request, and the hub holds those
+//! bytes until the machine dialed in, so the upgrade to the hub costs no round trip of its
+//! own. The hub forwards the stream's bytes to the machine, which
 //! keeps a connection to the hub. Inside the stream the client then runs its ordinary
 //! connection to the machine: TLS pinning the machine's certificate and presenting this
 //! device's key for it, the WebSocket and the hello. The hub relays only ciphertext, and
 //! the machine knows the device as on a direct connection.
 
+use std::io;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::task::{Context, Poll, ready};
 
-use anyhow::{Context as _, anyhow, bail};
-use futures_util::{SinkExt, StreamExt};
-use herder_protocol::{HostId, RELAY_VERSION, RelayAnswer, RelayHello};
+use anyhow::{Context as _, anyhow};
+use herder_protocol::{HostId, RelayError, RelayRoute};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::handshake::client::generate_key;
+use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+use tokio_tungstenite::tungstenite::protocol::Role;
 
 use crate::address;
 use crate::auth::{DeviceKey, client_config};
 use crate::supervisor::{self, Supervisor, Watched};
 use crate::tunnel::{self, Frames};
+
+/// Most bytes of the hub's answer to an upgrade, refusal included.
+const MAX_ANSWER: usize = 16 * 1024;
 
 /// Where a machine's `hub://` address leads: the machine it is of, and the client's
 /// machines, the hub among them.
@@ -34,8 +46,9 @@ pub(crate) struct Via {
     machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
 }
 
-/// A relay stream through a hub: the frames of a connection to it.
-pub(crate) type Stream = Frames<TlsStream<Watched>>;
+/// A relay stream through a hub: the frames of a connection to it, whose upgrade may not be
+/// answered yet.
+pub(crate) type Stream = Frames<Upgrading<TlsStream<Watched>>>;
 
 impl Via {
     /// The routes of `machine`, one of `machines`.
@@ -75,33 +88,230 @@ impl Via {
         let connector = TlsConnector::from(Arc::new(client_config(&saved.fingerprint, &device)?));
         let reaching = |address: String| {
             let connector = connector.clone();
-            // Each frame goes out as written: the TLS inside decides what to batch.
-            async move { supervisor::direct(&address, &connector, Some(tunnel::config())).await }
+            async move { supervisor::dial(&address, &connector).await }
         };
-        let (mut ws, _) = supervisor::race(&addresses, reaching)
+        let (mut tls, _) = supervisor::race(&addresses, reaching)
             .await
             .map_err(|error| anyhow!("the hub {}: {error}", saved.name))?;
-        let connect = RelayHello::Connect {
-            relay_version: RELAY_VERSION,
-            host_id,
-        };
-        ws.send(Message::text(serde_json::to_string(&connect)?))
+        let key = generate_key();
+        let request = format!(
+            "GET {} HTTP/1.1\r\nHost: herder\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+             Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n\r\n",
+            RelayRoute::Machine(host_id).path()
+        );
+        tls.write_all(request.as_bytes())
             .await
             .context("asking the hub")?;
-        loop {
-            let text = match ws.next().await {
-                Some(Ok(Message::Text(text))) => text,
-                Some(Ok(Message::Close(_))) | None => bail!("the hub closed the connection"),
-                Some(Ok(_)) => continue,
-                Some(Err(err)) => return Err(err).context("the hub's answer"),
-            };
-            return match serde_json::from_str(&text).context("the hub's answer")? {
-                RelayAnswer::Ready => Ok(Frames::new(ws)),
-                RelayAnswer::Refused { error } => {
-                    Err(anyhow!("the hub {}: {}", saved.name, error.message))
-                }
-                RelayAnswer::Unknown => Err(anyhow!("the hub's answer is newer than this app")),
-            };
+        tls.flush().await.context("asking the hub")?;
+        let upgrading = Upgrading {
+            stream: tls,
+            accept: derive_accept_key(key.as_bytes()),
+            hub: saved.name,
+            answer: Vec::new(),
+            open: false,
+        };
+        // Each frame goes out as written: the TLS inside decides what to batch.
+        let ws =
+            WebSocketStream::from_raw_socket(upgrading, Role::Client, Some(tunnel::config())).await;
+        Ok(Frames::new(ws))
+    }
+}
+
+/// A connection to the hub whose upgrade request is sent and whose answer is read before
+/// anything else: writes go out at once, behind the request, and the first read takes the
+/// answer. A `101` opens the stream; a refusal fails the read with the hub's reason.
+pub(crate) struct Upgrading<S> {
+    stream: S,
+    /// The `Sec-WebSocket-Accept` the answer must carry.
+    accept: String,
+    /// The hub's name, for a refusal.
+    hub: String,
+    /// The answer as read so far; once the stream is open, what came behind it, not read
+    /// yet.
+    answer: Vec<u8>,
+    open: bool,
+}
+
+impl<S> Upgrading<S> {
+    /// The length of the answer's head once it is a `101`; `None` until enough of the answer
+    /// is read, or, at `eof`, the refusal or failure it is.
+    fn answered(&self, eof: bool) -> io::Result<Option<usize>> {
+        let mut headers = [httparse::EMPTY_HEADER; 32];
+        let mut response = httparse::Response::new(&mut headers);
+        let bad = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
+        let head = match response.parse(&self.answer) {
+            Ok(httparse::Status::Complete(head)) => head,
+            Ok(httparse::Status::Partial) if !eof => return Ok(None),
+            Ok(httparse::Status::Partial) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!(
+                        "the hub {} closed the connection without an answer",
+                        self.hub
+                    ),
+                ));
+            }
+            Err(err) => return Err(bad(format!("the hub's answer: {err}"))),
+        };
+        let header = |name: &str| {
+            response
+                .headers
+                .iter()
+                .find(|header| header.name.eq_ignore_ascii_case(name))
+                .and_then(|header| std::str::from_utf8(header.value).ok())
+        };
+        let status = response.code.unwrap_or_default();
+        if status == 101 {
+            if header("sec-websocket-accept").map(str::trim) != Some(self.accept.as_str()) {
+                return Err(bad(
+                    "the hub's answer does not accept this upgrade".to_owned()
+                ));
+            }
+            return Ok(Some(head));
         }
+        let length = header("content-length")
+            .and_then(|length| length.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let body = &self.answer[head..];
+        if body.len() < length && !eof {
+            return Ok(None);
+        }
+        let reason = serde_json::from_slice::<RelayError>(&body[..body.len().min(length)])
+            .map(|error| error.message)
+            .unwrap_or_else(|_| format!("{status} {}", response.reason.unwrap_or_default()));
+        Err(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            format!("the hub {} refused: {reason}", self.hub),
+        ))
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Upgrading<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = &mut *self;
+        while !this.open {
+            let eof = {
+                let mut chunk = [0; 2048];
+                let mut read = ReadBuf::new(&mut chunk);
+                ready!(Pin::new(&mut this.stream).poll_read(cx, &mut read))?;
+                this.answer.extend_from_slice(read.filled());
+                read.filled().is_empty()
+            };
+            if let Some(head) = this.answered(eof)? {
+                this.answer.drain(..head);
+                this.open = true;
+            } else if this.answer.len() > MAX_ANSWER {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("the hub's answer is over {MAX_ANSWER} bytes"),
+                )));
+            }
+        }
+        if this.answer.is_empty() {
+            return Pin::new(&mut this.stream).poll_read(cx, buf);
+        }
+        let n = this.answer.len().min(buf.remaining());
+        buf.put_slice(&this.answer[..n]);
+        this.answer.drain(..n);
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Upgrading<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    fn asked(stream: tokio::io::DuplexStream) -> Upgrading<tokio::io::DuplexStream> {
+        Upgrading {
+            stream,
+            accept: derive_accept_key(b"dGhlIHNhbXBsZSBub25jZQ=="),
+            hub: "home".into(),
+            answer: Vec::new(),
+            open: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn what_comes_behind_a_101_is_the_stream() {
+        let (mut hub, client) = tokio::io::duplex(4096);
+        let mut upgrading = asked(client);
+        // Writes go out before any answer.
+        upgrading.write_all(b"client hello").await.unwrap();
+        let mut sent = [0; 12];
+        hub.read_exact(&mut sent).await.unwrap();
+        assert_eq!(&sent, b"client hello");
+        let answer = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\
+            Connection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\nserver";
+        for piece in answer.as_bytes().chunks(5) {
+            hub.write_all(piece).await.unwrap();
+        }
+        hub.write_all(b" hello").await.unwrap();
+        drop(hub);
+        let mut read = Vec::new();
+        upgrading.read_to_end(&mut read).await.unwrap();
+        assert_eq!(read, b"server hello");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_fails_the_read_with_the_hubs_reason() {
+        let (mut hub, client) = tokio::io::duplex(4096);
+        let mut upgrading = asked(client);
+        let body = r#"{"code":"host_offline","message":"the host h is not connected"}"#;
+        let answer = format!(
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        hub.write_all(answer.as_bytes()).await.unwrap();
+        let err = upgrading.read(&mut [0; 16]).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionRefused);
+        assert_eq!(
+            err.to_string(),
+            "the hub home refused: the host h is not connected"
+        );
+
+        // Something in front of the hub refused, with no reason of the hub's.
+        let (mut hub, client) = tokio::io::duplex(4096);
+        let mut upgrading = asked(client);
+        hub.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+            .await
+            .unwrap();
+        drop(hub);
+        let err = upgrading.read(&mut [0; 16]).await.unwrap_err();
+        assert_eq!(err.to_string(), "the hub home refused: 502 Bad Gateway");
+    }
+
+    #[tokio::test]
+    async fn an_answer_for_another_upgrade_is_refused() {
+        let (mut hub, client) = tokio::io::duplex(4096);
+        let mut upgrading = asked(client);
+        hub.write_all(b"HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: x\r\n\r\n")
+            .await
+            .unwrap();
+        let err = upgrading.read(&mut [0; 16]).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }

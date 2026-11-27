@@ -50,6 +50,7 @@ mod replicator;
 mod retention;
 mod secrets;
 mod store;
+mod upgrade;
 
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;

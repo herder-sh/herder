@@ -1,8 +1,8 @@
 //! One connection to the hub, direct or delivered by `cloudflared` inside a tunnel's
-//! frames: TLS with the peer's device certificate, the WebSocket upgrade and the first
-//! message, which tells a host from a client from an end of a relay stream ([`relay`]). A
-//! client is served by the
-//! daemon's client server over the fleet view; a host gets the hellos, then its messages are
+//! frames: TLS with the peer's device certificate, then the WebSocket upgrade, whose path
+//! tells an end of a relay stream ([`relay`]) from the rest, and on `/` the first message,
+//! which tells a host from a client. A client is served by the daemon's client server over
+//! the fleet view; a host gets the hellos, then its messages are
 //! handled one at a time: an image is durable before the next is read, and a batch is
 //! acknowledged once durable. An image the host's cap leaves no room for is dropped, never
 //! failing the connection.
@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     Cursor, DeviceId, HostId, HostMessage, HubHello, HubMessage, ProviderLogin,
-    REPLICATION_VERSION, ReplicationError, ReplicationErrorCode,
+    REPLICATION_VERSION, RelayRoute, ReplicationError, ReplicationErrorCode,
 };
 use tokio::net::TcpStream;
 use tokio::sync::watch;
@@ -24,9 +24,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::store::{self, Kept, Outcome, SecretUse};
+use super::upgrade::{self, Upgrade as Upgrading};
 use super::{BUILD, Shared, blocking, cliproxyapi, relay, secrets};
 use crate::auth::DeviceRole;
 use crate::ws::{self, Transport, Ws, tunnel};
+
+/// A connection whose upgrade request is read and not answered yet.
+pub(super) type Upgrade = Upgrading<tokio_rustls::server::TlsStream<Transport>>;
 
 /// Time a peer gets for the TLS and WebSocket handshakes, and again for its hello.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -45,14 +49,31 @@ pub(super) async fn run(
     if let Err(err) = ws::notice_a_gone_peer(&stream) {
         debug!(%peer, "cannot set the socket's keepalive: {err}");
     }
-    let ws = tokio::select! {
+    let opened = tokio::select! {
         () = cancel.cancelled() => return,
-        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared, stream, tunneled)) => ws,
+        opened = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared, stream, tunneled)) => opened,
     };
-    let (mut ws, device, pass) = match ws {
-        Ok(Ok(ws)) => ws,
+    let (upgrade, device, pass) = match opened {
+        Ok(Ok(opened)) => opened,
         Ok(Err(err)) => return info!(%peer, "handshake failed: {err:#}"),
         Err(_) => return info!(%peer, "handshake timed out"),
+    };
+    if upgrade.path() != "/" {
+        let Some(route) = RelayRoute::parse(upgrade.path()) else {
+            debug!(%peer, path = upgrade.path(), "refused an upgrade to an unknown path");
+            let _ = tokio::time::timeout(Duration::from_secs(1), upgrade.refuse(404, None)).await;
+            return;
+        };
+        return relay::serve(upgrade, route, &shared, &device, pass, peer, cancel).await;
+    }
+    let ws = tokio::select! {
+        () = cancel.cancelled() => return,
+        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, upgrade.accept(ws::ws_config())) => ws,
+    };
+    let mut ws = match ws {
+        Ok(Ok(ws)) => ws,
+        Ok(Err(err)) => return info!(%peer, "upgrade failed: {err:#}"),
+        Err(_) => return info!(%peer, "upgrade timed out"),
     };
     let first = tokio::select! {
         () = cancel.cancelled() => return,
@@ -64,9 +85,6 @@ pub(super) async fn run(
         Ok(Err(err)) => return info!(%peer, "no hello: {err:#}"),
         Err(_) => return info!(%peer, "no hello within {HANDSHAKE_TIMEOUT:?}"),
     };
-    if relay::is_hello(&first) {
-        return relay::serve(ws, &first, &shared, &device, pass, peer, cancel).await;
-    }
     if !is_host(&first) {
         return shared
             .clients
@@ -83,13 +101,14 @@ pub(super) async fn run(
     let _ = tokio::time::timeout(Duration::from_secs(1), ws.close(None)).await;
 }
 
-/// The handshakes of a connection: on a tunneled one, the upgrade from `cloudflared` first,
-/// which also gets it a pass through the tunnel's gate.
+/// The handshakes of a connection up to its upgrade request, which is read and not answered
+/// yet: on a tunneled one, the upgrade from `cloudflared` first, which also gets it a pass
+/// through the tunnel's gate.
 async fn open(
     shared: &Shared,
     stream: TcpStream,
     tunneled: bool,
-) -> Result<(Ws, String, Option<tunnel::Pass>)> {
+) -> Result<(Upgrade, String, Option<tunnel::Pass>)> {
     let (transport, pass) = if tunneled {
         let (frames, pass, _) = tunnel::accept(stream, &shared.tunnel_gate)
             .await
@@ -98,8 +117,9 @@ async fn open(
     } else {
         (Transport::Tcp(stream), None)
     };
-    let (ws, device) = ws::handshake(&shared.tls, transport).await?;
-    Ok((ws, device, pass))
+    let (tls, device) = ws::secure(&shared.tls, transport).await?;
+    let upgrade = upgrade::read(tls).await?;
+    Ok((upgrade, device, pass))
 }
 
 /// The first text frame, or `None` when the peer closes first.

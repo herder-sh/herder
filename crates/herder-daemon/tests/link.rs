@@ -39,8 +39,8 @@ use herder_daemon::hub::install::LocalHub;
 use herder_daemon::service::{Service, Services};
 use herder_protocol::{
     AccountId, ClientHello, ClientMessage, CommandBody, CommandResult, Cursor, ErrorCode,
-    EventBody, HostId, LinkedHub, PROTOCOL_VERSION, PermissionMode, Provider, RELAY_VERSION,
-    RelayAnswer, RelayErrorCode, RelayHello, Role, ServerMessage, SessionId, Timestamp,
+    EventBody, HostId, LinkedHub, PROTOCOL_VERSION, PermissionMode, Provider, RelayError,
+    RelayErrorCode, RelayRoute, Role, ServerMessage, SessionId, Timestamp,
 };
 use herder_store::{NewEvent, Store};
 use tokio_util::sync::CancellationToken;
@@ -744,27 +744,36 @@ async fn tcp(address: &str) -> TcpStream {
     tcp
 }
 
-/// What `hub` answers `device` asking for a stream to `host`, and the stream.
-async fn stream_to(hub: &Machine, device: &DeviceKey, host: &HostId) -> (RelayAnswer, Frames) {
-    let mut ws = secure(tcp(&hub.addresses[0]).await, &hub.fingerprint, device)
+/// The stream `hub` opens for `device` asking for `host`, or the code it refused with.
+async fn stream_to(
+    hub: &Machine,
+    device: &DeviceKey,
+    host: &HostId,
+) -> Result<Frames, RelayErrorCode> {
+    let config = client_config(&hub.fingerprint, device).unwrap();
+    let tls = TlsConnector::from(Arc::new(config))
+        .connect(
+            ServerName::try_from("herder").unwrap(),
+            tcp(&hub.addresses[0]).await,
+        )
         .await
         .unwrap();
-    let connect = RelayHello::Connect {
-        relay_version: RELAY_VERSION,
-        host_id: host.clone(),
-    };
-    ws.send(Message::text(serde_json::to_string(&connect).unwrap()))
-        .await
-        .unwrap();
-    let answer = loop {
-        match tokio::time::timeout(TIMEOUT, ws.next()).await.unwrap() {
-            Some(Ok(Message::Text(text))) => break serde_json::from_str(&text).unwrap(),
-            Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-            other => panic!("no answer from the hub: {other:?}"),
+    let path = RelayRoute::Machine(host.clone()).path();
+    let request = format!("wss://herder{path}").into_client_request().unwrap();
+    let config = WebSocketConfig::default().write_buffer_size(0);
+    match tokio_tungstenite::client_async_with_config(request, tls, Some(config)).await {
+        Ok((ws, _)) => Ok(Frames {
+            ws,
+            read: Bytes::new(),
+        }),
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            let body = response.body().as_deref().unwrap_or_default();
+            let error: RelayError = serde_json::from_slice(body).unwrap();
+            assert_eq!(error.code.status(), response.status().as_u16());
+            Err(error.code)
         }
-    };
-    let read = Bytes::new();
-    (answer, Frames { ws, read })
+        Err(err) => panic!("no answer from the hub: {err}"),
+    }
 }
 
 /// The next message of the client protocol on `ws`.
@@ -872,8 +881,7 @@ async fn a_device_reaches_a_linked_host_through_the_hub_as_it_does_directly() {
 
     // Through the hub the host answers the hello as it does directly, and streams a
     // session's journal.
-    let (answer, stream) = stream_to(&on_hub, &at_hub, &host_id).await;
-    assert_eq!(answer, RelayAnswer::Ready);
+    let stream = stream_to(&on_hub, &at_hub, &host_id).await.unwrap();
     let mut through = secure(stream, &on_host.fingerprint, &at_host)
         .await
         .unwrap();
@@ -928,8 +936,7 @@ async fn a_device_reaches_a_linked_host_through_the_hub_as_it_does_directly() {
     // The host authenticates inside the stream: a device it does not know is refused as it
     // is directly, though the hub forwarded for the device it knows.
     let stranger = DeviceKey::generate().unwrap();
-    let (answer, stream) = stream_to(&on_hub, &at_hub, &host_id).await;
-    assert_eq!(answer, RelayAnswer::Ready);
+    let stream = stream_to(&on_hub, &at_hub, &host_id).await.unwrap();
     let mut unknown = secure(stream, &on_host.fingerprint, &stranger)
         .await
         .unwrap();
@@ -950,16 +957,15 @@ async fn a_device_reaches_a_linked_host_through_the_hub_as_it_does_directly() {
     assert_eq!(relayed.code, ErrorCode::Forbidden);
 
     // The host's certificate is pinned inside the stream: the hub cannot answer for it.
-    let (_, stream) = stream_to(&on_hub, &at_hub, &host_id).await;
+    let stream = stream_to(&on_hub, &at_hub, &host_id).await.unwrap();
     assert!(
         secure(stream, &on_hub.fingerprint, &at_host).await.is_err(),
         "a connection pinned to another certificate went through"
     );
     // And the hub forwards only for a device it knows.
-    let (answer, _) = stream_to(&on_hub, &at_host, &host_id).await;
-    assert!(
-        matches!(&answer, RelayAnswer::Refused { error } if error.code == RelayErrorCode::Forbidden),
-        "{answer:?}"
+    assert_eq!(
+        stream_to(&on_hub, &at_host, &host_id).await.err(),
+        Some(RelayErrorCode::Forbidden)
     );
 
     // A host that takes no relayed connections is listed without the route, and gets none.
@@ -982,10 +988,9 @@ async fn a_device_reaches_a_linked_host_through_the_hub_as_it_does_directly() {
     })
     .await;
     assert!(unrelayed.hosts.iter().all(|h| !h.relay), "{unrelayed:?}");
-    let (answer, _) = stream_to(&on_hub, &at_hub, &host_id).await;
-    assert!(
-        matches!(&answer, RelayAnswer::Refused { error } if error.code == RelayErrorCode::UnknownHost),
-        "{answer:?}"
+    assert_eq!(
+        stream_to(&on_hub, &at_hub, &host_id).await.err(),
+        Some(RelayErrorCode::UnknownHost)
     );
     host.stop().await;
     hub.stop().await;
