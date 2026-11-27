@@ -100,7 +100,7 @@ Rules:
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
 - **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats, then Bots with a row per bot, §4.2.1), then **Workspace** (Providers, Skills, Hub; a hub's page opens inside Hub), then the
-  projects, then one footer line for the machines (`MachinesFooter`). It starts collapsed to
+  projects, and at the foot, only when it is worth saying, the stalled-work line (`StalledWork`). It starts collapsed to
   the rail (`sidebarCollapsed`), which leaves the width to the session and lists the same
   things in the same order; ⇧⌘\ toggles it. The window's traffic lights sit in its top bar
   (`Sidebar.topBar`, 52 pt on the Mac).
@@ -114,9 +114,21 @@ Rules:
   pane title's `Switcher` lists projects in the same order. Projects with no activity for 30
   days (`ProjectGroup.quiet`) fold under "N more", unless one waits for the user or is open.
   The sessions no project holds yet stay last.
-- **The machines footer** is a dot per machine coloured by its connection (`ConnectionMark`)
-  and a summary ("4 machines · 1 offline"). Clicking it opens a popover with each machine's
-  status, each row opening its page, and a link to Hub. On the rail it is the dots alone.
+- **The machines are not in the chrome** (P26.7). The old footer, a dot per machine, "4
+  machines · 1 offline" and a popover of each machine's state, told the user nothing they would
+  act on: the dots and the count never change what you do, a laptop asleep is expected, each
+  machine's state and its page are one click away in Hub, and the popover's "Open Hub"
+  repeated the sidebar's row. So the foot of the sidebar is empty while all is well.
+  It says one thing, in one quiet line, when it matters: a machine that open work runs on is
+  offline (`StalledWork`). Open work is a session that was running, waiting for capacity or
+  waiting for you when the machine was last heard from (`MachineSummary.openWork`; the
+  client keeps a machine's sessions through a drop). The line is the offline mark
+  (`ConnectionMark`) and the sentence, in the secondary colour: "devbox is offline · 2 sessions wait on it",
+  or "2 machines are offline · 5 sessions wait on them". It opens the machine's page in Hub,
+  or Hub when it names more than one. A machine still connecting, a hub, and a machine with
+  nothing open say nothing. On the rail it is the mark alone, the line in its tooltip. On the
+  iPhone the same line sits at the foot of the Board, over the tab bar, and opens the same
+  page on the Hub tab; nothing shows there while all is well.
 - **The list pane** is 380 pt (`ListAndSession`). ⌘\ hides it to give the session the whole
   width (`listHidden`); with no session open it always shows.
 - **The pane header** (`Pane`) is a `PageHeader` (§8.4): the title (a menu of sections and
@@ -131,8 +143,10 @@ Rules:
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
   parent, a page's breadcrumb (`PageTrail`, ⌘[) to what it opened over.
 
-Screenshots: `mac-home.png` (rail), `mac-sidebar-expanded.png`, `mac-sidebar-machines.png`
-(the machines popover), `mac-narrow.png`, `ios-home.png`.
+Screenshots: `mac-home.png` (rail), `mac-sidebar-expanded.png`, `mac-narrow.png`,
+`ios-home.png`; the stalled-work line in `stalled-work-mac.png`, `stalled-work-rail-mac.png`,
+`stalled-work-none-mac.png` (all well: nothing)
+and `stalled-work-iphone.png` (`StalledWorkScreenshotTests`).
 
 ---
 

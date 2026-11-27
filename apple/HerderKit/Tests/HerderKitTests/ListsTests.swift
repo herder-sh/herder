@@ -246,6 +246,24 @@ struct ListsTests {
         #expect(!Draft(hostId: "host-a", repo: "/src/app").isChat)
     }
 
+    @Test func anOfflineMachineCountsTheWorkLeftOpenOnIt() {
+        var running = Script("01A")
+        var asking = Script("01B")
+        var idle = Script("01C")
+        let devbox = machine("host-a", name: "devbox", sessions: ["01A", "01B", "01C"],
+                             connection: .disconnected(error: "gone"))
+        let lists = Lists(machines: [devbox], sessions: [
+            running.key: running.model([created(), .sessionStatusChanged(status: .running, retryAt: nil)]),
+            asking.key: asking.model([
+                created(), .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "s", routedTo: .user,
+                                              reason: nil, secret: nil, secretRequest: nil),
+            ]),
+            idle.key: idle.model([created()]),
+        ])
+        #expect(lists.machines.first?.openWork == 2)
+        #expect(StalledWork.line(lists.machines) == "devbox is offline · 2 sessions wait on it")
+    }
+
     @Test func aHubSessionShowsItsHostAndWhetherItIsOffline() {
         var script = Script("01A", host: "hub")
         var hub = machine("hub", name: "hub", sessions: ["01A"], hosts: [

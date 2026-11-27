@@ -131,6 +131,9 @@ struct MachineSummary: Hashable, Identifiable {
     let pinned: Bool
     /// Whether it is a hub, which backs up the machines rather than running sessions.
     var hub = false
+    /// Its sessions that were running, waiting for capacity or waiting for you when it was last
+    /// heard from: the work that stalls while it is offline.
+    var openWork = 0
 
     var connected: Bool { connection == .connected }
 }

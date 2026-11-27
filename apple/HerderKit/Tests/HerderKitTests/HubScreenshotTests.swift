@@ -11,7 +11,7 @@ import Testing
 /// the same page at the iPhone's width, and with no hub; a person's sheet; and Needs you's
 /// cards at the iPhone's width, their fixes under them.
 /// Attaches each; with `HERDER_SCREENSHOT_DIR` set, also writes them there as
-/// `setup-<screen>-<width>.png`.
+/// `hub-<screen>.png`.
 @MainActor @Suite(.serialized) struct HubScreenshotTests {
     private let now = Timestamp.date("2026-10-29T12:00:00Z")!
 

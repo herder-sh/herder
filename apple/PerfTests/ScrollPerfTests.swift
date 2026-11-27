@@ -81,20 +81,11 @@ final class ScrollPerfTests: PerfTestCase {
 
     /// A machine's settings: its accounts, CLIs, limits, MCP servers and backup.
     func testMachineSettings() {
-        #if os(macOS)
-        let footer = app.descendants(matching: .any)["sidebar-machines"].firstMatch
-        XCTAssertTrue(footer.waitForExistence(timeout: 10))
-        press(footer)
-        let devbox = app.descendants(matching: .any)["sidebar-machine-devbox"].firstMatch
-        XCTAssertTrue(devbox.waitForExistence(timeout: 10))
-        press(devbox)
-        #else
         section("Hub")
         let devbox = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'devbox'")).firstMatch
         XCTAssertTrue(devbox.waitForExistence(timeout: 10))
         reveal(devbox)
         press(devbox)
-        #endif
         // The Mac's page has a section index; the iPhone's, its name in the navigation bar.
         #if os(macOS)
         XCTAssertTrue(app.buttons["section-index-MCP servers"].waitForExistence(timeout: 15))
