@@ -46,8 +46,9 @@ must keep a corporate Cloudflare WARP (or any other VPN) on keeps it, and herder
 reaches home.
 
 - **Configured**: the user exports a peer config on the router and imports it once into
-  herder, as a QR code (the apps' camera) or the `.conf` text (file, paste, or
-  `herder vpn import <file>` in the TUI's CLI). It is a standard `wg-quick` config:
+  herder, as a QR code (the iPhone app's camera) or the `.conf` text (a file or a paste in
+  the apps' Hub tab, or `herder vpn import <name> <file>` in a terminal; the TUI shares the
+  profile). `herder vpn list` and `herder vpn remove <id>` list and remove them. It is a standard `wg-quick` config:
   `[Interface] PrivateKey, Address` (`DNS`, `MTU` read, `DNS` ignored) and one `[Peer]
   PublicKey, PresharedKey?, Endpoint, AllowedIPs` (`PersistentKeepalive` ignored: herder's
   own pings keep the path warm while it is used, and nothing should while it is not).
@@ -215,7 +216,7 @@ connection is needed; never a move mid-use.
 
 | Failure | What the user sees |
 | --- | --- |
-| The router's WireGuard server is down or its UDP port blocked | The `wg://` route gets no handshake answer and loses its race; other routes answer. Its error says "no WireGuard handshake from <endpoint> in 5 s". |
+| The router's WireGuard server is down or its UDP port blocked | The `wg://` route gets no handshake answer and loses its race; other routes answer. Its error says "no answer from <address> through the WireGuard server <endpoint> in 5s". |
 | At home with the own-VPN route ranked first by the user | The race still starts the LAN address 300 ms later; the tunnel usually fails (hairpin) and the LAN wins. |
 | AllowedIPs do not cover a machine | No `wg://` route is added for it. |
 | The hub's UDP port is not forwarded | `wg://hub/…` never handshakes; the Hub tab's reach check (P26.3) says so for that route. |

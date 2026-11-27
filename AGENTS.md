@@ -30,6 +30,7 @@ repo in parallel; these rules keep that safe. Follow them exactly.
 | `herder-protocol`    | Wire/protocol types and their JSON Schema                    |
 | `herder-store`       | SQLite append-only event journal and projections             |
 | `herder-adapters`    | Provider adapter trait, vendor adapters, fake adapter        |
+| `herder-wireguard`   | Userspace WireGuard tunnels and endpoint (boringtun, smoltcp) |
 | `herder-daemon`      | Daemon runtime, WebSocket server, sessions                   |
 | `herder-tasktools`   | MCP tool definitions agents use to run multi-agent tasks     |
 | `herder-telemetry`   | Opt-in diagnostics: Sentry traces and errors, scrubbed       |

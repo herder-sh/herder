@@ -150,6 +150,7 @@ struct OwnVpnFacts: View {
     let actions: RemoteActions
     @State private var importing = false
     @State private var choosingFile = false
+    @State private var scanning = false
     @State private var name = ""
     @State private var config = ""
     @State private var error: String?
@@ -185,6 +186,11 @@ struct OwnVpnFacts: View {
                 }
                 HStack(spacing: 10) {
                     SettingsButton(title: "Choose File…") { choosingFile = true }.fixedSize()
+                    #if os(iOS)
+                    SettingsButton(title: "Scan QR Code…") { scanning = true }
+                        .fixedSize()
+                        .accessibilityIdentifier("remote-access-scan-vpn")
+                    #endif
                     Spacer(minLength: 0)
                     SettingsButton(title: "Cancel", style: .quiet) { close() }.fixedSize()
                     SettingsButton(title: "Import", style: .primary) {
@@ -202,6 +208,21 @@ struct OwnVpnFacts: View {
             .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.item]) { result in
                 if case .success(let url) = result { read(url) }
             }
+            #if os(iOS)
+            .fullScreenCover(isPresented: $scanning) {
+                QRScanner(
+                    hint: "Point the camera at the QR code your router shows for this device’s WireGuard config.",
+                    rejected: "That QR code holds no WireGuard config.",
+                    otherwise: "Choose the .conf file instead.",
+                    close: { scanning = false }
+                ) { payload in
+                    guard isWireGuardConfig(payload) else { return false }
+                    config = payload
+                    error = nil
+                    return true
+                }
+            }
+            #endif
         } else {
             HStack {
                 SettingsButton(title: options.imported.isEmpty ? "Import a WireGuard Config…" : "Import Another…",

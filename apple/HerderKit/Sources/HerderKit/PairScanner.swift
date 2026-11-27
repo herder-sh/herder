@@ -10,6 +10,32 @@ import AVFoundation
 struct PairScanner: View {
     let scanned: (PairLink) -> Void
     let close: () -> Void
+
+    var body: some View {
+        QRScanner(
+            hint: "Point the camera at the QR code herder shows on your other device, or herder claim prints.",
+            rejected: "That QR code is not one of herder’s.",
+            otherwise: "Paste the link instead.",
+            close: close
+        ) { payload in
+            guard let link = pairLink(in: payload) else { return false }
+            scanned(link)
+            return true
+        }
+    }
+}
+
+/// The camera, full screen, looking for a QR code `accept` takes: it says whether it took
+/// the code's text, and the scanner closes once it does.
+struct QRScanner: View {
+    /// What to point the camera at.
+    let hint: String
+    /// What a code `accept` does not take is told.
+    let rejected: String
+    /// What to do instead without a camera, such as "Paste the link instead."
+    let otherwise: String
+    let close: () -> Void
+    let accept: (String) -> Bool
     @State private var camera = QRCamera()
 
     var body: some View {
@@ -29,7 +55,7 @@ struct PairScanner: View {
                 }
                 .padding(20)
                 Spacer()
-                Text(camera.error ?? camera.hint)
+                Text(camera.error ?? camera.hint ?? hint)
                     .font(.subheadline)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(camera.error == nil ? Theme.text : Theme.failure)
@@ -41,46 +67,50 @@ struct PairScanner: View {
         }
         .preferredColorScheme(.dark)
         .task {
-            await camera.start { link in
-                scanned(link)
+            await camera.start(rejected: rejected, otherwise: otherwise) { payload in
+                guard accept(payload) else { return false }
                 close()
+                return true
             }
         }
         .onDisappear { camera.stop() }
     }
 }
 
-/// A capture session that reads QR codes until one holds a link Add a machine takes.
+/// A capture session that reads QR codes until one holds what its caller takes.
 @MainActor
 @Observable
 private final class QRCamera: NSObject, AVCaptureMetadataOutputObjectsDelegate {
     private(set) var running = false
     private(set) var error: String?
-    private(set) var hint = "Point the camera at the QR code herder shows on your other device, or herder claim prints."
+    /// Set once a code was not taken, to say so.
+    private(set) var hint: String?
     @ObservationIgnored nonisolated(unsafe) let session = AVCaptureSession()
-    @ObservationIgnored private var found: ((PairLink) -> Void)?
+    @ObservationIgnored private var found: ((String) -> Bool)?
+    @ObservationIgnored private var rejected = ""
 
-    func start(found: @escaping (PairLink) -> Void) async {
+    func start(rejected: String, otherwise: String, found: @escaping (String) -> Bool) async {
         guard await AVCaptureDevice.requestAccess(for: .video) else {
-            error = "herder needs the camera to scan the code: Settings › herder › Camera. Or paste the link instead."
+            error = "herder needs the camera to scan the code: Settings › herder › Camera. Or \(otherwise.lowercasedFirst)"
             return
         }
         guard let device = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input)
         else {
-            error = "This device has no camera herder can use. Paste the link instead."
+            error = "This device has no camera herder can use. \(otherwise)"
             return
         }
         let output = AVCaptureMetadataOutput()
         guard session.canAddOutput(output) else {
-            error = "The camera cannot read QR codes. Paste the link instead."
+            error = "The camera cannot read QR codes. \(otherwise)"
             return
         }
         session.addInput(input)
         session.addOutput(output)
         output.setMetadataObjectsDelegate(self, queue: .main)
         output.metadataObjectTypes = [.qr]
+        self.rejected = rejected
         self.found = found
         // `startRunning` blocks until the camera is up: keep it off the main thread.
         await Task.detached { self.session.startRunning() }.value
@@ -102,13 +132,17 @@ private final class QRCamera: NSObject, AVCaptureMetadataOutputObjectsDelegate {
 
     private func scanned(_ payloads: [String]) {
         guard let found, !payloads.isEmpty else { return }
-        guard let link = payloads.lazy.compactMap(pairLink(in:)).first else {
-            hint = "That QR code is not one of herder’s."
+        guard payloads.contains(where: found) else {
+            hint = rejected
             return
         }
         self.found = nil
-        found(link)
     }
+}
+
+private extension String {
+    /// The string with its first letter lowercased, to follow "Or".
+    var lowercasedFirst: String { prefix(1).lowercased() + dropFirst() }
 }
 
 /// The camera's live picture.

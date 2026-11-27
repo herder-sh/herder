@@ -32,6 +32,7 @@ use crate::address;
 use crate::auth::{DeviceKey, client_config};
 use crate::supervisor::{self, Supervisor, Watched};
 use crate::tunnel::{self, Frames};
+use crate::wireguard::Tunnels;
 
 /// Most bytes of the hub's answer to an upgrade, refusal included.
 const MAX_ANSWER: usize = 16 * 1024;
@@ -46,6 +47,8 @@ pub(crate) struct Via {
     machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
     /// What each tunnel address of the machine sends on its upgrade.
     headers: tunnel::Headers,
+    /// The client's WireGuard tunnels, for `wg://` addresses.
+    tunnels: Option<Arc<Tunnels>>,
 }
 
 /// A relay stream through a hub: the frames of a connection to it, whose upgrade may not be
@@ -58,12 +61,19 @@ impl Via {
         machine: HostId,
         machines: Weak<Mutex<Vec<Arc<Supervisor>>>>,
         headers: tunnel::Headers,
+        tunnels: Option<Arc<Tunnels>>,
     ) -> Self {
         Self {
             machine: Some(machine),
             machines,
             headers,
+            tunnels,
         }
+    }
+
+    /// The client's WireGuard tunnels; none while signing in.
+    pub(crate) fn tunnels(&self) -> Option<&Tunnels> {
+        self.tunnels.as_deref()
     }
 
     /// What `address` sends on its upgrade, a tunnel's.
@@ -100,13 +110,16 @@ impl Via {
             .collect();
         let device = DeviceKey::from_pem(&saved.device_key)?;
         let connector = TlsConnector::from(Arc::new(client_config(&saved.fingerprint, &device)?));
-        let headers = Arc::new(saved.headers);
+        // The hub's own routes: its tunnels' headers, and this client's WireGuard tunnels.
+        let via = Self {
+            machine: None,
+            machines: Weak::new(),
+            headers: saved.headers,
+            tunnels: self.tunnels.clone(),
+        };
         let reaching = |address: String| {
-            let (connector, headers) = (connector.clone(), Arc::clone(&headers));
-            async move {
-                let sent = headers.get(&address).unwrap_or(&tunnel::NONE);
-                supervisor::dial(&address, sent, &connector).await
-            }
+            let (connector, via) = (connector.clone(), via.clone());
+            async move { supervisor::dial(&address, &via, &connector).await }
         };
         let (mut tls, _) = supervisor::race(&addresses, reaching)
             .await
