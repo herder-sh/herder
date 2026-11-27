@@ -22,7 +22,9 @@ work=$(mktemp -d)
 build=(-quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-macOS
   -configuration Release -destination "generic/platform=macOS" COMPILER_INDEX_STORE_ENABLE=NO
   MARKETING_VERSION="$version" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=-
-  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO)
+  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
+  # The write-only keys the app shares diagnostics with once its person turns them on.
+  HERDER_SENTRY_DSN="${SENTRY_DSN_MACOS:-}" HERDER_POSTHOG_TOKEN="${POSTHOG_PROJECT_TOKEN:-}")
 
 xcodegen generate --spec apple/project.yml
 
@@ -46,6 +48,7 @@ else
     DEVELOPMENT_TEAM="$APPLE_TEAM_ID" HERDER_MAC_ENTITLEMENTS="$(apple/scripts/adhoc-entitlements.sh)"
   codesign --force --sign - --options runtime --entitlements apple/App/herder.entitlements \
     "$work/herder.xcarchive/Products/Applications/herder.app"
+  apple/scripts/upload-dsyms.sh "${SENTRY_DSN_MACOS:-}" "$work/herder.xcarchive"
 
   identity=$(security find-identity -v -p codesigning |
     awk '/"Developer ID Application: .*\('"$APPLE_TEAM_ID"'\)"/ { print $2; exit }')

@@ -145,6 +145,11 @@ jobs:
           ASC_KEY: ${{ secrets.ASC_KEY }}
           MAC_P12_BASE64: ${{ secrets.MAC_P12_BASE64 }}
           MAC_P12_PASSWORD: ${{ secrets.MAC_P12_PASSWORD }}
+          # Diagnostics, sent only once the person turns them on; dSYMs for Sentry.
+          SENTRY_DSN_MACOS: ${{ secrets.SENTRY_DSN_MACOS }}
+          POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
         run: |
           # Without the certificate, as from a fork, the script signs ad hoc.
           if [ -n "$MAC_P12_BASE64" ]; then
@@ -262,6 +267,12 @@ jobs:
           ASC_KEY: ${{ secrets.ASC_KEY }}
           # Grows with every run of this workflow, so each upload of a version has a new build.
           BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+          # Diagnostics, sent only once the person turns them on; dSYMs for Sentry.
+          SENTRY_DSN_IOS: ${{ secrets.SENTRY_DSN_IOS }}
+          SENTRY_DSN_MACOS: ${{ secrets.SENTRY_DSN_MACOS }}
+          POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
         run: |
           export ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
           printf '%s' "$ASC_KEY" > "$ASC_KEY_PATH"

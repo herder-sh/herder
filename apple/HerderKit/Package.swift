@@ -15,6 +15,8 @@ let package = Package(
         .package(name: "Herder", path: "../../crates/herder-ffi/swift"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.20.0"),
         .package(url: "https://github.com/swhitty/SwiftDraw", from: "0.29.0"),
+        // Crashes, hangs, slow starts and traces, only while the person shares diagnostics.
+        .package(url: "https://github.com/getsentry/sentry-cocoa", from: "9.36.0"),
     ],
     targets: [
         .target(
@@ -24,6 +26,7 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 // Draws SVG project icons, which UIImage cannot read.
                 .product(name: "SwiftDraw", package: "SwiftDraw"),
+                .product(name: "Sentry", package: "sentry-cocoa"),
             ],
             // Mermaid 11.17.2 (MIT, LICENSE alongside) renders diagrams offline;
             // demo.json is the demo fleet the empty state offers, from scripts/record-demo.sh.

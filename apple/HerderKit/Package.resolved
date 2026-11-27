@@ -2,6 +2,15 @@
   "originHash" : "368d87346d1ac591e125efff5e6f7580947a384fbb101d8574b8a5da2935be0f",
   "pins" : [
     {
+      "identity" : "sentry-cocoa",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/getsentry/sentry-cocoa",
+      "state" : {
+        "revision" : "733cff2106f706dd2df19b1cc4937ed554f8fe71",
+        "version" : "9.36.0"
+      }
+    },
+    {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-argument-parser",

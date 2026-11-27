@@ -22,18 +22,36 @@ final class DiagnosticsSwitch {
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let keys: (sentryDsn: String?, posthogToken: String?)
-    @ObservationIgnored private let share: (Diagnostics?) -> Void
+    @ObservationIgnored private let share: @MainActor (Diagnostics?) -> Void
 
     /// `keys` are the write-only client keys the build was made with; `share` hands the
     /// diagnostics in effect to the client core.
     init(defaults: UserDefaults = .standard,
          keys: (sentryDsn: String?, posthogToken: String?) = DiagnosticsSwitch.buildKeys,
-         share: @escaping (Diagnostics?) -> Void = { setDiagnostics(diagnostics: $0) }) {
+         share: @escaping @MainActor (Diagnostics?) -> Void = DiagnosticsSwitch.shareEverywhere) {
         self.defaults = defaults
         self.keys = keys
         self.share = share
         on = defaults.bool(forKey: Self.onKey)
         asked = defaults.bool(forKey: Self.askedKey)
+    }
+
+    /// Hands `diagnostics` to the client core, for its traces, and to Sentry in the app.
+    static func shareEverywhere(_ diagnostics: Diagnostics?) {
+        setDiagnostics(diagnostics: diagnostics)
+        AppSentry.apply(dsn: diagnostics?.sentryDsn, installId: diagnostics?.installId)
+    }
+
+    /// The name of `command`'s case in snake case, such as `send_prompt`: what its span
+    /// records of it, never its contents.
+    nonisolated static func name(of command: CommandBody) -> String {
+        let label = Mirror(reflecting: command).children.first?.label ?? String(describing: command)
+        var name = ""
+        for character in label where character.isLetter || character.isNumber {
+            if character.isUppercase, !name.isEmpty { name.append("_") }
+            name.append(contentsOf: character.lowercased())
+        }
+        return name
     }
 
     /// Hands the switch, as saved, to the client core; at launch.
