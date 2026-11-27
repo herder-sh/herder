@@ -320,6 +320,8 @@ struct State {
     name: Option<String>,
     /// Addresses in order of preference.
     addresses: Vec<String>,
+    /// The headers each tunnel address sends on its upgrade.
+    headers: tunnel::Headers,
     /// What the daemon's latest hello named, as saved ([`address::advertised`]), until the
     /// client follows it ([`Supervisor::take_advertised`]).
     advertised: Option<Vec<String>>,
@@ -573,6 +575,7 @@ impl Supervisor {
         let (ops, queue) = mpsc::unbounded_channel();
         let state = State {
             addresses: saved.addresses.clone(),
+            headers: saved.headers.clone(),
             adopted: saved.advertised.clone(),
             ..State::default()
         };
@@ -652,6 +655,7 @@ impl Supervisor {
                 addresses: machine.addresses,
                 fingerprint: machine.fingerprint,
                 advertised: Vec::new(),
+                headers: Default::default(),
                 device_key: String::new(),
             },
             state: Mutex::new(state),
@@ -768,6 +772,7 @@ impl Supervisor {
             saved.name.clone_from(name);
         }
         saved.addresses.clone_from(&state.addresses);
+        saved.headers.clone_from(&state.headers);
         saved
     }
 
@@ -839,6 +844,11 @@ impl Supervisor {
             session_skills: state.live.session_skills.clone(),
             update: state.live.update.clone(),
             approvals: state.live.approvals.clone(),
+            address_headers: state
+                .headers
+                .iter()
+                .map(|(address, sent)| (address.clone(), sent.keys().cloned().collect()))
+                .collect(),
         }
     }
 
@@ -1257,9 +1267,19 @@ impl Supervisor {
         addresses
     }
 
-    /// Where this machine's `hub://` addresses lead.
+    /// How this machine's addresses are reached: where its `hub://` ones lead, and the
+    /// headers its tunnels' want.
     fn via(&self) -> Via {
-        Via::new(self.saved.host_id.clone(), self.machines.clone())
+        let headers = self.lock().headers.clone();
+        Via::new(self.saved.host_id.clone(), self.machines.clone(), headers)
+    }
+
+    /// Sends `headers` on the upgrades of this machine's tunnel addresses from the next
+    /// connection on, and dials again at once if it is not connected.
+    pub(crate) fn set_headers(&self, headers: tunnel::Headers) {
+        self.lock().headers = headers;
+        self.notify();
+        let _ = self.ops.send(Op::Readdress);
     }
 
     /// Whether the current connection runs through a hub.
@@ -2520,7 +2540,7 @@ async fn reach(address: &str, connector: &TlsConnector, via: &Via) -> anyhow::Re
                 let stream = via.stream(&hub).await?;
                 secure(Box::new(stream), connector, None).await
             }
-            None => direct(address, connector, None).await,
+            None => direct(address, via.headers(address), connector, None).await,
         }
     };
     tokio::time::timeout(CONNECT_TIMEOUT, reaching)
@@ -2528,15 +2548,16 @@ async fn reach(address: &str, connector: &TlsConnector, via: &Via) -> anyhow::Re
         .unwrap_or_else(|_| Err(anyhow!("no answer in {CONNECT_TIMEOUT:?}")))
 }
 
-/// A connection to the daemon at `address`, its own or a tunnel's, up to its WebSocket
-/// upgrade, with the WebSocket configured as `config` says.
+/// A connection to the daemon at `address`, its own or a tunnel's whose upgrade carries
+/// `headers`, up to its WebSocket upgrade, with the WebSocket configured as `config` says.
 pub(crate) async fn direct(
     address: &str,
+    headers: &tunnel::Sent,
     connector: &TlsConnector,
     config: Option<WebSocketConfig>,
 ) -> anyhow::Result<Ws> {
     let stream: Box<dyn Io> = if address::is_tunnel(address) {
-        Box::new(tunnel::open(address).await?)
+        Box::new(tunnel::open(address, headers).await?)
     } else {
         let tcp = TcpStream::connect(address).await.context("connecting")?;
         tcp.set_nodelay(true)?;

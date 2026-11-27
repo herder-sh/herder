@@ -37,6 +37,10 @@ pub(crate) struct SavedMachine {
     /// ([`crate::address::advertised`]): what `addresses` follows ([`crate::address::follow`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) advertised: Vec<String>,
+    /// The headers each tunnel address sends on its upgrade, for a proxy in front of it;
+    /// secret, and kept on this device only.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) headers: crate::tunnel::Headers,
     /// This device's key for the machine, as PEM; secret.
     pub(crate) device_key: String,
 }
@@ -174,6 +178,7 @@ mod tests {
             addresses: vec!["127.0.0.1:7447".into()],
             fingerprint: "ab".repeat(32),
             advertised: Vec::new(),
+            headers: Default::default(),
             device_key: "secret".into(),
         }
     }

@@ -10,8 +10,8 @@ import Testing
 /// (a signed-out account, two CLI updates, a login missing there, backing up to a hub) and
 /// for one they are a member on, and one they own linked to no hub, and attaches each; with
 /// `HERDER_SCREENSHOT_DIR` set, also writes them there as `machine-owner.png`,
-/// `machine-member.png` and `machine-unlinked.png`, and an owner's public addresses as
-/// `machine-public-addresses.png`.
+/// `machine-member.png` and `machine-unlinked.png`, an owner's public addresses as
+/// `machine-public-addresses.png`, and the proxy headers sheet as `address-headers.png`.
 @MainActor struct MachinePageScreenshotTests {
     @Test func drawsTheOwnersPage() async throws {
         let fleet = try sampleFleet()
@@ -55,6 +55,28 @@ import Testing
         Attachment.record(png, named: "machine-public-addresses.png")
         if let dir = ProcessInfo.processInfo.environment["HERDER_SCREENSHOT_DIR"] {
             try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("machine-public-addresses.png"))
+        }
+    }
+
+    @Test func drawsTheProxyHeadersSheet() async throws {
+        let target = HeaderTarget(hostId: "trash-can-01", address: "wss://hub.example.com",
+                                  names: ["cf-access-client-id", "cf-access-client-secret"])
+        let sheet = AddressHeadersSheet(fleet: try sampleFleet(), target: target)
+            .background(Theme.canvas)
+            .environment(\.colorScheme, .dark)
+        let host = NSHostingView(rootView: sheet)
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.frame = NSRect(x: 0, y: 0, width: 560, height: 420)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let png = try #require(rep.representation(using: .png, properties: [:]))
+        Attachment.record(png, named: "address-headers.png")
+        if let dir = ProcessInfo.processInfo.environment["HERDER_SCREENSHOT_DIR"] {
+            try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("address-headers.png"))
         }
     }
 

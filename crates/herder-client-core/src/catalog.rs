@@ -355,6 +355,7 @@ mod tests {
             user_id: None,
             person_id: None,
             approvals: Vec::new(),
+            address_headers: Default::default(),
         }
     }
 

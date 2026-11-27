@@ -58,6 +58,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         session_skills: Default::default(),
         update: None,
         approvals: Vec::new(),
+        address_headers: Default::default(),
     }
 }
 

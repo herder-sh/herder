@@ -17,7 +17,8 @@
 //! of its certificate, and the device key this device presents to it (one key per machine).
 //! [`Client::sign_in`] and [`Client::log_in`] add a machine, [`Client::rename`]
 //! changes the name it is shown by on this device, [`Client::set_addresses`] the addresses it
-//! is reached at, [`Client::reconnect`] connects again now, and [`Client::forget`] removes it.
+//! is reached at, [`Client::set_address_headers`] what a proxy in front of one of them wants,
+//! [`Client::reconnect`] connects again now, and [`Client::forget`] removes it.
 //!
 //! Clients may share a config dir at once, as the Mac app and the TUI on one Mac do: each
 //! change merges into the profile as the file holds it, under a lock, and each client re-reads
@@ -206,7 +207,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 22;
+pub const CLIENT_API_VERSION: u32 = 23;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -344,6 +345,11 @@ pub struct Machine {
     /// [`Client::approve_action`], or refuse it. Empty while not connected, and for a client
     /// opened without an [`Authenticator`], which the daemon sends none.
     pub approvals: Vec<ApprovalRequest>,
+    /// For each tunnel address that sends headers on its upgrade, their names, lowercase:
+    /// what a proxy in front of it wants, set with [`Client::set_address_headers`]. Their
+    /// values stay in the profile.
+    #[serde(default)]
+    pub address_headers: HashMap<String, Vec<String>>,
 }
 
 /// What [`Authenticator::assert`] returns.
@@ -725,7 +731,54 @@ impl Client {
         }
         self.machine(&host_id)?;
         self.update(|all| {
-            saved_mut(all, &host_id)?.addresses = normalized;
+            let machine = saved_mut(all, &host_id)?;
+            // An address dropped takes what it sent with it.
+            machine
+                .headers
+                .retain(|address, _| normalized.contains(address));
+            machine.addresses = normalized;
+            Ok(())
+        })
+    }
+
+    /// Sends `headers` on the WebSocket upgrade of `address`, a tunnel's URL among the
+    /// machine's addresses, from the next connection on: what a proxy in front of the tunnel
+    /// wants, such as a Cloudflare Access service token's `CF-Access-Client-Id` and
+    /// `CF-Access-Client-Secret`. No headers removes them. They are kept in this device's
+    /// profile only: never sent to the daemon, which sees only the connection inside the
+    /// tunnel, nor in a link shared with another device. A header that is not valid HTTP, or
+    /// one the upgrade sets itself (`Host`, `Origin`, `Sec-WebSocket-*`, ...), is refused, as
+    /// is an address that is not one of the machine's tunnels. A proxy that refuses the
+    /// upgrade shows in the machine's connection error.
+    pub fn set_address_headers(
+        &self,
+        host_id: HostId,
+        address: String,
+        headers: HashMap<String, String>,
+    ) -> Result<(), Error> {
+        let local = |message| Error::Local { message };
+        let address = address::normalize(&address).map_err(local)?;
+        let mut sent = tunnel::Sent::new();
+        for (name, value) in &headers {
+            let (name, value) = tunnel::header(name, value).map_err(local)?;
+            sent.insert(name, value);
+        }
+        self.machine(&host_id)?;
+        self.update(|all| {
+            let machine = saved_mut(all, &host_id)?;
+            if !machine.addresses.contains(&address) {
+                return Err(local(format!("{address} is not one of its addresses")));
+            }
+            if !address::is_tunnel(&address) {
+                return Err(local(format!(
+                    "{address} is not a tunnel's URL: only an upgrade to one carries headers"
+                )));
+            }
+            if sent.is_empty() {
+                machine.headers.remove(&address);
+            } else {
+                machine.headers.insert(address, sent);
+            }
             Ok(())
         })
     }
@@ -1215,6 +1268,8 @@ impl Inner {
                 if let Some(machine) = all.iter_mut().find(|m| m.host_id == host_id) {
                     let before = std::mem::take(&mut machine.advertised);
                     address::follow(&mut machine.addresses, &before, &now, using.as_deref());
+                    let kept = &machine.addresses;
+                    machine.headers.retain(|address, _| kept.contains(address));
                     machine.advertised = now;
                 }
             }
@@ -1244,6 +1299,9 @@ impl Inner {
                 }
                 if current.addresses != saved.addresses {
                     machine.set_addresses(saved.addresses);
+                }
+                if current.headers != saved.headers {
+                    machine.set_headers(saved.headers);
                 }
                 changed |= index != 0;
                 machines.push(machine);
@@ -1376,6 +1434,7 @@ pub(crate) fn unsaved(
         addresses: address::default_order(normalized),
         fingerprint: fingerprint.to_ascii_lowercase(),
         advertised: Vec::new(),
+        headers: Default::default(),
         device_key: device.to_pem().to_owned(),
     };
     Ok((saved, device))
@@ -1434,6 +1493,7 @@ mod tests {
             addresses: vec!["127.0.0.1:1".to_owned()],
             fingerprint: "00".repeat(32),
             advertised: Vec::new(),
+            headers: Default::default(),
             device_key: DeviceKey::generate().unwrap().to_pem().to_owned(),
         };
         profile::save(tmp.path(), &[machine]).unwrap();

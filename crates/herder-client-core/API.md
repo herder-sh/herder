@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 22`
+`CLIENT_API_VERSION = 23`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -108,7 +108,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `user_id`, `person_id` | `Client::sign_in`, `share`, `rename`, `set_addresses`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `FleetLink` |
+| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `user_id`, `person_id`, `address_headers` | `Client::sign_in`, `share`, `rename`, `set_addresses`, `set_address_headers`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `FleetLink` |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images` and `files`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow`, `MergeQueued` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
 | Projects  | `Machine::projects`; a `Project`'s `remote`, the URL `CloneProject` clones it onto another machine from (none without a remote), `icon`, the hash of its icon, to cache it by, `icon_uploaded`, whether an owner uploaded it, and `icon_background`, the colour behind it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `CloneProject` (a git URL or GitHub `owner/repo`, into a new folder, or without one into a folder named after the repository in the machine's projects dir; `conflict` when it exists) → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
@@ -715,6 +715,24 @@ the last hello joins `Machine::addresses` in its kind's place (LAN, other, Tails
 hub), one the daemon stopped naming leaves them unless the connection came in on it, and the
 ones the user added or removed stay as the user left them. So every device dials a public
 address an owner set once, with nothing to type.
+
+### Headers a proxy in front of a tunnel wants
+
+`Client::set_address_headers(host, address, headers)` sends `headers` on the WebSocket upgrade
+of `address`, one of the machine's tunnel URLs, from the next connection on: what a proxy in
+front of the tunnel admits a request by, such as a Cloudflare Access service token
+(`CF-Access-Client-Id`, `CF-Access-Client-Secret`), or a header an nginx or Caddy in front
+checks. An empty map removes them. They are kept in this device's profile only, with its
+device keys, and never reach the daemon through herder: it sees only the connection inside
+the tunnel (its tunnel listener ignores what a proxy passes on), and a shared link names
+addresses, not headers. A name that is not valid HTTP, one the upgrade sets itself (`Host`,
+`Origin`, `Connection`, `Upgrade`, `Sec-WebSocket-*`, ...), a value that is not a header
+value, or an address that is not one of the machine's tunnels is refused with `Local`.
+Removing an address removes its headers. `Machine::address_headers` lists, per address, the
+names it sends, lowercase; the values are not read back. A proxy that refuses the upgrade
+(a redirect, 401 or 403) shows in the address's error: with no headers set it says to set
+them, with some it names them and says to check them. P26.2 added this; the new `Machine`
+field moved `CLIENT_API_VERSION` to 23.
 
 `DaemonSettings.mcp_servers` is the user's MCP servers, which every session's agent gets next
 to herder's own, whatever its provider and account: each a `McpServerSettings` with a `name`
