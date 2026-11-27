@@ -2175,6 +2175,7 @@ dependencies = [
  "jiff 1.0.3",
  "nix 0.32.0",
  "portable-pty",
+ "proptest",
  "pulldown-cmark",
  "rcgen",
  "regex",

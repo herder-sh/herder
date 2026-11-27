@@ -121,9 +121,22 @@ spec:
       port: 7448
       targetPort: tunnel
 ---
-# Only pods of the cloudflared namespace reach the tunnel listener: it trusts the client
-# address its peer names. The other ports stay open to everyone, as without a policy.
-# Change the namespace's name here if your cloudflared runs in another.
+# What the hub's pod may reach, and what may reach it. It holds the fleet's secrets and
+# provider logins, and relays to every host, so a fault in it must not open a way into the
+# rest of the network.
+#
+# In: its own ports only. Only pods of the cloudflared namespace reach the tunnel listener,
+# which trusts the client address its peer names; hosts and apps reach 7447, and hosts
+# 8317, from anywhere, as without a policy. Change the namespace's name if your cloudflared
+# runs in another.
+#
+# Out: the cluster's DNS, and the internet: the providers' APIs the CLIProxyAPI calls, and
+# GitHub. Nothing private: not the LAN, the nodes, nor any other pod or Service. Hosts and
+# apps dial the hub, never the other way, and the hub reaches its CLIProxyAPI in the pod.
+# If yours needs a private address, such as a proxy on the LAN, add it as its own `to`.
+#
+# The cluster's network plugin must enforce NetworkPolicy, or this does nothing: k3s's
+# does unless started with --disable-network-policy.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -136,6 +149,7 @@ spec:
       app.kubernetes.io/name: herder-hub
   policyTypes:
     - Ingress
+    - Egress
   ingress:
     - ports:
         - port: 7447
@@ -146,6 +160,31 @@ spec:
               kubernetes.io/metadata.name: cloudflared
       ports:
         - port: 7448
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # RFC 1918: the LAN, the nodes, and the cluster's pods and Services.
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              # Carrier-grade NAT, where Tailscale puts its addresses.
+              - 100.64.0.0/10
+              # Link-local, where clouds serve instance metadata and credentials.
+              - 169.254.0.0/16
 ---
 apiVersion: apps/v1
 kind: StatefulSet

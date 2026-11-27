@@ -185,7 +185,8 @@ public address (`DaemonSettings::public_addresses`, P26.1) arrives with the next
 | Session confidentiality from Cloudflare | Inner TLS 1.3. Cloudflare sees sizes and timing only. |
 | Origin checks | Requests with `Origin` get 403 on the tunnel listener. |
 | Brute force of codes | Invites (100 bits) and host pairing codes (50 bits) are out of reach. **Gap:** the claim code has 30 bits, an open window allows unlimited guesses, and a correct guess plus any passkey makes the guesser the owner. Fix: the window closes after 5 wrong codes (P23.2). |
-| Rate limiting | Every tunnel peer is `127.0.0.1`, so per-peer limits see one peer. Cap connections that are not yet authenticated, per `CF-Connecting-IP` (trusted only on the loopback tunnel listener) and in total (P23.5). Cloudflare's own DDoS protection sits in front. |
+| Rate limiting | Every tunnel peer is `127.0.0.1`, so per-peer limits see one peer. Connections that are not yet authenticated are capped per `CF-Connecting-IP` (trusted only on the loopback tunnel listener, or, on a hub, behind its NetworkPolicy) and in total (P23.5); direct ones have a cap of their own, per peer address and in total, so a flood one way in does not lock out the other (P26.19). Cloudflare's own DDoS protection sits in front. |
+| Memory before sign-in | A connection reads at most 256 KiB until it authenticates, whatever its messages say they hold, and a tunnel frame at most 256 KiB; the hub tells a host's hello from a client's without parsing it into a tree (P26.19). Before, a stranger could send 64 MiB messages that a hub with a 512 MiB limit held in full. |
 | Login-approval spam | An unpaired device can ask a person's apps to approve it. Each request shows a code that must match by eye, and P23.5's cap bounds the number. |
 | Provider login tokens | Untouched. Nothing here reads, stores or relays them. |
 | Terminals owner-only | Untouched. Roles come from the same auth. |

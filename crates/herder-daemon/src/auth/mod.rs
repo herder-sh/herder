@@ -1053,7 +1053,6 @@ impl Auth {
     /// Asks for a person's app to approve the device with certificate `fingerprint`, for up
     /// to [`PAIRING_TTL`].
     pub fn start_login(&self, fingerprint: &str, client: &str) -> Result<LoginRequest, ErrorInfo> {
-        let code = random_code(SHORT_CODE_LEN, 3).map_err(|err| internal(&err))?;
         let expires_at = Timestamp::now()
             .checked_add(PAIRING_TTL)
             .map_err(|err| internal(&err))?;
@@ -1063,6 +1062,8 @@ impl Auth {
         state
             .logins
             .retain(|_, login| login.expires > now && !login.approved.is_closed());
+        let code = unused_code(&state.logins, || random_code(SHORT_CODE_LEN, 3))
+            .map_err(|err| internal(&err))?;
         state.logins.insert(
             normalize(&code),
             PendingLogin {
@@ -1742,6 +1743,22 @@ fn random_code(len: usize, group: usize) -> Result<String> {
         .join("-"))
 }
 
+/// A code from `new` that no device waiting in `logins` shows. A login's code is short, so
+/// a stranger asking for logins over and over would otherwise, now and then, draw a waiting
+/// device's code and take its place: the person approving their own device would let the
+/// stranger's in.
+fn unused_code(
+    logins: &HashMap<String, PendingLogin>,
+    mut new: impl FnMut() -> Result<String>,
+) -> Result<String> {
+    loop {
+        let code = new()?;
+        if !logins.contains_key(&normalize(&code)) {
+            return Ok(code);
+        }
+    }
+}
+
 /// A code as typed, without separators or case.
 fn normalize(code: &str) -> String {
     code.chars()
@@ -2400,6 +2417,21 @@ mod people_tests {
     }
 
     #[test]
+    fn a_new_login_never_takes_the_code_of_one_waiting() {
+        let (_tmp, auth) = open();
+        let waiting = auth.start_login("fp-mine", "herder-tui").unwrap();
+        // The next login draws the waiting one's code first, as a stranger's now and then
+        // would, written another way.
+        let mut drawn = vec![
+            Ok("NEW-ONE".to_owned()),
+            Ok(waiting.code.to_lowercase().replace('-', "")),
+        ];
+        let state = auth.lock();
+        let code = super::unused_code(&state.logins, || drawn.pop().unwrap()).unwrap();
+        assert_eq!(code, "NEW-ONE");
+    }
+
+    #[test]
     fn invites_and_roles() {
         let (_tmp, auth) = open();
         let (tomas, _) = claim(&auth);
@@ -2947,6 +2979,89 @@ mod people_tests {
                 user_handle: None,
             },
             kind: String::new(),
+        }
+    }
+
+    /// Fuzz targets, run briefly by `cargo test`, at length with `PROPTEST_CASES`: sign-ins
+    /// are what a device that is not authenticated sends, and the passkey's bytes in them are
+    /// parsed as CBOR and checked as WebAuthn before anyone knows who sent them.
+    mod fuzz {
+        use base64::Engine;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// The fields of an assertion or registration a stranger can change, by index.
+        fn change(field: &mut String, edits: &[(prop::sample::Index, u8)], cut: Option<usize>) {
+            let mut bytes = URL_SAFE_NO_PAD.decode(&*field).unwrap_or_default();
+            for (at, byte) in edits {
+                if !bytes.is_empty() {
+                    let at = at.index(bytes.len());
+                    bytes[at] = *byte;
+                }
+            }
+            if let Some(cut) = cut {
+                bytes.truncate(cut);
+            }
+            *field = URL_SAFE_NO_PAD.encode(bytes);
+        }
+
+        fn edits() -> impl Strategy<Value = Vec<(prop::sample::Index, u8)>> {
+            prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 0..6)
+        }
+
+        proptest! {
+            /// Tomas's assertion over a fresh challenge with any of its bytes changed signs
+            /// no one in; unchanged, it signs him in.
+            #[test]
+            fn fuzz_a_changed_assertion(
+                field in 0usize..5,
+                edits in edits(),
+                cut in proptest::option::of(0usize..200),
+            ) {
+                let (_tmp, auth) = open();
+                let (_, passkey) = claim(&auth);
+                let sent = fresh(&auth, &passkey);
+                let mut changed = sent.clone();
+                let response = &mut changed.response;
+                match field {
+                    0 => change(&mut response.client_data_json, &edits, cut),
+                    1 => change(&mut response.authenticator_data, &edits, cut),
+                    2 => change(&mut response.signature, &edits, cut),
+                    3 => change(response.user_handle.get_or_insert_default(), &edits, cut),
+                    _ => {
+                        change(&mut changed.raw_id, &edits, cut);
+                        changed.id.clone_from(&changed.raw_id);
+                    }
+                }
+                let assertion = changed.clone();
+                let signed_in = sign_in(&auth, "fp-stranger", SignIn::Passkey { assertion });
+                prop_assert_eq!(signed_in.is_ok(), changed == sent, "{:?}", signed_in);
+            }
+
+            /// A new person's passkey, created from a fresh challenge, with any of its bytes
+            /// changed: refused or added, never a panic.
+            #[test]
+            fn fuzz_a_changed_registration(
+                field in 0usize..2,
+                edits in edits(),
+                cut in proptest::option::of(0usize..400),
+            ) {
+                let (_tmp, auth) = open();
+                let invite = auth.invite(Role::Member).unwrap().0;
+                let (_, creation) = auth.sign_in_challenge().unwrap();
+                let (_, mut registration) = Authenticator::register("sam", &creation.unwrap());
+                match field {
+                    0 => change(&mut registration.response.client_data_json, &edits, cut),
+                    _ => change(&mut registration.response.attestation_object, &edits, cut),
+                }
+                let person = NewPerson {
+                    name: "Sam".into(),
+                    passkey: PersonPasskey::Register { registration },
+                };
+                let _ = sign_in(&auth, "fp-stranger", SignIn::AcceptInvite { invite, person });
+            }
         }
     }
 }

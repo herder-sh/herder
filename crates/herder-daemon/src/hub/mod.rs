@@ -110,8 +110,8 @@ struct Shared {
     cliproxyapi: OnceLock<Arc<ClientKeys>>,
     /// The relay streams between clients and hosts.
     relays: Arc<relay::Relays>,
-    /// Counts the tunneled connections not authenticated yet.
-    tunnel_gate: Arc<tunnel::Gate>,
+    /// Count the connections not authenticated yet.
+    gates: tunnel::Gates,
 }
 
 impl Shared {
@@ -176,10 +176,7 @@ impl Server {
                 secrets_key,
                 cliproxyapi: OnceLock::new(),
                 relays,
-                tunnel_gate: tunnel::Gate::new(
-                    tunnel::UNAUTHENTICATED,
-                    tunnel::UNAUTHENTICATED_PER_CLIENT,
-                ),
+                gates: tunnel::Gates::new(),
             }),
         }
     }

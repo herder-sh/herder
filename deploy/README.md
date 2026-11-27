@@ -148,6 +148,11 @@ kubectl rollout status -n herder statefulset/herder-hub
 kubectl get -n herder service herder-hub   # the address hosts connect to
 ```
 
+The manifest's NetworkPolicy lets the hub's pod reach only the cluster's DNS and the
+internet, never the LAN, the nodes or another pod, and lets in only its own ports. It needs
+a network plugin that enforces NetworkPolicy: k3s's does, unless started with
+`--disable-network-policy`.
+
 ### A public hostname
 
 The hub can be the one thing you expose: apps and hosts reach it at a public hostname
