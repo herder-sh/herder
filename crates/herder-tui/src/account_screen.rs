@@ -1,18 +1,21 @@
 //! The accounts screen: every machine's accounts with their usage windows, the add-account
 //! dialog for the selected machine, and logging the selected account in again once its login
-//! expired, in a login terminal like adding one.
+//! expired, in a login terminal like adding one, and removing the selected account after
+//! asking. The machine refuses removing an account sessions still run on; the account's
+//! config dir, with any login in it, stays on the machine.
 //!
 //! Usage is what the daemon last heard from each provider. Every account takes part in
 //! failover; pinning is set in each daemon's own config, and the screen shows it as the daemon
 //! reports it and says where it lives.
 
-use herder_client_core::Machine;
-use herder_protocol::{Account, AccountId, HostId};
+use herder_client_core::{ConnectionState, Machine};
+use herder_protocol::{Account, AccountId, CommandBody, CommandResult, HostId, Role};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use crate::accounts::{self, AddAccount, Outcome};
 use crate::action::Action;
 use crate::app::{App, Effect};
+use crate::compose::Origin;
 use crate::terminal::{self, Target};
 
 /// The accounts screen, shown over the main screen.
@@ -22,6 +25,19 @@ pub struct AccountScreen {
     pub chosen: Option<Pick>,
     /// The add-account dialog, over the screen.
     pub adding: Option<AddAccount>,
+    /// Asking before removing an account, over the screen.
+    pub removing: Option<Removing>,
+}
+
+/// The account the screen asks before removing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Removing {
+    /// Its machine.
+    pub host_id: HostId,
+    /// The account.
+    pub account_id: AccountId,
+    /// The removal is on its way.
+    pub sending: bool,
 }
 
 /// A row of the screen.
@@ -89,6 +105,12 @@ pub enum Input {
     Add,
     /// Log the selected account in again.
     LogInAgain,
+    /// Ask before removing the selected account.
+    Remove,
+    /// Remove the account asked about.
+    ConfirmRemove,
+    /// Keep the account asked about.
+    KeepAccount,
     /// Input to the add-account dialog.
     Dialog(crate::machines::Input),
 }
@@ -97,6 +119,14 @@ pub enum Input {
 pub fn for_key(key: KeyEvent, screen: &AccountScreen) -> Option<Action> {
     if screen.adding.is_some() {
         return accounts::input_for_key(key).map(|input| Action::Accounts(Input::Dialog(input)));
+    }
+    if screen.removing.is_some() {
+        let input = match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => Input::ConfirmRemove,
+            KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('n') => Input::KeepAccount,
+            _ => return None,
+        };
+        return Some(Action::Accounts(input));
     }
     let input = match key.code {
         KeyCode::Esc | KeyCode::Backspace | KeyCode::Left | KeyCode::Char('A' | 'h' | 'q') => {
@@ -108,6 +138,7 @@ pub fn for_key(key: KeyEvent, screen: &AccountScreen) -> Option<Action> {
         KeyCode::Char('G') | KeyCode::End | KeyCode::PageDown => Input::Bottom,
         KeyCode::Char('n') => Input::Add,
         KeyCode::Char('l') => Input::LogInAgain,
+        KeyCode::Char('d') => Input::Remove,
         KeyCode::Char('r') => return Some(Action::Reconnect),
         KeyCode::Char('?') => return Some(Action::ToggleHelp),
         _ => return None,
@@ -189,9 +220,79 @@ impl App {
                     }
                 }
             }
+            Input::Remove => {
+                let Some(Pick::Account(host_id, account_id)) = at.map(|at| rows[at].clone()) else {
+                    self.notice = Some("select an account to remove".to_owned());
+                    return Vec::new();
+                };
+                match remove_refusal(&self.machines, &host_id, &account_id) {
+                    Some(refusal) => self.notice = Some(refusal.to_owned()),
+                    None => {
+                        screen.removing = Some(Removing {
+                            host_id,
+                            account_id,
+                            sending: false,
+                        });
+                    }
+                }
+            }
+            Input::ConfirmRemove => {
+                let Some(removing) = screen.removing.as_mut().filter(|r| !r.sending) else {
+                    return Vec::new();
+                };
+                removing.sending = true;
+                return vec![Effect::Send {
+                    host_id: removing.host_id.clone(),
+                    command: CommandBody::RemoveAccount {
+                        account_id: removing.account_id.clone(),
+                    },
+                    origin: Origin::RemoveAccount(removing.host_id.clone()),
+                }];
+            }
+            Input::KeepAccount => screen.removing = None,
             Input::Dialog(_) => {}
         }
         Vec::new()
+    }
+
+    /// The machine's answer to removing an account: the dialog closes, and the status line
+    /// says it is gone, or why the machine refused.
+    pub(crate) fn account_removed(
+        &mut self,
+        host_id: &HostId,
+        result: Result<CommandResult, String>,
+    ) {
+        let Some(screen) = &mut self.account_screen else {
+            return;
+        };
+        let Some(removing) = screen
+            .removing
+            .take_if(|removing| removing.host_id == *host_id && removing.sending)
+        else {
+            return;
+        };
+        let account_id = removing.account_id;
+        self.notice = Some(match result {
+            Ok(_) => {
+                // Its row is gone: its machine's takes the selection.
+                screen.chosen = Some(Pick::Machine(removing.host_id));
+                format!("removed {account_id}; its config dir stays on the machine")
+            }
+            Err(error) => format!("removing {account_id}: {error}"),
+        });
+    }
+
+    /// Whether the accounts screen is open on an account its machine lets this user remove.
+    pub(crate) fn on_removable_account(&self) -> bool {
+        self.account_screen.as_ref().is_some_and(|screen| {
+            let rows = rows(&self.machines);
+            screen.selected(&rows).is_some_and(|at| match &rows[at] {
+                Pick::Account(host_id, account_id) => {
+                    remove_refusal(&self.machines, host_id, account_id).is_none()
+                }
+                Pick::Machine(_) => false,
+            })
+        })
     }
 
     /// Whether the accounts screen is open on a login account, which can be logged in again.
@@ -218,6 +319,31 @@ impl App {
             field.push_str(text.trim().lines().next().unwrap_or(""));
         }
         true
+    }
+}
+
+/// Why this user cannot remove `account_id` from `host_id`'s machine; the machine checks the
+/// rest, such as the sessions that still run on it.
+fn remove_refusal(
+    machines: &[Machine],
+    host_id: &HostId,
+    account_id: &AccountId,
+) -> Option<&'static str> {
+    let Some(machine) = machines.iter().find(|m| m.host_id == *host_id) else {
+        return Some("the machine is gone");
+    };
+    if machine.role != Some(Role::Owner) {
+        return Some("only the machine's owners remove accounts");
+    }
+    if machine.connection != ConnectionState::Connected {
+        return Some("removing accounts: the machine is not connected");
+    }
+    match find(machines, host_id, account_id) {
+        None => Some("the account is gone"),
+        Some(account) if account.hub_login.is_some() => {
+            Some("a hub login is removed on the hub's Logins page")
+        }
+        Some(_) => None,
     }
 }
 
@@ -627,6 +753,125 @@ mod tests {
         assert_eq!(
             app.notice.as_deref(),
             Some("adding accounts: terminals are owner-only")
+        );
+    }
+
+    fn removing(app: &App) -> Option<Removing> {
+        app.account_screen.as_ref().unwrap().removing.clone()
+    }
+
+    fn answer(app: &mut App, result: Result<herder_protocol::CommandResult, String>) {
+        app.update(Msg::Sent {
+            origin: Origin::RemoveAccount(HostId::new("h1")),
+            result,
+        });
+    }
+
+    #[test]
+    fn d_removes_the_selected_account_after_asking() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(app.on_removable_account());
+        // d only asks; n keeps the account.
+        assert_eq!(press(&mut app, KeyCode::Char('d')), []);
+        let asked = Removing {
+            host_id: HostId::new("h1"),
+            account_id: AccountId::new("claude-work"),
+            sending: false,
+        };
+        assert_eq!(removing(&app), Some(asked.clone()));
+        // Keys meant for the screen wait.
+        assert_eq!(press(&mut app, KeyCode::Char('n')), []);
+        assert_eq!(removing(&app), None);
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(press(&mut app, KeyCode::Char('l')), []);
+        assert_eq!(removing(&app), Some(asked));
+
+        // y sends the removal, once.
+        assert_eq!(
+            press(&mut app, KeyCode::Char('y')),
+            [Effect::Send {
+                host_id: HostId::new("h1"),
+                command: CommandBody::RemoveAccount {
+                    account_id: AccountId::new("claude-work"),
+                },
+                origin: Origin::RemoveAccount(HostId::new("h1")),
+            }]
+        );
+        assert!(removing(&app).unwrap().sending);
+        assert_eq!(press(&mut app, KeyCode::Char('y')), []);
+
+        // Removed: the dialog closes, the status line says so, and the machine's row takes
+        // the selection.
+        answer(&mut app, Ok(CommandResult::Applied));
+        assert_eq!(removing(&app), None);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("removed claude-work; its config dir stays on the machine")
+        );
+        assert_eq!(chosen(&app), Some(Pick::Machine(HostId::new("h1"))));
+    }
+
+    #[test]
+    fn the_machines_refusal_to_remove_an_account_shows_in_the_status_line() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(press(&mut app, KeyCode::Enter).len(), 1);
+        let why = "1 unarchived session runs on account claude-main; archive it first: s1";
+        answer(&mut app, Err(why.to_owned()));
+        assert_eq!(removing(&app), None);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some(format!("removing claude-main: {why}").as_str())
+        );
+        // The account stays selected, to try again once its sessions are archived.
+        assert_eq!(
+            chosen(&app),
+            Some(Pick::Account(
+                HostId::new("h1"),
+                AccountId::new("claude-main")
+            ))
+        );
+    }
+
+    #[test]
+    fn only_an_owner_removes_an_account_and_never_a_hub_login() {
+        // A machine's row has no account.
+        let mut app = app();
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('g'));
+        assert!(!app.on_removable_account());
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(removing(&app), None);
+        assert_eq!(app.notice.as_deref(), Some("select an account to remove"));
+
+        let mut app = App::default();
+        let mut h1 = machine("h1", "box", &[]);
+        h1.accounts = vec![fake::hub_login_account("work", "claude-ada.json", "Work")];
+        app.update(Msg::Machines(vec![h1]));
+        press(&mut app, KeyCode::Char('A'));
+        assert!(!app.on_removable_account());
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(removing(&app), None);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("a hub login is removed on the hub's Logins page")
+        );
+
+        let mut app = App::default();
+        let mut member = machine("h1", "box", &[]);
+        member.role = Some(herder_protocol::Role::Member);
+        member.accounts = vec![fake::account("claude-main", "Main")];
+        app.update(Msg::Machines(vec![member]));
+        press(&mut app, KeyCode::Char('A'));
+        assert!(!app.on_removable_account());
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(removing(&app), None);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("only the machine's owners remove accounts")
         );
     }
 

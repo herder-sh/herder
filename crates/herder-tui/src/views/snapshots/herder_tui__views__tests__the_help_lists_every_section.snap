@@ -178,6 +178,7 @@ expression: terminal.backend()
 "     │                       first, last                                                    │       "
 "     │  n                    add an account                                                 │       "
 "     │  l                    log in again                                                   │       "
+"     │  d                    remove the account: y removes, n keeps                         │       "
 "     │  r                    reconnect                                                      │       "
 "     │  ?                    this help                                                      │       "
 "     │  esc, ⌫, ←, h, q, A   close                                                          │       "
