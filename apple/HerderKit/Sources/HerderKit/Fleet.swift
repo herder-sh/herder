@@ -1169,6 +1169,19 @@ public final class Fleet {
         update(client.machines())
     }
 
+    /// Signs in with a browser to the login proxy in front of `address`, one of the machine's
+    /// tunnel URLs: `open` shows the proxy's login page, and is cancelled once the person has
+    /// signed in there and the machine has the token.
+    func signInToFrontDoor(_ hostId: HostId, address: String,
+                           open: @escaping @MainActor (URL) async -> Void) async throws {
+        let signIn = try await client.beginFrontDoorSignIn(hostId: hostId, address: address)
+        guard let url = URL(string: signIn.url()) else { return }
+        let browser = Task { @MainActor in await open(url) }
+        defer { browser.cancel() }
+        try await signIn.finish()
+        update(client.machines())
+    }
+
     /// Connects to a machine at `addresses`, first to last in order of preference.
     func setAddresses(_ hostId: HostId, to addresses: [String]) throws {
         try client.setAddresses(hostId: hostId, addresses: addresses)

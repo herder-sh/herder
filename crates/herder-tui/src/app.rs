@@ -168,6 +168,14 @@ pub enum Effect {
         /// Its addresses, first tried first.
         addresses: Vec<String>,
     },
+    /// Sign in with a browser to the login proxy in front of one of a machine's tunnel
+    /// addresses: its login page is opened, or shown, and how it went comes back as notices.
+    FrontDoorSignIn {
+        /// The machine.
+        host_id: HostId,
+        /// The tunnel address.
+        address: String,
+    },
     /// Clear the screen and draw every cell anew, as after a resize.
     Repaint,
     /// Suspend the TUI and attach the local terminal to a daemon terminal.

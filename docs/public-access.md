@@ -210,6 +210,35 @@ upgrade only. They stay in its profile next to its device keys: herder never sen
 the daemon (its tunnel listener ignores what a proxy passes on) nor in a link to another
 device. A proxy that refuses says so in the address's error, naming the headers sent.
 
+### Signing in with a browser (Cloudflare Access)
+
+People can sign in to the proxy themselves instead of typing a service token on each
+device. With Cloudflare Access in front of the hostname, set it up once in the Zero Trust
+dashboard:
+
+1. **Access → Applications → Add an application → Self-hosted**, with the tunnel's
+   hostname (`hub.example.com`) and a session duration, which is how long a sign-in lasts
+   before the app asks again (24 hours, say).
+2. A policy that **Allow**s the people who may sign in: their emails, an email domain, or a
+   group of your identity provider (Google, GitHub, a one-time PIN, ...).
+3. For machines that reach the hostname with nobody to sign in, such as a host whose hub
+   address is the tunnel: a **Service Auth** policy with a service token
+   (**Access → Service Auth → Create Service Token**). Enter its two headers on that machine
+   as above.
+
+Then, on each device, the tunnel address shows **Sign In…** once Access has turned the
+device away to its login: on the machine's page in the Mac or iPhone app, or as **sign in
+with s** in the TUI's routes (`o`, then `s` on the address). The app opens Access's login in
+a browser sheet (`ASWebAuthenticationSession`); the TUI opens the system browser, or shows
+the URL where there is none. Once you sign in there, the device gets the application's
+token, the way `cloudflared access login` does: sealed to a key the device made for this
+sign-in, through Cloudflare's transfer service. It sends the token as `cf-access-token` on
+the upgrade and reconnects (`Client::begin_front_door_sign_in`, P28.7). The token stays on
+the device with its other headers. When it expires, or Access refuses it, the address shows
+**Sign In Again…** (**sign in again with s** in the TUI).
+
+Other login proxies (Authelia, oauth2-proxy) take a header of your own for now, as above.
+
 Such a proxy is never required: the inner mutual TLS already authenticates every
 connection. Leaving the hostname outside it (or bypassing it) also lets a new device sign in
 through the tunnel; one behind it signs in at another address first.

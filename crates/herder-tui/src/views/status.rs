@@ -158,6 +158,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                     tap("space", "auto · only this · never", char(' ')),
                     tap("K", "earlier", char('K')),
                     tap("J", "later", char('J')),
+                    tap("s", "sign in", char('s')),
                     tap("esc", "done", KeyCode::Esc),
                 ],
                 None => vec![

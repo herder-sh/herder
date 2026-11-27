@@ -491,6 +491,14 @@ fn routes(ui: Ui, app: &App, machine: &Machine, at: usize) -> Vec<Line<'static>>
         if in_use == Some(address.as_str()) {
             spans.push(Span::styled("  in use", Style::new().fg(ui.theme.success)));
         }
+        if let Some(door) = machines::front_door(machine, address) {
+            let style = if door == "signed in" {
+                ui.muted()
+            } else {
+                Style::new().fg(ui.theme.warning)
+            };
+            spans.push(Span::styled(format!("  {door}"), style));
+        }
         lines.push(Line::from(spans));
     }
     lines
