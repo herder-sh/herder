@@ -26,6 +26,34 @@ struct AccountMachine: Equatable, Identifiable {
         account.map { fleet.relogin($0.accountId, on: place.hostId) }
     }
 
+    /// Whether the user may remove the row's account from its machine: they own the machine,
+    /// and it is not one of a hub's logins, which leave on the hub's Logins page.
+    var removable: Bool {
+        guard let account else { return false }
+        return account.hubLogin == nil && place.owner
+    }
+
+    /// What removing the row's account asks first.
+    func removalQuestion(title: String) -> (title: String, message: String) {
+        let message = account?.endpoint == nil
+            ? "Archive its sessions there first. The login stays in its config directory, so adding it again finds it signed in."
+            : "Archive its sessions there first. \(place.name) forgets its endpoint and key."
+        return ("Remove \(title) from \(place.name)?", message)
+    }
+
+    /// Removes the row's account from its machine. Nil once removed; else the daemon's refusal,
+    /// which names the sessions or settings that still use the account.
+    @MainActor
+    func remove(through send: @MainActor (HostId, CommandBody) async throws -> CommandResult) async -> String? {
+        guard let account else { return nil }
+        do {
+            _ = try await send(place.hostId, .removeAccount(accountId: account.accountId))
+            return nil
+        } catch {
+            return "\(place.name): \(describe(error))"
+        }
+    }
+
     /// The machines that have the login, an account a row, then those that lack it.
     static func rows(_ login: ProviderAccounts.Login, machines: [Machine],
                      summaries: [MachineSummary]) -> [AccountMachine] {
@@ -101,6 +129,8 @@ struct AccountPage: View {
     @State private var editingDirectory: AccountMachine?
     @State private var directory = ""
     @State private var error: String?
+    @State private var removing: AccountMachine?
+    @State private var removeError: String?
     @State private var saves = Autosave()
     @FocusState private var editingLabel: Bool
     private let period = UsagePeriod.week
@@ -127,6 +157,7 @@ struct AccountPage: View {
                 usage(login).detailSection(period.title)
                 machines(login, rows: rows).detailSection("Machines")
                 settings(login, rows: rows).detailSection("Settings")
+                dangerZone(rows)
                 AboutSection {
                     DetailRow(label: "Provider", value: ModelCatalog.providerName(login.provider))
                     DetailRow(label: "Endpoint", value: url, mono: true)
@@ -152,6 +183,7 @@ struct AccountPage: View {
                 usage(login).detailSection(period.title)
                 machines(login, rows: rows).detailSection("Machines")
                 settings(login, rows: rows).detailSection("Settings")
+                dangerZone(rows)
                 AboutSection {
                     DetailRow(label: "Provider", value: ModelCatalog.providerName(login.provider))
                     if let email = login.email { DetailRow(label: "Email", value: email) }
@@ -184,6 +216,13 @@ struct AccountPage: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Leave it empty for the provider’s default login. Archive every session on the machine first.")
+        }
+        .confirmationDialog(removing.map { $0.removalQuestion(title: login?.title ?? "the account").title } ?? "",
+                            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                            titleVisibility: .visible, presenting: removing) { row in
+            Button("Remove Account", role: .destructive) { Task { await remove(row, of: rows) } }
+        } message: { row in
+            Text(row.removalQuestion(title: login?.title ?? "the account").message)
         }
     }
 
@@ -570,7 +609,61 @@ struct AccountPage: View {
         return "Fallback is used only once every primary is out"
     }
 
+    // MARK: Danger zone
+
+    /// Removing the login's account from a machine the user owns, once its sessions there are
+    /// archived. A hub login has none: it leaves on the hub's Logins page.
+    @ViewBuilder private func dangerZone(_ rows: [AccountMachine]) -> some View {
+        let removable = rows.filter(\.removable)
+        if !removable.isEmpty {
+            DangerZone {
+                SettingRow(label: "Remove account",
+                           hint: removable.count == 1 ? "From \(removable[0].place.name); its config directory stays"
+                               : "From one machine; its config directory stays") {
+                    if removable.count == 1 {
+                        DangerButton(title: "Remove Account…") { removing = removable[0] }
+                            .disabled(!removable[0].place.connected)
+                            .accessibilityIdentifier("account-remove")
+                    } else {
+                        Menu {
+                            ForEach(removable) { row in
+                                Button(row.place.name) { removing = row }.disabled(!row.place.connected)
+                            }
+                        } label: {
+                            Text("Remove Account…")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.danger)
+                                .padding(.horizontal, 12)
+                                .frame(height: 32)
+                                .background(Theme.raised, in: .rect(cornerRadius: 7))
+                        }
+                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+                        .fixedSize()
+                        .accessibilityIdentifier("account-remove")
+                    }
+                }
+                if let removeError {
+                    RowDivider()
+                    Label(removeError, systemImage: "exclamationmark.triangle")
+                        .font(.footnote).foregroundStyle(Theme.failure)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("account-remove-error")
+                }
+            }
+        }
+    }
+
     // MARK: Actions
+
+    /// Removes the row's account; once it was the login's last, leaves for Providers.
+    private func remove(_ row: AccountMachine, of rows: [AccountMachine]) async {
+        let client = fleet.client
+        removeError = await row.remove { try await client.send(hostId: $0, command: $1) }
+        if removeError == nil && rows.filter({ $0.account != nil }).count == 1 { pages.close() }
+    }
 
     private func setUp(_ login: ProviderAccounts.Login, on place: ProviderAccounts.Place) {
         let taken = AccountDraft.taken(on: fleet.machines.first { $0.hostId == place.hostId },
