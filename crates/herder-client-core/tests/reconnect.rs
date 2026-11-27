@@ -347,8 +347,22 @@ impl View {
 
 /// Waits until the machine's connection satisfies `wanted`.
 async fn wait_connection(client: &Client, wanted: impl Fn(&ConnectionState) -> bool) {
+    wait_connection_within(TIMEOUT, client, wanted).await;
+}
+
+/// How long a stalled connection may take to be found dead: up to a ping interval to the next
+/// ping, then up to the most silence the client gives one, 20 s. A pong read after the paused
+/// clock jumped counts the jump as its round trip, which earns the most.
+const FOUND_DEAD: Duration = Duration::from_secs(60);
+
+/// [`wait_connection`], for at most `within`.
+async fn wait_connection_within(
+    within: Duration,
+    client: &Client,
+    wanted: impl Fn(&ConnectionState) -> bool,
+) {
     let changes = client.changes();
-    tokio::time::timeout(TIMEOUT, async {
+    tokio::time::timeout(within, async {
         while !client
             .machines()
             .iter()
@@ -2412,7 +2426,7 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
     let ticker = pause();
     tokio::time::advance(Duration::from_secs(10 * 60)).await;
     // On resume the silence is noticed, and nothing is retried while suspended.
-    wait_connection(&phone, |state| {
+    wait_connection_within(FOUND_DEAD, &phone, |state| {
         matches!(state, ConnectionState::Disconnected { .. })
     })
     .await;
@@ -2466,7 +2480,7 @@ async fn a_suspended_client_replaces_no_connection_until_woken() {
     let ticker = pause();
     tokio::time::advance(Duration::from_secs(10 * 60)).await;
     // The connection's pings find it dead, and nothing replaces it.
-    wait_connection(&phone, |state| {
+    wait_connection_within(FOUND_DEAD, &phone, |state| {
         matches!(state, ConnectionState::Disconnected { .. })
     })
     .await;
@@ -3747,7 +3761,10 @@ impl Logged {
         };
         tokio::time::timeout(TIMEOUT, logged)
             .await
-            .unwrap_or_else(|_| panic!("fewer than {count} lines with {text:?} for {client}"))
+            .unwrap_or_else(|_| {
+                let all = self.lines("", client);
+                panic!("fewer than {count} lines with {text:?} for {client}: {all:#?}")
+            })
     }
 }
 
@@ -4053,6 +4070,9 @@ async fn a_connection_given_up_tells_the_daemon_why() {
     let line = logged.wait_lines(closed, name, 1).await.remove(0);
     assert!(line.contains("client disconnected"), "{line}");
     assert!(line.contains(r#""reconnecting, as asked""#), "{line}");
+    // Done with what the daemon sends a new connection: a client that closes while the daemon
+    // still writes resets the connection, and the daemon reads no reason.
+    client.synced(host.clone()).await.unwrap();
 
     // So does one whose address is no longer one of the machine's.
     let relay = Relay::start(daemon.addr).await;
