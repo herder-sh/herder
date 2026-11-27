@@ -47,10 +47,14 @@ apps:
 parts:
   herder-gtk:
     plugin: rust
+    # The committed tree only, so a local target/ is not copied into the build.
     source: .
+    source-type: git
     rust-path: [linux]
-    # rustup installs the toolchain rust-toolchain.toml pins.
-    build-snaps: [rustup]
+    # The gnome extension points LD_LIBRARY_PATH at the GNOME SDK's C library, on which rustup
+    # and cargo crash; the linker finds the SDK's libraries through pkg-config and LDFLAGS.
+    build-environment:
+      - LD_LIBRARY_PATH: ""
     # The gnome extension's LDFLAGS point the linker at the GNOME SDK's libraries.
     rust-inherit-ldflags: true
     override-pull: |

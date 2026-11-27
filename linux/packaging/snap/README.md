@@ -117,5 +117,5 @@ sudo snap connect herder:herder-profile
 
 On Ubuntu, with snapd: `sudo snap install snapcraft --classic`, then `snapcraft pack` from the
 repo root (it builds in an LXD container; `snapcraft pack --use-lxd` after `sudo snap install
-lxd && sudo lxd init --auto`). snapcraft copies the whole checkout into the build, `target/`
-included, so build from a fresh clone or after `cargo clean`.
+lxd && sudo lxd init --auto`). It builds the committed tree (`source-type: git`): commit what
+you want in the snap first.
