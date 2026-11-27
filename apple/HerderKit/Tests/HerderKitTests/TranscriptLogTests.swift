@@ -4,10 +4,10 @@ import Testing
 
 struct TranscriptLogTests {
     /// A 600 pt view on 5,000 pt of transcript, at `offset`.
-    private func state(offset: CGFloat, content: CGFloat = 5000) -> TranscriptScrollState {
+    private func state(offset: CGFloat, content: CGFloat = 5000, height: CGFloat = 600) -> TranscriptScrollState {
         TranscriptScrollState(contentHeight: content, offsetY: offset,
-                              visible: CGRect(x: 0, y: offset, width: 800, height: 600),
-                              container: CGSize(width: 800, height: 600))
+                              visible: CGRect(x: 0, y: offset, width: 800, height: height),
+                              container: CGSize(width: 800, height: height))
     }
 
     @Test func aViewWithinTheContentIsInside() {
@@ -44,10 +44,11 @@ struct TranscriptLogTests {
     }
 
     /// What the owner's Mac logged as its transcript went blank: the content shrank by a
-    /// thousand points while the offset stayed, past the new end.
+    /// thousand points while the offset stayed, past the new end. Its window was taller than
+    /// 623 points, which is what puts 1675 past the end of 2298 points of content.
     @Test func contentShrinkingFromUnderTheViewIsCaught() {
-        let before = state(offset: 1675, content: 3446)
-        #expect(state(offset: 1675, content: 2298).shrankFromUnder(before))
+        let before = state(offset: 1675, content: 3446, height: 900)
+        #expect(state(offset: 1675, content: 2298, height: 900).shrankFromUnder(before))
         #expect(state(offset: 4400, content: 1200).shrankFromUnder(state(offset: 4400)))
     }
 
