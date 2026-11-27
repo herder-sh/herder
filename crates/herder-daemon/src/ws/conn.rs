@@ -1,7 +1,7 @@
 //! One client connection: handshake, then a reader handling client messages and a writer
 //! draining the connection's [`Outbox`].
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -501,6 +501,11 @@ async fn handle<B: Backend>(
                 });
                 return;
             }
+            if let CommandBody::ShowSessions { session_ids } = body {
+                let _ = replays.send(Replay::Show(session_ids));
+                outbox.push(answered(id, Ok(CommandResult::Applied)));
+                return;
+            }
             if let CommandBody::GetLatestEvents { session_id } = &body {
                 // Ahead of the replays queued: it is what an app shows first.
                 outbox.push_first(answered(id, latest_events(shared, session_id).await));
@@ -665,21 +670,41 @@ fn command_id(text: &str) -> Option<CommandId> {
         .map(|tagged| tagged.id)
 }
 
-/// A subscription change or sync, done in the order the client sent them.
+/// A subscription change or sync, done in the order the client sent them, but for the
+/// subscriptions of the sessions it shows, which go first.
 enum Replay {
     Subscribe(Cursor),
     Unsubscribe(SessionId),
     /// Answered once every replay asked for before it is queued.
     Sync(String),
+    /// The sessions the client shows now; taken in at once, not in turn.
+    Show(Vec<SessionId>),
 }
 
-/// Does the connection's subscription changes and syncs, one after the other.
+/// Does the connection's subscription changes and syncs, one after the other: in the order
+/// asked, except that a subscription to a session the client shows goes ahead of those
+/// still waiting.
 async fn replay<B: Backend>(
     shared: Arc<Shared<B>>,
     outbox: Arc<Outbox>,
     mut queue: mpsc::UnboundedReceiver<Replay>,
 ) {
-    while let Some(next) = queue.recv().await {
+    let mut waiting = Waiting::default();
+    loop {
+        // What was asked meanwhile, so that a session shown since goes ahead of it.
+        while let Ok(asked) = queue.try_recv() {
+            waiting.take(asked);
+        }
+        let next = match waiting.next() {
+            Some(next) => next,
+            None => match queue.recv().await {
+                Some(asked) => {
+                    waiting.take(asked);
+                    continue;
+                }
+                None => return,
+            },
+        };
         if outbox.state() != OutboxState::Open {
             return;
         }
@@ -687,7 +712,46 @@ async fn replay<B: Backend>(
             Replay::Subscribe(cursor) => subscribe(&shared, &outbox, cursor).await,
             Replay::Unsubscribe(session_id) => shared.fanout.unsubscribe(&outbox, &session_id),
             Replay::Sync(token) => outbox.catch_up([ServerMessage::Synced { token }]),
+            Replay::Show(_) => {}
         }
+    }
+}
+
+/// A connection's subscription changes and syncs not done yet, and the sessions its client
+/// shows.
+#[derive(Default)]
+struct Waiting {
+    queue: VecDeque<Replay>,
+    shown: HashSet<SessionId>,
+}
+
+impl Waiting {
+    fn take(&mut self, asked: Replay) {
+        match asked {
+            Replay::Show(session_ids) => self.shown = session_ids.into_iter().collect(),
+            asked => self.queue.push_back(asked),
+        }
+    }
+
+    /// The first subscription waiting to a session shown, unless the session is unsubscribed
+    /// from before it; else the change asked for first.
+    fn next(&mut self) -> Option<Replay> {
+        if self.shown.is_empty() {
+            return self.queue.pop_front();
+        }
+        let mut unsubscribed = HashSet::new();
+        let shown = self.queue.iter().position(|asked| match asked {
+            Replay::Subscribe(cursor) => {
+                self.shown.contains(&cursor.session_id)
+                    && !unsubscribed.contains(&cursor.session_id)
+            }
+            Replay::Unsubscribe(session_id) => {
+                unsubscribed.insert(session_id);
+                false
+            }
+            Replay::Sync(_) | Replay::Show(_) => false,
+        });
+        self.queue.remove(shown.unwrap_or(0))
     }
 }
 

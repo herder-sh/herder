@@ -69,6 +69,9 @@ says what exists, why, and how it maps to foreign languages.
   P29.1 added, compatibly, `Command.trace`, the W3C trace context a command runs under, and
   `DaemonSettings.telemetry` (`TelemetrySettings`); this API grew `send_traced`,
   `Diagnostics` and `set_diagnostics` without breaking anything (see Diagnostics).
+  P26.20 added, compatibly, the `ShowSessions` command: the sessions a client shows, whose
+  replays the daemon takes ahead of the others waiting. Apps do not send it: they call
+  `Client::show_sessions`, which sends it on each connection.
 
 ## Shape, and how it maps to UniFFI
 
@@ -120,7 +123,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `user_id`, `person_id`, `address_headers`, `pinned_address`, `disabled_addresses`; `route_kind`; `Client::wireguard_tunnels` | `Client::sign_in`, `share`, `rename`, `set_addresses`, `set_address_headers`, `set_route`, `import_wireguard`, `remove_wireguard`, `set_hub_wireguard`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `FleetLink` |
-| Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images` and `files`), `GetAttachment` → `CommandResult::Attachment`, `GetLatestEvents` → `CommandResult::LatestEvents`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow`, `MergeQueued` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
+| Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`, `Client::show_sessions`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images` and `files`), `GetAttachment` → `CommandResult::Attachment`, `GetLatestEvents` → `CommandResult::LatestEvents`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow`, `MergeQueued` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
 | Projects  | `Machine::projects`; a `Project`'s `remote`, the URL `CloneProject` clones it onto another machine from (none without a remote), `icon`, the hash of its icon, to cache it by, `icon_uploaded`, whether an owner uploaded it, and `icon_background`, the colour behind it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `CloneProject` (a git URL or GitHub `owner/repo`, into a new folder, or without one into a folder named after the repository in the machine's projects dir; `conflict` when it exists) → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`, `close_terminal` (owners only); `TerminalStream::input`, `resize`; drop = detach |
@@ -190,6 +193,7 @@ everything stops once the last clone is dropped.
 | `suspend()` | The app went to the background: saves the offline cache (blocking) and stops retrying lost connections. |
 | `wake()` | The app is in the foreground: reconnects every disconnected machine now and probes every connected one, replacing a dead connection. |
 | `subscribe_session(host_id: HostId, session_id: SessionId) -> Result<SessionSubscription, Error>` | Streams a session, cached state first, across reconnects. |
+| `show_sessions(host_id: HostId, session_ids: Vec<SessionId>) -> Result<(), Error>` | Says which sessions of the machine the app shows now, replacing what it said before (empty: none). Their replays go first on each connection; see Flaky networks. |
 | `async send(host_id: HostId, command: CommandBody) -> Result<CommandResult, Error>` | Sends a command and waits for the answer; resent with the same id after a reconnect. |
 | `async send_traced(host_id: HostId, command: CommandBody, trace: String) -> Result<CommandResult, Error>` | `send` under the app's span: `trace` is its W3C `traceparent`, which goes to the daemon only while the process shares diagnostics. See [Diagnostics](#diagnostics). |
 | `async open_terminal(host_id: HostId, session_id: SessionId, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Opens a shell in a session's worktree; owners only. |
@@ -320,6 +324,12 @@ about:
   life), within 30 s on a slow link or once idle, and within 5 s of the user asking something
   of it: a command and a subscription probe the connection they are sent on. A slow link that
   still carries bytes is kept.
+- A reconnect resumes every subscription, and the daemon replays them one after the other: a
+  session's live events wait for its replay. The sessions an app said it shows, with
+  `show_sessions`, go first, on the connection up when it says so and on each new one, so a
+  prompt sent in the open session shows there about a round trip later, however much the
+  other sessions have to catch up. An app calls `show_sessions` whenever the sessions on
+  screen change, an empty list when none is.
 - Commands wait out a drop and are resent with the same id on the next connection; the daemon
   applies an id once.
 - A connection that ends within 30 s of being made did not work. The first such is replaced as
@@ -499,6 +509,7 @@ answers to the commands the apps send to read (`list_people`, `list_bots`, `get_
 
 - Machines show as `Connected`, with what was recorded; nothing connects, retries or saves.
 - `subscribe_session` streams the recorded events in one first update.
+- `show_sessions` does nothing.
 - `send` returns the recorded answer to an equal command; any other command, and
   `open_terminal`, `attach_terminal`, `reconnect`, `sign_in`, `log_in`, `rename`,
   `set_addresses` and `forget`, fail with `Error::Demo`, which the apps show as "This is a

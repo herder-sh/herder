@@ -1052,6 +1052,27 @@
           ]
         },
         {
+          "description": "The sessions the user has open on this client now, replacing those named before on\nthe connection: the replays of their subscriptions go ahead of the others still\nwaiting, then and on any later subscribe, so a reconnect brings what the user looks at\nup to date, and streaming live, first. Answered with `applied`; it changes nothing, so a\nresend is answered afresh.",
+          "type": "object",
+          "properties": {
+            "session_ids": {
+              "description": "The sessions shown, in any order; empty when none is.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SessionId"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "show_sessions"
+            }
+          },
+          "required": [
+            "type",
+            "session_ids"
+          ]
+        },
+        {
           "description": "Stop the running turn.",
           "type": "object",
           "properties": {

@@ -604,13 +604,18 @@ fn repo(dir: &Path) -> String {
     dir.to_str().unwrap().to_owned()
 }
 
-/// Writes a fake-adapter script of `turns` turns, each answering `Prompt <n>.` with a short
+/// Writes a fake-adapter script of the turns numbered `turns`, each answering `Prompt <n>.` with a short
 /// message and one that streams for a few seconds. With `big`, the first turn instead adds
 /// that many bytes of messages at once, for a replay that takes a slow link long.
-fn script(dir: &Path, rng: &mut Rng, turns: u64, big: Option<usize>) -> PathBuf {
+fn script(
+    dir: &Path,
+    rng: &mut Rng,
+    turns: std::ops::RangeInclusive<u64>,
+    big: Option<usize>,
+) -> PathBuf {
     let mut steps = Vec::new();
     let message = |id: &str, turn: &str, text: &str| json!({"id": id, "turn_id": turn, "body": {"type": "assistant_message", "text": text}});
-    for number in 1..=turns {
+    for number in turns {
         let turn = format!("turn-{number}");
         let prompt = format!("Prompt {number}.");
         steps.push(json!({"expect": {"type": "send_prompt", "turn_id": turn, "text": prompt}}));
@@ -970,7 +975,7 @@ impl World {
     async fn start_on(seed: u64, turns: u64, big: Option<usize>, relayed: bool) -> Self {
         eprintln!("bad network: seed {seed}");
         let tmp = tempfile::tempdir().unwrap();
-        let script = script(tmp.path(), &mut Rng::new(seed), turns, big);
+        let script = script(tmp.path(), &mut Rng::new(seed), 1..=turns, big);
         let open = |name: &str| {
             let dir = tmp.path().join(name).display().to_string();
             Client::open(dir, "herder-test/0".into()).unwrap()
@@ -2540,6 +2545,117 @@ fn a_prompt_during_a_catch_up_is_applied_in_half_a_round_trip() {
             after(answered) <= 1500,
             "answered {} ms after the send",
             after(answered)
+        );
+        drop(watched);
+        world.nothing_wrong();
+    });
+}
+
+/// The same return as above, but the megabyte and a half went to another session while the
+/// app was away, and the user prompts in the session they have open, which did nothing
+/// meanwhile. The app says which session it shows, so the daemon replays that one ahead of
+/// the 500 others, and the prompt's own events reach its view a round trip after the send,
+/// not once the whole catch-up is through.
+#[test]
+fn a_prompt_in_the_open_session_shows_ahead_of_the_catch_up_of_others() {
+    run(async {
+        let mut world = World::start(43, 1, Some(1_500_000)).await;
+        let mut watched = Vec::new();
+        for _ in 0..500 {
+            let session_id = created(&world.truth, &world.host, create_chat()).await;
+            let sub = world.app.subscribe_session(world.host.clone(), session_id);
+            watched.push(sub.unwrap());
+        }
+        let busy = created(&world.truth, &world.host, create_chat()).await;
+        watched.push(
+            world
+                .app
+                .subscribe_session(world.host.clone(), busy.clone())
+                .unwrap(),
+        );
+        world
+            .app
+            .show_sessions(world.host.clone(), vec![world.session.clone()])
+            .unwrap();
+        world.app.synced(world.host.clone()).await.unwrap();
+
+        // Away while a turn adds a megabyte and a half to another session.
+        world.excuse(Instant::now(), Instant::now() + secs(3600));
+        world.app.suspend();
+        world.net.kill(None, Kill::Silent);
+        let busy_turn = world
+            .truth
+            .subscribe_session(world.host.clone(), busy.clone())
+            .unwrap();
+        let sent = world.truth.send(world.host.clone(), prompt(&busy, 1));
+        assert_eq!(sent.await.unwrap(), CommandResult::Applied);
+        tokio::time::timeout(secs(30), async {
+            loop {
+                let update = busy_turn.next().await.unwrap();
+                if update
+                    .events
+                    .iter()
+                    .any(|event| matches!(event.body, EventBody::TurnCompleted { .. }))
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("the turn did not end");
+        // The open session's adapter starts at its first prompt, which is turn 2.
+        script(world.tmp.path(), &mut Rng::new(43), 2..=2, None);
+        world.trouble(Trouble::Link(HALF_SECOND)).await;
+        tokio::time::sleep(secs(20)).await;
+        let before = world.net.carried.load(Ordering::SeqCst);
+        let woken = Instant::now();
+        world.app.wake();
+        world.shows(secs(30), "a connection", connected).await;
+        let shown = woken.elapsed();
+
+        let user_message = |body: &EventBody| match body {
+            EventBody::ItemAdded { item } => {
+                matches!(&item.body, ItemBody::UserMessage { text, .. } if text == "Prompt 2.")
+            }
+            _ => false,
+        };
+        let sent = Instant::now();
+        let ((answer, answered), applied, shows_sent) = tokio::join!(
+            async {
+                let prompt = prompt(&world.session, 2);
+                let answer = world.app.send(world.host.clone(), prompt).await;
+                (answer, Instant::now())
+            },
+            first_seen(&world.real, user_message),
+            first_seen(&world.seen, user_message),
+        );
+        assert_eq!(answer.unwrap(), CommandResult::Applied);
+        world.app.synced(world.host.clone()).await.unwrap();
+        let caught_up = woken.elapsed();
+        let carried = world.net.carried.load(Ordering::SeqCst) - before;
+        let after = |at: Instant| (at - sent).as_millis();
+        eprintln!(
+            "connected {} ms after the wake, caught up after {} ms, {carried} bytes; from the \
+             send: applied {} ms, answered {} ms, the app has the prompt {} ms",
+            shown.as_millis(),
+            caught_up.as_millis(),
+            after(applied),
+            after(answered),
+            after(shows_sent),
+        );
+        assert!(
+            carried > 1_000_000,
+            "the catch-up was no load: {carried} bytes"
+        );
+        assert!(
+            caught_up > shown + secs(2),
+            "the catch-up took {caught_up:?}"
+        );
+        // A round trip, and what the link and the daemon's socket hold ahead of the events.
+        assert!(
+            after(shows_sent) <= 1500,
+            "the app had the prompt {} ms after the send",
+            after(shows_sent)
         );
         drop(watched);
         world.nothing_wrong();

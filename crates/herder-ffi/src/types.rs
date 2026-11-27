@@ -669,6 +669,9 @@ pub enum CommandBody {
     GetLatestEvents {
         session_id: SessionId,
     },
+    ShowSessions {
+        session_ids: Vec<SessionId>,
+    },
     Interrupt {
         session_id: SessionId,
     },

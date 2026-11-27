@@ -307,6 +307,15 @@ pub enum CommandBody {
         /// The session.
         session_id: SessionId,
     },
+    /// The sessions the user has open on this client now, replacing those named before on
+    /// the connection: the replays of their subscriptions go ahead of the others still
+    /// waiting, then and on any later subscribe, so a reconnect brings what the user looks at
+    /// up to date, and streaming live, first. Answered with `applied`; it changes nothing, so a
+    /// resend is answered afresh.
+    ShowSessions {
+        /// The sessions shown, in any order; empty when none is.
+        session_ids: Vec<SessionId>,
+    },
     /// Stop the running turn.
     Interrupt {
         /// Target session.

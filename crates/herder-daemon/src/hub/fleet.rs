@@ -515,6 +515,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::ComposeDown { session_id, .. }
         | CommandBody::OpenTerminal { session_id, .. } => Some(session_id),
         CommandBody::CreateSession { .. }
+        | CommandBody::ShowSessions { .. }
         | CommandBody::ForkSession { .. }
         | CommandBody::UploadHistory { .. }
         | CommandBody::ListDirectory { .. }

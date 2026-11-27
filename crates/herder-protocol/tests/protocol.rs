@@ -308,6 +308,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::GetLatestEvents {
             session_id: session_id(),
         }),
+        command(CommandBody::ShowSessions {
+            session_ids: vec![session_id()],
+        }),
         command(CommandBody::UnarchiveSession {
             session_id: session_id(),
         }),
