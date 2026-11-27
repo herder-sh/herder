@@ -346,6 +346,21 @@ pub struct AccountConfig {
     pub endpoint: Option<Endpoint>,
 }
 
+/// What starts the id of the account on a hub login. It keeps the word from before the hub
+/// was renamed: sessions' journals and the config dirs name their account by it, and an id
+/// that changed would leave every session on a hub login without a configured account.
+const HUB_LOGIN_PREFIX: &str = "vault-";
+
+/// The account on the hub login pinned as `pin`.
+fn hub_login_account(pin: &str) -> AccountId {
+    AccountId::new(format!("{HUB_LOGIN_PREFIX}{pin}"))
+}
+
+/// Whether `account_id` names the account on a hub login ([`hub_login_account`]).
+fn is_hub_login_account(account_id: &AccountId) -> bool {
+    account_id.as_str().starts_with(HUB_LOGIN_PREFIX)
+}
+
 /// What the host fetches endpoint account `account_id`'s key from its hub for, as the hub's
 /// audit shows it: `endpoint:<id>` in lowercase, or `endpoint` for an id too long for that.
 fn key_purpose(account_id: &AccountId) -> String {
@@ -594,6 +609,27 @@ impl Inner {
                 self.unreachable(account_id);
             }
             _ => {}
+        }
+    }
+
+    /// Why `account_id`, which is not an account now, cannot run a turn. A hub login on a host
+    /// linked to a hub is `unreachable`: the host has yet to have it from the hub, as just
+    /// after the daemon starts, or the hub no longer lists it, so failover moves the session
+    /// or it retries once the hub may be reached again. Any other is `fatal`.
+    pub(super) fn missing_account(&self, account_id: &AccountId) -> TurnError {
+        let linked = self.secrets.get().is_some_and(|secrets| secrets.linked());
+        if linked && is_hub_login_account(account_id) {
+            return TurnError {
+                class: ErrorClass::Unreachable,
+                message: format!(
+                    "account {account_id} is one of the hub's logins, which this host does not \
+                     have from its hub now; trying again shortly"
+                ),
+            };
+        }
+        TurnError {
+            class: ErrorClass::Fatal,
+            message: format!("account {account_id} is not configured"),
         }
     }
 
@@ -2058,7 +2094,7 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Makes the accounts on the hub's logins `logins`, run through `proxy`, with config dirs
+    /// Makes the accounts on the hub's logins `logins` ([`hub_login_account`]), run through `proxy`, with config dirs
     /// under `dir`.
     pub(crate) fn set_hub_logins(&self, logins: &[ProviderLogin], proxy: &PinProxy, dir: &Path) {
         let inner = &self.inner;
@@ -2074,10 +2110,7 @@ impl SessionManager {
             {
                 continue;
             }
-            // The id keeps the word from before the hub was renamed: sessions' journals and
-            // the config dirs name their account by it, and an id that changed would leave
-            // every session on a hub login without a configured account.
-            let account_id = AccountId::new(format!("vault-{}", login.pin));
+            let account_id = hub_login_account(&login.pin);
             let config_dir = dir.join(account_id.as_str());
             if let Err(err) = std::fs::create_dir_all(&config_dir) {
                 warn!(%account_id, "cannot make the hub login's config dir: {err}");

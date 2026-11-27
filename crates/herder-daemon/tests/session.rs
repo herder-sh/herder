@@ -2620,9 +2620,12 @@ impl Switching {
         let shutdown = CancellationToken::new();
         let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
         let repo = dir.join("app");
-        std::fs::create_dir(&repo).unwrap();
-        git(&repo, &["init", "--quiet", "--initial-branch=main"]);
-        git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "init"]);
+        // A manager opened again over `dir`, as after a restart, finds its repository there.
+        if !repo.exists() {
+            std::fs::create_dir(&repo).unwrap();
+            git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+            git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "init"]);
+        }
         Self {
             manager,
             repo,
@@ -4203,6 +4206,149 @@ async fn an_endpoint_key_the_hub_cannot_be_reached_for_fails_over_to_a_login_acc
     daemon.shutdown.cancel();
 }
 
+/// The texts queued on `session_id`, in order, as the manager lists the session.
+async fn queued(daemon: &Switching, session_id: &SessionId) -> Vec<String> {
+    let heads = daemon.manager.sessions().await.unwrap();
+    let head = heads
+        .iter()
+        .find(|head| head.session_id == *session_id)
+        .unwrap();
+    head.queue
+        .iter()
+        .map(|prompt| prompt.text.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_prompt_whose_cli_cannot_start_stays_queued_with_those_behind_it_until_it_can() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failed_start_queue.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[("claude-login", Provider::Claude)],
+        Vec::new(),
+    )
+    .await;
+    // Its key is a hub secret on a host linked to no hub: its CLI cannot start.
+    let account = AccountConfig {
+        provider: Provider::Claude,
+        label: "Hub".into(),
+        config_dir: Some(dir.path().join("hub")),
+        fallback: false,
+        endpoint: Some(Endpoint {
+            url: "https://hub.example.com:8317".into(),
+            key: EndpointKey::Secret("CLIPROXYAPI_KEY".parse().unwrap()),
+        }),
+    };
+    assert!(daemon.manager.add_account(AccountId::new("hub"), account));
+    let session = daemon.create("hub").await;
+    daemon.send(&session, "First.").await;
+    daemon.settled(&session, SessionStatus::NeedsYou).await;
+    daemon.send(&session, "Second.").await;
+    daemon.settled(&session, SessionStatus::NeedsYou).await;
+
+    // Neither reached the agent, so neither is used up: both wait, in order.
+    assert_eq!(queued(&daemon, &session).await, ["First.", "Second."]);
+    assert!(claude.starts().is_empty());
+
+    // Once the session can run, both run, in order, once each.
+    assert_eq!(
+        daemon
+            .handle(switch_account(&session, "claude-login"))
+            .await,
+        Ok(CommandResult::Applied)
+    );
+    let journal = daemon.settled(&session, SessionStatus::Idle).await;
+    assert_eq!(
+        from_first_turn(&journal),
+        [
+            "-: status Running",
+            "-: turn_started turn-1",
+            "-: turn_failed turn-1 Fatal",
+            "-: status NeedsYou",
+            "-: status Running",
+            "-: turn_started turn-2",
+            "-: turn_failed turn-2 Fatal",
+            "-: status NeedsYou",
+            "alice: account_switched claude-login",
+            "-: status Running",
+            "alice: user turn-3 First.",
+            "-: turn_started turn-3",
+            "-: assistant turn-3 One.",
+            "-: turn_completed turn-3",
+            "alice: user turn-4 Second.",
+            "-: turn_started turn-4",
+            "-: assistant turn-4 Two.",
+            "-: turn_completed turn-4",
+            "-: status Idle",
+        ]
+    );
+    assert!(queued(&daemon, &session).await.is_empty());
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_hub_login_the_host_has_yet_to_have_from_its_hub_waits_and_retries_instead_of_failing() {
+    let dir = tempfile::tempdir().unwrap();
+    let login = "vault-claude-ada";
+    let daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, Scripted::new(&[]))],
+        &[(login, Provider::Claude)],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create(login).await;
+    daemon.shutdown.cancel();
+    drop(daemon);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Started again, linked to a hub that has yet to send its logins.
+    let claude = Scripted::new(&[]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[],
+        Vec::new(),
+    )
+    .await;
+    let secrets = Arc::new(herder_daemon::hub::HostSecrets::default());
+    secrets.set_linked(true);
+    daemon.manager.use_secrets(secrets).unwrap();
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let EventBody::SessionStatusChanged { retry_at, .. } = daemon
+        .until(|body| {
+            matches!(
+                body,
+                EventBody::SessionStatusChanged {
+                    status: SessionStatus::WaitingForCapacity,
+                    ..
+                }
+            )
+        })
+        .await
+    else {
+        unreachable!();
+    };
+    assert!(
+        retry_at.is_some(),
+        "it retries once the hub may have sent it"
+    );
+    let journal = daemon.manager.read_since(&session, 0, 1000).await.unwrap();
+    let failures: Vec<_> = journal
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::TurnFailed { error, .. } => Some(error.class),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(failures, [ErrorClass::Unreachable]);
+    assert!(claude.starts().is_empty());
+    daemon.shutdown.cancel();
+}
+
 #[tokio::test]
 async fn an_unreachable_codex_endpoint_account_fails_over_to_a_codex_login_account() {
     let dir = tempfile::tempdir().unwrap();
@@ -4559,7 +4705,7 @@ async fn a_logged_out_account_is_passed_over() {
 async fn an_account_logged_in_again_takes_part_in_failover_again() {
     let dir = tempfile::tempdir().unwrap();
     let claude = Scripted::new(&[
-        "failover_logged_out.jsonl",
+        "logged_out_then_logged_in.jsonl",
         "failover_limit_after_login.jsonl",
         "failover_retry_after_login.jsonl",
     ]);
@@ -4577,7 +4723,8 @@ async fn an_account_logged_in_again_takes_part_in_failover_again() {
     daemon.send(&first, "Refactor the parser.").await;
     daemon.settled(&first, SessionStatus::NeedsLogin).await;
 
-    // claude-a was logged in again from a client: the next limit rotates to it.
+    // claude-a was logged in again from a client: the failed turn's prompt runs there, and
+    // the next limit rotates to it.
     daemon.manager.logged_in_again(&AccountId::new("claude-a"));
     daemon.settled(&first, SessionStatus::Idle).await;
     let second = daemon.create("claude-b").await;
@@ -4588,7 +4735,7 @@ async fn an_account_logged_in_again_takes_part_in_failover_again() {
         lines.contains(&"-: account_switched claude-a".to_owned()),
         "{lines:?}"
     );
-    assert_eq!(lines[lines.len() - 2], "-: turn_completed turn-3");
+    assert_eq!(lines[lines.len() - 2], "-: turn_completed turn-4");
     assert_eq!(claude.starts().len(), 3);
     daemon.shutdown.cancel();
 }
@@ -4612,7 +4759,8 @@ async fn a_signed_out_account_holds_prompts_until_it_is_logged_in_again() {
     assert_eq!(daemon.manager.accounts(), accounts);
     daemon.until_status(SessionStatus::NeedsLogin).await;
 
-    // Prompts sent meanwhile are held in the queue: no turn starts, so none fails.
+    // The failed turn's prompt never reached the agent: it waits first, and prompts sent
+    // meanwhile are held behind it. No turn starts, so none fails.
     daemon.prompt(alice(), &session, "Add tests.").await;
     daemon.prompt(bob(), &session, "Update the docs.").await;
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -4620,12 +4768,15 @@ async fn a_signed_out_account_holds_prompts_until_it_is_logged_in_again() {
         .into_iter()
         .map(|(text, _)| text)
         .collect();
-    assert_eq!(queue, ["Add tests.", "Update the docs."]);
+    assert_eq!(
+        queue,
+        ["Refactor the parser.", "Add tests.", "Update the docs."]
+    );
     assert_eq!(daemon.commands.lock().unwrap().len(), 1);
     let head = daemon.manager.sessions().await.unwrap();
     assert_eq!(head[0].status, SessionStatus::NeedsLogin);
 
-    // Logged in again: the account is cleared and the held prompts run in the order sent.
+    // Logged in again: the account is cleared and every prompt runs in the order sent.
     daemon.manager.logged_in_again(&account());
     assert_eq!(daemon.next_accounts().await[0].needs_login, None);
     daemon.until_status(SessionStatus::Idle).await;
@@ -4638,14 +4789,18 @@ async fn a_signed_out_account_holds_prompts_until_it_is_logged_in_again() {
             "-: turn_failed turn-1 Auth",
             "-: status NeedsLogin",
             "-: status Running",
-            "alice: user turn-2 Add tests.",
+            "alice: user turn-2 Refactor the parser.",
             "-: turn_started turn-2",
-            "-: assistant turn-2 Added the tests.",
+            "-: assistant turn-2 Refactored the parser.",
             "-: turn_completed turn-2",
-            "bob: user turn-3 Update the docs.",
+            "alice: user turn-3 Add tests.",
             "-: turn_started turn-3",
-            "-: assistant turn-3 Updated the docs.",
+            "-: assistant turn-3 Added the tests.",
             "-: turn_completed turn-3",
+            "bob: user turn-4 Update the docs.",
+            "-: turn_started turn-4",
+            "-: assistant turn-4 Updated the docs.",
+            "-: turn_completed turn-4",
             "-: status Idle",
         ]
     );
@@ -4678,7 +4833,8 @@ async fn a_held_session_never_moves_account_by_itself_but_runs_on_the_one_it_is_
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(claude.starts().len(), 1);
 
-    // "Continue on another account" is the user's switch; the held prompt runs there.
+    // "Continue on another account" is the user's switch; the held prompts run there, the
+    // failed turn's first.
     let switched = daemon.handle(switch_account(&session, "claude-b")).await;
     assert_eq!(switched, Ok(CommandResult::Applied));
     let journal = daemon.settled(&session, SessionStatus::Idle).await;
@@ -4692,10 +4848,14 @@ async fn a_held_session_never_moves_account_by_itself_but_runs_on_the_one_it_is_
             "-: status NeedsLogin",
             "alice: account_switched claude-b",
             "-: status Running",
-            "alice: user turn-2 Add tests.",
+            "alice: user turn-2 Refactor the parser.",
             "-: turn_started turn-2",
-            "-: assistant turn-2 Added the tests.",
+            "-: assistant turn-2 Refactored the parser.",
             "-: turn_completed turn-2",
+            "alice: user turn-3 Add tests.",
+            "-: turn_started turn-3",
+            "-: assistant turn-3 Added the tests.",
+            "-: turn_completed turn-3",
             "-: status Idle",
         ]
     );
