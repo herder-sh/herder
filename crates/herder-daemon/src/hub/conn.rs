@@ -57,6 +57,33 @@ pub(super) async fn run(
         () = cancel.cancelled() => return,
         opened = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared, stream, peer, tunneled)) => opened,
     };
+    serve_opened(opened, peer, shared, cancel).await;
+}
+
+/// Serves a connection the relay Worker delivered in `frames`, counted by `pass` until it
+/// authenticated, exactly as one from the tunnel listener.
+pub(super) async fn run_relayed(
+    frames: Box<dyn tunnel::Io>,
+    pass: tunnel::Pass,
+    peer: SocketAddr,
+    shared: Arc<Shared>,
+    cancel: CancellationToken,
+) {
+    let opening = secure(&shared, Transport::Relay(frames), pass);
+    let opened = tokio::select! {
+        () = cancel.cancelled() => return,
+        opened = tokio::time::timeout(HANDSHAKE_TIMEOUT, opening) => opened,
+    };
+    serve_opened(opened, peer, shared, cancel).await;
+}
+
+/// Serves a connection whose handshakes up to its upgrade request ended as `opened`.
+async fn serve_opened(
+    opened: Result<Result<(Upgrade, String, tunnel::Pass)>, tokio::time::error::Elapsed>,
+    peer: SocketAddr,
+    shared: Arc<Shared>,
+    cancel: CancellationToken,
+) {
     let (upgrade, device, pass) = match opened {
         Ok(Ok(opened)) => opened,
         Ok(Err(err)) => return info!(%peer, "handshake failed: {err:#}"),
@@ -121,6 +148,16 @@ async fn open(
     } else {
         (Transport::Tcp(stream), shared.gates.direct(peer)?)
     };
+    secure(shared, transport, pass).await
+}
+
+/// The TLS handshake on `transport` and the upgrade request after it, read and not answered
+/// yet.
+async fn secure(
+    shared: &Shared,
+    transport: Transport,
+    pass: tunnel::Pass,
+) -> Result<(Upgrade, String, tunnel::Pass)> {
     let (tls, device) = ws::secure(&shared.tls, pass.meter(transport)).await?;
     let upgrade = upgrade::read(tls).await?;
     Ok((upgrade, device, pass))

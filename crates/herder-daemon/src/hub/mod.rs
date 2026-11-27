@@ -39,6 +39,7 @@
 
 mod client;
 pub mod cliproxyapi;
+mod cloudflare;
 mod conn;
 mod fleet;
 mod host_secrets;
@@ -46,6 +47,7 @@ pub mod install;
 mod link;
 pub mod pin;
 mod relay;
+mod relay_worker;
 mod replicator;
 mod retention;
 mod secrets;
@@ -112,6 +114,8 @@ struct Shared {
     relays: Arc<relay::Relays>,
     /// Count the connections not authenticated yet.
     gates: tunnel::Gates,
+    /// The relay Worker in the owner's Cloudflare account, once the hub looks after one.
+    relay_worker: OnceLock<Arc<relay_worker::RelayWorker>>,
 }
 
 impl Shared {
@@ -177,6 +181,7 @@ impl Server {
                 cliproxyapi: OnceLock::new(),
                 relays,
                 gates: tunnel::Gates::new(),
+                relay_worker: OnceLock::new(),
             }),
         }
     }
@@ -199,6 +204,17 @@ impl Server {
             .cliproxyapi
             .set(Arc::new(keys))
             .map_err(|_| anyhow::anyhow!("the hub uses one CLIProxyAPI"))
+    }
+
+    /// Looks after a relay Worker in its owner's Cloudflare account, deployed through the API
+    /// at `api` and kept in `data_dir`, and from [`Self::run`] on stays connected to it while
+    /// it is deployed; once per server.
+    pub fn use_relay_worker(&self, data_dir: &std::path::Path, api: &str) -> Result<()> {
+        let worker = relay_worker::RelayWorker::open(data_dir, api)?;
+        self.shared
+            .relay_worker
+            .set(Arc::new(worker))
+            .map_err(|_| anyhow::anyhow!("the hub looks after one relay Worker"))
     }
 
     /// The store, for reading what hosts replicated.
@@ -241,6 +257,13 @@ impl Server {
                 Arc::clone(&self.shared.store),
                 Arc::clone(key),
                 cliproxyapi::SYNC_EVERY,
+                shutdown.child_token(),
+            ));
+        }
+        if let Some(worker) = self.shared.relay_worker.get() {
+            tokio::spawn(relay_worker::run(
+                Arc::clone(&self.shared),
+                Arc::clone(worker),
                 shutdown.child_token(),
             ));
         }
@@ -332,6 +355,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     ));
     let public = settings.public_addresses();
     server.manage_settings(settings)?;
+    server.use_relay_worker(data_dir.root(), cloudflare::API)?;
     let control = auth::control::bind(data_dir.root())?;
     tokio::spawn(auth::control::serve(
         control,

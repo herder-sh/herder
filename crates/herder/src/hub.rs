@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use herder_daemon::auth::control::{self, Request, Response};
+use herder_daemon::auth::control::{self, RelayWorkerRequest, Request, Response};
 use herder_daemon::hub::install::cliproxyapi::{self, Proxy, Tls};
 use herder_daemon::hub::install::{self as hub_install, LocalHub};
 use herder_daemon::service::{self, Service};
@@ -44,6 +44,34 @@ pub enum Command {
         #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
         config: Option<PathBuf>,
     },
+    /// Reach this hub from anywhere through a relay in your own Cloudflare account, on
+    /// workers.dev: no public address, port forward or domain needed.
+    RelayWorker {
+        #[command(subcommand)]
+        command: RelayWorkerCommand,
+        /// Hub config file, to find its data dir [default: $XDG_CONFIG_HOME/herder/daemon.toml].
+        #[arg(long, value_name = "PATH", env = "HERDER_CONFIG", global = true)]
+        config: Option<PathBuf>,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum RelayWorkerCommand {
+    /// Deploy the relay to your Cloudflare account, or update it. The first time, give an API
+    /// token with the account permissions Workers Scripts: Edit and Account Settings: Read;
+    /// the hub keeps it to update and remove the relay, and never sends it to a device.
+    Deploy {
+        /// The Cloudflare account's id, where the token reaches several.
+        #[arg(long)]
+        account: Option<String>,
+        /// Ask for a new API token even though the hub keeps one.
+        #[arg(long)]
+        new_token: bool,
+    },
+    /// Remove the relay from your Cloudflare account.
+    Remove,
+    /// Show where the relay is.
+    Status,
 }
 
 /// How `herder hub install` sets up the CLIProxyAPI next to the hub. Pass the same flags
@@ -106,7 +134,42 @@ pub fn run(command: Command) -> Result<()> {
         Command::Install { port, cliproxyapi } => install(port, cliproxyapi.proxy()?),
         Command::Uninstall { purge } => uninstall(purge),
         Command::ForgetHost { host, config } => forget_host(host, config),
+        Command::RelayWorker { command, config } => relay_worker(command, config),
     }
+}
+
+/// The variable `herder hub relay-worker deploy` reads the Cloudflare API token from, if set.
+const CLOUDFLARE_TOKEN_ENV: &str = "CLOUDFLARE_API_TOKEN";
+
+fn relay_worker(command: RelayWorkerCommand, config: Option<PathBuf>) -> Result<()> {
+    let config = herder_daemon::Config::load(config.as_deref())?;
+    let ask = |request| control::request(&config.data_dir, &Request::RelayWorker(request));
+    let request = match command {
+        RelayWorkerCommand::Deploy { account, new_token } => {
+            let kept = match ask(RelayWorkerRequest::Status)? {
+                Response::RelayWorker { url } => url.is_some(),
+                Response::Error { message } => bail!("{message}"),
+                other => bail!("unexpected answer: {other:?}"),
+            };
+            let token = match std::env::var(CLOUDFLARE_TOKEN_ENV) {
+                Ok(token) if !token.trim().is_empty() => Some(token),
+                _ if kept && !new_token => None,
+                _ => Some(rpassword::prompt_password(
+                    "Cloudflare API token (Workers Scripts: Edit, Account Settings: Read): ",
+                )?),
+            };
+            RelayWorkerRequest::Deploy { token, account }
+        }
+        RelayWorkerCommand::Remove => RelayWorkerRequest::Remove,
+        RelayWorkerCommand::Status => RelayWorkerRequest::Status,
+    };
+    match ask(request)? {
+        Response::RelayWorker { url: Some(url) } => println!("relay Worker: {url}"),
+        Response::RelayWorker { url: None } => println!("no relay Worker is deployed"),
+        Response::Error { message } => bail!("{message}"),
+        other => bail!("unexpected answer: {other:?}"),
+    }
+    Ok(())
 }
 
 /// The hub's service, when `herder hub install` installed one on this machine.

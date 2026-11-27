@@ -35,6 +35,10 @@ const MAX_REQUEST: u64 = 64 * 1024;
 /// Time a request gets to arrive, and to be answered.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Time a relay Worker request gets to be answered: a deploy makes several calls to
+/// Cloudflare.
+const RELAY_WORKER_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// What `herder pair`, `herder login` and `herder claim` ask the daemon.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -64,6 +68,25 @@ pub enum Request {
     /// Open the window in which a daemon takes a new owner though it has owners (`herder
     /// claim`), for someone who lost every device.
     Claim,
+    /// Deploy, update, remove or show the hub's relay Worker (`herder hub relay-worker`).
+    RelayWorker(RelayWorkerRequest),
+}
+
+/// What `herder hub relay-worker` asks the hub.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum RelayWorkerRequest {
+    /// Deploy it, or update it, with `token` or the one it was deployed with.
+    Deploy {
+        /// A Cloudflare API token; kept on the hub.
+        token: Option<String>,
+        /// The Cloudflare account, where the token reaches several.
+        account: Option<String>,
+    },
+    /// Remove it from the Cloudflare account.
+    Remove,
+    /// Where it is.
+    Status,
 }
 
 /// The daemon's answer.
@@ -90,6 +113,11 @@ pub enum Response {
     ForgotHost(Forgot),
     /// The window for a first owner is open.
     Own(OwnInfo),
+    /// The hub's relay Worker.
+    RelayWorker {
+        /// Its URL, while deployed.
+        url: Option<String>,
+    },
     /// The request failed.
     Error {
         /// Why.
@@ -265,6 +293,15 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
                 message: "only a hub forgets hosts; run this on the hub".to_owned(),
             },
         },
+        Request::RelayWorker(request) => match &daemon.hub {
+            Some(admin) => match admin.relay_worker(request).await {
+                Ok(url) => Response::RelayWorker { url },
+                Err(err) => failed(err),
+            },
+            None => Response::Error {
+                message: "only a hub has a relay Worker; run this on the hub".to_owned(),
+            },
+        },
     }
 }
 
@@ -289,7 +326,11 @@ pub fn request(data_dir: &Path, request: &Request) -> Result<Response> {
             path.display()
         )
     })?;
-    stream.set_read_timeout(Some(TIMEOUT))?;
+    let timeout = match request {
+        Request::RelayWorker(_) => RELAY_WORKER_TIMEOUT,
+        _ => TIMEOUT,
+    };
+    stream.set_read_timeout(Some(timeout))?;
     let mut text = serde_json::to_string(request)?;
     text.push('\n');
     stream.write_all(text.as_bytes())?;

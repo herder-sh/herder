@@ -60,7 +60,10 @@ pub fn run(args: Args) -> Result<()> {
             Ok(())
         }
         Response::Error { message } => bail!("{message}"),
-        Response::Address { .. } | Response::ForgotHost(_) | Response::Own(_) => {
+        Response::Address { .. }
+        | Response::ForgotHost(_)
+        | Response::Own(_)
+        | Response::RelayWorker { .. } => {
             bail!("the daemon sent an unexpected answer")
         }
     }

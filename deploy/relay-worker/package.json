@@ -1,0 +1,15 @@
+{
+  "name": "herder-relay-worker",
+  "private": true,
+  "type": "module",
+  "description": "herder's relay Worker: tests and a local runtime for the Rust end-to-end test",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "miniflare": "4.20260730.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
