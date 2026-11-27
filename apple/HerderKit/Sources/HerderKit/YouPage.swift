@@ -367,6 +367,7 @@ struct YouPage: View {
                     Text(people.failures.values.sorted().joined(separator: "\n"))
                         .font(Theme.body).foregroundStyle(Theme.secondary)
                 }
+                DiagnosticsRow(diagnostics: .shared)
             }
             .pageColumn()
         }

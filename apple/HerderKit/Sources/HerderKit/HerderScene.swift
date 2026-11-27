@@ -20,6 +20,8 @@ public struct HerderScene: Scene {
 
     public init() {
         Hangs.watch()
+        // Off unless the person turned it on: nothing is shared before this says so.
+        DiagnosticsSwitch.shared.apply()
     }
 
     public var body: some Scene {
@@ -34,6 +36,11 @@ public struct HerderScene: Scene {
                             }
                     } else {
                         FleetView(fleet: fleet)
+                            .safeAreaInset(edge: .bottom, spacing: 0) {
+                                if DiagnosticsSwitch.shared.shouldAsk {
+                                    DiagnosticsAsk { DiagnosticsSwitch.shared.set($0) }
+                                }
+                            }
                             .overlay { Splash(fleet: fleet) }
                             .environment(\.exploreDemo) {
                                 do {

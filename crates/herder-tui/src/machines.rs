@@ -11,7 +11,8 @@
 //! An owner edits the selected machine's public addresses in the panel too: where other
 //! devices reach it from outside its networks (a port forward, a TCP proxy, a VPN, a tunnel's
 //! `wss://` URL). They are the daemon's setting, so every device picks them up from its next
-//! connection.
+//! connection. They also turn the machine's sharing of diagnostics on or off, its
+//! `[telemetry]` setting: off until they do.
 //!
 //! Anyone ranks the selected machine's routes on this device: `o` lists its addresses in the
 //! order they are tried, each named by what carries it; space pins one (the only one dialled),
@@ -100,6 +101,24 @@ pub enum PublicSent {
     Save(HostId, Vec<String>),
     /// Saving them.
     Set(HostId),
+}
+
+/// A step of turning a machine's sharing of diagnostics on or off, whose answer comes back to
+/// the panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiagnosticsSent {
+    /// Asking for its settings, to save them with sharing turned the other way.
+    Load(HostId),
+    /// Saving them, with sharing on or off.
+    Set(HostId, bool),
+}
+
+fn send_diagnostics(host_id: HostId, command: CommandBody, sent: DiagnosticsSent) -> Effect {
+    Effect::Send {
+        host_id,
+        command,
+        origin: crate::compose::Origin::Diagnostics(sent),
+    }
 }
 
 /// `text`, public addresses as typed: separated by spaces or commas.
@@ -285,6 +304,8 @@ pub enum Input {
     Public,
     /// Rank the routes of the selected machine on this device.
     Routes,
+    /// Turn the selected machine's sharing of diagnostics on or off.
+    Diagnostics,
     /// Try the selected route earlier.
     Earlier,
     /// Try the selected route later.
@@ -392,6 +413,7 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Char('s') => Input::Secrets,
             KeyCode::Char('p') => Input::Public,
             KeyCode::Char('o') => Input::Routes,
+            KeyCode::Char('t') => Input::Diagnostics,
             KeyCode::Char('r') => return Some(Action::Reconnect),
             KeyCode::Char('?') => return Some(Action::ToggleHelp),
             _ => return None,
@@ -554,6 +576,21 @@ impl App {
                     let host_id = machine.host_id.clone();
                     let sent = PublicSent::Load(host_id.clone());
                     return vec![send_public(host_id, CommandBody::GetSettings, sent)];
+                }
+                Input::Diagnostics => {
+                    let Some(at) = panel.selected(&self.machines) else {
+                        return Vec::new();
+                    };
+                    let machine = &self.machines[at];
+                    if machine.role != Some(Role::Owner) {
+                        self.notice = Some(
+                            "diagnostics: only the machine's owners turn them on or off".to_owned(),
+                        );
+                        return Vec::new();
+                    }
+                    let host_id = machine.host_id.clone();
+                    let sent = DiagnosticsSent::Load(host_id.clone());
+                    return vec![send_diagnostics(host_id, CommandBody::GetSettings, sent)];
                 }
                 Input::Routes => {
                     let Some(at) = panel.selected(&self.machines) else {
@@ -754,6 +791,56 @@ impl App {
     }
 }
 
+impl App {
+    /// Folds in a machine's answer to a step of turning its diagnostics on or off.
+    pub(crate) fn diagnostics_sent(
+        &mut self,
+        sent: DiagnosticsSent,
+        result: Result<CommandResult, String>,
+    ) -> Vec<Effect> {
+        let settings = match result {
+            Ok(CommandResult::Settings { settings, .. }) => settings,
+            Ok(_) => {
+                self.notice = Some("diagnostics: the machine sent no settings".to_owned());
+                return Vec::new();
+            }
+            Err(error) => {
+                self.notice = Some(format!("diagnostics: {error}"));
+                return Vec::new();
+            }
+        };
+        match sent {
+            DiagnosticsSent::Load(host_id) => {
+                let mut settings = settings;
+                let enabled = !settings.telemetry.enabled;
+                settings.telemetry.enabled = enabled;
+                let set = CommandBody::SetSettings { settings };
+                vec![send_diagnostics(
+                    host_id.clone(),
+                    set,
+                    DiagnosticsSent::Set(host_id, enabled),
+                )]
+            }
+            DiagnosticsSent::Set(host_id, enabled) => {
+                let name = self
+                    .machines
+                    .iter()
+                    .find(|machine| machine.host_id == host_id)
+                    .map_or(host_id.as_str(), |machine| machine.name.as_str());
+                self.notice = Some(if enabled {
+                    format!(
+                        "diagnostics on for {name}: it shares traces, errors and anonymous \
+                         measurements, never your work; see herder.sh/privacy"
+                    )
+                } else {
+                    format!("diagnostics off for {name}: it sends nothing")
+                });
+                Vec::new()
+            }
+        }
+    }
+}
+
 impl AddMachine {
     /// A whole link replaces the form and goes straight to checking its fingerprint; other
     /// text goes into the field being typed in, as one line.
@@ -935,6 +1022,96 @@ mod tests {
                 is_hub: false,
             }),
         }
+    }
+
+    #[test]
+    fn an_owner_turns_a_machines_diagnostics_on_and_off() {
+        let mut app = App::default();
+        let mut member = machine("h2", "laptop", &[]);
+        member.role = Some(Role::Member);
+        app.update(Msg::Machines(vec![machine("h1", "box", &[]), member]));
+        press(&mut app, KeyCode::Char('m'));
+        let load = Effect::Send {
+            host_id: HostId::new("h1"),
+            command: CommandBody::GetSettings,
+            origin: crate::compose::Origin::Diagnostics(DiagnosticsSent::Load(HostId::new("h1"))),
+        };
+        for enabled in [true, false] {
+            assert_eq!(
+                press(&mut app, KeyCode::Char('t')),
+                std::slice::from_ref(&load)
+            );
+            // The machine answers with its settings, sharing the other way.
+            let Msg::Sent { result, .. } = settings(&[]) else {
+                unreachable!()
+            };
+            let result = result.map(|result| match result {
+                CommandResult::Settings {
+                    mut settings,
+                    restart_required,
+                    data_dir,
+                    is_hub,
+                } => {
+                    settings.telemetry.enabled = !enabled;
+                    CommandResult::Settings {
+                        settings,
+                        restart_required,
+                        data_dir,
+                        is_hub,
+                    }
+                }
+                other => other,
+            });
+            let origin =
+                crate::compose::Origin::Diagnostics(DiagnosticsSent::Load(HostId::new("h1")));
+            let Some(Effect::Send {
+                command: CommandBody::SetSettings { settings },
+                origin,
+                ..
+            }) = app.update(Msg::Sent { origin, result }).pop()
+            else {
+                panic!("expected the settings saved");
+            };
+            assert_eq!(settings.telemetry.enabled, enabled);
+            assert_eq!(
+                origin,
+                crate::compose::Origin::Diagnostics(DiagnosticsSent::Set(
+                    HostId::new("h1"),
+                    enabled
+                ))
+            );
+
+            app.update(Msg::Sent {
+                origin: crate::compose::Origin::Diagnostics(DiagnosticsSent::Set(
+                    HostId::new("h1"),
+                    enabled,
+                )),
+                result: settings_result(),
+            });
+            let notice = app.notice.clone().unwrap();
+            let wanted = if enabled {
+                "diagnostics on for box"
+            } else {
+                "diagnostics off for box"
+            };
+            assert!(notice.starts_with(wanted), "{notice}");
+        }
+        // A member cannot.
+        press(&mut app, KeyCode::Char('j'));
+        assert!(press(&mut app, KeyCode::Char('t')).is_empty());
+        assert!(
+            app.notice
+                .as_deref()
+                .unwrap()
+                .contains("only the machine's owners")
+        );
+    }
+
+    fn settings_result() -> Result<CommandResult, String> {
+        let Msg::Sent { result, .. } = settings(&[]) else {
+            unreachable!()
+        };
+        result
     }
 
     #[test]

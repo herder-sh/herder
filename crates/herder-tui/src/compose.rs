@@ -103,6 +103,8 @@ pub enum Origin {
     Latest(SessionKey),
     /// A step of editing a machine's public addresses.
     Public(crate::machines::PublicSent),
+    /// A step of turning a machine's sharing of diagnostics on or off.
+    Diagnostics(crate::machines::DiagnosticsSent),
 }
 
 /// The composer and overlays, and what the daemon last said about each session.
@@ -567,6 +569,7 @@ impl App {
             Origin::AddAccount(_) => self.account_added(result.map(|_| ())),
             Origin::AccountHub(host_id) => self.account_hub(&host_id, result),
             Origin::Public(sent) => return self.public_sent(sent, result),
+            Origin::Diagnostics(sent) => return self.diagnostics_sent(sent, result),
             Origin::Secrets(sent) => return self.secrets_sent(sent, result),
             Origin::Supply(sent) => return self.supply_sent(sent, result),
             Origin::Fork(host_id) => {
