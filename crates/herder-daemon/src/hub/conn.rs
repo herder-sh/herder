@@ -38,24 +38,25 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Serves a connection accepted on a listen address, or, with `tunneled`, on the tunnel
 /// listener, where it first takes `cloudflared`'s WebSocket upgrade.
 pub(super) async fn run(
-    stream: TcpStream,
+    incoming: Incoming,
     peer: SocketAddr,
-    tunneled: bool,
     shared: Arc<Shared>,
     cancel: CancellationToken,
 ) {
-    let _ = stream.set_nodelay(true);
-    // A relay stream's peer that is gone must not hold the other end's connection open.
-    if let Err(err) = ws::notice_a_gone_peer(&stream) {
-        debug!(%peer, "cannot set the socket's keepalive: {err}");
-    }
-    #[cfg(target_os = "linux")]
-    if let Err(err) = ws::hold_back_unsent(&stream) {
-        debug!(%peer, "cannot limit the socket's unsent bytes: {err}");
+    if let Incoming::Direct(stream) | Incoming::Tunneled(stream) = &incoming {
+        let _ = stream.set_nodelay(true);
+        // A relay stream's peer that is gone must not hold the other end's connection open.
+        if let Err(err) = ws::notice_a_gone_peer(stream) {
+            debug!(%peer, "cannot set the socket's keepalive: {err}");
+        }
+        #[cfg(target_os = "linux")]
+        if let Err(err) = ws::hold_back_unsent(stream) {
+            debug!(%peer, "cannot limit the socket's unsent bytes: {err}");
+        }
     }
     let opened = tokio::select! {
         () = cancel.cancelled() => return,
-        opened = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared, stream, peer, tunneled)) => opened,
+        opened = tokio::time::timeout(HANDSHAKE_TIMEOUT, open(&shared, incoming, peer)) => opened,
     };
     serve_opened(opened, peer, shared, cancel).await;
 }
@@ -132,21 +133,36 @@ async fn serve_opened(
     let _ = tokio::time::timeout(Duration::from_secs(1), ws.close(None)).await;
 }
 
+/// A connection the hub took, by what carried it.
+pub(super) enum Incoming {
+    /// A TCP connection to one of its listeners.
+    Direct(TcpStream),
+    /// One `cloudflared` delivered on its tunnel listener.
+    Tunneled(TcpStream),
+    /// One an enrolled device opened through herder's WireGuard; its peer is the device's
+    /// address inside the tunnel.
+    WireGuard(herder_wireguard::TcpStream),
+}
+
 /// The handshakes of a connection up to its upgrade request, which is read and not answered
 /// yet, once a gate lets it in: on a tunneled one, the upgrade from `cloudflared` first.
 async fn open(
     shared: &Shared,
-    stream: TcpStream,
+    incoming: Incoming,
     peer: SocketAddr,
-    tunneled: bool,
 ) -> Result<(Upgrade, String, tunnel::Pass)> {
-    let (transport, pass) = if tunneled {
-        let (frames, pass, _) = tunnel::accept(stream, &shared.gates.tunnel)
-            .await
-            .context("the tunnel's WebSocket upgrade")?;
-        (Transport::Tunnel(Box::new(frames)), pass)
-    } else {
-        (Transport::Tcp(stream), shared.gates.direct(peer)?)
+    let (transport, pass) = match incoming {
+        Incoming::Tunneled(stream) => {
+            let (frames, pass, _) = tunnel::accept(stream, &shared.gates.tunnel)
+                .await
+                .context("the tunnel's WebSocket upgrade")?;
+            (Transport::Tunnel(Box::new(frames)), pass)
+        }
+        Incoming::Direct(stream) => (Transport::Tcp(stream), shared.gates.direct(peer)?),
+        Incoming::WireGuard(stream) => (
+            Transport::Relay(Box::new(stream)),
+            shared.gates.direct(peer)?,
+        ),
     };
     secure(shared, transport, pass).await
 }

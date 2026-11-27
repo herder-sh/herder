@@ -2085,7 +2085,8 @@ async fn only_owners_set_how_a_hub_is_reached_from_outside() {
     };
     assert_eq!(error.code, ErrorCode::Forbidden);
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
-    // What a hub offers, and enrolling a device's own key, are for every client device.
+    // What a hub offers, and enrolling a device's own key, are for every client device: they
+    // reach the backend as the device's own commands, which a daemon refuses.
     for (n, body) in [
         CommandBody::GetRemoteAccess,
         CommandBody::EnrollWireGuard {
@@ -2100,11 +2101,12 @@ async fn only_owners_set_how_a_hub_is_reached_from_outside() {
         let ServerMessage::CommandRejected { error, .. } =
             member.command(&format!("m{}", n + 2), body).await
         else {
-            panic!("expected the test backend's rejection");
+            panic!("expected the backend's rejection");
         };
         assert_eq!(error.code, ErrorCode::Unsupported);
     }
-    assert_eq!(daemon.commands.load(Ordering::SeqCst), 4);
+    // Only the relay token is a command of the user's.
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
 
     let mut owner = daemon.client().await;
     owner.hello(Vec::new()).await;
@@ -2112,7 +2114,7 @@ async fn only_owners_set_how_a_hub_is_reached_from_outside() {
         panic!("expected the test backend's rejection");
     };
     assert_eq!(error.code, ErrorCode::Unsupported);
-    assert_eq!(daemon.commands.load(Ordering::SeqCst), 5);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -55,6 +55,7 @@ mod retention;
 mod secrets;
 mod store;
 mod upgrade;
+pub mod wireguard;
 
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
@@ -232,6 +233,7 @@ impl Server {
         data_dir: &std::path::Path,
         api: &str,
         tunnel: Arc<cloudflare::ManagedTunnel>,
+        port: u16,
         shutdown: CancellationToken,
     ) -> Result<Arc<remote_access::RemoteAccessHub>> {
         let relay = cloudflare::ManagedRelay::open(
@@ -239,13 +241,16 @@ impl Server {
             api,
             Arc::clone(&self.shared.cloudflare_relay),
         )?;
-        relay.start(shutdown);
+        relay.start(shutdown.clone());
+        let wireguard =
+            wireguard::HubWireGuard::open(data_dir, port, Arc::downgrade(&self.shared), shutdown)?;
         let remote_access = remote_access::RemoteAccessHub::open(
             data_dir,
             Arc::clone(&self.shared.store),
             self.shared.secrets_key.clone(),
             tunnel,
             relay,
+            Arc::new(wireguard),
         )?;
         self.shared
             .fleet
@@ -334,7 +339,12 @@ impl Server {
                     debug!(%peer, tunneled, "connection accepted");
                     let shared = Arc::clone(&self.shared);
                     let cancel = shutdown.child_token();
-                    tokio::spawn(conn::run(stream, peer, tunneled, shared, cancel));
+                    let incoming = if tunneled {
+                        conn::Incoming::Tunneled(stream)
+                    } else {
+                        conn::Incoming::Direct(stream)
+                    };
+                    tokio::spawn(conn::run(incoming, peer, shared, cancel));
                 }
                 Err(err) => {
                     // Usually out of file descriptors; back off instead of spinning.
@@ -428,8 +438,15 @@ async fn serve_with(
             shutdown.clone(),
         )
         .await;
-    let remote_access =
-        server.use_remote_access(data_dir.root(), cloudflare.api, managed, shutdown.clone())?;
+    // The tunnel reaches the hub's herder port: its first listener's.
+    let port = listen.first().map_or(0, |address| address.port());
+    let remote_access = server.use_remote_access(
+        data_dir.root(),
+        cloudflare.api,
+        managed,
+        port,
+        shutdown.clone(),
+    )?;
     remote_access.start().await;
     let control = auth::control::bind(data_dir.root())?;
     tokio::spawn(auth::control::serve(

@@ -103,6 +103,13 @@ spec:
     - name: cliproxyapi
       port: 8317
       targetPort: cliproxyapi
+    # herder's WireGuard (docs/remote-access.md): one UDP port, silent to anyone without an
+    # enrolled key. Forward it on the router to the load balancer's address; the hub binds it
+    # once an owner turns WireGuard on. Use the same port in the Hub tab's setting.
+    - name: wireguard
+      port: 51820
+      targetPort: wireguard
+      protocol: UDP
 ---
 # The tunnel listener, for cloudflared only: `service: http://herder-hub-tunnel.herder:7448`
 # in its ingress. Not on the load balancer.
@@ -126,9 +133,9 @@ spec:
 # rest of the network.
 #
 # In: its own ports only. Only pods of the cloudflared namespace reach the tunnel listener,
-# which trusts the client address its peer names; hosts and apps reach 7447, and hosts
-# 8317, from anywhere, as without a policy. Change the namespace's name if your cloudflared
-# runs in another.
+# which trusts the client address its peer names; hosts and apps reach 7447, hosts 8317,
+# and apps herder's WireGuard on UDP 51820, from anywhere, as without a policy. Change the
+# namespace's name if your cloudflared runs in another.
 #
 # Out: the cluster's DNS, and the internet: the providers' APIs the CLIProxyAPI calls, and
 # GitHub. Nothing private: not the LAN, the nodes, nor any other pod or Service. Hosts and
@@ -154,6 +161,8 @@ spec:
     - ports:
         - port: 7447
         - port: 8317
+        - port: 51820
+          protocol: UDP
     - from:
         - namespaceSelector:
             matchLabels:
@@ -271,6 +280,9 @@ spec:
               containerPort: 7447
             - name: tunnel
               containerPort: 7448
+            - name: wireguard
+              containerPort: 51820
+              protocol: UDP
           readinessProbe:
             tcpSocket:
               port: replication

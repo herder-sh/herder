@@ -699,6 +699,7 @@ impl Supervisor {
                 advertised: Vec::new(),
                 headers: Default::default(),
                 routes: Default::default(),
+                wireguard: None,
                 device_key: String::new(),
                 relay_grant: None,
             },
@@ -2759,7 +2760,14 @@ pub(crate) async fn dial(
         let tunnels = via
             .tunnels()
             .context("a machine is first signed in to at an address of its own")?;
-        Box::new(tunnels.connect(tunnel, inner).await?)
+        if tunnel == crate::wireguard::HUB {
+            let hub = via
+                .machine()
+                .context("a machine is first signed in to at an address of its own")?;
+            Box::new(tunnels.connect_hub(hub, inner).await?)
+        } else {
+            Box::new(tunnels.connect(tunnel, inner).await?)
+        }
     } else if address::is_tunnel(address) {
         Box::new(tunnel::open(address, via.headers(address)).await?)
     } else {

@@ -385,6 +385,20 @@ pub(crate) fn vpn_routes(addresses: &mut Vec<String>, tunnels: &[(String, Vec<St
     changed
 }
 
+/// Adds `address` to `addresses` after the last of its kind or of one that sorts before it,
+/// unless it is there; whether it was added.
+pub(crate) fn insert_ranked(addresses: &mut Vec<String>, address: String) -> bool {
+    if addresses.contains(&address) {
+        return false;
+    }
+    let at = addresses
+        .iter()
+        .rposition(|held| rank(held) <= rank(&address))
+        .map_or(0, |last| last + 1);
+    addresses.insert(at, address);
+    true
+}
+
 /// The tunnel and the `host:port` inside it, for the address of a route through a WireGuard
 /// tunnel of herder's, `wg://<tunnel>/<host:port>`.
 pub(crate) fn wireguard(address: &str) -> Option<(&str, &str)> {

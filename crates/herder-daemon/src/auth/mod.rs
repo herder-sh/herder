@@ -145,7 +145,25 @@ pub struct Device {
     /// When it last connected; devices that have not since this was kept have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<Timestamp>,
+    /// Its key for the hub's WireGuard endpoint, when it enrolled one
+    /// (`docs/remote-access.md`): it goes with the device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wireguard: Option<WireGuardPeer>,
 }
+
+/// A device's key for the hub's WireGuard endpoint, and its address inside the tunnel.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireGuardPeer {
+    /// The device's WireGuard public key, base64.
+    pub public_key: String,
+    /// Its address inside the tunnel, in [`WIREGUARD_NETWORK`].
+    pub address: std::net::Ipv4Addr,
+}
+
+/// The network inside the hub's WireGuard tunnel: the hub is its first address, each enrolled
+/// device gets one of the rest.
+pub const WIREGUARD_NETWORK: (std::net::Ipv4Addr, u8) =
+    (std::net::Ipv4Addr::new(10, 247, 0, 0), 16);
 
 /// A freshly minted pairing code.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -605,6 +623,7 @@ impl Auth {
             paired_at: now,
             role: pending.device_role,
             last_seen: Some(now),
+            wireguard: None,
         };
         users.devices.push(device.clone());
         self.save(&users).map_err(|err| {
@@ -786,6 +805,110 @@ impl Auth {
         }
         info!(%device_id, "device revoked");
         Ok(true)
+    }
+
+    /// Enrolls `public_key` as the client device `device_id`'s key for the hub's WireGuard
+    /// endpoint, replacing one it enrolled before and taking it from any other device that
+    /// had it: its address inside the tunnel, which it keeps across re-enrollments.
+    pub fn enroll_wireguard(
+        &self,
+        device_id: &DeviceId,
+        public_key: &str,
+    ) -> Result<std::net::Ipv4Addr, ErrorInfo> {
+        let mut state = self.lock();
+        let mut users = state.users.clone();
+        let device = users
+            .devices
+            .iter()
+            .find(|device| &device.device_id == device_id)
+            .ok_or_else(|| forbidden("this device is not paired with the hub"))?;
+        if device.role != DeviceRole::Client {
+            return Err(forbidden("a host device does not use the hub's WireGuard"));
+        }
+        let kept = device.wireguard.as_ref().map(|peer| peer.address);
+        let taken: Vec<std::net::Ipv4Addr> = users
+            .devices
+            .iter()
+            .filter(|other| &other.device_id != device_id)
+            .filter_map(|other| other.wireguard.as_ref().map(|peer| peer.address))
+            .collect();
+        let address = match kept {
+            Some(address) => address,
+            None => {
+                let base = u32::from(WIREGUARD_NETWORK.0);
+                let size = 1u32 << (32 - WIREGUARD_NETWORK.1);
+                // .0 is the network, .1 the hub, the last the broadcast address.
+                (2..size - 1)
+                    .map(|n| std::net::Ipv4Addr::from(base + n))
+                    .find(|address| !taken.contains(address))
+                    .ok_or_else(|| ErrorInfo {
+                        code: ErrorCode::Conflict,
+                        message: "every address in the hub's WireGuard network is taken".into(),
+                    })?
+            }
+        };
+        for device in &mut users.devices {
+            if &device.device_id == device_id {
+                device.wireguard = Some(WireGuardPeer {
+                    public_key: public_key.to_owned(),
+                    address,
+                });
+            } else if device
+                .wireguard
+                .as_ref()
+                .is_some_and(|peer| peer.public_key == public_key)
+            {
+                device.wireguard = None;
+            }
+        }
+        self.save(&users).map_err(|err| ErrorInfo {
+            code: ErrorCode::Internal,
+            message: format!("{err:#}"),
+        })?;
+        state.users = users;
+        Ok(address)
+    }
+
+    /// Drops the WireGuard key `device_id` enrolled, if any.
+    pub fn unenroll_wireguard(&self, device_id: &DeviceId) -> Result<(), ErrorInfo> {
+        let mut state = self.lock();
+        let mut users = state.users.clone();
+        let Some(device) = users
+            .devices
+            .iter_mut()
+            .find(|device| &device.device_id == device_id && device.wireguard.is_some())
+        else {
+            return Ok(());
+        };
+        device.wireguard = None;
+        self.save(&users).map_err(|err| ErrorInfo {
+            code: ErrorCode::Internal,
+            message: format!("{err:#}"),
+        })?;
+        state.users = users;
+        Ok(())
+    }
+
+    /// The WireGuard key `device_id` enrolled, if any.
+    pub fn wireguard_of(&self, device_id: &DeviceId) -> Option<WireGuardPeer> {
+        let state = self.lock();
+        let device = state
+            .users
+            .devices
+            .iter()
+            .find(|d| &d.device_id == device_id)?;
+        device.wireguard.clone()
+    }
+
+    /// The WireGuard key each paired device enrolled, with its address.
+    pub fn wireguard_peers(&self) -> Vec<WireGuardPeer> {
+        let state = self.lock();
+        state
+            .users
+            .devices
+            .iter()
+            .filter_map(|device| device.wireguard.clone())
+            .collect()
     }
 
     /// Whether the device with certificate `fingerprint` is paired.
@@ -1611,6 +1734,7 @@ fn new_device(user_id: &UserId, fingerprint: &str, client: &str) -> Device {
         paired_at: now,
         role: DeviceRole::Client,
         last_seen: Some(now),
+        wireguard: None,
     }
 }
 
@@ -1854,6 +1978,45 @@ mod tests {
             &CancellationToken::new(),
         );
         assert_eq!(refused.unwrap_err().code, ErrorCode::Forbidden);
+    }
+
+    #[test]
+    fn a_wireguard_key_goes_with_its_device() {
+        let (tmp, auth) = open();
+        let a = auth.legacy_user("alice", Role::Owner, "fp-a");
+        let b = auth.legacy_user("alice", Role::Owner, "fp-b");
+        let first = auth.enroll_wireguard(&a.device_id, "key-a").unwrap();
+        assert_eq!(first, std::net::Ipv4Addr::new(10, 247, 0, 2));
+        let second = auth.enroll_wireguard(&b.device_id, "key-b").unwrap();
+        assert_eq!(second, std::net::Ipv4Addr::new(10, 247, 0, 3));
+        // A new key keeps the device's address.
+        assert_eq!(
+            auth.enroll_wireguard(&a.device_id, "key-a2").unwrap(),
+            first
+        );
+        assert_eq!(
+            auth.wireguard_of(&a.device_id).unwrap().public_key,
+            "key-a2"
+        );
+        // A key belongs to one device: enrolled by another, it leaves the first.
+        auth.enroll_wireguard(&b.device_id, "key-a2").unwrap();
+        assert_eq!(auth.wireguard_of(&a.device_id), None);
+        assert_eq!(auth.wireguard_peers().len(), 1);
+        // Kept across a restart; revoking the device drops it; a freed address is reused.
+        drop(auth);
+        let auth = Auth::open(tmp.path()).unwrap();
+        assert_eq!(auth.wireguard_of(&b.device_id).unwrap().address, second);
+        assert!(auth.revoke(&b.device_id).unwrap());
+        assert!(auth.wireguard_peers().is_empty());
+        assert_eq!(
+            auth.enroll_wireguard(&a.device_id, "key-a3").unwrap(),
+            first
+        );
+        auth.unenroll_wireguard(&a.device_id).unwrap();
+        assert!(auth.wireguard_peers().is_empty());
+        // A device the hub does not have, or a host's, enrolls nothing.
+        let unknown = auth.enroll_wireguard(&DeviceId::new("nope"), "k");
+        assert_eq!(unknown.unwrap_err().code, ErrorCode::Forbidden);
     }
 
     fn connect(auth: &Auth, fingerprint: &str, peer: DeviceRole) -> Result<Identity, ErrorInfo> {

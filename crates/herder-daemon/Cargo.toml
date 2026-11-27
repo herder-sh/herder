@@ -19,6 +19,7 @@ futures-util.workspace = true
 herder-adapters.workspace = true
 herder-client-core.workspace = true
 herder-protocol.workspace = true
+herder-wireguard.workspace = true
 herder-store.workspace = true
 herder-tasktools.workspace = true
 herder-telemetry.workspace = true

@@ -2372,6 +2372,7 @@ dependencies = [
  "herder-store",
  "herder-tasktools",
  "herder-telemetry",
+ "herder-wireguard",
  "http-body-util",
  "httparse",
  "hyper",

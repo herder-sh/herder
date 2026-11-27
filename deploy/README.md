@@ -247,6 +247,51 @@ in its `[hub]` table and reaches the hub there from anywhere. Clients paired wit
 hub and with a linked host then reach that host through the hub whenever they cannot
 dial it; `relay = false` in the host's `[hub]` table turns that off.
 
+### herder's WireGuard
+
+For a hub at home with no VPN of your own and no tunnel: the hub runs a userspace WireGuard
+endpoint on one UDP port (no privileges, no TUN device), and each device turns it on with
+one switch (`docs/remote-access.md`). Inside it a device reaches the hub's port 7447 and,
+through the hub, every machine; nothing else on your network.
+
+1. **Forward one UDP port** on your router to the hub: 51820 to the load balancer's
+   address (the manifest's `herder-hub` Service carries it as `wireguard`), or to the
+   machine running `herder hub install`. The endpoint answers no packet from a key it
+   has not enrolled, so a scan sees a closed port.
+2. **Turn it on** as an owner: in the app, Hub tab › Remote access › herder's WireGuard,
+   with the port (51820) and where devices reach it from outside, your router's public
+   name or IP and that port, such as `home.example.net:51820`. That is
+   `set_remote_access`'s `wireguard`; the hub keeps it in `remote-access.json` and its
+   WireGuard key in `wireguard.key`, both in its data dir.
+3. **Use it** on each device: the switch on the same card. The device makes its own key,
+   gives the hub only the public half, and from then on reaches the hub through
+   WireGuard whenever its other routes do not answer. Revoking the device drops its key.
+
+#### Apply to a hub already running
+
+On the live hub, whose Kubernetes objects keep the `herder-vault` names (namespace
+`herder`), add the port to the StatefulSet's `hub` container, the Service and the
+NetworkPolicy, then forward UDP 51820 on the router to the Service's address:
+
+```sh
+kubectl -n herder patch statefulset herder-vault --type json -p '[
+  {"op": "add", "path": "/spec/template/spec/containers/0/ports/-",
+   "value": {"name": "wireguard", "containerPort": 51820, "protocol": "UDP"}}]'
+kubectl -n herder patch service herder-vault --type json -p '[
+  {"op": "add", "path": "/spec/ports/-",
+   "value": {"name": "wireguard", "port": 51820, "targetPort": "wireguard", "protocol": "UDP"}}]'
+kubectl -n herder get networkpolicy        # if the hub has one, add the port to its ingress:
+kubectl -n herder patch networkpolicy herder-vault --type json -p '[
+  {"op": "add", "path": "/spec/ingress/0/ports/-", "value": {"port": 51820, "protocol": "UDP"}}]'
+kubectl -n herder get service herder-vault  # the address to forward UDP 51820 to
+```
+
+Check first that container 0 is `hub` (`kubectl -n herder get sts herder-vault -o
+jsonpath='{.spec.template.spec.containers[*].name}'`) and use its index if not. The
+StatefulSet patch restarts the pod, so apply it when no session needs the hub; then an
+owner turns WireGuard on in the app as in step 2. A LoadBalancer Service with both TCP and
+UDP ports needs Kubernetes 1.26 or later (k3s's ServiceLB handles it).
+
 ## Pair a host
 
 Mint a one-time host code on the hub, named after the host:
