@@ -1,11 +1,12 @@
 name: release
 
-# A `v*` tag builds static musl binaries, an Apple silicon macOS binary and the macOS app, signed
-# with the Developer ID and notarized, and publishes them as a GitHub Release; it also uploads
-# the iOS and macOS apps to TestFlight, and pushes the Linux app's PKGBUILD to the AUR once the
-# AUR_SSH_PRIVATE_KEY secret exists. workflow_dispatch runs the same, without publishing the
-# GitHub Release. PRs that change this file or the app's release script run the builds only,
-# without the TestFlight upload; from a fork, which gets no secrets, the macOS app is signed ad hoc.
+# A `v*` tag builds static musl binaries, an Apple silicon macOS binary, the macOS app, signed
+# with the Developer ID and notarized, and the Linux app's x86_64 Flatpak bundle, and publishes
+# them as a GitHub Release; it also uploads the iOS and macOS apps to TestFlight, and pushes the
+# Linux app's PKGBUILD to the AUR once the AUR_SSH_PRIVATE_KEY secret exists. workflow_dispatch
+# runs the same, without publishing the GitHub Release. PRs that change this file or the app's
+# release script run the builds only, without the TestFlight upload; from a fork, which gets no
+# secrets, the macOS app is signed ad hoc.
 
 on:
   push:
@@ -17,6 +18,7 @@ on:
       - "apple/scripts/build-mac-release.sh"
       - "apple/scripts/import-mac-cert.sh"
       - "apple/scripts/developer-id-profile.py"
+      - "linux/packaging/flatpak/check-metainfo-release.sh"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -155,6 +157,45 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  flatpak:
+    name: build the Flatpak
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the version and check the metainfo has its release entry
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the Cargo.toml version $version"
+            exit 1
+          fi
+          linux/packaging/flatpak/check-metainfo-release.sh
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: linux/packaging/flatpak/sh.herder.Herder.yml
+          bundle: herder-${{ steps.version.outputs.version }}-x86_64.flatpak
+          cache: false
+          upload-artifact: false
+      - name: Checksum the bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir dist
+          mv "herder-$VERSION-x86_64.flatpak" dist/
+          cd dist
+          sha256sum "herder-$VERSION-x86_64.flatpak" > "herder-$VERSION-x86_64.flatpak.sha256"
+          cat "herder-$VERSION-x86_64.flatpak.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: herder-flatpak-x86_64
+          path: dist/*
+          if-no-files-found: error
+
   testflight:
     name: upload the apps to TestFlight
     if: github.event_name != 'pull_request'
@@ -190,7 +231,7 @@ jobs:
 
   publish:
     name: publish
-    needs: [build, macos]
+    needs: [build, macos, flatpak]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
