@@ -26,11 +26,11 @@ struct DesktopShell: View {
         HStack(spacing: 0) {
             Group {
                 if sidebarCollapsed {
-                    SidebarRail(fleet: fleet, people: people, item: section, session: $session,
+                    SidebarRail(fleet: fleet, item: section, session: $session,
                                 collapsed: $sidebarCollapsed, order: order, newSession: newSession)
                         .frame(width: 76)
                 } else {
-                    Sidebar(fleet: fleet, people: people, item: section, session: $session, sheet: $sheet,
+                    Sidebar(fleet: fleet, item: section, session: $session, sheet: $sheet,
                             collapsed: $sidebarCollapsed, sort: $projectSort, manual: $projectOrder,
                             newSession: newSession)
                         .frame(width: 228)
@@ -447,7 +447,6 @@ struct Sidebar: View {
     static let gap: CGFloat = 10
     static var labelInset: CGFloat { inset + icon + gap }
     let fleet: Fleet
-    let people: FleetPeople
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
     @Binding var sheet: AppSheet?
@@ -487,28 +486,21 @@ struct Sidebar: View {
             .frame(height: Self.topBar)
             .padding(.horizontal, 10)
 
-            SidebarRow(title: "Board", symbol: "checklist", needsYou: lists.requests.count,
-                       selected: item == .board) { select(.board) }
-            SidebarRow(title: "Chats", symbol: Switcher.chatSymbol,
-                       needsYou: lists.chats.filter { $0.state == .needsYou }.count,
-                       working: lists.chats.filter { $0.state == .running }.count,
-                       selected: item == .chats) { select(.chats) }
-            SidebarRow(title: "Bots", symbol: Switcher.botsSymbol, needsYou: lists.botsWaiting,
-                       selected: item == .bots(nil)) { select(.bots(nil)) }
+            SidebarRow(title: "Board", symbol: "checklist", selected: item == .board) { select(.board) }
+            SidebarRow(title: "Chats", symbol: Switcher.chatSymbol, selected: item == .chats) { select(.chats) }
+            SidebarRow(title: "Bots", symbol: Switcher.botsSymbol, selected: item == .bots(nil)) {
+                select(.bots(nil))
+            }
             // Each bot filters Bots to its own conversations.
             ForEach(lists.bots) { group in
-                SidebarRow(title: fleet.botName(group), symbol: "", needsYou: group.waiting,
-                           selected: item == .bots(group.id), indented: true) { select(.bots(group.id)) }
+                SidebarRow(title: fleet.botName(group), symbol: "", selected: item == .bots(group.id),
+                           indented: true) { select(.bots(group.id)) }
             }
 
             heading("Workspace")
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
-            HubCount(fleet: fleet, people: people) { count in
-                SidebarRow(title: "Hub", symbol: Switcher.hubSymbol, needsYou: count, selected: item == .hub) {
-                    select(.hub)
-                }
-            }
+            SidebarRow(title: "Hub", symbol: Switcher.hubSymbol, selected: item == .hub) { select(.hub) }
 
             heading("Projects") {
                 Menu {
@@ -584,7 +576,6 @@ struct Sidebar: View {
         SidebarRow(
             title: project.name, symbol: "shippingbox",
             icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId)),
-            needsYou: project.needsYou, working: project.working,
             selected: item == .project(project.id),
             settings: project.projectId == nil ? nil : {
                 select(.project(project.id))
@@ -606,7 +597,6 @@ struct Sidebar: View {
 /// sidebar does, in the same order, the quiet projects folded away.
 private struct SidebarRail: View {
     let fleet: Fleet
-    let people: FleetPeople
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
     @Binding var collapsed: Bool
@@ -623,22 +613,18 @@ private struct SidebarRail: View {
             IconButton(symbol: "square.and.pencil", help: "New Session", action: newSession)
                 .keyboardShortcut("n")
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
-            rail("checklist", "Board", .board, needsYou: lists.requests.count)
-            rail(Switcher.chatSymbol, "Chats", .chats, needsYou: lists.chats.filter { $0.state == .needsYou }.count,
-                 working: lists.chats.filter { $0.state == .running }.count)
-            rail(Switcher.botsSymbol, "Bots", .bots(nil), needsYou: lists.botsWaiting)
+            rail("checklist", "Board", .board)
+            rail(Switcher.chatSymbol, "Chats", .chats)
+            rail(Switcher.botsSymbol, "Bots", .bots(nil))
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("person.2", "Providers", .providers)
             rail("book.closed", "Skills", .skills)
-            HubCount(fleet: fleet, people: people) { count in
-                rail(Switcher.hubSymbol, "Hub", .hub, needsYou: count)
-            }
+            rail(Switcher.hubSymbol, "Hub", .hub)
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             ScrollView {
                 VStack(spacing: 10) {
                     ForEach(order.folded(lists.projects, open: item).shown) { project in
-                        rail("shippingbox", project.name, .project(project.id), needsYou: project.needsYou,
-                             working: project.working,
+                        rail("shippingbox", project.name, .project(project.id),
                              icon: ProjectIcon(projectId: project.projectId, name: project.name,
                                                image: fleet.projectIcon(project.projectId), size: 22))
                     }
@@ -656,15 +642,11 @@ private struct SidebarRail: View {
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    /// A section or project's button: an amber dot when something waits for the user, a
-    /// running mark when something works.
+    /// A section or project's button.
     private func rail(
-        _ symbol: String, _ title: String, _ target: SidebarItem, needsYou: Int = 0, working: Int = 0,
-        icon: ProjectIcon? = nil
+        _ symbol: String, _ title: String, _ target: SidebarItem, icon: ProjectIcon? = nil
     ) -> some View {
-        let value = [needsYou > 0 ? "\(needsYou) need you" : nil, working > 0 ? "\(working) running" : nil]
-            .compactMap(\.self).joined(separator: ", ")
-        return Button {
+        Button {
             if item != target { session = nil }
             item = target
         } label: {
@@ -674,35 +656,21 @@ private struct SidebarRail: View {
                 .foregroundStyle(item == target ? Theme.text : Theme.secondary)
                 .frame(width: 38, height: 34)
                 .background(item == target ? Theme.raised : .clear, in: .rect(cornerRadius: 8))
-                .overlay(alignment: .topTrailing) {
-                    if needsYou > 0 { Circle().fill(Urgency.needsYou.color).frame(width: 8, height: 8).offset(x: -4, y: 4) }
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    if working > 0 {
-                        StatusGlyph(state: .running, size: 6, pulses: false)
-                            .background(.ground, in: .circle)
-                            .offset(x: 2, y: 2)
-                    }
-                }
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .help(title)
-        // Named by its title, not the symbol or the marks it shows.
+        // Named by its title, not the symbol.
         .accessibilityLabel(title)
-        .accessibilityValue(value)
     }
 }
 
-/// A section or project in the sidebar. It shows only what is live: an amber count of what
-/// waits for the user, a blue count of what is working, nothing when quiet.
+/// A section or project in the sidebar: its icon and title, with no counts.
 private struct SidebarRow: View {
     let title: String
     let symbol: String
     /// A project's tile, in the symbol's place.
     var icon: ProjectIcon?
-    var needsYou = 0
-    var working = 0
     let selected: Bool
     /// A sub-item of the row above: no icon, its label under that row's.
     var indented = false
@@ -729,24 +697,6 @@ private struct SidebarRow: View {
                     }
                     .buttonStyle(.plain)
                     .help("Project Settings")
-                } else {
-                    HStack(spacing: 6) {
-                        if working > 0 {
-                            Text("\(working)")
-                                .font(.caption.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(Urgency.running.color)
-                                .help("\(working) running")
-                        }
-                        if needsYou > 0 {
-                            Text("\(needsYou)")
-                                .font(.caption.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(.ground)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(Urgency.needsYou.color, in: .capsule)
-                                .help("\(needsYou) need you")
-                        }
-                    }
                 }
             }
             .font(.body.weight(selected ? .semibold : .regular))

@@ -116,18 +116,6 @@ extension HubProblem {
     }
 }
 
-/// How many things need you, for the Hub row and tab's badge: on a view of its own, so the
-/// rest of the sidebar does not draw again as the machines change.
-struct HubCount<Content: View>: View {
-    let fleet: Fleet
-    let people: FleetPeople
-    @ViewBuilder let content: (Int) -> Content
-
-    var body: some View {
-        content(HubProblem.found(fleet: fleet, directory: people.directory(fleet.machines)).needingYou.count)
-    }
-}
-
 /// Hub's pane on the Mac and iPad: its header, with what needs you counted in its line and
 /// Add a Device and Add a Machine, over the page. A view of its own, so only it draws again as
 /// the machines change.

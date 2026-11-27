@@ -509,8 +509,11 @@ private struct FollowsEnd: ViewModifier {
                 if end { unseen = false }
                 log.atEnd(end, blocks: blocks.count, key: key)
             }
-            .onScrollGeometryChange(for: TranscriptScrollState.self, of: { TranscriptScrollState($0) }) { _, state in
+            .onScrollGeometryChange(for: TranscriptScrollState.self, of: { TranscriptScrollState($0) }) { old, state in
                 log.geometry(state, blocks: blocks.count, key: key)
+                // The content shrank from under the view, which shows past its end, blank:
+                // back to the end, as the content is now.
+                if state.shrankFromUnder(old) { position.scrollTo(edge: .bottom) }
             }
             .onAppear { log.appeared(key, blocks: blocks.count) }
             // A block more, or the last one grown: a running turn's "Working" line stays last.

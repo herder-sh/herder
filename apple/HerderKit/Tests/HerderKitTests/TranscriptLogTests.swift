@@ -43,6 +43,23 @@ struct TranscriptLogTests {
         #expect(state(offset: 10, content: 300).placement == .pastEnd)
     }
 
+    /// What the owner's Mac logged as its transcript went blank: the content shrank by a
+    /// thousand points while the offset stayed, past the new end.
+    @Test func contentShrinkingFromUnderTheViewIsCaught() {
+        let before = state(offset: 1675, content: 3446)
+        #expect(state(offset: 1675, content: 2298).shrankFromUnder(before))
+        #expect(state(offset: 4400, content: 1200).shrankFromUnder(state(offset: 4400)))
+    }
+
+    @Test func aBounceOrAShrinkThatLeavesTheViewInsideIsLeftAlone() {
+        // A bounce at the end, on content that did not shrink.
+        #expect(!state(offset: 4500).shrankFromUnder(state(offset: 4400)))
+        // Content that shrank above a view still within it.
+        #expect(!state(offset: 1000, content: 4000).shrankFromUnder(state(offset: 1000)))
+        // Content that grew.
+        #expect(!state(offset: 4400, content: 6000).shrankFromUnder(state(offset: 4400)))
+    }
+
     @Test func noBlockInViewOfATranscriptWithBlocksIsBlank() {
         #expect(TranscriptScrollState.blank(visible: 0, blocks: 120))
         #expect(!TranscriptScrollState.blank(visible: 3, blocks: 120))

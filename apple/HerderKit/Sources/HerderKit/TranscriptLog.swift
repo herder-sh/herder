@@ -51,6 +51,14 @@ struct TranscriptScrollState: Equatable {
 
     /// No block in view though the transcript has some: the blank transcript.
     static func blank(visible: Int, blocks: Int) -> Bool { visible == 0 && blocks > 0 }
+
+    /// Whether the content came out shorter than in `old` and left the view past its end: the
+    /// lazy stack measured again the rows out of view, smaller than it had guessed, and the
+    /// scroll view kept its offset, so the transcript shows blank with its scroller still long.
+    /// A bounce at the end goes past it too, but on content that did not shrink.
+    func shrankFromUnder(_ old: Self) -> Bool {
+        contentHeight < old.contentHeight && [.pastEnd, .outside].contains(placement)
+    }
 }
 
 
