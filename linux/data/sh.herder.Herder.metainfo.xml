@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- AppStream metadata of the Linux app, for software centres and Flathub. Each release adds
-     a <release> entry for the workspace version; the flatpak CI job checks it is there. -->
+<!-- AppStream metadata of the Linux app, for software centres and Flathub. The release
+     workflow adds the <release> entry for each tag's version when it builds the Flatpak. -->
 <component type="desktop-application">
   <id>sh.herder.Herder</id>
   <metadata_license>CC0-1.0</metadata_license>
