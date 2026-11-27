@@ -2,15 +2,14 @@
 //! starts and at once whenever an owner changes it ([`crate::settings`]). Off unless turned
 //! on; off sends nothing at all.
 //!
-//! The daemon shares them through the client core's process-wide switch
-//! ([`herder_client_core::set_diagnostics`]), with a random install id kept in its data dir
-//! and the keys its build was made with: the Sentry DSN, unless `[telemetry] dsn` names
-//! another, and the PostHog project token.
+//! The daemon shares them through `herder-telemetry`, which scrubs everything it sends, with
+//! a random install id kept in its data dir and the keys its build was made with: the Sentry
+//! DSN, unless `[telemetry] dsn` names another, and the PostHog project token.
 
 use std::path::Path;
 
-use herder_client_core::{Diagnostics, set_diagnostics};
 use herder_protocol::TelemetrySettings;
+use herder_telemetry::{Component, Telemetry};
 use tracing::{info, warn};
 
 /// The file in the data dir holding the daemon's install id.
@@ -29,11 +28,11 @@ pub(crate) fn apply(data_dir: &Path, settings: &TelemetrySettings) {
         Some(_) => info!("the daemon shares diagnostics, as [telemetry] says"),
         None => info!("the daemon shares no diagnostics"),
     }
-    set_diagnostics(diagnostics);
+    herder_telemetry::set(diagnostics);
 }
 
 /// What the daemon shares with, while `settings` turn it on.
-fn diagnostics(data_dir: &Path, settings: &TelemetrySettings) -> Option<Diagnostics> {
+fn diagnostics(data_dir: &Path, settings: &TelemetrySettings) -> Option<Telemetry> {
     if !settings.enabled {
         return None;
     }
@@ -46,10 +45,11 @@ fn diagnostics(data_dir: &Path, settings: &TelemetrySettings) -> Option<Diagnost
         }
     };
     let set = |value: Option<&str>| value.filter(|value| !value.is_empty()).map(str::to_owned);
-    Some(Diagnostics {
+    Some(Telemetry {
         install_id,
         sentry_dsn: set(settings.dsn.as_deref()).or_else(|| set(BUILD_SENTRY_DSN)),
         posthog_token: set(BUILD_POSTHOG_TOKEN),
+        component: Component::Daemon,
     })
 }
 

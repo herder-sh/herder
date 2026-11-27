@@ -178,6 +178,14 @@ pub fn client_api_version() -> u32 {
 /// as the app's one switch says; off until an app turns it on.
 #[uniffi::export]
 pub fn set_diagnostics(diagnostics: Option<client_core::Diagnostics>) {
+    // The client core's spans reach Sentry through this subscriber: the apps install no
+    // other. Installed once, on the first call, which every launch makes.
+    static SUBSCRIBER: std::sync::Once = std::sync::Once::new();
+    SUBSCRIBER.call_once(|| {
+        use tracing_subscriber::layer::SubscriberExt;
+        let subscriber = tracing_subscriber::registry().with(herder_telemetry::layer());
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
     client_core::set_diagnostics(diagnostics);
 }
 

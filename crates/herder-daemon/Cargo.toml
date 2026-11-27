@@ -21,6 +21,7 @@ herder-client-core.workspace = true
 herder-protocol.workspace = true
 herder-store.workspace = true
 herder-tasktools.workspace = true
+herder-telemetry.workspace = true
 http-body-util.workspace = true
 httparse.workspace = true
 hyper.workspace = true

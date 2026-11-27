@@ -57,6 +57,9 @@ const ATTACHED_TO_ANSWER: &str = "The attachments to my answer.";
 /// answered on `reply`.
 pub(super) struct SessionCommand {
     pub(super) by: Option<UserId>,
+    /// The W3C trace context of the command's span, while the daemon shares diagnostics: the
+    /// turn a prompt starts joins its trace.
+    pub(super) trace: Option<String>,
     pub(super) request: Request,
     pub(super) reply: oneshot::Sender<Result<CommandResult, ErrorInfo>>,
 }
@@ -298,6 +301,10 @@ pub(super) struct Actor {
     /// Prompts that left the queue to start a turn since the actor started: editing one is a
     /// conflict, not an unknown prompt.
     started: HashSet<PromptId>,
+    /// The trace context of the command being applied, while it is.
+    command_trace: Option<String>,
+    /// The trace each queued prompt was sent in, for its turn's start to join.
+    traces: HashMap<PromptId, String>,
     /// The latest assistant message of the running turn: a child's report when it ends.
     last_reply: Option<String>,
     /// Approval requests of the running turn not yet answered, oldest first.
@@ -355,6 +362,8 @@ impl Actor {
             prompt: None,
             queue: VecDeque::new(),
             started: HashSet::new(),
+            command_trace: None,
+            traces: HashMap::new(),
             last_reply: None,
             approvals: Vec::new(),
             stores: HashMap::new(),
@@ -513,7 +522,9 @@ impl Actor {
             };
             match next {
                 Next::Command(command) => {
+                    self.command_trace = command.trace;
                     let result = self.apply(command.by, command.request).await;
+                    self.command_trace = None;
                     // Before the reply, so an accepted prompt survives a restart.
                     self.save_queue().await;
                     // Before the reply, so a `wait_for` after `spawn` or `send` sees the child
@@ -729,8 +740,15 @@ impl Actor {
                 self.cancel_retry(false).await;
                 let busy =
                     self.turn.is_some() || !self.queue.is_empty() || self.needs_login().is_some();
+                let prompt_id = new_prompt_id();
+                let queue = &self.queue;
+                self.traces
+                    .retain(|queued, _| queue.iter().any(|prompt| prompt.prompt_id == *queued));
+                if let Some(trace) = self.command_trace.take() {
+                    self.traces.insert(prompt_id.clone(), trace);
+                }
                 self.queue.push_back(Prompt {
-                    prompt_id: new_prompt_id(),
+                    prompt_id,
                     agent_message: None,
                     follow_up: None,
                     by,
@@ -1894,6 +1912,16 @@ impl Actor {
             let Some(prompt) = self.queue.pop_front() else {
                 return;
             };
+            // Until the prompt is with the CLI, or the turn could not start: in the trace
+            // it was sent in, when it was.
+            let sent_in = self.traces.remove(&prompt.prompt_id);
+            let _starting = tracing::info_span!(
+                "turn.start",
+                sentry.trace = sent_in
+                    .as_deref()
+                    .and_then(herder_telemetry::sentry_trace)
+                    .unwrap_or_default(),
+            );
             self.started.insert(prompt.prompt_id.clone());
             let original = prompt.clone();
             // The stored queue keeps the prompt until its transcript item takes it off, in one
