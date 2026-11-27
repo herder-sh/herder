@@ -5,7 +5,7 @@ IP, no router to forward a port on and no domain. herder deploys a small Cloudfl
 with a Durable Object to the owner's own Cloudflare account, on `workers.dev`; the hub and
 the devices both connect out to it, and it pairs their connections.
 
-Basecamp: P27.5 · Durable Object relay in the user's Cloudflare account. Part of P27 ·
+Basecamp: P28.5 · Durable Object relay in the user's Cloudflare account. Part of P28 ·
 Remote access options, which ranks it among the other routes. Builds on [public-access.md](public-access.md) and [hub-relay.md](hub-relay.md).
 
 ## Set it up
@@ -66,8 +66,8 @@ Hosts reach their hub through the relay the same way, signing with their own dev
 ### Status
 
 Done: the Worker, deploying, updating and removing it, and the hub's side, tested end to end
-against the Worker in a local workerd. Next, once P27.1 fixes the route model: devices and
-hosts dial the relay as a route of the hub, ranked as P27.1 says, and a session streams
+against the Worker in a local workerd. Next, once P28.1 fixes the route model: devices and
+hosts dial the relay as a route of the hub, ranked as P28.1 says, and a session streams
 from a machine through it in a test.
 
 ### Who gets in
