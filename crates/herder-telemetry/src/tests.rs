@@ -366,20 +366,30 @@ fn nothing_is_sent_while_off_and_everything_stops_once_turned_off() {
         assert!(!is_on());
 
         // Without a DSN, on sends nowhere either.
-        set_with_transport(
+        set_with(
             Some(Telemetry {
                 sentry_dsn: None,
                 ..telemetry()
             }),
-            Arc::clone(&factory),
-            1.0,
+            Endpoints {
+                sentry: Some(Arc::clone(&factory)),
+                base_rate: 1.0,
+                ..Endpoints::default()
+            },
         );
         assert!(!is_on());
         sentry::capture_message("no dsn", sentry::Level::Error);
         assert!(transport.fetch_and_clear_envelopes().is_empty());
 
         // On: a span becomes a trace, scrubbed, and an error an event.
-        set_with_transport(Some(telemetry()), Arc::clone(&factory), 1.0);
+        set_with(
+            Some(telemetry()),
+            Endpoints {
+                sentry: Some(Arc::clone(&factory)),
+                base_rate: 1.0,
+                ..Endpoints::default()
+            },
+        );
         assert!(is_on());
         let parent = tracing::info_span!("command", command = "send_prompt", path = SECRETS[0])
             .in_scope(|| {
@@ -453,4 +463,146 @@ fn a_variant_is_named_without_its_contents() {
     assert_eq!(variant(&prompt), "send_prompt");
     assert_eq!(variant(&Body::Interrupt), "interrupt");
     assert_eq!(variant(&Body::GetLatestEvents(3)), "get_latest_events");
+}
+
+/// A PostHog that keeps every request body it is sent, on localhost.
+struct FakePostHog {
+    host: String,
+    bodies: Arc<Mutex<Vec<String>>>,
+}
+
+impl FakePostHog {
+    fn start() -> Self {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = format!("http://{}", listener.local_addr().unwrap());
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&bodies);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let kept = Arc::clone(&kept);
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut writer = stream;
+                    loop {
+                        let mut length = 0;
+                        loop {
+                            let mut line = String::new();
+                            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                                return;
+                            }
+                            let line = line.trim_end();
+                            if line.is_empty() {
+                                break;
+                            }
+                            if let Some((name, value)) = line.split_once(':')
+                                && name.eq_ignore_ascii_case("content-length")
+                            {
+                                length = value.trim().parse().unwrap();
+                            }
+                        }
+                        let mut body = vec![0; length];
+                        reader.read_exact(&mut body).unwrap();
+                        kept.lock()
+                            .unwrap()
+                            .push(String::from_utf8_lossy(&body).into_owned());
+                        let answer = "{\"status\":\"Ok\"}";
+                        let _ = write!(
+                            writer,
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{answer}",
+                            answer.len()
+                        );
+                    }
+                });
+            }
+        });
+        Self { host, bodies }
+    }
+
+    /// Every event it got, as PostHog's batches carry them.
+    fn events(&self) -> Vec<serde_json::Value> {
+        self.bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|body| serde_json::from_str::<serde_json::Value>(body).ok())
+            .flat_map(|body| match body.get("batch") {
+                Some(serde_json::Value::Array(batch)) => batch.clone(),
+                _ => vec![body],
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn measurements_go_to_posthog_only_while_on_and_carry_only_what_they_may() {
+    let _turn = SWITCH.lock().unwrap_or_else(PoisonError::into_inner);
+    let posthog = FakePostHog::start();
+    let endpoints = || Endpoints {
+        posthog_host: posthog.host.clone(),
+        ..Endpoints::default()
+    };
+    let connected = || {
+        measure(
+            "connected",
+            &[
+                ("route", "system_vpn".into()),
+                ("connect_ms", Duration::from_millis(84).into()),
+                ("reconnect", true.into()),
+                ("address", SECRETS[3].into()),
+                ("cause", SECRETS[15].into()),
+            ],
+        );
+    };
+
+    // Off: nothing is measured.
+    set_with(None, endpoints());
+    connected();
+    flush_measurements();
+    // On without a token: nothing either.
+    set_with(Some(telemetry()), endpoints());
+    connected();
+    flush_measurements();
+    assert!(posthog.events().is_empty());
+
+    // On with a token: the event, with its numbers, flags and words, and nothing else.
+    set_with(
+        Some(Telemetry {
+            posthog_token: Some("phc_test".into()),
+            ..telemetry()
+        }),
+        endpoints(),
+    );
+    connected();
+    flush_measurements();
+    let events = posthog.events();
+    assert_clean(&events);
+    let event = events
+        .iter()
+        .find(|event| event["event"] == "connected")
+        .unwrap_or_else(|| panic!("no connected event in {events:?}"));
+    let properties = &event["properties"];
+    assert_eq!(properties["route"], "system_vpn");
+    assert_eq!(properties["connect_ms"], 84);
+    assert_eq!(properties["reconnect"], true);
+    assert_eq!(properties["component"], "daemon");
+    assert_eq!(properties["herder_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(properties["$geoip_disable"], true);
+    assert!(properties.get("address").is_none(), "{properties}");
+    assert!(properties.get("cause").is_none(), "{properties}");
+    assert_eq!(
+        event["distinct_id"]
+            .as_str()
+            .or(properties["distinct_id"].as_str()),
+        Some("0b7f1c2e-4d4b-4e0e-9a51-3f6f1b2a9c10")
+    );
+
+    // Off again: nothing more goes.
+    set_with(None, endpoints());
+    let before = posthog.events().len();
+    connected();
+    flush_measurements();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(posthog.events().len(), before);
 }

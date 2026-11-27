@@ -17,7 +17,10 @@
 //! of the span it runs in, for a command to carry; [`sentry_trace`] turns a received one into
 //! what a span continues the trace from (`sentry.trace`).
 
+mod measure;
 pub mod scrub;
+
+pub use measure::{Measure, POSTHOG_HOST, flush_measurements, measure};
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -84,19 +87,38 @@ thread_local! {
     static BOUND: Cell<u64> = const { Cell::new(0) };
 }
 
-/// Turns sharing diagnostics on, with `Some`, or off, with `None`, for the whole process.
-pub fn set(telemetry: Option<Telemetry>) {
-    start(telemetry, None, BASE_RATE);
+/// Where diagnostics go: Sentry through its HTTP transport and PostHog's EU host, keeping
+/// [`BASE_RATE`] of the traces; tests point them at fakes, never at the real services.
+pub struct Endpoints {
+    /// What sends to Sentry; its HTTP transport when absent.
+    pub sentry: Option<Arc<dyn TransportFactory>>,
+    /// Where measurements go.
+    pub posthog_host: String,
+    /// The share of traces sent whatever their length.
+    pub base_rate: f64,
 }
 
-/// [`set`], sending through `transport` and keeping `base_rate` of the traces: for tests,
-/// which must never reach the real Sentry.
-pub fn set_with_transport(
-    telemetry: Option<Telemetry>,
-    transport: Arc<dyn TransportFactory>,
-    base_rate: f64,
-) {
-    start(telemetry, Some(transport), base_rate);
+impl Default for Endpoints {
+    fn default() -> Self {
+        Self {
+            sentry: None,
+            posthog_host: POSTHOG_HOST.to_owned(),
+            base_rate: BASE_RATE,
+        }
+    }
+}
+
+/// Turns sharing diagnostics on, with `Some`, or off, with `None`, for the whole process.
+pub fn set(telemetry: Option<Telemetry>) {
+    set_with(telemetry, Endpoints::default());
+}
+
+/// [`set`], sending to `endpoints`.
+pub fn set_with(telemetry: Option<Telemetry>, endpoints: Endpoints) {
+    measure::restart(telemetry.as_ref(), &endpoints.posthog_host);
+    start(telemetry, endpoints.sentry, endpoints.base_rate);
+    // Counts the installs that share, as each turns it on or starts with it on.
+    measure("diagnostics_on", &[]);
 }
 
 /// Whether the process shares diagnostics with Sentry now.

@@ -794,6 +794,7 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
         }
     }
     shared.fanout.subscribe(outbox, &session_id);
+    let started = std::time::Instant::now();
     let mut last = after_seq;
     let mut replayed = 0;
     loop {
@@ -829,6 +830,14 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
         }
     }
     tracing::Span::current().record("events", replayed);
+    herder_telemetry::measure(
+        "replayed",
+        &[
+            ("events", replayed.into()),
+            ("ms", started.elapsed().into()),
+            ("from_start", (after_seq == 0).into()),
+        ],
+    );
     // Live events go ahead of a catch-up: the session's must wait for the last of its replay
     // to be written, or they would reach the client before the events they follow.
     outbox.wait_below(1).await;

@@ -1100,6 +1100,7 @@ impl Client {
                 .library
                 .setting(&host_id, connection, url.clone());
         }
+        let started = std::time::Instant::now();
         let result = self
             .signed(&machine, command, |body| {
                 let machine = Arc::clone(&machine);
@@ -1116,7 +1117,24 @@ impl Client {
                         .map_err(|info| Error::Rejected { info })
                 }
             })
-            .await?;
+            .await;
+        herder_telemetry::measure(
+            "command",
+            &[
+                ("command", herder_telemetry::variant(&body).into()),
+                ("ms", started.elapsed().into()),
+                (
+                    "outcome",
+                    match &result {
+                        Ok(_) => "ok",
+                        Err(Error::Rejected { .. }) => "rejected",
+                        Err(_) => "failed",
+                    }
+                    .into(),
+                ),
+            ],
+        );
+        let result = result?;
         match body {
             CommandBody::SetSkillsRepo { url } => {
                 self.inner
