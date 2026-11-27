@@ -48,7 +48,8 @@ Run locally before pushing:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo nextest run --workspace   # or cargo test --workspace, without cargo-nextest
+cargo test --workspace --doc
 ```
 
 ## Code rules
