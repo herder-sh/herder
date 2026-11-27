@@ -1,6 +1,6 @@
 //! The server over real TLS sockets on localhost.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -480,6 +480,13 @@ struct Client {
     view: View,
     /// Sent in the hello.
     pairing_code: Option<String>,
+    /// Said in the hello: the client reads compressed frames.
+    deflate: bool,
+    /// Messages of a compressed frame not read yet.
+    inbox: VecDeque<String>,
+    /// Bytes of the frames' payloads read so far, and how many frames were compressed.
+    received: usize,
+    compressed: usize,
 }
 
 impl Client {
@@ -538,6 +545,10 @@ impl Client {
             ws,
             view: View::default(),
             pairing_code: code.map(str::to_owned),
+            deflate: false,
+            inbox: VecDeque::new(),
+            received: 0,
+            compressed: 0,
         })
     }
 
@@ -549,12 +560,33 @@ impl Client {
     /// The next message, or `None` once the server closed the connection.
     async fn try_recv(&mut self) -> Option<ServerMessage> {
         loop {
+            if let Some(text) = self.inbox.pop_front() {
+                let message = serde_json::from_str(&text).unwrap();
+                assert!(
+                    !matches!(message, ServerMessage::Hello(_)),
+                    "the hello came compressed"
+                );
+                return Some(message);
+            }
             let frame = tokio::time::timeout(TIMEOUT, self.ws.next())
                 .await
                 .expect("no message from the server");
             match frame {
                 None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return None,
-                Some(Ok(Message::Text(text))) => return Some(serde_json::from_str(&text).unwrap()),
+                Some(Ok(Message::Text(text))) => {
+                    self.received += text.len();
+                    return Some(serde_json::from_str(&text).unwrap());
+                }
+                Some(Ok(Message::Binary(data))) => {
+                    assert!(
+                        self.deflate,
+                        "a compressed frame to a client that did not ask"
+                    );
+                    self.received += data.len();
+                    self.compressed += 1;
+                    let text = herder_protocol::deflate::inflate(&data, usize::MAX).unwrap();
+                    self.inbox.extend(text.split('\n').map(str::to_owned));
+                }
                 Some(Ok(_)) => {}
             }
         }
@@ -575,7 +607,7 @@ impl Client {
             pairing_code: self.pairing_code.clone(),
             sign_in: false,
             passkey: false,
-            deflate: false,
+            deflate: self.deflate,
         }))
         .await;
         let ServerMessage::Hello(hello) = self.recv().await else {
@@ -3970,4 +4002,135 @@ async fn a_terminal_without_a_passkey_asks_the_phone_and_waits_for_it() {
         panic!("expected the lone terminal refused");
     };
     assert!(error.message.contains("herder app"), "{}", error.message);
+}
+
+/// The events of a long session as an agent writes them: prose, tool calls and the files they
+/// read, here this daemon's own sources and docs.
+fn realistic_catch_up(daemon: &Daemon, session: &SessionId) {
+    let sources = [
+        include_str!("conn.rs"),
+        include_str!("mod.rs"),
+        include_str!("../fanout.rs"),
+        include_str!("../../../../docs/hub-relay.md"),
+    ];
+    let mut turn = 0;
+    for source in sources {
+        let lines: Vec<&str> = source.lines().collect();
+        for (part, chunk) in lines.chunks(60).enumerate() {
+            turn += 1;
+            let item = |id: String, body: ItemBody| Item {
+                agent_message: None,
+                follow_up: None,
+                parent_call_id: None,
+                id: ItemId::new(id),
+                turn_id: TurnId::new(format!("t{turn}")),
+                body,
+            };
+            let prose = format!("Reading part {part} of the file to see how it handles this.");
+            let call = format!("call-{turn}");
+            let items = [
+                (
+                    format!("message-{turn}"),
+                    ItemBody::AssistantMessage { text: prose },
+                ),
+                (
+                    call.clone(),
+                    ItemBody::ToolCall {
+                        name: "Read".into(),
+                        input: serde_json::json!({
+                            "file_path": "/repo/src/file.rs",
+                            "offset": part * 60,
+                        }),
+                    },
+                ),
+                (
+                    format!("result-{turn}"),
+                    ItemBody::ToolResult {
+                        call_id: ItemId::new(call),
+                        output: chunk.join("\n"),
+                        is_error: false,
+                    },
+                ),
+            ];
+            for (id, body) in items {
+                daemon.append(
+                    session,
+                    EventBody::ItemAdded {
+                        item: item(id, body),
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_catch_up_takes_a_fraction_of_the_bytes_compressed() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    realistic_catch_up(&daemon, &session);
+    let head = daemon.store.lock().unwrap().sessions().unwrap()[0].last_seq;
+    let mut measured = Vec::new();
+    for deflate in [false, true] {
+        let mut client = daemon.client().await;
+        client.deflate = deflate;
+        let hello = client.hello(vec![cursor(&session, 0)]).await;
+        assert!(hello.deflate);
+        let before = client.received;
+        client.read_until(|view| view.last_seq() == head).await;
+        measured.push((client.received - before, client.compressed));
+    }
+    let [(plain, plain_compressed), (deflated, compressed)] = measured[..] else {
+        unreachable!()
+    };
+    // A client that did not say `deflate`, as one from before it, gets only text frames.
+    assert_eq!(plain_compressed, 0);
+    assert!(compressed > 0);
+    eprintln!(
+        "a catch-up of {head} events: {plain} bytes as text, {deflated} compressed ({:.1}x)",
+        plain as f64 / deflated as f64
+    );
+    assert!(
+        deflated * 4 < plain,
+        "compressed {deflated} bytes against {plain}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_compressed_command_is_read_only_after_both_said_deflate() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let prompt = |id: &str| {
+        let message = ClientMessage::Command(Command {
+            id: CommandId::new(id),
+            body: CommandBody::SendPrompt {
+                session_id: session.clone(),
+                text: "Please look at this. ".repeat(100),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+        });
+        let text = serde_json::to_string(&message).unwrap();
+        Message::binary(herder_protocol::deflate::deflate([text.as_str()]))
+    };
+
+    let mut client = daemon.client().await;
+    client.deflate = true;
+    client.hello(Vec::new()).await;
+    client.ws.send(prompt("c1")).await.unwrap();
+    let answer = client.recv().await;
+    assert!(
+        matches!(&answer, ServerMessage::CommandAccepted { command_id, .. } if command_id.as_str() == "c1"),
+        "{answer:?}"
+    );
+
+    // A client that did not say `deflate` is not read compressed.
+    let mut old = daemon.client().await;
+    old.hello(Vec::new()).await;
+    old.ws.send(prompt("c2")).await.unwrap();
+    let ServerMessage::Error { error, .. } = old.recv().await else {
+        panic!("a compressed frame from a client that did not say deflate was read");
+    };
+    assert_eq!(error.code, ErrorCode::BadRequest);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
 }

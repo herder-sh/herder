@@ -65,13 +65,13 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use futures_util::future::BoxFuture;
-use futures_util::stream::{FuturesUnordered, SplitSink, SplitStream};
+use futures_util::stream::{BoxStream, FuturesUnordered, SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ApprovalRequest, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
     Cursor, ErrorInfo, FailoverSettings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, PasskeyAssertion,
     PasskeyChallenge, PasskeyCreation, PersonId, Project, Role, ServerHello, ServerMessage,
-    SessionId, TerminalId, Timestamp, UserId,
+    SessionId, TerminalId, Timestamp, UserId, deflate,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
@@ -82,10 +82,10 @@ use tokio::time::{Instant, MissedTickBehavior};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
+use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -102,6 +102,16 @@ use crate::{ConnectionQuality, ConnectionState, Error, Machine, SessionUpdate, n
 
 /// Time one address gets for TCP, TLS and the WebSocket upgrade.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Messages of these sizes go to the daemon compressed, when it reads compressed ones. A
+/// smaller one gains little. A larger one is mostly attached images, which shrink little
+/// beyond base64's quarter, and would go out only once compressed: on a phone that holds an
+/// upload back, and nothing moving meanwhile looks like a dead connection.
+const DEFLATED: std::ops::Range<usize> = 512..(1 << 20);
+
+/// Most bytes a compressed frame from the daemon may inflate to, as much as the WebSocket reads
+/// of one uncompressed message.
+const INFLATE_LIMIT: usize = 64 << 20;
 
 /// Time a daemon that was reached gets to answer a hello, which it does at once. The other
 /// addresses that were reached wait for it, so it is short.
@@ -1634,7 +1644,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
             pairing_code: None,
             sign_in: false,
             passkey: supervisor.passkey,
-            deflate: false,
+            deflate: true,
         };
         let via = supervisor.via();
         async move { connect(&addresses, &saved.fingerprint, device, hello, &turn, &via).await }
@@ -1705,6 +1715,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
         let (error, wait) = match connected {
             Ok((ws, hello, address)) => {
                 attempt = 0;
+                let deflate = hello.deflate;
                 let made = Instant::now();
                 {
                     let mut state = supervisor.lock();
@@ -1726,7 +1737,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                 }
                 let ended = serve(
                     &supervisor,
-                    ws,
+                    (ws, deflate),
                     &mut ops,
                     &mut pending,
                     &mut syncs,
@@ -1851,10 +1862,11 @@ fn save_in_background(supervisor: &Arc<Supervisor>) {
     tokio::task::spawn_blocking(move || supervisor.save());
 }
 
-/// Runs a connection until it fails or `stop`, then tells the daemon why it ended.
+/// Runs a connection until it fails or `stop`, then tells the daemon why it ended. With
+/// `deflate`, the daemon's hello said it reads compressed messages.
 async fn serve(
     supervisor: &Arc<Supervisor>,
-    ws: Ws,
+    (ws, deflate): (Ws, bool),
     ops: &mut Ops,
     pending: &mut Vec<Pending>,
     syncs: &mut HashMap<String, oneshot::Sender<()>>,
@@ -1864,10 +1876,10 @@ async fn serve(
     let (sink, stream) = ws.split();
     // What the connection sends is queued here and written beside its reading.
     let (outgoing, queued) = mpsc::unbounded_channel();
-    let mut writing = Box::pin(write(sink, queued));
+    let mut writing = Box::pin(write(sink, queued, deflate));
     let mut link = Link {
         alive,
-        stream,
+        stream: incoming(stream),
         outgoing,
     };
     let ended = converse(
@@ -1906,7 +1918,7 @@ async fn serve(
 /// A connection's two ways: what the daemon sends, and the queue of what it is sent.
 struct Link {
     alive: Alive,
-    stream: SplitStream<Ws>,
+    stream: Incoming,
     outgoing: mpsc::UnboundedSender<Message>,
 }
 
@@ -2235,6 +2247,32 @@ async fn converse(
     }
 }
 
+/// What the daemon sends on a connection, a compressed frame's messages each as a text frame
+/// of its own.
+type Incoming = BoxStream<'static, Result<Message, tungstenite::Error>>;
+
+/// The daemon's frames on `stream`, with each compressed one taken apart into its messages.
+fn incoming(stream: SplitStream<Ws>) -> Incoming {
+    stream
+        .flat_map(|frame| {
+            let frames = match frame {
+                Ok(Message::Binary(data)) => match deflate::inflate(&data, INFLATE_LIMIT) {
+                    Ok(text) => text
+                        .split('\n')
+                        .map(|text| Ok(Message::text(text.to_owned())))
+                        .collect(),
+                    Err(err) => {
+                        warn!("skipping a compressed frame: {err}");
+                        Vec::new()
+                    }
+                },
+                frame => vec![frame],
+            };
+            futures_util::stream::iter(frames)
+        })
+        .boxed()
+}
+
 /// Queues `message` for the daemon, unless it is over [`MAX_MESSAGE_BYTES`]. A command that
 /// waits for its answer never is (see [`too_large`]); that leaves what is sent unanswered,
 /// such as a terminal's input, which is dropped.
@@ -2301,8 +2339,21 @@ fn message_bytes(command: &Command) -> usize {
 async fn write(
     mut sink: SplitSink<Ws, Message>,
     mut queued: mpsc::UnboundedReceiver<Message>,
+    deflate: bool,
 ) -> String {
-    while let Some(message) = queued.recv().await {
+    while let Some(mut message) = queued.recv().await {
+        if deflate
+            && let Message::Text(text) = &message
+            && DEFLATED.contains(&text.len())
+        {
+            // Off the connection's task, which reads meanwhile.
+            let text = text.clone();
+            if let Ok(frame) =
+                tokio::task::spawn_blocking(move || deflate::deflate([text.as_str()])).await
+            {
+                message = Message::binary(frame);
+            }
+        }
         if let Err(err) = sink.send(message).await {
             return format!("writing to the daemon: {err}");
         }

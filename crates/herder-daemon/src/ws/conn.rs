@@ -3,6 +3,7 @@
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -58,6 +59,14 @@ const UNACKNOWLEDGED: Duration = Duration::from_secs(60);
 /// [`MAX_MESSAGE_BYTES`], so that a client sending a message over that limit is told which
 /// command was refused and keeps its connection; a message over this one closes it.
 const READ_LIMIT: usize = 4 * MAX_MESSAGE_BYTES;
+
+/// Most bytes of JSON the writer gathers from what is queued into one compressed frame. Only
+/// what is already queued goes in, so no message waits for a frame to fill; and one frame
+/// holds back what is queued behind it for only as long as these bytes take to send.
+const BATCH_BYTES: usize = 64 * 1024;
+
+/// A lone message of fewer bytes goes as a text frame: compression gains little on it.
+const DEFLATE_FROM: usize = 512;
 
 /// Serves a connection accepted on a listen address, or, with `tunneled`, on the tunnel
 /// listener, where it first takes `cloudflared`'s WebSocket upgrade.
@@ -204,17 +213,28 @@ pub(super) async fn serve<B: Backend>(
     let started = Instant::now();
     let (sink, stream) = ws.split();
     let outbox = Arc::new(Outbox::default());
+    // Set once both hellos said `deflate`: then the writer compresses, and the reader inflates.
+    let deflate = Arc::new(AtomicBool::new(false));
     let writer = tokio::spawn(write(
         sink,
         Arc::clone(&outbox),
         Arc::clone(&shared.auth),
+        Arc::clone(&deflate),
         cancel.clone(),
     ));
     let who = OnceLock::new();
     // `None` when the writer or a shutdown ended the connection under the reader.
     let ended = tokio::select! {
         () = cancel.cancelled() => None,
-        result = read(stream, (first, pass), &shared, &outbox, (peer, &device), &cancel, &who) => {
+        result = read(
+            stream,
+            (first, pass),
+            &shared,
+            (&outbox, &deflate),
+            (peer, &device),
+            &cancel,
+            &who,
+        ) => {
             Some(result)
         }
     };
@@ -299,14 +319,14 @@ async fn read<B: Backend>(
     mut stream: SplitStream<Ws>,
     (first, pass): (Option<String>, Option<tunnel::Pass>),
     shared: &Arc<Shared<B>>,
-    outbox: &Arc<Outbox>,
+    (outbox, deflate): (&Arc<Outbox>, &AtomicBool),
     (peer, device): (SocketAddr, &str),
     cancel: &CancellationToken,
     who: &OnceLock<Who>,
 ) -> Result<()> {
     let first = match first {
         Some(text) => Some(decode(&text)),
-        None => tokio::time::timeout(HANDSHAKE_TIMEOUT, next(&mut stream))
+        None => tokio::time::timeout(HANDSHAKE_TIMEOUT, next(&mut stream, false))
             .await
             .map_err(|_| anyhow!("no hello within {HANDSHAKE_TIMEOUT:?}"))??,
     };
@@ -356,6 +376,8 @@ async fn read<B: Backend>(
         resumes = hello.resume.len(),
         "client connected"
     );
+    // Set before the hello is queued: the writer sends the hello itself as text either way.
+    deflate.store(hello.deflate, Ordering::Relaxed);
     // Set once: this is the connection's only accepted hello.
     let _ = who.set(Who {
         client: hello.client.clone(),
@@ -371,7 +393,7 @@ async fn read<B: Backend>(
         person_id: identity.person_id.clone(),
         herder_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
         addresses: shared.advertised().unwrap_or_default(),
-        deflate: false,
+        deflate: true,
     }));
     shared.fanout.connect(outbox, identity.role);
     let person = shared.auth.resolve(&identity.user_id);
@@ -438,7 +460,7 @@ async fn read<B: Backend>(
         };
         tokio::select! {
             () = handled => handling = None,
-            message = next(&mut stream), if ended.is_none() && waiting.len() < WAITING => {
+            message = next(&mut stream, hello.deflate), if ended.is_none() && waiting.len() < WAITING => {
                 match message {
                     Ok(Some(message)) => waiting.push_back(message),
                     Ok(None) => ended = Some(Ok(())),
@@ -570,25 +592,33 @@ impl Undecodable {
     }
 }
 
-/// The next client message: `Some(Err)` describes a frame that is not one.
-async fn next(stream: &mut SplitStream<Ws>) -> Result<Option<Result<ClientMessage, Undecodable>>> {
+/// The next client message: `Some(Err)` describes a frame that is not one. With `deflate`,
+/// the client may send a message compressed in a binary frame.
+async fn next(
+    stream: &mut SplitStream<Ws>,
+    deflate: bool,
+) -> Result<Option<Result<ClientMessage, Undecodable>>> {
     loop {
         let Some(frame) = stream.next().await else {
             return Ok(None);
         };
-        return Ok(Some(match frame.context("reading from the client")? {
-            Message::Text(text) if text.len() > MAX_MESSAGE_BYTES => Err(Undecodable {
-                command_id: command_id(&text),
-                message: format!(
-                    "message too large: {} bytes, and one may have at most {MAX_MESSAGE_BYTES}",
-                    text.len()
-                ),
-                too_large: true,
-            }),
-            Message::Text(text) => decode(&text),
-            Message::Binary(_) => Err(Undecodable::new(
-                "messages must be JSON text frames".to_owned(),
-            )),
+        let text = match frame.context("reading from the client")? {
+            Message::Text(text) => text.as_str().to_owned(),
+            Message::Binary(data) if deflate => {
+                match herder_protocol::deflate::inflate(&data, READ_LIMIT) {
+                    Ok(text) => text,
+                    Err(err) => {
+                        return Ok(Some(Err(Undecodable::new(format!(
+                            "invalid compressed message: {err}"
+                        )))));
+                    }
+                }
+            }
+            Message::Binary(_) => {
+                return Ok(Some(Err(Undecodable::new(
+                    "messages must be JSON text frames".to_owned(),
+                ))));
+            }
             // A client that gives its connection up says why, which the close log then shows.
             Message::Close(Some(frame)) if !frame.reason.is_empty() => {
                 bail!(
@@ -598,7 +628,18 @@ async fn next(stream: &mut SplitStream<Ws>) -> Result<Option<Result<ClientMessag
             }
             Message::Close(_) => return Ok(None),
             Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
-        }));
+        };
+        if text.len() > MAX_MESSAGE_BYTES {
+            return Ok(Some(Err(Undecodable {
+                command_id: command_id(&text),
+                message: format!(
+                    "message too large: {} bytes, and one may have at most {MAX_MESSAGE_BYTES}",
+                    text.len()
+                ),
+                too_large: true,
+            })));
+        }
+        return Ok(Some(decode(&text)));
     }
 }
 
@@ -784,10 +825,13 @@ async fn sign_in<B: Backend>(
         })
     };
     // A person gets the challenge's lifetime to answer it with their passkey.
-    let answer = tokio::time::timeout(Duration::from_secs(PASSKEY_CHALLENGE_SECS), next(stream))
-        .await
-        .map_err(|_| refused("no sign_in before the challenge expired"))?
-        .map_err(|_| refused("the connection failed"))?;
+    let answer = tokio::time::timeout(
+        Duration::from_secs(PASSKEY_CHALLENGE_SECS),
+        next(stream, false),
+    )
+    .await
+    .map_err(|_| refused("no sign_in before the challenge expired"))?
+    .map_err(|_| refused("the connection failed"))?;
     let method = match answer {
         Some(Ok(ClientMessage::SignIn(method))) => method,
         Some(Ok(_)) => return Err(refused("the answer to sign_in_challenge must be sign_in")),
@@ -812,7 +856,7 @@ async fn sign_in<B: Backend>(
             _ => return Err(expired().into()),
         },
         // The device says nothing while it waits; anything it sends ends the wait.
-        _ = next(stream) => return Err(refused("the device stopped waiting for its login")),
+        _ = next(stream, false) => return Err(refused("the device stopped waiting for its login")),
     }
     Ok(shared
         .auth
@@ -840,21 +884,54 @@ async fn write(
     mut sink: SplitSink<Ws, Message>,
     outbox: Arc<Outbox>,
     auth: Arc<Auth>,
+    deflate: Arc<AtomicBool>,
     cancel: CancellationToken,
 ) -> Option<String> {
+    let encode = |mut message: ServerMessage| {
+        auth.attribute(&mut message);
+        serde_json::to_string(&message)
+            .inspect_err(|err| warn!("cannot encode a message for a client: {err}"))
+            .ok()
+    };
     let close = loop {
-        while let Some(mut message) = outbox.pop() {
-            auth.attribute(&mut message);
-            let text = match serde_json::to_string(&message) {
-                Ok(text) => text,
-                Err(err) => {
-                    warn!("cannot encode a message for a client: {err}");
-                    continue;
+        while let Some(message) = outbox.pop() {
+            // The hello goes by itself as text, so a client reads it as it reads any daemon's.
+            let hello = matches!(message, ServerMessage::Hello(_));
+            let Some(text) = encode(message) else {
+                continue;
+            };
+            let frame = if hello || !deflate.load(Ordering::Relaxed) {
+                Message::text(text)
+            } else {
+                let mut texts = vec![text];
+                let mut bytes = texts[0].len();
+                while bytes < BATCH_BYTES
+                    && let Some(message) = outbox.pop()
+                {
+                    if let Some(text) = encode(message) {
+                        bytes += text.len();
+                        texts.push(text);
+                    }
+                }
+                if texts.len() == 1 && bytes < DEFLATE_FROM {
+                    Message::text(texts.swap_remove(0))
+                } else {
+                    // Off the runtime's threads: one large event takes a while to compress.
+                    let deflated = tokio::task::spawn_blocking(move || {
+                        herder_protocol::deflate::deflate(texts.iter().map(String::as_str))
+                    });
+                    match deflated.await {
+                        Ok(frame) => Message::binary(frame),
+                        Err(err) => {
+                            warn!("cannot compress messages for a client: {err}");
+                            continue;
+                        }
+                    }
                 }
             };
             let sent = tokio::select! {
                 () = cancel.cancelled() => None,
-                sent = sink.send(Message::text(text)) => Some(sent),
+                sent = sink.send(frame) => Some(sent),
             };
             match sent {
                 None => break,
