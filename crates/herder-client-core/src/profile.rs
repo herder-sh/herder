@@ -41,8 +41,51 @@ pub(crate) struct SavedMachine {
     /// secret, and kept on this device only.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub(crate) headers: crate::tunnel::Headers,
+    /// Which of `addresses` the user pinned or disabled.
+    #[serde(default, skip_serializing_if = "Routes::is_empty")]
+    pub(crate) routes: Routes,
     /// This device's key for the machine, as PEM; secret.
     pub(crate) device_key: String,
+}
+
+/// Which of a machine's addresses the user pinned or disabled
+/// ([`crate::Client::set_route`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Routes {
+    /// The one address dialled, when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pinned: Option<String>,
+    /// Addresses never dialled; kept among the addresses so that a daemon's hello does not
+    /// add them back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) disabled: Vec<String>,
+}
+
+impl Routes {
+    fn is_empty(&self) -> bool {
+        self.pinned.is_none() && self.disabled.is_empty()
+    }
+
+    /// Of `addresses`, in their order, the ones to dial: the pinned one alone when it is
+    /// among them, else every one not disabled.
+    pub(crate) fn dialled(&self, addresses: &[String]) -> Vec<String> {
+        match &self.pinned {
+            Some(pinned) if addresses.contains(pinned) => vec![pinned.clone()],
+            _ => addresses
+                .iter()
+                .filter(|address| !self.disabled.contains(address))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Forgets the choices about addresses not among `addresses`.
+    pub(crate) fn keep(&mut self, addresses: &[String]) {
+        if self.pinned.as_ref().is_some_and(|p| !addresses.contains(p)) {
+            self.pinned = None;
+        }
+        self.disabled.retain(|address| addresses.contains(address));
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -73,7 +116,7 @@ pub(crate) fn update<T>(
     dir: &Path,
     change: impl FnOnce(&mut Vec<SavedMachine>) -> Result<T, Error>,
 ) -> Result<(Vec<SavedMachine>, T), Error> {
-    let lock = lock(dir).map_err(|message| Error::Local {
+    let lock = lock(dir, LOCK).map_err(|message| Error::Local {
         message: format!("locking the profile: {message}"),
     })?;
     let mut machines = load(dir)?;
@@ -83,11 +126,11 @@ pub(crate) fn update<T>(
     Ok((machines, changed))
 }
 
-/// Takes the exclusive lock on the profile in `dir`, creating `dir` if missing; held until the
-/// file is dropped.
-fn lock(dir: &Path) -> Result<File, String> {
+/// Takes the exclusive lock `name` in `dir`, creating `dir` if missing; held until the file is
+/// dropped.
+pub(crate) fn lock(dir: &Path, name: &str) -> Result<File, String> {
     create_private_dir(dir)?;
-    let path = dir.join(LOCK);
+    let path = dir.join(name);
     let file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -179,6 +222,7 @@ mod tests {
             fingerprint: "ab".repeat(32),
             advertised: Vec::new(),
             headers: Default::default(),
+            routes: Default::default(),
             device_key: "secret".into(),
         }
     }
@@ -200,6 +244,23 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
         fs::write(dir.join(FILE), "not json").unwrap();
         assert!(matches!(load(&dir), Err(Error::Local { .. })));
+    }
+
+    #[test]
+    fn a_pinned_address_is_dialled_alone_and_disabled_ones_never() {
+        let addresses = ["a:1", "b:1", "c:1"].map(String::from);
+        let mut routes = Routes::default();
+        assert_eq!(routes.dialled(&addresses), addresses);
+        routes.disabled.push("a:1".into());
+        assert_eq!(routes.dialled(&addresses), ["b:1", "c:1"]);
+        routes.pinned = Some("c:1".into());
+        assert_eq!(routes.dialled(&addresses), ["c:1"]);
+        // A pin on an address that is gone pins nothing.
+        routes.keep(&addresses[..2]);
+        assert_eq!(routes.pinned, None);
+        assert_eq!(routes.dialled(&addresses[..2]), ["b:1"]);
+        routes.keep(&addresses[1..]);
+        assert!(routes.is_empty());
     }
 
     /// Updates from many writers at once, as from clients sharing the dir, all land.

@@ -196,6 +196,30 @@
         "stream_id",
         "device_id"
       ]
+    },
+    {
+      "description": "A fresh token for the hub's Durable Object relay, or `None` once the relay is gone;\nsent to a host whose hello set `cloudflare_relay`, before the one it holds expires and\nwhenever the relay changes.",
+      "type": "object",
+      "properties": {
+        "grant": {
+          "description": "The relay and the token.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelayGrant"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "const": "relay_grant"
+        }
+      },
+      "required": [
+        "type"
+      ]
     }
   ],
   "$defs": {
@@ -271,6 +295,17 @@
         "cliproxyapi_relay": {
           "description": "Whether the hub forwards this host to its CLIProxyAPI over relay connections\n([`crate::RelayRoute::Proxy`]); sent, without `cliproxyapi`, by a hub that runs one,\nholds this host's client key and is configured with no address hosts reach the proxy\nat. The host then points its CLIs at a listener of its own on loopback, which forwards\neach connection through the hub, and runs the hub's provider logins as it does with\n`cliproxyapi`.",
           "type": "boolean"
+        },
+        "relay_grant": {
+          "description": "A token for the hub's Durable Object relay, sent to a host whose hello set\n`cloudflare_relay` while the relay is up: the host keeps a control WebSocket to it,\n`<url>/hosts/<host id>`, and opens `<url>/streams/<stream id>` for each stream it\nasks for (`docs/remote-access.md`). Renewed with [`HubMessage::RelayGrant`].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelayGrant"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "replication_version": {
           "description": "The hub's [`REPLICATION_VERSION`]; on a mismatch both sides disconnect.",
@@ -410,6 +445,30 @@
           "type": "string",
           "const": "conflict"
         }
+      ]
+    },
+    "RelayGrant": {
+      "description": "A token for the Durable Object relay, answering `get_relay_token`, or sent to a host on\nits replication connection.\n\nThe token is sent as `Authorization: Bearer <token>` on every upgrade to the relay. It is\n`v1.<claims>.<mac>`: `claims` is base64url (no padding) of the JSON object\n`{\"sub\": <device or host id>, \"kind\": \"client\" | \"host\", \"exp\": <unix seconds>}`, and\n`mac` is base64url (no padding) of HMAC-SHA256, keyed with the relay's secret, over\n`v1.<claims>`. The relay refuses with 401 a token that is malformed, expired or wrongly\nsigned, a `client` token anywhere but `/machines/<host id>`, and a `host` token whose\n`sub` is not the host its path names.",
+      "type": "object",
+      "properties": {
+        "expires_at": {
+          "description": "When the token expires; renew it before.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "token": {
+          "description": "The token.",
+          "type": "string"
+        },
+        "url": {
+          "description": "The relay, as `https://<worker host>`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "token",
+        "expires_at"
       ]
     },
     "ReplicationError": {

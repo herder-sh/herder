@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 23`
+`CLIENT_API_VERSION = 24`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -61,6 +61,11 @@ says what exists, why, and how it maps to foreign languages.
   P26.14 added, compatibly, the `GetLatestEvents` command with its `LatestEvents` result
   (`LATEST_EVENTS`, `LATEST_EVENTS_BYTES`): a session's latest events, answered ahead of the
   replays queued for the connection, which an app shows while a long session replays.
+  P27.1 added, compatibly, the remote access commands (`GetRemoteAccess`, `SetRemoteAccess`,
+  `EnrollWireGuard`, `UnenrollWireGuard`, `GetRelayToken`) with their results (`RemoteAccess`,
+  `WireGuardEnrolled`, `RelayToken`) and types (`RemoteAccessSettings`, `WireGuardSettings`,
+  `CloudflareSettings`, `WireGuardOffer`, `RouteStatus`, `RouteState`, `WireGuardEnrollment`,
+  `RelayGrant`); see [Routes](#routes).
 
 ## Shape, and how it maps to UniFFI
 
@@ -111,7 +116,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `user_id`, `person_id`, `address_headers` | `Client::sign_in`, `share`, `rename`, `set_addresses`, `set_address_headers`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `FleetLink` |
+| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `user_id`, `person_id`, `address_headers`, `pinned_address`, `disabled_addresses`; `route_kind`; `Client::wireguard_tunnels` | `Client::sign_in`, `share`, `rename`, `set_addresses`, `set_address_headers`, `set_route`, `import_wireguard`, `remove_wireguard`, `set_hub_wireguard`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `FleetLink` |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images` and `files`), `GetAttachment` → `CommandResult::Attachment`, `GetLatestEvents` → `CommandResult::LatestEvents`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow`, `MergeQueued` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
 | Projects  | `Machine::projects`; a `Project`'s `remote`, the URL `CloneProject` clones it onto another machine from (none without a remote), `icon`, the hash of its icon, to cache it by, `icon_uploaded`, whether an owner uploaded it, and `icon_background`, the colour behind it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `CloneProject` (a git URL or GitHub `owner/repo`, into a new folder, or without one into a folder named after the repository in the machine's projects dir; `conflict` when it exists) → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
@@ -145,6 +150,11 @@ default), `models` (`CatalogModel`: `id`, `name`, `detail`). `ProviderHint` is `
 
 - `CLIENT_API_VERSION: u32` — the version of this API.
 
+### Functions
+
+- `route_kind(address: String) -> RouteKind` — what carries a connection to one of a
+  machine's addresses, for an app to name the route. See [Routes](#routes).
+
 ### `Client` (object)
 
 The client: paired machines and one connection supervisor per machine. Cheap to clone;
@@ -160,6 +170,11 @@ everything stops once the last clone is dropped.
 | `async share() -> Result<FleetLink, Error>` | The `herder://fleet` link of every saved machine, connected or not, by the name this device gives it, and of the person this device acts for, by their name and passkeys as the connected machines list them (`list_people`), for another device of the person to sign in to each with one of those passkeys. It carries no code, and no loopback address (`localhost`, `127.0.0.0/8`, `::1`): a machine with only those is left out. Fails with `Local` while no machine is left, in a demo, and while no connected machine knows this device as a person; with the machines' error when none lists the person. See [Fleet links](#fleet-links). |
 | `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
 | `set_addresses(host_id: HostId, addresses: Vec<String>) -> Result<(), Error>` | Connects to a machine at `addresses`, in this order of preference, from now on; each a host or IP with an optional port (7447 by default), a tunnel's `wss://` URL, or `hub://<host id>` (see Addresses). Fails with `Error::Local` on an invalid address or an empty list. |
+| `set_route(host_id: HostId, address: String, choice: RouteChoice) -> Result<(), Error>` | Pins one of a machine's addresses (the only one dialled), disables it (never dialled, kept so a hello does not add it back), or puts it back in the race (`Auto`). Fails with `Local` for an address the machine does not have, or for disabling its last enabled one. See [Routes](#routes). |
+| `import_wireguard(name: String, config: String) -> Result<WireGuardTunnel, Error>` | Imports a WireGuard config (a `.conf` file's text, or its QR code's) as the tunnel `name`, replacing one of the same id, for herder's own connections only; kept in this device's profile, private key included. Fails with `Local`, saying why, for a config herder cannot use. |
+| `wireguard_tunnels() -> Result<Vec<WireGuardTunnel>, Error>` | The imported tunnels, in import order, then each hub's this device enrolled with; without their keys. |
+| `remove_wireguard(id: String) -> Result<(), Error>` | Removes an imported tunnel and its key. `Local` for an unknown id. |
+| `async set_hub_wireguard(host_id: HostId, enabled: bool) -> Result<(), Error>` | Turns herder's own WireGuard on a hub on or off for this device: a key generated here, its public half enrolled with the hub, the hub's `wg://hub/…` address added; off undoes all three. Until P27.4 it fails with `Local`. |
 | `async reconnect(host_id: HostId) -> Result<String, Error>` | Drops a machine's connection, if up, and connects again at once, racing its addresses in order: the address the new connection uses, or `Unreachable` when none answered. |
 | `forget(host_id: HostId) -> Result<(), Error>` | Unpairs a machine on this device. |
 | `async sign_in(hosts: Vec<String>, fingerprint: String, passkeys: Vec<String>) -> Result<PendingSignIn, Error>` | Connects to a machine under a new device key to sign in as a person: the `PendingSignIn` holds what the person's passkey signs, restricted to the credential ids `passkeys` (a fleet link's person's; empty for any passkey). Fails with `Unreachable` when no address answered. See [Signing in](#signing-in). |
@@ -368,6 +383,37 @@ through a hub.
 chosen address by putting it first with `set_addresses` and then calling `reconnect`. A
 dead first address falls back to the next after its 300 ms head start, so the answer says
 which address the connection ended up on.
+
+## Routes
+
+`docs/remote-access.md` is the design. Every address is one of these `RouteKind`s, which is
+also the order `sign_in` and a hello's new addresses sort into:
+
+| `RouteKind` | Address |
+| --- | --- |
+| `HomeNetwork` | a private, link-local or `.local` address |
+| `OwnVpn { tunnel }` | `wg://<tunnel>/<host:port>`: through an imported WireGuard tunnel (P27.3) |
+| `Direct` | any other `host:port`: a port forward or TCP proxy |
+| `SystemVpn` | a Tailscale address |
+| `HubWireGuard` | `wg://hub/<ip:port>`, among a hub's addresses: herder's WireGuard on it (P27.4) |
+| `Tunnel` | a tunnel's `wss://` URL |
+| `Hub { hub }` | `hub://<host id>` |
+| `CloudflareRelay` | `relay+wss://<worker host>`: the Durable Object relay (P27.5) |
+
+`set_addresses` and the address forms the client adds by itself take the `wg://` and
+`relay+wss://` forms once P27.3 and P27.5 land; until then `normalize` refuses them.
+
+`set_route` pins or disables an address per machine: a pinned one is the only one dialled,
+on every connect, wake and reconnect, and a dead pinned one is not fallen back from; a
+disabled one is never dialled, nor by a `hub://` route through that machine.
+`Machine::pinned_address` and `disabled_addresses` show the choices, which are saved with
+the machine and dropped with the address.
+
+`WireGuardTunnel` is `id` (as in `wg://<id>/…`: the import name's letters and digits,
+lowercase, hyphens between), `name`, `endpoint`, `addresses` and `allowed_ips` (CIDR), `kind`
+(`WireGuardKind::Imported`, or `Hub { host_id }`) and `up` (a connection or race is using
+it). P27.1 added these, `RouteKind`, `RouteChoice` and the two `Machine` fields, which moved
+`CLIENT_API_VERSION` to 24.
 
 ## Connection quality
 

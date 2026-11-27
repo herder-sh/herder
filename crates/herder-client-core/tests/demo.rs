@@ -39,6 +39,8 @@ fn demo() -> Demo {
         update: None,
         approvals: Vec::new(),
         address_headers: Default::default(),
+        pinned_address: None,
+        disabled_addresses: Vec::new(),
     };
     let created = Event {
         session_id: SessionId::new("s1"),

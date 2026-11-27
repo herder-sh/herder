@@ -92,7 +92,8 @@ impl Via {
             .map(|hub| hub.saved())
             .with_context(|| format!("this device is not signed in to the hub {hub}"))?;
         let addresses: Vec<String> = saved
-            .addresses
+            .routes
+            .dialled(&saved.addresses)
             .into_iter()
             .filter(|address| address::hub(address).is_none())
             .collect();

@@ -847,6 +847,7 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
         pairing_code: None,
         attachments_cap: None,
         relay: false,
+        cloudflare_relay: false,
     });
     let text = serde_json::to_string(&hello).unwrap();
     ws.send(Message::text(text)).await.unwrap();
@@ -1026,6 +1027,7 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
         pairing_code: None,
         attachments_cap: None,
         relay: false,
+        cloudflare_relay: false,
     });
     ws.send(Message::text(serde_json::to_string(&hello).unwrap()))
         .await
@@ -1141,6 +1143,7 @@ async fn images_are_not_backed_up_unless_the_host_says_so_and_never_fail_it() {
             pairing_code: None,
             attachments_cap: cap,
             relay: false,
+            cloudflare_relay: false,
         });
         ws.send(Message::text(serde_json::to_string(&hello).unwrap()))
             .await
@@ -1764,6 +1767,39 @@ async fn a_host_holds_secrets_for_its_own_use_until_revoked_or_its_hub_is_down()
     held_until(&mail, |held| *held == Held::WaitingForHub).await;
     assert_eq!(mail.current().state(), HostSecretsState::WaitingForHub);
     host.runtime.kill().await;
+}
+
+/// Until herder's WireGuard and the Cloudflare routes are set up on it, a hub offers none of
+/// them, and says so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hub_offers_no_remote_access_until_it_is_set_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    let hub = Hub::start(&tmp.path().join("hub"), 0).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    hub.join(&client).await;
+    assert_eq!(
+        client
+            .send(HostId::new("hub"), CommandBody::GetRemoteAccess)
+            .await,
+        Ok(CommandResult::RemoteAccess {
+            remote_access: Box::default()
+        })
+    );
+    for command in [
+        CommandBody::EnrollWireGuard {
+            public_key: "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=".into(),
+        },
+        CommandBody::GetRelayToken,
+    ] {
+        match client.send(HostId::new("hub"), command).await {
+            Err(Error::Rejected { info }) => assert_eq!(info.code, ErrorCode::Unsupported),
+            other => panic!("expected a refusal: {other:?}"),
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2577,6 +2613,7 @@ async fn replicating(hub: &Hub, host_dir: &Path, relay: bool) -> Ws {
         pairing_code: Some(hub.auth.mint_host("devbox", PAIRING_TTL).unwrap().code),
         attachments_cap: None,
         relay,
+        cloudflare_relay: false,
     });
     say(&mut ws, &hello).await;
     assert!(matches!(next_message(&mut ws).await, HubMessage::Hello(_)));
@@ -3052,6 +3089,7 @@ async fn a_hub_that_names_its_proxys_address_forwards_no_host_to_it() {
         pairing_code: Some(hub.auth.mint_host("devbox", PAIRING_TTL).unwrap().code),
         attachments_cap: None,
         relay: true,
+        cloudflare_relay: false,
     });
     say(&mut ws, &hello).await;
     let HubMessage::Hello(hello) = next_message(&mut ws).await else {

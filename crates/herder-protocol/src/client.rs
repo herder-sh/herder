@@ -1215,4 +1215,34 @@ pub enum CommandBody {
         /// Bytes to write.
         data: Bytes,
     },
+    /// On a hub, what it offers devices away from home (`docs/remote-access.md`); any client
+    /// device, with the settings for owners only. Answered with `remote_access`. It changes
+    /// nothing, so a resend is answered afresh. Refused with `unsupported` on a daemon that is
+    /// not a hub.
+    GetRemoteAccess,
+    /// On a hub, set how it is reached from outside: herder's WireGuard endpoint, and what it
+    /// sets up in the owner's Cloudflare account. Owners only. Answered with
+    /// `remote_access`, as applied; what it sets up is reported there as it goes. Refused with
+    /// `bad_request` for an invalid setting, such as an `endpoint` that is not `host:port` or
+    /// an `api_token` no secret of the hub has, and with `unsupported` on a daemon that is not
+    /// a hub.
+    SetRemoteAccess {
+        /// The settings, replacing the hub's.
+        settings: Box<crate::RemoteAccessSettings>,
+    },
+    /// On a hub with herder's WireGuard on, enroll the public half of a WireGuard key this
+    /// device generated, replacing any it enrolled before; any client device. Answered with
+    /// `wireguard_enrolled`. Revoking the device drops the key. Refused with `bad_request`
+    /// for a key that is not 32 bytes of base64, and `unsupported` when WireGuard is off.
+    EnrollWireGuard {
+        /// The device's WireGuard public key, base64 as WireGuard writes keys.
+        public_key: String,
+    },
+    /// On a hub, drop the WireGuard key this device enrolled, if any; any client device.
+    /// Answered with `applied`.
+    UnenrollWireGuard,
+    /// On a hub with the Durable Object relay up, a fresh token for this device to use it;
+    /// any client device. Answered with `relay_token`. Refused with `unsupported` while the
+    /// relay is not up.
+    GetRelayToken,
 }

@@ -1149,6 +1149,17 @@ impl SessionManager {
                      herder app",
                 ));
             }
+            CommandBody::GetRemoteAccess
+            | CommandBody::SetRemoteAccess { .. }
+            | CommandBody::EnrollWireGuard { .. }
+            | CommandBody::UnenrollWireGuard
+            | CommandBody::GetRelayToken => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this machine is not a hub: herder's WireGuard and the Cloudflare relay \
+                     and tunnel are set up on the hub it is linked to",
+                ));
+            }
             CommandBody::CreateSecretSet { .. }
             | CommandBody::DeleteSecretSet { .. }
             | CommandBody::PutSecret { .. }

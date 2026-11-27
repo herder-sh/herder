@@ -1513,6 +1513,11 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             "managing secrets is for the hub's owners only; ask one of them to do it",
         ));
     }
+    if matches!(command, CommandBody::SetRemoteAccess { .. }) && role != Role::Owner {
+        return Err(forbidden(
+            "how the hub is reached from outside is for its owners to set",
+        ));
+    }
     let logins = matches!(
         command,
         CommandBody::ListProviderLogins

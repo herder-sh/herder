@@ -481,6 +481,7 @@ fn hello_message(
         acked,
         cliproxyapi,
         cliproxyapi_relay,
+        relay_grant: None,
     })
 }
 
@@ -580,6 +581,7 @@ mod tests {
                     pairing_code: Some("ABCDE-FGHJK".into()),
                     attachments_cap: Some(1 << 30),
                     relay: true,
+                    cloudflare_relay: false,
                 });
                 let mut bytes = serde_json::to_vec(&hello).unwrap();
                 for (at, byte) in edits {

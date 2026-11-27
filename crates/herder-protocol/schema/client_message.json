@@ -687,6 +687,35 @@
         "resume"
       ]
     },
+    "CloudflareSettings": {
+      "description": "What a hub sets up in its owner's Cloudflare account, through the API.",
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "description": "The Cloudflare account.",
+          "type": "string"
+        },
+        "api_token": {
+          "description": "The hub secret holding the API token, put with `put_secret`: the hub reads it, and it\nnever goes back to a client nor to a host.",
+          "$ref": "#/$defs/SecretRef"
+        },
+        "relay": {
+          "description": "Whether the hub deploys and runs the Durable Object relay, on the account's\n`workers.dev` subdomain.",
+          "type": "boolean"
+        },
+        "tunnel_hostname": {
+          "description": "The hostname of the managed tunnel to the hub, in one of the account's zones, such as\n`hub.example.com`; no tunnel when absent. Once up it is one of the hub's public\naddresses.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "account_id",
+        "api_token"
+      ]
+    },
     "Command": {
       "description": "A request to change state, applied at most once per `id`.",
       "type": "object",
@@ -3303,6 +3332,81 @@
             "terminal_id",
             "data"
           ]
+        },
+        {
+          "description": "On a hub, what it offers devices away from home (`docs/remote-access.md`); any client\ndevice, with the settings for owners only. Answered with `remote_access`. It changes\nnothing, so a resend is answered afresh. Refused with `unsupported` on a daemon that is\nnot a hub.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "get_remote_access"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "On a hub, set how it is reached from outside: herder's WireGuard endpoint, and what it\nsets up in the owner's Cloudflare account. Owners only. Answered with\n`remote_access`, as applied; what it sets up is reported there as it goes. Refused with\n`bad_request` for an invalid setting, such as an `endpoint` that is not `host:port` or\nan `api_token` no secret of the hub has, and with `unsupported` on a daemon that is not\na hub.",
+          "type": "object",
+          "properties": {
+            "settings": {
+              "description": "The settings, replacing the hub's.",
+              "$ref": "#/$defs/RemoteAccessSettings"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_remote_access"
+            }
+          },
+          "required": [
+            "type",
+            "settings"
+          ]
+        },
+        {
+          "description": "On a hub with herder's WireGuard on, enroll the public half of a WireGuard key this\ndevice generated, replacing any it enrolled before; any client device. Answered with\n`wireguard_enrolled`. Revoking the device drops the key. Refused with `bad_request`\nfor a key that is not 32 bytes of base64, and `unsupported` when WireGuard is off.",
+          "type": "object",
+          "properties": {
+            "public_key": {
+              "description": "The device's WireGuard public key, base64 as WireGuard writes keys.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "enroll_wire_guard"
+            }
+          },
+          "required": [
+            "type",
+            "public_key"
+          ]
+        },
+        {
+          "description": "On a hub, drop the WireGuard key this device enrolled, if any; any client device.\nAnswered with `applied`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "unenroll_wire_guard"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "On a hub with the Durable Object relay up, a fresh token for this device to use it;\nany client device. Answered with `relay_token`. Refused with `unsupported` while the\nrelay is not up.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "get_relay_token"
+            }
+          },
+          "required": [
+            "type"
+          ]
         }
       ]
     },
@@ -5306,6 +5410,34 @@
         "project_id"
       ]
     },
+    "RemoteAccessSettings": {
+      "description": "How a hub is reached from outside, as its owners set it.",
+      "type": "object",
+      "properties": {
+        "cloudflare": {
+          "description": "What the hub sets up in the owner's Cloudflare account; nothing when absent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudflareSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wireguard": {
+          "description": "herder's WireGuard endpoint; off when absent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireGuardSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "ResourceSettings": {
       "description": "The `[resources]` table.",
       "type": "object",
@@ -5918,6 +6050,27 @@
     "UserId": {
       "description": "Identifies a named user of a daemon; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "WireGuardSettings": {
+      "description": "herder's WireGuard endpoint on a hub.",
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "description": "Where devices send to from outside, as `host:port`: the router's public name or IP\nand the port it forwards, such as `home.example.net:51820`.",
+          "type": "string"
+        },
+        "port": {
+          "description": "The UDP port the endpoint binds, on every interface; [`DEFAULT_WIREGUARD_PORT`] as a\nrule. The router forwards it to the hub.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "port",
+        "endpoint"
+      ]
     }
   }
 }

@@ -843,6 +843,23 @@ pub enum CommandResult {
         /// older ones are left.
         entries: Vec<SecretAccess>,
     },
+    /// What a hub offers devices away from home, answering `get_remote_access` and
+    /// `set_remote_access`.
+    RemoteAccess {
+        /// The offer, and for owners the settings.
+        remote_access: Box<crate::RemoteAccess>,
+    },
+    /// This device's enrollment with the hub's WireGuard endpoint, answering
+    /// `enroll_wireguard`.
+    WireGuardEnrolled {
+        /// What the device needs, with the private key it kept, to reach the hub.
+        enrollment: crate::WireGuardEnrollment,
+    },
+    /// A token for the hub's Durable Object relay, answering `get_relay_token`.
+    RelayToken {
+        /// The relay and the token.
+        grant: crate::RelayGrant,
+    },
 }
 
 /// The hub a host is linked to, as its `[hub]` table names it.

@@ -13,8 +13,15 @@
 //!
 //! A third form, `hub://<hub's host id>`, is the route through a hub this device is
 //! signed in to, which forwards the connection to the machine ([`crate::relay`]). The client
-//! adds it to a machine's addresses once the hub says it relays there; it sorts last of
-//! all, as it takes two hops, the hub's own route and the machine's to the hub.
+//! adds it to a machine's addresses once the hub says it relays there; it sorts after the
+//! machine's own routes, as it takes two hops, the hub's own route and the machine's to the
+//! hub.
+//!
+//! Every address is of a [`RouteKind`], and that is the order they sort in
+//! (`docs/remote-access.md`): the home network, the user's own VPN through herder's WireGuard
+//! (`wg://<tunnel>/<host:port>`), other direct addresses, a system VPN such as Tailscale, a hub
+//! through herder's WireGuard on it (`wg://hub/<ip:port>`), a tunnel's URL, a hub's relay, and
+//! last the Durable Object relay (`relay+wss://<host>`).
 //!
 //! A daemon's hello names where it is reached: the addresses it listens on, then the public
 //! addresses its owner set (a port forward, a TCP proxy, a VPN, a tunnel's URL). The client
@@ -25,6 +32,8 @@
 use std::net::{IpAddr, SocketAddr};
 
 use herder_protocol::HostId;
+
+use crate::RouteKind;
 
 /// The port a daemon listens on unless configured otherwise, as `herder daemon` has it.
 const DEFAULT_PORT: u16 = 7447;
@@ -205,23 +214,34 @@ fn host(address: &str) -> &str {
     host.trim_matches(['[', ']'])
 }
 
-/// 0 for a private network address, 1 for any other, 2 for a Tailscale one, 3 for a tunnel,
-/// 4 for the route through a hub.
-fn rank(address: &str) -> u8 {
-    if hub(address).is_some() {
-        return 4;
+/// What carries a connection to `address` (`docs/remote-access.md`, The routes).
+pub(crate) fn kind(address: &str) -> RouteKind {
+    if let Some(hub) = hub(address) {
+        return RouteKind::Hub { hub };
+    }
+    if address.starts_with(RELAY) || address.starts_with(RELAY_PLAIN) {
+        return RouteKind::CloudflareRelay;
+    }
+    if let Some((tunnel, _)) = wireguard(address) {
+        return if tunnel == crate::wireguard::HUB {
+            RouteKind::HubWireGuard
+        } else {
+            RouteKind::OwnVpn {
+                tunnel: tunnel.to_owned(),
+            }
+        };
     }
     if is_tunnel(address) {
-        return 3;
+        return RouteKind::Tunnel;
     }
     let host = host(address);
     let Ok(ip) = host.parse::<IpAddr>() else {
         return if host.ends_with(".ts.net") {
-            2
+            RouteKind::SystemVpn
         } else if host.ends_with(".local") || !host.contains('.') {
-            0
+            RouteKind::HomeNetwork
         } else {
-            1
+            RouteKind::Direct
         };
     };
     match ip {
@@ -229,25 +249,53 @@ fn rank(address: &str) -> u8 {
             let [a, b, ..] = ip.octets();
             // Tailscale hands out addresses from the CGNAT range, 100.64.0.0/10.
             if a == 100 && b & 0xc0 == 64 {
-                2
+                RouteKind::SystemVpn
             } else if ip.is_private() || ip.is_loopback() || ip.is_link_local() {
-                0
+                RouteKind::HomeNetwork
             } else {
-                1
+                RouteKind::Direct
             }
         }
         IpAddr::V6(ip) => {
             let segments = ip.segments();
             // Tailscale's unique local prefix, fd7a:115c:a1e0::/48.
             if segments[..3] == [0xfd7a, 0x115c, 0xa1e0] {
-                2
+                RouteKind::SystemVpn
             } else if ip.is_unique_local() || ip.is_loopback() || ip.is_unicast_link_local() {
-                0
+                RouteKind::HomeNetwork
             } else {
-                1
+                RouteKind::Direct
             }
         }
     }
+}
+
+/// Where `address` sorts among a machine's addresses: the order of [`RouteKind`]'s variants.
+fn rank(address: &str) -> u8 {
+    match kind(address) {
+        RouteKind::HomeNetwork => 0,
+        RouteKind::OwnVpn { .. } => 1,
+        RouteKind::Direct => 2,
+        RouteKind::SystemVpn => 3,
+        RouteKind::HubWireGuard => 4,
+        RouteKind::Tunnel => 5,
+        RouteKind::Hub { .. } => 6,
+        RouteKind::CloudflareRelay => 7,
+    }
+}
+
+/// What the address of a route through a WireGuard tunnel of herder's starts with.
+const WIREGUARD: &str = "wg://";
+
+/// What the address of a route through a Durable Object relay starts with, and with `ws://`
+/// inside, as a local relay in a test has it.
+const RELAY: &str = "relay+wss://";
+const RELAY_PLAIN: &str = "relay+ws://";
+
+/// The tunnel and the `host:port` inside it, for the address of a route through a WireGuard
+/// tunnel of herder's, `wg://<tunnel>/<host:port>`.
+pub(crate) fn wireguard(address: &str) -> Option<(&str, &str)> {
+    address.strip_prefix(WIREGUARD)?.split_once('/')
 }
 
 #[cfg(test)]
@@ -471,7 +519,50 @@ mod tests {
             ]
         );
         // 100.128.0.0 is past the CGNAT range.
-        assert_eq!(rank("100.128.0.1:7447"), 1);
+        assert_eq!(kind("100.128.0.1:7447"), RouteKind::Direct);
+    }
+
+    #[test]
+    fn routes_sort_best_first_by_kind() {
+        let addresses = [
+            "relay+wss://herder-relay.example.workers.dev",
+            "hub://h",
+            "wss://box.example.com",
+            "wg://hub/10.247.0.1:7447",
+            "100.101.102.103:7447",
+            "203.0.113.7:7447",
+            "wg://home/192.168.1.5:7447",
+            "192.168.1.5:7447",
+        ];
+        let ordered = default_order(addresses.map(str::to_owned).to_vec());
+        let reversed: Vec<_> = addresses.iter().rev().map(|a| (*a).to_owned()).collect();
+        assert_eq!(ordered, reversed);
+        let kinds: Vec<RouteKind> = ordered.iter().map(|a| kind(a)).collect();
+        assert_eq!(
+            kinds,
+            [
+                RouteKind::HomeNetwork,
+                RouteKind::OwnVpn {
+                    tunnel: "home".into()
+                },
+                RouteKind::Direct,
+                RouteKind::SystemVpn,
+                RouteKind::HubWireGuard,
+                RouteKind::Tunnel,
+                RouteKind::Hub {
+                    hub: HostId::new("h")
+                },
+                RouteKind::CloudflareRelay,
+            ]
+        );
+        assert_eq!(
+            wireguard("wg://home/192.168.1.5:7447"),
+            Some(("home", "192.168.1.5:7447"))
+        );
+        assert_eq!(
+            kind("relay+ws://127.0.0.1:8787"),
+            RouteKind::CloudflareRelay
+        );
     }
 
     #[test]

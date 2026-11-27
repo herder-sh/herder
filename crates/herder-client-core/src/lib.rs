@@ -172,6 +172,7 @@ mod skills;
 mod supervisor;
 mod terminal;
 mod tunnel;
+mod wireguard;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -203,11 +204,12 @@ use profile::SavedMachine;
 pub use sign_in::PendingSignIn;
 use supervisor::{Subscription, Supervisor};
 pub use terminal::{TerminalEvent, TerminalStream};
+pub use wireguard::{WireGuardKind, WireGuardTunnel};
 
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 23;
+pub const CLIENT_API_VERSION: u32 = 24;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -350,6 +352,61 @@ pub struct Machine {
     /// values stay in the profile.
     #[serde(default)]
     pub address_headers: HashMap<String, Vec<String>>,
+    /// The one address of `addresses` dialled, when the user pinned one with
+    /// [`Client::set_route`].
+    #[serde(default)]
+    pub pinned_address: Option<String>,
+    /// The addresses of `addresses` the user disabled with [`Client::set_route`]: never
+    /// dialled.
+    #[serde(default)]
+    pub disabled_addresses: Vec<String>,
+}
+
+/// What carries a connection to one of a machine's addresses, best first: the order
+/// addresses are sorted in (`docs/remote-access.md`, The routes).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RouteKind {
+    /// The machine's own network: a private, link-local or `.local` address.
+    HomeNetwork,
+    /// The user's own VPN, through herder's WireGuard client: `wg://<tunnel>/<address>`.
+    OwnVpn {
+        /// The imported tunnel's id ([`WireGuardTunnel::id`]).
+        tunnel: String,
+    },
+    /// A public address of the machine's own: a port forward or a TCP proxy.
+    Direct,
+    /// A VPN the operating system runs, such as Tailscale.
+    SystemVpn,
+    /// A hub through herder's own WireGuard on it: `wg://hub/<address>`, among the hub's
+    /// addresses.
+    HubWireGuard,
+    /// A tunnel's `wss://` URL, such as a Cloudflare Tunnel's.
+    Tunnel,
+    /// Through a hub's relay: `hub://<hub host id>`.
+    Hub {
+        /// The hub.
+        hub: HostId,
+    },
+    /// Through the Durable Object relay in the owner's Cloudflare account:
+    /// `relay+wss://<worker host>`.
+    CloudflareRelay,
+}
+
+/// What [`Client::set_route`] makes of one of a machine's addresses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RouteChoice {
+    /// Raced with the others in its place: the default.
+    Auto,
+    /// The only address dialled.
+    Pinned,
+    /// Never dialled.
+    Disabled,
+}
+
+/// What carries a connection to `address`, one of a machine's addresses, for an app to name
+/// the route.
+pub fn route_kind(address: String) -> RouteKind {
+    address::kind(&address)
 }
 
 /// What [`Authenticator::assert`] returns.
@@ -733,10 +790,11 @@ impl Client {
         self.machine(&host_id)?;
         self.update(|all| {
             let machine = saved_mut(all, &host_id)?;
-            // An address dropped takes what it sent with it.
+            // An address dropped takes what it sent, and the user's choice about it, with it.
             machine
                 .headers
                 .retain(|address, _| normalized.contains(address));
+            machine.routes.keep(&normalized);
             machine.addresses = normalized;
             Ok(())
         })
@@ -781,6 +839,108 @@ impl Client {
                 machine.headers.insert(address, sent);
             }
             Ok(())
+        })
+    }
+
+    /// Makes `address`, one of the machine's addresses, the only one dialled
+    /// ([`RouteChoice::Pinned`]), never dialled ([`RouteChoice::Disabled`]), or raced in its
+    /// place again ([`RouteChoice::Auto`]), from the next connection on, and saves that.
+    /// Pinning one unpins any other; a disabled address stays among the addresses, so a
+    /// daemon's hello does not add it back. Refused with [`Error::Local`] for an address the
+    /// machine does not have, and for disabling the last address that is not.
+    pub fn set_route(
+        &self,
+        host_id: HostId,
+        address: String,
+        choice: RouteChoice,
+    ) -> Result<(), Error> {
+        let local = |message| Error::Local { message };
+        let address = address::normalize(&address).map_err(local)?;
+        self.machine(&host_id)?;
+        self.update(|all| {
+            let machine = saved_mut(all, &host_id)?;
+            if !machine.addresses.contains(&address) {
+                return Err(local(format!("{address} is not one of its addresses")));
+            }
+            let routes = &mut machine.routes;
+            routes.disabled.retain(|held| *held != address);
+            if routes.pinned.as_ref() == Some(&address) {
+                routes.pinned = None;
+            }
+            match choice {
+                RouteChoice::Auto => {}
+                RouteChoice::Pinned => routes.pinned = Some(address),
+                RouteChoice::Disabled => {
+                    routes.disabled.push(address);
+                    if routes.dialled(&machine.addresses).is_empty() {
+                        return Err(local(
+                            "a machine needs at least one address that is not disabled".to_owned(),
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Imports `config`, a WireGuard config as a router exports it (the text of a `.conf`
+    /// file or of its QR code), as the tunnel `name`, replacing one imported under the same
+    /// name: herder's own connections reach machines' home addresses through it, away from
+    /// home, as the "own VPN" route. Nothing else on the device uses it. The config, its
+    /// private key included, is kept in this device's profile only. Refused with
+    /// [`Error::Local`] for a config herder cannot use, saying why.
+    pub fn import_wireguard(&self, name: String, config: String) -> Result<WireGuardTunnel, Error> {
+        self.live()?;
+        let tunnel =
+            wireguard::parse(&name, &config).map_err(|message| Error::Local { message })?;
+        let view = tunnel.view(false);
+        wireguard::update(&self.inner.config_dir, |tunnels| {
+            tunnels.retain(|held| held.id != tunnel.id);
+            tunnels.push(tunnel);
+            Ok(())
+        })?;
+        self.inner.changed.send_modify(|version| *version += 1);
+        Ok(view)
+    }
+
+    /// The WireGuard tunnels herder's connections may run through: the imported ones, in the
+    /// order they were imported, then each hub's that this device enrolled with.
+    pub fn wireguard_tunnels(&self) -> Result<Vec<WireGuardTunnel>, Error> {
+        Ok(wireguard::load(&self.inner.config_dir)?
+            .iter()
+            .map(|tunnel| tunnel.view(false))
+            .collect())
+    }
+
+    /// Removes the imported tunnel `id`, and its private key with it. Refused with
+    /// [`Error::Local`] when no tunnel has that id.
+    pub fn remove_wireguard(&self, id: String) -> Result<(), Error> {
+        self.live()?;
+        wireguard::update(&self.inner.config_dir, |tunnels| {
+            let count = tunnels.len();
+            tunnels.retain(|held| held.id != id);
+            if tunnels.len() == count {
+                return Err(Error::Local {
+                    message: format!("no WireGuard tunnel {id}"),
+                });
+            }
+            Ok(())
+        })?;
+        self.inner.changed.send_modify(|version| *version += 1);
+        Ok(())
+    }
+
+    /// Turns herder's own WireGuard on the hub `host_id` on or off for this device: on, it
+    /// generates a key on the device, enrolls its public half with the hub
+    /// (`enroll_wireguard`) and adds the hub's `wg://hub/` address; off, it unenrolls and
+    /// deletes the key and the address. The hub must offer it (`get_remote_access`).
+    pub async fn set_hub_wireguard(&self, host_id: HostId, enabled: bool) -> Result<(), Error> {
+        self.live()?;
+        self.machine(&host_id)?;
+        // P27.4 fills this in (docs/remote-access.md).
+        let _ = enabled;
+        Err(Error::Local {
+            message: "herder's WireGuard on a hub is not available in this version yet".to_owned(),
         })
     }
 
@@ -1306,6 +1466,9 @@ impl Inner {
                 if current.headers != saved.headers {
                     machine.set_headers(saved.headers);
                 }
+                if current.routes != saved.routes {
+                    machine.set_routes(saved.routes);
+                }
                 changed |= index != 0;
                 machines.push(machine);
                 continue;
@@ -1438,6 +1601,7 @@ pub(crate) fn unsaved(
         fingerprint: fingerprint.to_ascii_lowercase(),
         advertised: Vec::new(),
         headers: Default::default(),
+        routes: Default::default(),
         device_key: device.to_pem().to_owned(),
     };
     Ok((saved, device))
@@ -1497,6 +1661,7 @@ mod tests {
             fingerprint: "00".repeat(32),
             advertised: Vec::new(),
             headers: Default::default(),
+            routes: Default::default(),
             device_key: DeviceKey::generate().unwrap().to_pem().to_owned(),
         };
         profile::save(tmp.path(), &[machine]).unwrap();

@@ -9,6 +9,31 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+fn remote_access_settings() -> RemoteAccessSettings {
+    RemoteAccessSettings {
+        wireguard: Some(WireGuardSettings {
+            port: DEFAULT_WIREGUARD_PORT,
+            endpoint: "home.example.net:51820".into(),
+        }),
+        cloudflare: Some(CloudflareSettings {
+            account_id: "023e105f4ecef8ad9ca31a8372d0c353".into(),
+            api_token: "herder/CLOUDFLARE_API_TOKEN".parse().unwrap(),
+            relay: true,
+            tunnel_hostname: Some("hub.example.com".into()),
+        }),
+    }
+}
+
+fn relay_grant() -> RelayGrant {
+    RelayGrant {
+        url: "https://herder-relay.example.workers.dev".into(),
+        token: "v1.eyJzdWIiOiIwMUo5REVWSUNFIiwia2luZCI6ImNsaWVudCIsImV4cCI6MTc5NjAwMDAwMH0.\
+                c2lnbmF0dXJl"
+            .into(),
+        expires_at: at(),
+    }
+}
+
 fn at() -> Timestamp {
     "2026-10-02T12:00:00Z".parse().unwrap()
 }
@@ -828,6 +853,18 @@ fn client_fixtures() -> Vec<ClientMessage> {
             terminal_id: terminal_id(),
             data: Bytes(b"ls\r\x1b[A\xff".to_vec()),
         }),
+        command(CommandBody::GetRemoteAccess),
+        command(CommandBody::SetRemoteAccess {
+            settings: Box::new(remote_access_settings()),
+        }),
+        command(CommandBody::SetRemoteAccess {
+            settings: Box::default(),
+        }),
+        command(CommandBody::EnrollWireGuard {
+            public_key: "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=".into(),
+        }),
+        command(CommandBody::UnenrollWireGuard),
+        command(CommandBody::GetRelayToken),
     ];
     for mode in [
         PermissionMode::ReadOnly,
@@ -1508,6 +1545,58 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 login_id: "2c3aa71dfa309d66262b1a34202481ea".into(),
                 url: "https://claude.ai/oauth/authorize?state=2c3aa71dfa309d66262b1a34202481ea"
                     .into(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::RemoteAccess {
+                remote_access: Box::new(RemoteAccess {
+                    settings: Some(remote_access_settings()),
+                    wireguard: Some(WireGuardOffer {
+                        endpoint: "home.example.net:51820".into(),
+                        enrolled: true,
+                    }),
+                    relay: Some(RouteStatus {
+                        url: "https://herder-relay.example.workers.dev".into(),
+                        state: RouteState::Up,
+                        error: None,
+                    }),
+                    tunnel: Some(RouteStatus {
+                        url: String::new(),
+                        state: RouteState::Failed,
+                        error: Some("the API token may not edit DNS in example.com".into()),
+                    }),
+                }),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::RemoteAccess {
+                remote_access: Box::new(RemoteAccess {
+                    tunnel: Some(RouteStatus {
+                        url: "wss://hub.example.com".into(),
+                        state: RouteState::SettingUp,
+                        error: None,
+                    }),
+                    ..RemoteAccess::default()
+                }),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::WireGuardEnrolled {
+                enrollment: WireGuardEnrollment {
+                    endpoint: "home.example.net:51820".into(),
+                    hub_public_key: "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=".into(),
+                    address: "10.247.0.2".into(),
+                    hub_address: "10.247.0.1:7447".into(),
+                },
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::RelayToken {
+                grant: relay_grant(),
             },
         },
         ServerMessage::CommandAccepted {
@@ -3958,6 +4047,7 @@ fn host_fixtures() -> Vec<HostMessage> {
             pairing_code: Some("483-921".into()),
             attachments_cap: Some(1 << 30),
             relay: true,
+            cloudflare_relay: true,
         }),
         HostMessage::Hello(HostHello {
             replication_version: REPLICATION_VERSION,
@@ -3967,6 +4057,7 @@ fn host_fixtures() -> Vec<HostMessage> {
             pairing_code: None,
             attachments_cap: None,
             relay: false,
+            cloudflare_relay: false,
         }),
         HostMessage::Session(SessionSummary {
             parent: Some(SessionId::new("01J9PRIMARY")),
@@ -4093,6 +4184,7 @@ fn hub_fixtures() -> Vec<HubMessage> {
             acked: vec![cursor(12)],
             cliproxyapi: Some("https://cpa.lan:8317".into()),
             cliproxyapi_relay: false,
+            relay_grant: None,
         }),
         HubMessage::Hello(HubHello {
             replication_version: REPLICATION_VERSION,
@@ -4100,7 +4192,12 @@ fn hub_fixtures() -> Vec<HubMessage> {
             acked: Vec::new(),
             cliproxyapi: None,
             cliproxyapi_relay: true,
+            relay_grant: Some(relay_grant()),
         }),
+        HubMessage::RelayGrant {
+            grant: Some(relay_grant()),
+        },
+        HubMessage::RelayGrant { grant: None },
         HubMessage::RelayOpen {
             stream_id: "01J9STREAM".into(),
             device_id: DeviceId::new("01J9DEVICE"),
@@ -4294,8 +4391,15 @@ fn relay_fields_are_absent_unless_set() {
         pairing_code: None,
         attachments_cap: None,
         relay: false,
+        cloudflare_relay: false,
     };
     assert!(serde_json::to_value(&hello).unwrap().get("relay").is_none());
+    assert!(
+        serde_json::to_value(&hello)
+            .unwrap()
+            .get("cloudflare_relay")
+            .is_none()
+    );
     let old: HostHello = serde_json::from_value(serde_json::to_value(&hello).unwrap()).unwrap();
     assert!(!old.relay);
     let hello = HubHello {
@@ -4304,9 +4408,11 @@ fn relay_fields_are_absent_unless_set() {
         acked: Vec::new(),
         cliproxyapi: None,
         cliproxyapi_relay: false,
+        relay_grant: None,
     };
     let value = serde_json::to_value(&hello).unwrap();
     assert!(value.get("cliproxyapi_relay").is_none());
+    assert!(value.get("relay_grant").is_none());
 }
 
 #[test]
