@@ -48,6 +48,7 @@ jobs:
     outputs:
       key: ${{ steps.key.outputs.key }}
       hit: ${{ steps.cache.outputs.cache-hit }}
+      ios-shards: ${{ steps.shards.outputs.shards }}
     steps:
       - uses: actions/checkout@v7
       - id: key
@@ -62,6 +63,12 @@ jobs:
             target/debug/examples/fake_daemon
           key: ${{ steps.key.outputs.key }}
           lookup-only: true
+      # Fails, before any macOS runner starts, when a UI test class is in no shard.
+      - id: shards
+        name: Split the iOS UI tests into shards
+        run: |
+          shards=$(apple/scripts/ios-ui-shards.sh)
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
 
   bindings:
     name: bindings
@@ -74,7 +81,11 @@ jobs:
         run: |
           rustup show active-toolchain || rustup toolchain install
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
+      # Saved from main alone: a PR's 1 GB Rust cache pushes the repo past GitHub's 10 GB limit
+      # and evicts the small bindings and fake daemon entry the jobs below restore.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the bindings, the xcframework and the fake daemon
         run: apple/scripts/build-ffi.sh
       - name: Run the Swift sample against the fake daemon
@@ -90,13 +101,15 @@ jobs:
             target/debug/examples/fake_daemon
           key: ${{ needs.key.outputs.key }}
 
-  ios:
-    name: ios
+  # The iOS UI tests (apple/UITests) build once, here, and run in shards side by side, each on its
+  # own runner and simulator: one runner takes 10 to 20 minutes for them all.
+  ios-build:
+    name: ios-build
     needs: [key, bindings]
     # Also when the bindings job is skipped on a cache hit.
     if: ${{ !failure() && !cancelled() }}
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions/cache/restore@v6
@@ -112,29 +125,71 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate --spec apple/project.yml
+      - name: Build the iOS app and its UI tests
+        run: >-
+          xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj
+          -scheme herder-iOS -destination "generic/platform=iOS Simulator" -derivedDataPath "$RUNNER_TEMP/DerivedData"
+          COMPILER_INDEX_STORE_ENABLE=NO
+      # Tarred, as an artifact keeps neither the app bundles' symlinks nor their permissions. The
+      # .xctestrun file names the products relative to its own folder, so they run from anywhere.
+      - name: Pack the app and its UI tests
+        run: tar -czf "$RUNNER_TEMP/ios-products.tgz" -C "$RUNNER_TEMP/DerivedData/Build" Products
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-products
+          path: ${{ runner.temp }}/ios-products.tgz
+          compression-level: 0
+          retention-days: 1
+
+  ios:
+    name: ios (${{ matrix.shard }})
+    needs: [key, bindings, ios-build]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.key.outputs.ios-shards) }}
+    steps:
       - name: Pick and boot a simulator
         run: |
           device=$(xcrun simctl list devices available -j |
             jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
           echo "device=$device" >> "$GITHUB_ENV"
-          # Booted while the app builds, so the first test does not wait out a cold boot.
+          # Booted first, so the tests do not wait out a cold boot.
           xcrun simctl boot "$device"
           # The photo library loads on its first use, which can take longer than the photo test
-          # waits: the picker then shows only "Loading...". Opening Photos loads it during the build.
+          # waits: the picker then shows only "Loading...". Opening Photos loads it during the boot.
           nohup sh -c "xcrun simctl bootstatus '$device' && xcrun simctl launch '$device' com.apple.mobileslideshow" \
             > "$RUNNER_TEMP/photos-warmup.log" 2>&1 &
-      - name: Build the iOS app and its UI tests
-        run: >-
-          xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj
-          -scheme herder-iOS -destination "platform=iOS Simulator,id=$device" COMPILER_INDEX_STORE_ENABLE=NO
+      - uses: actions/checkout@v7
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            crates/herder-ffi/swift/build
+            target/debug/examples/fake_daemon
+          key: ${{ needs.key.outputs.key }}
+          fail-on-cache-miss: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: ios-products
+          path: ${{ runner.temp }}
+      - name: Unpack the app and its UI tests
+        run: |
+          tar -xzf "$RUNNER_TEMP/ios-products.tgz" -C "$RUNNER_TEMP"
+          xctestrun=$(ls "$RUNNER_TEMP"/Products/*.xctestrun)
+          echo "xctestrun=$xctestrun" >> "$GITHUB_ENV"
       # Apart from the tests' own limit: a cold boot's data migration alone can take 7 minutes.
       - name: Wait for the simulator to boot
         timeout-minutes: 15
         run: xcrun simctl bootstatus "$device"
       - name: Test the iOS app on a simulator against the fake daemons
-        # A UI test that loses its way can leave xcodebuild waiting forever. A healthy run takes
-        # 15 to 20 minutes, writing the result bundle included, so stop at 30.
-        timeout-minutes: 30
+        # A UI test that loses its way can leave xcodebuild waiting forever. A healthy shard takes 5
+        # to 8 minutes, writing the result bundle included, so stop at 20.
+        timeout-minutes: 20
+        env:
+          ONLY_TESTING: ${{ matrix.only }}
         run: |
           # The photo test picks the newest photo, which the picker shows first. The simulator's own
           # photos can still be loading when it runs, and the picker then never hands one over;
@@ -156,8 +211,9 @@ jobs:
           for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_own.out" ] && break; sleep 1; done
           [ -s "$RUNNER_TEMP/fake_own.out" ] || { echo "the fake machine to own did not start"; exit 1; }
           # After a slow first boot the simulator can refuse to launch the test runner ("Unknown
-          # application display identifier"), before any test runs. Nothing is spent by then, so
-          # try again, a few times. Waiting does not clear it, but a reboot does.
+          # application display identifier"), or xcodebuild not find the booted simulator, before
+          # any test runs. Nothing is spent by then, so try again, a few times. Waiting does not
+          # clear it, but a reboot does.
           for attempt in 1 2 3; do
             rm -rf "$RUNNER_TEMP/ios-tests.xcresult"
             TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
@@ -165,14 +221,15 @@ jobs:
             TEST_RUNNER_HERDER_WAITING_SESSION=$(sed -n 9p "$RUNNER_TEMP/fake_daemon.out") \
             TEST_RUNNER_HERDER_HUB_LINK=$(head -1 "$RUNNER_TEMP/fake_hub.out") \
             TEST_RUNNER_HERDER_OWN_LINK=$(head -1 "$RUNNER_TEMP/fake_own.out") \
-              xcodebuild test-without-building -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
+              xcodebuild test-without-building -quiet -xctestrun "$xctestrun" $ONLY_TESTING \
               -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
               2>&1 | tee "$RUNNER_TEMP/ios-tests.log"
             status=${PIPESTATUS[0]}
             [ "$status" -eq 0 ] && exit 0
-            grep -q "Failed to install or launch the test runner" "$RUNNER_TEMP/ios-tests.log" || exit "$status"
+            grep -qE "Failed to install or launch the test runner|The requested device could not be found" \
+              "$RUNNER_TEMP/ios-tests.log" || exit "$status"
             echo "::warning::The simulator did not launch the test runner (attempt $attempt)"
-            xcrun simctl shutdown "$device"
+            xcrun simctl shutdown "$device" || true
             xcrun simctl boot "$device"
             xcrun simctl bootstatus "$device"
           done
@@ -190,17 +247,52 @@ jobs:
           for file in "$RUNNER_TEMP"/attachments/*.txt; do
             if [ -f "$file" ]; then echo "::group::$(basename "$file")"; cat "$file"; echo "::endgroup::"; fi
           done
+      # Shows each shard ran its tests, and how long each took, to rebalance the shards by
+      # (apple/scripts/ios-ui-shards.sh).
+      - name: Report the UI tests this shard ran
+        if: always()
+        run: |
+          bundle="$RUNNER_TEMP/ios-tests.xcresult"
+          [ -d "$bundle" ] || exit 0
+          {
+            echo "| UI test | result | time |"
+            echo "| --- | --- | --- |"
+            xcrun xcresulttool get test-results tests --path "$bundle" |
+              jq -r '.. | objects | select(.nodeType? == "Test Case") | "| \(.nodeIdentifier // .name) | \(.result) | \(.duration) |"'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          total=$(xcrun xcresulttool get test-results summary --path "$bundle" | jq '.totalTestCount')
+          [ "$total" -gt 0 ] || { echo "the shard ran no UI tests"; exit 1; }
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
-          name: ios-tests-xcresult
+          name: ios-tests-xcresult-${{ matrix.shard }}
           path: ${{ runner.temp }}/ios-tests.xcresult
           if-no-files-found: ignore
+
+  # Only ships, so main alone builds it.
+  ios-device:
+    name: ios-device
+    needs: [key, bindings]
+    if: ${{ !failure() && !cancelled() && github.event_name == 'push' }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            crates/herder-ffi/swift/build
+            target/debug/examples/fake_daemon
+          key: ${{ needs.key.outputs.key }}
+          fail-on-cache-miss: true
+      - name: Install the Metal toolchain (SwiftTerm's renderer needs it)
+        run: xcodebuild -downloadComponent MetalToolchain
       - name: Build the iOS app for devices
-        if: github.event_name == 'push'
-        run: >-
-          xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS
-          -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec apple/project.yml
+          xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
+            -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO
 
   # The Mac UI tests (apple/MacUITests) on the demo fleet: selecting and copying transcript text
   # with the mouse, which no log shows going wrong.
