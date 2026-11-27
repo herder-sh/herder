@@ -694,7 +694,8 @@ public final class Fleet {
     /// given, and returns it.
     func createSession(
         on hostId: HostId, repo: String?, projectId: String?, chat: Bool = false, accountId: AccountId, model: String,
-        mode: PermissionMode, prompt: String, images: [Herder.Image] = [], files: [PromptFile] = []
+        mode: PermissionMode, prompt: String, images: [Herder.Image] = [], files: [PromptFile] = [],
+        created: () -> Void = {}
     ) async throws -> SessionKey {
         let result = try await client.send(
             hostId: hostId,
@@ -705,18 +706,21 @@ public final class Fleet {
             throw HerderError.Local(detail: "the machine did not create a session")
         }
         let key = SessionKey(hostId: hostId, sessionId: sessionId)
+        track(key)
+        created()
         if !prompt.isEmpty || !images.isEmpty || !files.isEmpty {
             // Through the outbox, as any prompt: the machine journals the first one only once
-            // its CLI is up, and till then the new session would show no turns.
-            track(key)
+            // its CLI is up, and till then the new session would show no turns. The outbox
+            // takes it before `submit` first waits, so the session is never listed without it.
             await submit(prompt, images: images, files: files, to: key)
         }
         return key
     }
 
     /// Starts a session from a draft in the background, so the draft is free to close and
-    /// another to start meanwhile: it is listed in `starting` until its machine creates it. A
-    /// failure puts the prompt back in the draft, kept in `drafts`, and is toasted.
+    /// another to start meanwhile: it is listed in `starting` until its machine creates it, when
+    /// the session's own row, titled by the prompt on its way, takes its place. A failure puts
+    /// the prompt back in the draft, kept in `drafts`, and is toasted.
     func start(
         _ draft: Draft, accountId: AccountId, model: String, mode: PermissionMode, prompt: String,
         images: [Herder.Image] = [], files: [PromptFile] = [], drafts: PromptDrafts = .shared
@@ -729,7 +733,7 @@ public final class Fleet {
                 return .success(try await createSession(
                     on: draft.hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId,
                     chat: draft.isChat, accountId: accountId, model: model, mode: mode, prompt: prompt,
-                    images: images, files: files))
+                    images: images, files: files, created: { starting.removeAll { $0.id == pending.id } }))
             } catch {
                 drafts.restore(PromptDrafts.Content(text: prompt, images: images, files: files, draft: draft),
                                for: draft.key)

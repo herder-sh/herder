@@ -444,8 +444,10 @@ struct Lists: Equatable {
         func summary(now: Date, children: [SessionKey: [Entry]]) -> SessionSummary {
             let kids = children[key] ?? []
             return SessionSummary(
-                // The list's title stands in until the session's own events have loaded.
-                key: key, title: model.titled ?? head.title ?? model.title ?? head.task ?? "Session …\(key.sessionId.suffix(6))",
+                // The list's title stands in until the session's own events have loaded; the
+                // prompt this device sent, before the machine has journaled anything.
+                key: key, title: model.titled ?? head.title ?? model.title ?? head.task
+                    ?? model.outbox.first.map { firstLine($0.text) } ?? "Session …\(key.sessionId.suffix(6))",
                 project: projectId.map { String($0.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? "") } ?? "",
                 projectId: projectId, branch: model.branch ?? "", worktree: model.worktree ?? "", machine: machineName,
                 machineOffline: host.map { !$0.online } ?? false, fromHub: host != nil,
