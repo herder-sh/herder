@@ -1883,6 +1883,61 @@ fn a_bloated_link_is_kept() {
     run(slow_network(35, &[MOBILE, BLOATED]));
 }
 
+/// The phone's buffers fill with another app's uploads until a round trip takes 6 s, longer
+/// than a connection on a good link is given to answer: the connection, whose pongs measured
+/// the round trips growing, is kept. Then it dies there with no FIN, and is still found dead
+/// within a ping's interval and the most silence any connection is given.
+#[test]
+fn a_link_bloated_until_a_round_trip_takes_6_s_is_kept_and_found_dead_in_time() {
+    run(async {
+        let mut world = World::start(36, 4, None).await;
+        world.spawn_user(36, 4);
+        world.trouble(Trouble::Link(MOBILE)).await;
+        tokio::time::sleep(secs(30)).await;
+        let kept = world.net.accepted();
+        for latency_ms in [600, 1200, 1800, 2400, 3000] {
+            let link = Link {
+                latency_ms,
+                jitter_ms: 200,
+                ..BLOATED
+            };
+            world.trouble(Trouble::Link(link)).await;
+            tokio::time::sleep(secs(30)).await;
+        }
+        assert_eq!(
+            world.net.accepted(),
+            kept,
+            "at {:.3} s a connection that carried what it was sent was replaced",
+            world.at()
+        );
+        world.nothing_wrong();
+        let slowest = world.machine().quality.max_rtt_ms;
+        assert!(slowest > Some(5000), "{slowest:?}");
+
+        world.trouble(Trouble::Kill(Kill::Silent)).await;
+        let died = Instant::now();
+        let found = async {
+            while world.net.accepted() == kept {
+                tokio::time::sleep(ms(100)).await;
+            }
+        };
+        // The ping interval, 10 s, and the most silence a connection is given, 20 s.
+        tokio::time::timeout(secs(31), found)
+            .await
+            .expect("the dead connection was not found in time");
+        eprintln!(
+            "{:9.3} s: found dead after {:?}",
+            world.at(),
+            died.elapsed()
+        );
+        // The other app's uploads are done; a new connection is made at once.
+        world.trouble(Trouble::Link(MOBILE)).await;
+        world.allowed += 4;
+        world.shows(secs(10), "a connection", connected).await;
+        world.finish().await;
+    });
+}
+
 fn random_link(rng: &mut Rng) -> Link {
     match rng.range(1, 10) {
         1..=4 => Link {
