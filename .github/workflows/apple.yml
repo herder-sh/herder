@@ -211,8 +211,9 @@ jobs:
           for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_own.out" ] && break; sleep 1; done
           [ -s "$RUNNER_TEMP/fake_own.out" ] || { echo "the fake machine to own did not start"; exit 1; }
           # After a slow first boot the simulator can refuse to launch the test runner ("Unknown
-          # application display identifier"), before any test runs. Nothing is spent by then, so
-          # try again, a few times. Waiting does not clear it, but a reboot does.
+          # application display identifier"), or xcodebuild not find the booted simulator, before
+          # any test runs. Nothing is spent by then, so try again, a few times. Waiting does not
+          # clear it, but a reboot does.
           for attempt in 1 2 3; do
             rm -rf "$RUNNER_TEMP/ios-tests.xcresult"
             TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
@@ -225,9 +226,10 @@ jobs:
               2>&1 | tee "$RUNNER_TEMP/ios-tests.log"
             status=${PIPESTATUS[0]}
             [ "$status" -eq 0 ] && exit 0
-            grep -q "Failed to install or launch the test runner" "$RUNNER_TEMP/ios-tests.log" || exit "$status"
+            grep -qE "Failed to install or launch the test runner|The requested device could not be found" \
+              "$RUNNER_TEMP/ios-tests.log" || exit "$status"
             echo "::warning::The simulator did not launch the test runner (attempt $attempt)"
-            xcrun simctl shutdown "$device"
+            xcrun simctl shutdown "$device" || true
             xcrun simctl boot "$device"
             xcrun simctl bootstatus "$device"
           done
