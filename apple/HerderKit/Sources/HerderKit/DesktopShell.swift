@@ -432,7 +432,8 @@ struct PaneButton: View {
 }
 
 /// The sidebar: what the user works on, then the workspace's setup, the projects in the order
-/// the user chose, and the machines' health in one line at the bottom.
+/// the user chose, and at the bottom, only while open work waits on an offline machine, a line
+/// that says so.
 struct Sidebar: View {
     #if os(macOS)
     static let topBar = Theme.headerHeight
@@ -461,6 +462,12 @@ struct Sidebar: View {
     private func select(_ next: SidebarItem) {
         if item != next { session = nil }
         item = next
+    }
+
+    /// Hub, with the machine's page over it when the line names one.
+    private func openMachine(_ hostId: HostId?) {
+        select(.hub)
+        if let hostId { pages.open(.machine(hostId)) }
     }
 
     var body: some View {
@@ -550,8 +557,7 @@ struct Sidebar: View {
                 }
             }
             Spacer(minLength: 0)
-            MachinesFooter(machines: lists.machines) { select(.hub) }
-                .padding(.vertical, 10)
+            StalledWork(machines: lists.machines, open: openMachine)
         }
         .padding(.horizontal, 8)
         .frame(maxHeight: .infinity, alignment: .top)
@@ -596,111 +602,6 @@ struct Sidebar: View {
     }
 }
 
-/// The machines in one line: a dot per machine by its health and how many are not well. It
-/// opens a popover with each one's status and a way to its page, over Machines.
-struct MachinesFooter: View {
-    let machines: [MachineSummary]
-    /// Shows only the dots, stacked, for the rail.
-    var compact = false
-    let showAll: () -> Void
-    @State private var open = false
-    @Environment(\.pages) private var pages
-
-    /// "3 machines · 1 offline": the machines that run sessions, those not connected, then a
-    /// hub that is not, as Machines counts them.
-    nonisolated static func summary(_ machines: [MachineSummary]) -> String {
-        let hosts = machines.filter { !$0.hub }
-        guard !hosts.isEmpty else { return machines.isEmpty ? "No machines" : "No machines yet" }
-        var parts = [hosts.count == 1 ? "1 machine" : "\(hosts.count) machines"]
-        let offline = hosts.filter { if case .disconnected = $0.connection { true } else { false } }.count
-        let connecting = hosts.filter { $0.connection == .connecting }.count
-        if offline > 0 { parts.append("\(offline) offline") }
-        if connecting > 0 { parts.append("\(connecting) connecting") }
-        if machines.contains(where: { $0.hub && !$0.connected }) { parts.append("hub offline") }
-        return parts.joined(separator: " · ")
-    }
-
-    var body: some View {
-        let summary = Self.summary(machines)
-        Button { open.toggle() } label: {
-            Group {
-                if compact {
-                    VStack(spacing: 8) { dots }
-                        .frame(width: 38)
-                } else {
-                    HStack(spacing: 8) {
-                        HStack(spacing: 4) { dots }
-                        Text(summary).lineLimit(1)
-                        Spacer(minLength: 0)
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(Theme.secondary)
-                    .padding(.horizontal, Sidebar.inset)
-                    .frame(height: 30)
-                }
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .help(summary)
-        .accessibilityLabel(summary)
-        .accessibilityIdentifier("sidebar-machines")
-        .popover(isPresented: $open, arrowEdge: compact ? .trailing : .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                SectionHeading(title: "Machines").padding(.horizontal, 10).padding(.bottom, 4)
-                ForEach(machines) { machine in
-                    Button {
-                        open = false
-                        showAll()
-                        pages.open(.machine(machine.hostId))
-                    } label: {
-                        HStack(spacing: 10) {
-                            ConnectionMark(state: machine.connection).frame(width: 12)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(machine.name).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                                Text(Self.status(machine)).font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
-                            }
-                            Spacer(minLength: 12)
-                            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                        }
-                        .padding(.horizontal, 10)
-                        .frame(minHeight: 40)
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Open \(machine.name)")
-                    .accessibilityIdentifier("sidebar-machine-\(machine.name)")
-                }
-                Divider().padding(.vertical, 4)
-                Button {
-                    open = false
-                    showAll()
-                } label: {
-                    Text("Open Hub").foregroundStyle(Theme.link).padding(.horizontal, 10).frame(height: 28)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-            }
-            .font(.subheadline)
-            .padding(.vertical, 10)
-            .frame(width: 260)
-            .presentationCompactAdaptation(.popover)
-        }
-    }
-
-    @ViewBuilder private var dots: some View {
-        ForEach(machines) { machine in
-            ConnectionMark(state: machine.connection)
-        }
-    }
-
-    /// A machine's line in the popover: its connection, then what runs on it.
-    nonisolated static func status(_ machine: MachineSummary) -> String {
-        guard machine.connected else { return machine.connection.label }
-        return machine.running > 0 ? "\(machine.running) running" : "Idle"
-    }
-}
-
 /// The sidebar collapsed to a rail of icons, leaving the room to the session. It lists what the
 /// sidebar does, in the same order, the quiet projects folded away.
 private struct SidebarRail: View {
@@ -711,6 +612,7 @@ private struct SidebarRail: View {
     @Binding var collapsed: Bool
     let order: ProjectOrder
     let newSession: () -> Void
+    @Environment(\.pages) private var pages
 
     var body: some View {
         let lists = fleet.lists
@@ -744,9 +646,10 @@ private struct SidebarRail: View {
             }
             .scrollIndicators(.never)
             Spacer(minLength: 0)
-            MachinesFooter(machines: lists.machines, compact: true) {
+            StalledWork(machines: lists.machines, compact: true) { hostId in
                 if item != .hub { session = nil }
                 item = .hub
+                if let hostId { pages.open(.machine(hostId)) }
             }
         }
         .padding(.bottom, 14)
