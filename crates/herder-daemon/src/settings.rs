@@ -236,27 +236,53 @@ impl Settings {
 }
 
 /// Where other devices reach the daemon from outside its networks: `public_addresses`, as
-/// they are in effect now.
+/// they are in effect now, then a hub's managed tunnel while it runs.
 #[derive(Debug, Default)]
-pub struct PublicAddresses(RwLock<Vec<String>>);
+pub struct PublicAddresses {
+    configured: RwLock<Vec<String>>,
+    managed: RwLock<Option<String>>,
+}
 
 impl PublicAddresses {
     /// `addresses`, normalized as the config holds them.
     pub fn new(addresses: Vec<String>) -> Self {
-        Self(RwLock::new(addresses))
+        Self {
+            configured: RwLock::new(addresses),
+            managed: RwLock::default(),
+        }
     }
 
     /// The addresses now.
     pub fn get(&self) -> Vec<String> {
-        // Every write replaces the list whole, so a poisoned one is consistent.
-        self.0
+        // Every write replaces a value whole, so a poisoned one is consistent.
+        let mut addresses = self
+            .configured
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .clone();
+        let managed = self
+            .managed
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(managed) = managed
+            && !addresses.contains(&managed)
+        {
+            addresses.push(managed);
+        }
+        addresses
     }
 
     fn set(&self, addresses: Vec<String>) {
-        *self.0.write().unwrap_or_else(PoisonError::into_inner) = addresses;
+        *self
+            .configured
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = addresses;
+    }
+
+    /// Advertises `address`, the hub's managed tunnel's, after the configured ones; or stops.
+    pub(crate) fn set_managed(&self, address: Option<String>) {
+        *self.managed.write().unwrap_or_else(PoisonError::into_inner) = address;
     }
 }
 

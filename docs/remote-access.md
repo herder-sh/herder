@@ -279,7 +279,8 @@ Durable Object relay when granted one), `HubHello::relay_grant: Option<RelayGran
   local `workerd` relays a session end to end in a test, connections without a valid
   token (missing, expired, wrong kind or host) are refused, tokens renew, and the
   `relay+wss://` route ranks last as designed.
-- **P27.6 · Managed Cloudflare Tunnel for the hub.** Unchanged, with the settings above:
+- **P27.6 · Managed Cloudflare Tunnel for the hub.** Done (`herder-daemon::hub::cloudflare`,
+  `hub::remote_access`, which keeps the settings for every route): with the settings above:
   done when, with a token and `tunnel_hostname`, herder sets up, repairs and removes the
   tunnel and hostname (mocked API), the hub runs `cloudflared` and publishes the hostname
   as a public address, `RemoteAccess::tunnel` reports its state, and docs cover it.

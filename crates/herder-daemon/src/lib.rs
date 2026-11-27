@@ -315,6 +315,7 @@ pub async fn serve(
             listen: listen.clone(),
             public: settings.public_addresses(),
             hub: None,
+            remote_access: None,
         },
         shutdown.clone(),
     ));

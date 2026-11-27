@@ -16,7 +16,8 @@
 //! The hub also forwards: a client paired with it reaches a host that replicates to it
 //! through a relay stream, whose bytes the hub copies and cannot read ([`relay`]). With
 //! `tunnel` set it takes the connections `cloudflared` delivers, as a daemon does, so one
-//! public hostname reaches the hub and, through it, every host.
+//! public hostname reaches the hub and, through it, every host. The hub can set that
+//! hostname up in Cloudflare and run `cloudflared` for it itself ([`cloudflare`]).
 //!
 //! A host whose config has a `[hub]` table runs a [`Replicator`], which streams every
 //! session's journal there under [`herder_protocol::replication`], resuming from the cursors
@@ -39,6 +40,7 @@
 
 mod client;
 pub mod cliproxyapi;
+pub mod cloudflare;
 mod conn;
 mod fleet;
 mod host_secrets;
@@ -46,6 +48,7 @@ pub mod install;
 mod link;
 pub mod pin;
 mod relay;
+pub mod remote_access;
 mod replicator;
 mod retention;
 mod secrets;
@@ -201,6 +204,25 @@ impl Server {
             .map_err(|_| anyhow::anyhow!("the hub uses one CLIProxyAPI"))
     }
 
+    /// Answers owners' remote access commands, running `tunnel`, with the settings kept in
+    /// `data_dir`; once per server.
+    pub fn use_remote_access(
+        &self,
+        data_dir: &std::path::Path,
+        tunnel: Arc<cloudflare::ManagedTunnel>,
+    ) -> Result<Arc<remote_access::RemoteAccessHub>> {
+        let remote_access = remote_access::RemoteAccessHub::open(
+            data_dir,
+            Arc::clone(&self.shared.store),
+            self.shared.secrets_key.clone(),
+            tunnel,
+        )?;
+        self.shared
+            .fleet
+            .use_remote_access(Arc::clone(&remote_access));
+        Ok(remote_access)
+    }
+
     /// The store, for reading what hosts replicated.
     pub fn store(&self) -> Arc<Mutex<HubStore>> {
         Arc::clone(&self.shared.store)
@@ -281,6 +303,27 @@ impl Server {
 
 /// Runs the hub on `config`'s data dir and port until `shutdown`.
 pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
+    let secrets_key = SecretsKey::from_env()?;
+    let cloudflare = Cloudflare {
+        api: cloudflare::API,
+        cloudflared: cloudflare::cloudflared::download,
+    };
+    serve_with(config, secrets_key, cloudflare, shutdown).await
+}
+
+/// Where the hub reaches Cloudflare: its API, and the `cloudflared` it runs.
+struct Cloudflare<'a> {
+    api: &'a str,
+    cloudflared: cloudflare::cloudflared::Download,
+}
+
+/// [`serve`], keeping secrets under `secrets_key` and reaching `cloudflare`.
+async fn serve_with(
+    config: &Config,
+    secrets_key: Option<SecretsKey>,
+    cloudflare: Cloudflare<'_>,
+    shutdown: CancellationToken,
+) -> Result<()> {
     let data_dir = DataDir::open(&config.data_dir)?;
     let host = Host {
         id: HostId::new(data_dir.host_id().to_string()),
@@ -291,7 +334,6 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     let store_path = data_dir.root().join("db/hub.db");
     let store = HubStore::open(&store_path)
         .with_context(|| format!("opening the hub database {}", store_path.display()))?;
-    let secrets_key = SecretsKey::from_env()?;
     if secrets_key.is_none() {
         info!("no secrets key in {SECRETS_KEY_ENV}: this hub keeps no secrets");
     }
@@ -332,6 +374,16 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     ));
     let public = settings.public_addresses();
     server.manage_settings(settings)?;
+    let managed = cloudflare::ManagedTunnel::open(data_dir.root(), cloudflare.api, config.tunnel)?;
+    managed
+        .start(
+            Arc::clone(&public),
+            cloudflare.cloudflared,
+            shutdown.clone(),
+        )
+        .await;
+    let remote_access = server.use_remote_access(data_dir.root(), managed)?;
+    remote_access.start().await;
     let control = auth::control::bind(data_dir.root())?;
     tokio::spawn(auth::control::serve(
         control,
@@ -341,6 +393,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
             listen: listen.clone(),
             public,
             hub: Some(server.admin()),
+            remote_access: Some(remote_access),
         },
         shutdown.clone(),
     ));
@@ -378,17 +431,18 @@ async fn blocking<T: Send + 'static>(
 
 #[cfg(test)]
 mod tests {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
     use super::*;
 
-    #[tokio::test]
-    async fn serve_opens_the_hub_and_returns_once_shutdown_is_cancelled() {
-        let tmp = tempfile::tempdir().unwrap();
-        let config = Config {
-            path: tmp.path().join("daemon.toml"),
+    /// A hub's config in `tmp`, taking tunneled connections at `tunnel`.
+    fn config(tmp: &std::path::Path, tunnel: Option<std::net::SocketAddr>) -> Config {
+        Config {
+            path: tmp.join("daemon.toml"),
             listen: vec!["127.0.0.1:0".parse().unwrap()],
-            tunnel: None,
+            tunnel,
             public_addresses: Vec::new(),
-            data_dir: tmp.path().join("data"),
+            data_dir: tmp.join("data"),
             log: Default::default(),
             accounts: Default::default(),
             binaries: Default::default(),
@@ -406,7 +460,13 @@ mod tests {
             mcp_servers: Vec::new(),
             bots: Vec::new(),
             self_update: None,
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn serve_opens_the_hub_and_returns_once_shutdown_is_cancelled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = config(tmp.path(), None);
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({
             let shutdown = shutdown.clone();
@@ -419,5 +479,132 @@ mod tests {
         assert!(tmp.path().join("data/control.sock").exists());
         // A hub runs no sessions, so it has no journal.
         assert!(!tmp.path().join("data/db/herder.db").exists());
+    }
+
+    /// Sends `request` to the hub on `data_dir`'s control socket, once it is up.
+    async fn control(
+        data_dir: std::path::PathBuf,
+        request: auth::control::Request,
+    ) -> auth::control::Response {
+        tokio::task::spawn_blocking(move || {
+            for _ in 0..200 {
+                if let Ok(response) = auth::control::request(&data_dir, &request) {
+                    return response;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            panic!("the hub's control socket never answered");
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_hub_sets_up_its_tunnel_runs_cloudflared_and_is_reached_through_the_route() {
+        use auth::control::{Request, Response};
+        use cloudflare::fake::FakeCloudflare;
+        use herder_protocol::RouteState;
+
+        let fake = FakeCloudflare::start();
+        let tmp = tempfile::tempdir().unwrap();
+        let tunnel = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let config = config(tmp.path(), Some(tunnel));
+        let data_dir = config.data_dir.clone();
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn({
+            let (shutdown, api) = (shutdown.clone(), fake.url.clone());
+            async move {
+                let cloudflare = Cloudflare {
+                    api: &api,
+                    cloudflared: cloudflare::tunnel::tests::fake_cloudflared,
+                };
+                let key = SecretsKey::new(&[7; 32]);
+                serve_with(&config, Some(key), cloudflare, shutdown).await
+            }
+        });
+
+        // As `herder hub tunnel set-up` asks, the token put as a hub secret.
+        let set_up = Request::TunnelSetUp {
+            account_id: Some(cloudflare::fake::ACCOUNT.into()),
+            hostname: "https://hub.example.com".into(),
+            api_token: herder_protocol::SecretValue::new(cloudflare::fake::TOKEN),
+        };
+        for _ in 0..200 {
+            if data_dir.join("control.sock").exists() || task.is_finished() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(!task.is_finished(), "{:?}", task.await);
+        let Response::Tunnel {
+            tunnel: Some(mut status),
+        } = control(data_dir.clone(), set_up).await
+        else {
+            panic!("the tunnel was not set up");
+        };
+        assert_eq!(status.url, "wss://hub.example.com");
+        for _ in 0..400 {
+            if status.state == RouteState::Up {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            let Response::Tunnel { tunnel: Some(now) } =
+                control(data_dir.clone(), Request::TunnelStatus).await
+            else {
+                panic!("no tunnel");
+            };
+            status = now;
+        }
+        assert_eq!(status.state, RouteState::Up, "{status:?}");
+
+        // The fake edge: what Cloudflare routes hub.example.com to, as an edge and
+        // cloudflared would deliver a client's WebSocket there.
+        let route = fake.held().route("hub.example.com").unwrap();
+        let address = route.strip_prefix("http://").unwrap().to_owned();
+        let stream = tokio::net::TcpStream::connect(&address).await.unwrap();
+        let request = format!("ws://{address}/").into_client_request().unwrap();
+        let (_ws, response) = tokio_tungstenite::client_async(request, stream)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 101);
+
+        // The hub runs cloudflared with the tunnel's token, and names the hostname to devices.
+        let token = data_dir.join("cloudflare/cloudflared.token");
+        for _ in 0..400 {
+            if std::fs::read_to_string(&token).is_ok_and(|text| !text.is_empty()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert_eq!(
+            std::fs::read_to_string(&token).unwrap().trim(),
+            "token-of-tunnel1"
+        );
+        let Response::Address { addresses, .. } = control(data_dir.clone(), Request::Address).await
+        else {
+            panic!("no address");
+        };
+        assert!(
+            addresses.contains(&"wss://hub.example.com".to_owned()),
+            "{addresses:?}"
+        );
+
+        // Removed, and gone in Cloudflare.
+        let Response::Tunnel { .. } = control(data_dir.clone(), Request::TunnelRemove).await else {
+            panic!("the tunnel was not removed");
+        };
+        for _ in 0..400 {
+            if fake.held().route("hub.example.com").is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert_eq!(fake.held().route("hub.example.com"), None);
+
+        shutdown.cancel();
+        task.await.unwrap().unwrap();
     }
 }

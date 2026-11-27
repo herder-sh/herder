@@ -55,6 +55,14 @@ cloudflared tunnel run box          # or: cloudflared service install
 Public address: `https://hub.example.com` (saved as `wss://hub.example.com`). The tunnel
 sees only the inner TLS's ciphertext ([Design](#design-the-daemon-connection-inside-a-websocket)).
 
+**Managed Cloudflare Tunnel (hub).** A hub can do all of that itself: given a Cloudflare
+account, an API token kept as a hub secret and a hostname (`herder hub tunnel set-up`, or
+the hub's remote access settings), it creates the tunnel, its route and the hostname's DNS
+record through Cloudflare's API, runs a pinned `cloudflared`, repairs them at each start,
+and names the hostname to devices with nothing to type; removing it deletes them. See
+[deploy/README.md](../deploy/README.md#the-managed-tunnel) and
+[remote-access.md](remote-access.md).
+
 **VPN** (WireGuard, Tailscale, ZeroTier, UniFi Teleport). Nothing to forward: the
 machine's VPN address is among the addresses it lists already when it listens on every
 interface. Add the VPN's DNS name as a public address if you'd rather devices use it.

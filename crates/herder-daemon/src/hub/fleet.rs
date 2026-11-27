@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use herder_protocol::{
     Account, AttachmentId, Batch, CommandBody, CommandId, CommandResult, DeviceId, ErrorCode,
-    ErrorInfo, Event, EventBody, FleetHost, HostId, HostUsage, HubVolume, IMAGE_NOT_BACKED_UP, Seq,
-    SessionHead, SessionId, Timestamp, UserId,
+    ErrorInfo, Event, EventBody, FleetHost, HostId, HostUsage, HubVolume, IMAGE_NOT_BACKED_UP,
+    RemoteAccess, Role, Seq, SessionHead, SessionId, Timestamp, UserId,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -55,6 +55,8 @@ pub(crate) struct Fleet {
     secrets_key: Option<Arc<SecretsKey>>,
     /// The CLIProxyAPI next to the hub, whose provider logins owners manage; set once.
     cliproxyapi: Arc<std::sync::OnceLock<super::cliproxyapi::Management>>,
+    /// How the hub is reached from outside; set once, by [`super::serve`].
+    remote_access: Arc<std::sync::OnceLock<Arc<super::remote_access::RemoteAccessHub>>>,
 }
 
 /// How often at most clients get the hub's status.
@@ -79,7 +81,16 @@ impl Fleet {
             status_changed: Arc::default(),
             secrets_key,
             cliproxyapi: Arc::default(),
+            remote_access: Arc::default(),
         }
+    }
+
+    /// Answers remote access commands with `remote_access`; once.
+    pub(crate) fn use_remote_access(
+        &self,
+        remote_access: Arc<super::remote_access::RemoteAccessHub>,
+    ) {
+        let _ = self.remote_access.set(remote_access);
     }
 
     /// Answers owners' provider login commands through `management`; once.
@@ -357,7 +368,7 @@ impl Backend for Fleet {
 
     async fn command(
         &self,
-        _: &UserId,
+        user_id: &UserId,
         _: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
@@ -379,14 +390,30 @@ impl Backend for Fleet {
             }
             CommandBody::PairHubHost { host_name } => return self.pair_host(&host_name),
             CommandBody::RevokeHubHost { host_id } => return self.revoke_host(host_id).await,
-            // Nothing is offered yet (docs/remote-access.md, P27.4 to P27.6).
             CommandBody::GetRemoteAccess => {
+                let remote_access = match self.remote_access.get() {
+                    Some(remote_access) => {
+                        let owner = self.auth.role(user_id) == Some(Role::Owner);
+                        remote_access.get(owner).await
+                    }
+                    None => RemoteAccess::default(),
+                };
                 return Ok(CommandResult::RemoteAccess {
-                    remote_access: Box::default(),
+                    remote_access: Box::new(remote_access),
                 });
             }
-            CommandBody::SetRemoteAccess { .. }
-            | CommandBody::EnrollWireGuard { .. }
+            CommandBody::SetRemoteAccess { settings } => {
+                let Some(remote_access) = self.remote_access.get() else {
+                    return Err(error(
+                        ErrorCode::Unsupported,
+                        "this hub sets up no remote access".into(),
+                    ));
+                };
+                return Ok(CommandResult::RemoteAccess {
+                    remote_access: Box::new(remote_access.set(*settings).await?),
+                });
+            }
+            CommandBody::EnrollWireGuard { .. }
             | CommandBody::UnenrollWireGuard
             | CommandBody::GetRelayToken => {
                 return Err(error(
