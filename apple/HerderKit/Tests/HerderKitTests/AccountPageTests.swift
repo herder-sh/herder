@@ -165,6 +165,62 @@ struct AccountPageTests {
     }
 }
 
+@MainActor struct AccountRemovalTests {
+    /// The login's rows over `machines`.
+    private func rows(_ machines: [Machine]) throws -> [AccountMachine] {
+        let login = try #require(ProviderAccounts(machines: machines, now: now).groups.first?.logins.first)
+        return AccountMachine.rows(login, machines: machines, summaries: [])
+    }
+
+    @Test func removingAnAccountSendsRemoveAccountToItsMachine() async throws {
+        let row = try #require(try rows(machines()).first { $0.place.name == "trash-can-01" })
+        var sent: [(HostId, CommandBody)] = []
+        let refused = await row.remove { hostId, command in
+            sent.append((hostId, command))
+            return .applied
+        }
+        #expect(refused == nil)
+        #expect(sent.map(\.0) == ["b"])
+        #expect(sent.map(\.1) == [.removeAccount(accountId: "claude-work")])
+        // A machine without the login has nothing to remove.
+        let missing = try #require(try rows(machines()).last)
+        #expect(await missing.remove { _, _ in Issue.record("sent"); return .applied } == nil)
+    }
+
+    @Test func itAsksFirstAndSaysTheLoginStays() throws {
+        let row = try #require(try rows(machines()).first)
+        let question = row.removalQuestion(title: "work")
+        #expect(question.title == "Remove work from work-mbp?")
+        #expect(question.message.hasPrefix("Archive its sessions there first."))
+        #expect(question.message.contains("stays in its config directory"))
+    }
+
+    @Test func onlyAnOwnerMayRemoveAnAccount() throws {
+        #expect(try rows(machines()).map(\.removable) == [true, true, false])
+        let shared = [
+            machine("a", name: "work-mbp", sessions: [], accounts: [account("main", now: now)], role: .member),
+            machine("b", name: "trash-can-01", sessions: [], accounts: [account("claude-work", now: now)]),
+        ]
+        #expect(try rows(shared).map(\.removable) == [false, true])
+    }
+
+    @Test func aHubLoginIsRemovedOnTheHubNotHere() throws {
+        let login = try #require(ProviderAccounts(machines: hubLoginFleetMachines(), now: now).groups.flatMap(\.logins)
+            .first { $0.hubLogin == "claude-ada@example.com.json" })
+        let rows = AccountMachine.rows(login, machines: hubLoginFleetMachines(), summaries: [])
+        #expect(rows.count == 2 && rows.allSatisfy { $0.place.owner && !$0.removable })
+    }
+
+    @Test func aRefusalShowsTheDaemonsReason() async throws {
+        let row = try #require(try rows(machines()).first)
+        let why = "1 unarchived session runs on account main; archive it first: \"Fix the login\" (01A)"
+        let refused = await row.remove { _, _ in
+            throw HerderError.Rejected(info: ErrorInfo(code: .conflict, message: why))
+        }
+        #expect(refused == "work-mbp: \(why)")
+    }
+}
+
 #if os(macOS)
 import AppKit
 
