@@ -41,9 +41,11 @@ final class HubLogins {
         }
     }
 
-    /// Has the proxy start signing in to `provider`: the login and the URL to sign in at.
-    func start(_ provider: Provider) async throws -> (loginId: String, url: String) {
-        guard case .providerLoginStarted(let loginId, let url) = try await send(.startProviderLogin(provider: provider, name: nil)) else {
+    /// Has the proxy start signing in to `provider`: the login and the URL to sign in at. With
+    /// `again`, it signs that login in again, replacing its tokens in place: it keeps its name,
+    /// pin, label and fallback mark, so it stays the same account on every host.
+    func start(_ provider: Provider, again: String? = nil) async throws -> (loginId: String, url: String) {
+        guard case .providerLoginStarted(let loginId, let url) = try await send(.startProviderLogin(provider: provider, name: again)) else {
             throw HerderError.Local(detail: "the hub did not start the login")
         }
         return (loginId, url)
@@ -124,6 +126,12 @@ final class HubLogins {
         return email
     }
 
+    /// The logins whose tokens the provider no longer takes: sessions on them fail until their
+    /// owner logs them in again.
+    var signedOut: [ProviderLogin] {
+        logins.filter { $0.state == .needsSignIn }
+    }
+
     /// The providers the proxy signs in to from an app.
     nonisolated static let providers: [Provider] = ["claude", "codex"]
 
@@ -140,6 +148,15 @@ final class HubLogins {
         }
     }
 
+    /// What the Logins tab says above its list while `signedOut` is not empty.
+    nonisolated static func signedOutNotice(_ signedOut: [ProviderLogin]) -> String {
+        let names = signedOut.map { $0.label ?? $0.name }
+        guard names.count != 1 else {
+            return "\(names[0]) needs signing in again: the provider no longer takes its tokens, so every session on it fails. Log in again below; it stays the same account on every host."
+        }
+        return "\(names.count) logins need signing in again: the provider no longer takes their tokens, so every session on them fails. Log each in again below; each stays the same account on every host."
+    }
+
     nonisolated static func stateTint(_ state: ProviderLoginState) -> Color {
         switch state {
         case .active: Theme.success
@@ -151,10 +168,13 @@ final class HubLogins {
 }
 
 /// Adding a login: pick a provider, sign in at the URL the proxy gives, then paste the address
-/// the browser ended on. A login left before it is done is cancelled.
+/// the browser ended on. Or logging one in `again`, as its own provider and account, in place.
+/// A login left before it is done is cancelled.
 @MainActor @Observable
 final class LoginAdder {
     let logins: HubLogins
+    /// The login signed in again; nil when adding one.
+    let again: ProviderLogin?
     var provider: Provider = "claude"
     private(set) var started: (loginId: String, url: String)?
     var address = ""
@@ -162,12 +182,14 @@ final class LoginAdder {
     private(set) var sending = false
     private(set) var done = false
 
-    init(logins: HubLogins) {
+    init(logins: HubLogins, again: ProviderLogin? = nil) {
         self.logins = logins
+        self.again = again
+        if let again { provider = again.provider }
     }
 
     func start() async {
-        await run { started = try await logins.start(provider) }
+        await run { started = try await logins.start(provider, again: again?.name) }
     }
 
     /// Whether the proxy now holds the login.
@@ -202,6 +224,8 @@ struct ProviderLoginsSection: View {
     /// Whether this device's user owns the hub: only they rename a login or mark it fallback.
     var owner = true
     let add: () -> Void
+    /// Logs a login in again, in place.
+    var signInAgain: (ProviderLogin) -> Void = { _ in }
     let remove: (ProviderLogin) -> Void
 
     var body: some View {
@@ -224,10 +248,12 @@ struct ProviderLoginsSection: View {
                 Text("No logins yet. Add one, and hosts' endpoint accounts on this hub run on it.")
                     .font(.subheadline).foregroundStyle(Theme.tertiary)
             case .loaded(let list):
+                if !logins.signedOut.isEmpty { signedOutNotice }
                 VStack(spacing: 0) {
                     ForEach(Array(list.enumerated()), id: \.element.name) { index, login in
                         if index > 0 { Divider().overlay(Theme.stroke) }
-                        ProviderLoginRow(login: login, logins: logins, owner: owner) { remove(login) }
+                        ProviderLoginRow(login: login, logins: logins, owner: owner,
+                                         signInAgain: { signInAgain(login) }, remove: { remove(login) })
                     }
                 }
                 .background(.card, in: .rect(cornerRadius: Theme.corner))
@@ -236,13 +262,33 @@ struct ProviderLoginsSection: View {
     }
 }
 
+extension ProviderLoginsSection {
+    /// Above the list while any login is signed out: sessions on it fail until it is logged in
+    /// again.
+    private var signedOutNotice: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.failure)
+            Text(HubLogins.signedOutNotice(logins.signedOut))
+                .font(.subheadline).foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.failure.opacity(0.12), in: .rect(cornerRadius: Theme.corner))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("provider-logins-signed-out")
+    }
+}
+
 /// A login: its label and email, provider and state, what is left of its session and weekly
-/// windows, and for owners an inline rename, its Fallback switch and Remove. A change the hub
-/// refuses shows under it.
+/// windows, and for owners an inline rename, its Fallback switch and Remove. A login the
+/// provider no longer takes says so under it, with Log in again. A change the hub refuses shows
+/// under it.
 private struct ProviderLoginRow: View {
     let login: ProviderLogin
     let logins: HubLogins
     let owner: Bool
+    let signInAgain: () -> Void
     let remove: () -> Void
     @State private var renaming = false
     @State private var label = ""
@@ -278,6 +324,7 @@ private struct ProviderLoginRow: View {
                 }
                 .font(.caption)
             }
+            if login.state == .needsSignIn { signedOut }
             if let error = logins.errors[login.name] {
                 Text(error).font(.caption).foregroundStyle(Theme.failure)
                     .fixedSize(horizontal: false, vertical: true)
@@ -312,6 +359,35 @@ private struct ProviderLoginRow: View {
 
     private var state: some View {
         Chip(text: HubLogins.stateLabel(login), tint: HubLogins.stateTint(login.state)).fixedSize()
+    }
+
+    /// Why sessions on it fail, and for owners Log in again.
+    private var signedOut: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+                signedOutText
+                Spacer(minLength: 8)
+                if owner { signInAgainButton }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                signedOutText
+                if owner { signInAgainButton }
+            }
+        }
+        .padding(10)
+        .background(Theme.failure.opacity(0.12), in: .rect(cornerRadius: 8))
+    }
+
+    private var signedOutText: some View {
+        Text("Its tokens no longer work: sessions on it fail until you log in again, as \(login.email ?? "its own account").")
+            .font(.caption).foregroundStyle(Theme.text)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var signInAgainButton: some View {
+        PillButton(title: "Log in again", symbol: "arrow.clockwise", prominent: true, action: signInAgain)
+            .fixedSize()
+            .accessibilityIdentifier("provider-login-again-\(login.name)")
     }
 
     @ViewBuilder private func limits(_ windows: (session: WindowLeft?, weekly: WindowLeft?)) -> some View {
@@ -399,19 +475,15 @@ struct AddProviderLoginSheet: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        SheetScaffold(title: "Add Login", subtitle: "To the CLIProxyAPI next to this hub", height: 480,
+        SheetScaffold(title: adder.again == nil ? "Add Login" : "Log In Again",
+                      subtitle: adder.again.map { "\($0.label ?? $0.name), in place: it stays the same account on every host" }
+                          ?? "To the CLIProxyAPI next to this hub",
+                      height: 480,
                       hint: adder.started == nil ? "Its tokens stay on the hub." : "The login waits five minutes.") {
-            Field(label: "Provider") {
-                Picker("Provider", selection: $adder.provider) {
-                    ForEach(HubLogins.providers, id: \.self) { Text(ModelCatalog.providerName($0)).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .disabled(adder.started != nil)
-                .accessibilityIdentifier("provider-login-provider")
-            }
+            if adder.again == nil { providerPicker }
             if let started = adder.started {
-                Field(label: "1. Sign in", hint: "In your browser, as the account to add.") {
+                Field(label: "1. Sign in", hint: adder.again.map { "In your browser, as \($0.email ?? "the login's own account"); another account is refused." }
+                          ?? "In your browser, as the account to add.") {
                     HStack(spacing: 10) {
                         Text(started.url).font(.caption.monospaced()).foregroundStyle(Theme.secondary)
                             .lineLimit(1).truncationMode(.middle)
@@ -441,7 +513,7 @@ struct AddProviderLoginSheet: View {
                     .disabled(adder.sending)
                     .accessibilityIdentifier("provider-login-start")
             } else {
-                ActionButton(title: "Add Login", style: .primary) {
+                ActionButton(title: adder.again == nil ? "Add Login" : "Log In Again", style: .primary) {
                     if await adder.complete() { dismiss() }
                 }
                 .frame(maxWidth: 200)
@@ -450,5 +522,17 @@ struct AddProviderLoginSheet: View {
             }
         }
         .onDisappear { Task { await adder.leave() } }
+    }
+
+    private var providerPicker: some View {
+        Field(label: "Provider") {
+            Picker("Provider", selection: $adder.provider) {
+                ForEach(HubLogins.providers, id: \.self) { Text(ModelCatalog.providerName($0)).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(adder.started != nil)
+            .accessibilityIdentifier("provider-login-provider")
+        }
     }
 }
