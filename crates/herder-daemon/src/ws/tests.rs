@@ -1538,10 +1538,11 @@ async fn direct_strangers_are_capped_before_tls_but_signed_in_devices_are_not() 
     }
     let connect = || Client::connect(daemon.addr, &daemon.fingerprint, &daemon.owner, None, None);
     // Once the daemon took every one of them, a device not signed in yet is refused before
-    // its TLS starts.
+    // its TLS starts. One that got in first took a stranger's place, and that stranger was
+    // refused instead: another one takes it.
     tokio::time::timeout(TIMEOUT, async {
         while connect().await.is_ok() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            strangers.push(TcpStream::connect(daemon.addr).await.unwrap());
         }
     })
     .await
@@ -1552,8 +1553,8 @@ async fn direct_strangers_are_capped_before_tls_but_signed_in_devices_are_not() 
         owner.recv().await,
         ServerMessage::Synced { token: "t".into() }
     );
-    // A stranger gone frees its place.
-    drop(strangers.pop());
+    // Strangers gone free their places.
+    drop(strangers);
     let mut device = tokio::time::timeout(TIMEOUT, async {
         loop {
             match connect().await {
