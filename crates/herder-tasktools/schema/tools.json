@@ -1391,7 +1391,12 @@
                   "detach_terminal",
                   "close_terminal",
                   "resize_terminal",
-                  "terminal_input"
+                  "terminal_input",
+                  "get_remote_access",
+                  "set_remote_access",
+                  "enroll_wire_guard",
+                  "unenroll_wire_guard",
+                  "get_relay_token"
                 ]
               }
             },
