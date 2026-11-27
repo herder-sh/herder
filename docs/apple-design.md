@@ -466,8 +466,10 @@ herder's options set up in place, in the card, without a sheet:
 
 - *Your VPN, in herder* (`OwnVpnFacts`): a row per imported config, its name, endpoint and
   AllowedIPs, with **Remove**; then **Import a WireGuard Config…**, which opens a name and a
-  config field in the card, with **Choose File…** for a `.conf` (a UniFi router's export) and
-  **Import** (`import_wireguard`). One line says the private key stays on this device and that
+  config field in the card, with **Choose File…** for a `.conf` (a UniFi router's export),
+  on iPhone **Scan QR Code…** (`QRScanner`, the pairing scanner's camera, for the QR code a
+  router shows), and **Import** (`import_wireguard`). A config's mark is green while a
+  connection runs through it (P27.3), its route "Your VPN" on the machines' rows. One line says the private key stays on this device and that
   herder carries only its own connections, so another VPN here stays on.
 - *herder's WireGuard on the hub* (`HubWireGuardFacts`): while the hub offers it, **Use on this
   device**, a switch (`set_hub_wireguard`). To an owner, the router's public `host:port` and the
