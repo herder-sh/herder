@@ -234,8 +234,9 @@ struct RemoteOptions: Equatable {
                                   tunnelHostname: tunnelHostname.isEmpty ? nil : tunnelHostname)
     }
 
-    /// The hub secret the Cloudflare API token is kept in.
-    static let tokenSet = "remote-access"
+    /// The hub secret the Cloudflare API token is kept in, where `herder hub tunnel` puts it
+    /// too, so either finds the other's.
+    static let tokenSet = "cloudflare"
     static let tokenName = "CLOUDFLARE_API_TOKEN"
     static var tokenRef: SecretRef { "\(tokenSet)/\(tokenName)" }
 

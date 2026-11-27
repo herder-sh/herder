@@ -477,7 +477,7 @@ herder's options set up in place, in the card, without a sheet:
 - *Cloudflare, set up by the hub* (`CloudflareFacts`): a row each for the **Tunnel** and the
   **Relay** while set up, with its mark and host or Cloudflare's message. To an owner, **Set
   Up…** opens the account ID, the API token (secure; kept on the hub as the secret
-  `remote-access/CLOUDFLARE_API_TOKEN`, never read back; left empty it keeps the one there), the
+  `cloudflare/CLOUDFLARE_API_TOKEN`, where `herder hub tunnel` puts it too, never read back; left empty it keeps the one there), the
   tunnel's hostname (optional) and a **Relay** switch, and **Set Up** (`put_secret`, then
   `set_remote_access`); once set up, **Change…** and **Remove**.
 
