@@ -1305,6 +1305,69 @@ async fn a_long_replay_to_a_slow_client_does_not_hold_up_its_commands() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_session_shown_replays_ahead_of_those_waiting() {
+    let daemon = Daemon::start().await;
+    // Two long sessions resume ahead of the one the user opens.
+    let text = "y".repeat(CHUNK);
+    let long: Vec<SessionId> = ["a", "b"]
+        .into_iter()
+        .map(|id| {
+            let session = daemon.create_session(id);
+            for n in 0..CHUNKS / 2 {
+                daemon.append(&session, added(&format!("i{n}"), &text));
+            }
+            session
+        })
+        .collect();
+    let shown = daemon.create_session("shown");
+    let mut client = Client::connect(
+        daemon.addr,
+        &daemon.fingerprint,
+        &daemon.owner,
+        None,
+        Some(4096),
+    )
+    .await
+    .unwrap();
+    client
+        .hello(vec![
+            cursor(&long[0], 0),
+            cursor(&long[1], 0),
+            cursor(&shown, 0),
+        ])
+        .await;
+    client
+        .send(&ClientMessage::Command(Command {
+            id: CommandId::new("c1"),
+            body: CommandBody::ShowSessions {
+                session_ids: vec![shown.clone()],
+            },
+            trace: None,
+        }))
+        .await;
+    client
+        .send(&ClientMessage::Sync { token: "t".into() })
+        .await;
+    // The order sessions' events arrive in, each named once.
+    let mut order: Vec<SessionId> = Vec::new();
+    loop {
+        match client.recv().await {
+            ServerMessage::Event(event) => {
+                if order.last() != Some(&event.session_id) {
+                    order.push(event.session_id);
+                }
+            }
+            ServerMessage::Synced { .. } => break,
+            _ => {}
+        }
+    }
+    // The first long session's replay may have begun before the client said what it
+    // shows; the second waits for the shown one.
+    order.retain(|session| *session != long[0]);
+    assert_eq!(order, vec![shown, long[1].clone()]);
+}
+
 fn latest(session: &SessionId) -> CommandBody {
     CommandBody::GetLatestEvents {
         session_id: session.clone(),

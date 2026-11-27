@@ -295,7 +295,8 @@ enum Op {
     ),
     /// A stream was added for this terminal; attach it, unless a new connection already did.
     Attach(TerminalId),
-    /// Send a terminal command once if connected, ignoring its answer: input, resize, detach.
+    /// Send a command once if connected, ignoring its answer: a terminal's input, resize or
+    /// detach, or the sessions shown.
     Once(CommandBody),
     /// Report once the daemon sent everything it owes for what was sent before.
     Sync(oneshot::Sender<()>),
@@ -386,6 +387,8 @@ struct State {
     logs: HashMap<SessionId, Log>,
     /// Subscribers per session; the daemon streams the sessions with at least one.
     wanted: HashMap<SessionId, usize>,
+    /// The sessions the app shows, whose replays go first on each connection.
+    shown: Vec<SessionId>,
     /// Terminals this client holds a stream for; each new connection re-attaches them.
     streams: HashMap<TerminalId, Attached>,
     /// Whether something the offline cache holds changed since the last save.
@@ -1381,14 +1384,40 @@ impl Supervisor {
         }))
     }
 
-    /// Where each wanted session resumes.
+    /// Where each wanted session resumes, the sessions shown first.
     fn cursors(&self) -> Vec<Cursor> {
         let state = self.lock();
-        state
+        let mut cursors: Vec<Cursor> = state
             .wanted
             .keys()
             .map(|session_id| cursor(&state, session_id))
-            .collect()
+            .collect();
+        cursors.sort_by_key(|cursor| !state.shown.contains(&cursor.session_id));
+        cursors
+    }
+
+    /// Says which sessions the app shows; the daemon is told at once if connected, and on
+    /// each new connection.
+    pub(crate) fn show(&self, session_ids: Vec<SessionId>) {
+        let mut state = self.lock();
+        if state.shown == session_ids {
+            return;
+        }
+        state.shown.clone_from(&session_ids);
+        drop(state);
+        let _ = self
+            .ops
+            .send(Op::Once(CommandBody::ShowSessions { session_ids }));
+    }
+
+    /// What a new connection tells the daemon of the sessions shown, if any is.
+    fn shown(&self) -> Option<ClientMessage> {
+        let state = self.lock();
+        (!state.shown.is_empty()).then(|| {
+            once(CommandBody::ShowSessions {
+                session_ids: state.shown.clone(),
+            })
+        })
     }
 
     /// Applies one daemon message to the state.
@@ -1989,7 +2018,12 @@ async fn converse(
     let settling = ClientMessage::Sync {
         token: settle.clone(),
     };
-    let messages: Vec<_> = std::iter::once(settling)
+    // The sessions shown go first, so that their replays, which the hello asked for first,
+    // stay ahead of the others; and of any subscribed to later.
+    let messages: Vec<_> = supervisor
+        .shown()
+        .into_iter()
+        .chain(std::iter::once(settling))
         .chain(supervisor.reattach(&mut attaching))
         .chain(resent)
         .chain(synced)

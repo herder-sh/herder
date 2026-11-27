@@ -1301,6 +1301,7 @@
                   "send_prompt",
                   "get_attachment",
                   "get_latest_events",
+                  "show_sessions",
                   "interrupt",
                   "remove_queued",
                   "move_queued",

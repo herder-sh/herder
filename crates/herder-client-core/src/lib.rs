@@ -111,6 +111,12 @@
 //! it; each new connection resumes it from the last seq held, and events are deduplicated by
 //! seq, so a reconnect never shows a gap or a duplicate.
 //!
+//! A reconnect resumes every subscription, and the daemon replays them one after the other;
+//! a session's live events wait for its replay. An app says which sessions it shows with
+//! [`Client::show_sessions`] whenever that changes: their replays go first, on the connection
+//! up then and on each new one, so a prompt sent in the open session shows there a round
+//! trip later, however much the other sessions have to catch up.
+//!
 //! # Offline cache
 //!
 //! What each machine last said is saved in `<config_dir>/cache/`, private to the user: the
@@ -211,7 +217,7 @@ pub use wireguard::{WireGuardKind, WireGuardTunnel};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 24;
+pub const CLIENT_API_VERSION: u32 = 25;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1022,6 +1028,15 @@ impl Client {
     ) -> Result<SessionSubscription, Error> {
         let machine = self.machine(&host_id)?;
         Ok(SessionSubscription(Subscription::new(machine, session_id)))
+    }
+
+    /// Says which sessions of a machine the app shows now, replacing what it said before; an
+    /// empty list when it shows none. Their replays go ahead of every other session's on each
+    /// connection, so after a reconnect what the user looks at catches up, and streams live,
+    /// first. See the crate docs, Sessions.
+    pub fn show_sessions(&self, host_id: HostId, session_ids: Vec<SessionId>) -> Result<(), Error> {
+        self.machine(&host_id)?.show(session_ids);
+        Ok(())
     }
 
     /// Sends a command to a machine and waits for the daemon's answer, however long it takes
