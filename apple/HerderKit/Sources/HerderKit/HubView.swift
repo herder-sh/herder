@@ -146,7 +146,7 @@ struct HubPane: View {
 
 /// Hub: how your herder is put together. In order: what needs you, each with its fix
 /// (hidden when nothing does); the hub and the machines that sync to it, then the other
-/// machines; updates, when there are any; your devices; and the people. On iPhone, also the
+/// machines; how they are reached from outside home; updates, when there are any; your devices; and the people. On iPhone, also the
 /// way to Skills and Providers.
 struct HubView: View {
     let fleet: Fleet
@@ -173,6 +173,9 @@ struct HubView: View {
                     NeedsYouSection(problems: problems.needingYou, fix: fix)
                 }
                 MachinesView(fleet: fleet, sheet: $sheet)
+                RemoteAccessReader(fleet: fleet) { access in
+                    RemoteAccessSection(access: access) { pages.open(.remoteAccess) }
+                }
                 if !problems.updates.isEmpty {
                     UpdatesSection(updates: problems.updates, fix: fix)
                 }

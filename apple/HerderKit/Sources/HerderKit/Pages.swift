@@ -26,6 +26,8 @@ enum Page: Hashable {
     case recovery
     /// A chat bot on a machine, for its owners.
     case bot(hostId: HostId, botId: BotId)
+    /// How the fleet is reached from outside home, opened from Hub.
+    case remoteAccess
 }
 
 extension Page {
@@ -53,6 +55,8 @@ extension Page {
             return "Recovery"
         case .bot(_, let botId):
             return botId
+        case .remoteAccess:
+            return "Remote access"
         }
     }
 
@@ -69,6 +73,7 @@ extension Page {
         case .you: YouPage(fleet: fleet, sheet: sheet)
         case .recovery: RecoveryPage(fleet: fleet)
         case .bot(let hostId, let botId): BotPage(fleet: fleet, hostId: hostId, botId: botId)
+        case .remoteAccess: RemoteAccessPage(fleet: fleet)
         }
     }
 }
