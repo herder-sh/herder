@@ -2,12 +2,12 @@ name: release
 
 # A `v*` tag builds static musl binaries, an Apple silicon macOS binary and the macOS app, signed
 # with the Developer ID and notarized, and publishes them as a GitHub Release; it also uploads
-# the iOS and macOS apps to TestFlight, and pushes the Linux app's PKGBUILD to the AUR once the
+# the iOS and macOS apps to TestFlight. For the Linux app it builds the snap (snap.yml) and
+# attaches it to the GitHub Release, uploads it to the Snap Store once the
+# SNAPCRAFT_STORE_CREDENTIALS secret exists, and pushes the PKGBUILD to the AUR once the
 # AUR_SSH_PRIVATE_KEY secret exists. workflow_dispatch runs the same, without publishing the
 # GitHub Release. PRs that change this file or the app's release script run the builds only,
 # without the TestFlight upload; from a fork, which gets no secrets, the macOS app is signed ad hoc.
-# A tag also builds the Linux app's snap (snap.yml), attaches it to the GitHub Release and
-# uploads it to the Snap Store once the SNAPCRAFT_STORE_CREDENTIALS secret exists.
 
 on:
   push:
