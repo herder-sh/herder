@@ -173,7 +173,7 @@ struct HubView: View {
                     NeedsYouSection(problems: problems.needingYou, fix: fix)
                 }
                 MachinesView(fleet: fleet, sheet: $sheet)
-                RemoteAccessReader(fleet: fleet) { access in
+                RemoteAccessReader(fleet: fleet) { access, _ in
                     RemoteAccessSection(access: access) { pages.open(.remoteAccess) }
                 }
                 if !problems.updates.isEmpty {

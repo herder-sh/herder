@@ -16,6 +16,12 @@ struct MachineRoute: Hashable {
         case internet
         /// Relayed by the hub of that name.
         case hub(String)
+        /// herder's own WireGuard client, to the user's WireGuard server (a `wg://` route).
+        case ownVpn
+        /// herder's own WireGuard client, to the hub's WireGuard endpoint.
+        case hubWireGuard
+        /// The Durable Object relay in the user's Cloudflare account (`relay+wss://`).
+        case relay
     }
 
     let kind: Kind
@@ -27,6 +33,19 @@ struct MachineRoute: Hashable {
 
     init(address: String, among machines: [Machine]) {
         self.address = address
+        switch routeKind(address: address) {
+        case .ownVpn:
+            kind = .ownVpn
+            return
+        case .hubWireGuard:
+            kind = .hubWireGuard
+            return
+        case .cloudflareRelay:
+            kind = .relay
+            return
+        default:
+            break
+        }
         if let hub = MachineRow.via(address, among: machines) {
             kind = .hub(hub)
         } else if address.hasPrefix("wss://") {
@@ -54,6 +73,9 @@ struct MachineRoute: Hashable {
         case .tunnel: "Tunnel"
         case .internet: "Internet"
         case .hub(let hub): "Through \(hub)"
+        case .ownVpn: "Your VPN"
+        case .hubWireGuard: "Hub WireGuard"
+        case .relay: "Cloudflare relay"
         }
     }
 

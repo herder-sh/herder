@@ -396,14 +396,16 @@ Needs you takes over. A `herder://own` link opened from outside the app, and a h
 a machine's Backup, still approve in `ApproveSheet`. `AddMachineScreenshotTests` draws Install,
 Kubernetes, Approve, Done and a hub to sign in to (`mac-add-machine-*.png`, `mac-add-hub.png`).
 
-### 4.4.1 Remote access (`RemoteAccess`, `RemoteAccessPage`, P26.18)
+### 4.4.1 Remote access (`RemoteAccess`, `RemoteAccessPage`, P26.18, P27.8)
 
-How this fleet is reached from outside home, and how to set that up, in one calm place.
-herder runs no VPN and is married to no vendor: every connection is end-to-end mutual TLS to
-the machine whatever carries it ([public-access.md](public-access.md)), so this page only says
-what each route this device could use is doing, from data it already has, and how to set up one
-that is not. Nothing here is a problem to fix: a route not set up is a choice, never amber, never
-in Needs you, never in the badge.
+How this fleet is reached from outside home, and how to set that up, in one calm place: the
+one place to pick and set up each route ([remote-access.md](remote-access.md)). herder is
+married to no vendor: every connection is end-to-end mutual TLS to the machine whatever carries
+it ([public-access.md](public-access.md)). The page says what each route this device could use
+is doing, from data it already has; sets up in a few taps the routes herder runs itself (an
+imported WireGuard config, herder's WireGuard on the hub, a Cloudflare tunnel or relay the hub
+runs); and gives short steps for the ones the owner runs. Nothing here is a problem to fix: a
+route not set up is a choice, never amber, never in Needs you, never in the badge.
 
 **Routes** (`RemoteAccess.routes`), each with a state (`RemoteAccess.State`): **working** (green
 dot), **set up, not seen working from outside yet** (grey dashed ring), **not set up** (grey
@@ -415,6 +417,18 @@ ring), and, only for an address that cannot work as typed, **won't work** (amber
 | **Tailscale** | every machine's addresses in Tailscale's ranges (100.64.0.0/10, fd7a:115c:a1e0::/48, `*.ts.net`), and whether its connection is over one now (`MachineRoute.tailscale`) | working while a machine answers on it, or once one did; set up when machines have Tailscale addresses but none answered on one yet; not set up with none |
 | **VPN on your router** (WireGuard, OpenVPN, a UniFi gateway's VPN server) | a machine connected at a private IPv4 address (`MachineRoute.local`) that is on none of this device's own networks, while this device has a tunnel interface of its own with an IPv4 address outside Tailscale's range (`NetworkInterface`) | working while that holds, or once it did, naming the home subnets that answered; otherwise not set up |
 
+herder's own options (`RemoteOptions`), read from this device's WireGuard configs
+(`Client::wireguard_tunnels`) and the hub's `get_remote_access`, asked when the hub connects and
+after each change:
+
+| option | states |
+|---|---|
+| **Your VPN, in herder** (an imported WireGuard config, P27.3) | working while a connection runs through one; set up once one is imported; not set up |
+| **herder's WireGuard on the hub** (P27.4) | working while this device's connection runs through it; set up when the hub offers it and this device is enrolled; not set up when the hub has it off or this device is not enrolled |
+| **Cloudflare, set up by the hub** (the managed tunnel, P27.6, and the Durable Object relay, P27.5) | each from its `RouteStatus`: up is working, setting up is unseen, failed is **won't work** with Cloudflare's message; the card takes the failed one first, else the better |
+
+They join the Hub tab's row only once set up, so a fleet that uses none of them reads as before.
+
 "Once it was" is this device's memory (`RemoteSightings`, in its defaults): when a route last
 worked from outside, so at home the page still says the router's VPN worked yesterday, rather
 than "not set up". Nothing is probed: the page reads only connections the app made anyway.
@@ -424,7 +438,8 @@ machines: a globe tile, green when any route works, then one line (`RemoteAccess
 each route's mark and short name (● Hub ● Tailscale ○ Router VPN), and a chevron:
 
 - "Reachable from anywhere through the hub" — the hub route works;
-- "Reachable over Tailscale", "Reachable over your router's VPN", or both joined — the hub
+- "Reachable over Tailscale", "Reachable over your router's VPN", "Reachable over herder's
+  WireGuard", "your VPN" or "the Cloudflare relay", those working joined ("A, B and C") — the hub
   route does not, another does;
 - "The hub's public address hub.example.com doesn't reach it from outside" — won't work;
 - "The hub has a public address, not seen working from outside yet" — set up, unseen;
@@ -432,8 +447,45 @@ each route's mark and short name (● Hub ● Tailscale ○ Router VPN), and a c
 - "Reached at home only · set up access from anywhere" — nothing set up.
 
 **The page** (`RemoteAccessPage`, a `DetailPage`, `Page.remoteAccess`): the summary as its
-status, one line on what herder does and does not do, then a card per route, the hub first.
-Each card: the route's mark and name, its state in words, then its facts as label–value rows:
+status, one line on what carries a connection, then **Your machines**, then a card per route:
+through the hub, your VPN in herder, herder's WireGuard on the hub and Cloudflare (both only with
+a hub), Tailscale, the VPN on your router.
+
+**Your machines** (`MachineRoutesCard`, from `MachineRoutes`): a row per machine, a green dot
+while connected, its name, and one line: the route in use and its round trip ("Tailscale ·
+38 ms", P26.15's `MachineRoute` and `Machine::quality`), "Offline", and "· pinned" or "· pinned
+to Home network" when the user pinned one. A tap opens its routes in place, in the order they are
+tried, numbered: each route's name by what carries it (`route_kind`: Local network, Your VPN,
+Tailscale, Internet, Hub WireGuard, Tunnel, Through ‹hub›, Cloudflare relay), its address in
+monospace, **In use** on the one in use, and a quiet menu: **In the race** (Auto), **Only this
+route** (pinned: only it is dialled), **Never** (disabled: never dialled, drawn dimmed), and Try
+Earlier / Try Later to reorder (`set_route`, `set_addresses`). Under them, one line: routes are
+tried when a connection starts, after a drop or a network change, never moved mid-use (P27.2).
+
+herder's options set up in place, in the card, without a sheet:
+
+- *Your VPN, in herder* (`OwnVpnFacts`): a row per imported config, its name, endpoint and
+  AllowedIPs, with **Remove**; then **Import a WireGuard Config…**, which opens a name and a
+  config field in the card, with **Choose File…** for a `.conf` (a UniFi router's export) and
+  **Import** (`import_wireguard`). One line says the private key stays on this device and that
+  herder carries only its own connections, so another VPN here stays on.
+- *herder's WireGuard on the hub* (`HubWireGuardFacts`): while the hub offers it, **Use on this
+  device**, a switch (`set_hub_wireguard`). To an owner, the router's public `host:port` and the
+  hub's UDP port (51820 by default) and **Turn On**; once on, **Change…** and **Turn Off**
+  (`set_remote_access`). One line says to forward that UDP port, and that only paired devices
+  get an answer.
+- *Cloudflare, set up by the hub* (`CloudflareFacts`): a row each for the **Tunnel** and the
+  **Relay** while set up, with its mark and host or Cloudflare's message. To an owner, **Set
+  Up…** opens the account ID, the API token (secure; kept on the hub as the secret
+  `remote-access/CLOUDFLARE_API_TOKEN`, never read back; left empty it keeps the one there), the
+  tunnel's hostname (optional) and a **Relay** switch, and **Set Up** (`put_secret`, then
+  `set_remote_access`); once set up, **Change…** and **Remove**.
+
+A member sees each option's state and "An owner of the hub sets it up". A hub too old to answer
+says "The hub's herder is too old for this. Update it from Hub › Updates." in the card's line.
+
+The routes the owner runs keep their cards. Each: the route's mark and name, its state in words,
+then its facts as label–value rows:
 
 - *Through the hub*: **Public address** (`hub.example.com`, or "None yet"), **Front-door
   login** for a tunnel address ("Sends cf-access-client-id, cf-access-client-secret", or "None,
@@ -463,14 +515,17 @@ per option, each three or four lines with the commands in monospace:
   away from home (On Demand). Nothing to add in herder: the machines' home addresses answer.
 
 Steps are collapsed when the route works and open until it does, so a working page reads as
-status first. The TUI has no Remote access view yet; its fleet view still shows each machine's
-addresses.
+status first; herder's options have no steps, as they set themselves up. The TUI has no Remote
+access view yet; its fleet view still shows each machine's addresses.
 
 Screenshots (`RemoteAccessScreenshotTests`): `remote-access-hub-iphone.png` (the Hub tab's
-row, all well), `remote-access-mac.png` (the page: hub working with a front-door login, Tailscale
-on two machines, router VPN worked yesterday), `remote-access-iphone.png` (the page at an
-iPhone's width), `remote-access-none-iphone.png` (nothing set up, every route's steps open); the
-row also shows in `hub-mac.png` and `hub-iphone.png`.
+row, all well), `remote-access-mac.png` (the page: each machine's route and round trip, work-mbp
+pinned through the hub; hub working with a front-door login; a WireGuard config imported and up;
+the hub's WireGuard on; its Cloudflare tunnel up and relay failed; Tailscale on two machines;
+router VPN worked yesterday), `remote-access-iphone.png` (the page at an iPhone's width),
+`remote-access-offers-iphone.png` (a hub this device owns, nothing of herder's set up: each
+option's set-up offered), `remote-access-none-iphone.png` (nothing set up, no hub, every route's
+steps open); the row also shows in `hub-mac.png` and `hub-iphone.png`.
 
 ### 4.5 Usage (`UsageView`)
 
@@ -799,8 +854,10 @@ red: a laptop asleep is expected), an amber tortoise "Slow".
 **Route** (`MachineRoute`, from `Machine::address`): what the connection in use goes over,
 named by kind, then its transport: **Local network** (a private range, loopback, `.local`),
 **Tailscale** (100.64.0.0/10, fd7a:115c:a1e0::/48, `*.ts.net`), **Tunnel** (a `wss://`
-address), **Internet** (any other public address) or **Through ‹hub›** (a `hub://` route,
-relayed by the hub). The transport follows after a dot, "Tailscale · WebSocket"; every
+address), **Internet** (any other public address), **Through ‹hub›** (a `hub://` route,
+relayed by the hub), **Your VPN** (a `wg://` route through a WireGuard config imported into
+herder), **Hub WireGuard** (`wg://hub/…`, herder's WireGuard on the hub) or **Cloudflare relay**
+(`relay+wss://`), as `route_kind` names them (P27.1). The transport follows after a dot, "Tailscale · WebSocket"; every
 connection is WebSocket today, and QUIC (P26.9) adds its own word there, not a new place.
 
 Where it shows:
