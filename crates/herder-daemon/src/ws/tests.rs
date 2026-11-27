@@ -2765,6 +2765,7 @@ async fn agents_act_for_a_bot_person_as_the_user_they_are_linked_to() {
     // Nor signs a provider login in or out, though it may list them.
     let start = CommandBody::StartProviderLogin {
         provider: herder_protocol::Provider::Claude,
+        name: None,
     };
     let refused = control
         .command(SessionId::new("s1"), via("Ada"), start)

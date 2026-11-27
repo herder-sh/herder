@@ -892,6 +892,7 @@ pub enum CommandBody {
     ListProviderLogins,
     StartProviderLogin {
         provider: Provider,
+        name: Option<String>,
     },
     CompleteProviderLogin {
         login_id: String,

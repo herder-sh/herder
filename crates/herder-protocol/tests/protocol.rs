@@ -610,6 +610,11 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::ListProviderLogins),
         command(CommandBody::StartProviderLogin {
             provider: Provider::Claude,
+            name: None,
+        }),
+        command(CommandBody::StartProviderLogin {
+            provider: Provider::Claude,
+            name: Some("claude-ada@example.com.json".into()),
         }),
         command(CommandBody::CompleteProviderLogin {
             login_id: "2c3aa71dfa309d66262b1a34202481ea".into(),
@@ -3538,9 +3543,23 @@ fn provider_logins_have_their_wire_form() {
     assert_eq!(
         serde_json::to_value(CommandBody::StartProviderLogin {
             provider: Provider::Codex,
+            name: None,
         })
         .unwrap(),
         json!({ "type": "start_provider_login", "provider": "codex" })
+    );
+    // Signing an existing login in again names it.
+    assert_eq!(
+        serde_json::from_value::<CommandBody>(json!({
+            "type": "start_provider_login",
+            "provider": "claude",
+            "name": "claude-ada@example.com.json",
+        }))
+        .unwrap(),
+        CommandBody::StartProviderLogin {
+            provider: Provider::Claude,
+            name: Some("claude-ada@example.com.json".into()),
+        }
     );
     let login: ProviderLogin = serde_json::from_value(json!({
         "name": "claude-ada@example.com.json",

@@ -446,7 +446,7 @@ pub fn command(management: &Management, command: CommandBody) -> Result<CommandR
         CommandBody::ListProviderLogins => Ok(CommandResult::ProviderLogins {
             logins: management.logins().map_err(internal)?,
         }),
-        CommandBody::StartProviderLogin { provider } => {
+        CommandBody::StartProviderLogin { provider, .. } => {
             if !matches!(provider, Provider::Claude | Provider::Codex) {
                 return Err(failed(
                     ErrorCode::BadRequest,
@@ -1121,6 +1121,7 @@ mod tests {
             &proxy,
             CommandBody::StartProviderLogin {
                 provider: Provider::Claude,
+                name: None,
             },
         )
         .await
@@ -1211,6 +1212,7 @@ mod tests {
         let proxy = FakeProxy::start();
         let start = || CommandBody::StartProviderLogin {
             provider: Provider::Codex,
+            name: None,
         };
         let Ok(CommandResult::ProviderLoginStarted { login_id, .. }) = run(&proxy, start()).await
         else {
@@ -1261,6 +1263,7 @@ mod tests {
             &proxy,
             CommandBody::StartProviderLogin {
                 provider: Provider::Gemini,
+                name: None,
             },
         )
         .await

@@ -1049,12 +1049,19 @@ pub enum CommandBody {
     ListProviderLogins,
     /// On a hub, have its CLIProxyAPI start signing in to `provider`; owners only. Answered
     /// with `provider_login_started`, the URL to sign in at; the login waits five minutes for
-    /// `complete_provider_login`. Refused with `bad_request` for a provider the proxy cannot
-    /// sign in to here (it can Claude and Codex), and `unsupported` as `list_provider_logins`
-    /// is.
+    /// `complete_provider_login`. With `name`, it signs that login in again: once the
+    /// provider signs in the same account, the proxy replaces the login's tokens in place, so
+    /// it keeps its name, pin, label and fallback mark, and stays the same account on every
+    /// host; a different account is refused when the login completes. Refused with
+    /// `bad_request` for a provider the proxy cannot sign in to here (it can Claude and
+    /// Codex) or that is not the named login's, `not_found` for a `name` the proxy does not
+    /// hold, and `unsupported` as `list_provider_logins` is.
     StartProviderLogin {
         /// The provider.
         provider: crate::Provider,
+        /// The login to sign in again, by its `name`; absent adds a new login.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     /// On a hub, finish a login `start_provider_login` started, with the address the
     /// browser was sent to once the owner signed in; owners only. The proxy trades the code in

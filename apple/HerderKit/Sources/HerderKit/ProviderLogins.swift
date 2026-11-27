@@ -43,7 +43,7 @@ final class HubLogins {
 
     /// Has the proxy start signing in to `provider`: the login and the URL to sign in at.
     func start(_ provider: Provider) async throws -> (loginId: String, url: String) {
-        guard case .providerLoginStarted(let loginId, let url) = try await send(.startProviderLogin(provider: provider)) else {
+        guard case .providerLoginStarted(let loginId, let url) = try await send(.startProviderLogin(provider: provider, name: nil)) else {
             throw HerderError.Local(detail: "the hub did not start the login")
         }
         return (loginId, url)

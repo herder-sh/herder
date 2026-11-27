@@ -2312,6 +2312,7 @@ mod tests {
             CommandBody::ListProviderLogins,
             CommandBody::StartProviderLogin {
                 provider: herder_protocol::Provider::Claude,
+                name: None,
             },
             CommandBody::CompleteProviderLogin {
                 login_id: "state".into(),
