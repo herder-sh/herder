@@ -85,6 +85,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Upgrade<S> {
         &self.path
     }
 
+    /// The stream the request came on.
+    pub(crate) fn stream(&self) -> &S {
+        &self.stream
+    }
+
     /// Answers `101`: the WebSocket, which reads the bytes that came behind the request
     /// first.
     pub(crate) async fn accept(mut self, config: WebSocketConfig) -> Result<WebSocketStream<S>> {

@@ -46,6 +46,7 @@ use super::conn::Upgrade;
 use super::{Shared, blocking, cliproxyapi};
 use crate::auth::DeviceRole;
 use crate::ws;
+use crate::ws::Transport;
 use crate::ws::tunnel::{Frames, Pass};
 
 /// How long a host that is not connected gets to connect before its client is refused: after
@@ -76,6 +77,15 @@ type ProxyBody = BoxBody<Bytes, hyper::Error>;
 /// gone. A peer behind a tunnel is not the socket's peer, so the kernel cannot tell.
 const PING_EVERY: Duration = Duration::from_secs(30);
 const SILENCE: Duration = Duration::from_secs(90);
+
+/// The receive buffer of the hub's socket from a host on a relay stream: how far the hub
+/// reads ahead of what it passed on to the client. Left to itself, the kernel grows it to
+/// megabytes, and a catch-up the client's slower link cannot take yet waits in it, where the
+/// host can put nothing ahead of it: an answer the client waits on queues behind all of it.
+/// This little keeps the backlog on the host, which sends what the client waits on first.
+/// It caps a stream at about this per round trip between the host and the hub (Linux doubles
+/// it for its own use): some 2 MB/s at 30 ms.
+const HOST_READ_AHEAD: usize = 64 * 1024;
 
 /// Time to deliver an answer or a close frame before the socket is dropped.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -526,6 +536,12 @@ async fn accept(
             format!("no client waits for the stream {stream_id}"),
         )
     };
+    // A tunneled host's bytes come through `cloudflared`, whose buffers the hub cannot set.
+    if let Transport::Tcp(tcp) = upgrade.stream().get_ref().0.transport()
+        && let Err(err) = socket2::SockRef::from(tcp).set_recv_buffer_size(HOST_READ_AHEAD)
+    {
+        debug!(%peer, "cannot limit the socket's receive buffer: {err}");
+    }
     let Some(waiting) = shared.relays.accept(stream_id, &host) else {
         refuse(upgrade, peer, gone()).await;
         return Ok(());
