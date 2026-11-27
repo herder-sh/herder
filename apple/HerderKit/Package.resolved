@@ -1,6 +1,15 @@
 {
-  "originHash" : "368d87346d1ac591e125efff5e6f7580947a384fbb101d8574b8a5da2935be0f",
+  "originHash" : "8553451c0724c4702bfd2405c15da6891a8e7939207d0412c1a1d839e96be1b5",
   "pins" : [
+    {
+      "identity" : "keyboardshortcuts",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sindresorhus/KeyboardShortcuts",
+      "state" : {
+        "revision" : "772133d9dbe800fdac0473226822994c5c162c58",
+        "version" : "3.1.0"
+      }
+    },
     {
       "identity" : "sentry-cocoa",
       "kind" : "remoteSourceControl",

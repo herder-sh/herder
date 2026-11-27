@@ -37,7 +37,8 @@ import Testing
 
     private func window(_ fleet: Fleet) -> some View {
         DesktopShell(fleet: fleet, sheet: .constant(nil), item: .constant(.board), pages: .constant(PageStack()),
-                     session: .constant(nil), draft: .constant(nil), people: FleetPeople(fleet: fleet), opened: { _ in })
+                     session: .constant(nil), draft: .constant(nil), people: FleetPeople(fleet: fleet), opened: { _ in },
+                     perform: { _ in })
     }
 
     /// studio, connected, with a task done; devbox with a session running and one waiting on an

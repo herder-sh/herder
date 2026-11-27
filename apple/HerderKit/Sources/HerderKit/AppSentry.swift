@@ -267,13 +267,16 @@ enum AppScrub {
     }
 
     /// A name code or the system gives: a type, a function, a view controller, an operation, a
-    /// version or a device model. Never a path, an email, a URL, a host or a sentence.
+    /// version or a device model. Never a path, an email, a URL, a host, an address or a sentence.
     static func isSymbol(_ text: String) -> Bool {
         guard !text.isEmpty, text.count <= 200, !text.contains("/"), !text.contains("@"), !text.contains("://") else {
             return false
         }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_.:<>()[],-$ "))
         guard text.unicodeScalars.allSatisfy({ allowed.contains($0) && $0.isASCII }) else { return false }
+        // An address with its port, as `10.0.4.17:7447`, or an IPv6 one, as `fd7a:115c:a1e0::1`:
+        // a symbol's colons come with its labels, as in `foo(bar:)`.
+        if text.contains(":"), text.allSatisfy({ $0.isHexDigit || $0 == "." || $0 == ":" }) { return false }
         // A sentence: four or more words of letters.
         let words = text.split(separator: " ").filter { $0.allSatisfy(\.isLetter) }
         guard words.count < 4 else { return false }

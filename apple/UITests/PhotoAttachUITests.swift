@@ -12,9 +12,14 @@ final class PhotoAttachUITests: XCTestCase {
         app.openWaitingTask()
         let attach = app.descendants(matching: .any)["attach"].firstMatch
         XCTAssertTrue(attach.waitForExistence(timeout: 10))
-        attach.tap()
+        // A tap on a loaded CI simulator can land before the menu takes it, leaving it closed,
+        // so tap until its items show.
         let library = app.buttons["Photo Library"]
-        XCTAssertTrue(library.waitForExistence(timeout: 5))
+        for _ in 0..<3 where !library.exists {
+            attach.tap()
+            _ = library.waitForExistence(timeout: 5)
+        }
+        XCTAssertTrue(library.exists, "the attach menu did not open")
         library.tap()
 
         // The picker runs out of process; its photos show as images in the app's hierarchy. On a

@@ -173,5 +173,8 @@ struct AppSentryTests {
         #expect(!AppScrub.isSymbol(secrets[13]))
         #expect(AppScrub.isSymbol("UIHostingController<RootView>"))
         #expect(AppScrub.isSymbol("app.command"))
+        // Colons in a function's labels keep it; an address's colons do not.
+        #expect(AppScrub.isSymbol("Fleet.start(_:accountId:)"))
+        #expect(!AppScrub.isSymbol("100.64.0.7:7447"))
     }
 }

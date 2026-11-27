@@ -169,6 +169,8 @@ private struct SessionPane: View {
         .onAppear { fleet.watch(opened) }
         .task(id: key) { await fleet.showLatest(key) }
         .onDisappear { fleet.unwatch(opened) }
+        // Its keys are the menu bar's; a fork pushed over it takes them.
+        .focusedSceneValue(\.sessionCommands, pushedFork == nil ? commands(model) : nil)
         .navigationDestination(isPresented: Binding(
             get: { pushedFork != nil }, set: { if !$0 { pushedFork = nil } }
         )) {
@@ -286,27 +288,23 @@ private struct SessionPane: View {
                     showsTerminal.toggle()
                 }
                     .accessibilityLabel(showsTerminal ? "Chat" : "Terminal")
-                    .keyboardShortcut("`", modifiers: .command)
                     .help(showsTerminal ? "Back to the chat (⌘`)" : "A shell in this session's worktree (⌘`)")
             }
             if !showsTerminal {
                 HeaderButton(symbol: "magnifyingglass", selected: find.shown) { toggleFind() }
                     .accessibilityLabel("Find in Transcript")
-                    .keyboardShortcut("f", modifiers: .command)
                     .help("Find in the transcript (⌘F)")
             }
             HeaderButton(symbol: "info.circle", selected: inspector == .pane && inspectorShown) {
                 showInspector()
             }
                 .accessibilityLabel("Events and Statistics")
-                .keyboardShortcut("i", modifiers: [.command, .option])
                 .help("Events and statistics (⌥⌘I)")
             #if os(macOS)
             HeaderButton(symbol: listHidden ? "sidebar.squares.left" : "rectangle.expand.vertical") {
                 listHidden.toggle()
             }
                 .accessibilityLabel(listHidden ? "Show the Session List" : "Hide the Session List")
-                .keyboardShortcut("\\", modifiers: .command)
                 .help(listHidden ? "Show the session list (⌘\\)" : "Give the session the whole width (⌘\\)")
             #endif
             if let model {
@@ -321,6 +319,22 @@ private struct SessionPane: View {
     }
 
     private func toggleFind() { find.shown.toggle() }
+
+    /// The header buttons' actions, for the menu bar (`HerderCommands`), which holds their keys.
+    private func commands(_ model: SessionModel?) -> SessionCommands {
+        #if os(macOS)
+        let list: (() -> Void)? = { listHidden.toggle() }
+        #else
+        let list: (() -> Void)? = nil
+        #endif
+        return SessionCommands(
+            terminal: ownsTerminal && model?.state != .archived ? { showsTerminal.toggle() } : nil,
+            showsTerminal: showsTerminal,
+            find: showsTerminal ? nil : { toggleFind() },
+            inspector: { showInspector() },
+            list: list,
+            listHidden: listHidden)
+    }
 
     /// The pull requests `#123` in the transcript can name: the session tree's, then the
     /// project's, whose repository the rest are in.
@@ -804,7 +818,8 @@ struct DraftSessionView: View {
                 skills: fleet.draftSkills(on: hostId, account: account?.accountId),
                 setMode: { mode = $0 },
                 send: start,
-                stop: {}
+                stop: {},
+                draftKey: draft.key
             ) {
                 FooterMenu(section: machineSection, text: machine?.name ?? "", help: "Where it runs")
                 FooterMenu(section: accountSection, text: account?.label ?? "No account",
