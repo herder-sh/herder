@@ -27,6 +27,7 @@ mod compose;
 mod fake;
 mod fork;
 mod fuzzy;
+mod hub_usage;
 mod inbox;
 mod keys;
 mod machines;

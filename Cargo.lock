@@ -2690,6 +2690,7 @@ dependencies = [
  "herder-store",
  "image",
  "insta",
+ "jiff 1.0.3",
  "nix 0.32.0",
  "nucleo-matcher",
  "ratatui",

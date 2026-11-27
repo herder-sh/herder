@@ -66,6 +66,8 @@ pub enum Action {
     Backup(crate::backup::Input),
     /// Input to the fleet's secrets screen.
     Secrets(crate::secrets::Input),
+    /// Input to the fleet's hub usage screen.
+    HubUsage(crate::hub_usage::Input),
     /// Open the selected session's terminal picker, or close it.
     Terminals,
     /// Something in the inbox.

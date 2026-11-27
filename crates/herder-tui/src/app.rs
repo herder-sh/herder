@@ -702,6 +702,7 @@ impl App {
             Action::Machines(input) => return self.machine_input(input),
             Action::Backup(input) => return self.backup_input(input),
             Action::Secrets(input) => return self.secrets_input(input),
+            Action::HubUsage(input) => return self.hub_usage_input(input),
             Action::OpenMachines => return self.open_machines(false),
             Action::AddMachine => return self.open_machines(true),
             Action::ToggleHelp => self.help = !self.help,

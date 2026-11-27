@@ -2657,3 +2657,51 @@ fn a_session_opened_mid_replay_shows_its_latest_events_until_the_replay_reaches_
     assert_eq!(shown.matches("The latest answer.").count(), 1, "{shown}");
     assert!(shown.contains("Answer 38."), "{shown}");
 }
+
+#[test]
+fn the_hub_usage_screen_at_three_widths() {
+    let mut app = fake::hub_usage();
+    at_three_widths("hub_usage", &mut app);
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    assert!(
+        screen.contains("j/k move  enter open  p period  r reload  esc back  ? help"),
+        "{screen}"
+    );
+    // Work, the costliest, opens to its machines, models and days.
+    press(&mut app, KeyCode::Enter);
+    at_three_widths("hub_usage_open", &mut app);
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    assert!(screen.contains("machines"), "{screen}");
+    assert!(screen.contains("Thu 26 Nov"), "{screen}");
+}
+
+#[test]
+fn the_hub_usage_screen_asks_again_for_the_next_period() {
+    let mut app = fake::hub_usage();
+    let effects = app.update(key(KeyCode::Char('p')));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::Effect::Send {
+                command: herder_protocol::CommandBody::GetHubUsage {
+                    period: herder_protocol::UsagePeriod::ThirtyDays
+                },
+                ..
+            }
+        )),
+        "{effects:?}"
+    );
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    assert!(screen.contains("last 30 days"), "{screen}");
+}
+
+#[test]
+fn the_fleet_offers_usage_on_a_hub_only() {
+    let mut app = fake::backups();
+    let screen = render(&mut app, 160, 30).backend().to_string();
+    assert!(!screen.contains("u usage"), "{screen}");
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    let screen = render(&mut app, 160, 30).backend().to_string();
+    assert!(screen.contains("u usage"), "{screen}");
+}

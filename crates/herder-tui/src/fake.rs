@@ -1776,3 +1776,174 @@ pub fn secrets() -> App {
     }
     app
 }
+
+/// The usage screen of [`backups`]' hub, which `devbox` and `laptop` back up to, over the
+/// last 7 days: `Work` on both hosts with two models, three limit hits and two failovers off
+/// it; the Codex login, fallback, on `laptop`, which sessions failed over onto; a login the hub
+/// no longer holds; and one that used nothing.
+pub fn hub_usage() -> App {
+    use herder_protocol::{
+        AccountId, CommandBody, CommandResult, FailoverTotal, HubFailoverTotal, HubUsageTotal,
+        ProviderLogin, ProviderLoginState, UsageTotal, UsageWindow,
+    };
+    let mut app = backups();
+    let mut machines = app.machines.clone();
+    let now = Timestamp::UNIX_EPOCH;
+    if let Some(hub) = machines.iter_mut().find(|m| m.host_id.as_str() == "v") {
+        hub.hosts = ["devbox", "laptop"]
+            .map(|name| FleetHost {
+                host_id: HostId::new(name),
+                host_name: name.into(),
+                online: true,
+                last_seen: now,
+                usage: None,
+                relay: false,
+            })
+            .into();
+    }
+    app.update(Msg::Machines(machines));
+    let press = |app: &mut App, c: char| {
+        app.update(Msg::Key(ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char(c),
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        )))
+    };
+    press(&mut app, 'j');
+    press(&mut app, 'j');
+    let window = |name: &str, used_percent: f64, hours: u64| UsageWindow {
+        window: name.into(),
+        used_percent,
+        resets_at: Some(now + std::time::Duration::from_secs(hours * 3600)),
+    };
+    let login = |pin: &str, provider: Provider, label: Option<&str>, usage: Vec<UsageWindow>| {
+        ProviderLogin {
+            name: format!("{pin}.json"),
+            provider,
+            label: label.map(str::to_owned),
+            email: None,
+            fallback: pin == "codex-ada",
+            usage,
+            pin: pin.into(),
+            state: ProviderLoginState::Active,
+            until: None,
+            message: None,
+        }
+    };
+    let logins = vec![
+        login(
+            "work",
+            Provider::Claude,
+            Some("Work"),
+            vec![window("five_hour", 42.0, 2), window("seven_day", 81.0, 100)],
+        ),
+        login(
+            "codex-ada",
+            Provider::Codex,
+            Some("ada@example.com"),
+            vec![window("five_hour", 12.0, 3)],
+        ),
+        login("spare", Provider::Claude, Some("Spare"), Vec::new()),
+    ];
+    let total =
+        |pin: &str, host: &str, day: &str, model: &str, tokens: u64, cost_usd: f64| HubUsageTotal {
+            pin: pin.into(),
+            host_id: HostId::new(host),
+            day: day.into(),
+            usage: UsageTotal {
+                account_id: AccountId::new(format!("vault-{pin}")),
+                provider: if pin.starts_with("codex") {
+                    Provider::Codex
+                } else {
+                    Provider::Claude
+                },
+                model: model.into(),
+                turns: tokens / 100_000 + 1,
+                input: tokens / 10,
+                output: tokens / 10,
+                cache_read: tokens * 7 / 10,
+                cache_write: tokens / 10,
+                cost_usd,
+                cost_estimated: pin.starts_with("codex"),
+            },
+        };
+    let totals = vec![
+        total(
+            "work",
+            "devbox",
+            "2026-11-25",
+            "claude-opus-5-5",
+            9_400_000,
+            61.20,
+        ),
+        total(
+            "work",
+            "devbox",
+            "2026-11-26",
+            "claude-opus-5-5",
+            3_100_000,
+            22.75,
+        ),
+        total(
+            "work",
+            "laptop",
+            "2026-11-26",
+            "claude-sonnet-5-5",
+            2_200_000,
+            6.10,
+        ),
+        total(
+            "codex-ada",
+            "laptop",
+            "2026-11-26",
+            "gpt-5.5",
+            820_000,
+            3.40,
+        ),
+        total(
+            "gone",
+            "devbox",
+            "2026-11-21",
+            "claude-opus-5-5",
+            40_000,
+            0.30,
+        ),
+    ];
+    let failover = |pin: &str, host: &str, hits, out, into| HubFailoverTotal {
+        pin: pin.into(),
+        host_id: HostId::new(host),
+        failovers: FailoverTotal {
+            account_id: AccountId::new(format!("vault-{pin}")),
+            limit_hits: hits,
+            failovers_out: out,
+            failovers_in: into,
+        },
+    };
+    let failovers = vec![
+        failover("work", "devbox", 3, 2, 0),
+        failover("codex-ada", "laptop", 0, 0, 2),
+    ];
+    for effect in press(&mut app, 'u') {
+        let crate::app::Effect::Send {
+            origin, command, ..
+        } = effect
+        else {
+            continue;
+        };
+        let result = match command {
+            CommandBody::GetHubUsage { period } => CommandResult::HubUsage {
+                period,
+                since: now,
+                totals: totals.clone(),
+                failovers: failovers.clone(),
+            },
+            _ => CommandResult::ProviderLogins {
+                logins: logins.clone(),
+            },
+        };
+        app.update(Msg::Sent {
+            origin,
+            result: Ok(result),
+        });
+    }
+    app
+}

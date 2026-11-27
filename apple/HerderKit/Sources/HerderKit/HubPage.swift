@@ -5,7 +5,8 @@ import SwiftUI
 /// the secrets in it, and the latest fetches. Owners create and delete sets, add, replace and
 /// delete secrets, and grant a set to the hub's hosts or revoke it. A value is typed into a
 /// secure field and never shown again. A Logins tab lists the provider logins in the
-/// CLIProxyAPI next to the hub, and adds and removes them.
+/// CLIProxyAPI next to the hub, and adds and removes them; a Usage tab what each of them was
+/// used for on every machine.
 struct HubPage: View {
     let fleet: Fleet
     let hub: HostId
@@ -13,6 +14,7 @@ struct HubPage: View {
     @State private var tab = Tab.overview
     @State private var secrets: HubSecrets
     @State private var logins: HubLogins
+    @State private var usage: HubUsage
     @State private var adding: LoginAdder?
     @State private var removing: ProviderLogin?
     @State private var newSet = ""
@@ -21,7 +23,7 @@ struct HubPage: View {
     @State private var error: String?
 
     enum Tab: Hashable {
-        case overview, secrets, logins
+        case overview, secrets, logins, usage
     }
 
     /// A set or a secret, asked about before it is deleted.
@@ -50,15 +52,18 @@ struct HubPage: View {
         _tab = State(initialValue: tab)
         _secrets = State(initialValue: HubSecrets(fleet: fleet, hub: hub))
         _logins = State(initialValue: HubLogins(fleet: fleet, hub: hub))
+        _usage = State(initialValue: HubUsage(fleet: fleet, hub: hub))
     }
 
-    /// The page with `secrets` and `logins` in place of the hub's, for previews and tests.
-    init(fleet: Fleet, hub: HostId, tab: Tab, secrets: HubSecrets, logins: HubLogins) {
+    /// The page with `secrets`, `logins` and `usage` in place of the hub's, for previews and
+    /// tests.
+    init(fleet: Fleet, hub: HostId, tab: Tab, secrets: HubSecrets, logins: HubLogins, usage: HubUsage? = nil) {
         self.fleet = fleet
         self.hub = hub
         _tab = State(initialValue: tab)
         _secrets = State(initialValue: secrets)
         _logins = State(initialValue: logins)
+        _usage = State(initialValue: usage ?? HubUsage(fleet: fleet, hub: hub))
     }
 
     var body: some View {
@@ -71,6 +76,13 @@ struct HubPage: View {
                 IconButton(symbol: "arrow.clockwise", help: "Reload") { Task { await secrets.reload() } }
             } else if tab == .logins {
                 IconButton(symbol: "arrow.clockwise", help: "Reload") { Task { await logins.reload() } }
+            } else if tab == .usage {
+                IconButton(symbol: "arrow.clockwise", help: "Reload") {
+                    Task {
+                        await logins.reload()
+                        await usage.reload()
+                    }
+                }
             }
             IconButton(symbol: "gearshape", help: "Machine Settings") { pages.open(.machine(hub)) }
         } content: {
@@ -79,6 +91,7 @@ struct HubPage: View {
                     Text("Overview").tag(Tab.overview)
                     Text("Secrets").tag(Tab.secrets)
                     Text("Logins").tag(Tab.logins)
+                    Text("Usage").tag(Tab.usage)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -92,6 +105,9 @@ struct HubPage: View {
                     Text(error).font(.footnote).foregroundStyle(Theme.failure)
                         .accessibilityIdentifier("provider-logins-change-error")
                 }
+            } else if owned && tab == .usage {
+                HubUsageSection(usage: usage, logins: logins,
+                                hostNames: Dictionary((machine?.hosts ?? []).map { ($0.hostId, $0.hostName) }) { a, _ in a })
             } else if owned && tab == .secrets {
                 VStack(alignment: .leading, spacing: 18) { sets(machine) }
                 if let error {
@@ -109,7 +125,7 @@ struct HubPage: View {
         .task(id: tab) {
             switch tab {
             case .secrets: await secrets.reload()
-            case .logins: await logins.reload()
+            case .logins, .usage: await logins.reload()
             case .overview: break
             }
         }

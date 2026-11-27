@@ -35,6 +35,7 @@ mod composer;
 mod details;
 mod fork;
 mod help;
+mod hub_usage;
 mod inbox;
 mod machines;
 mod markdown;
