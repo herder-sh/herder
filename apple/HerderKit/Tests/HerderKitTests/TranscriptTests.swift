@@ -202,7 +202,7 @@ struct TranscriptTests {
         model.outbox = [outgoing]
         // Running: the message shows until the machine's queue lists it; the tray has it then.
         #expect(Transcript.blocks(model).last == .user(id: outgoing.id.uuidString, text: "next", outgoing: outgoing))
-        model.settle([QueuedPrompt(promptId: "p1", text: "next", images: 0, by: "sample", agentMessage: nil)])
+        model.settle([QueuedPrompt(promptId: "p1", text: "next", images: 0, by: "sample", agentMessage: nil)], head: model.lastSeq)
         #expect(model.outbox.isEmpty)
         #expect(Transcript.blocks(model).last == .working(since: model.turnStartedAt, waiting: false))
         // Idle: the message, then the wait for the agent to take it, until it does.
@@ -220,11 +220,63 @@ struct TranscriptTests {
         model.outbox = [outgoing]
         // No turn runs: the machine lists the prompt only until it takes it to start the CLI.
         let queue = [QueuedPrompt(promptId: "p1", text: "first", images: 0, by: "sample", agentMessage: nil)]
-        model.settle(queue)
+        model.settle(queue, head: model.lastSeq)
         #expect(model.outbox == [outgoing])
         #expect(model.waiting(in: queue).isEmpty)
-        model.settle([])
+        model.settle([], head: model.lastSeq)
         #expect(Transcript.blocks(model).contains(.user(id: outgoing.id.uuidString, text: "first", outgoing: outgoing)))
+    }
+
+    /// A fold hours behind its machine still shows a turn the machine ended long ago. The
+    /// prompt its queue lists is about to start, not waiting behind that turn: it stays in the
+    /// transcript, through the machine taking it off the queue, until the journal shows it.
+    @Test func aSentPromptStaysWhileTheFoldIsBehindItsMachine() {
+        var script = Script()
+        var model = script.model([created(), .turnStarted(turnId: "t1")])
+        let outgoing = Outgoing(text: "next", state: .delivered)
+        model.outbox = [outgoing]
+        let queue = [QueuedPrompt(promptId: "p1", text: "next", images: 0, by: "sample", agentMessage: nil)]
+        model.settle(queue, head: model.lastSeq + 40)
+        #expect(model.outbox == [outgoing])
+        #expect(model.waiting(in: queue).isEmpty)
+        model.settle([], head: model.lastSeq + 42)
+        #expect(Transcript.blocks(model).contains(.user(id: outgoing.id.uuidString, text: "next", outgoing: outgoing)))
+    }
+
+    /// A prompt whose answer has yet to come that the machine's queue already lists shows once,
+    /// in the transcript, not in the tray as well.
+    @Test func aPromptOnItsWayThatTheQueueListsShowsOnce() {
+        var script = Script()
+        var model = script.model([created()])
+        let outgoing = Outgoing(text: "next", state: .sending)
+        model.outbox = [outgoing]
+        let queue = [QueuedPrompt(promptId: "p1", text: "next", images: 0, by: "sample", agentMessage: nil)]
+        #expect(model.waiting(in: queue).isEmpty)
+        #expect(Transcript.blocks(model, queue: queue).contains(.user(id: outgoing.id.uuidString, text: "next", outgoing: outgoing)))
+        model.outbox = [Outgoing(text: "next", state: .failed("refused"))]
+        #expect(model.waiting(in: queue) == queue)
+    }
+
+    /// A copy folding its journal from the start passes messages sent before with the same
+    /// words: only the one journaled after it was sent takes what this device sent.
+    @Test func onlyAMessageJournaledAfterTheSendTakesIt() {
+        var script = Script()
+        let history = [
+            created(), .turnStarted(turnId: "t1"), item("u1", .userMessage(text: "yes", attachments: []), turn: "t1"),
+            .turnCompleted(turnId: "t1", usage: nil),
+        ].map { script.event($0) }
+        var model = SessionModel(key: script.key)
+        model.apply(SessionUpdate(events: history, streaming: []))
+        var outgoing = Outgoing(text: "yes", state: .delivered)
+        outgoing.after = model.lastSeq
+        var replay = SessionModel(key: script.key)
+        replay.outbox = [outgoing]
+        replay.apply(SessionUpdate(events: history, streaming: []))
+        #expect(replay.outbox == [outgoing])
+        model.outbox = [outgoing]
+        model.apply(script.event(.turnStarted(turnId: "t2")))
+        model.apply(script.event(item("u2", .userMessage(text: "yes", attachments: []), turn: "t2")))
+        #expect(model.outbox.isEmpty)
     }
 
     @Test func claudeSessionsStartOnOpus() {
@@ -430,9 +482,9 @@ struct DefaultAccountTests {
         let delivered = Outgoing(text: "next", images: [], state: .delivered)
         model.outbox = [typing, failed, delivered]
         let agent = AgentMessage(senderSessionId: "other", messageId: "m1", hopCount: 1, permissionCeiling: .ask)
-        model.settle([QueuedPrompt(promptId: "p1", text: "next", images: 0, by: nil, agentMessage: agent)])
+        model.settle([QueuedPrompt(promptId: "p1", text: "next", images: 0, by: nil, agentMessage: agent)], head: model.lastSeq)
         #expect(model.outbox == [typing, failed, delivered])
-        model.settle([QueuedPrompt(promptId: "p2", text: "next", images: 0, by: "sample", agentMessage: nil)])
+        model.settle([QueuedPrompt(promptId: "p2", text: "next", images: 0, by: "sample", agentMessage: nil)], head: model.lastSeq)
         #expect(model.outbox == [typing, failed])
     }
 

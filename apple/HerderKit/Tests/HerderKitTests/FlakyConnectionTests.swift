@@ -117,6 +117,37 @@ struct FlakyConnectionTests {
         #expect(fleet.session(direct)?.loaded == true)
     }
 
+    /// A message sent from the host's copy shows on whichever copy the open session moves to,
+    /// as the connections drop and come back, until the copy shown has journaled it.
+    @Test func aSentMessageMovesWithTheCopyShown() async throws {
+        let fleet = try openFleet()
+        list([devbox(), hub()], on: fleet)
+        fleet.applyForTesting(SessionUpdate(events: journal(), streaming: []), to: direct)
+        fleet.watch(direct)
+        await fleet.submit("Tidy the README", to: direct)
+        let shows = { (key: SessionKey) in
+            fleet.transcript(key).contains { block in
+                if case .user(_, "Tidy the README", _, .some, _, _) = block { true } else { false }
+            }
+        }
+        #expect(shows(direct))
+
+        // The host drops, and the hub's copy, further along, is shown: the message too, though
+        // the hub's journal has the same words from before it was sent.
+        list([devbox(.disconnected(error: "unreachable")), hub()], on: fleet)
+        fleet.applyForTesting(SessionUpdate(events: journal(more: 2), streaming: []), to: replica)
+        #expect(fleet.source(for: direct) == replica)
+        #expect(shows(replica))
+
+        // The hub's copy journals it: it shows from the journal there.
+        let taken = Event(sessionId: "01A", seq: 7, at: "2026-01-01T00:00:07Z", by: nil, body: .itemAdded(item: Item(
+            agentMessage: nil, parentCallId: nil, id: "u2", turnId: "t2",
+            body: .userMessage(text: "Tidy the README", attachments: []))))
+        fleet.applyForTesting(SessionUpdate(events: [taken], streaming: []), to: replica)
+        #expect(!shows(replica))
+        #expect(fleet.session(replica)?.outbox.isEmpty == true)
+    }
+
     /// A session its machine stops listing while it is open keeps what it shows.
     @Test func anOpenSessionKeepsItsStateWhenItsMachineStopsListingIt() throws {
         let fleet = try openFleet()

@@ -132,8 +132,14 @@ struct SessionModel {
     /// running turn: the queue tray shows it from then on. With no turn running, a listed prompt
     /// is about to start, and the machine takes it off the queue before it journals it; it stays
     /// here till then, so it does not vanish while the CLI starts.
-    mutating func settle(_ queue: [QueuedPrompt]) {
-        guard turn != nil else { return }
+    ///
+    /// `head` is the journal's last event as the machine lists it. A fold behind it may show a
+    /// turn that ended long ago, and a prompt the queue lists is then about to start: handed
+    /// over, it went from the transcript as soon as the machine took it off the queue, before
+    /// the fold showed it journaled. A session folded hours behind its host lost the message
+    /// the user sent that way.
+    mutating func settle(_ queue: [QueuedPrompt], head: UInt64) {
+        guard turn != nil, lastSeq >= head else { return }
         for prompt in queue where prompt.agentMessage == nil {
             if let index = outbox.firstIndex(where: { $0.state == .delivered && $0.text == prompt.text }) {
                 outbox.remove(at: index)
@@ -141,9 +147,11 @@ struct SessionModel {
         }
     }
 
-    /// The prompts of the machine's queue the transcript does not show from the outbox.
+    /// The prompts of the machine's queue the transcript does not show from the outbox. One
+    /// still on its way shows there too: the machine listing it has it, whether or not its
+    /// answer has come yet, and it showed twice, in the transcript and in the tray.
     func waiting(in queue: [QueuedPrompt]) -> [QueuedPrompt] {
-        var shown = outbox.filter { $0.state == .delivered }.map(\.text)
+        var shown = outbox.filter(\.pending).map(\.text)
         return queue.filter { prompt in
             guard prompt.agentMessage == nil, let index = shown.firstIndex(of: prompt.text) else { return true }
             shown.remove(at: index)
@@ -332,7 +340,11 @@ struct SessionModel {
         switch event.body {
         case .itemAdded(let item):
             log.append(.item(item))
-            if item.parentCallId == nil, item.agentMessage == nil, item.followUp == nil, case .userMessage(let text, _) = item.body, let index = outbox.firstIndex(where: { $0.text == text }) {
+            // Only a message journaled after it was sent is it: a copy folding its journal from
+            // the start passes the same words sent before.
+            if item.parentCallId == nil, item.agentMessage == nil, item.followUp == nil,
+               case .userMessage(let text, _) = item.body,
+               let index = outbox.firstIndex(where: { $0.text == text && event.seq > $0.after }) {
                 outbox.remove(at: index)
             }
         case .branchCheckedOut(let branch): notice("Checked out \(branch)")
@@ -1058,6 +1070,9 @@ struct Outgoing: Hashable, Identifiable {
     var files: [PromptFile] = []
     var state: State = .sending
     var sentAt = Date.now
+    /// The journal's last event as far as any copy of the session had folded it when this was
+    /// sent: the user message it becomes is journaled after.
+    var after: UInt64 = 0
 
     /// Whether it is on its way or delivered, not failed.
     var pending: Bool { if case .failed = state { false } else { true } }
