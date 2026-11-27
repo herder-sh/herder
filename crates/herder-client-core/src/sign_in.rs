@@ -54,6 +54,7 @@ pub(crate) async fn start(
         pairing_code: None,
         sign_in: true,
         passkey: false,
+        deflate: false,
     };
     let (ws, opened, _) = supervisor::open(&saved.addresses, &saved.fingerprint, &device, hello)
         .await

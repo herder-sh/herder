@@ -575,6 +575,7 @@ impl Client {
             pairing_code: self.pairing_code.clone(),
             sign_in: false,
             passkey: false,
+            deflate: false,
         }))
         .await;
         let ServerMessage::Hello(hello) = self.recv().await else {
@@ -597,6 +598,7 @@ impl Client {
             pairing_code: None,
             sign_in: true,
             passkey: true,
+            deflate: false,
         }))
         .await;
         let ServerMessage::SignInChallenge {
@@ -695,6 +697,7 @@ async fn hello_is_answered_with_the_protocol_version_and_lists() {
             pairing_code: None,
             sign_in: false,
             passkey: false,
+            deflate: false,
         }))
         .await;
     let ServerMessage::Hello(hello) = client.recv().await else {
@@ -729,6 +732,7 @@ async fn a_wrong_protocol_version_is_refused() {
             pairing_code: None,
             sign_in: false,
             passkey: false,
+            deflate: false,
         }))
         .await;
     let ServerMessage::Error { error, .. } = client.recv().await else {
@@ -1375,6 +1379,7 @@ async fn refused(mut client: Client) -> ErrorInfo {
             pairing_code: client.pairing_code.clone(),
             sign_in: false,
             passkey: false,
+            deflate: false,
         }))
         .await;
     let ServerMessage::Error { error, .. } = client.recv().await else {
@@ -2002,6 +2007,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
             pairing_code: None,
             sign_in: false,
             passkey: false,
+            deflate: false,
         }))
         .await;
     assert!(matches!(client.recv().await, ServerMessage::Hello(_)));
@@ -2944,6 +2950,7 @@ async fn a_fresh_daemon_gets_its_first_owner_by_an_assertion_and_their_devices_n
             pairing_code: None,
             sign_in: true,
             passkey: false,
+            deflate: false,
         }))
         .await;
     assert!(matches!(
@@ -3391,6 +3398,7 @@ async fn an_invited_member_connects_a_role_change_applies_and_a_revoke_disconnec
         pairing_code: None,
         sign_in: true,
         passkey: false,
+        deflate: false,
     }))
     .await;
     assert!(
@@ -3802,6 +3810,7 @@ async fn a_terminal_without_a_passkey_asks_the_phone_and_waits_for_it() {
         pairing_code: None,
         sign_in: true,
         passkey: false,
+        deflate: false,
     }))
     .await;
     assert!(matches!(

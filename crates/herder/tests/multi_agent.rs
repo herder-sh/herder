@@ -487,6 +487,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             pairing_code: None,
             sign_in: true,
             passkey: false,
+            deflate: false,
         }))
         .await;
     let ServerMessage::SignInChallenge { registration, .. } = client.recv().await else {

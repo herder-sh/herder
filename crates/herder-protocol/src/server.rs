@@ -234,6 +234,10 @@ pub struct ServerHello {
     /// daemon that does not say.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub addresses: Vec<String>,
+    /// Whether the daemon reads binary frames of compressed messages ([`crate::deflate`]),
+    /// and sends them after this hello to a client whose hello said `deflate`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deflate: bool,
 }
 
 /// A host that replicates to a hub, as the hub lists it.

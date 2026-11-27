@@ -177,6 +177,7 @@ async fn read_sessions(hub: &HubConfig, device: &DeviceKey) -> Result<Vec<Sessio
         pairing_code: hub.pairing_code.clone(),
         sign_in: false,
         passkey: false,
+        deflate: false,
     });
     let token = "read".to_owned();
     for message in [

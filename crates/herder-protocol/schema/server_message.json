@@ -5115,6 +5115,10 @@
             "type": "string"
           }
         },
+        "deflate": {
+          "description": "Whether the daemon reads binary frames of compressed messages ([`crate::deflate`]),\nand sends them after this hello to a client whose hello said `deflate`.",
+          "type": "boolean"
+        },
         "device_id": {
           "description": "The paired device this connection comes from.",
           "$ref": "#/$defs/DeviceId"
