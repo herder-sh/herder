@@ -3611,7 +3611,10 @@ impl Logged {
         };
         tokio::time::timeout(TIMEOUT, logged)
             .await
-            .unwrap_or_else(|_| panic!("fewer than {count} lines with {text:?} for {client}"))
+            .unwrap_or_else(|_| {
+                let all = self.lines("", client);
+                panic!("fewer than {count} lines with {text:?} for {client}: {all:#?}")
+            })
     }
 }
 
