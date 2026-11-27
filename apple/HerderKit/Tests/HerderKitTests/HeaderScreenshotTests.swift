@@ -8,7 +8,7 @@ import Testing
 
 /// Draws the Mac window's headers as the app's dark appearance shows them: a project's list pane
 /// beside an open session waiting for the user with a PR, that session at the window's full
-/// width, and the Setup page; attaches each, and with `HERDER_SCREENSHOT_DIR` set, also
+/// width, and the Hub page; attaches each, and with `HERDER_SCREENSHOT_DIR` set, also
 /// writes them there as `headers-pane.png`, `headers-wide.png` and `headers-machines.png`.
 @MainActor @Suite(.serialized) struct HeaderScreenshotTests {
     @Test func drawsTheListPaneBesideTheSession() async throws {
@@ -25,7 +25,7 @@ import Testing
 
     @Test func drawsAPageHeader() async throws {
         let (fleet, _, _) = try await sampleFleet()
-        try await shoot(fleet, item: .setup, session: nil, width: 1440, named: "headers-machines.png")
+        try await shoot(fleet, item: .hub, session: nil, width: 1440, named: "headers-machines.png")
     }
 
     private func shoot(_ fleet: Fleet, item: SidebarItem, session: SessionKey?, width: CGFloat,

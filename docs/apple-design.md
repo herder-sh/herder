@@ -20,7 +20,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 ## 1. Decisions at a glance
 
 1. **One information architecture everywhere.** Board, Projects, Usage, Skills,
-   Setup (machines, with a hub inside, and people), a session, and settings sheets. The Mac, the iPad and the iPhone show the
+   Hub (machines, with a hub inside, and people), Bots under Chats, a session, and settings sheets. The Mac, the iPad and the iPhone show the
    same sections with the same names; only the navigation chrome changes (§3).
 2. **Three layouts, chosen by width, not by device.** `FleetView` picks the layout from the
    horizontal size class; `ListAndSession` picks list-beside-session from the pane's width.
@@ -55,10 +55,11 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 | **Projects** | every project with its sessions, children under parents | sidebar *projects* tree | `ProjectsView` (iPhone), `ProjectSessions` (Mac/iPad) |
 | **Usage** | tokens and API-equivalent dollars over a period, per account and model | — | `UsageView` |
 | **Skills** | the skill library on every machine, and a session's project skills | — | `SkillsView` |
-| **Setup** | what needs you, each with its fix; the hub with the machines that sync to it; your devices; the people | fleet + accounts | `SetupView` |
-| Hub (inside Setup) | a hub's hosts, how current each is, and its secrets | fleet, host grouping | `HubPage` |
+| **Hub** | what needs you, each with its fix; the hub with the machines that sync to it; your devices; the people | fleet + accounts | `HubView` |
+| a hub's page (inside Hub) | a hub's hosts, how current each is, and its secrets | fleet, host grouping | `HubPage` |
 | **Session** | one session: transcript, request, composer | session pane, chat tab | `SessionView` |
 | Terminal | owner-only shells in the session's worktree | term tab | `TerminalPane` |
+| **Bots** (under Chats) | the bots' conversations, a section a bot, apart from your own chats; their settings one step in | — | `BotSessions`, `BotSettingsView` |
 | Inspector | the session's events and stats | details panel | `SessionInspector` |
 | Settings | per machine and per project, as sheets | dialogs | `MachineSettingsSheet`, `ProjectSettingsSheet` |
 | New session | pick a project, then an empty chat whose first message creates it | `n` dialog | `ProjectPicker`, `DraftSessionView` |
@@ -83,7 +84,7 @@ the project header's gear).
 | | Mac window / iPad regular | narrow regular (< 820 pt content) | iPhone / compact |
 |---|---|---|---|
 | frame | `DesktopShell` | `DesktopShell` | `FleetView.tabs` |
-| navigation | sidebar: rail (76 pt) or full (228 pt) | same | tab bar: Board · Chats · Projects · Setup |
+| navigation | sidebar: rail (76 pt) or full (228 pt) | same | tab bar: Board · Chats · Projects · Hub |
 | section switch | sidebar rows; the pane title's menu (`Switcher`) | same | tabs |
 | list | 380 pt pane beside the session (`ListAndSession`) | full width until a session opens | full screen, `NavigationStack` |
 | session | fills the rest | replaces the list, with **Back** | pushed; tab bar hidden |
@@ -98,7 +99,7 @@ Rules:
   size class is compact and `DesktopShell` otherwise, so an iPad in slide-over gets the iPhone
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
-- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats), then **Workspace**, the setup (Providers, Skills, Setup, Integrations; a hub lives inside Setup), then the
+- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats, then Bots with a row per bot, §4.2.1), then **Workspace** (Providers, Skills, Hub; a hub's page opens inside Hub), then the
   projects, then one footer line for the machines (`MachinesFooter`). It starts collapsed to
   the rail (`sidebarCollapsed`), which leaves the width to the session and lists the same
   things in the same order; ⇧⌘\ toggles it. The window's traffic lights sit in its top bar
@@ -115,7 +116,7 @@ Rules:
   The sessions no project holds yet stay last.
 - **The machines footer** is a dot per machine coloured by its connection (`ConnectionMark`)
   and a summary ("4 machines · 1 offline"). Clicking it opens a popover with each machine's
-  status, each row opening its page, and a link to Setup. On the rail it is the dots alone.
+  status, each row opening its page, and a link to Hub. On the rail it is the dots alone.
 - **The list pane** is 380 pt (`ListAndSession`). ⌘\ hides it to give the session the whole
   width (`listHidden`); with no session open it always shows.
 - **The pane header** (`Pane`) is a `PageHeader` (§8.4): the title (a menu of sections and
@@ -123,8 +124,8 @@ Rules:
   narrow pane to "1 needs you · 238 tasks", never cut), the pane's actions on the right as
   header controls (§8.4), then a search field where the pane lists sessions.
 - **The tab bar** on compact width has the same sections as the sidebar: Board (badged with the
-  request count), Chats, Projects, Setup (badged amber with what needs you). Skills, Providers,
-  Integrations and a hub show inside Setup. Each tab is its own `NavigationStack` (`boardPath`,
+  request count), Chats (with Bots as its second switch), Projects, Hub (badged amber with what
+  needs you). Skills, Providers and a hub's page show inside Hub. Each tab is its own `NavigationStack` (`boardPath`,
   `projectsPath`), so switching tabs keeps each tab's place.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
@@ -161,18 +162,34 @@ doing; a waiting dot replaces the old Needs you section.
   the rolled-up state glyph, with the sort menu, settings and New Session. The iPhone's Projects
   list says the same status under each project's name.
 
+### 4.2.1 Bots (`BotSessions`, `BotSettingsView`)
+
+A bot is a way into chat, so Bots lives with Chats, as its own section, never mixed into your
+chats: on the Mac and iPad the sidebar's **Bots** row sits under Chats with a row per bot
+under it; on the iPhone it is the second switch of the Chats tab (Mine · Bots). It lists the
+conversations people started with the bots, a section a bot (§4.7's rows, the person and the
+place in the activity line), counted by what waits for you.
+
+Its settings are one step in, not a section of their own: the pane's gear (the toolbar's on
+iPhone, while Bots shows) opens **Bot Settings** (`Page.botSettings`), every bot on every
+machine you own as one table, each opening its page (`BotPage`); a single bot's gear opens its
+page directly. **Add Bot** is in the pane's header on the Mac and Bot Settings' toolbar on
+iPhone. Screenshots: `mac-bots.png`, `mac-bots-session.png`, `ios-bots.png`,
+`mac-bot-settings.png`, `mac-bot-settings-narrow.png`, `ios-bot-settings.png`
+(`ScreenshotTests`).
+
 ### 4.3 Pull Requests
 
 The apps have no Pull Requests section (unlike the TUI's prs view), and nothing counts PRs
 across sessions. A session shows its PRs as text: the chip in its header (§5.1) and the badges
 on its row.
 
-### 4.4 Setup and hub (`SetupView`, `MachinesView`, `HubPage`)
+### 4.4 Hub (`HubView`, `MachinesView`, `HubPage`)
 
-Setup shows how your herder is put together, in the words herder.sh uses: your **devices**
+Hub shows how your herder is put together, in the words herder.sh uses: your **devices**
 (the apps) reach your **machines**, and the **hub** keeps what should outlive any one machine.
-It is the sidebar's **Setup** row under Workspace and the iPhone's fourth tab, badged amber
-with how many things need you (`SetupCount`). Every element is something you act on or need to
+It is the sidebar's **Hub** row under Workspace and the iPhone's fourth tab, badged amber
+with how many things need you (`HubCount`). Every element is something you act on or need to
 understand your setup; what only diagnoses a machine is on that machine's page (§8.7).
 
 Its header reads "2 need you" or "Everything is set up", and has **Add a Device**
@@ -182,7 +199,7 @@ order, the page has:
 - **Needs you** (`NeedsYouSection`), only while something does: a card per item, its mark in
   amber, what happened in a line, and the one button that fixes it, beside the text on the Mac
   and under it on the iPhone (`NeedsYouCard`). Only real actions are here, and only they count
-  in the badge (`SetupProblem.found`): machines that still know you by an earlier setup
+  in the badge (`HubProblem.found`): machines that still know you by an earlier setup
   (Approve…), your other Mac or iPhone missing from a machine you own (Add a Device), an
   account signed out on a machine you own (Sign In…, its Account page). A machine that is
   offline needs nothing.
@@ -223,7 +240,7 @@ order, the page has:
   is signed with your passkey (§8.4 Face ID). A machine's page opens its own people
   (`PeoplePage`), the same rows narrowed to it.
 
-What Setup no longer shows, and where it is instead: a machine's address, round trip, CPU
+What Hub no longer shows, and where it is instead: a machine's address, round trip, CPU
 load, CLI versions and account count (its page: the header, Connection, Provider CLIs,
 Accounts); how far a machine's copy lags (the hub's page, with its "Why?"); your role on every
 row (only "Member" is said, as it is what limits you); the You row (you are the first row of
@@ -232,8 +249,8 @@ collection to sort, so they are not a `SortableTable` (§8.4). There is no who-c
 and no "Add a device…" row at the foot of the machines.
 
 On iPhone the page is the same, in one column, with "Everything is set up" at its top when
-nothing needs you, and Skills, Providers and Integrations are rows at its foot. Screenshots: `setup-mac.png`, `setup-iphone.png`, `setup-no-hub-iphone.png`,
-`setup-person-mac.png`, `setup-needs-you-iphone.png` (`SetupScreenshotTests`), `machines.png`,
+nothing needs you, and Skills and Providers are rows at its foot. Screenshots: `hub-mac.png`, `hub-iphone.png`, `hub-no-hub-iphone.png`,
+`hub-person-mac.png`, `hub-needs-you-iphone.png` (`HubScreenshotTests`), `machines.png`,
 `hub-page.png` (`MachinesScreenshotTests`), and the app's `mac-machines.png`,
 `ios-machines.png`, `mac-person-sheet.png`, `ios-person-sheet.png` (`ScreenshotTests`).
 
@@ -266,7 +283,7 @@ install's terminal, so the machine's versions are current when the job ends.
 
 **Adding a device** (`AddDevice.swift`, P22.5). Two halves of one flow, sharing the
 per-machine rows and their marks. A device with machines offers **Add a Device** in
-Setup's header and on the You page's Devices (§8.9), once a machine knows it as a person
+Hub's header and on the You page's Devices (§8.9), once a machine knows it as a person
 (`Fleet.canShare`). Its sheet (`AddDeviceSheet`, "Add a device") shows the `herder://fleet` link
 of `Client::share()`, which names you and your passkeys as your connected machines list them, as
 a large QR code (or why it could not make one), then **Shares your 5 machines** with each machine's name as a chip, and one line:
@@ -357,7 +374,7 @@ the Claim your machines sheet that came up on launch and Fleet's claim banner.
 
 Claim your machines (`ClaimSheet`), which moves machines that still know you by an old
 per-machine user to your passkey and asks about the users nobody can place, no longer comes up
-on launch and has no Fleet banner: it opens from People (`fleet.offerClaim`), the entry Setup's
+on launch and has no Fleet banner: it opens from People (`fleet.offerClaim`), the entry Hub's
 Needs you takes over. A `herder://own` link opened from outside the app, and a hub set up from
 a machine's Backup, still approve in `ApproveSheet`. `AddMachineScreenshotTests` draws Install,
 Kubernetes, Approve, Done and a hub to sign in to (`mac-add-machine-*.png`, `mac-add-hub.png`).
@@ -405,7 +422,7 @@ the app cannot read a skill's files); **Import** opens `SkillImportSheet`: a fol
 device, every file in it but the hidden ones, named after it (`SkillFolder`), or a git URL and a
 folder in it. Both are `AppSheet`s; a refused change shows as a toast. Members see everything and
 change nothing: the actions and menus are hidden, the switches disabled, and a line says why. It
-fills the width on the Mac; on iPhone it opens from the foot of Setup. Screenshots:
+fills the width on the Mac; on iPhone it opens from the foot of Hub. Screenshots:
 `mac-skills.png`, `ios-skills.png` (`apple/ScreenshotTests`, against the demo fleet's library).
 
 ### 4.7 List rules (every session list)
@@ -855,7 +872,7 @@ Xcode preview in its file.
 Objects get pages, actions get sheets. A machine, an account, a project's settings, a hub and
 a provider's sub-agent are a `Page`. On the Mac and iPad a page opens over its section in the
 main area (`PageStack` in `DesktopShell`), under a breadcrumb of the section and each page on
-the way ("Setup › trash-can-01"), each crumb a way back to it and ⌘[ one step back
+the way ("Hub › trash-can-01"), each crumb a way back to it and ⌘[ one step back
 (`PageTrail`); choosing a section in the sidebar, even the one shown, closes its pages. On iPhone
 the same page is pushed on the tab's `NavigationStack` (`NavRoute.page`). Views open and close
 pages through the environment's `pages` (`PageNavigator`), so they need not know which.
@@ -970,7 +987,7 @@ session onto its default model, and the model menu picks the model.
 
 ### 8.9 You page (P22.7)
 
-`YouPage` replaces People › You: Setup's Your devices rows and your row in People open it
+`YouPage` replaces People › You: Hub's Your devices rows and your row in People open it
 (`Page.you`). Top to bottom:
 
 - **Header** (`YouHeader`): your avatar, name and what you are on the machines ("Owner of 5
@@ -1026,9 +1043,10 @@ iPhone layout fixes land in P7.21.
 |---|---|---|
 | Board | `mac-home.png`, `mac-sidebar-expanded.png` | `ios-home.png` |
 | Project / Projects | `mac-project.png` | `ios-projects.png` |
-| Setup, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
+| Hub, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
 | Session (idle, approval, running) | `mac-session.png`, `mac-session-approval.png`, `mac-session-running.png` | `ios-session.png`, `ios-session-keyboard.png`, `ios-session-approval.png`, `ios-session-running.png` |
 | Session menu | — | `ios-session-menu.png` |
+| **Bots** (under Chats) | the bots' conversations, a section a bot, apart from your own chats; their settings one step in | — | `BotSessions`, `BotSettingsView` |
 | Inspector | `mac-session-inspector.png` | `ios-session-inspector.png` |
 | Terminal | `mac-session-terminal.png` | — |
 | New session | `mac-new-session.png` | `ios-new-session.png`, `ios-new-session-path.png` |

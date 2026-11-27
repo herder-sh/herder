@@ -75,7 +75,7 @@ public final class Fleet {
     @ObservationIgnored var claims: [ApprovalRequest: CheckedContinuation<HostId, Error>] = [:]
     /// The installs, logins and AWS sign-ins this device started; see `Activity`.
     var activity = Activity()
-    /// Every owned machine's bots, as Integrations last asked; see `FleetBots`.
+    /// Every owned machine's bots, as Bot Settings last asked; see `FleetBots`.
     var bots = FleetBots()
     /// Each session's open shells, kept while the app runs; see `SessionTerminals`.
     @ObservationIgnored var sessionTerminals: [SessionKey: SessionTerminals] = [:]

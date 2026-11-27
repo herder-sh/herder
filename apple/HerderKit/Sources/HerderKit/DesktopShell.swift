@@ -12,7 +12,7 @@ struct DesktopShell: View {
     @Binding var pages: PageStack
     @Binding var session: SessionKey?
     @Binding var draft: Draft?
-    /// Everyone on the machines, for Setup and what needs you there.
+    /// Everyone on the machines, for Hub and what needs you there.
     let people: FleetPeople
     let opened: (SessionKey) -> Void
     @AppStorage("sidebarCollapsed") private var sidebarCollapsed = true
@@ -77,8 +77,7 @@ struct DesktopShell: View {
         case .chats: "Chats"
         case .skills: "Skills"
         case .providers: "Providers"
-        case .setup: "Setup"
-        case .integrations: "Integrations"
+        case .hub: "Hub"
         case .project(let id): lists.projects.first { $0.id == id }?.name ?? "Project"
         case .bots(let id): lists.bots.first { $0.id == id }.map(fleet.botName) ?? "Bots"
         }
@@ -137,7 +136,19 @@ struct DesktopShell: View {
                      status: BotSessions.status(groups), switcher: switcher, query: $query) {
                     BotSessions(fleet: fleet, groups: groups, query: query, selection: $session)
                 } actions: {
-                    EmptyView()
+                    // One bot's opens its own page; every bot's, the bots' settings.
+                    if let group = groups.first, id != nil {
+                        HeaderButton(symbol: "gearshape") { pages.open(.bot(hostId: group.hostId, botId: group.botId)) }
+                            .help("Bot Settings")
+                            .accessibilityLabel("Bot Settings")
+                    } else {
+                        HeaderButton(symbol: "gearshape") { pages.open(.botSettings) }
+                            .help("Bot Settings")
+                            .accessibilityLabel("Bot Settings")
+                            .accessibilityIdentifier("bot-settings")
+                    }
+                    PaneButton(title: "Add Bot", symbol: "plus", prominent: true) { sheet = .addBot }
+                        .disabled(fleet.botMachines.isEmpty)
                 }
             }
         case .board:
@@ -166,15 +177,8 @@ struct DesktopShell: View {
                 }
                 PaneButton(title: "Add Account", symbol: "plus", prominent: true) { sheet = .addAccount }
             }
-        case .setup:
-            SetupPane(fleet: fleet, people: people, sheet: $sheet, switcher: switcher)
-        case .integrations:
-            Pane(fleet: fleet, title: "Integrations", status: fleet.bots.status, switcher: switcher) {
-                IntegrationsView(fleet: fleet, sheet: $sheet)
-            } actions: {
-                PaneButton(title: "Add Bot", symbol: "plus", prominent: true) { sheet = .addBot }
-                    .disabled(fleet.botMachines.isEmpty)
-            }
+        case .hub:
+            HubPane(fleet: fleet, people: people, sheet: $sheet, switcher: switcher)
         }
     }
 
@@ -368,10 +372,8 @@ struct Switcher {
     static let chatSymbol = "bubble.left.and.bubble.right"
     /// The symbol of Bots.
     static let botsSymbol = "ellipsis.bubble"
-    /// The symbol of Integrations.
-    static let integrationsSymbol = "puzzlepiece.extension"
-    /// The symbol of Setup.
-    static let setupSymbol = "slider.horizontal.3"
+    /// The symbol of Hub, the hub card's mark.
+    static let hubSymbol = "point.3.connected.trianglepath.dotted"
     let fleet: Fleet
     let item: Binding<SidebarItem>
     let session: Binding<SessionKey?>
@@ -385,8 +387,7 @@ struct Switcher {
         Divider()
         Button("Providers", systemImage: "person.2") { go(.providers) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
-        Button("Setup", systemImage: Self.setupSymbol) { go(.setup) }
-        Button("Integrations", systemImage: Switcher.integrationsSymbol) { go(.integrations) }
+        Button("Hub", systemImage: Self.hubSymbol) { go(.hub) }
         Divider()
         ForEach(order.sorted(fleet.lists.projects)) { project in
             Button(project.name, systemImage: "shippingbox") { go(.project(project.id)) }
@@ -496,13 +497,10 @@ struct Sidebar: View {
             heading("Workspace")
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
-            SetupCount(fleet: fleet, people: people) { count in
-                SidebarRow(title: "Setup", symbol: Switcher.setupSymbol, needsYou: count, selected: item == .setup) {
-                    select(.setup)
+            HubCount(fleet: fleet, people: people) { count in
+                SidebarRow(title: "Hub", symbol: Switcher.hubSymbol, needsYou: count, selected: item == .hub) {
+                    select(.hub)
                 }
-            }
-            SidebarRow(title: "Integrations", symbol: Switcher.integrationsSymbol, selected: item == .integrations) {
-                select(.integrations)
             }
 
             heading("Projects") {
@@ -552,7 +550,7 @@ struct Sidebar: View {
                 }
             }
             Spacer(minLength: 0)
-            MachinesFooter(machines: lists.machines) { select(.setup) }
+            MachinesFooter(machines: lists.machines) { select(.hub) }
                 .padding(.vertical, 10)
         }
         .padding(.horizontal, 8)
@@ -678,7 +676,7 @@ struct MachinesFooter: View {
                     open = false
                     showAll()
                 } label: {
-                    Text("Open Setup").foregroundStyle(Theme.link).padding(.horizontal, 10).frame(height: 28)
+                    Text("Open Hub").foregroundStyle(Theme.link).padding(.horizontal, 10).frame(height: 28)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -730,10 +728,9 @@ private struct SidebarRail: View {
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("person.2", "Providers", .providers)
             rail("book.closed", "Skills", .skills)
-            SetupCount(fleet: fleet, people: people) { count in
-                rail(Switcher.setupSymbol, "Setup", .setup, needsYou: count)
+            HubCount(fleet: fleet, people: people) { count in
+                rail(Switcher.hubSymbol, "Hub", .hub, needsYou: count)
             }
-            rail(Switcher.integrationsSymbol, "Integrations", .integrations)
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             ScrollView {
                 VStack(spacing: 10) {
@@ -748,8 +745,8 @@ private struct SidebarRail: View {
             .scrollIndicators(.never)
             Spacer(minLength: 0)
             MachinesFooter(machines: lists.machines, compact: true) {
-                if item != .setup { session = nil }
-                item = .setup
+                if item != .hub { session = nil }
+                item = .hub
             }
         }
         .padding(.bottom, 14)

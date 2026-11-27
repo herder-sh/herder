@@ -23,7 +23,7 @@ struct SetupTests {
 
     @Test func problemsComeFirstEachWithItsFixThenSuggestions() {
         let machines = machines()
-        let found = SetupProblem.found(machines: machines, overview: overview(machines), unclaimed: true, directory: nil)
+        let found = HubProblem.found(machines: machines, overview: overview(machines), unclaimed: true, directory: nil)
         #expect(found.map(\.id) == ["claim", "signed-out.h-can/ops", "herder-update", "cli-updates"])
         #expect(found.map(\.suggestion) == [false, false, true, true])
         #expect(found[1].title == "Claude · ops is signed out on trash-can-01")
@@ -33,7 +33,7 @@ struct SetupTests {
         // Only the problems need you; an update never does.
         #expect(found.needingYou.map(\.id) == ["claim", "signed-out.h-can/ops"])
         #expect(found.updates.map(\.id) == ["herder-update", "cli-updates"])
-        #expect(SetupProblem.status(found) == "2 need you")
+        #expect(HubProblem.status(found) == "2 need you")
         // Nothing in the UI says "claim".
         #expect(found.allSatisfy { !"\($0.title) \($0.detail) \($0.action)".lowercased().contains("claim") })
     }
@@ -46,7 +46,7 @@ struct SetupTests {
         for index in machines.indices {
             machines[index].connection = .disconnected(error: "192.168.1.147:7447: no answer in 10s")
         }
-        let found = SetupProblem.found(machines: machines, overview: overview(machines), unclaimed: false, directory: nil)
+        let found = HubProblem.found(machines: machines, overview: overview(machines), unclaimed: false, directory: nil)
         #expect(found.isEmpty)
     }
 
@@ -54,9 +54,9 @@ struct SetupTests {
         var machines = sampleFleetMachines(now: now)
         machines[1].accounts = machines[1].accounts.map { var account = $0; account.needsLogin = nil; return account }
         machines[1].providers = machines[0].providers
-        let found = SetupProblem.found(machines: machines, overview: overview(machines), unclaimed: false, directory: nil)
+        let found = HubProblem.found(machines: machines, overview: overview(machines), unclaimed: false, directory: nil)
         #expect(found.isEmpty)
-        #expect(SetupProblem.status(found) == "Everything is set up")
+        #expect(HubProblem.status(found) == "Everything is set up")
     }
 
     /// An update stops nothing, so it is not in the badge's count or the header's line.
@@ -65,19 +65,19 @@ struct SetupTests {
         machines[1].accounts = machines[1].accounts.map { var account = $0; account.needsLogin = nil; return account }
         machines[0].herderVersion = "0.21.0"
         machines[1].herderVersion = "0.20.0"
-        let found = SetupProblem.found(machines: machines, overview: overview(machines), unclaimed: false, directory: nil)
+        let found = HubProblem.found(machines: machines, overview: overview(machines), unclaimed: false, directory: nil)
         #expect(found.map(\.id) == ["herder-update", "cli-updates"])
         #expect(found.needingYou.isEmpty)
-        #expect(SetupProblem.status(found) == "Everything is set up")
+        #expect(HubProblem.status(found) == "Everything is set up")
     }
 
     @Test func aDeviceMissingFromAMachineYouOwnNeedsYou() {
         let directory = Directory.demo(now: now)
-        let missing = SetupProblem.missingDevices(directory)
+        let missing = HubProblem.missingDevices(directory)
         // The iPhone is not on draugelis; this Mac is on every one, and a terminal is on its own.
         #expect(missing.map(\.title) == ["Your iPhone isn’t on draugelis yet"])
         #expect(missing[0].fix == .addDevice)
-        #expect(SetupProblem.status(missing) == "1 needs you")
+        #expect(HubProblem.status(missing) == "1 needs you")
     }
 
     @Test func aTeammatesDevicesAreTheirsAndNeverThisOne() async throws {

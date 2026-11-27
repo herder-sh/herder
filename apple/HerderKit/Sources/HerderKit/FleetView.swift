@@ -3,16 +3,16 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case board, chats, skills, providers, setup, integrations
+    case board, chats, skills, providers, hub
     case project(String)
     /// The bots' conversations: one bot's, by its `BotGroup.id`, or every bot's for `nil`.
     case bots(String?)
 }
 
 /// The tab bar's tabs on compact width: the sidebar's sections, with the projects as one tab,
-/// and Skills, Providers and Integrations inside Setup.
+/// and Skills and Providers inside Hub.
 enum CompactTab: Hashable, CaseIterable {
-    case board, chats, projects, setup
+    case board, chats, projects, hub
 
     /// The tab that shows a sidebar entry.
     init(_ item: SidebarItem) {
@@ -20,7 +20,7 @@ enum CompactTab: Hashable, CaseIterable {
         case .project: self = .projects
         case .chats, .bots: self = .chats
         case .board: self = .board
-        case .skills, .providers, .setup, .integrations: self = .setup
+        case .skills, .providers, .hub: self = .hub
         }
     }
 
@@ -29,7 +29,7 @@ enum CompactTab: Hashable, CaseIterable {
         case .board: "Board"
         case .chats: "Chats"
         case .projects: "Projects"
-        case .setup: "Setup"
+        case .hub: "Hub"
         }
     }
 
@@ -38,7 +38,7 @@ enum CompactTab: Hashable, CaseIterable {
         case .board: "checklist"
         case .chats: Switcher.chatSymbol
         case .projects: "square.stack.3d.up"
-        case .setup: Switcher.setupSymbol
+        case .hub: Switcher.hubSymbol
         }
     }
 }
@@ -46,7 +46,7 @@ enum CompactTab: Hashable, CaseIterable {
 /// The fleet: tabs on iPhone; herder's own sidebar and panes on iPad and the Mac.
 struct FleetView: View {
     let fleet: Fleet
-    /// Everyone on the machines: Setup lists them, and what needs you there counts on them.
+    /// Everyone on the machines: Hub lists them, and what needs you there counts on them.
     @State private var people: FleetPeople
     @State private var sheet: AppSheet?
     @State private var item: SidebarItem = .board
@@ -58,7 +58,7 @@ struct FleetView: View {
     @State private var projectsPath: [NavRoute] = []
     @State private var boardPath: [NavRoute] = []
     @State private var chatsPath: [NavRoute] = []
-    @State private var setupPath: [NavRoute] = []
+    @State private var hubPath: [NavRoute] = []
     @State private var boardQuery = ""
     /// The session a `herder://session` link asked for, until its machine says whether it has it.
     @State private var linked: SessionKey?
@@ -335,12 +335,12 @@ struct FleetView: View {
         }
     }
 
-    /// Shows a machine's page: over the section on the Mac and iPad, on the Setup tab on iPhone.
+    /// Shows a machine's page: over the section on the Mac and iPad, on the Hub tab on iPhone.
     private func openMachine(_ hostId: HostId) {
         #if os(iOS)
         if sizeClass == .compact {
-            tab = .setup
-            setupPath = [.page(.machine(hostId))]
+            tab = .hub
+            hubPath = [.page(.machine(hostId))]
             return
         }
         #endif
@@ -377,7 +377,7 @@ struct FleetView: View {
     /// Closes a session's pane, and pops it and what was pushed over it on every tab.
     private func close(_ key: SessionKey) {
         if session == key { session = nil }
-        for path in [$projectsPath, $boardPath, $chatsPath, $setupPath] {
+        for path in [$projectsPath, $boardPath, $chatsPath, $hubPath] {
             if let index = path.wrappedValue.firstIndex(of: .session(key)) { path.wrappedValue.removeSubrange(index...) }
         }
     }
@@ -403,7 +403,7 @@ struct FleetView: View {
         case .board: $boardPath
         case .chats: $chatsPath
         case .projects: $projectsPath
-        case .setup: $setupPath
+        case .hub: $hubPath
         }
     }
 
@@ -442,12 +442,12 @@ struct FleetView: View {
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $boardPath)
-        case .setup:
-            NavigationStack(path: $setupPath) {
-                SetupView(fleet: fleet, people: people, sheet: $sheet, showsSections: true)
+        case .hub:
+            NavigationStack(path: $hubPath) {
+                HubView(fleet: fleet, people: people, sheet: $sheet, showsSections: true)
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
-            .environment(\.sessionPath, $setupPath)
+            .environment(\.sessionPath, $hubPath)
         }
     }
 
@@ -601,13 +601,14 @@ struct ProjectView: View {
 }
 
 /// The chats on iPhone: their sessions, pushed when tapped; "Bots" switches to the bots'
-/// conversations.
+/// conversations, kept apart from yours, with the bots' settings in its toolbar.
 struct ChatsView: View {
     enum Shown: Hashable { case mine, bots }
 
     let fleet: Fleet
     @State private var query = ""
     @State private var shown = Shown.mine
+    @Environment(\.pages) private var pages
 
     var body: some View {
         let lists = fleet.lists
@@ -638,6 +639,12 @@ struct ChatsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .alwaysSearchable(text: $query, prompt: shown == .mine ? "Chats" : "Bot conversations")
+        .toolbar {
+            if shown == .bots {
+                Button("Bot Settings", systemImage: "gearshape") { pages.open(.botSettings) }
+                    .accessibilityIdentifier("bot-settings")
+            }
+        }
         .background(.ground)
         .refreshable { fleet.wake() }
         .navigationTitle("Chats")
@@ -696,7 +703,7 @@ private struct NewChatButton: View {
     }
 }
 
-/// A tab's badge: on the Board, how many requests wait for you; on Setup, how many things
+/// A tab's badge: on the Board, how many requests wait for you; on Hub, how many things
 /// there need you.
 private struct TabBadge: ViewModifier {
     let fleet: Fleet
@@ -706,7 +713,7 @@ private struct TabBadge: ViewModifier {
     func body(content: Content) -> some View {
         let count = switch tab {
         case .board: fleet.lists.requests.count
-        case .setup: SetupProblem.found(fleet: fleet, directory: people.directory(fleet.machines)).needingYou.count
+        case .hub: HubProblem.found(fleet: fleet, directory: people.directory(fleet.machines)).needingYou.count
         case .chats, .projects: 0
         }
         return content.badge(count)

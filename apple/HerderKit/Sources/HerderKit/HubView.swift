@@ -2,9 +2,9 @@ import Herder
 import SwiftUI
 
 /// Something on your machines with the one button that deals with it. A problem needs you: it
-/// is a card at the top of Setup and counts in its badge. A suggestion, which is an update,
+/// is a card at the top of Hub and counts in its badge. A suggestion, which is an update,
 /// stops nothing: it is a quiet row under the machines, and counts nowhere.
-struct SetupProblem: Identifiable, Equatable {
+struct HubProblem: Identifiable, Equatable {
     enum Fix: Equatable {
         /// Add a Device's code, which another device of yours scans.
         case addDevice
@@ -27,26 +27,26 @@ struct SetupProblem: Identifiable, Equatable {
     let fix: Fix
 }
 
-extension [SetupProblem] {
+extension [HubProblem] {
     /// What needs you: the cards, and the badge's count.
-    var needingYou: [SetupProblem] { filter { !$0.suggestion } }
+    var needingYou: [HubProblem] { filter { !$0.suggestion } }
 
     /// The updates, which never need you.
-    var updates: [SetupProblem] { filter(\.suggestion) }
+    var updates: [HubProblem] { filter(\.suggestion) }
 }
 
-extension SetupProblem {
+extension HubProblem {
     /// Everything to deal with across `machines`, problems first, then suggestions: machines
     /// that know you by an earlier setup, a device of yours missing from
     /// a machine you own, a signed-out account, then herder and CLI updates. `directory` is nil
     /// until the machines list their people.
     static func found(machines: [Machine], overview: ProvidersOverview, unclaimed: Bool,
-                      directory: Directory?) -> [SetupProblem] {
+                      directory: Directory?) -> [HubProblem] {
         // A machine that isn't connected needs nothing from you: a laptop asleep or away is
         // expected, and the machine list already shows it offline.
-        var found: [SetupProblem] = []
+        var found: [HubProblem] = []
         if unclaimed {
-            found.append(SetupProblem(id: "claim", symbol: "person.badge.key",
+            found.append(HubProblem(id: "claim", symbol: "person.badge.key",
                                       title: "Some machines know you by an earlier setup",
                                       detail: "Approve once with your passkey, and they know you by it.",
                                       action: "Approve…", fix: .claim))
@@ -55,7 +55,7 @@ extension SetupProblem {
         for signedOut in overview.signedOut where signedOut.place.owner {
             let login = signedOut.login
             let account = login.email ?? login.account.label
-            found.append(SetupProblem(
+            found.append(HubProblem(
                 id: "signed-out.\(signedOut.id)", symbol: "person.crop.circle.badge.exclamationmark",
                 title: "\(ModelCatalog.providerName(login.provider)) · \(account) is signed out on \(signedOut.place.name)",
                 detail: "Sessions there can’t use it until it signs in again.",
@@ -66,7 +66,7 @@ extension SetupProblem {
             let versions = Set(behind.compactMap { $0.machine.herderVersion })
             let names = Directory.list(behind.map { $0.machine.name })
             let run = behind.count == 1 ? "runs" : "run"
-            found.append(SetupProblem(
+            found.append(HubProblem(
                 id: "herder-update", suggestion: true, symbol: "arrow.up",
                 title: "herder \(newest) is out",
                 detail: versions.count == 1 ? "\(names) \(run) \(versions.first ?? "")." : "\(names) \(run) an older herder.",
@@ -78,7 +78,7 @@ extension SetupProblem {
             let providers = Directory.list(Array(Set(clis.map { ModelCatalog.providerName($0.provider) })).sorted())
             let hosts = Directory.list(Array(Set(clis.map(\.machine))).sorted())
             let names = Set(clis.map(\.provider)).count
-            found.append(SetupProblem(
+            found.append(HubProblem(
                 id: "cli-updates", suggestion: true, symbol: "arrow.down.circle",
                 title: "\(providers) \(clis.count == 1 ? "has an update" : names == 1 ? "has updates" : "have updates")",
                 detail: "On \(hosts).", action: clis.count == 1 ? "Update" : "Update All", fix: .updateCLIs))
@@ -86,28 +86,28 @@ extension SetupProblem {
         return found
     }
 
-    @MainActor static func found(fleet: Fleet, directory: Directory?) -> [SetupProblem] {
+    @MainActor static func found(fleet: Fleet, directory: Directory?) -> [HubProblem] {
         found(machines: fleet.machines, overview: ProvidersOverview(fleet: fleet), unclaimed: fleet.hasUnclaimed,
               directory: directory)
     }
 
     /// Your other Macs and iPhones that are not signed in to every machine you own. A
     /// terminal signs in to one machine with `herder login`, so it misses none.
-    static func missingDevices(_ directory: Directory) -> [SetupProblem] {
+    static func missingDevices(_ directory: Directory) -> [HubProblem] {
         let owned = directory.columns.filter { !$0.hub && directory.me.roles[$0.id] == .owner }
         return directory.devices.compactMap { device in
             guard !device.current, device.kind != .terminal else { return nil }
             let missing = owned.filter { device.paired[$0.id] == nil }
             guard !missing.isEmpty else { return nil }
-            return SetupProblem(id: "device.\(device.id)", symbol: device.kind == .phone ? "iphone" : "laptopcomputer",
+            return HubProblem(id: "device.\(device.id)", symbol: device.kind == .phone ? "iphone" : "laptopcomputer",
                                 title: "Your \(device.title) isn’t on \(Directory.list(missing.map(\.name))) yet",
                                 detail: "Show the code here, and scan it on your \(device.title) to sign in to the rest.",
                                 action: "Add a Device", fix: .addDevice)
         }
     }
 
-    /// The Setup header's line: "2 need you", or "Everything is set up" with nothing to fix.
-    static func status(_ problems: [SetupProblem]) -> String {
+    /// The Hub header's line: "2 need you", or "Everything is set up" with nothing to fix.
+    static func status(_ problems: [HubProblem]) -> String {
         switch problems.needingYou.count {
         case 0: "Everything is set up"
         case 1: "1 needs you"
@@ -116,22 +116,22 @@ extension SetupProblem {
     }
 }
 
-/// How many things need you, for the Setup row and tab's badge: on a view of its own, so the
+/// How many things need you, for the Hub row and tab's badge: on a view of its own, so the
 /// rest of the sidebar does not draw again as the machines change.
-struct SetupCount<Content: View>: View {
+struct HubCount<Content: View>: View {
     let fleet: Fleet
     let people: FleetPeople
     @ViewBuilder let content: (Int) -> Content
 
     var body: some View {
-        content(SetupProblem.found(fleet: fleet, directory: people.directory(fleet.machines)).needingYou.count)
+        content(HubProblem.found(fleet: fleet, directory: people.directory(fleet.machines)).needingYou.count)
     }
 }
 
-/// Setup's pane on the Mac and iPad: its header, with what needs you counted in its line and
+/// Hub's pane on the Mac and iPad: its header, with what needs you counted in its line and
 /// Add a Device and Add a Machine, over the page. A view of its own, so only it draws again as
 /// the machines change.
-struct SetupPane: View {
+struct HubPane: View {
     let fleet: Fleet
     let people: FleetPeople
     @Binding var sheet: AppSheet?
@@ -140,9 +140,9 @@ struct SetupPane: View {
     var body: some View {
         let machines = fleet.machines
         let directory = people.directory(machines)
-        let problems = SetupProblem.found(fleet: fleet, directory: directory)
-        Pane(fleet: fleet, title: "Setup", status: SetupProblem.status(problems), switcher: switcher) {
-            SetupView(fleet: fleet, people: people, sheet: $sheet)
+        let problems = HubProblem.found(fleet: fleet, directory: directory)
+        Pane(fleet: fleet, title: "Hub", status: HubProblem.status(problems), switcher: switcher) {
+            HubView(fleet: fleet, people: people, sheet: $sheet)
         } actions: {
             if !AwsSignIn.machines(machines).isEmpty {
                 PaneButton(title: "AWS Sign-in", symbol: "key") { sheet = .awsSignIn }
@@ -156,15 +156,15 @@ struct SetupPane: View {
     }
 }
 
-/// Setup: how your herder is put together. In order: what needs you, each with its fix
+/// Hub: how your herder is put together. In order: what needs you, each with its fix
 /// (hidden when nothing does); the hub and the machines that sync to it, then the other
 /// machines; updates, when there are any; your devices; and the people. On iPhone, also the
-/// way to Skills, Providers and Integrations.
-struct SetupView: View {
+/// way to Skills and Providers.
+struct HubView: View {
     let fleet: Fleet
     let people: FleetPeople
     @Binding var sheet: AppSheet?
-    /// Leads to Skills, Providers and Integrations, where they have no section of their own,
+    /// Leads to Skills and Providers, where they have no section of their own,
     /// and says at the top that everything is set up, when it is.
     var showsSections = false
     @Environment(\.pages) private var pages
@@ -172,12 +172,12 @@ struct SetupView: View {
     var body: some View {
         let machines = fleet.machines
         let directory = people.directory(machines)
-        let problems = SetupProblem.found(fleet: fleet, directory: directory)
+        let problems = HubProblem.found(fleet: fleet, directory: directory)
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 // Needs you says its own count; only "Everything is set up" is worth a line.
                 if showsSections, problems.needingYou.isEmpty {
-                    Text(SetupProblem.status(problems))
+                    Text(HubProblem.status(problems))
                         .font(.subheadline).foregroundStyle(Theme.secondary)
                 }
                 // A device with no machines shows Welcome instead.
@@ -211,7 +211,7 @@ struct SetupView: View {
             fleet.wake()
             await people.reload(fleet.machines)
         }
-        .navigationTitle("Setup")
+        .navigationTitle("Hub")
         .toolbar {
             #if os(iOS)
             ActivityToolbarButton(fleet: fleet) { sheet = .activity }
@@ -227,7 +227,7 @@ struct SetupView: View {
         }
     }
 
-    private func fix(_ fix: SetupProblem.Fix) {
+    private func fix(_ fix: HubProblem.Fix) {
         switch fix {
         case .addDevice: sheet = .addDevice
         case .updateHerder(let hosts): for host in hosts { fleet.updateHerder(on: host, when: .idle) }
@@ -238,10 +238,10 @@ struct SetupView: View {
     }
 }
 
-/// The top of Setup: each thing that needs you as a card, with the button that fixes it.
+/// The top of Hub: each thing that needs you as a card, with the button that fixes it.
 struct NeedsYouSection: View {
-    let problems: [SetupProblem]
-    let fix: (SetupProblem.Fix) -> Void
+    let problems: [HubProblem]
+    let fix: (HubProblem.Fix) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -259,7 +259,7 @@ struct NeedsYouSection: View {
 /// One thing that needs you: its mark in amber, what happened and what to do, and its fix,
 /// beside it where there is room and under it where there is not.
 struct NeedsYouCard: View {
-    let problem: SetupProblem
+    let problem: HubProblem
     let action: () -> Void
 
     var body: some View {
@@ -311,8 +311,8 @@ struct NeedsYouCard: View {
 /// The updates that are out, a quiet row each with its button: a newer herder, newer provider
 /// CLIs. Nothing here needs you.
 struct UpdatesSection: View {
-    let updates: [SetupProblem]
-    let fix: (SetupProblem.Fix) -> Void
+    let updates: [HubProblem]
+    let fix: (HubProblem.Fix) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -373,11 +373,10 @@ struct DevicesSection: View {
     }
 }
 
-/// Skills, Providers and Integrations on iPhone, where they have no tab of their own.
+/// Skills and Providers on iPhone, where they have no tab of their own.
 private struct WorkspaceLinks: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
-    @Environment(\.pages) private var pages
 
     var body: some View {
         SettingsGroup {
@@ -393,13 +392,6 @@ private struct WorkspaceLinks: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("providers-link")
-            RowDivider()
-            // A page on the stack, so the bot pages it opens push over it rather than replace it.
-            Button { pages.open(.integrations) } label: {
-                link("Integrations", symbol: Switcher.integrationsSymbol, summary: "Slack bots on your machines")
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("integrations-link")
         }
     }
 

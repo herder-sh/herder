@@ -79,7 +79,7 @@ private struct Gallery: View {
                         Text("Any").foregroundStyle(Theme.secondary)
                     }
                     RowDivider()
-                    SettingRow(label: "Setup command", hint: "Runs once in each new worktree") {
+                    SettingRow(label: "Hub command", hint: "Runs once in each new worktree") {
                         Text("pnpm install").font(Theme.mono).foregroundStyle(Theme.secondary)
                     }
                 }

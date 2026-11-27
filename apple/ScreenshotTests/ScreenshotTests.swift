@@ -134,8 +134,8 @@ final class ScreenshotTests: XCTestCase {
             }
         }
 
-        // Setup: what needs you, the hub with its machines under it, your devices, and the people.
-        if section("Setup") {
+        // Hub: what needs you, the hub with its machines under it, your devices, and the people.
+        if section("Hub") {
             settle()
             #if os(macOS)
             shoot("mac-machines")
@@ -176,7 +176,7 @@ final class ScreenshotTests: XCTestCase {
         bots()
         skills()
         providers()
-        integrations()
+        botSettings()
         archiving()
         project()
         #if os(iOS)
@@ -408,30 +408,33 @@ final class ScreenshotTests: XCTestCase {
         return false
     }
 
-    /// Integrations: every machine's bots in one table, then `trash-can`'s page, then Add Bot's
-    /// steps. The demo's bots wait for a hub, so none reaches Slack.
-    private func integrations() {
+    /// Bot Settings: every machine's bots in one table, opened from Bots under Chats, then
+    /// `trash-can`'s page, then Add Bot's steps. The demo's bots wait for a hub, so none reaches
+    /// Slack.
+    private func botSettings() {
         #if os(macOS)
-        guard section("Integrations") else { return }
+        guard section("Bots") else { return }
         #else
-        // On the iPhone, Integrations is a link at the foot of Setup, not a tab.
-        guard section("Setup") else { return }
-        let link = app.descendants(matching: .any)["integrations-link"].firstMatch
-        guard wait(link, "Integrations link") else { return }
-        reveal(link)
-        press(link)
+        // On the iPhone, Bots is Chats' second switch.
+        guard section("Chats") else { return }
+        let bots = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Bots'")).firstMatch
+        guard wait(bots, "Chats' Bots switch") else { return }
+        press(bots)
         #endif
+        let settings = app.buttons["bot-settings"].firstMatch
+        guard wait(settings, "Bot Settings button") else { return }
+        press(settings)
         // The Mac's table names a row after its machine and bot.
         let bot = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier == 'bot-trash-can' OR identifier ENDSWITH '/trash-can'")).firstMatch
-        guard wait(bot, "trash-can in Integrations") else { return }
+        guard wait(bot, "trash-can in Bot Settings") else { return }
         settle()
-        shoot(platform("integrations"))
+        shoot(platform("bot-settings"))
         #if os(macOS)
         // Narrow, the table keeps the bot's name and status and folds the rest under the name.
         resize(to: CGSize(width: 720, height: 900))
         settle()
-        shoot("mac-integrations-narrow")
+        shoot("mac-bot-settings-narrow")
         resize(to: CGSize(width: 1440, height: 900))
         #endif
         press(bot)
@@ -467,8 +470,8 @@ final class ScreenshotTests: XCTestCase {
         #if os(macOS)
         guard section("Skills") else { return }
         #else
-        // On the iPhone, Skills is a link at the foot of Setup, not a tab.
-        guard section("Setup") else { return }
+        // On the iPhone, Skills is a link at the foot of Hub, not a tab.
+        guard section("Hub") else { return }
         let link = app.descendants(matching: .any)["skills-link"].firstMatch
         guard wait(link, "Skills link") else { return }
         reveal(link)
@@ -509,8 +512,8 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot("mac-providers")
         #else
-        // On the iPhone, Providers is a link at the foot of Setup, not a tab.
-        guard section("Setup") else { return }
+        // On the iPhone, Providers is a link at the foot of Hub, not a tab.
+        guard section("Hub") else { return }
         let link = app.descendants(matching: .any)["providers-link"].firstMatch
         guard wait(link, "Providers link") else { return }
         reveal(link)

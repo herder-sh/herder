@@ -188,7 +188,7 @@ final class BotKnowledge {
     }
 }
 
-/// Every owned machine's bots, kept while the app runs so Integrations and its header share
+/// Every owned machine's bots, kept while the app runs so Bot Settings and Bots share
 /// them.
 @MainActor @Observable
 final class FleetBots {

@@ -1,7 +1,7 @@
 import Herder
 import SwiftUI
 
-/// A bot as a row of the Integrations table.
+/// A bot as a row of the Bot Settings table.
 struct BotTableRow: Identifiable {
     var id: String { "\(hostId)/\(bot.botId)" }
     let hostId: HostId
@@ -37,7 +37,7 @@ struct BotTableRow: Identifiable {
 /// Every bot on every machine this device owns, as one table: its kind and machine, how its
 /// connection stands, how many people it answers and its default project. A bot opens as its
 /// page. Machines that can't list their bots say why under it, in a line each.
-struct IntegrationsView: View {
+struct BotSettingsView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
     /// The table's width, which decides its columns.
@@ -51,6 +51,16 @@ struct IntegrationsView: View {
         let asking = machines.contains { bots[$0.hostId].map { if case .asking = $0.bots { true } else { false } } ?? true }
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                #if os(macOS)
+                // A page over Bots, under its breadcrumb: the bots' status and Add Bot, as
+                // iPhone's toolbar has it.
+                HStack(spacing: 12) {
+                    Text(fleet.bots.status).font(.subheadline).foregroundStyle(Theme.secondary)
+                    Spacer(minLength: 8)
+                    PillButton(title: "Add Bot", symbol: "plus", prominent: true) { sheet = .addBot }
+                        .disabled(machines.isEmpty)
+                }
+                #endif
                 if !rows.isEmpty {
                     SortableTable("bots", rows: rows, sortedBy: TableSort(column: "Bot"), columns: columns) {
                         pages.open(.bot(hostId: $0.hostId, botId: $0.bot.botId))
@@ -72,7 +82,7 @@ struct IntegrationsView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .background(.ground)
         .refreshable { await fleet.bots.reload() }
-        .navigationTitle("Integrations")
+        .navigationTitle("Bot Settings")
         #if os(iOS)
         .toolbar {
             Button("Add Bot", systemImage: "plus") { sheet = .addBot }
@@ -200,7 +210,7 @@ struct CopyPill: View {
     }
 }
 
-/// Integrations with no bot: what a bot is, and the button that adds one.
+/// Bot Settings with no bot: what a bot is, and the button that adds one.
 struct BotsEmptyState: View {
     /// Whether a machine could run one.
     let canAdd: Bool
@@ -520,7 +530,7 @@ struct MachineBotsSection: View {
             if let note = BotsNote(fleet: fleet, machine: machine, bots: bots) {
                 note.padding(.horizontal, 6).padding(.vertical, 4)
             } else if bots.list.isEmpty {
-                Text("No bots. Add one under Integrations.").font(.subheadline).foregroundStyle(Theme.tertiary)
+                Text("No bots. Add one from Bots, under Chats.").font(.subheadline).foregroundStyle(Theme.tertiary)
                     .padding(.horizontal, Theme.cellPadding).frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
             }
         }

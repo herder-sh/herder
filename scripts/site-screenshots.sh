@@ -22,7 +22,7 @@ shots=(
     mac-failover:mac-failover
     mac-machines:mac-machines
     mac-agents:mac-task-agents
-    mac-integrations:mac-integrations
+    mac-integrations:mac-bot-settings
     mac-backup:mac-machine-backup
     mac-member:mac-machine-member
     ios-board:ios-home

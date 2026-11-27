@@ -6,13 +6,13 @@ import Herder
 import SwiftUI
 import Testing
 
-/// Draws Setup as the app's dark appearance shows it: the Mac's page on `sampleFleetMachines`
+/// Draws Hub as the app's dark appearance shows it: the Mac's page on `sampleFleetMachines`
 /// with the mockup's people, what needs you at its top and the hub with its machines under it;
 /// the same page at the iPhone's width, and with no hub; a person's sheet; and Needs you's
 /// cards at the iPhone's width, their fixes under them.
 /// Attaches each; with `HERDER_SCREENSHOT_DIR` set, also writes them there as
 /// `setup-<screen>-<width>.png`.
-@MainActor @Suite(.serialized) struct SetupScreenshotTests {
+@MainActor @Suite(.serialized) struct HubScreenshotTests {
     private let now = Timestamp.date("2026-10-29T12:00:00Z")!
 
     /// Each machine's people: you own all four, Sam is a member of the three that run sessions,
@@ -59,28 +59,28 @@ import Testing
 
     @Test func drawsTheMacPage() async throws {
         let (fleet, people) = try await setup()
-        let switcher = Switcher(fleet: fleet, item: .constant(.setup), session: .constant(nil), order: ProjectOrder(sort: .manual, stored: ""))
-        let page = SetupPane(fleet: fleet, people: people, sheet: .constant(nil), switcher: switcher)
-        try await shoot(page, size: CGSize(width: 1180, height: 1300), named: "setup-mac.png")
+        let switcher = Switcher(fleet: fleet, item: .constant(.hub), session: .constant(nil), order: ProjectOrder(sort: .manual, stored: ""))
+        let page = HubPane(fleet: fleet, people: people, sheet: .constant(nil), switcher: switcher)
+        try await shoot(page, size: CGSize(width: 1180, height: 1300), named: "hub-mac.png")
     }
 
     @Test func drawsTheIPhonePage() async throws {
         let (fleet, people) = try await setup()
-        let page = SetupView(fleet: fleet, people: people, sheet: .constant(nil), showsSections: true)
-        try await shoot(page, size: CGSize(width: 390, height: 1500), named: "setup-iphone.png")
+        let page = HubView(fleet: fleet, people: people, sheet: .constant(nil), showsSections: true)
+        try await shoot(page, size: CGSize(width: 390, height: 1500), named: "hub-iphone.png")
     }
 
     @Test func drawsTheIPhonePageWithNoHub() async throws {
         let (fleet, people) = try await setup(hub: false)
-        let page = SetupView(fleet: fleet, people: people, sheet: .constant(nil), showsSections: true)
-        try await shoot(page, size: CGSize(width: 390, height: 1300), named: "setup-no-hub-iphone.png")
+        let page = HubView(fleet: fleet, people: people, sheet: .constant(nil), showsSections: true)
+        try await shoot(page, size: CGSize(width: 390, height: 1300), named: "hub-no-hub-iphone.png")
     }
 
     @Test func drawsAPersonsSheet() async throws {
         let directory = Directory.demo(now: now)
         let sheet = PersonSheet(directory: directory, person: directory.teammates[1], setRole: { _, _ in },
                                 signOut: { _ in }, itsMe: {})
-        try await shoot(sheet, size: CGSize(width: 480, height: 820), named: "setup-person-mac.png")
+        try await shoot(sheet, size: CGSize(width: 480, height: 820), named: "hub-person-mac.png")
     }
 
     @Test func drawsNeedsYouAtTheIPhonesWidth() async throws {
@@ -90,9 +90,9 @@ import Testing
         machines[1].herderVersion = "0.20.0"
         let overview = ProvidersOverview(accounts: ProviderAccounts(machines: machines, now: now),
                                          versions: ProviderVersions(machines: machines), installs: [:])
-        let problems = SetupProblem.found(machines: machines, overview: overview, unclaimed: false, directory: directory)
+        let problems = HubProblem.found(machines: machines, overview: overview, unclaimed: false, directory: directory)
         let view = NeedsYouSection(problems: problems.needingYou) { _ in }.padding(16)
-        try await shoot(view, size: CGSize(width: 390, height: 900), named: "setup-needs-you-iphone.png")
+        try await shoot(view, size: CGSize(width: 390, height: 900), named: "hub-needs-you-iphone.png")
     }
 
     private func shoot(_ content: some View, size: CGSize, named name: String) async throws {

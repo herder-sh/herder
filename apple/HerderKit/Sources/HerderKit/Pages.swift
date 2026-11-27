@@ -16,11 +16,11 @@ enum Page: Hashable {
     case hub(HostId, tab: HubPage.Tab = .overview)
     /// A provider's own sub-agent, in its session.
     case agent(SessionKey, NativeAgent.ID)
-    /// Every bot on every machine, opened from Setup on iPhone, where it is no tab.
-    case integrations
+    /// Every bot on every machine, opened from Bots, under Chats.
+    case botSettings
     /// One machine's people, opened from its page.
     case people(HostId)
-    /// You: your passkeys, your devices and recovery, opened from Setup.
+    /// You: your passkeys, your devices and recovery, opened from Hub.
     case you
     /// If you lose your devices: how to get back in, opened from You.
     case recovery
@@ -43,8 +43,8 @@ extension Page {
             return "Skills"
         case .agent(let key, let id):
             return fleet.session(key).flatMap { NativeAgent.find(id, in: $0) }?.title ?? "Sub-agent"
-        case .integrations:
-            return "Integrations"
+        case .botSettings:
+            return "Bot Settings"
         case .people:
             return "People"
         case .you:
@@ -64,7 +64,7 @@ extension Page {
         case .skills: SkillsView(fleet: fleet, sheet: sheet)
         case .hub(let hostId, let tab): HubPage(fleet: fleet, hub: hostId, tab: tab)
         case .agent(let key, let id): NativeAgentPage(reference: id, fleet: fleet, key: key)
-        case .integrations: IntegrationsView(fleet: fleet, sheet: sheet)
+        case .botSettings: BotSettingsView(fleet: fleet, sheet: sheet)
         case .people(let hostId): PeoplePage(fleet: fleet, hostId: hostId, sheet: sheet)
         case .you: YouPage(fleet: fleet, sheet: sheet)
         case .recovery: RecoveryPage(fleet: fleet)

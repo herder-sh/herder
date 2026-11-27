@@ -109,7 +109,7 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
 
     }
 
-    /// However the hub is exposed (a port forward, a reverse proxy, a tunnel, a VPN), Setup says
+    /// However the hub is exposed (a port forward, a reverse proxy, a tunnel, a VPN), Hub says
     /// how far its furthest-reaching address reaches, and names that address.
     @Test func aHubSaysHowFarItIsReachedAndAtWhichAddress() {
         var machines = sampleFleetMachines()
@@ -226,7 +226,7 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
 #if os(macOS)
 import AppKit
 
-/// Draws Setup's hub with its machines under it, and the hub's page, and attaches them;
+/// Draws Hub's hub with its machines under it, and the hub's page, and attaches them;
 /// with `HERDER_SCREENSHOT_DIR` set, also writes them there as `machines.png` and
 /// `hub-page.png`.
 @MainActor struct MachinesScreenshotTests {

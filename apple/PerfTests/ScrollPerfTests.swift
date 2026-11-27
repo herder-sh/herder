@@ -65,8 +65,8 @@ final class ScrollPerfTests: PerfTestCase {
         measureScrolling()
     }
 
-    func testSetup() {
-        section("Setup")
+    func testHub() {
+        section("Hub")
         measureScrolling()
     }
 
@@ -89,7 +89,7 @@ final class ScrollPerfTests: PerfTestCase {
         XCTAssertTrue(devbox.waitForExistence(timeout: 10))
         press(devbox)
         #else
-        section("Setup")
+        section("Hub")
         let devbox = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'devbox'")).firstMatch
         XCTAssertTrue(devbox.waitForExistence(timeout: 10))
         reveal(devbox)
@@ -149,9 +149,9 @@ final class ScrollPerfTests: PerfTestCase {
     }
 
     #if os(iOS)
-    /// Opens one of the Setup tab's links, such as Providers.
+    /// Opens one of the Hub tab's links, such as Providers.
     private func link(_ id: String) {
-        section("Setup")
+        section("Hub")
         let link = app.descendants(matching: .any)[id].firstMatch
         XCTAssertTrue(link.waitForExistence(timeout: 10), "no \(id)")
         reveal(link)
