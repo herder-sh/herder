@@ -195,6 +195,20 @@ struct TranscriptTests {
         #expect(moments == handoffs)
     }
 
+    /// The transcript scrolls to what the reader sends: the newest of their messages on its way.
+    @Test func theLastSentIsTheNewestMessageOnItsWay() {
+        var script = Script()
+        var model = script.model([created()])
+        #expect(Transcript.blocks(model).lastSentAt == nil)
+        let first = Outgoing(text: "first", state: .delivered, sentAt: Date(timeIntervalSince1970: 100))
+        let next = Outgoing(text: "next", state: .sending, sentAt: Date(timeIntervalSince1970: 200))
+        model.outbox = [first, next]
+        #expect(Transcript.blocks(model).lastSentAt == next.sentAt)
+        // The session took the newest: what is left on its way is older, not newly sent.
+        model.outbox = [first]
+        #expect(Transcript.blocks(model).lastSentAt == first.sentAt)
+    }
+
     @Test func aSentPromptShowsUntilTheQueueOrTheSessionTakesIt() {
         var script = Script()
         var model = script.model([created(), .turnStarted(turnId: "t1")])

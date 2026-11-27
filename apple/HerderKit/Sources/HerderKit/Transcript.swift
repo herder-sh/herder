@@ -20,6 +20,17 @@ struct ToolCall: Hashable, Identifiable {
 }
 
 /// A block of a session's transcript, as the session view shows it.
+extension [TranscriptBlock] {
+    /// When this device sent the newest message the transcript shows on its way: what the reader
+    /// just sent, which the transcript scrolls to wherever they were.
+    var lastSentAt: Date? {
+        compactMap { block -> Date? in
+            guard case .user(_, _, _, .some(let outgoing), _, _) = block else { return nil }
+            return outgoing.sentAt
+        }.max()
+    }
+}
+
 enum TranscriptBlock: Hashable, Identifiable {
     /// A user message; `outgoing` while it is on its way from this device. `followUp` when herder
     /// sent it on its own.

@@ -473,7 +473,8 @@ private struct SessionPane: View {
 
 /// Keeps the transcript at its end while the reader is there, following what comes, the
 /// session's history included as it loads. Scrolled up, nothing moves what they read: what
-/// comes below shows a "New" pill instead. Tells `top` the block at the top of the view.
+/// comes below shows a "New" pill instead, but for a message they send, which it scrolls to.
+/// Tells `top` the block at the top of the view.
 private struct FollowsEnd: ViewModifier {
     let key: SessionKey
     let blocks: [TranscriptBlock]
@@ -522,6 +523,14 @@ private struct FollowsEnd: ViewModifier {
                 grew()
             }
             .onChange(of: blocks.last) { grew() }
+            // A message the reader sends shows where they look for it, at the end, even when
+            // they had scrolled up, or the transcript took them for scrolled up as its lazy
+            // stack measured again: under a "New" pill it looks lost.
+            .onChange(of: blocks.lastSentAt) { old, sent in
+                guard let sent, sent > old ?? .distantPast else { return }
+                unseen = false
+                position.scrollTo(edge: .bottom)
+            }
             .overlay(alignment: .bottom) {
                 if unseen {
                     Button {
