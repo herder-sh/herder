@@ -21,7 +21,7 @@ use std::time::Duration;
 use herder_protocol::{
     Account, AttachmentId, Batch, CommandBody, CommandId, CommandResult, DeviceId, ErrorCode,
     ErrorInfo, Event, EventBody, FleetHost, HostId, HostUsage, HubVolume, IMAGE_NOT_BACKED_UP,
-    RemoteAccess, Role, Seq, SessionHead, SessionId, Timestamp, UserId,
+    RemoteAccess, Role, Seq, SessionHead, SessionId, Timestamp, UsagePeriod, UserId,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -196,6 +196,26 @@ impl Fleet {
 
     /// The bytes of the image `attachment_id` of `session_id`, from the copy of the host that
     /// has the session now.
+    /// What each hub login was used for over `period`, from the journals the hub holds.
+    async fn hub_usage(&self, period: UsagePeriod) -> Result<CommandResult, ErrorInfo> {
+        let since = period.start(Timestamp::now());
+        match blocking(&self.store, move |store| store.hub_usage(since)).await {
+            Ok((totals, failovers)) => Ok(CommandResult::HubUsage {
+                period,
+                since,
+                totals,
+                failovers,
+            }),
+            Err(err) => {
+                warn!("cannot add the hub logins' usage up: {err:#}");
+                Err(error(
+                    ErrorCode::Internal,
+                    "cannot read the hub database".into(),
+                ))
+            }
+        }
+    }
+
     async fn attachment(
         &self,
         session_id: SessionId,
@@ -442,6 +462,7 @@ impl Backend for Fleet {
                     local_hub: false,
                 });
             }
+            CommandBody::GetHubUsage { period } => return self.hub_usage(period).await,
             CommandBody::PairHubHost { host_name } => return self.pair_host(&host_name),
             CommandBody::RevokeHubHost { host_id } => return self.revoke_host(host_id).await,
             CommandBody::SetRemoteAccess { settings } => {

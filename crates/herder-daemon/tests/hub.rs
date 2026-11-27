@@ -32,7 +32,7 @@ use herder_protocol::{
     HostSecretsState, HubMessage, Item, ItemBody, ItemId, JournalRecord, PROTOCOL_VERSION,
     PermissionMode, Provider, REPLICATION_VERSION, RelayError, RelayErrorCode, RelayRoute,
     ReplicationErrorCode, SecretError, SecretErrorCode, SecretRef, SecretValue, ServerMessage,
-    SessionId, SessionStatus, SessionSummary, Timestamp, TurnId, UserId,
+    SessionId, SessionStatus, SessionSummary, Timestamp, TurnId, UsagePeriod, UserId,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -3106,5 +3106,117 @@ async fn a_hub_that_names_its_proxys_address_forwards_no_host_to_it() {
         relay_refusal(&hub, &host_key, &RelayRoute::Proxy).await,
         RelayErrorCode::Forbidden
     );
+    hub.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_owner_asks_the_hub_what_each_login_used_as_the_host_counts_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, hub_dir) = (tmp.path().join("host"), tmp.path().join("hub"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    {
+        // Turns journaled as the host's daemon journals them, its usage recorded with each.
+        let mut store = Store::open(host_dir.join("herder.db")).unwrap();
+        for (session, account, tokens) in [("s1", "vault-claude-ada", 10), ("s2", "main", 99)] {
+            let session_id = SessionId::new(session);
+            append(
+                &mut store,
+                &session_id,
+                EventBody::SessionCreated {
+                    repo: "/home/dev/herder".into(),
+                    worktree: "/home/dev/herder".into(),
+                    branch: None,
+                    provider: Provider::Claude,
+                    account_id: AccountId::new(account),
+                    model: "claude-opus-5-5".into(),
+                    permission_mode: PermissionMode::Ask,
+                    parent: None,
+                    parent_host: None,
+                    task: None,
+                    failover_pin: None,
+                    chat: false,
+                    origin: None,
+                },
+            );
+            let usage = herder_protocol::TurnUsage {
+                input: tokens,
+                output: 2 * tokens,
+                cache_read: 30 * tokens,
+                cache_write: 0,
+                cost_usd: Some(0.5),
+                cost_estimated: false,
+            };
+            let at = Timestamp::now();
+            store
+                .append(NewEvent {
+                    session_id: session_id.clone(),
+                    at,
+                    by: None,
+                    body: EventBody::TurnCompleted {
+                        turn_id: TurnId::new("t1"),
+                        usage: Some(usage.clone()),
+                    },
+                })
+                .unwrap();
+            store
+                .record_turn_usage(&session_id, &TurnId::new("t1"), &usage, at)
+                .unwrap();
+        }
+    }
+    let hub = Hub::start(&hub_dir, 0).await;
+    let host = HostDaemon::start(&host_dir, hub.config()).await;
+    caught_up(&host_dir, &hub_dir).await;
+
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    hub.join(&client).await;
+    let asked = client
+        .send(
+            HostId::new("hub"),
+            CommandBody::GetHubUsage {
+                period: UsagePeriod::Day,
+            },
+        )
+        .await;
+    let Ok(CommandResult::HubUsage {
+        period: UsagePeriod::Day,
+        totals,
+        failovers,
+        ..
+    }) = asked
+    else {
+        panic!("expected the hub's usage: {asked:?}");
+    };
+    let sessions = host.sessions.clone();
+    let own = host
+        .runtime
+        .handle()
+        .spawn(async move {
+            let summary = CommandBody::GetUsageSummary {
+                period: UsagePeriod::Day,
+            };
+            sessions.handle(UserId::new("alice"), summary).await
+        })
+        .await
+        .unwrap();
+    let Ok(CommandResult::UsageSummary { totals: own, .. }) = own else {
+        panic!("expected the host's usage: {own:?}");
+    };
+    // Only the hub login counts, exactly as the host counted it.
+    let ada: Vec<_> = own
+        .into_iter()
+        .filter(|total| total.account_id.as_str() == "vault-claude-ada")
+        .collect();
+    assert_eq!(ada.len(), 1);
+    assert_eq!(totals.len(), 1, "{totals:?}");
+    assert_eq!(totals[0].pin, "claude-ada");
+    assert_eq!(totals[0].host_id, host_id());
+    assert_eq!(totals[0].day, Timestamp::now().to_string()[..10]);
+    assert_eq!(totals[0].usage, ada[0]);
+    assert!(failovers.is_empty());
+    host.runtime.kill().await;
     hub.runtime.kill().await;
 }
