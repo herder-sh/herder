@@ -22,27 +22,38 @@ Basecamp: P24 · The hub relays to every machine. Builds on
 ## Design
 
 ```
-app ───TLS(hub cert, device cert) + WS────▶ hub ◀───TLS(hub cert, host's device cert) + WS──── host
- │       relay hello: connect <host>         │           relay hello: accept <stream>           │
- └────────── TLS 1.3 (pinned host cert + device cert) + WebSocket + hello, end to end ──────────┘
+app ───TLS(hub cert, device cert) + WS GET /machines/<host>──▶ hub ◀───TLS(hub cert, host's device cert) + WS GET /streams/<id>──── host
+ │                                                             │                                                                  │
+ └────────────────── TLS 1.3 (pinned host cert + device cert) + WebSocket + hello, end to end ────────────────────────────────────┘
 ```
 
-1. **The app asks the hub for a stream.** It opens an ordinary connection to the hub
-   (direct, or through the hub's tunnel URL), authenticated as every hub connection is,
-   and says `RelayHello::Connect { host_id }` instead of a client hello.
-2. **The hub asks the host to dial in.** It sends `HubMessage::RelayOpen { stream_id,
-   device_id }` on the host's replication connection. The host opens a second, outbound
-   connection to the hub with its own device key and says `RelayHello::Accept
-   { stream_id }`.
-3. **The hub splices the two.** It answers both `RelayAnswer::Ready`; from then on both
-   connections carry binary frames only, and the hub copies each frame's bytes to the
-   other side.
-4. **The app and the host run a direct connection inside.** The app starts TLS pinning the
-   host's certificate and presenting its device certificate, then the WebSocket and hello.
-   The host hands the stream to the same `serve` path a TCP socket or a tunnel's frames get.
+The WebSocket upgrade request's path names the route (`herder-protocol::relay::RelayRoute`),
+so a relayed connection needs no message of its own before the stream:
 
-The wire types are in `herder-protocol::relay`; schemas `relay_hello.json` and
-`relay_answer.json`.
+1. **The app asks the hub for the machine by path.** It opens an ordinary connection to
+   the hub (direct, through a port forward or reverse proxy, or through the hub's tunnel
+   URL), authenticated as every hub connection is, and sends the upgrade request for
+   `/machines/<host_id>`. It does not wait for the answer: the first frames of its TLS
+   to the host go out right behind the request.
+2. **The hub asks the host to dial in, holding the app's bytes.** It reads the request and
+   nothing after it, so the app's first frames wait in the hub's read buffer and the
+   socket, bounded by TCP's window. It sends `HubMessage::RelayOpen { stream_id,
+   device_id }` on the host's replication connection; the host opens a second, outbound
+   connection to the hub with its own device key and asks for `/streams/<stream_id>`.
+3. **The hub answers both upgrades and splices the two.** `101` to the host, then to the
+   app; from then on both connections carry binary frames only, and the hub copies each
+   frame's bytes to the other side, the app's held frames first.
+4. **The app and the host run a direct connection inside.** The app's TLS pins the host's
+   certificate and presents its device certificate, then the WebSocket and hello. The host
+   hands the stream to the same `serve` path a TCP socket or a tunnel's frames get.
+
+A refusal is the upgrade's answer: an HTTP error status with a `RelayError` as JSON
+(`relay_error.json`), then the hub closes the connection. The app's held frames are
+dropped unread.
+
+Every one of these runs inside the hub's own TLS, so a port forward, a reverse proxy and a
+tunnel listener carry it alike: whatever is in front of the hub sees ciphertext, and only
+the hub sees the path.
 
 ### The hub only forwards
 
@@ -62,10 +73,12 @@ What the hub decides is whether to forward at all:
 
 | Check | Refusal |
 | --- | --- |
-| The device is paired with the hub as a client (not a host device) | `forbidden` |
-| The host replicates to this hub and its hello set `relay` | `unknown_host` |
-| The host is connected, and opens its end within 10 s | `host_offline` |
-| Streams open: at most 32 per device, 64 per host | `busy` |
+| The device is paired with the hub as a client (not a host device) | `forbidden` (403) |
+| The host replicates to this hub and its hello set `relay` | `unknown_host` (404) |
+| The host is connected, and opens its end within 10 s | `host_offline` (503) |
+| Streams open: at most 32 per device, 64 per host | `busy` (429) |
+
+A path the hub does not know gets `404` with no body.
 
 A host that is not connected gets 3 s to appear before `host_offline`: after a hub
 restart the app and the host both reconnect, and the app must not lose that race.
@@ -88,17 +101,31 @@ The replication connection carries the request to open a stream, never its bytes
 - **The hub's work is a copy loop.** One frame read, one frame written, back-pressure
   from the socket. No buffering beyond the frame in hand.
 
-The cost is one more connection setup when a stream opens (TCP, TLS, upgrade, hello from
-host to hub). It is paid once per app connection, and the host is usually a millisecond
-from the hub.
+The cost is one more connection setup when a stream opens (TCP, TLS and upgrade from host
+to hub). It is paid once per app connection, and the host is usually a millisecond from
+the hub.
+
+### Round trips
+
+A direct connection costs four round trips: TCP, TLS, the upgrade, the hello. Through the
+hub the app pays TCP and TLS to the hub, then sends its upgrade with the first flight of
+its TLS to the host behind it, so the upgrade to the hub and the TLS to the host share a
+round trip; then the upgrade to the host and the hello. Five round trips on the app's leg,
+one more than direct, plus the host's dial-in on its own leg (TCP, TLS, upgrade, usually
+on a short one).
+
+A host could instead keep a spare connection to the hub open, saving the dial-in. That is
+a connection per host held at all times and replaced after every stream, for three round
+trips on the host's leg, which is a LAN or a datacenter for most hubs. The hub holds the
+app's bytes instead; P26.8's test measures both legs.
 
 ### Layers and cost
 
 Through the public hostname a message is wrapped, outermost first: Cloudflare's TLS, the
 tunnel's WebSocket, the hub's TLS and WebSocket, the host's TLS and WebSocket. That is
 about 100 bytes and two extra AES-GCM passes per message; no extra round trip once the
-stream is open. Opening costs about three more round trips than a direct connection. P24.3
-measures the forwarding overhead in a test.
+stream is open. Opening costs one more round trip than a direct connection on the app's
+leg (see Round trips). P24.3 measures the forwarding overhead in a test, P26.8 the connect.
 
 ### How an app addresses a machine through the hub
 
@@ -152,7 +179,7 @@ Only the hub is exposed, so the proxy is reached through it too:
   `HubHello::cliproxyapi_relay`.
 - The host already runs its hub logins' CLIs through a proxy of its own on loopback,
   which pins each request to its login. For each request that proxy now opens a relay
-  connection to the hub with `RelayHello::Proxy` and speaks HTTP on it; the hub serves
+  connection to the hub at `/proxy` and speaks HTTP on it; the hub serves
   it, forwarding the request to its proxy (speaking the proxy's TLS itself when it has one)
   and streaming the answer back.
 - The hub forwards everything but the proxy's management API, which stays reachable
@@ -186,6 +213,7 @@ Only a host device whose host holds a client key may open proxy streams, at most
 | Change | Where |
 | --- | --- |
 | `herder-protocol::relay`: `RelayHello`, `RelayAnswer`, `RelayError`, `RELAY_VERSION` | this todo |
+| `herder-protocol::relay::RelayRoute`, `RelayErrorCode::status`, `relay_error.json`; the hellos, answers and `RELAY_VERSION` removed | P26.8 |
 | `HostHello::relay`, `HubMessage::RelayOpen`, `HubHello::cliproxyapi_relay` | this todo; optional, so it does not change `REPLICATION_VERSION` |
 | `FleetHost::relay` | this todo; optional, so it does not change `PROTOCOL_VERSION` |
 | `hub://` addresses in client-core | No signature change: `set_addresses` and the saved profile take more strings, as with tunnel URLs. |

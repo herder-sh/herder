@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelayError",
+  "description": "Why the hub opened no stream: the body of its refusal, as JSON, under the code's HTTP\nstatus.",
+  "type": "object",
+  "properties": {
+    "code": {
+      "description": "What kind of refusal.",
+      "$ref": "#/$defs/RelayErrorCode"
+    },
+    "message": {
+      "description": "Human-readable detail.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "code",
+    "message"
+  ],
+  "$defs": {
+    "RelayErrorCode": {
+      "description": "Kind of refusal of a relay stream.",
+      "oneOf": [
+        {
+          "description": "The hello was malformed, or names a stream the hub did not ask for or no longer\nwaits for.",
+          "type": "string",
+          "const": "bad_request"
+        },
+        {
+          "description": "The hello's `relay_version` is not the hub's.",
+          "type": "string",
+          "const": "unsupported"
+        },
+        {
+          "description": "The device is not paired with the hub, or not as what this hello needs: a client for\n[`RelayHello::Connect`], the host itself for the others.",
+          "type": "string",
+          "const": "forbidden"
+        },
+        {
+          "description": "No host with that id replicates to this hub, or it takes no relayed connections.",
+          "type": "string",
+          "const": "unknown_host"
+        },
+        {
+          "description": "The host is not connected to the hub, or did not open its end in time; try again.",
+          "type": "string",
+          "const": "host_offline"
+        },
+        {
+          "description": "The device or the host has as many streams open as the hub allows; try again.",
+          "type": "string",
+          "const": "busy"
+        },
+        {
+          "description": "The hub failed, or cannot reach its CLIProxyAPI.",
+          "type": "string",
+          "const": "internal"
+        }
+      ]
+    }
+  }
+}
