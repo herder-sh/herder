@@ -2530,17 +2530,32 @@ impl Actor {
                 ) {
                     return self.limit_reached(turn_id, error).await;
                 }
-                let endpoint = self
-                    .inner
-                    .account(&self.session.account_id)
-                    .and_then(|account| account.endpoint);
+                let account = self.inner.account(&self.session.account_id);
+                let label = account.as_ref().map(|account| account.label.clone());
+                let endpoint = account.and_then(|account| account.endpoint);
                 let mut settled = match error.class {
                     // The account needs logging in again: what is sent meanwhile waits for it.
                     ErrorClass::Auth if endpoint.is_none() => SessionStatus::NeedsLogin,
                     _ => SessionStatus::NeedsYou,
                 };
-                // An endpoint account has no login: its endpoint refused its client key.
                 let error = match (&endpoint, error.class) {
+                    // The hub's proxy has no working sign-in for its login: only its owner can
+                    // fix that, on the hub, whatever the CLI makes of the proxy's answer.
+                    (Some(_), _)
+                        if super::is_hub_login_account(&self.session.account_id)
+                            && hub_login_signed_out(&error.message) =>
+                    {
+                        TurnError {
+                            class: error.class,
+                            message: format!(
+                                "{}, one of the hub's provider logins, has no working sign-in \
+                                 on the hub's CLIProxyAPI. Log in again on the hub's Provider \
+                                 logins.",
+                                label.unwrap_or_else(|| self.session.account_id.to_string())
+                            ),
+                        }
+                    }
+                    // An endpoint account has no login: its endpoint refused its client key.
                     (Some(endpoint), ErrorClass::Auth) => TurnError {
                         class: ErrorClass::Auth,
                         message: format!(
@@ -3341,6 +3356,15 @@ fn setup_unfinished(journal: &[herder_protocol::Event]) -> bool {
 }
 
 /// A failed turn's report.
+/// Whether a turn on a hub login failed because the hub's CLIProxyAPI has no working sign-in
+/// for it: `auth_unavailable` ("no auth available") when the login cannot be used, or
+/// `upstream_authentication_required` once the proxy knows the provider refuses it.
+fn hub_login_signed_out(message: &str) -> bool {
+    ["auth_unavailable", "upstream_authentication_required"]
+        .iter()
+        .any(|code| message.contains(code))
+}
+
 pub(super) fn failed(error: &TurnError) -> String {
     format!("The turn failed: {}", error.message)
 }

@@ -100,6 +100,7 @@ struct HubPage: View {
             }
             if owned && tab == .logins {
                 ProviderLoginsSection(logins: logins, owner: owned, add: { adding = LoginAdder(logins: logins) },
+                                      signInAgain: { adding = LoginAdder(logins: logins, again: $0) },
                                       remove: { removing = $0 })
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(Theme.failure)

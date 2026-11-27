@@ -4441,6 +4441,52 @@ async fn an_unreachable_endpoint_account_with_no_other_waits_and_retries_on_it()
 }
 
 #[tokio::test]
+async fn a_hub_login_with_no_working_sign_in_says_to_log_it_in_again_on_the_hub() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["hub_login_auth_unavailable.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[],
+        Vec::new(),
+    )
+    .await;
+    let account = AccountConfig {
+        provider: Provider::Claude,
+        label: "Work".into(),
+        config_dir: Some(dir.path().join("vault-claude-ada")),
+        fallback: false,
+        endpoint: Some(Endpoint {
+            url: "http://127.0.0.1:8317".into(),
+            key: EndpointKey::Held(herder_protocol::SecretValue::new("cpa-client-key").unwrap()),
+        }),
+    };
+    assert!(
+        daemon
+            .manager
+            .add_account(AccountId::new("vault-claude-ada"), account)
+    );
+    let session = daemon.create("vault-claude-ada").await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::NeedsYou).await;
+    let error = journal
+        .iter()
+        .find_map(|event| match &event.body {
+            EventBody::TurnFailed { error, .. } => Some(error.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        error.message,
+        "Work, one of the hub's provider logins, has no working sign-in on the hub's \
+         CLIProxyAPI. Log in again on the hub's Provider logins."
+    );
+    assert!(!error.message.contains("inference gateway"));
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
 async fn a_refused_key_on_an_endpoint_account_needs_you_not_a_login() {
     let dir = tempfile::tempdir().unwrap();
     let claude = Scripted::new(&["endpoint_bad_key.jsonl"]);

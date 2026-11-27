@@ -23,7 +23,11 @@
 //! ([`command`]): `/credentials` lists and deletes them, and `/oauth/auth-url` starts a login,
 //! which waits five minutes for the address the browser was sent to, posted to
 //! `/oauth/callback`; `/oauth/status` then says when the proxy holds the login. The tokens
-//! stay in the proxy: the answers read here carry none.
+//! stay in the proxy: the answers read here carry none. A login the provider no longer takes
+//! is signed in again by naming it to `/oauth/auth-url` (`name`): the proxy then writes the new
+//! tokens into its credential file, keeping the fields below, and refuses another account.
+//! Adding the account afresh instead could name a new file (the proxy's Claude file names carry
+//! a hash of the organization, Codex's the plan), and so give it a new pin.
 //!
 //! Every login is also an account on each host holding a key ([`Management::logins`]). The
 //! proxy itself keeps what herder sets on a login, in its credential file:
@@ -330,6 +334,21 @@ fn refusal(url: &str, status: u16, text: &str) -> anyhow::Error {
     anyhow::anyhow!("{url} answered {status}: {}", text.trim())
 }
 
+/// The `refresh_error.code`s of a login whose refresh token the provider refused: once it
+/// cannot be used either, only signing in again brings it back. The proxy itself asks for a
+/// sign-in (`requires_sign_in`) only for some of them, and for Claude's `invalid_grant`
+/// ("Refresh token not found or invalid", as when the proxy rotated a token it could not save)
+/// keeps retrying the dead token instead, for ever.
+const SIGN_IN_AGAIN: &[&str] = &[
+    "invalid_grant",
+    "refresh_token_expired",
+    "refresh_token_reused",
+    "refresh_token_invalidated",
+    "token_revoked",
+    "invalid_client",
+    "unauthorized",
+];
+
 /// A provider login, from one of the proxy's credential entries; `None` for one with no name.
 fn login(entry: &serde_json::Value, now: Timestamp) -> Option<ProviderLogin> {
     let text = |key: &str| {
@@ -345,9 +364,13 @@ fn login(entry: &serde_json::Value, now: Timestamp) -> Option<ProviderLogin> {
     let until = text("next_retry_after")
         .and_then(|at| at.parse::<Timestamp>().ok())
         .filter(|at| *at > now);
+    let refresh_rejected = entry["refresh_error"]["code"]
+        .as_str()
+        .is_some_and(|code| SIGN_IN_AGAIN.contains(&code));
+    let unusable = yes("unavailable") || text("status").as_deref() == Some("error");
     let state = if yes("disabled") || text("status").as_deref() == Some("disabled") {
         ProviderLoginState::Disabled
-    } else if yes("requires_sign_in") {
+    } else if yes("requires_sign_in") || (refresh_rejected && unusable) {
         ProviderLoginState::NeedsSignIn
     } else if (yes("unavailable") || yes("quota_blocked")) && until.is_some() {
         ProviderLoginState::CoolingDown
@@ -375,7 +398,13 @@ fn login(entry: &serde_json::Value, now: Timestamp) -> Option<ProviderLogin> {
             .or_else(|| text("email"))
             .or_else(|| text("label")),
         until: until.filter(|_| state == ProviderLoginState::CoolingDown),
-        message: text("status_message"),
+        // Why its tokens were refused says more than "invalid grant (retrying)".
+        message: entry["refresh_error"]["message"]
+            .as_str()
+            .map(str::trim)
+            .filter(|why| state == ProviderLoginState::NeedsSignIn && !why.is_empty())
+            .map(str::to_owned)
+            .or_else(|| text("status_message")),
         state,
     })
 }
@@ -446,7 +475,7 @@ pub fn command(management: &Management, command: CommandBody) -> Result<CommandR
         CommandBody::ListProviderLogins => Ok(CommandResult::ProviderLogins {
             logins: management.logins().map_err(internal)?,
         }),
-        CommandBody::StartProviderLogin { provider, .. } => {
+        CommandBody::StartProviderLogin { provider, name } => {
             if !matches!(provider, Provider::Claude | Provider::Codex) {
                 return Err(failed(
                     ErrorCode::BadRequest,
@@ -456,11 +485,38 @@ pub fn command(management: &Management, command: CommandBody) -> Result<CommandR
                     ),
                 ));
             }
-            let path = format!("/oauth/auth-url?provider={}", provider.as_str());
-            let answer = management
-                .call("GET", &path, None)
-                .map_err(internal)?
-                .ok_or_else(|| internal(anyhow::anyhow!("the proxy cannot start logins")))?;
+            let mut path = format!("/oauth/auth-url?provider={}", provider.as_str());
+            // Named, the proxy signs that credential in again: it keeps its file, and so its
+            // pin, label and fallback mark, and takes only the same account.
+            if let Some(name) = &name {
+                path.push_str(&format!("&name={}", query(name)));
+            }
+            let (url, status, answer, text) =
+                management.request("GET", &path, None).map_err(internal)?;
+            let answer = match (status, answer) {
+                (200..=299, Some(answer)) => answer,
+                (404, _) if name.is_some() => {
+                    return Err(failed(
+                        ErrorCode::NotFound,
+                        format!(
+                            "the hub's CLIProxyAPI holds no login {}",
+                            name.unwrap_or_default()
+                        ),
+                    ));
+                }
+                (400, answer) if name.is_some() => {
+                    let why = answer
+                        .as_ref()
+                        .and_then(|a| a["error"].as_str())
+                        .unwrap_or("bad request")
+                        .to_owned();
+                    return Err(failed(
+                        ErrorCode::BadRequest,
+                        format!("the hub's CLIProxyAPI cannot sign that login in again: {why}"),
+                    ));
+                }
+                _ => return Err(internal(refusal(&url, status, &text))),
+            };
             match (answer["state"].as_str(), answer["url"].as_str()) {
                 (Some(state), Some(url)) => Ok(CommandResult::ProviderLoginStarted {
                     login_id: state.to_owned(),
@@ -598,6 +654,14 @@ fn complete(
                 let why = answer["error"].as_str().unwrap_or("the login failed");
                 if why == "unknown or expired state" {
                     return Err(not_waiting());
+                }
+                if why.contains("does not match target credential") {
+                    return Err(failed(
+                        ErrorCode::Conflict,
+                        "you signed in as another account than this login's; log in again as \
+                         the login's own account"
+                            .into(),
+                    ));
                 }
                 return Err(failed(
                     ErrorCode::Conflict,
@@ -888,17 +952,40 @@ mod tests {
                             }
                             ("GET", "/oauth/auth-url") => {
                                 let provider = param(&path, "provider").unwrap_or_default();
-                                let mut waiting = waiting.lock().unwrap();
-                                let state = format!("state{}", waiting.len() + 1);
-                                waiting.insert(
-                                    state.clone(),
-                                    serde_json::json!({ "status": "wait", "provider": provider }),
-                                );
-                                ok(serde_json::json!({
-                                    "status": "ok",
-                                    "state": state,
-                                    "url": format!("https://{provider}.example/oauth?state={state}"),
-                                }))
+                                let target = param(&path, "name");
+                                let held = target.as_ref().map(|name| {
+                                    creds
+                                        .lock()
+                                        .unwrap()
+                                        .iter()
+                                        .find(|c| c["name"] == name.as_str())
+                                        .cloned()
+                                });
+                                match held {
+                                    Some(None) => missing("auth file not found"),
+                                    Some(Some(c)) if c["provider"] != provider.as_str() => (
+                                        "400 Bad Request",
+                                        r#"{"error":"provider does not match target credential"}"#
+                                            .to_owned(),
+                                    ),
+                                    _ => {
+                                        let mut waiting = waiting.lock().unwrap();
+                                        let state = format!("state{}", waiting.len() + 1);
+                                        waiting.insert(
+                                            state.clone(),
+                                            serde_json::json!({
+                                                "status": "wait",
+                                                "provider": provider,
+                                                "target": target,
+                                            }),
+                                        );
+                                        ok(serde_json::json!({
+                                            "status": "ok",
+                                            "state": state,
+                                            "url": format!("https://{provider}.example/oauth?state={state}"),
+                                        }))
+                                    }
+                                }
                             }
                             ("POST", "/oauth/callback") => {
                                 let body: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -910,17 +997,52 @@ mod tests {
                                 let mut waiting = waiting.lock().unwrap();
                                 match waiting.get_mut(state) {
                                     Some(login) if login["status"] == "wait" => {
-                                        if code.as_deref() == Some("good") {
+                                        // `good` signs Ada in, `bob` Bob.
+                                        let email = match code.as_deref() {
+                                            Some("good") => Some("ada@example.com"),
+                                            Some("bob") => Some("bob@example.com"),
+                                            _ => None,
+                                        };
+                                        let mut creds = creds.lock().unwrap();
+                                        let target = login["target"].as_str().map(|name| {
+                                            creds.iter().position(|c| c["name"] == name).unwrap()
+                                        });
+                                        if let Some(email) = email {
                                             let provider = login["provider"].clone();
-                                            *login = serde_json::json!({ "status": "ok" });
-                                            creds.lock().unwrap().push(serde_json::json!({
-                                                "name": format!("{}-ada@example.com.json", provider.as_str().unwrap()),
-                                                "provider": provider,
-                                                "email": "ada@example.com",
-                                                "status": "active",
-                                                // Never relayed.
-                                                "id_token": { "email": "ada@example.com" },
-                                            }));
+                                            match target {
+                                                // In place: the same file, its fields kept,
+                                                // with new tokens and its errors gone.
+                                                Some(at) if creds[at]["email"] == email => {
+                                                    let entry = creds[at].as_object_mut().unwrap();
+                                                    for stale in [
+                                                        "refresh_error",
+                                                        "requires_sign_in",
+                                                        "unavailable",
+                                                        "status_message",
+                                                    ] {
+                                                        entry.remove(stale);
+                                                    }
+                                                    entry.insert("status".into(), "active".into());
+                                                    *login = serde_json::json!({ "status": "ok" });
+                                                }
+                                                Some(_) => {
+                                                    *login = serde_json::json!({
+                                                        "status": "error",
+                                                        "error": "Authenticated account does not match target credential",
+                                                    });
+                                                }
+                                                None => {
+                                                    *login = serde_json::json!({ "status": "ok" });
+                                                    creds.push(serde_json::json!({
+                                                        "name": format!("{}-{email}.json", provider.as_str().unwrap()),
+                                                        "provider": provider,
+                                                        "email": email,
+                                                        "status": "active",
+                                                        // Never relayed.
+                                                        "id_token": { "email": email },
+                                                    }));
+                                                }
+                                            }
                                         } else {
                                             *login = serde_json::json!({
                                                 "status": "error",
@@ -1306,6 +1428,121 @@ mod tests {
         }));
         assert_eq!(off.state, ProviderLoginState::Disabled);
         assert!(login(&serde_json::json!({ "provider": "claude" }), now).is_none());
+    }
+
+    /// A credential as CLIProxyAPI v8.1.1 lists it once its Claude refresh token is gone: it
+    /// rotated the token in memory while it could not write it to disk, then restarted.
+    const INVALID_GRANT: &str = include_str!("fixtures/cliproxyapi-invalid-grant.json");
+
+    #[test]
+    fn a_login_whose_refresh_token_the_provider_refused_needs_signing_in_again() {
+        let now: Timestamp = "2026-11-27T09:15:00Z".parse().unwrap();
+        let entry: serde_json::Value = serde_json::from_str(INVALID_GRANT).unwrap();
+        // The proxy itself does not ask for a sign-in, and retries the dead token.
+        assert_eq!(entry["requires_sign_in"], false);
+        let dead = login(&entry, now).unwrap();
+        assert_eq!(dead.state, ProviderLoginState::NeedsSignIn);
+        assert!(
+            dead.message
+                .as_deref()
+                .is_some_and(|why| why.contains("Refresh token not found or invalid")),
+            "{dead:?}"
+        );
+        assert_eq!(dead.label.as_deref(), Some("Work"));
+        assert!(dead.fallback);
+
+        // A rejected refresh while its access token still works leaves it in use.
+        let mut working = entry.clone();
+        working["status"] = "active".into();
+        working["unavailable"] = false.into();
+        assert_eq!(
+            login(&working, now).unwrap().state,
+            ProviderLoginState::Active
+        );
+        // A refresh that failed for another reason is no reason to sign in again.
+        let mut flaky = entry;
+        flaky["refresh_error"]["code"] = "refresh_failed".into();
+        assert_eq!(login(&flaky, now).unwrap().state, ProviderLoginState::Error);
+    }
+
+    #[tokio::test]
+    async fn signing_a_login_in_again_keeps_its_name_pin_label_and_fallback_mark() {
+        let proxy = FakeProxy::start();
+        let dead: serde_json::Value = serde_json::from_str(INVALID_GRANT).unwrap();
+        let name = dead["name"].as_str().unwrap().to_owned();
+        proxy.credentials.lock().unwrap().push(dead);
+        let before = listed(run(&proxy, CommandBody::ListProviderLogins).await);
+        assert_eq!(before[0].state, ProviderLoginState::NeedsSignIn);
+
+        let again = |provider| CommandBody::StartProviderLogin {
+            provider,
+            name: Some(name.clone()),
+        };
+        // Only as its own provider, and only a login the proxy holds.
+        let codex = run(&proxy, again(Provider::Codex)).await.unwrap_err();
+        assert_eq!(codex.code, ErrorCode::BadRequest);
+        let unknown = run(
+            &proxy,
+            CommandBody::StartProviderLogin {
+                provider: Provider::Claude,
+                name: Some("claude-nobody.json".into()),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(unknown.code, ErrorCode::NotFound);
+
+        // Another account is refused, and the login stays as it was.
+        let Ok(CommandResult::ProviderLoginStarted { login_id, .. }) =
+            run(&proxy, again(Provider::Claude)).await
+        else {
+            panic!("the login did not start");
+        };
+        let bob = run(
+            &proxy,
+            CommandBody::CompleteProviderLogin {
+                redirect_url: format!("http://localhost:54545/callback?code=bob&state={login_id}"),
+                login_id,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(bob.code, ErrorCode::Conflict);
+        assert!(bob.message.contains("another account"), "{bob:?}");
+        assert_eq!(
+            listed(run(&proxy, CommandBody::ListProviderLogins).await),
+            before
+        );
+
+        let Ok(CommandResult::ProviderLoginStarted { login_id, .. }) =
+            run(&proxy, again(Provider::Claude)).await
+        else {
+            panic!("the login did not start");
+        };
+        let after = listed(
+            run(
+                &proxy,
+                CommandBody::CompleteProviderLogin {
+                    redirect_url: format!(
+                        "http://localhost:54545/callback?code=good&state={login_id}"
+                    ),
+                    login_id,
+                },
+            )
+            .await,
+        );
+        // One login, the same one, working again.
+        assert_eq!(after.len(), 1);
+        assert_eq!(
+            (
+                &after[0].name,
+                &after[0].pin,
+                &after[0].label,
+                after[0].fallback
+            ),
+            (&name, &before[0].pin, &before[0].label, true)
+        );
+        assert_eq!(after[0].state, ProviderLoginState::Active);
     }
 
     /// The fields the hub put on the proxy's credential `name`.

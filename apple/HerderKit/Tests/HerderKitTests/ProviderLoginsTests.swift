@@ -4,10 +4,13 @@ import Herder
 import Testing
 
 /// A hub's CLIProxyAPI, as the app reaches it: it records what it is sent, starts logins,
-/// and signs one in when the pasted address carries the code `good`.
+/// and signs one in when the pasted address carries the code `good`: a new one, or the login
+/// the start named, again, in place.
 @MainActor final class FakeLoginsHub {
     var sent: [CommandBody] = []
     var logins: [ProviderLogin] = sampleProviderLogins()
+    /// The login being signed in again.
+    var again: String?
 
     func model() -> HubLogins {
         HubLogins(hub: "h-hub") { [self] command in
@@ -15,11 +18,17 @@ import Testing
             switch command {
             case .listProviderLogins:
                 return .providerLogins(logins: logins)
-            case .startProviderLogin(let provider, _):
+            case .startProviderLogin(let provider, let name):
+                again = name
                 return .providerLoginStarted(loginId: "state1", url: "https://\(provider).example/oauth?state=state1")
             case .completeProviderLogin(_, let address):
                 guard address.contains("code=good") else {
                     throw HerderError.Rejected(info: ErrorInfo(code: .badRequest, message: "that address has no code"))
+                }
+                if let again, let at = logins.firstIndex(where: { $0.name == again }) {
+                    logins[at].state = .active
+                    logins[at].message = nil
+                    return .providerLogins(logins: logins)
                 }
                 logins.append(ProviderLogin(name: "claude-grace@example.com.json", provider: "claude",
                                             label: "grace@example.com", email: "grace@example.com", pin: "grace",
@@ -101,6 +110,35 @@ func sampleProviderLogins(now: Date = .now) -> [ProviderLogin] {
         await adder.leave()
         await adder.leave()
         #expect(hub.sent == [.startProviderLogin(provider: "codex", name: nil), .cancelProviderLogin(loginId: "state1")])
+    }
+
+    @Test func loggingALoginInAgainNamesItAndKeepsItInPlace() async {
+        let hub = FakeLoginsHub()
+        let logins = hub.model()
+        await logins.reload()
+        let old = logins.logins[2]
+        #expect(logins.signedOut.map(\.name) == [old.name])
+
+        let adder = LoginAdder(logins: logins, again: old)
+        await adder.start()
+        adder.address = "http://localhost:54545/callback?code=good&state=state1"
+        #expect(await adder.complete())
+        #expect(hub.sent == [
+            .listProviderLogins,
+            .startProviderLogin(provider: "claude", name: old.name),
+            .completeProviderLogin(loginId: "state1", redirectUrl: "http://localhost:54545/callback?code=good&state=state1"),
+        ])
+        // The same login, working again, and no other.
+        #expect(logins.logins.count == 3)
+        #expect(logins.logins[2].name == old.name && logins.logins[2].pin == old.pin)
+        #expect(logins.logins[2].state == .active)
+        #expect(logins.signedOut.isEmpty)
+    }
+
+    @Test func aSignedOutLoginIsCalledOutAboveTheList() {
+        let logins = sampleProviderLogins()
+        #expect(HubLogins.signedOutNotice([logins[2]]).hasPrefix("claude-old.json needs signing in again"))
+        #expect(HubLogins.signedOutNotice([logins[0], logins[2]]).hasPrefix("2 logins need signing in again"))
     }
 
     @Test func removingALoginListsAgain() async throws {
@@ -241,6 +279,9 @@ import SwiftUI
         await adder.start()
         adder.address = "http://localhost:54545/callback?code=abc"
         try await shoot(AddProviderLoginSheet(adder: adder), named: "add-login-paste.png", width: 560, height: 480)
+        let again = LoginAdder(logins: hub.model(), again: hub.logins[2])
+        await again.start()
+        try await shoot(AddProviderLoginSheet(adder: again), named: "log-in-again.png", width: 560, height: 480)
     }
 
     private func shoot(_ view: some View, named name: String, width: CGFloat, height: CGFloat) async throws {

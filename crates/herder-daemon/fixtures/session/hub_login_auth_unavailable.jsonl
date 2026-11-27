@@ -1,0 +1,5 @@
+# A hub login's turn fails: the hub's CLIProxyAPI has no working sign-in for it, and the CLI
+# says so with its own advice about the gateway.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Refactor the parser."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-1", "error": {"class": "transient", "message": "API Error: 503 {\"error\":{\"message\":\"auth_unavailable: no auth available (providers=claude, model=claude-opus-4-7)\",\"type\":\"server_error\",\"code\":\"internal_server_error\"}} · If it persists, check your inference gateway (127.0.0.1:8317)."}}}
