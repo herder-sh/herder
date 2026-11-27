@@ -38,6 +38,38 @@ struct DraftStartTests {
         #expect(drafts.load(draft.key) == nil)
     }
 
+    /// The machine lists the new session before its CLI is up to take the prompt: from then
+    /// on its row, titled by the prompt, stands in for the starting card, never beside it.
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func theSessionsRowTakesTheStartingCardsPlace() async throws {
+        let daemon = try FakeDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        let machine = try await fleet.signIn(to: daemon)
+        try await fleet.client.synced(hostId: machine.hostId)
+        let draft = Draft(hostId: machine.hostId, repo: daemon.repo)
+
+        let sent = fleet.start(draft, accountId: daemon.account, model: "", mode: .ask, prompt: "Say hello.",
+                               drafts: drafts)
+        var both = false
+        var listed: SessionSummary?
+        let deadline = ContinuousClock.now + .seconds(120)
+        while listed == nil, ContinuousClock.now < deadline {
+            listed = fleet.lists.projects.flatMap(\.sessions).first
+            both = both || (listed != nil && !fleet.starting.isEmpty)
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        let row = try #require(listed)
+        #expect(!both)
+        // Named from the first moment: by the prompt, or by the session once its events load.
+        #expect(!row.title.hasPrefix("Session …"))
+        _ = try await sent.value.get()
+    }
+
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
     func aStartThatFailsPutsThePromptBackAndSaysSo() async throws {
         let daemon = try FakeDaemon()

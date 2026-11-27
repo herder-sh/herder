@@ -60,6 +60,16 @@ struct SessionModelTests {
         #expect(model.title == "Start iOS App Development")
     }
 
+    @Test func anIdleSessionWithAPromptOnItsWaySaysItIsStarting() {
+        var script = Script()
+        var model = script.model([created()])
+        #expect(model.activity == "Idle")
+        model.outbox = [Outgoing(text: "Say hello.", state: .delivered)]
+        #expect(model.activity == "Starting…")
+        model.outbox = [Outgoing(text: "Say hello.", state: .failed("offline"))]
+        #expect(model.activity == "Idle")
+    }
+
     @Test func statusComesFromStatusEvents() {
         var script = Script()
         let model = script.model([created(), .sessionStatusChanged(status: .running, retryAt: nil), .turnStarted(turnId: "t1")])

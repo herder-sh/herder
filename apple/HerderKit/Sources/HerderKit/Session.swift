@@ -710,6 +710,8 @@ struct SessionModel {
         case .needsYou where status == .needsLogin:
             return "\(provider.map(ModelCatalog.providerName) ?? "The") account needs sign-in"
         case .needsYou: return "Needs you"
+        // A prompt sent here waits for the CLI to start, or for the machine to take it.
+        case .idle where outbox.contains(where: \.pending): return "Starting…"
         case .idle, .done: return lastMessage.map(firstLine) ?? (loaded ? "Idle" : "")
         }
     }
@@ -1039,6 +1041,9 @@ struct Outgoing: Hashable, Identifiable {
     var files: [PromptFile] = []
     var state: State = .sending
     var sentAt = Date.now
+
+    /// Whether it is on its way or delivered, not failed.
+    var pending: Bool { if case .failed = state { false } else { true } }
 
     /// How long a message may be on its way before its line says it has not been delivered. The
     /// client finds a dead connection 5 s after a send and shows the machine as lost 5 s after
