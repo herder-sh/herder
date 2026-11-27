@@ -437,7 +437,7 @@ struct FleetView: View {
                     // Only while open work waits on an offline machine.
                     .safeAreaInset(edge: .bottom, spacing: 0) {
                         BoardStalledWork(fleet: fleet) { hostId in
-                            if let hostId { openMachine(hostId) } else { tab = .hub }
+                            if let hostId { openMachine(hostId) } else { self.tab = .hub }
                         }
                     }
                     .toolbar {
