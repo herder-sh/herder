@@ -8,7 +8,7 @@ use jiff::{SignedDuration, ZonedDateTime};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{AccountId, Provider, Timestamp};
+use crate::{AccountId, HostId, Provider, Timestamp};
 
 /// Tokens and cost of one turn, as its provider reported them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -106,4 +106,31 @@ pub struct FailoverTotal {
     pub failovers_out: u64,
     /// Sessions the daemon moved onto the account off another that hit its limit.
     pub failovers_in: u64,
+}
+
+/// What the account on one hub login used with one model on one host on one UTC day, as the
+/// hub adds it up from the journal the host replicates to it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HubUsageTotal {
+    /// The login's pin, as [`crate::ProviderLogin::pin`] has it; `usage.account_id` is the
+    /// host's account on it, `vault-<pin>`.
+    pub pin: String,
+    /// The host the turns ran on.
+    pub host_id: HostId,
+    /// The UTC day the turns completed on, `YYYY-MM-DD`.
+    pub day: String,
+    /// What the turns used, as the host's own `usage_summary` counts them.
+    pub usage: UsageTotal,
+}
+
+/// How often the account on one hub login hit its limit on one host, and how often that host
+/// failed sessions over off it and onto it, as the hub counts them in the host's journal.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HubFailoverTotal {
+    /// The login's pin, as [`crate::ProviderLogin::pin`] has it.
+    pub pin: String,
+    /// The host.
+    pub host_id: HostId,
+    /// Its limit hits and failovers, as the host's own `usage_summary` counts them.
+    pub failovers: FailoverTotal,
 }

@@ -17,21 +17,21 @@ use herder_protocol::{
     CloudflareSettings, CommandBody, CommandResult, Constraint, Container, ContainerState,
     DaemonSettings, DeviceId, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason,
     Event, EventBody, FactId, FailoverSettings, FailoverTotal, FleetHost, FollowUp, FollowUpReason,
-    FollowUpSettings, HistoryPart, HostId, HostReplication, HostResources, HostUsage, HubStatus,
-    HubVolume, Image, Item, ItemBody, ItemId, LeftoverDecision, LibrarySkill, LinkedHub, LogFormat,
-    LogSettings, McpServerSettings, McpTransport, Mergeable, NewPerson, PasskeyAssertion,
-    PasskeyChallenge, PasskeyCreation, PasskeyKey, PasskeyRegistration, PermissionMode, PersonCard,
-    PersonId, PersonInfo, PersonPasskey, PrState, Pressure, Project, ProjectDiscovery, ProjectId,
-    PromptFile, PromptId, Provider, ProviderBinary, ProviderLogin, ProviderLoginState,
-    ProviderReload, ProviderStatus, PullRequest, QuestionId, QueuedPrompt, RefusedPasskey,
-    RegistrationResponse, Relay, RelayGrant, RemoteAccess, RemoteAccessSettings, ResourceSettings,
-    ReviewStatus, Role, Route, RouteState, RouteStatus, SecretAccess, SecretInfo, SecretRef,
-    SecretRequest, SecretSet, SecretStoreRequest, SecretValue, SessionHead, SessionId,
-    SessionOrigin, SessionSkill, SessionStatus, SessionUsage, SignIn, SignInRefusal, SkillFile,
-    SkillReload, SkillSource, SkillsStatus, TelemetrySettings, Terminal, TerminalId,
-    TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource, TurnError, TurnId,
-    TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow, UserDevice, UserId,
-    UserInfo, WireGuardEnrollment, WireGuardOffer, WireGuardSettings,
+    FollowUpSettings, HistoryPart, HostId, HostReplication, HostResources, HostUsage,
+    HubFailoverTotal, HubStatus, HubUsageTotal, HubVolume, Image, Item, ItemBody, ItemId,
+    LeftoverDecision, LibrarySkill, LinkedHub, LogFormat, LogSettings, McpServerSettings,
+    McpTransport, Mergeable, NewPerson, PasskeyAssertion, PasskeyChallenge, PasskeyCreation,
+    PasskeyKey, PasskeyRegistration, PermissionMode, PersonCard, PersonId, PersonInfo,
+    PersonPasskey, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId,
+    Provider, ProviderBinary, ProviderLogin, ProviderLoginState, ProviderReload, ProviderStatus,
+    PullRequest, QuestionId, QueuedPrompt, RefusedPasskey, RegistrationResponse, Relay, RelayGrant,
+    RemoteAccess, RemoteAccessSettings, ResourceSettings, ReviewStatus, Role, Route, RouteState,
+    RouteStatus, SecretAccess, SecretInfo, SecretRef, SecretRequest, SecretSet, SecretStoreRequest,
+    SecretValue, SessionHead, SessionId, SessionOrigin, SessionSkill, SessionStatus, SessionUsage,
+    SignIn, SignInRefusal, SkillFile, SkillReload, SkillSource, SkillsStatus, TelemetrySettings,
+    Terminal, TerminalId, TerminalPurpose, ThreadLink, Timestamp, TitleSettings, TitleSource,
+    TurnError, TurnId, TurnUsage, UpdateStage, UpdateWhen, UsagePeriod, UsageTotal, UsageWindow,
+    UserDevice, UserId, UserInfo, WireGuardEnrollment, WireGuardOffer, WireGuardSettings,
 };
 use serde_json::Value as Json;
 
@@ -771,6 +771,9 @@ pub enum CommandBody {
     GetUsageSummary {
         period: UsagePeriod,
     },
+    GetHubUsage {
+        period: UsagePeriod,
+    },
     GetHubLink,
     LinkHub {
         addresses: Vec<String>,
@@ -1108,6 +1111,12 @@ pub enum CommandResult {
         since: Timestamp,
         totals: Vec<UsageTotal>,
         failovers: Vec<FailoverTotal>,
+    },
+    HubUsage {
+        period: UsagePeriod,
+        since: Timestamp,
+        totals: Vec<HubUsageTotal>,
+        failovers: Vec<HubFailoverTotal>,
     },
     HubLink {
         is_hub: bool,
@@ -1978,6 +1987,21 @@ pub struct FailoverTotal {
     pub limit_hits: u64,
     pub failovers_out: u64,
     pub failovers_in: u64,
+}
+
+#[uniffi::remote(Record)]
+pub struct HubUsageTotal {
+    pub pin: String,
+    pub host_id: HostId,
+    pub day: String,
+    pub usage: UsageTotal,
+}
+
+#[uniffi::remote(Record)]
+pub struct HubFailoverTotal {
+    pub pin: String,
+    pub host_id: HostId,
+    pub failovers: FailoverTotal,
 }
 
 #[uniffi::remote(Record)]

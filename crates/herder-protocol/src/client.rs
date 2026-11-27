@@ -720,6 +720,16 @@ pub enum CommandBody {
         /// The period, ending now.
         period: UsagePeriod,
     },
+    /// Add up, on a hub, what each of its provider logins was used for over `period`, on every
+    /// host that replicates to it, per host, model and UTC day, with each login's limit hits
+    /// and failovers per host; owners only, as the logins are. Answered with `hub_usage`, from
+    /// the journals the hosts replicate, which count each turn as the host's own
+    /// `usage_summary` does. A daemon that is not a hub refuses it with `unsupported`. It
+    /// changes nothing, so a resend is answered afresh.
+    GetHubUsage {
+        /// The period, ending now.
+        period: UsagePeriod,
+    },
     /// Say which hub this daemon is linked to; owners only. Answered with `hub_link`.
     /// It changes nothing, so a resend is answered afresh.
     GetHubLink,

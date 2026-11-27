@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, AgentMessage, Bytes, CommandId, DaemonSettings, DeviceId, Event, FailoverTotal,
-    HostId, HostResources, Item, ItemId, PasskeyChallenge, PasskeyCreation, PersonId, PersonInfo,
-    Project, ProjectId, PromptId, Provider, SecretAccess, SecretInfo, SecretRef, SecretSet,
-    SecretValue, Seq, SessionId, SessionStatus, SessionUsage, TerminalId, Timestamp, UsagePeriod,
-    UsageTotal, UserId,
+    HostId, HostResources, HubFailoverTotal, HubUsageTotal, Item, ItemId, PasskeyChallenge,
+    PasskeyCreation, PersonId, PersonInfo, Project, ProjectId, PromptId, Provider, SecretAccess,
+    SecretInfo, SecretRef, SecretSet, SecretValue, Seq, SessionId, SessionStatus, SessionUsage,
+    TerminalId, Timestamp, UsagePeriod, UsageTotal, UserId,
 };
 
 /// What a device without a passkey asks its person to approve; see `approval_request`.
@@ -695,6 +695,21 @@ pub enum CommandResult {
         /// account; empty from a daemon that does not count them.
         #[serde(default)]
         failovers: Vec<FailoverTotal>,
+    },
+    /// What each of a hub's provider logins was used for over a period, on every host that
+    /// replicates to it, answering `get_hub_usage`.
+    HubUsage {
+        /// The period asked for.
+        period: UsagePeriod,
+        /// When it starts, as [`UsagePeriod::start`] has it at the time of the answer.
+        #[schemars(with = "crate::TimestampSchema")]
+        since: Timestamp,
+        /// One total per login, host, model and UTC day with a turn in the period, ordered by
+        /// pin, host, day, then model.
+        totals: Vec<HubUsageTotal>,
+        /// One total per login and host with a limit hit or failover in the period, ordered
+        /// by pin, then host.
+        failovers: Vec<HubFailoverTotal>,
     },
     /// Which hub the daemon is linked to, answering `get_hub_link`.
     HubLink {

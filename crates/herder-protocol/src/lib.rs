@@ -94,7 +94,9 @@ pub use skills::{
     SessionSkill, SkillFile, SkillReload, SkillSource, SkillsStatus, is_valid_skill_name,
 };
 pub use types::{PermissionMode, Provider, clean_title};
-pub use usage::{FailoverTotal, TurnUsage, UsagePeriod, UsageTotal};
+pub use usage::{
+    FailoverTotal, HubFailoverTotal, HubUsageTotal, TurnUsage, UsagePeriod, UsageTotal,
+};
 
 /// Wire protocol version, exchanged in both hellos; peers with different versions disconnect.
 pub const PROTOCOL_VERSION: u32 = 6;

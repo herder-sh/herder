@@ -1661,6 +1661,46 @@
           ]
         },
         {
+          "description": "What each of a hub's provider logins was used for over a period, on every host that\nreplicates to it, answering `get_hub_usage`.",
+          "type": "object",
+          "properties": {
+            "failovers": {
+              "description": "One total per login and host with a limit hit or failover in the period, ordered\nby pin, then host.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HubFailoverTotal"
+              }
+            },
+            "period": {
+              "description": "The period asked for.",
+              "$ref": "#/$defs/UsagePeriod"
+            },
+            "since": {
+              "description": "When it starts, as [`UsagePeriod::start`] has it at the time of the answer.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "totals": {
+              "description": "One total per login, host, model and UTC day with a turn in the period, ordered by\npin, host, day, then model.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HubUsageTotal"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "hub_usage"
+            }
+          },
+          "required": [
+            "type",
+            "period",
+            "since",
+            "totals",
+            "failovers"
+          ]
+        },
+        {
           "description": "Which hub the daemon is linked to, answering `get_hub_link`.",
           "type": "object",
           "properties": {
@@ -3694,6 +3734,29 @@
         "attachment_bytes"
       ]
     },
+    "HubFailoverTotal": {
+      "description": "How often the account on one hub login hit its limit on one host, and how often that host\nfailed sessions over off it and onto it, as the hub counts them in the host's journal.",
+      "type": "object",
+      "properties": {
+        "failovers": {
+          "description": "Its limit hits and failovers, as the host's own `usage_summary` counts them.",
+          "$ref": "#/$defs/FailoverTotal"
+        },
+        "host_id": {
+          "description": "The host.",
+          "$ref": "#/$defs/HostId"
+        },
+        "pin": {
+          "description": "The login's pin, as [`crate::ProviderLogin::pin`] has it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pin",
+        "host_id",
+        "failovers"
+      ]
+    },
     "HubStatus": {
       "description": "What a hub holds, in total and per host.",
       "type": "object",
@@ -3729,6 +3792,34 @@
         "events",
         "storage_bytes",
         "hosts"
+      ]
+    },
+    "HubUsageTotal": {
+      "description": "What the account on one hub login used with one model on one host on one UTC day, as the\nhub adds it up from the journal the host replicates to it.",
+      "type": "object",
+      "properties": {
+        "day": {
+          "description": "The UTC day the turns completed on, `YYYY-MM-DD`.",
+          "type": "string"
+        },
+        "host_id": {
+          "description": "The host the turns ran on.",
+          "$ref": "#/$defs/HostId"
+        },
+        "pin": {
+          "description": "The login's pin, as [`crate::ProviderLogin::pin`] has it; `usage.account_id` is the\nhost's account on it, `vault-<pin>`.",
+          "type": "string"
+        },
+        "usage": {
+          "description": "What the turns used, as the host's own `usage_summary` counts them.",
+          "$ref": "#/$defs/UsageTotal"
+        }
+      },
+      "required": [
+        "pin",
+        "host_id",
+        "day",
+        "usage"
       ]
     },
     "HubVolume": {
