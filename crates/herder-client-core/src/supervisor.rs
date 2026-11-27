@@ -348,6 +348,8 @@ struct State {
     headers: tunnel::Headers,
     /// Which addresses the user pinned or disabled.
     routes: Routes,
+    /// The machine's token for its Cloudflare relay, for a hub that has one.
+    relay_grant: Option<herder_protocol::RelayGrant>,
     /// What the daemon's latest hello named, as saved ([`address::advertised`]), until the
     /// client follows it ([`Supervisor::take_advertised`]).
     advertised: Option<Vec<String>>,
@@ -604,6 +606,7 @@ impl Supervisor {
             addresses: saved.addresses.clone(),
             headers: saved.headers.clone(),
             routes: saved.routes.clone(),
+            relay_grant: saved.relay_grant.clone(),
             adopted: saved.advertised.clone(),
             ..State::default()
         };
@@ -686,6 +689,7 @@ impl Supervisor {
                 headers: Default::default(),
                 routes: Default::default(),
                 device_key: String::new(),
+                relay_grant: None,
             },
             state: Mutex::new(state),
             changed,
@@ -803,7 +807,18 @@ impl Supervisor {
         saved.addresses.clone_from(&state.addresses);
         saved.headers.clone_from(&state.headers);
         saved.routes.clone_from(&state.routes);
+        saved.relay_grant.clone_from(&state.relay_grant);
         saved
+    }
+
+    /// The machine's token for its Cloudflare relay, for a hub that gave this device one.
+    pub(crate) fn relay_grant(&self) -> Option<herder_protocol::RelayGrant> {
+        self.lock().relay_grant.clone()
+    }
+
+    /// Keeps `grant` as the machine's token for its Cloudflare relay.
+    pub(crate) fn set_relay_grant(&self, grant: Option<herder_protocol::RelayGrant>) {
+        self.lock().relay_grant = grant;
     }
 
     /// Connects to `addresses`, in this order of preference, from now on.
@@ -2650,6 +2665,10 @@ async fn reach(address: &str, connector: &TlsConnector, via: &Via) -> anyhow::Re
         match address::hub(address) {
             Some(hub) => {
                 let stream = via.stream(&hub).await?;
+                upgrade(secure(Box::new(stream), connector).await?, None).await
+            }
+            None if address::relay(address).is_some() => {
+                let stream = via.relay_stream(address).await?;
                 upgrade(secure(Box::new(stream), connector).await?, None).await
             }
             None => direct(address, via.headers(address), connector, None).await,

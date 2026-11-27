@@ -24,6 +24,9 @@ pub struct Held {
     pub tunnels: BTreeMap<String, Value>,
     pub configs: BTreeMap<String, Value>,
     pub records: BTreeMap<String, Value>,
+    /// Workers scripts by name: the multipart body of their last upload, the migration they
+    /// last ran, and whether they are served on `workers.dev`.
+    pub scripts: BTreeMap<String, Script>,
     /// Every request, as `METHOD /path`.
     pub calls: Vec<String>,
     next: u32,
@@ -55,6 +58,20 @@ impl Held {
         format!("token-of-{id}")
     }
 }
+
+/// A Workers script the fake holds.
+#[derive(Debug, Default, Clone)]
+pub struct Script {
+    /// The body of its last upload.
+    pub upload: String,
+    /// The Durable Object migration it last ran, if any.
+    pub migration: Option<String>,
+    /// Whether it is served on `workers.dev`.
+    pub workers_dev: bool,
+}
+
+/// The fake account's `workers.dev` subdomain.
+pub const SUBDOMAIN: &str = "ada";
 
 /// The fake API.
 pub struct FakeCloudflare {
@@ -126,6 +143,7 @@ fn answer(held: &Mutex<Held>, head: &str, body: &str) -> (&'static str, Value) {
             json!({ "success": false, "errors": [{ "code": 9109, "message": "Invalid access token" }] }),
         );
     }
+    let raw = body;
     let body: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     match (method.as_str(), segments.as_slice()) {
@@ -215,6 +233,47 @@ fn answer(held: &Mutex<Held>, head: &str, body: &str) -> (&'static str, Value) {
             Some(_) => ok(json!({ "id": id })),
             None => missing(),
         },
+        ("GET", ["accounts", ACCOUNT, "workers", "subdomain"]) => {
+            ok(json!({ "subdomain": SUBDOMAIN }))
+        }
+        ("GET", ["accounts", ACCOUNT, "workers", "scripts"]) => {
+            let scripts: Vec<Value> = held
+                .scripts
+                .iter()
+                .map(|(id, script)| json!({ "id": id, "migration_tag": script.migration }))
+                .collect();
+            ok(json!(scripts))
+        }
+        ("PUT", ["accounts", ACCOUNT, "workers", "scripts", name]) => {
+            assert!(head.contains("multipart/form-data; boundary="), "{head}");
+            let script = held.scripts.entry((*name).to_owned()).or_default();
+            if raw.contains(r#""new_tag":"v1""#) {
+                script.migration = Some("v1".to_owned());
+            }
+            if script.migration.is_none() {
+                return (
+                    "400 Bad Request",
+                    json!({ "success": false, "errors": [{ "code": 10074, "message": "Cannot create binding for class Relay that is not exported by the script" }] }),
+                );
+            }
+            script.upload = raw.to_owned();
+            ok(json!({ "id": name }))
+        }
+        ("POST", ["accounts", ACCOUNT, "workers", "scripts", name, "subdomain"]) => {
+            match held.scripts.get_mut(*name) {
+                Some(script) => {
+                    script.workers_dev = body["enabled"] == true;
+                    ok(json!({ "enabled": script.workers_dev }))
+                }
+                None => missing(),
+            }
+        }
+        ("DELETE", ["accounts", ACCOUNT, "workers", "scripts", name]) => {
+            match held.scripts.remove(*name) {
+                Some(_) => ok(json!(null)),
+                None => missing(),
+            }
+        }
         _ => missing(),
     }
 }

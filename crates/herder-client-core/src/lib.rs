@@ -185,14 +185,15 @@ use std::time::Duration;
 use herder_protocol::{
     Account, AccountId, ApprovalRequest, AwsProfile, Command, CommandBody, CommandId,
     CommandResult, ErrorCode, ErrorInfo, Event, FailoverSettings, FleetHost, HostId, HostResources,
-    HubStatus, Item, PasskeyAssertion, PasskeyChallenge, PersonId, Project, Provider, Role,
-    SessionHead, SessionId, SessionSkill, SessionUsage, SignInRefusal, SkillsStatus, Terminal,
-    TerminalId, Timestamp, UpdateStage, UserId,
+    HubStatus, Item, PasskeyAssertion, PasskeyChallenge, PersonId, Project, Provider, RelayGrant,
+    Role, SessionHead, SessionId, SessionSkill, SessionUsage, SignInRefusal, SkillsStatus,
+    Terminal, TerminalId, Timestamp, UpdateStage, UserId,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use auth::DeviceKey;
 pub use catalog::{
@@ -489,6 +490,9 @@ struct Inner {
     stop: CancellationToken,
     /// Whether this is a demo ([`Client::open_demo`]): no profile, nothing sent.
     demo: bool,
+    /// When each machine was last asked for a token for its Cloudflare relay: on which of
+    /// its connections, and when.
+    relay_asked: Mutex<HashMap<HostId, (u32, Instant)>>,
 }
 
 impl Drop for Inner {
@@ -567,6 +571,7 @@ impl Client {
             changed,
             stop,
             demo: false,
+            relay_asked: Mutex::default(),
         });
         tokio::spawn(follow_profile(
             Arc::downgrade(&inner),
@@ -598,6 +603,7 @@ impl Client {
                 changed,
                 stop,
                 demo: true,
+                relay_asked: Mutex::default(),
             }),
         }
     }
@@ -685,9 +691,13 @@ impl Client {
                 let hosts: Vec<String> = saved
                     .addresses
                     .into_iter()
-                    // A route through a hub is this client's own: the device that takes
-                    // the link gets its own once it is signed in to the hub.
-                    .filter(|host| !address::is_loopback(host) && address::hub(host).is_none())
+                    // A route through a hub, or its Cloudflare relay, is this client's own: the
+                    // device that takes the link gets its own once it is signed in to the hub.
+                    .filter(|host| {
+                        !address::is_loopback(host)
+                            && address::hub(host).is_none()
+                            && address::relay(host).is_none()
+                    })
                     .collect();
                 (!hosts.is_empty()).then_some(FleetMachine {
                     hosts,
@@ -1405,6 +1415,81 @@ impl Inner {
         Ok(())
     }
 
+    /// Keeps `grant` as `hub`'s token for its Cloudflare relay. Once a hub has none, the
+    /// routes through the relay it had leave every machine.
+    fn keep_relay_grant(
+        &self,
+        machines: &mut Vec<Arc<Supervisor>>,
+        hub: &HostId,
+        grant: Option<RelayGrant>,
+    ) {
+        let Ok(held) = find(machines, hub) else {
+            return;
+        };
+        let before = held.relay_grant();
+        if before == grant {
+            return;
+        }
+        let gone = before
+            .and_then(|before| address::through_relay(&before.url))
+            .filter(|old| {
+                grant
+                    .as_ref()
+                    .and_then(|g| address::through_relay(&g.url))
+                    .as_ref()
+                    != Some(old)
+            });
+        let kept = self.update(machines, |all| {
+            saved_mut(all, hub)?.relay_grant = grant;
+            if let Some(gone) = gone {
+                for machine in all.iter_mut() {
+                    machine.addresses.retain(|address| *address != gone);
+                }
+            }
+            Ok(())
+        });
+        if let Err(err) = kept {
+            warn!("saving a hub's token for its Cloudflare relay: {err}");
+        }
+    }
+
+    /// Gives each machine reached through a hub's Cloudflare relay, the hub and each machine
+    /// it says it relays to, the route through the relay, last of its addresses, unless it
+    /// has it.
+    fn add_relay_routes(&self, machines: &mut Vec<Arc<Supervisor>>) {
+        let mut missing: Vec<(HostId, String)> = Vec::new();
+        for hub in machines.iter() {
+            let Some(through) = hub
+                .relay_grant()
+                .and_then(|g| address::through_relay(&g.url))
+            else {
+                continue;
+            };
+            let reached = std::iter::once(hub.saved.host_id.clone()).chain(hub.relays_to());
+            for host_id in reached {
+                let machine = machines.iter().find(|m| m.saved.host_id == host_id);
+                if machine.is_some_and(|m| !m.saved().addresses.contains(&through)) {
+                    missing.push((host_id, through.clone()));
+                }
+            }
+        }
+        if missing.is_empty() {
+            return;
+        }
+        let added = self.update(machines, |all| {
+            for (host_id, through) in missing {
+                let machine = all.iter_mut().find(|m| m.host_id == host_id);
+                if let Some(machine) = machine.filter(|m| !m.addresses.contains(&through)) {
+                    machine.addresses.push(through);
+                }
+            }
+            Ok(())
+        });
+        if let Err(err) = added {
+            warn!("saving a machine's route through its hub's Cloudflare relay: {err}");
+        }
+    }
+
     /// Gives each machine a hub says it relays to the route through that hub, last of
     /// its addresses, unless it has it: from then on the machine is reached there whenever
     /// its own addresses do not answer.
@@ -1496,6 +1581,9 @@ impl Inner {
                 if current.routes != saved.routes {
                     machine.set_routes(saved.routes);
                 }
+                if current.relay_grant != saved.relay_grant {
+                    machine.set_relay_grant(saved.relay_grant);
+                }
                 changed |= index != 0;
                 machines.push(machine);
                 continue;
@@ -1553,7 +1641,63 @@ async fn follow_profile(inner: Weak<Inner>, stop: CancellationToken) {
             }
         }
         inner.add_hub_routes(&mut machines);
+        inner.add_relay_routes(&mut machines);
         inner.follow_advertised(&mut machines);
+        renew_relay_tokens(&inner, &machines);
+    }
+}
+
+/// How long before its token for a hub's Cloudflare relay expires this device asks for a new
+/// one: half the 24 hours a hub gives it.
+const RELAY_RENEW_BEFORE: Duration = Duration::from_secs(12 * 3600);
+
+/// How often a machine that did not give a token, or failed to, is asked again while it
+/// stays connected.
+const RELAY_ASK_AGAIN: Duration = Duration::from_secs(600);
+
+/// Asks each connected hub, once per connection, for a token for its Cloudflare relay, and
+/// again once the token is half used: a hub with its relay up gives one, any other says it
+/// has none. The token, or its absence, is saved with the hub.
+fn renew_relay_tokens(inner: &Arc<Inner>, machines: &[Arc<Supervisor>]) {
+    let renew_after = Timestamp::now().as_second() + RELAY_RENEW_BEFORE.as_secs().cast_signed();
+    for machine in machines {
+        // Only a hub has a relay; it says it is one with its status.
+        let view = machine.view();
+        if view.connection != ConnectionState::Connected || view.hub.is_none() {
+            continue;
+        }
+        let connection = machine.connections();
+        let stale = machine
+            .relay_grant()
+            .is_some_and(|grant| grant.expires_at.as_second() < renew_after);
+        {
+            let mut asked = inner
+                .relay_asked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let last = asked.get(&machine.saved.host_id);
+            let due = match last {
+                None => true,
+                Some((on, at)) => *on != connection || (stale && at.elapsed() > RELAY_ASK_AGAIN),
+            };
+            if !due {
+                continue;
+            }
+            asked.insert(machine.saved.host_id.clone(), (connection, Instant::now()));
+        }
+        let (weak, machine) = (Arc::downgrade(inner), Arc::clone(machine));
+        tokio::spawn(async move {
+            let grant = match once(&machine, CommandBody::GetRelayToken).await {
+                Ok(CommandResult::RelayToken { grant }) => Some(grant),
+                Err(Error::Rejected { info }) if info.code == ErrorCode::Unsupported => None,
+                Ok(other) => return warn!("a relay token was answered with {other:?}"),
+                Err(err) => return debug!("cannot get a relay token: {err}"),
+            };
+            if let Some(inner) = weak.upgrade() {
+                let mut machines = inner.lock();
+                inner.keep_relay_grant(&mut machines, &machine.saved.host_id, grant);
+            }
+        });
     }
 }
 
@@ -1630,6 +1774,7 @@ pub(crate) fn unsaved(
         headers: Default::default(),
         routes: Default::default(),
         device_key: device.to_pem().to_owned(),
+        relay_grant: None,
     };
     Ok((saved, device))
 }
@@ -1691,6 +1836,7 @@ mod tests {
             headers: Default::default(),
             routes: Default::default(),
             device_key: DeviceKey::generate().unwrap().to_pem().to_owned(),
+            relay_grant: None,
         };
         profile::save(tmp.path(), &[machine]).unwrap();
         let cache = offline::path(tmp.path(), &host_id);

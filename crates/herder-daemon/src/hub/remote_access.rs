@@ -1,8 +1,8 @@
 //! How the hub is reached from outside, as its owners set it with `set_remote_access`
 //! (`docs/remote-access.md`): the settings, kept in `<data_dir>/remote-access.json`, and what
-//! the hub runs for them. Today that is the managed Cloudflare Tunnel
-//! ([`cloudflare::ManagedTunnel`]); herder's WireGuard and the Durable Object relay are
-//! refused until they come.
+//! the hub runs for them: the managed Cloudflare Tunnel ([`cloudflare::ManagedTunnel`]) and
+//! the Durable Object relay ([`cloudflare::ManagedRelay`]); herder's WireGuard is refused
+//! until it comes.
 //!
 //! The settings name the Cloudflare API token by the hub secret holding it
 //! (`CloudflareSettings::api_token`); the hub reads its value from its secrets, and it never
@@ -17,7 +17,7 @@ use herder_protocol::{
     SecretValue, Timestamp,
 };
 
-use super::cloudflare::{self, ManagedTunnel, Wanted};
+use super::cloudflare::{self, ManagedRelay, ManagedTunnel, Wanted, WantedRelay};
 
 /// The hub secret set `herder hub tunnel` puts the Cloudflare API token in.
 pub const TOKEN_SET: &str = "cloudflare";
@@ -35,16 +35,18 @@ pub struct RemoteAccessHub {
     store: Arc<Mutex<HubStore>>,
     secrets_key: Option<Arc<SecretsKey>>,
     tunnel: Arc<ManagedTunnel>,
+    relay: Arc<ManagedRelay>,
 }
 
 impl RemoteAccessHub {
     /// The remote access of the hub with `data_dir`, reading the API token from the secrets in
-    /// `store` under `secrets_key`, and running `tunnel`.
+    /// `store` under `secrets_key`, and running `tunnel` and `relay`.
     pub fn open(
         data_dir: &Path,
         store: Arc<Mutex<HubStore>>,
         secrets_key: Option<Arc<SecretsKey>>,
         tunnel: Arc<ManagedTunnel>,
+        relay: Arc<ManagedRelay>,
     ) -> Result<Arc<Self>> {
         let path = data_dir.join("remote-access.json");
         let settings = match std::fs::read(&path) {
@@ -61,14 +63,17 @@ impl RemoteAccessHub {
             store,
             secrets_key,
             tunnel,
+            relay,
         }))
     }
 
-    /// Tells the tunnel what the settings want, as the hub starts.
+    /// Tells the tunnel and the relay what the settings want, as the hub starts.
     pub async fn start(&self) {
         let settings = self.settings.lock().await.clone();
         let wanted = self.wanted(settings.cloudflare.as_ref()).await;
         self.tunnel.want(wanted, None);
+        let relay = self.wanted_relay(settings.cloudflare.as_ref()).await;
+        self.relay.want(relay, None);
     }
 
     /// Answers `get_remote_access`: the settings for an `owner` only.
@@ -77,7 +82,7 @@ impl RemoteAccessHub {
         RemoteAccess {
             settings: owner.then_some(settings),
             wireguard: None,
-            relay: None,
+            relay: self.relay.status().await,
             tunnel: self.tunnel.status().await,
         }
     }
@@ -91,12 +96,6 @@ impl RemoteAccessHub {
             ));
         }
         if let Some(cloudflare) = &mut new.cloudflare {
-            if cloudflare.relay {
-                return Err(error(
-                    ErrorCode::Unsupported,
-                    "this hub's version of herder deploys no Durable Object relay yet".into(),
-                ));
-            }
             if cloudflare.account_id.is_empty()
                 || !cloudflare
                     .account_id
@@ -133,7 +132,9 @@ impl RemoteAccessHub {
         *settings = new.clone();
         drop(settings);
         let wanted = self.wanted(new.cloudflare.as_ref()).await;
-        self.tunnel.want(wanted, removal_token);
+        self.tunnel.want(wanted, removal_token.clone());
+        let relay = self.wanted_relay(new.cloudflare.as_ref()).await;
+        self.relay.want(relay, removal_token);
         Ok(self.get(true).await)
     }
 
@@ -237,6 +238,20 @@ impl RemoteAccessHub {
         }))
     }
 
+    /// The relay `cloudflare` wants, or why the hub cannot tell.
+    async fn wanted_relay(
+        &self,
+        cloudflare: Option<&CloudflareSettings>,
+    ) -> Result<Option<WantedRelay>, String> {
+        let Some(cloudflare) = cloudflare.filter(|cloudflare| cloudflare.relay) else {
+            return Ok(None);
+        };
+        Ok(Some(WantedRelay {
+            account_id: cloudflare.account_id.clone(),
+            api_token: self.token(&cloudflare.api_token).await?,
+        }))
+    }
+
     /// The value of the hub secret `secret`.
     async fn token(&self, secret: &SecretRef) -> Result<SecretValue, String> {
         let Some(key) = self.secrets_key.clone() else {
@@ -333,7 +348,9 @@ mod tests {
                 shutdown.clone(),
             )
             .await;
-        let hub = RemoteAccessHub::open(dir, store, key.map(Arc::new), tunnel).unwrap();
+        let relay = ManagedRelay::open(dir, &fake.url, Arc::default()).unwrap();
+        relay.start(shutdown.clone());
+        let hub = RemoteAccessHub::open(dir, store, key.map(Arc::new), tunnel, relay).unwrap();
         hub.start().await;
         (hub, shutdown)
     }
@@ -425,13 +442,6 @@ mod tests {
             .await
             .unwrap();
 
-        let mut relay = tunnel("hub.example.com", TOKEN_NAME);
-        relay.cloudflare.as_mut().unwrap().relay = true;
-        assert_eq!(
-            hub.set(relay).await.unwrap_err().code,
-            ErrorCode::Unsupported
-        );
-
         let mut account = tunnel("hub.example.com", TOKEN_NAME);
         account.cloudflare.as_mut().unwrap().account_id = "not an id".into();
         assert_eq!(
@@ -512,6 +522,136 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("keeps no secrets"), "{}", err.message);
+        shutdown.cancel();
+    }
+
+    fn relay() -> RemoteAccessSettings {
+        RemoteAccessSettings {
+            wireguard: None,
+            cloudflare: Some(CloudflareSettings {
+                account_id: ACCOUNT.into(),
+                api_token: TOKEN_NAME.parse().unwrap(),
+                relay: true,
+                tunnel_hostname: None,
+            }),
+        }
+    }
+
+    /// The relay as `get` shows it once it is no longer being set up.
+    async fn relay_settled(hub: &RemoteAccessHub) -> Option<herder_protocol::RouteStatus> {
+        for _ in 0..400 {
+            let relay = hub.get(true).await.relay;
+            if relay
+                .as_ref()
+                .is_none_or(|r| r.state != RouteState::SettingUp)
+            {
+                return relay;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("the relay is still being set up");
+    }
+
+    #[tokio::test]
+    async fn an_owner_deploys_the_relay_which_is_repaired_updated_and_removed() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let fake = FakeCloudflare::start();
+        let dir = tempfile::tempdir().unwrap();
+        let (access, shutdown) = hub(dir.path(), &fake, Some(SecretsKey::new(&[1; 32]))).await;
+        access
+            .put_token(SecretValue::new(TOKEN).unwrap())
+            .await
+            .unwrap();
+        access.set(relay()).await.unwrap();
+        let up = relay_settled(&access).await.unwrap();
+        assert_eq!(up.state, RouteState::Up, "{up:?}");
+        assert_eq!(up.url, "https://herder-relay.ada.workers.dev");
+        let script = fake.held().scripts["herder-relay"].clone();
+        assert!(script.workers_dev);
+        assert_eq!(script.migration.as_deref(), Some("v1"));
+        assert!(
+            script
+                .upload
+                .contains("export class Relay extends DurableObject")
+        );
+        assert!(script.upload.contains(r#""name":"RELAY_SECRET""#));
+        // The relay's secret is kept for the hub's user only, never in the settings.
+        let kept = dir.path().join("cloudflare/relay.json");
+        let mode = std::fs::metadata(&kept).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&kept).unwrap()).unwrap();
+        let secret = state["secret"].as_str().unwrap().to_owned();
+        assert!(script.upload.contains(&secret));
+        let settings = std::fs::read_to_string(dir.path().join("remote-access.json")).unwrap();
+        assert!(!settings.contains(&secret) && !settings.contains(TOKEN));
+        shutdown.cancel();
+
+        // Deleted in the dashboard, it is deployed again as the hub starts, with the same
+        // secret: the tokens the hub gave stay good.
+        fake.held().scripts.clear();
+        let (access, shutdown) = hub(dir.path(), &fake, Some(SecretsKey::new(&[1; 32]))).await;
+        assert_eq!(relay_settled(&access).await.unwrap().state, RouteState::Up);
+        let script = fake.held().scripts["herder-relay"].clone();
+        assert!(script.upload.contains(&secret));
+        shutdown.cancel();
+
+        // A hub with a newer relay deploys it, without making its class again.
+        let uploads = |fake: &FakeCloudflare| {
+            let calls = fake.held().calls.clone();
+            calls
+                .iter()
+                .filter(|c| c.starts_with("PUT /accounts/acc1/workers/scripts"))
+                .count()
+        };
+        let mut older = state.clone();
+        older["worker"] = "an older worker".into();
+        std::fs::write(&kept, serde_json::to_vec(&older).unwrap()).unwrap();
+        let before = uploads(&fake);
+        let (access, shutdown) = hub(dir.path(), &fake, Some(SecretsKey::new(&[1; 32]))).await;
+        assert_eq!(relay_settled(&access).await.unwrap().state, RouteState::Up);
+        assert_eq!(uploads(&fake), before + 1);
+        assert!(
+            !fake.held().scripts["herder-relay"]
+                .upload
+                .contains("new_tag")
+        );
+        // Current and there: nothing to upload.
+        let before = uploads(&fake);
+        access.set(relay()).await.unwrap();
+        relay_settled(&access).await;
+        assert_eq!(uploads(&fake), before);
+
+        // Turned off, the relay is deleted with its Durable Objects, and forgotten.
+        let mut off = relay();
+        off.cloudflare.as_mut().unwrap().relay = false;
+        access.set(off).await.unwrap();
+        assert_eq!(relay_settled(&access).await, None);
+        assert!(fake.held().scripts.is_empty());
+        assert!(!kept.exists());
+        assert!(
+            fake.held()
+                .calls
+                .contains(&"DELETE /accounts/acc1/workers/scripts/herder-relay".to_owned())
+        );
+        shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn a_refused_api_token_leaves_the_relay_failed_with_cloudflares_words() {
+        let fake = FakeCloudflare::start();
+        let dir = tempfile::tempdir().unwrap();
+        let (hub, shutdown) = hub(dir.path(), &fake, Some(SecretsKey::new(&[1; 32]))).await;
+        hub.put_token(SecretValue::new("not the token").unwrap())
+            .await
+            .unwrap();
+        hub.set(relay()).await.unwrap();
+        let failed = relay_settled(&hub).await.unwrap();
+        assert_eq!(failed.state, RouteState::Failed);
+        let why = failed.error.unwrap();
+        assert!(why.contains("Workers Scripts Edit"), "{why}");
+        assert!(fake.held().scripts.is_empty());
         shutdown.cancel();
     }
 }

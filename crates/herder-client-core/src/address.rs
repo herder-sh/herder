@@ -51,6 +51,15 @@ pub(crate) fn normalize(text: &str) -> Result<String, String> {
         }
         return Ok(text.to_owned());
     }
+    if let Some(relay) = text
+        .strip_prefix(RELAY)
+        .or_else(|| text.strip_prefix(RELAY_PLAIN))
+    {
+        if relay.is_empty() || relay.contains(|c: char| c.is_whitespace() || c == '/') {
+            return Err(format!("{text} names no relay"));
+        }
+        return Ok(text.to_owned());
+    }
     if text.contains("://") {
         return normalize_url(text);
     }
@@ -149,7 +158,8 @@ pub(crate) fn default_order(addresses: Vec<String>) -> Vec<String> {
 pub(crate) fn advertised(named: &[String]) -> Vec<String> {
     let mut kept: Vec<String> = Vec::new();
     for address in named.iter().filter_map(|text| normalize(text).ok()) {
-        if hub(&address).is_none() && !is_loopback(&address) && !kept.contains(&address) {
+        let routed = hub(&address).is_some() || relay(&address).is_some();
+        if !routed && !is_loopback(&address) && !kept.contains(&address) {
             kept.push(address);
         }
     }
@@ -291,6 +301,28 @@ const WIREGUARD: &str = "wg://";
 /// inside, as a local relay in a test has it.
 const RELAY: &str = "relay+wss://";
 const RELAY_PLAIN: &str = "relay+ws://";
+
+/// The address of the route through the Durable Object relay at `url`, `https://<host>` (or
+/// `http://` for a local one), as a hub's token for it names it.
+pub(crate) fn through_relay(url: &str) -> Option<String> {
+    let url = url.trim_end_matches('/');
+    let (prefix, host) = match url.strip_prefix("https://") {
+        Some(host) => (RELAY, host),
+        None => (RELAY_PLAIN, url.strip_prefix("http://")?),
+    };
+    (!host.is_empty() && !host.contains('/')).then(|| format!("{prefix}{host}"))
+}
+
+/// The WebSocket URL of the relay a route through a Durable Object relay goes through,
+/// `wss://<host>` (or `ws://`), for such an address.
+pub(crate) fn relay(address: &str) -> Option<String> {
+    if let Some(host) = address.strip_prefix(RELAY) {
+        return Some(format!("wss://{host}"));
+    }
+    address
+        .strip_prefix(RELAY_PLAIN)
+        .map(|host| format!("ws://{host}"))
+}
 
 /// The tunnel and the `host:port` inside it, for the address of a route through a WireGuard
 /// tunnel of herder's, `wg://<tunnel>/<host:port>`.

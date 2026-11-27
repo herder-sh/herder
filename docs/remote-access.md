@@ -124,7 +124,8 @@ Cloudflare account through the API (`RemoteAccessSettings::cloudflare` with `rel
   the Worker each, at `/hosts/<host id>` (control). A client connects out to
   `/machines/<host id>` and starts its inner TLS right behind the upgrade, as on the hub's
   relay. The Durable Object for that host tells the host's control socket
-  `{"open":"<stream id>"}`, the host dials `/streams/<stream id>`, and the Durable Object
+  `{"open":"<stream id>","device":"<the token's sub>","client":"<the device's IP>"}`, the
+  host dials `/streams/<stream id>`, and the Durable Object
   pairs the two sockets and copies binary frames between them. It is the hub relay's shape
   (P24) on Cloudflare's edge, so the host serves the stream with the same code.
 - **Authenticated before it forwards**: every upgrade carries `Authorization: Bearer
@@ -146,7 +147,26 @@ Cloudflare account through the API (`RemoteAccessSettings::cloudflare` with `rel
 
 The Cloudflare API token is entered once, as a hub secret (`PutSecret`, write-only), and
 named by `CloudflareSettings::api_token`; it never goes back to a client, and machines never
-get it.
+get it. It needs the account permissions **Workers Scripts: Edit** (and **Account Settings:
+Read**, to find the account's `workers.dev` subdomain). An account that never opened
+Workers & Pages has no subdomain yet; the relay's status says to open it once.
+
+The hub deploys the Worker as the script `herder-relay` with a SQLite-backed Durable Object
+class and the secret binding `RELAY_SECRET`, enables its `workers.dev` route, and keeps
+what it deployed (the account, the URL, the secret and the source's hash) in
+`<data_dir>/cloudflare/relay.json`, readable by its user only. It deploys again when its
+bundled source changes, so updating herder updates the relay, and when the script is gone
+from the account; turning the relay off deletes the script with its Durable Objects.
+
+**Cost.** Every socket is accepted through the WebSocket Hibernation API: between frames a
+Durable Object is out of memory and billed nothing, and Cloudflare answers pings without
+waking it, so the hosts' idle control sockets cost nothing. On Cloudflare's published
+pricing (2026) the Workers Free plan includes SQLite-backed Durable Objects with 100,000
+requests a day (each upgrade one; incoming WebSocket messages count 1 in 20) and 13,000
+GB-s of duration a day (about 28 hours awake at 128 MB). One person with a phone and a
+laptop, a few hours a day, stays well inside it: **free**. Only a household streaming busy
+sessions all day would need Workers Paid, $5 a month. Outgoing messages and bandwidth are
+not billed.
 
 ## Choosing a route
 
@@ -255,7 +275,9 @@ Durable Object relay when granted one), `HubHello::relay_grant: Option<RelayGran
   streams as `AsyncRead + AsyncWrite` (client: `connect(addr)`; hub: `accept()` for a
   fixed address and port). `herder-client-core` and `herder-daemon` depend on it; nothing
   else does.
-- The Durable Object relay is TypeScript under `deploy/cloudflare-relay/` (P27.5); its tests
+- The Durable Object relay is plain JavaScript under `deploy/cloudflare-relay/` (P27.5),
+  type-checked with `// @ts-check` and `tsc --noEmit` against `@cloudflare/workers-types`,
+  so the hub embeds and uploads the file as it is, with no build step; its tests
   run under `workerd`/miniflare in CI, never against Cloudflare.
 
 ## Todos
