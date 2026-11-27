@@ -61,6 +61,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         address_headers: Default::default(),
         pinned_address: None,
         disabled_addresses: Vec::new(),
+        front_doors: Vec::new(),
     }
 }
 
