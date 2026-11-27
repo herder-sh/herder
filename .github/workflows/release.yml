@@ -78,6 +78,10 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Build
+        # Write-only client keys a daemon shares diagnostics with once its owner turns
+        # [telemetry] on; empty, it shares with nothing.
+        env:
+          HERDER_DAEMON_SENTRY_DSN: ${{ secrets.SENTRY_DSN_DAEMON }}
         run: cargo build --release --locked --target "$TARGET" -p herder
       - name: Check the binary is static (Linux) and runs
         env:

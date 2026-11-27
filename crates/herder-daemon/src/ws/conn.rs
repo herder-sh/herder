@@ -22,7 +22,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{Instrument, debug, info, warn};
 
 use super::{Backend, Identity, Shared, Tls, Transport, Ws, fingerprint, tunnel};
 use crate::auth::{self, Auth};
@@ -92,7 +92,11 @@ pub(super) async fn run<B: Backend>(
         ws = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
             open(&shared.tls, &shared.gates, stream, peer, tunneled),
-        ) => ws,
+        )
+        .instrument(tracing::info_span!(
+            "handshake",
+            route = if tunneled { "tunnel" } else { "direct" },
+        )) => ws,
     };
     let (ws, device, pass) = match ws {
         Ok(Ok(ws)) => ws,
@@ -132,7 +136,8 @@ pub(super) async fn run_relayed<B: Backend>(
         ws = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
             handshake(&shared.tls, pass.meter(Transport::Relay(stream))),
-        ) => ws,
+        )
+        .instrument(tracing::info_span!("handshake", route = "hub")) => ws,
     };
     let (ws, device) = match ws {
         Ok(Ok(ws)) => ws,
@@ -493,7 +498,14 @@ async fn handle<B: Backend>(
         Ok(ClientMessage::Sync { token }) => {
             let _ = replays.send(Replay::Sync(token));
         }
-        Ok(ClientMessage::Command(Command { id, body, .. })) => {
+        Ok(ClientMessage::Command(Command { id, body, trace })) => {
+            // Joins the client's trace, while both share diagnostics.
+            let parent = trace.as_deref().and_then(herder_telemetry::sentry_trace);
+            let span = tracing::info_span!(
+                "command",
+                command = herder_telemetry::variant(&body),
+                sentry.trace = parent.as_deref().unwrap_or_default(),
+            );
             if let Err(error) = auth::authorize(identity.role, &body) {
                 outbox.push(ServerMessage::CommandRejected {
                     command_id: id,
@@ -508,7 +520,8 @@ async fn handle<B: Backend>(
             }
             if let CommandBody::GetLatestEvents { session_id } = &body {
                 // Ahead of the replays queued: it is what an app shows first.
-                outbox.push_first(answered(id, latest_events(shared, session_id).await));
+                let latest = latest_events(shared, session_id).instrument(span).await;
+                outbox.push_first(answered(id, latest));
                 return;
             }
             let waiting = match shared.approval(identity, &hello.client, hello.passkey, &body) {
@@ -527,6 +540,7 @@ async fn handle<B: Backend>(
                 let id = id.clone();
                 let approved = waiting.is_some();
                 async move { shared.apply(&identity, &outbox, &id, body, approved).await }
+                    .instrument(span)
             };
             if let Some(waiting) = waiting {
                 // The device waits for its person without holding up its other messages.
@@ -709,7 +723,10 @@ async fn replay<B: Backend>(
             return;
         }
         match next {
-            Replay::Subscribe(cursor) => subscribe(&shared, &outbox, cursor).await,
+            Replay::Subscribe(cursor) => {
+                let span = tracing::info_span!("replay", events = tracing::field::Empty);
+                subscribe(&shared, &outbox, cursor).instrument(span).await;
+            }
             Replay::Unsubscribe(session_id) => shared.fanout.unsubscribe(&outbox, &session_id),
             Replay::Sync(token) => outbox.catch_up([ServerMessage::Synced { token }]),
             Replay::Show(_) => {}
@@ -778,6 +795,7 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
     }
     shared.fanout.subscribe(outbox, &session_id);
     let mut last = after_seq;
+    let mut replayed = 0;
     loop {
         outbox.wait_below(REPLAY_PAGE).await;
         if outbox.state() != OutboxState::Open {
@@ -796,6 +814,7 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
             }
         };
         let full = page.len() == REPLAY_PAGE;
+        replayed += page.len();
         if let Some(event) = page.last() {
             last = event.seq;
         }
@@ -809,6 +828,7 @@ async fn subscribe<B: Backend>(shared: &Shared<B>, outbox: &Outbox, cursor: Curs
             break;
         }
     }
+    tracing::Span::current().record("events", replayed);
     // Live events go ahead of a catch-up: the session's must wait for the last of its replay
     // to be written, or they would reach the client before the events they follow.
     outbox.wait_below(1).await;

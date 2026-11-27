@@ -411,6 +411,9 @@ async fn connect(
     peer: SocketAddr,
     cancel: CancellationToken,
 ) -> Result<()> {
+    // From the client's request until both ends are answered: what relaying adds to a
+    // connection's start.
+    let opening = tracing::info_span!("hub.relay", outcome = tracing::field::Empty);
     let identity =
         match shared
             .auth
@@ -469,6 +472,8 @@ async fn connect(
     let host_ws = host_end.accept(ws::ws_config()).await?;
     // The client's frames that waited behind its request go first.
     let ws = upgrade.accept(ws::ws_config()).await?;
+    opening.record("outcome", "ok");
+    drop(opening);
     info!(%peer, device_id = %device, host_id = %host, "relay stream opened");
     let started = Instant::now();
     let ended = tokio::select! {

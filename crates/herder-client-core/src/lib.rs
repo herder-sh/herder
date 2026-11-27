@@ -199,7 +199,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{Instrument, debug, warn};
 
 use auth::DeviceKey;
 pub use catalog::{
@@ -1075,16 +1075,20 @@ impl Client {
         command: CommandBody,
         trace: String,
     ) -> Result<CommandResult, Error> {
-        let trace = diagnostics::shared_trace(trace);
-        self.send_under(host_id, command, trace).await
+        self.send_under(host_id, command, Some(trace)).await
     }
 
     async fn send_under(
         &self,
         host_id: HostId,
         command: CommandBody,
-        trace: Option<String>,
+        app: Option<String>,
     ) -> Result<CommandResult, Error> {
+        let span = diagnostics::command_span(&command, app.as_deref());
+        self.send_in(host_id, command).instrument(span).await
+    }
+
+    async fn send_in(&self, host_id: HostId, command: CommandBody) -> Result<CommandResult, Error> {
         let machine = self.machine(&host_id)?;
         if self.inner.demo {
             return machine.demo_answer(&command);
@@ -1099,12 +1103,12 @@ impl Client {
         let result = self
             .signed(&machine, command, |body| {
                 let machine = Arc::clone(&machine);
-                let trace = trace.clone();
                 async move {
+                    // The command's span, while the process shares diagnostics.
                     let command = Command {
                         id: new_command_id(),
                         body,
-                        trace,
+                        trace: herder_telemetry::traceparent(),
                     };
                     machine
                         .send(command)

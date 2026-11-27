@@ -92,7 +92,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{Instrument, debug, warn};
 
 use crate::address;
 use crate::auth::{DeviceKey, client_config};
@@ -2600,15 +2600,24 @@ async fn open_in_turn(
     let connector = TlsConnector::from(Arc::new(config));
     let attempt = |address: String| {
         let (connector, hello, turn) = (connector.clone(), hello.clone(), Arc::clone(turn));
-        async move {
+        let route = herder_telemetry::variant(&crate::route_kind(address.clone()));
+        let span = tracing::info_span!("connect", route, outcome = tracing::field::Empty);
+        let attempting = async move {
             let mut ws = reach(&address, &connector, via).await?;
             // Held until this attempt is dropped: with its hello answered, that is once
             // every other attempt is gone.
             let _turn = turn.lock().await;
-            let opened = tokio::time::timeout(HELLO_TIMEOUT, greet(&mut ws, &hello))
+            let greeting = tokio::time::timeout(HELLO_TIMEOUT, greet(&mut ws, &hello))
+                .instrument(tracing::info_span!("handshake"));
+            let opened = greeting
                 .await
                 .unwrap_or_else(|_| Err(anyhow!("no hello in {HELLO_TIMEOUT:?}")))?;
             Ok((ws, opened))
+        };
+        async move {
+            let attempted = attempting.instrument(span.clone()).await;
+            span.record("outcome", if attempted.is_ok() { "ok" } else { "failed" });
+            attempted
         }
     };
     race(addresses, attempt)

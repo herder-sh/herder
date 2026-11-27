@@ -2634,7 +2634,13 @@ impl SessionManager {
         request: Request,
     ) -> Result<CommandResult, ErrorInfo> {
         let (reply, answer) = oneshot::channel();
-        let command = SessionCommand { by, request, reply };
+        let command = SessionCommand {
+            by,
+            // The span of the command this request carries out, if the daemon shares them.
+            trace: herder_telemetry::traceparent(),
+            request,
+            reply,
+        };
         self.actor(&session_id)
             .await?
             .send(command)
