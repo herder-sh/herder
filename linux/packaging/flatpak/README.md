@@ -11,6 +11,7 @@ every crate in `Cargo.lock`.
 | `update-cargo-sources.sh`              | Regenerates `cargo-sources.json` (needs `uv`)            |
 | `check-metainfo-release.sh`            | Checks the metainfo has the workspace version's release  |
 | `lint.sh`                              | `flatpak-builder-lint` on the manifest and a built repo  |
+| `ci-unlayer-flatpak.sh`                | Works around a CI container runtime-update failure       |
 | `../../data/sh.herder.Herder.metainfo.xml` | The AppStream metainfo                               |
 
 ## The sandbox

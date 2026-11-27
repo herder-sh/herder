@@ -52,6 +52,8 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v7
+      - name: Copy the image's flatpak installation into the container layer
+        run: linux/packaging/flatpak/ci-unlayer-flatpak.sh
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: linux/packaging/flatpak/sh.herder.Herder.yml
