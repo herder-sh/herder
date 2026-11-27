@@ -1,0 +1,51 @@
+# The Flatpak of the Linux app (linux/, the herder-gtk crate), built from this checkout with
+# no network: cargo-sources.json, which update-cargo-sources.sh writes from Cargo.lock and CI
+# generates before each build, vendors every crate. README.md says how to build it locally,
+# and how the Flathub copy differs: only in its first source, a git tag instead of this
+# directory.
+id: sh.herder.Herder
+runtime: org.gnome.Platform
+runtime-version: "51"
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: herder-gtk
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # A network client: it connects to the herder daemons of your machines.
+  - --share=network
+  # The profile it shares with the herder TUI, ~/.config/herder: the machines, their pinned
+  # certificates and what each last said. Nothing else of the home directory.
+  - --filesystem=xdg-config/herder:create
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+modules:
+  - name: herder-gtk
+    buildsystem: simple
+    build-options:
+      env:
+        CARGO_HOME: /run/build/herder-gtk/cargo
+        CARGO_NET_OFFLINE: "true"
+        CARGO_PROFILE_RELEASE_STRIP: symbols
+    build-commands:
+      - cargo build --release --locked --offline -p herder-gtk
+      - install -Dm755 target/release/herder-gtk -t /app/bin
+      - install -Dm644 linux/data/sh.herder.Herder.desktop -t /app/share/applications
+      - install -Dm644 linux/data/icons/hicolor/scalable/apps/sh.herder.Herder.svg
+        -t /app/share/icons/hicolor/scalable/apps
+      - install -Dm644 linux/data/sh.herder.Herder.metainfo.xml -t /app/share/metainfo
+    sources:
+      - type: dir
+        path: ../../..
+        skip:
+          - .git
+          - target
+          - build-dir
+          - .flatpak-builder
+          - docs
+          - design
+          - site
+      - cargo-sources.json

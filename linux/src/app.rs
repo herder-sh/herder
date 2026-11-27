@@ -3,6 +3,8 @@
 //! `apple/scripts/record-demo.sh`, with no profile and no connection.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -69,7 +71,7 @@ pub(crate) fn open_demo() -> Result<Client, String> {
 
 /// Opens this device's profile, the one the TUI uses.
 fn open_client() -> Result<Client, String> {
-    let config_dir = glib::user_config_dir().join("herder");
+    let config_dir = profile_dir(|var| std::env::var_os(var), glib::user_config_dir);
     let config_dir = config_dir
         .to_str()
         .ok_or_else(|| format!("the config dir {} is not valid UTF-8", config_dir.display()))?
@@ -79,6 +81,27 @@ fn open_client() -> Result<Client, String> {
         format!("herder-gtk/{}", env!("CARGO_PKG_VERSION")),
     )
     .map_err(|err| err.to_string())
+}
+
+/// The profile's directory, the TUI's: `$XDG_CONFIG_HOME/herder`. In the Flatpak,
+/// `XDG_CONFIG_HOME` is the app's own directory under `~/.var/app`, so it takes the host's,
+/// `HOST_XDG_CONFIG_HOME` or else `~/.config`, whose `herder` directory the sandbox may open.
+fn profile_dir(
+    env: impl Fn(&str) -> Option<OsString>,
+    user_config_dir: impl FnOnce() -> PathBuf,
+) -> PathBuf {
+    let absolute = |var| {
+        env(var)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    let config = if env("FLATPAK_ID").is_some() {
+        absolute("HOST_XDG_CONFIG_HOME")
+            .or_else(|| absolute("HOME").map(|home| home.join(".config")))
+    } else {
+        None
+    };
+    config.unwrap_or_else(user_config_dir).join("herder")
 }
 
 /// Shows the client's machines and their sessions as they change, and wires the app actions
@@ -223,5 +246,50 @@ impl MachineOps for Fleet {
                     .unwrap_or_else(|_| Err("the sign-in stopped".to_owned())),
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |var| {
+            vars.iter()
+                .find(|(name, _)| *name == var)
+                .map(|(_, value)| OsString::from(value))
+        }
+    }
+
+    fn glib_dir() -> PathBuf {
+        PathBuf::from("/home/u/.config")
+    }
+
+    #[test]
+    fn the_profile_is_in_the_user_config_dir_outside_the_flatpak() {
+        let vars = [("HOME", "/home/u"), ("HOST_XDG_CONFIG_HOME", "/elsewhere")];
+        assert_eq!(
+            profile_dir(env(&vars), glib_dir),
+            PathBuf::from("/home/u/.config/herder")
+        );
+    }
+
+    #[test]
+    fn the_flatpak_opens_the_hosts_profile() {
+        let sandbox = || PathBuf::from("/home/u/.var/app/sh.herder.Herder/config");
+        let vars = [("FLATPAK_ID", "sh.herder.Herder"), ("HOME", "/home/u")];
+        assert_eq!(
+            profile_dir(env(&vars), sandbox),
+            PathBuf::from("/home/u/.config/herder")
+        );
+        let vars = [
+            ("FLATPAK_ID", "sh.herder.Herder"),
+            ("HOME", "/home/u"),
+            ("HOST_XDG_CONFIG_HOME", "/home/u/conf"),
+        ];
+        assert_eq!(
+            profile_dir(env(&vars), sandbox),
+            PathBuf::from("/home/u/conf/herder")
+        );
     }
 }

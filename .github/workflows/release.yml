@@ -2,12 +2,13 @@ name: release
 
 # A `v*` tag builds static musl binaries, an Apple silicon macOS binary and the macOS app, signed
 # with the Developer ID and notarized, and publishes them as a GitHub Release; it also uploads
-# the iOS and macOS apps to TestFlight. For the Linux app it builds the snap (snap.yml) and
-# attaches it to the GitHub Release, uploads it to the Snap Store once the
-# SNAPCRAFT_STORE_CREDENTIALS secret exists, and pushes the PKGBUILD to the AUR once the
-# AUR_SSH_PRIVATE_KEY secret exists. workflow_dispatch runs the same, without publishing the
-# GitHub Release. PRs that change this file or the app's release script run the builds only,
-# without the TestFlight upload; from a fork, which gets no secrets, the macOS app is signed ad hoc.
+# the iOS and macOS apps to TestFlight. For the Linux app it builds the snap (snap.yml) and the
+# x86_64 Flatpak bundle and attaches each to the GitHub Release if it built, uploads the snap to
+# the Snap Store once the SNAPCRAFT_STORE_CREDENTIALS secret exists, and pushes the PKGBUILD to
+# the AUR once the AUR_SSH_PRIVATE_KEY secret exists. workflow_dispatch runs the same, without
+# publishing the GitHub Release. PRs that change this file or the app's release script run the
+# builds only, without the TestFlight upload; from a fork, which gets no secrets, the macOS app
+# is signed ad hoc.
 
 on:
   push:
@@ -19,6 +20,9 @@ on:
       - "apple/scripts/build-mac-release.sh"
       - "apple/scripts/import-mac-cert.sh"
       - "apple/scripts/developer-id-profile.py"
+      - "linux/packaging/flatpak/add-metainfo-release.sh"
+      - "linux/packaging/flatpak/update-cargo-sources.sh"
+      - "linux/packaging/flatpak/ci-unlayer-flatpak.sh"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -157,6 +161,76 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # The release goes out without the Flatpak if these fail: publish only attaches it.
+  flatpak-sources:
+    name: generate the Flatpak's cargo sources
+    # Never fails the run: the pages workflow refreshes the site only after a green release.
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+      - name: Generate cargo-sources.json from Cargo.lock
+        run: linux/packaging/flatpak/update-cargo-sources.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flatpak-cargo-sources
+          path: linux/packaging/flatpak/cargo-sources.json
+          if-no-files-found: error
+
+  flatpak:
+    name: build the Flatpak
+    # Never fails the run: the pages workflow refreshes the site only after a green release.
+    continue-on-error: true
+    needs: flatpak-sources
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: flatpak-cargo-sources
+          path: linux/packaging/flatpak
+      - name: Read the version and add its release to the metainfo
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the Cargo.toml version $version"
+            exit 1
+          fi
+          # The tag's date (the tagger's for an annotated tag); today when not run on a tag.
+          date=
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            date=$(git for-each-ref --format='%(creatordate:short)' "refs/tags/$GITHUB_REF_NAME")
+          fi
+          linux/packaging/flatpak/add-metainfo-release.sh "$version" "${date:-$(date -u +%F)}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Copy the image's flatpak installation into the container layer
+        run: linux/packaging/flatpak/ci-unlayer-flatpak.sh
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: linux/packaging/flatpak/sh.herder.Herder.yml
+          bundle: herder-${{ steps.version.outputs.version }}-x86_64.flatpak
+          cache: false
+          upload-artifact: false
+      - name: Checksum the bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir dist
+          mv "herder-$VERSION-x86_64.flatpak" dist/
+          cd dist
+          sha256sum "herder-$VERSION-x86_64.flatpak" > "herder-$VERSION-x86_64.flatpak.sha256"
+          cat "herder-$VERSION-x86_64.flatpak.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: herder-flatpak-x86_64
+          path: dist/*
+          if-no-files-found: error
+
   testflight:
     name: upload the apps to TestFlight
     if: github.event_name != 'pull_request'
@@ -195,8 +269,12 @@ jobs:
 
   publish:
     name: publish
-    needs: [build, macos, snap]
-    if: github.ref_type == 'tag'
+    needs: [build, macos, flatpak, snap]
+    # Only the binaries and the Mac app hold up the release: the snap and the Flatpak are
+    # attached if they built, and the release goes out without them if not.
+    if: >-
+      !cancelled() && github.ref_type == 'tag' &&
+      needs.build.result == 'success' && needs.macos.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -222,8 +300,11 @@ jobs:
   aur:
     name: update the AUR package
     needs: publish
-    # pkgver cannot hold the dash of a prerelease tag; those stay off the AUR.
-    if: github.ref_type == 'tag' && !contains(github.ref_name, '-')
+    # pkgver cannot hold the dash of a prerelease tag; those stay off the AUR. It checks
+    # publish's own result: the implicit success() would also skip it when the snap failed.
+    if: >-
+      !cancelled() && needs.publish.result == 'success' &&
+      github.ref_type == 'tag' && !contains(github.ref_name, '-')
     runs-on: ubuntu-24.04
     env:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

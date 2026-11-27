@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata of the Linux app, for software centres and Flathub. The release
+     workflow adds the <release> entry for each tag's version when it builds the Flatpak. -->
+<component type="desktop-application">
+  <id>sh.herder.Herder</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+
+  <name>herder</name>
+  <summary>Watch and steer coding agents across your machines</summary>
+  <developer id="sh.herder">
+    <name>herder</name>
+  </developer>
+
+  <description>
+    <p>
+      herder runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your
+      accounts and Linux machines. A herder daemon on each machine hosts the agent sessions;
+      this app connects to them over the network, so you see every session in one place.
+    </p>
+    <ul>
+      <li>The board: what every agent is doing, and the requests waiting on you</li>
+      <li>Answer an agent's approval or question as soon as it asks</li>
+      <li>Open a session to read its transcript, its tool calls and its pull requests, and send
+        it the next prompt</li>
+      <li>Start a session in any project on any of your machines</li>
+      <li>Add a machine from the link another herder app shares, approved with your passkey</li>
+    </ul>
+    <p>
+      It shares its machines with the herder terminal UI on the same computer. The agents run
+      on your machines, through each vendor's own command-line tool; the app never sees a
+      provider login.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">sh.herder.Herder.desktop</launchable>
+
+  <url type="homepage">https://herder.sh</url>
+  <url type="bugtracker">https://github.com/herder-sh/herder/issues</url>
+  <url type="vcs-browser">https://github.com/herder-sh/herder</url>
+
+  <categories>
+    <category>Development</category>
+  </categories>
+  <keywords>
+    <keyword>agent</keyword>
+    <keyword>AI</keyword>
+    <keyword>Claude</keyword>
+    <keyword>Codex</keyword>
+    <keyword>coding</keyword>
+  </keywords>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#9ece6a</color>
+    <color type="primary" scheme_preference="dark">#1a1b26</color>
+  </branding>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+  <supports>
+    <control>touch</control>
+  </supports>
+
+  <content_rating type="oars-1.1"/>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>The board: every agent's tasks and the requests waiting on you</caption>
+      <image>https://raw.githubusercontent.com/herder-sh/herder/main/docs/screenshots/p8-8/board.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>An agent asking to run a command</caption>
+      <image>https://raw.githubusercontent.com/herder-sh/herder/main/docs/screenshots/p8-8/session-approval.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>A finished session: its tool calls and its answer</caption>
+      <image>https://raw.githubusercontent.com/herder-sh/herder/main/docs/screenshots/p8-8/session-done.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Your machines and their connections</caption>
+      <image>https://raw.githubusercontent.com/herder-sh/herder/main/docs/screenshots/p8-8/machines.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>On a narrow screen, the list and the session take turns</caption>
+      <image>https://raw.githubusercontent.com/herder-sh/herder/main/docs/screenshots/p8-8/narrow-session.png</image>
+    </screenshot>
+  </screenshots>
+
+  <releases>
+    <release version="0.25.0" date="2026-11-27">
+      <url type="details">https://github.com/herder-sh/herder/releases/tag/v0.25.0</url>
+    </release>
+  </releases>
+</component>
