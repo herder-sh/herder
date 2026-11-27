@@ -257,7 +257,7 @@ An app calls `suspend()` when it goes to the background and `wake()` when it ret
 calls `wake()` on its reconnect key).
 
 - Suspended, the client keeps connections that are up for as long as the OS lets the process
-  run, but does not retry one it loses.
+  run, but neither probes one nor replaces or retries one it loses until `wake()`.
 - `wake()` reconnects disconnected machines at once. A connected one is checked: if it was
   silent for longer than 15 s, as after a long suspension in which the OS may have killed the
   socket without either end noticing, it is replaced right away; otherwise it is pinged and
