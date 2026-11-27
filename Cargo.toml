@@ -84,7 +84,7 @@ ulid = "3"
 ureq = "3"
 uniffi = "0.32"
 url = "2"
-uuid = { version = "1", features = ["v7"] }
+uuid = { version = "1", features = ["v4", "v7"] }
 # 0.6 verifies with RustCrypto; 0.5 needs OpenSSL, which no herder build links. The daemon
 # keeps passkeys as WebAuthn's portable credential id and COSE key, and rebuilds webauthn-rs's
 # credential from them to verify: that needs its credential internals, the CBOR codec its COSE

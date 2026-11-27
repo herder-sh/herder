@@ -23,6 +23,7 @@ pub mod session;
 pub mod settings;
 pub mod skills;
 pub mod stalls;
+mod telemetry;
 pub mod terminal;
 pub mod update;
 pub mod usage;

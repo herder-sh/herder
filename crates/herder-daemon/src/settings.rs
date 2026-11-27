@@ -2,8 +2,9 @@
 //! of its config file ([`crate::config::set_settings`]).
 //!
 //! A change is written to the file at once. The turn limit applies at once too, and so do the
-//! public addresses, to the next hello, invite and claim link, and the MCP servers, to each
-//! session's CLI from its next start; everything else applies when the
+//! public addresses, to the next hello, invite and claim link, the MCP servers, to each
+//! session's CLI from its next start, and whether the daemon shares diagnostics
+//! ([`crate::telemetry`]); everything else applies when the
 //! daemon next starts, which `restart_daemon` does without anyone at
 //! the machine. The answer says whether the file holds settings not in effect yet, whoever
 //! wrote them.
@@ -67,6 +68,7 @@ impl Settings {
         admission: Option<Arc<Admission>>,
         shutdown: CancellationToken,
     ) -> Self {
+        crate::telemetry::apply(&config.data_dir, &config.settings().telemetry);
         Self {
             path: config.path.clone(),
             data_dir: config.data_dir.clone(),
@@ -211,6 +213,10 @@ impl Settings {
                 addresses = ?settings.public_addresses,
                 "the public addresses changed; devices get them on their next connection"
             );
+        }
+        if settings.telemetry != running.telemetry {
+            crate::telemetry::apply(&self.data_dir, &settings.telemetry);
+            running.telemetry = settings.telemetry.clone();
         }
         info!("an owner changed the daemon's settings");
         Ok(self.answer(settings, &running))
@@ -373,6 +379,34 @@ mod tests {
             err.message
         );
         assert_eq!(public.get(), normalized);
+    }
+
+    #[tokio::test]
+    async fn telemetry_turns_on_and_off_at_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        std::fs::write(&path, format!("data_dir = {:?}\n", tmp.path().join("data"))).unwrap();
+        let config = Config::load_file(&path).unwrap();
+        let settings = Settings::new(&config, None, CancellationToken::new());
+        for enabled in [true, false] {
+            let mut new = config.settings();
+            new.telemetry.enabled = enabled;
+            let set = CommandBody::SetSettings {
+                settings: Box::new(new),
+            };
+            let CommandResult::Settings {
+                settings: answered,
+                restart_required,
+                ..
+            } = settings.command(set).await.unwrap()
+            else {
+                panic!("set_settings answers with the settings");
+            };
+            assert_eq!(answered.telemetry.enabled, enabled);
+            assert!(!restart_required, "telemetry enabled = {enabled}");
+        }
+        // Turned on once, the daemon keeps its install id in its data dir.
+        assert!(tmp.path().join("data/telemetry-id").is_file());
     }
 
     #[tokio::test]
