@@ -84,7 +84,8 @@ fn account() -> AccountId {
 }
 
 /// A daemon on its own runtime, so killing it drops every task at once, as a killed process
-/// would: no close frames, no clean shutdown of its sessions.
+/// would: no close frames, no clean shutdown of its sessions. A test that pauses the clock
+/// runs it on the test's runtime instead, see [`Daemon::start_here`].
 struct Daemon {
     runtime: Option<tokio::runtime::Runtime>,
     addr: SocketAddr,
@@ -110,99 +111,46 @@ impl Daemon {
         script: &str,
         turns: Arc<AtomicU64>,
     ) -> Self {
-        let host_id = HostId::new(host_id);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
             .unwrap();
-        let (dir, script) = (dir.to_owned(), fixture(script));
         let (started, ready) = tokio::sync::oneshot::channel();
-        std::fs::create_dir_all(dir.join("tls")).unwrap();
-        runtime.spawn(async move {
-            let tls = Tls::load_or_create(&dir.join("tls"), "test-host").unwrap();
-            let auth = Arc::new(Auth::open(&dir).unwrap());
-            let fanout = Arc::new(Fanout::default());
-            fanout.set_failover(failover());
-            let fake = fake_provider();
-            let mut adapters = Adapters::new();
-            adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script)));
-            let mut accounts = Accounts::new();
-            accounts.insert(
-                account(),
-                AccountConfig {
-                    provider: fake,
-                    label: "Account 1".into(),
-                    config_dir: Some(dir.join("account")),
-                    fallback: false,
-                    endpoint: None,
-                },
-            );
-            let setup = Setup {
-                store: Store::open(dir.join("herder.db")).unwrap(),
-                adapters,
-                accounts,
-                sink: Arc::clone(&fanout) as Arc<dyn session::EventSink>,
-                turn_ids: Box::new(move || {
-                    TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
-                }),
-                worktrees: Worktrees::new(dir.join("worktrees")),
-                attachments: dir.join("attachments"),
-                chats: dir.join("chats"),
-            };
-            let shutdown = CancellationToken::new();
-            let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
-            let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
-            let addr = listener.local_addr().unwrap();
-            let tunnel = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let tunnel_addr = tunnel.local_addr().unwrap();
-            let fingerprint = tls.fingerprint().to_owned();
-            let host = Host {
-                name: format!("test-{host_id}"),
-                id: host_id,
-            };
-            let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
-            // The login is fake; the account it adds is a real provider's, as the config holds,
-            // and the one it logs in again the fake one.
-            let logins = Logins::new(
-                HashMap::from([
-                    (Provider::Codex, fake_login()),
-                    (fake_provider(), fake_login()),
-                ]),
-                dir.join("daemon.toml"),
-                sessions.clone(),
-            );
-            let server = Server::new(
-                tls,
-                Arc::clone(&auth),
-                Arc::clone(&fanout),
-                sessions,
-                terminals,
-                logins,
-                host,
-            );
-            // The AWS CLI and its config, both absent until a test writes them.
-            let aws = dir.join("aws");
-            let env = move |key: &str| match key {
-                "PATH" => Some(aws.join("bin").into_os_string()),
-                "AWS_CONFIG_FILE" => Some(aws.join("config").into_os_string()),
-                _ => None,
-            };
-            server.manage_aws(Aws::from_env(env)).unwrap();
-            let config = herder_daemon::Config::load_file(&dir.join("daemon.toml")).unwrap();
-            let settings = Settings::new(&config, None, shutdown.clone());
-            server.manage_settings(Arc::new(settings)).unwrap();
-            started
-                .send((addr, tunnel_addr, fingerprint, auth, fanout))
-                .ok()
-                .unwrap();
-            server
-                .run_tunneled(vec![listener], Some(tunnel), shutdown)
-                .await;
-        });
+        runtime.spawn(serve(
+            HostId::new(host_id),
+            dir.to_owned(),
+            port,
+            fixture(script),
+            turns,
+            started,
+        ));
+        Self::ready(Some(runtime), ready).await
+    }
+
+    /// [`Daemon::start`] on the test's own runtime, so that it runs on the same clock: one the
+    /// test pauses would otherwise run out while the daemon answers in real time. It cannot be
+    /// killed.
+    async fn start_here(dir: &Path, script: &str) -> Self {
+        let (started, ready) = tokio::sync::oneshot::channel();
+        tokio::spawn(serve(
+            HostId::new("host-1"),
+            dir.to_owned(),
+            0,
+            fixture(script),
+            Arc::default(),
+            started,
+        ));
+        Self::ready(None, ready).await
+    }
+
+    async fn ready(
+        runtime: Option<tokio::runtime::Runtime>,
+        ready: tokio::sync::oneshot::Receiver<Started>,
+    ) -> Self {
         let (addr, tunnel, fingerprint, auth, fanout) = ready.await.unwrap();
         Self {
-            runtime: Some(runtime),
+            runtime,
             addr,
             tunnel,
             fingerprint,
@@ -239,6 +187,101 @@ impl Drop for Daemon {
             runtime.shutdown_background();
         }
     }
+}
+
+/// What a started daemon tells the test: its address, its tunnel's, its certificate's
+/// fingerprint, its auth and its fanout.
+type Started = (SocketAddr, SocketAddr, String, Arc<Auth>, Arc<Fanout>);
+
+/// Runs a daemon on the current runtime until the runtime goes; see [`Daemon::start_as`].
+async fn serve(
+    host_id: HostId,
+    dir: PathBuf,
+    port: u16,
+    script: PathBuf,
+    turns: Arc<AtomicU64>,
+    started: tokio::sync::oneshot::Sender<Started>,
+) {
+    std::fs::create_dir_all(dir.join("tls")).unwrap();
+    let tls = Tls::load_or_create(&dir.join("tls"), "test-host").unwrap();
+    let auth = Arc::new(Auth::open(&dir).unwrap());
+    let fanout = Arc::new(Fanout::default());
+    fanout.set_failover(failover());
+    let fake = fake_provider();
+    let mut adapters = Adapters::new();
+    adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script)));
+    let mut accounts = Accounts::new();
+    accounts.insert(
+        account(),
+        AccountConfig {
+            provider: fake,
+            label: "Account 1".into(),
+            config_dir: Some(dir.join("account")),
+            fallback: false,
+            endpoint: None,
+        },
+    );
+    let setup = Setup {
+        store: Store::open(dir.join("herder.db")).unwrap(),
+        adapters,
+        accounts,
+        sink: Arc::clone(&fanout) as Arc<dyn session::EventSink>,
+        turn_ids: Box::new(move || {
+            TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
+        }),
+        worktrees: Worktrees::new(dir.join("worktrees")),
+        attachments: dir.join("attachments"),
+        chats: dir.join("chats"),
+    };
+    let shutdown = CancellationToken::new();
+    let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
+    let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let tunnel = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let tunnel_addr = tunnel.local_addr().unwrap();
+    let fingerprint = tls.fingerprint().to_owned();
+    let host = Host {
+        name: format!("test-{host_id}"),
+        id: host_id,
+    };
+    let terminals = Terminals::new(Arc::clone(&fanout), PathBuf::from("/bin/sh"));
+    // The login is fake; the account it adds is a real provider's, as the config holds,
+    // and the one it logs in again the fake one.
+    let logins = Logins::new(
+        HashMap::from([
+            (Provider::Codex, fake_login()),
+            (fake_provider(), fake_login()),
+        ]),
+        dir.join("daemon.toml"),
+        sessions.clone(),
+    );
+    let server = Server::new(
+        tls,
+        Arc::clone(&auth),
+        Arc::clone(&fanout),
+        sessions,
+        terminals,
+        logins,
+        host,
+    );
+    // The AWS CLI and its config, both absent until a test writes them.
+    let aws = dir.join("aws");
+    let env = move |key: &str| match key {
+        "PATH" => Some(aws.join("bin").into_os_string()),
+        "AWS_CONFIG_FILE" => Some(aws.join("config").into_os_string()),
+        _ => None,
+    };
+    server.manage_aws(Aws::from_env(env)).unwrap();
+    let config = herder_daemon::Config::load_file(&dir.join("daemon.toml")).unwrap();
+    let settings = Settings::new(&config, None, shutdown.clone());
+    server.manage_settings(Arc::new(settings)).unwrap();
+    started
+        .send((addr, tunnel_addr, fingerprint, auth, fanout))
+        .ok()
+        .unwrap();
+    server
+        .run_tunneled(vec![listener], Some(tunnel), shutdown)
+        .await;
 }
 
 /// A git repository with one commit, for sessions to work on.
@@ -1509,16 +1552,22 @@ impl Relay {
         let swallows = Arc::clone(&swallowing);
         tokio::spawn(async move {
             while let Ok((mut inbound, _)) = listener.accept().await {
-                count.fetch_add(1, Ordering::SeqCst);
                 let mut cut = cuts.subscribe();
                 let mut stall = stalls.subscribe();
                 let swallowed = swallows.load(Ordering::SeqCst);
+                let count = Arc::clone(&count);
                 tokio::spawn(async move {
+                    if !is_clients(&inbound).await {
+                        return;
+                    }
+                    count.fetch_add(1, Ordering::SeqCst);
+                    let _ = inbound.set_nodelay(true);
                     let relayed = async {
                         if swallowed {
                             std::future::pending::<()>().await;
                         }
                         let mut outbound = TcpStream::connect(target).await.unwrap();
+                        let _ = outbound.set_nodelay(true);
                         let Some(rate) = rate else {
                             let _ =
                                 tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
@@ -1565,10 +1614,22 @@ impl Relay {
         self.stall.send_modify(|version| *version += 1);
     }
 
-    /// How many connections the relay accepted.
+    /// How many of the client's connections the relay accepted.
     fn accepted(&self) -> u64 {
         self.accepted.load(Ordering::SeqCst)
     }
+}
+
+/// Whether `inbound` is one of the client's connections, which start with a TLS handshake
+/// record. Whatever else finds a fresh port, as tools that probe a machine's listening ports
+/// do, is not the client's doing: a relay drops it and does not count it.
+async fn is_clients(inbound: &TcpStream) -> bool {
+    let mut first = [0; 1];
+    let clients = matches!(inbound.peek(&mut first).await, Ok(1)) && first[0] == 0x16;
+    if !clients {
+        eprintln!("dropped a connection that is not the client's");
+    }
+    clients
 }
 
 /// Copies `from` to `to` at no more than `rate` bytes a second.
@@ -2252,6 +2313,28 @@ fn status(machine: &herder_client_core::Machine, session_id: &SessionId) -> Sess
         .status
 }
 
+/// Pauses the clock, for a test whose daemon runs on its runtime ([`Daemon::start_here`]).
+/// The clock moves on to the next timer whenever no task has work, bytes on their way
+/// through a socket or not: with a timer every millisecond, a hop costs at most that.
+/// Loopback delivers within the write, unless the kernel puts it off on a busy machine:
+/// giving up the CPU at each tick lets it catch up before time moves on. Returns the ticker
+/// for [`resume`] to stop.
+fn pause() -> tokio::task::JoinHandle<()> {
+    tokio::time::pause();
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            std::thread::yield_now();
+        }
+    })
+}
+
+/// Runs the clock that [`pause`] paused in real time again.
+fn resume(ticker: tokio::task::JoinHandle<()>) {
+    ticker.abort();
+    tokio::time::resume();
+}
+
 /// The phone goes to the background mid-turn, the OS silently kills its socket, and another
 /// device ends the turn. Ten minutes later, on a paused clock, the phone comes back: it did not
 /// retry while suspended, and its wake resumes the session with no gap.
@@ -2259,13 +2342,7 @@ fn status(machine: &herder_client_core::Machine, session_id: &SessionId) -> Sess
 async fn a_ten_minute_suspension_resumes_without_a_gap() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp.path().join("app"));
-    let daemon = Daemon::start(
-        &tmp.path().join("daemon"),
-        0,
-        "interrupted_turn.jsonl",
-        Arc::default(),
-    )
-    .await;
+    let daemon = Daemon::start_here(&tmp.path().join("daemon"), "interrupted_turn.jsonl").await;
     let relay = Relay::start(daemon.addr).await;
     let phone = Client::open(
         tmp.path().join("phone").display().to_string(),
@@ -2319,7 +2396,7 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
     drop(watched);
     drop(desktop);
 
-    tokio::time::pause();
+    let ticker = pause();
     tokio::time::advance(Duration::from_secs(10 * 60)).await;
     // On resume the silence is noticed, and nothing is retried while suspended.
     wait_connection(&phone, |state| {
@@ -2333,7 +2410,7 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
         phone.machines()[0].connection,
         ConnectionState::Disconnected { .. }
     ));
-    tokio::time::resume();
+    resume(ticker);
 
     phone.wake();
     view.read_until(&sub, interrupted("turn-1")).await;
@@ -2350,13 +2427,7 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
 #[tokio::test]
 async fn a_suspended_client_replaces_no_connection_until_woken() {
     let tmp = tempfile::tempdir().unwrap();
-    let daemon = Daemon::start(
-        &tmp.path().join("daemon"),
-        0,
-        "mid_turn.jsonl",
-        Arc::default(),
-    )
-    .await;
+    let daemon = Daemon::start_here(&tmp.path().join("daemon"), "mid_turn.jsonl").await;
     let relay = Relay::start(daemon.addr).await;
     let phone = Client::open(
         tmp.path().join("phone").display().to_string(),
@@ -2379,7 +2450,7 @@ async fn a_suspended_client_replaces_no_connection_until_woken() {
         .subscribe_session(host.clone(), SessionId::new("nope"))
         .unwrap();
 
-    tokio::time::pause();
+    let ticker = pause();
     tokio::time::advance(Duration::from_secs(10 * 60)).await;
     // The connection's pings find it dead, and nothing replaces it.
     wait_connection(&phone, |state| {
@@ -2388,7 +2459,7 @@ async fn a_suspended_client_replaces_no_connection_until_woken() {
     .await;
     tokio::time::sleep(Duration::from_secs(5 * 60)).await;
     assert_eq!(relay.accepted(), 2);
-    tokio::time::resume();
+    resume(ticker);
 
     phone.wake();
     wait_connection(&phone, |state| *state == ConnectionState::Connected).await;
@@ -3840,8 +3911,12 @@ async fn slow_down(target: SocketAddr, rate: u64) -> (SocketAddr, Arc<AtomicU64>
     let count = Arc::clone(&accepted);
     tokio::spawn(async move {
         while let Ok((mut inbound, _)) = listener.accept().await {
-            count.fetch_add(1, Ordering::SeqCst);
+            let count = Arc::clone(&count);
             tokio::spawn(async move {
+                if !is_clients(&inbound).await {
+                    return;
+                }
+                count.fetch_add(1, Ordering::SeqCst);
                 let mut outbound = TcpStream::connect(target).await.unwrap();
                 let (mut from_client, mut to_client) = inbound.split();
                 let (mut from_daemon, mut to_daemon) = outbound.split();
