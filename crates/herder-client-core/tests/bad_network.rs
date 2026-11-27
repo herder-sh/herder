@@ -69,7 +69,7 @@ use herder_store::Store;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{ReadHalf, WriteHalf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -145,6 +145,9 @@ struct Link {
     /// next piece either way, as a 3G or EDGE radio's does.
     wake_ms: u64,
 }
+
+/// Bytes the relay's socket to the daemon takes ahead of what the link carries.
+const RELAY_BUFFER: u32 = 64 * 1024;
 
 /// How long a radio carries nothing before it goes idle, and has to come up for the next piece.
 const RADIO_IDLE: Duration = secs(5);
@@ -280,7 +283,12 @@ async fn carry(net: Arc<Net>, path: usize, mut inbound: TcpStream, mut rng: Rng)
                     return Kill::Fin;
                 }
             }
-            let Ok(daemon) = TcpStream::connect(net.target).await else {
+            // What the link has not carried yet waits on the daemon's side, as on a real
+            // network, where no more than its window is ever on the way; loopback would
+            // otherwise take megabytes into this end's receive buffer at once.
+            let socket = TcpSocket::new_v4().unwrap();
+            socket.set_recv_buffer_size(RELAY_BUFFER).unwrap();
+            let Ok(daemon) = socket.connect(net.target).await else {
                 return Kill::Reset;
             };
             // The relay passes on small pieces in quick succession. Nagle's algorithm would
@@ -2212,5 +2220,126 @@ fn a_daemons_link_to_the_hub_that_dies_silently_shows_once_and_recovers() {
         world.did.prompts = 1;
         world.settle().await;
         world.finish().await;
+    });
+}
+
+/// The link a Mac app had when sending a prompt took seconds: a round trip of 450 ms.
+const HALF_SECOND: Link = Link {
+    latency_ms: 225,
+    jitter_ms: 0,
+    rate: Some(500_000),
+    loss: 0,
+    wake_ms: 0,
+};
+
+/// When `wanted` first holds of an event `seen` showed, looked at every millisecond.
+async fn first_seen(seen: &Seen, wanted: impl Fn(&EventBody) -> bool) -> Instant {
+    loop {
+        if seen.events.lock().unwrap().iter().any(|e| wanted(&e.body)) {
+            return Instant::now();
+        }
+        tokio::time::sleep(ms(1)).await;
+    }
+}
+
+/// An app watching 500 sessions comes back over a link with a 450 ms round trip, and the user
+/// sends a prompt the moment it shows the machine connected, while the daemon resumes every
+/// subscription and replays the megabyte and a half one session did meanwhile. Nothing
+/// waits before the prompt goes out: the daemon applies it and starts its turn half a round
+/// trip after the send. Printed is when each step happened; the answer still waits behind
+/// the catch-up on its way back.
+#[test]
+fn a_prompt_during_a_catch_up_is_applied_in_half_a_round_trip() {
+    run(async {
+        let mut world = World::start(41, 2, Some(1_500_000)).await;
+        let mut watched = Vec::new();
+        for _ in 0..500 {
+            let session_id = created(&world.truth, &world.host, create_chat()).await;
+            let sub = world.app.subscribe_session(world.host.clone(), session_id);
+            watched.push(sub.unwrap());
+        }
+        world.app.synced(world.host.clone()).await.unwrap();
+
+        // Away while a turn adds a megabyte and a half to the session.
+        world.excuse(Instant::now(), Instant::now() + secs(3600));
+        world.app.suspend();
+        world.net.kill(None, Kill::Silent);
+        let sent = world
+            .truth
+            .send(world.host.clone(), prompt(&world.session, 1));
+        assert_eq!(sent.await.unwrap(), CommandResult::Applied);
+        let mut ended = world.real.ended.subscribe();
+        tokio::time::timeout(secs(30), ended.wait_for(|ended| *ended == 1))
+            .await
+            .expect("the turn did not end")
+            .unwrap();
+        world.trouble(Trouble::Link(HALF_SECOND)).await;
+        tokio::time::sleep(secs(20)).await;
+        let before = world.net.carried.load(Ordering::SeqCst);
+        let woken = Instant::now();
+        world.app.wake();
+        world.shows(secs(30), "a connection", connected).await;
+        let shown = woken.elapsed();
+
+        let user_message = |body: &EventBody| match body {
+            EventBody::ItemAdded { item } => {
+                matches!(&item.body, ItemBody::UserMessage { text, .. } if text == "Prompt 2.")
+            }
+            _ => false,
+        };
+        let turn_started = |body: &EventBody| match body {
+            EventBody::TurnStarted { turn_id } => turn_id.as_str() == "turn-2",
+            _ => false,
+        };
+        let sent = Instant::now();
+        let ((answer, answered), applied, started, shows_sent, shows_started) = tokio::join!(
+            async {
+                let prompt = prompt(&world.session, 2);
+                let answer = world.app.send(world.host.clone(), prompt).await;
+                (answer, Instant::now())
+            },
+            first_seen(&world.real, user_message),
+            first_seen(&world.real, turn_started),
+            first_seen(&world.seen, user_message),
+            first_seen(&world.seen, turn_started),
+        );
+        assert_eq!(answer.unwrap(), CommandResult::Applied);
+        world.app.synced(world.host.clone()).await.unwrap();
+        let caught_up = woken.elapsed();
+        let carried = world.net.carried.load(Ordering::SeqCst) - before;
+        let after = |at: Instant| (at - sent).as_millis();
+        eprintln!(
+            "connected {} ms after the wake, caught up after {} ms, {carried} bytes; from the \
+             send: applied {} ms, turn started {} ms, answered {} ms; the app has the prompt \
+             {} ms, the turn {} ms",
+            shown.as_millis(),
+            caught_up.as_millis(),
+            after(applied),
+            after(started),
+            after(answered),
+            after(shows_sent),
+            after(shows_started),
+        );
+        assert!(
+            carried > 1_000_000,
+            "the catch-up was no load: {carried} bytes"
+        );
+        assert!(
+            caught_up > shown + secs(2),
+            "the catch-up took {caught_up:?}"
+        );
+        // The prompt travels the 225 ms one way, and nothing is awaited before it is sent.
+        assert!(
+            after(applied) <= 260,
+            "applied {} ms after the send",
+            after(applied)
+        );
+        assert!(
+            after(started) <= 260,
+            "started {} ms after the send",
+            after(started)
+        );
+        drop(watched);
+        world.nothing_wrong();
     });
 }
