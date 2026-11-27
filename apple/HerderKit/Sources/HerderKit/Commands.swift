@@ -5,7 +5,8 @@ import AppKit
 import KeyboardShortcuts
 #endif
 
-/// What the menu bar and the system-wide hotkey ask the fleet's window to do.
+/// What the menu bar, the system-wide hotkey and Siri (`ShortcutActions`) ask the fleet's
+/// window to do.
 enum AppCommand: Hashable, Sendable {
     /// ⌘N: a session where the window is, as the sidebar's New Session.
     case newSession
@@ -15,6 +16,10 @@ enum AppCommand: Hashable, Sendable {
     /// Reconnects every machine.
     case reconnect
     case go(Section)
+    /// A project's pane, by its `ProjectGroup.id`.
+    case openProject(String)
+    /// A session, as its `herder://session` link opens it.
+    case openSession(SessionKey)
 
     /// The sections ⌘1… go to, in the sidebar's order.
     enum Section: CaseIterable, Hashable, Sendable {
@@ -130,6 +135,8 @@ enum CommandRoute: Equatable {
     case draft(Draft, listens: Bool)
     case sheet(AppSheet)
     case section(SidebarItem)
+    /// Opens a session once its machine lists it, as a link does.
+    case session(SessionKey)
     case reconnect
     /// Not yet: no machine to chat on is connected, but one is connecting.
     case wait
@@ -162,6 +169,10 @@ enum CommandRoute: Equatable {
             self = .reconnect
         case .go(let section):
             self = .section(section.item)
+        case .openProject(let id):
+            self = .section(.project(id))
+        case .openSession(let key):
+            self = .session(key)
         }
     }
 }
