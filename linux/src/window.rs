@@ -13,8 +13,8 @@ use adw::prelude::*;
 use gtk::glib;
 use herder_client_core::{ConnectionState, Machine, SessionUpdate};
 use herder_protocol::{
-    Answer, ApprovalDecision, CommandBody, CommandResult, Event, HostId, ProjectId, SessionStatus,
-    Timestamp,
+    Answer, ApprovalDecision, CommandBody, CommandResult, Event, HostId, ProjectId, SessionId,
+    SessionStatus, Timestamp,
 };
 
 use crate::lists::{self, Lists, Request, RequestKind, Section, SessionKey, Task};
@@ -78,7 +78,15 @@ struct State {
     /// The latest events asked for of sessions opened before their journal had replayed that
     /// far; see [`MainWindow::ask_latest`].
     latest: HashMap<SessionKey, Latest>,
+    /// The session open, which the client was told the window shows.
+    shown: Option<SessionKey>,
+    /// Tells the client which sessions of a machine the window shows.
+    show: Option<Show>,
 }
+
+/// Tells the client which sessions of a machine the window shows: after a reconnect they
+/// catch up first.
+pub type Show = Rc<dyn Fn(HostId, Vec<SessionId>)>;
 
 /// Where the latest events asked for of a session stand.
 enum Latest {
@@ -387,6 +395,11 @@ impl MainWindow {
         self.session_view.set_sender(sender);
     }
 
+    /// What the window tells which session it shows.
+    pub fn set_show(&self, show: Show) {
+        self.state.borrow_mut().show = Some(show);
+    }
+
     /// What adds, renames, reconnects and forgets machines.
     pub fn set_ops(&self, ops: Rc<dyn MachineOps>) {
         self.state.borrow_mut().ops = Some(Rc::clone(&ops));
@@ -462,6 +475,7 @@ impl MainWindow {
         if !self.show_session(key) {
             return;
         }
+        self.shown(key);
         self.ask_latest(key);
         if self.main.visible_child_name().as_deref() != Some("tasks") {
             let section = self.state.borrow().section.clone();
@@ -509,6 +523,25 @@ impl MainWindow {
         self.session_view
             .show(key, session, machine, recent, latest);
         true
+    }
+
+    /// Tells the client that `key` is the session open, and that the machine of the one open
+    /// before, if another, shows none now.
+    fn shown(&self, key: &SessionKey) {
+        let (before, show) = {
+            let mut state = self.state.borrow_mut();
+            if state.shown.as_ref() == Some(key) {
+                return;
+            }
+            (state.shown.replace(key.clone()), state.show.clone())
+        };
+        let Some(show) = show else {
+            return;
+        };
+        if let Some(before) = before.filter(|before| before.host_id != key.host_id) {
+            show(before.host_id, Vec::new());
+        }
+        show(key.host_id.clone(), vec![key.session_id.clone()]);
     }
 
     /// Asks once for the latest events of `key` while its journal is still on its way. A
@@ -1525,6 +1558,31 @@ mod tests {
             &update("s4", vec![created("/src/api", "herder/old")]),
         );
         window.flush();
+    }
+
+    /// Opening a session tells the client the window shows it, and that the machine of the
+    /// one open before shows none, once.
+    #[gtk::test]
+    fn opening_a_session_tells_the_client_which_one_is_shown() {
+        let (window, _) = open();
+        let told = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&told);
+        window.set_show(Rc::new(move |host_id, session_ids| {
+            log.borrow_mut().push((host_id, session_ids));
+        }));
+        show_fleet(&window);
+        let (s1, s4) = (key("h1", "s1"), key("h2", "s4"));
+        window.open(&s1);
+        window.open(&s1);
+        window.open(&s4);
+        let shows = |host: &str, sessions: &[&SessionKey]| {
+            let sessions = sessions.iter().map(|key| key.session_id.clone()).collect();
+            (HostId::new(host), sessions)
+        };
+        assert_eq!(
+            *told.borrow(),
+            vec![shows("h1", &[&s1]), shows("h1", &[]), shows("h2", &[&s4])]
+        );
     }
 
     /// A session opened before its journal replayed as far as its machine lists asks once for

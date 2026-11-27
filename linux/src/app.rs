@@ -134,6 +134,11 @@ pub(crate) fn wire(window: &MainWindow, client: &Client) {
                 .map_err(|err| err.to_string())
         })
     }));
+    let shows = client.clone();
+    window.set_show(Rc::new(move |host_id, session_ids| {
+        // A machine forgotten meanwhile has nothing to be told.
+        let _ = shows.show_sessions(host_id, session_ids);
+    }));
     let mut subscriptions = Subscriptions::default();
     let mut refresh = {
         let window = window.clone();
