@@ -922,6 +922,44 @@ fn a_hubs_disk_and_each_hosts_usage_with_a_warning_when_nearly_full() {
 }
 
 #[test]
+fn the_fleet_ranks_a_machines_routes_on_this_device() {
+    let mut app = fake::tree();
+    let mut machines = app.machines.clone();
+    let mut hub = fake::machine("0193a5b2-7c1e", "home hub", &[]);
+    hub.addresses = vec!["wss://hub.example.com".into()];
+    let route = format!("hub://{}", hub.host_id);
+    machines[0].addresses = vec![
+        "192.168.1.5:7447".into(),
+        "wg://home-udm/192.168.1.5:7447".into(),
+        "100.101.1.2:7447".into(),
+        route.clone(),
+    ];
+    machines[0].address = Some("100.101.1.2:7447".into());
+    machines[0].pinned_address = Some("100.101.1.2:7447".into());
+    machines[0].disabled_addresses = vec![route];
+    machines.push(hub);
+    app.update(Msg::Machines(machines));
+    press(&mut app, KeyCode::Char('m'));
+    // Its addresses say the choices; `o` lists them as routes.
+    let shown = format!("{:?}", render(&mut app, 120, 30).backend());
+    assert!(shown.contains("100.101.1.2:7447 (only"), "{shown}");
+    assert!(shown.contains("through home hub (never)"), "{shown}");
+    press(&mut app, KeyCode::Char('o'));
+    press(&mut app, KeyCode::Char('j'));
+    at_three_widths("routes", &mut app);
+    let shown = format!("{:?}", render(&mut app, 120, 30).backend());
+    for said in [
+        "home network",
+        "your VPN",
+        "system VPN",
+        "through home hub",
+        "in use",
+    ] {
+        assert!(shown.contains(said), "{said}: {shown}");
+    }
+}
+
+#[test]
 fn a_machine_reached_through_its_hub_names_the_hub() {
     let mut app = fake::tree();
     let mut machines = app.machines.clone();

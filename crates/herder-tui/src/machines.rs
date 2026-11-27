@@ -12,12 +12,15 @@
 //! devices reach it from outside its networks (a port forward, a TCP proxy, a VPN, a tunnel's
 //! `wss://` URL). They are the daemon's setting, so every device picks them up from its next
 //! connection.
+//!
+//! Anyone ranks the selected machine's routes on this device: `o` lists its addresses in the
+//! order they are tried, each named by what carries it; space pins one (the only one dialled),
+//! disables it (never dialled) or puts it back in the race, and `J`/`K` move it.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 
-use herder_client_core::Machine;
-use herder_client_core::{FleetLink, FleetMachine};
+use herder_client_core::{FleetLink, FleetMachine, Machine, RouteChoice};
 use herder_protocol::{CommandBody, CommandResult, HostId, HubVolume, Role};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -63,6 +66,29 @@ pub enum PanelEdit {
     /// Editing its public addresses, separated by spaces or commas: `None` until the machine
     /// said what they are.
     Public(Option<String>),
+    /// Ranking its routes on this device: the one selected, by its index in its addresses.
+    Routes(usize),
+}
+
+/// What a route's choice becomes when space is pressed on it: in the race, then the only one,
+/// then never, then back in the race.
+pub fn next_choice(choice: RouteChoice) -> RouteChoice {
+    match choice {
+        RouteChoice::Auto => RouteChoice::Pinned,
+        RouteChoice::Pinned => RouteChoice::Disabled,
+        RouteChoice::Disabled => RouteChoice::Auto,
+    }
+}
+
+/// The user's choice for `address`, one of `machine`'s addresses.
+pub fn choice(machine: &Machine, address: &str) -> RouteChoice {
+    if machine.pinned_address.as_deref() == Some(address) {
+        RouteChoice::Pinned
+    } else if machine.disabled_addresses.iter().any(|a| a == address) {
+        RouteChoice::Disabled
+    } else {
+        RouteChoice::Auto
+    }
 }
 
 /// A step of editing a machine's public addresses, whose answer comes back to the panel.
@@ -257,6 +283,12 @@ pub enum Input {
     Secrets,
     /// Edit the public addresses of the selected machine.
     Public,
+    /// Rank the routes of the selected machine on this device.
+    Routes,
+    /// Try the selected route earlier.
+    Earlier,
+    /// Try the selected route later.
+    Later,
     /// Pick the previous choice.
     Left,
     /// Pick the next choice.
@@ -297,6 +329,15 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
         Some(PanelEdit::Forget) => match key.code {
             KeyCode::Enter | KeyCode::Char('y') => Input::Submit,
             KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('n') => Input::Close,
+            _ => return None,
+        },
+        Some(PanelEdit::Routes(_)) => match key.code {
+            KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('o' | 'q') => Input::Close,
+            KeyCode::Char('k') | KeyCode::Up => Input::Up,
+            KeyCode::Char('j') | KeyCode::Down => Input::Down,
+            KeyCode::Char(' ') | KeyCode::Enter => Input::Submit,
+            KeyCode::Char('K') => Input::Earlier,
+            KeyCode::Char('J') => Input::Later,
             _ => return None,
         },
         None => return panel_key(key, panel),
@@ -350,12 +391,54 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Char('b') => Input::Backup,
             KeyCode::Char('s') => Input::Secrets,
             KeyCode::Char('p') => Input::Public,
+            KeyCode::Char('o') => Input::Routes,
             KeyCode::Char('r') => return Some(Action::Reconnect),
             KeyCode::Char('?') => return Some(Action::ToggleHelp),
             _ => return None,
         },
     };
     Some(Action::Machines(input))
+}
+
+/// Carries out one input while ranking `machine`'s routes, `at` the one selected.
+fn routes_input(machine: &Machine, at: &mut usize, input: Input) -> Vec<Effect> {
+    let addresses = &machine.addresses;
+    let last = addresses.len().saturating_sub(1);
+    *at = (*at).min(last);
+    let host_id = machine.host_id.clone();
+    let moved = |to: usize| {
+        let mut addresses = addresses.clone();
+        addresses.swap(*at, to);
+        Effect::SetAddresses {
+            host_id: host_id.clone(),
+            addresses,
+        }
+    };
+    match input {
+        Input::Up => *at = at.saturating_sub(1),
+        Input::Down => *at = (*at + 1).min(last),
+        Input::Submit => {
+            if let Some(address) = addresses.get(*at) {
+                return vec![Effect::SetRoute {
+                    host_id: host_id.clone(),
+                    address: address.clone(),
+                    choice: next_choice(choice(machine, address)),
+                }];
+            }
+        }
+        Input::Earlier if *at > 0 => {
+            let effect = moved(*at - 1);
+            *at -= 1;
+            return vec![effect];
+        }
+        Input::Later if *at < last => {
+            let effect = moved(*at + 1);
+            *at += 1;
+            return vec![effect];
+        }
+        _ => {}
+    }
+    Vec::new()
 }
 
 impl App {
@@ -429,6 +512,14 @@ impl App {
                     panel.chosen = None;
                     return selected.map(Effect::ForgetMachine).into_iter().collect();
                 }
+                (PanelEdit::Routes(at), input) => {
+                    let Some(machine) = selected
+                        .and_then(|host_id| self.machines.iter().find(|m| m.host_id == host_id))
+                    else {
+                        return Vec::new();
+                    };
+                    return routes_input(machine, at, input);
+                }
                 _ => {}
             }
             return Vec::new();
@@ -463,6 +554,16 @@ impl App {
                     let host_id = machine.host_id.clone();
                     let sent = PublicSent::Load(host_id.clone());
                     return vec![send_public(host_id, CommandBody::GetSettings, sent)];
+                }
+                Input::Routes => {
+                    let Some(at) = panel.selected(&self.machines) else {
+                        return Vec::new();
+                    };
+                    if self.machines[at].addresses.is_empty() {
+                        self.notice = Some("routes: this machine has no addresses".to_owned());
+                        return Vec::new();
+                    }
+                    panel.edit = Some(PanelEdit::Routes(0));
                 }
                 Input::Secrets => return self.open_secrets(),
                 Input::AddAccount => {
@@ -690,6 +791,55 @@ mod tests {
     use herder_client_core::FleetPerson;
 
     const FP: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn the_panel_pins_disables_and_moves_a_machines_routes() {
+        let mut app = App::default();
+        let mut box1 = machine("h1", "box", &[]);
+        box1.addresses = vec!["192.168.1.5:7447".into(), "100.101.1.2:7447".into()];
+        app.update(Msg::Machines(vec![box1.clone()]));
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Char('o'));
+        let edit = |app: &App| app.machine_panel.as_ref().and_then(|p| p.edit.clone());
+        assert_eq!(edit(&app), Some(PanelEdit::Routes(0)));
+        // Space cycles the selected route: only this, then never, then back in the race.
+        press(&mut app, KeyCode::Down);
+        let set = |choice| Effect::SetRoute {
+            host_id: HostId::new("h1"),
+            address: "100.101.1.2:7447".into(),
+            choice,
+        };
+        assert_eq!(
+            press(&mut app, KeyCode::Char(' ')),
+            [set(RouteChoice::Pinned)]
+        );
+        box1.pinned_address = Some("100.101.1.2:7447".into());
+        app.update(Msg::Machines(vec![box1.clone()]));
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [set(RouteChoice::Disabled)]
+        );
+        box1.pinned_address = None;
+        box1.disabled_addresses = vec!["100.101.1.2:7447".into()];
+        app.update(Msg::Machines(vec![box1.clone()]));
+        assert_eq!(
+            press(&mut app, KeyCode::Char(' ')),
+            [set(RouteChoice::Auto)]
+        );
+        // K tries it earlier; at the top it stays.
+        assert_eq!(
+            press(&mut app, KeyCode::Char('K')),
+            [Effect::SetAddresses {
+                host_id: HostId::new("h1"),
+                addresses: vec!["100.101.1.2:7447".into(), "192.168.1.5:7447".into()],
+            }]
+        );
+        assert_eq!(edit(&app), Some(PanelEdit::Routes(0)));
+        assert!(press(&mut app, KeyCode::Char('K')).is_empty());
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(edit(&app), None);
+        assert!(app.machine_panel.is_some());
+    }
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Effect> {
         app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)))

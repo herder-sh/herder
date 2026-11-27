@@ -150,6 +150,24 @@ pub enum Effect {
     },
     /// Unpair a machine on this device; a failure comes back as a notice.
     ForgetMachine(HostId),
+    /// Pin one of a machine's addresses, disable it or put it back in the race, on this
+    /// device; a failure comes back as a notice.
+    SetRoute {
+        /// The machine.
+        host_id: HostId,
+        /// One of its addresses.
+        address: String,
+        /// What to do with it.
+        choice: herder_client_core::RouteChoice,
+    },
+    /// Try a machine's addresses in this order, on this device; a failure comes back as a
+    /// notice.
+    SetAddresses {
+        /// The machine.
+        host_id: HostId,
+        /// Its addresses, first tried first.
+        addresses: Vec<String>,
+    },
     /// Clear the screen and draw every cell anew, as after a resize.
     Repaint,
     /// Suspend the TUI and attach the local terminal to a daemon terminal.

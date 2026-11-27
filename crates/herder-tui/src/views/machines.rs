@@ -27,7 +27,7 @@
 //!               laptop   3 sessions · images off
 //! ```
 
-use herder_client_core::{ConnectionState, Machine};
+use herder_client_core::{ConnectionState, Machine, RouteChoice, RouteKind};
 use herder_protocol::{FleetHost, HubVolume, Role, Timestamp};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -39,7 +39,7 @@ use ratatui_textarea::TextArea;
 use crate::accounts::{self, AddAccount};
 use crate::app::App;
 use crate::backup::{self, Known};
-use crate::machines::{MachinePanel, PanelEdit};
+use crate::machines::{self, MachinePanel, PanelEdit};
 use crate::mouse::{Click, Hits, List as Rows, Wheel};
 use crate::palette::search_line;
 use crate::ui::dialog::{Dialog, Size};
@@ -118,6 +118,12 @@ fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel, hits: &m
                         ui.muted(),
                     ),
                 );
+            }
+        }
+        Some(PanelEdit::Routes(at)) => {
+            // The routes, in the order they are tried, replace the details.
+            if let Some(at_machine) = selected {
+                details = routes(ui, app, &app.machines[at_machine], *at);
             }
         }
         Some(PanelEdit::Forget) => {
@@ -418,6 +424,78 @@ fn route(app: &App, address: &str) -> String {
     }
 }
 
+/// What a route's choice says beside it; nothing while it is in the race.
+fn choice_word(choice: RouteChoice) -> Option<&'static str> {
+    match choice {
+        RouteChoice::Auto => None,
+        RouteChoice::Pinned => Some("only this"),
+        RouteChoice::Disabled => Some("never"),
+    }
+}
+
+/// What carries a connection to `address`: "home network", "through herder-hub".
+fn carrier(app: &App, address: &str) -> String {
+    match herder_client_core::route_kind(address.to_owned()) {
+        RouteKind::HomeNetwork => "home network".to_owned(),
+        RouteKind::OwnVpn { .. } => "your VPN".to_owned(),
+        RouteKind::Direct => "internet".to_owned(),
+        RouteKind::SystemVpn => "system VPN".to_owned(),
+        RouteKind::HubWireGuard => "hub WireGuard".to_owned(),
+        RouteKind::Tunnel => "tunnel".to_owned(),
+        RouteKind::Hub { .. } => route(app, address),
+        RouteKind::CloudflareRelay => "Cloudflare relay".to_owned(),
+    }
+}
+
+/// `machine`'s routes in the order they are tried, `at` selected: each numbered, named by
+/// what carries it, its address, the user's choice and whether it is in use.
+fn routes(ui: Ui, app: &App, machine: &Machine, at: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::styled(
+            format!("{} · routes on this device", machine.name),
+            ui.strong(),
+        ),
+        Line::styled(
+            "tried first to last when a connection starts; never moved mid-use",
+            ui.muted(),
+        ),
+    ];
+    let in_use = match machine.connection {
+        ConnectionState::Connected => machine.address.as_deref(),
+        _ => None,
+    };
+    for (index, address) in machine.addresses.iter().enumerate() {
+        let choice = machines::choice(machine, address);
+        let marker = if index == at { ui.glyphs.pointer } else { " " };
+        let style = match (index == at, choice) {
+            (true, _) => ui.accent(),
+            (false, RouteChoice::Disabled) => ui.muted(),
+            (false, _) => ui.text(),
+        };
+        let mut spans = vec![
+            Span::styled(format!("{marker} {}. ", index + 1), style),
+            Span::styled(format!("{:<18}", carrier(app, address)), style),
+            // A route through a hub is named by the hub; its id says nothing more.
+            Span::styled(
+                if address.starts_with("hub://") {
+                    String::new()
+                } else {
+                    address.clone()
+                },
+                ui.muted(),
+            ),
+        ];
+        if let Some(word) = choice_word(choice) {
+            spans.push(Span::styled(format!("  {word}"), style));
+        }
+        if in_use == Some(address.as_str()) {
+            spans.push(Span::styled("  in use", Style::new().fg(ui.theme.success)));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
 /// The selected machine in full: its name, then each fact, the values `width` wide.
 fn details(
     ui: Ui,
@@ -465,7 +543,16 @@ fn details(
         ui.text(),
         width,
     ));
-    let addresses: Vec<String> = machine.addresses.iter().map(|a| route(app, a)).collect();
+    let addresses: Vec<String> = machine
+        .addresses
+        .iter()
+        .map(
+            |address| match choice_word(machines::choice(machine, address)) {
+                Some(word) => format!("{} ({word})", route(app, address)),
+                None => route(app, address),
+            },
+        )
+        .collect();
     let addresses = addresses.join(", ");
     lines.extend(field(ui, "addresses", &addresses, ui.text(), width));
     lines.extend(field(

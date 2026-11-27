@@ -559,6 +559,25 @@ the dialog shows the command to run there (P0.13).
  NAVIGATE  j/k move  a add  e rename  d forget  F fork  esc back              ● box ● m2 ◌ hub
 ```
 
+**Routes** (`o`, P27.8): the selected machine's addresses replace its details, in the order
+they are tried, each named by what carries it (`route_kind`: home network, your VPN, internet,
+system VPN, hub WireGuard, tunnel, through ‹hub›, Cloudflare relay), with **only this** on a
+pinned one, **never** on a disabled one (dimmed) and **in use** on the connection's. Space
+cycles the selected route through in the race, only this and never (`set_route`); `K`/`J` try it
+earlier or later (`set_addresses`); esc is done. It is this device's choice, so members rank
+routes too. Outside it, the details' **addresses** say "(only this)" and "(never)" beside
+those routes.
+
+```text
+   box · routes on this device
+   tried first to last when a connection starts; never moved mid-use
+     1. home network      192.168.1.5:7447
+   ▶ 2. your VPN          wg://home-udm/192.168.1.5:7447
+     3. system VPN        100.101.1.2:7447  only this  in use
+     4. through home hub                    never
+ j/k move  space auto · only this · never  K earlier  J later  esc done
+```
+
 ### 2.7 Switch account / provider / model (picker)
 
 This is OpenCode's model picker reshaped around herder's switches:
