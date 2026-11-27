@@ -349,7 +349,7 @@ pub struct AccountConfig {
 /// What starts the id of the account on a hub login. It keeps the word from before the hub
 /// was renamed: sessions' journals and the config dirs name their account by it, and an id
 /// that changed would leave every session on a hub login without a configured account.
-const HUB_LOGIN_PREFIX: &str = "vault-";
+pub(crate) const HUB_LOGIN_PREFIX: &str = "vault-";
 
 /// The account on the hub login pinned as `pin`.
 fn hub_login_account(pin: &str) -> AccountId {

@@ -38,6 +38,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
 mod secrets;
+mod usage;
 
 pub use secrets::{Grant, Sealed, SecretUse, SetDeleted};
 
