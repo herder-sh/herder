@@ -5,6 +5,8 @@ name: release
 # the iOS and macOS apps to TestFlight. workflow_dispatch runs the same, without publishing the
 # GitHub Release. PRs that change this file or the app's release script run the builds only,
 # without the TestFlight upload; from a fork, which gets no secrets, the macOS app is signed ad hoc.
+# A tag also builds the Linux app's snap (snap.yml), attaches it to the GitHub Release and
+# uploads it to the Snap Store once the SNAPCRAFT_STORE_CREDENTIALS secret exists.
 
 on:
   push:
@@ -187,9 +189,12 @@ jobs:
           apple/scripts/upload-testflight.sh ios
           apple/scripts/upload-testflight.sh macos
 
+  snap:
+    uses: ./.github/workflows/snap.yml
+
   publish:
     name: publish
-    needs: [build, macos]
+    needs: [build, macos, snap]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
@@ -212,3 +217,40 @@ jobs:
             --title "herder ${GITHUB_REF_NAME#v}" \
             --generate-notes \
             $prerelease
+
+  snap-store:
+    # stable for a release, as the GitHub Release is; edge for a pre-release tag (v1.2.0-rc.1),
+    # which the GitHub Release marks as one too. Snap users get refreshed automatically, so
+    # only what is released anyway reaches stable.
+    name: publish the snap to the Snap Store
+    needs: [snap, publish]
+    if: github.ref_type == 'tag'
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ubuntu-24.04
+    env:
+      SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+    steps:
+      - name: Skip without store credentials
+        if: env.SNAPCRAFT_STORE_CREDENTIALS == ''
+        run: echo "::notice::SNAPCRAFT_STORE_CREDENTIALS is not set; not publishing to the Snap Store"
+      - uses: actions/download-artifact@v8
+        if: env.SNAPCRAFT_STORE_CREDENTIALS != ''
+        with:
+          name: herder-snap-${{ matrix.arch }}
+          path: dist
+      - name: Pick the snap and its channel
+        id: snap
+        if: env.SNAPCRAFT_STORE_CREDENTIALS != ''
+        run: |
+          channel=stable
+          case "$GITHUB_REF_NAME" in *-*) channel=edge ;; esac
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "file=$(ls dist/*.snap)" >> "$GITHUB_OUTPUT"
+      - uses: snapcore/action-publish@v1
+        if: env.SNAPCRAFT_STORE_CREDENTIALS != ''
+        with:
+          snap: ${{ steps.snap.outputs.file }}
+          release: ${{ steps.snap.outputs.channel }}

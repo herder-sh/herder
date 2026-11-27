@@ -1,0 +1,69 @@
+# The herder Linux app (linux/, herder-gtk) as a strictly confined snap. snapcraft needs this
+# file inside the directory it builds, which must hold the whole workspace, hence snap/ at the
+# root; the launcher and the owner's steps are in linux/packaging/snap/.
+name: herder
+title: herder
+summary: Watch and steer coding agents across your machines
+description: |
+  herder runs coding agents (Claude, Codex, Cursor, ...) on your machines. This app connects
+  to the herder daemons you have paired and shows every session as it runs: its transcript,
+  tool calls and pull requests, the approvals and questions waiting on you, and a composer to
+  steer it or start a new one.
+
+  It is a network client only: the agents run on the machines herder is installed on. It
+  shares its machines with the herder command line in ~/.config/herder once its
+  herder-profile plug is connected; `herder.herder-gtk --demo` opens a demo fleet.
+license: Apache-2.0
+website: https://herder.sh
+source-code: https://github.com/herder-sh/herder
+icon: linux/data/icons/hicolor/scalable/apps/sh.herder.Herder.svg
+base: core24
+grade: stable
+confinement: strict
+adopt-info: herder-gtk
+
+platforms:
+  amd64:
+  arm64:
+
+plugs:
+  # The profile the herder command line and this app share: the paired machines, their
+  # device keys and what each last said. A private copy under ~/snap would not see the
+  # machines the command line pairs, nor it this app's.
+  herder-profile:
+    interface: personal-files
+    write:
+      - $HOME/.config/herder
+
+apps:
+  herder-gtk:
+    command: bin/herder-gtk
+    command-chain: [bin/shared-profile]
+    common-id: sh.herder.Herder
+    desktop: usr/share/applications/sh.herder.Herder.desktop
+    extensions: [gnome]
+    plugs: [network, herder-profile]
+
+parts:
+  herder-gtk:
+    plugin: rust
+    source: .
+    rust-path: [linux]
+    # The gnome extension's LDFLAGS point the linker at the GNOME SDK's libraries.
+    rust-inherit-ldflags: true
+    override-pull: |
+      craftctl default
+      craftctl set version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+    override-build: |
+      craftctl default
+      install -Dm644 linux/data/sh.herder.Herder.desktop \
+        "$CRAFT_PART_INSTALL/usr/share/applications/sh.herder.Herder.desktop"
+      install -Dm644 linux/data/icons/hicolor/scalable/apps/sh.herder.Herder.svg \
+        "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/scalable/apps/sh.herder.Herder.svg"
+
+  shared-profile:
+    plugin: dump
+    source: linux/packaging/snap
+    organize:
+      shared-profile: bin/shared-profile
+    stage: [bin/shared-profile]
