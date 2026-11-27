@@ -231,8 +231,24 @@ struct FleetView: View {
         #endif
     }
 
-    private var screens: some View {
+    private var commanded: some View {
         presenting
+            // The menu bar's and the hotkey's commands; a chat waits for its machine to connect.
+            .onChange(observing: { AppCommands.shared.pending }, initial: true) { _, _ in performPending() }
+            .onChange(observing: { fleet.machines.filter { $0.connection == .connected }.map(\.hostId) }) { _, _ in
+                performPending()
+            }
+            .task(observing: { AppCommands.shared.pending }) {
+                guard AppCommands.shared.pending != nil, (try? await Task.sleep(for: .seconds(15))) != nil,
+                      let command = AppCommands.shared.take() else { return }
+                // Still waiting: no machine connected in time.
+                let route = CommandRoute(command, fleet: fleet, item: item)
+                follow(route == .wait ? .problem("No machine is connected to chat on") : route)
+            }
+    }
+
+    private var screens: some View {
+        commanded
         .onAppear { Launch.mark(.frame) }
         .task { await fleet.follow() }
         .overlay(alignment: .bottom) { ToastView(fleet: fleet) }
@@ -293,7 +309,50 @@ struct FleetView: View {
 
     private var shell: some View {
         DesktopShell(fleet: fleet, sheet: $sheet, item: $item, pages: $pages, session: $session, draft: $draft,
-                     people: people, opened: opened)
+                     people: people, opened: opened, perform: perform)
+    }
+
+    /// Carries out the command the menu bar or the hotkey sent, unless it has to wait.
+    private func performPending() {
+        let commands = AppCommands.shared
+        guard let command = commands.pending else { return }
+        let route = CommandRoute(command, fleet: fleet, item: item)
+        if route == .wait { return }
+        _ = commands.take()
+        follow(route)
+    }
+
+    /// Carries out a command from the window's own controls.
+    private func perform(_ command: AppCommand) {
+        follow(CommandRoute(command, fleet: fleet, item: item))
+    }
+
+    private func follow(_ route: CommandRoute) {
+        switch route {
+        case .draft(let next, let listens):
+            // Over whatever shows, so the draft is in sight: on the Mac a page would cover it.
+            sheet = nil
+            pages.back(to: 0)
+            if next.isChat {
+                item = .chats
+                tab = .chats
+            }
+            draft = next
+            if listens { AppCommands.shared.listen(for: next.key) }
+        case .sheet(let next):
+            sheet = next
+        case .section(let next):
+            pages.back(to: 0)
+            if item != next { session = nil }
+            item = next
+            tab = CompactTab(next)
+        case .reconnect:
+            fleet.wake()
+        case .wait:
+            break
+        case .problem(let text):
+            fleet.toast = Toast(text: text, failed: true)
+        }
     }
 
     /// Shows a session just created from a draft: beside the Board or Chats it

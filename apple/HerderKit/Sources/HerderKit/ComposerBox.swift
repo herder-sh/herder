@@ -34,6 +34,8 @@ struct ComposerBox<Footer: View>: View {
     let setMode: (PermissionMode) -> Void
     let send: () -> Void
     let stop: () -> Void
+    /// The draft it writes, by `Draft.key`: Speak to Chat has it start dictating as it shows.
+    var draftKey: String?
     @ViewBuilder var footer: Footer
     @State private var editing = false
     /// Long pastes, shown as chips and sent in place of their markers.
@@ -42,6 +44,8 @@ struct ComposerBox<Footer: View>: View {
     @State private var dictation = Dictation()
     /// The text before dictation started; what is heard follows it.
     @State private var dictatedAfter = ""
+    /// Who this composer is to `AppCommands`, which stops its dictation.
+    @State private var composerId = UUID()
     #if os(iOS)
     /// Photos picked to attach, until they load.
     @State private var picked: [PhotosPickerItem] = []
@@ -159,6 +163,18 @@ struct ComposerBox<Footer: View>: View {
         }
         #endif
         .onAppear { if focusesOnAppear { focus() } }
+        // ⇧⌘D in the menu bar.
+        .focusedSceneValue(\.dictationCommand, DictationCommand(listening: dictation.listening, toggle: toggleDictation))
+        // Speak to Chat: it listens once this draft shows, after the draft's kept text is in.
+        .onChange(observing: { AppCommands.shared.listening }, initial: true) { _, _ in
+            guard AppCommands.shared.takeListening(for: draftKey) else { return }
+            Task { if !dictation.listening { toggleDictation() } }
+        }
+        // So Speak to Chat's key stops what it started.
+        .onChange(of: dictation.listening) { _, listening in
+            AppCommands.shared.dictation(composerId, stop: listening ? { [dictation] in dictation.stop() } : nil)
+        }
+        .onDisappear { AppCommands.shared.dictation(composerId, stop: nil) }
         .onChange(of: text) {
             // A chip deleted from the text takes its image or paste with it.
             PromptText.prune(.image, items: &images, text: &text)
@@ -410,7 +426,7 @@ struct DictationButton: View {
                 .hitTarget()
         }
         .buttonStyle(.plain)
-        .keyboardShortcut("d", modifiers: [.command, .shift])
+        // ⇧⌘D is the menu bar's Dictate (`HerderCommands`).
         .help(listening ? "Stop dictating (⇧⌘D)" : "Dictate, on this device (⇧⌘D)")
         .accessibilityLabel(listening ? "Stop dictating" : "Dictate")
     }
