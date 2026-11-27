@@ -28,7 +28,7 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-pub(crate) use conn::{handshake, notice_a_gone_peer};
+pub(crate) use conn::{notice_a_gone_peer, secure, ws_config};
 pub use tls::{Tls, fingerprint};
 pub(crate) use tunnel::Transport;
 

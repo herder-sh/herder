@@ -10,6 +10,7 @@ repository.workspace = true
 anyhow.workspace = true
 futures-util.workspace = true
 herder-protocol.workspace = true
+httparse.workspace = true
 rcgen.workspace = true
 ring.workspace = true
 rustls.workspace = true

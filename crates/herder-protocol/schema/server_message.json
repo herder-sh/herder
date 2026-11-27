@@ -3312,7 +3312,7 @@
           "type": "boolean"
         },
         "relay": {
-          "description": "Whether the hub relays clients to the host now: it is online and takes relayed\nconnections. A client paired with both then reaches the host through the hub, with\n[`crate::RelayHello::Connect`] (see [`crate::relay`]).",
+          "description": "Whether the hub relays clients to the host now: it is online and takes relayed\nconnections. A client paired with both then reaches the host through the hub, with\n[`crate::RelayRoute::Machine`] (see [`crate::relay`]).",
           "type": "boolean"
         },
         "usage": {
