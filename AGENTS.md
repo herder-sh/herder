@@ -33,7 +33,7 @@ repo in parallel; these rules keep that safe. Follow them exactly.
 | `herder-wireguard`   | Userspace WireGuard tunnels and endpoint (boringtun, smoltcp) |
 | `herder-daemon`      | Daemon runtime, WebSocket server, sessions                   |
 | `herder-tasktools`   | MCP tool definitions agents use to run multi-agent tasks     |
-| `herder-telemetry`   | Opt-in diagnostics: Sentry traces and errors, scrubbed       |
+| `herder-telemetry`   | Opt-in diagnostics: Sentry traces, PostHog measurements      |
 | `herder-client-core` | Shared client core for the TUI and native apps               |
 | `herder-tui`         | ratatui client                                               |
 | `herder`             | The single binary: `herder daemon`, bare `herder` = TUI      |

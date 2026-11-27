@@ -82,6 +82,7 @@ jobs:
         # [telemetry] on; empty, it shares with nothing.
         env:
           HERDER_DAEMON_SENTRY_DSN: ${{ secrets.SENTRY_DSN_DAEMON }}
+          HERDER_POSTHOG_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
         run: cargo build --release --locked --target "$TARGET" -p herder
       - name: Check the binary is static (Linux) and runs
         env:

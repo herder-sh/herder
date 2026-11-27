@@ -51,6 +51,8 @@ nucleo-matcher = "0.3"
 portable-pty = "0.9"
 prettyplease = "0.3"
 proptest = "1"
+# Measurements for PostHog (EU); its HTTP client takes ring as the process's TLS provider.
+posthog = { version = "1.7", default-features = false, features = ["tls-no-provider"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = "0.30"
 ratatui-textarea = "0.9"

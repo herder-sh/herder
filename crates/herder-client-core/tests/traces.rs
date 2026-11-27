@@ -22,7 +22,7 @@ use herder_protocol::{
     AccountId, CommandBody, CommandResult, EventBody, HostId, PermissionMode, Provider, TurnId,
 };
 use herder_store::Store;
-use herder_telemetry::{Component, Telemetry};
+use herder_telemetry::{Component, Endpoints, Telemetry};
 use sentry::protocol::{Context, EnvelopeItem, Transaction};
 use sentry::test::TestTransport;
 use tokio::net::TcpListener;
@@ -196,15 +196,18 @@ async fn a_sent_prompt_is_traced_from_the_app_through_the_daemon_to_its_turn() {
     assert!(transport.fetch_and_clear_envelopes().is_empty());
 
     // On, as the app's switch turns it: the app sends the prompt in a span of its own.
-    herder_telemetry::set_with_transport(
+    herder_telemetry::set_with(
         Some(Telemetry {
             install_id: "0b7f1c2e-4d4b-4e0e-9a51-3f6f1b2a9c10".into(),
             sentry_dsn: Some("https://public@sentry.invalid/1".into()),
             posthog_token: None,
             component: Component::App,
         }),
-        Arc::new(Arc::clone(&transport)),
-        1.0,
+        Endpoints {
+            sentry: Some(Arc::new(Arc::clone(&transport))),
+            base_rate: 1.0,
+            ..Endpoints::default()
+        },
     );
     let subscription = client
         .subscribe_session(host.clone(), session_id.clone())

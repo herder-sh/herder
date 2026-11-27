@@ -10,6 +10,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+posthog.workspace = true
+rustls.workspace = true
 sentry.workspace = true
 sentry-tracing.workspace = true
 tracing.workspace = true

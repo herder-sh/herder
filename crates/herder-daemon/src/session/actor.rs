@@ -1915,6 +1915,7 @@ impl Actor {
             // Until the prompt is with the CLI, or the turn could not start: in the trace
             // it was sent in, when it was.
             let sent_in = self.traces.remove(&prompt.prompt_id);
+            let starting = std::time::Instant::now();
             let _starting = tracing::info_span!(
                 "turn.start",
                 sentry.trace = sent_in
@@ -1967,6 +1968,8 @@ impl Actor {
                 continue;
             }
             let mut left_out = Vec::new();
+            // Whether this turn starts the CLI, which takes longer than one already running.
+            let started_cli = self.adapter.is_none();
             if self.adapter.is_none() {
                 match self.start_adapter().await {
                     Ok((adapter, servers_left_out)) => {
@@ -2035,6 +2038,13 @@ impl Actor {
                     text: prompt_text,
                     images,
                 });
+                herder_telemetry::measure(
+                    "turn_started",
+                    &[
+                        ("start_ms", starting.elapsed().into()),
+                        ("cli_started", started_cli.into()),
+                    ],
+                );
             }
             self.turn = Some(turn_id);
             self.prompt = Some(Prompt {

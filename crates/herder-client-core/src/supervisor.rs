@@ -1676,6 +1676,17 @@ enum Ended {
 }
 
 impl Ended {
+    /// Why the connection ended, as diagnostics say it; none when the client stopped.
+    fn cause(&self) -> Option<&'static str> {
+        match self {
+            Self::Stopped => None,
+            Self::Lost(_) => Some("lost"),
+            Self::Replaced(_) => Some("dead"),
+            Self::Dropped(_) => Some("dropped"),
+            Self::Reconnect(_) => Some("asked"),
+        }
+    }
+
     /// What the daemon is told as the connection closes.
     fn said(&self) -> &str {
         match self {
@@ -1742,6 +1753,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
     };
     'connection: loop {
         supervisor.set_connection(ConnectionState::Connecting);
+        let connecting = Instant::now();
         let connected = {
             // The races under way; the first connection any of them makes is taken.
             let mut races = FuturesUnordered::new();
@@ -1826,6 +1838,16 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                 for reply in reconnects.drain(..) {
                     let _ = reply.send(Ok(address.clone()));
                 }
+                let route = herder_telemetry::variant(&crate::route_kind(address.clone()));
+                let reconnect = supervisor.lock().quality.connections > 1;
+                herder_telemetry::measure(
+                    "connected",
+                    &[
+                        ("route", route.clone().into()),
+                        ("connect_ms", connecting.elapsed().into()),
+                        ("reconnect", reconnect.into()),
+                    ],
+                );
                 let ended = serve(
                     &supervisor,
                     (ws, deflate),
@@ -1837,6 +1859,21 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                 .await;
                 save_in_background(&supervisor);
                 let error = ended.said().to_owned();
+                if let Some(cause) = ended.cause() {
+                    let quality = supervisor.lock().quality.view();
+                    herder_telemetry::measure(
+                        "disconnected",
+                        &[
+                            ("route", route.into()),
+                            ("cause", cause.into()),
+                            ("connected_ms", made.elapsed().into()),
+                            ("average_rtt_ms", quality.average_rtt_ms.unwrap_or(0).into()),
+                            ("max_rtt_ms", quality.max_rtt_ms.unwrap_or(0).into()),
+                            ("missed_pongs", quality.missed_pongs.into()),
+                            ("suspended", suspended.into()),
+                        ],
+                    );
+                }
                 let wait = match ended {
                     Ended::Stopped => return,
                     Ended::Lost(_) | Ended::Replaced(_) => {
@@ -1868,6 +1905,13 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                 supervisor.set_connection(ConnectionState::Disconnected {
                     error: error.clone(),
                 });
+                herder_telemetry::measure(
+                    "connect_failed",
+                    &[
+                        ("attempt", attempt.into()),
+                        ("connect_ms", connecting.elapsed().into()),
+                    ],
+                );
                 let wait = backoff(attempt);
                 attempt = attempt.saturating_add(1);
                 (error, wait)
