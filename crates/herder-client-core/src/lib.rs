@@ -170,6 +170,7 @@ mod catalog;
 mod demo;
 mod diagnostics;
 mod fork;
+mod front_door;
 mod link;
 mod offline;
 mod profile;
@@ -369,6 +370,64 @@ pub struct Machine {
     /// dialled.
     #[serde(default)]
     pub disabled_addresses: Vec<String>,
+    /// The tunnel addresses behind a login proxy that a person signs in to with a browser
+    /// ([`Client::begin_front_door_sign_in`]): those signed in to, and those whose proxy
+    /// turned the upgrade away to its login.
+    #[serde(default)]
+    pub front_doors: Vec<FrontDoor>,
+}
+
+/// A tunnel address behind a login proxy, such as Cloudflare Access with an identity
+/// provider, that a person signs in to with a browser.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrontDoor {
+    /// The address, one of the machine's tunnel URLs.
+    pub address: String,
+    /// When the token of the latest sign-in expires; `None` before the first, or for a
+    /// token that does not say.
+    pub expires_at: Option<Timestamp>,
+    /// Whether the person signs in now: the proxy turned the latest upgrade away to its
+    /// login, or the token expired. An app offers "Sign in", or "Sign in again" once
+    /// `expires_at` is known.
+    pub sign_in: bool,
+}
+
+/// A browser sign-in to the login proxy in front of a tunnel address, under way: open
+/// [`FrontDoorSignIn::url`] in a browser, and wait for [`FrontDoorSignIn::finish`].
+pub struct FrontDoorSignIn {
+    client: Client,
+    host_id: HostId,
+    address: String,
+    url: String,
+    /// Taken by the one [`FrontDoorSignIn::finish`].
+    begun: tokio::sync::Mutex<Option<front_door::Begun>>,
+}
+
+impl FrontDoorSignIn {
+    /// The page the person signs in on, to open in a browser: on Apple platforms an
+    /// `ASWebAuthenticationSession`, closed once [`Self::finish`] returns.
+    pub fn url(&self) -> String {
+        self.url.clone()
+    }
+
+    /// Waits up to ten minutes for the person to sign in, then sends the token the proxy
+    /// gave on the address's upgrade from the next connection on, and dials again. Fails
+    /// with `Unreachable` when the sign-in service fails or nobody signs in in time. A
+    /// sign-in finishes once: calling this again fails with `Closed`.
+    pub async fn finish(&self) -> Result<(), Error> {
+        let Some(begun) = self.begun.lock().await.take() else {
+            return Err(Error::Closed);
+        };
+        let token = begun.token().await.map_err(|err| Error::Unreachable {
+            message: format!("{}: {err:#}", self.address),
+        })?;
+        self.client.put_header(
+            &self.host_id,
+            &self.address,
+            front_door::TOKEN_HEADER,
+            token,
+        )
+    }
 }
 
 /// What carries a connection to one of a machine's addresses, best first: the order
@@ -654,6 +713,68 @@ impl Client {
     ) -> Result<Machine, Error> {
         self.live()?;
         sign_in::log_in(self, &hosts, &fingerprint, shown).await
+    }
+
+    /// Starts signing in with a browser to the login proxy in front of `address`, one of the
+    /// machine's tunnel URLs: Cloudflare Access with an identity provider, as
+    /// `cloudflared access login` does. Open [`FrontDoorSignIn::url`] in a browser, then wait
+    /// for [`FrontDoorSignIn::finish`]. Fails with `Local` for an address that is not one of
+    /// the machine's tunnels, and `Unreachable` when its host does not answer or no Access
+    /// application guards it.
+    pub async fn begin_front_door_sign_in(
+        &self,
+        host_id: HostId,
+        address: String,
+    ) -> Result<FrontDoorSignIn, Error> {
+        self.live()?;
+        let local = |message| Error::Local { message };
+        let address = address::normalize(&address).map_err(local)?;
+        let machine = self.machine(&host_id)?;
+        if !machine.saved().addresses.contains(&address) {
+            return Err(local(format!("{address} is not one of its addresses")));
+        }
+        if !address::is_tunnel(&address) {
+            return Err(local(format!(
+                "{address} is not a tunnel's URL: only those have a front door"
+            )));
+        }
+        let begun = front_door::begin(&address, front_door::TRANSFER)
+            .await
+            .map_err(|err| Error::Unreachable {
+                message: format!("{address}: {err:#}"),
+            })?;
+        Ok(FrontDoorSignIn {
+            client: self.clone(),
+            host_id,
+            address,
+            url: begun.url.clone(),
+            begun: tokio::sync::Mutex::new(Some(begun)),
+        })
+    }
+
+    /// Sends `name: value` on the upgrade of `address`, one of the machine's tunnels, with
+    /// its other headers, from the next connection on.
+    fn put_header(
+        &self,
+        host_id: &HostId,
+        address: &str,
+        name: &str,
+        value: String,
+    ) -> Result<(), Error> {
+        self.update(|all| {
+            let machine = saved_mut(all, host_id)?;
+            if !machine.addresses.iter().any(|a| a == address) {
+                return Err(Error::Local {
+                    message: format!("{address} is no longer one of its addresses"),
+                });
+            }
+            machine
+                .headers
+                .entry(address.to_owned())
+                .or_default()
+                .insert(name.to_owned(), value);
+            Ok(())
+        })
     }
 
     /// Saves a freshly paired machine, replacing it if paired before, and starts its

@@ -470,6 +470,25 @@ impl Client {
         Ok(self.inner.set_address_headers(host_id, address, headers)?)
     }
 
+    /// Starts signing in with a browser to the login proxy in front of `address`, one of the
+    /// machine's tunnel URLs, such as Cloudflare Access: open [`FrontDoorSignIn::url`] in an
+    /// `ASWebAuthenticationSession`, and close it once [`FrontDoorSignIn::finish`] returns.
+    pub async fn begin_front_door_sign_in(
+        &self,
+        host_id: HostId,
+        address: String,
+    ) -> Result<Arc<FrontDoorSignIn>, HerderError> {
+        let client = self.inner.clone();
+        let inner = call(&self.handle, async move {
+            client.begin_front_door_sign_in(host_id, address).await
+        })
+        .await?;
+        Ok(Arc::new(FrontDoorSignIn {
+            inner: Arc::new(inner),
+            handle: self.handle.clone(),
+        }))
+    }
+
     /// Pins one of a machine's addresses (the only one dialled), disables it (never
     /// dialled), or puts it back in the race.
     pub fn set_route(
@@ -783,6 +802,27 @@ impl PendingSignIn {
     pub async fn finish(&self, sign_in: SignIn) -> Result<Machine, HerderError> {
         let inner = Arc::clone(&self.inner);
         call(&self.handle, async move { inner.finish(sign_in).await }).await
+    }
+}
+
+/// A browser sign-in to a login proxy in front of a tunnel address, under way.
+#[derive(uniffi::Object)]
+pub struct FrontDoorSignIn {
+    inner: Arc<client_core::FrontDoorSignIn>,
+    handle: Handle,
+}
+
+#[uniffi::export]
+impl FrontDoorSignIn {
+    /// The page the person signs in on.
+    pub fn url(&self) -> String {
+        self.inner.url()
+    }
+
+    /// Waits for the person to sign in, then connects with the token the proxy gave.
+    pub async fn finish(&self) -> Result<(), HerderError> {
+        let inner = Arc::clone(&self.inner);
+        call(&self.handle, async move { inner.finish().await }).await
     }
 }
 

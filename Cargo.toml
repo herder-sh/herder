@@ -24,6 +24,7 @@ async-trait = "0.1"
 base64 = "0.23"
 boringtun = { version = "0.7", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
+crypto_box = "0.9"
 flate2 = "1"
 frankenstein = { version = "0.53", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

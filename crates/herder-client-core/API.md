@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 24`
+`CLIENT_API_VERSION = 25`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -83,8 +83,8 @@ adapting anything:
 
 | Rust                                                          | UniFFI                          |
 | ------------------------------------------------------------- | ------------------------------- |
-| `Client`, `SessionSubscription`, `TerminalStream`, `Changes`, `PendingSignIn` | objects (`Arc`, `Send + Sync`)  |
-| `Machine`, `ConnectionQuality`, `SessionUpdate`, `NewAccount`, `FleetLink`, `FleetPerson`, `FleetMachine`, `LoginUri`, `OwnUri` | records |
+| `Client`, `SessionSubscription`, `TerminalStream`, `Changes`, `PendingSignIn`, `FrontDoorSignIn` | objects (`Arc`, `Send + Sync`)  |
+| `Machine`, `ConnectionQuality`, `SessionUpdate`, `NewAccount`, `FleetLink`, `FleetPerson`, `FleetMachine`, `LoginUri`, `OwnUri`, `FrontDoor` | records |
 | `ConnectionState`, `TerminalEvent`                            | enums with named fields         |
 | `Error`                                                       | error enum with named fields    |
 | `async fn` methods                                            | async methods on a tokio runtime (`async_runtime = "tokio"`) |
@@ -125,7 +125,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `user_id`, `person_id`, `address_headers`, `pinned_address`, `disabled_addresses`; `route_kind`; `Client::wireguard_tunnels` | `Client::sign_in`, `share`, `rename`, `set_addresses`, `set_address_headers`, `set_route`, `import_wireguard`, `remove_wireguard`, `set_hub_wireguard`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `FleetLink` |
+| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role`, `user_id`, `person_id`, `address_headers`, `pinned_address`, `disabled_addresses`, `front_doors`; `route_kind`; `Client::wireguard_tunnels` | `Client::sign_in`, `share`, `rename`, `set_addresses`, `set_address_headers`, `begin_front_door_sign_in` (`FrontDoorSignIn::url`, `finish`), `set_route`, `import_wireguard`, `remove_wireguard`, `set_hub_wireguard`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `FleetLink` |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`, `Client::show_sessions`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images` and `files`), `GetAttachment` → `CommandResult::Attachment`, `GetLatestEvents` → `CommandResult::LatestEvents`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow`, `MergeQueued` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
 | Projects  | `Machine::projects`; a `Project`'s `remote`, the URL `CloneProject` clones it onto another machine from (none without a remote), `icon`, the hash of its icon, to cache it by, `icon_uploaded`, whether an owner uploaded it, and `icon_background`, the colour behind it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `CloneProject` (a git URL or GitHub `owner/repo`, into a new folder, or without one into a folder named after the repository in the machine's projects dir; `conflict` when it exists) → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
@@ -844,6 +844,35 @@ names it sends, lowercase; the values are not read back. A proxy that refuses th
 (a redirect, 401 or 403) shows in the address's error: with no headers set it says to set
 them, with some it names them and says to check them. P26.2 added this; the new `Machine`
 field moved `CLIENT_API_VERSION` to 23.
+
+### Signing in to a front door with a browser
+
+A tunnel address may sit behind a login proxy that people sign in to, such as Cloudflare
+Access with an identity provider, rather than one that takes a service token. Such an
+address is a front door. `Machine::front_doors` lists them: each `FrontDoor` has the
+`address`, when the token of the latest sign-in expires (`expires_at`, `None` before the
+first), and `sign_in`, which is true while the person should sign in. That is when the proxy
+turned the latest upgrade away to its login (a redirect to `*.cloudflareaccess.com`, or a
+refusal of the token sent) or when the token expired. An app offers "Sign in", or "Sign in
+again" once `expires_at` is known. Machines and other devices without a person keep using
+service tokens through `set_address_headers`.
+
+`Client::begin_front_door_sign_in(host, address)` starts one, as `cloudflared access login`
+does. It asks the address's host which Access application guards it, then makes an X25519
+key pair for this sign-in only. It returns a `FrontDoorSignIn`, whose `url()` is the
+application's login page (`/cdn-cgi/access/cli`, naming the public key). An app opens that
+page in a browser: an `ASWebAuthenticationSession` on Apple platforms, closed once `finish`
+returns, or the system browser from a terminal. `finish()` long-polls Cloudflare's transfer
+service for up to ten minutes. Once the person has signed in, the service hands over the
+application token sealed to the key (NaCl `crypto_box`), so only this device can open it.
+`finish()` then keeps it as the address's `cf-access-token` header, next to its other
+headers, and dials again. It fails with `Local` for an address that is not one of the
+machine's tunnels, and with `Unreachable` when the host does not answer, no Access
+application guards it, the transfer service fails, or nobody signs in in time. A sign-in
+finishes once; calling `finish` again fails with `Closed`. The token stays in this device's
+profile and goes only to that address's proxy, as other headers do. Login proxies other than
+Cloudflare Access (Authelia, oauth2-proxy) take headers through `set_address_headers` for
+now. P28.7a added this; the new `Machine` field moved `CLIENT_API_VERSION` to 25.
 
 `DaemonSettings.mcp_servers` is the user's MCP servers, which every session's agent gets next
 to herder's own, whatever its provider and account: each a `McpServerSettings` with a `name`

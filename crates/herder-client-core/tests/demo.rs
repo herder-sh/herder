@@ -41,6 +41,7 @@ fn demo() -> Demo {
         address_headers: Default::default(),
         pinned_address: None,
         disabled_addresses: Vec::new(),
+        front_doors: Vec::new(),
     };
     let created = Event {
         session_id: SessionId::new("s1"),

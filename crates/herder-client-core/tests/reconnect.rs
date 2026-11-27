@@ -17,8 +17,9 @@ use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::{
-    Client, ConnectionState, Error, FleetLink, FleetPerson, LoginUri, Machine, NewAccount,
-    RouteChoice, SessionSubscription, SessionUpdate, TerminalEvent, TerminalStream, WireGuardKind,
+    Client, ConnectionState, Error, FleetLink, FleetPerson, FrontDoor, LoginUri, Machine,
+    NewAccount, RouteChoice, SessionSubscription, SessionUpdate, TerminalEvent, TerminalStream,
+    WireGuardKind,
 };
 use herder_daemon::auth::Auth;
 use herder_daemon::auth::authenticator::{self, Authenticator};
@@ -670,6 +671,213 @@ async fn a_public_address_set_on_the_daemon_reaches_every_device() {
     set_public(Vec::new()).await;
     assert_eq!(phone.reconnect(host.clone()).await, Ok(at_home.clone()));
     wait_machines(&phone, |m| m[0].addresses == [at_home.clone()]).await;
+}
+
+/// A JWT with `claims`, unsigned, as a Cloudflare Access token looks to a device.
+fn jwt(claims: serde_json::Value) -> String {
+    use base64::Engine as _;
+    let part = |value: serde_json::Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string())
+    };
+    format!(
+        "{}.{}.sig",
+        part(serde_json::json!({ "alg": "RS256" })),
+        part(claims)
+    )
+}
+
+/// Cloudflare Access with an identity provider in front of the daemon's tunnel listener: it
+/// names its application to a metadata request, lets an upgrade through only with the token
+/// it holds as signed in (passing on the request without it), turns any other away to its
+/// login, and refuses a token it does not hold.
+struct AccessGate {
+    addr: SocketAddr,
+    /// The token of the person signed in, which it admits; `None` once revoked.
+    signed_in: Arc<Mutex<Option<String>>>,
+}
+
+impl AccessGate {
+    async fn start(tunnel: SocketAddr) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let signed_in = Arc::new(Mutex::new(None::<String>));
+        let held = Arc::clone(&signed_in);
+        tokio::spawn(async move {
+            while let Ok((mut inbound, _)) = listener.accept().await {
+                let held = Arc::clone(&held);
+                tokio::spawn(async move {
+                    let mut head = Vec::new();
+                    while !head.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        if inbound.read_exact(&mut byte).await.is_err() {
+                            return;
+                        }
+                        head.push(byte[0]);
+                    }
+                    let head = String::from_utf8_lossy(&head).into_owned();
+                    let lines: Vec<&str> = head.split("\r\n").collect();
+                    let header = |name: &str| {
+                        lines.iter().find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.eq_ignore_ascii_case(name)
+                                .then(|| value.trim().to_owned())
+                        })
+                    };
+                    let token = header("cf-access-token");
+                    let admitted = held.lock().unwrap().clone();
+                    let refusal = if head.starts_with("HEAD ")
+                        && header("cf-access-metadata-request").is_some()
+                    {
+                        let metadata = jwt(serde_json::json!({
+                            "aud": "aud1", "hostname": "127.0.0.1", "type": "match",
+                        }));
+                        Some(format!(
+                            "HTTP/1.1 200 OK\r\ncf-access-metadata: {metadata}\r\n\
+                             content-length: 0\r\nconnection: close\r\n\r\n"
+                        ))
+                    } else {
+                        match (token, admitted) {
+                            (Some(token), Some(admitted)) if token == admitted => None,
+                            (Some(_), _) => Some(
+                                "HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n".to_owned(),
+                            ),
+                            (None, _) => Some(
+                                "HTTP/1.1 302 Found\r\nlocation: https://team.cloudflareaccess.com/\
+                                 cdn-cgi/access/login/127.0.0.1\r\ncontent-length: 0\r\n\r\n"
+                                    .to_owned(),
+                            ),
+                        }
+                    };
+                    if let Some(refusal) = refusal {
+                        let _ = inbound.write_all(refusal.as_bytes()).await;
+                        return;
+                    }
+                    let passed: Vec<&str> = lines
+                        .iter()
+                        .copied()
+                        .filter(|line| !line.to_ascii_lowercase().starts_with("cf-access-token"))
+                        .collect();
+                    let mut outbound = TcpStream::connect(tunnel).await.unwrap();
+                    outbound
+                        .write_all(passed.join("\r\n").as_bytes())
+                        .await
+                        .unwrap();
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                });
+            }
+        });
+        Self { addr, signed_in }
+    }
+}
+
+/// A machine whose tunnel sits behind Cloudflare Access with an identity provider: the
+/// device shows it wants a browser sign-in, starts one on the application's login page, and
+/// once it holds the token connects with it; when the proxy refuses the token again, or it
+/// expires, the device asks to sign in again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tunnel_behind_a_login_proxy_is_signed_in_to_with_a_browser() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&client, "alice", daemon.addr)
+        .await
+        .unwrap()
+        .host_id;
+    let gate = AccessGate::start(daemon.tunnel).await;
+    let url = format!("ws://{}", gate.addr);
+    client
+        .set_addresses(host.clone(), vec![url.clone()])
+        .unwrap();
+
+    // Turned away to the login: the device says to sign in.
+    let message = match client.reconnect(host.clone()).await {
+        Err(Error::Unreachable { message }) => message,
+        other => panic!("{other:?}"),
+    };
+    assert!(message.contains("sign in with a browser"), "{message}");
+    let door = |machines: &[Machine]| machines[0].front_doors.clone();
+    assert_eq!(
+        door(&client.machines()),
+        vec![FrontDoor {
+            address: url.clone(),
+            expires_at: None,
+            sign_in: true,
+        }]
+    );
+
+    // The sign-in opens the application's login, naming this device's key for it.
+    let sign_in = client
+        .begin_front_door_sign_in(host.clone(), url.clone())
+        .await
+        .unwrap();
+    let page = sign_in.url();
+    assert!(
+        page.starts_with(&format!("http://{}/cdn-cgi/access/cli?", gate.addr)),
+        "{page}"
+    );
+    assert!(
+        page.contains("aud=aud1") && page.contains("token="),
+        "{page}"
+    );
+
+    // Signed in: the token the transfer service hands over is the address's header.
+    let expires = 4_000_000_000;
+    let token = jwt(serde_json::json!({ "exp": expires, "aud": ["aud1"] }));
+    *gate.signed_in.lock().unwrap() = Some(token.clone());
+    let headers = HashMap::from([("cf-access-token".to_owned(), token.clone())]);
+    client
+        .set_address_headers(host.clone(), url.clone(), headers)
+        .unwrap();
+    assert_eq!(client.reconnect(host.clone()).await, Ok(url.clone()));
+    client.synced(host.clone()).await.unwrap();
+    let expires_at = Some(herder_protocol::Timestamp::from_second(expires).unwrap());
+    assert_eq!(
+        door(&client.machines()),
+        vec![FrontDoor {
+            address: url.clone(),
+            expires_at,
+            sign_in: false,
+        }]
+    );
+
+    // The proxy no longer takes it: sign in again.
+    *gate.signed_in.lock().unwrap() = None;
+    assert!(client.reconnect(host.clone()).await.is_err());
+    assert_eq!(
+        door(&client.machines()),
+        vec![FrontDoor {
+            address: url.clone(),
+            expires_at,
+            sign_in: true,
+        }]
+    );
+
+    // An expired token asks the same, before any upgrade.
+    let expired = jwt(serde_json::json!({ "exp": 1_000_000_000 }));
+    let headers = HashMap::from([("cf-access-token".to_owned(), expired)]);
+    client
+        .set_address_headers(host.clone(), url.clone(), headers)
+        .unwrap();
+    wait_machines(&client, |m| {
+        m[0].front_doors.first().is_some_and(|door| {
+            door.sign_in
+                && door
+                    .expires_at
+                    .is_some_and(|at| at.as_second() == 1_000_000_000)
+        })
+    })
+    .await;
 }
 
 /// A proxy in front of the daemon's tunnel listener that lets an upgrade through only with
