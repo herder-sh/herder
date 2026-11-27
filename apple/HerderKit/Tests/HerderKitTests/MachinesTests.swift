@@ -110,25 +110,61 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
     }
 
     /// However the hub is exposed (a port forward, a reverse proxy, a tunnel, a VPN), Hub says
-    /// how far its furthest-reaching address reaches, and names that address.
+    /// how far its furthest-reaching address reaches, and names that address; a public one only
+    /// as far as it was checked.
     @Test func aHubSaysHowFarItIsReachedAndAtWhichAddress() {
         var machines = sampleFleetMachines()
-        func reachability(_ addresses: [String]) -> String {
+        machines[3].address = nil
+        func reachability(_ addresses: [String], resolved: [String: [String]] = [:]) -> String {
             machines[3].addresses = addresses
-            return SetupStructure(machines: machines, summaries: [], localNames: []).hubs[0].reachability
+            return SetupStructure(machines: machines, summaries: [], localNames: [], resolved: resolved)
+                .hubs[0].reachability
         }
         #expect(reachability([]) == "Reachable on its network only")
         #expect(reachability(["10.0.0.4:7447", "hub.lan:7447", "[fe80::1]:7447"]) == "Reachable on its network only")
         #expect(reachability(["10.0.0.4:7447", "hub.tail1234.ts.net:7447"])
             == "Reachable over your VPN, at hub.tail1234.ts.net")
         #expect(reachability(["100.101.4.2:7447"]) == "Reachable over your VPN, at 100.101.4.2")
-        // A forwarded port, a reverse proxy and a tunnel all read the same.
-        #expect(reachability(["10.0.0.4:7447", "203.0.113.7:7447"]) == "Reachable from anywhere, at 203.0.113.7")
+        // A forwarded port, a reverse proxy and a tunnel all read the same, unchecked.
+        #expect(reachability(["10.0.0.4:7447", "203.0.113.7:7447"])
+            == "Public address 203.0.113.7, not yet seen working from outside its network")
         #expect(reachability(["hub.tail1234.ts.net:7447", "hub.example.com:443"])
-            == "Reachable from anywhere, at hub.example.com")
-        #expect(reachability(["wss://Hub.Example.com:8443/herder", "10.0.0.4:7447"])
-            == "Reachable from anywhere, at hub.example.com")
+            == "Public address hub.example.com, not yet seen working from outside its network")
+        #expect(reachability(["wss://Hub.Example.com:8443/herder", "10.0.0.4:7447"], resolved: ["hub.example.com": ["104.16.1.1"]])
+            == "Public address hub.example.com, not yet seen working from outside its network")
         #expect(AddressScope("[fd7a:115c:a1e0::12]:7447") == .vpn && AddressScope("172.20.1.1:7447") == .network)
+    }
+
+    /// A public-looking name that resolves only to the LAN reads as such, and one that resolves
+    /// to nothing too; one this device is connected through reads as reachable.
+    @Test func aPublicAddressSaysWhatWasChecked() throws {
+        var machines = sampleFleetMachines()
+        machines[3].addresses = ["10.0.0.4:7447", "home.example.net:7447"]
+        machines[3].connection = .connected
+        machines[3].address = "10.0.0.4:7447"
+        func hub(_ resolved: [String: [String]]) -> SetupStructure.Hub {
+            SetupStructure(machines: machines, summaries: [], localNames: [], resolved: resolved).hubs[0]
+        }
+        let lan = hub(["home.example.net": ["192.168.1.10", "fd00::10"]])
+        #expect(lan.check == .localOnly(["192.168.1.10", "fd00::10"]))
+        #expect(lan.reachability == "home.example.net resolves only to your local network (192.168.1.10, fd00::10), so devices away from it cannot reach the hub there")
+        #expect(lan.reachSymbol == "exclamationmark.triangle")
+        #expect(hub(["home.example.net": []]).reachability == "home.example.net does not resolve, so no device reaches the hub there")
+        #expect(hub([:]).lookup == "home.example.net")
+        machines[3].address = "home.example.net:7447"
+        let through = hub(["home.example.net": ["192.168.1.10"]])
+        #expect(through.reachability == "Reachable from anywhere, at home.example.net: connected through it now")
+        #expect(through.reachSymbol == "globe")
+        // An IP is not looked up.
+        machines[3].addresses = ["203.0.113.7:7447"]
+        #expect(hub([:]).lookup == nil)
+        #expect(!HostLookup.needsLookup("203.0.113.7") && HostLookup.needsLookup("hub.example.com"))
+    }
+
+    /// The lookup is this device's resolver: a literal comes back as itself.
+    @Test func aLookupReturnsWhatTheNameResolvesTo() async {
+        #expect(await HostLookup.addresses(of: "127.0.0.1") == ["127.0.0.1"])
+        #expect(await HostLookup.addresses(of: "no-such-host.invalid").isEmpty)
     }
 
     /// A laptop asleep is expected: it reads Offline, and On another network while its hub
