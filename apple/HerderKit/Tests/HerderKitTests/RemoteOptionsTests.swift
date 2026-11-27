@@ -34,7 +34,7 @@ func homeTunnel(up: Bool = false) -> RemoteOptions.Tunnel {
         #expect(options.cloudflareState == .notSetUp)
         #expect(options.hubWireGuardLine == "Off. An owner of the hub turns it on.")
         #expect(options.cloudflareLine == "Not set up. An owner of the hub sets it up.")
-        let access = RemoteAccess(machines: remoteFleet(now: now), options: options, now: now)
+        let access = FleetReach(machines: remoteFleet(now: now), options: options, now: now)
         #expect(access.routes.map(\.name) == ["Hub", "Tailscale", "Router VPN"])
         #expect(RemoteOptions(hub: "h-hub", owner: true).hubWireGuardLine.hasPrefix("Off. One UDP port"))
     }
@@ -74,9 +74,9 @@ func homeTunnel(up: Bool = false) -> RemoteOptions.Tunnel {
         machines[3].addresses = ["172.20.40.200:7448"]
         machines[1].addresses = ["172.20.40.9:7447"]
         machines[1].address = "172.20.40.9:7447"
-        let access = RemoteAccess(machines: machines, options: options, now: now)
+        let access = FleetReach(machines: machines, options: options, now: now)
         #expect(access.summary == "Reachable over your VPN")
-        #expect(access.routes.last == RemoteAccess.RouteState(name: "Your VPN", state: .working))
+        #expect(access.routes.last == FleetReach.RouteState(name: "Your VPN", state: .working))
         #expect(access.overall == .working)
     }
 
@@ -114,7 +114,7 @@ func homeTunnel(up: Bool = false) -> RemoteOptions.Tunnel {
     }
 
     @Test func namesJoinAsASentence() {
-        #expect(RemoteAccess.joined(["Tailscale"]) == "Tailscale")
-        #expect(RemoteAccess.joined(["A", "B", "C"]) == "A, B and C")
+        #expect(FleetReach.joined(["Tailscale"]) == "Tailscale")
+        #expect(FleetReach.joined(["A", "B", "C"]) == "A, B and C")
     }
 }

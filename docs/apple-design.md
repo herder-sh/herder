@@ -396,7 +396,7 @@ Needs you takes over. A `herder://own` link opened from outside the app, and a h
 a machine's Backup, still approve in `ApproveSheet`. `AddMachineScreenshotTests` draws Install,
 Kubernetes, Approve, Done and a hub to sign in to (`mac-add-machine-*.png`, `mac-add-hub.png`).
 
-### 4.4.1 Remote access (`RemoteAccess`, `RemoteAccessPage`, P26.18, P27.8)
+### 4.4.1 Remote access (`FleetReach`, `RemoteAccessPage`, P26.18, P27.8)
 
 How this fleet is reached from outside home, and how to set that up, in one calm place: the
 one place to pick and set up each route ([remote-access.md](remote-access.md)). herder is
@@ -407,7 +407,7 @@ imported WireGuard config, herder's WireGuard on the hub, a Cloudflare tunnel or
 runs); and gives short steps for the ones the owner runs. Nothing here is a problem to fix: a
 route not set up is a choice, never amber, never in Needs you, never in the badge.
 
-**Routes** (`RemoteAccess.routes`), each with a state (`RemoteAccess.State`): **working** (green
+**Routes** (`FleetReach.routes`), each with a state (`FleetReach.State`): **working** (green
 dot), **set up, not seen working from outside yet** (grey dashed ring), **not set up** (grey
 ring), and, only for an address that cannot work as typed, **won't work** (amber triangle).
 
@@ -434,7 +434,7 @@ worked from outside, so at home the page still says the router's VPN worked yest
 than "not set up". Nothing is probed: the page reads only connections the app made anyway.
 
 **On the Hub tab** (`RemoteAccessSection`): one card under **Remote access**, after Hub and
-machines: a globe tile, green when any route works, then one line (`RemoteAccess.summary`) over
+machines: a globe tile, green when any route works, then one line (`FleetReach.summary`) over
 each route's mark and short name (● Hub ● Tailscale ○ Router VPN), and a chevron:
 
 - "Reachable from anywhere through the hub" — the hub route works;
@@ -510,7 +510,7 @@ per option, each three or four lines with the commands in monospace:
   on every interface lists its Tailscale address by itself; keep it on away from home.
 - *VPN on your router*: turn on the router's WireGuard (or OpenVPN) server; make this device's
   config **split**, routing only the home subnets (`AllowedIPs = 172.20.40.0/24,
-  172.20.10.0/24`, the /24s of the machines' own private addresses, `RemoteAccess.homeSubnets`)
+  172.20.10.0/24`, the /24s of the machines' own private addresses, `FleetReach.homeSubnets`)
   rather than `0.0.0.0/0`, so the rest of its traffic does not go through home; turn it on
   away from home (On Demand). Nothing to add in herder: the machines' home addresses answer.
 

@@ -1,11 +1,11 @@
 import Herder
 import SwiftUI
 
-/// Reads `RemoteAccess` from the fleet: looks the hub's public name up, reads this device's
+/// Reads `FleetReach` from the fleet: looks the hub's public name up, reads this device's
 /// interfaces as connections change, and remembers what it saw working (`RemoteSightings`).
 struct RemoteAccessReader<Content: View>: View {
     let fleet: Fleet
-    @ViewBuilder var content: (RemoteAccess, RemoteActions) -> Content
+    @ViewBuilder var content: (FleetReach, RemoteActions) -> Content
     @State private var resolved: [String: [String]] = [:]
     @State private var interfaces: [NetworkInterface] = []
     @State private var offer: RemoteOptions?
@@ -16,12 +16,12 @@ struct RemoteAccessReader<Content: View>: View {
 
     var body: some View {
         let machines = fleet.machines
-        let hub = RemoteAccess.hub(among: machines)
+        let hub = FleetReach.hub(among: machines)
         var options = offer ?? RemoteOptions()
         options.hub = hub?.hostId
         options.owner = hub?.role == .owner
         options.tunnels = tunnels
-        let access = RemoteAccess(machines: machines, resolved: resolved, interfaces: interfaces,
+        let access = FleetReach(machines: machines, resolved: resolved, interfaces: interfaces,
                                   seen: RemoteSightings.decode(sightings), options: options)
         return content(access, actions(hub: hub?.hostId))
             // Read this device's WireGuard configs again as connections change, and after each change.
@@ -83,7 +83,7 @@ struct RemoteAccessReader<Content: View>: View {
 /// Hub's Remote access: the fleet's reach in a line, each route's mark under it, and the page a
 /// tap away.
 struct RemoteAccessSection: View {
-    let access: RemoteAccess
+    let access: FleetReach
     let open: () -> Void
 
     var body: some View {
@@ -140,7 +140,7 @@ struct RemoteAccessPage: View {
 /// What `RemoteAccessPage` draws. `openMachine` opens a machine's page, where its public
 /// addresses and proxy headers are set.
 struct RemoteAccessView: View {
-    let access: RemoteAccess
+    let access: FleetReach
     /// Each machine's routes, for the route in use and the user's ranking.
     var machines: [MachineRoutes] = []
     var actions = RemoteActions()
@@ -244,13 +244,13 @@ struct RemoteAccessView: View {
 struct RouteCard<Facts: View>: View {
     let title: String
     let symbol: String
-    let state: RemoteAccess.State
+    let state: FleetReach.State
     let line: String
     let options: [SetupOption]
     let facts: Facts
     @State private var showsSteps: Bool
 
-    init(title: String, symbol: String, state: RemoteAccess.State, line: String, options: [SetupOption],
+    init(title: String, symbol: String, state: FleetReach.State, line: String, options: [SetupOption],
          @ViewBuilder facts: () -> Facts) {
         self.title = title
         self.symbol = symbol
@@ -335,7 +335,7 @@ struct SetupOption: Hashable, Identifiable {
     let steps: [String]
 
     /// Through the hub: a tunnel, a port forward or a reverse proxy, then its address once.
-    static func hub(_ access: RemoteAccess) -> [SetupOption] {
+    static func hub(_ access: FleetReach) -> [SetupOption] {
         let name = access.hub.name ?? "the hub"
         let page = "**Public addresses** on \(name)’s page"
         var options = [
@@ -372,7 +372,7 @@ struct SetupOption: Hashable, Identifiable {
     ]
 
     /// A VPN server on the router, with a split config that routes only the home subnets.
-    static func router(_ access: RemoteAccess) -> [SetupOption] {
+    static func router(_ access: FleetReach) -> [SetupOption] {
         let subnets = access.homeSubnets.isEmpty ? "192.168.1.0/24" : access.homeSubnets.joined(separator: ", ")
         return [
             SetupOption(title: "WireGuard or OpenVPN on your router", steps: [
@@ -415,7 +415,7 @@ private struct SetupSteps: View {
 /// A route's symbol on a tile, tinted green when it works, amber when it won't, grey otherwise.
 private struct RouteTile: View {
     let symbol: String
-    let state: RemoteAccess.State
+    let state: FleetReach.State
 
     private var tint: Color {
         switch state {
@@ -439,7 +439,7 @@ private struct RouteTile: View {
 /// unseen, a ring when not set up, an amber triangle only when it cannot work. Never red: a
 /// route not set up is a choice.
 struct RouteMark: View {
-    let state: RemoteAccess.State
+    let state: FleetReach.State
 
     var body: some View {
         Group {

@@ -6,7 +6,7 @@ import Herder
 /// (`PublicCheck`), this device's own network interfaces, and the options herder sets up itself
 /// (`RemoteOptions`). Each route is one the owner set up, or did not, which is a choice, never a
 /// problem.
-struct RemoteAccess: Equatable {
+struct FleetReach: Equatable {
     /// How a route stands.
     enum State: Hashable {
         /// It answered from outside: now, or before (`RemoteSightings`).
