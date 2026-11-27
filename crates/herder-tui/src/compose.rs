@@ -99,6 +99,8 @@ pub enum Origin {
     AddAccount(HostId),
     /// The add-account dialog's question to this host of where it backs up.
     AccountHub(HostId),
+    /// The accounts screen's removal of an account from this host.
+    RemoveAccount(HostId),
     /// Asking for a session's latest events, shown while its journal replays.
     Latest(SessionKey),
     /// A step of editing a machine's public addresses.
@@ -568,6 +570,7 @@ impl App {
             Origin::Backup(sent) => return self.backup_sent(sent, result),
             Origin::AddAccount(_) => self.account_added(result.map(|_| ())),
             Origin::AccountHub(host_id) => self.account_hub(&host_id, result),
+            Origin::RemoveAccount(host_id) => self.account_removed(&host_id, result),
             Origin::Public(sent) => return self.public_sent(sent, result),
             Origin::Diagnostics(sent) => return self.diagnostics_sent(sent, result),
             Origin::Secrets(sent) => return self.secrets_sent(sent, result),

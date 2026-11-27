@@ -635,6 +635,7 @@ pub const ACCOUNTS: &[Keys] = &[
     keys(&[ch('g'), HOME, PGUP, ch('G'), END, PGDN], "first, last"),
     keys(&[ch('n')], "add an account"),
     keys(&[ch('l')], "log in again"),
+    keys(&[ch('d')], "remove the account: y removes, n keeps"),
     keys(&[ch('r')], "reconnect"),
     keys(&[ch('?')], "this help"),
     keys(&[ESC, BACKSPACE, LEFT, ch('h'), ch('q'), ch('A')], "close"),

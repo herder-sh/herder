@@ -500,7 +500,7 @@ fn the_accounts_and_fleet_views_show_their_keys_in_the_mode_bar() {
     press(&mut app, KeyCode::Char('A'));
     let screen = render(&mut app, 100, 30).backend().to_string();
     assert!(
-        screen.contains("n add account  l log in again  r reconnect  esc back"),
+        screen.contains("n add account  l log in again  d remove  r reconnect  esc back"),
         "{screen}"
     );
     press(&mut app, KeyCode::Esc);
@@ -1453,6 +1453,14 @@ fn the_add_account_dialog_over_the_accounts_screen() {
     press(&mut app, KeyCode::Char('A'));
     press(&mut app, KeyCode::Char('n'));
     insta::assert_snapshot!(render(&mut app, 45, 40).backend());
+}
+
+#[test]
+fn removing_an_account_asks_first_over_the_accounts_screen() {
+    let mut app = with_accounts();
+    press(&mut app, KeyCode::Char('A'));
+    press(&mut app, KeyCode::Char('d'));
+    insta::assert_snapshot!(render(&mut app, 100, 30).backend());
 }
 
 #[test]

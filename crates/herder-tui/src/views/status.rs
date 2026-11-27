@@ -181,11 +181,21 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
         None if app
             .account_screen
             .as_ref()
+            .is_some_and(|screen| screen.removing.is_some()) =>
+        {
+            vec![tap("y", "remove", char('y')), tap("n", "keep", char('n'))]
+        }
+        None if app
+            .account_screen
+            .as_ref()
             .is_some_and(|screen| screen.adding.is_none()) =>
         {
             let mut hints = vec![hint("j/k", "move"), tap("n", "add account", char('n'))];
             if app.on_account() {
                 hints.push(tap("l", "log in again", char('l')));
+            }
+            if app.on_removable_account() {
+                hints.push(tap("d", "remove", char('d')));
             }
             hints.extend([
                 tap("r", "reconnect", char('r')),

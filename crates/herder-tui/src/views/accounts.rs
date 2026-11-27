@@ -15,17 +15,22 @@
 //! An endpoint account shows its endpoint instead: it has no login, so no usage of its own.
 //! An account on one of the hub's logins is marked `hub` and shows the login's usage; its
 //! name and fallback mark are the hub's, changed in the app's hub Logins tab.
+//!
+//! Removing an account asks first, in a dialog over the view.
 
 use herder_client_core::{Machine, provider_hints};
 use herder_protocol::{Account, HostId, SessionStatus, Timestamp, UsageWindow};
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::account_screen::{self, AccountScreen, Pick};
+use crate::account_screen::{self, AccountScreen, Pick, Removing};
 use crate::app::App;
 use crate::mouse::{Click, Hits, List as Rows, Wheel};
+use crate::ui::dialog::{Dialog, Size};
+use crate::ui::hints::Hint;
 use crate::ui::list::{ListView, Row};
 use crate::ui::{GAP, Ui, usage};
 
@@ -150,9 +155,9 @@ pub(super) fn draw(
     let mut offset = 0;
     let placed = ListView::new(ui, rows)
         .select(selected_row)
-        .focused(screen.adding.is_none())
+        .focused(screen.adding.is_none() && screen.removing.is_none())
         .render(list, frame.buffer_mut(), &mut offset);
-    if screen.adding.is_none() {
+    if screen.adding.is_none() && screen.removing.is_none() {
         hits.wheel(area, Wheel::Keys);
         for (row, rect) in placed {
             if let Some(Some(at)) = of_row.get(row) {
@@ -173,6 +178,71 @@ pub(super) fn draw(
     if let Some(adding) = &screen.adding {
         super::machines::account_dialog(frame, area, app, adding);
     }
+    if let Some(removing) = &screen.removing {
+        remove_dialog(frame, area, app, removing, hits);
+    }
+}
+
+/// Asks before removing an account: what stops it, and what stays on the machine.
+fn remove_dialog(frame: &mut Frame, area: Rect, app: &App, removing: &Removing, hits: &mut Hits) {
+    let ui = app.ui();
+    let machine = app
+        .machines
+        .iter()
+        .find(|machine| machine.host_id == removing.host_id)
+        .map_or_else(
+            || removing.host_id.to_string(),
+            |machine| machine.name.clone(),
+        );
+    let label = account_screen::find(&app.machines, &removing.host_id, &removing.account_id)
+        .map_or_else(
+            || removing.account_id.to_string(),
+            |account| account.label.clone(),
+        );
+    let width = usize::from(
+        Size::Medium
+            .width()
+            .min(area.width)
+            .saturating_sub(2 + 2 * crate::ui::dialog::PAD_X),
+    )
+    .max(8);
+    let wrapped = |text: &str, style: Style| -> Vec<Line<'static>> {
+        textwrap::wrap(text, width)
+            .into_iter()
+            .map(|line| Line::styled(line.into_owned(), style))
+            .collect()
+    };
+    let mut lines = wrapped(
+        &format!("Remove {label} from {machine}?"),
+        Style::new().fg(ui.theme.warning),
+    );
+    lines.push(Line::default());
+    lines.extend(wrapped(
+        &format!(
+            "Archive the sessions that run on it first: {machine} refuses while any does. Its \
+             config dir stays on {machine}, with its login in it."
+        ),
+        ui.muted(),
+    ));
+    if removing.sending {
+        lines.push(Line::default());
+        lines.push(Line::styled(
+            format!("Removing{}", ui.glyphs.ellipsis),
+            ui.muted(),
+        ));
+    }
+    let hints = [Hint::new("y", "remove"), Hint::new("n", "keep")];
+    let narrow = area.width < super::NARROW;
+    let height = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+    let areas = Dialog::new(ui, "remove account", Size::Medium)
+        .hints(if narrow || removing.sending {
+            &[]
+        } else {
+            &hints
+        })
+        .render(area, height, frame.buffer_mut());
+    super::palette::dialog_taps(hits, area, &areas);
+    frame.render_widget(Paragraph::new(lines), areas.body);
 }
 
 /// A machine: its connection and name, whether it pins sessions to their account, and why it

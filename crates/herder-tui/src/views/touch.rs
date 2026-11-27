@@ -124,11 +124,24 @@ fn buttons(app: &App) -> Vec<Button> {
     if app
         .account_screen
         .as_ref()
+        .is_some_and(|screen| screen.removing.is_some())
+    {
+        return vec![
+            button("y", "remove", char('y')),
+            button("n", "keep", char('n')),
+        ];
+    }
+    if app
+        .account_screen
+        .as_ref()
         .is_some_and(|screen| screen.adding.is_none())
     {
         let mut buttons = vec![button("n", "add", char('n'))];
         if app.on_account() {
             buttons.push(button("l", "log in", char('l')));
+        }
+        if app.on_removable_account() {
+            buttons.push(button("d", "remove", char('d')));
         }
         buttons.push(esc());
         return buttons;

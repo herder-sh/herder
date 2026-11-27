@@ -41,4 +41,4 @@ expression: terminal.backend()
 "                                             "
 "                                             "
 "                                             "
-" n add   l log in   esc close                "
+" n add   l log in   d remove   esc close     "
