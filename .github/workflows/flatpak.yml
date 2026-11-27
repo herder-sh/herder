@@ -1,0 +1,69 @@
+name: flatpak
+
+# Builds the Flatpak of the Linux app (linux/packaging/flatpak/) and lints it as Flathub does,
+# apart from the required `ci` check so it doesn't slow that down. cargo-sources.json, the
+# crates the offline build vendors, is generated from Cargo.lock here, so a dependency bump
+# needs no hand edit. release.yml builds the bundle a release ships.
+
+on:
+  pull_request:
+    paths:
+      - "linux/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - ".github/workflows/flatpak.yml"
+  push:
+    branches: [main]
+    paths:
+      - "linux/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - ".github/workflows/flatpak.yml"
+
+concurrency:
+  group: flatpak-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sources:
+    name: flatpak sources
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+      - name: Generate cargo-sources.json from Cargo.lock
+        run: linux/packaging/flatpak/update-cargo-sources.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flatpak-cargo-sources
+          path: linux/packaging/flatpak/cargo-sources.json
+          if-no-files-found: error
+
+  flatpak:
+    name: flatpak
+    needs: sources
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: flatpak-cargo-sources
+          path: linux/packaging/flatpak
+      - name: Copy the image's flatpak installation into the container layer
+        run: linux/packaging/flatpak/ci-unlayer-flatpak.sh
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: linux/packaging/flatpak/sh.herder.Herder.yml
+          bundle: sh.herder.Herder.flatpak
+          cache-key: flatpak-builder-${{ hashFiles('Cargo.lock') }}
+          # As Flathub builds it, so the repo lint passes: the screenshots go into the repo
+          # under Flathub's media URL. Release bundles keep the upstream URLs instead.
+          mirror-screenshots-url: https://dl.flathub.org/media
+      - name: Lint the manifest and the repo with flatpak-builder-lint
+        run: linux/packaging/flatpak/lint.sh repo
