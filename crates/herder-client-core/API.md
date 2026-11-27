@@ -72,6 +72,9 @@ says what exists, why, and how it maps to foreign languages.
   P26.20 added, compatibly, the `ShowSessions` command: the sessions a client shows, whose
   replays the daemon takes ahead of the others waiting. Apps do not send it: they call
   `Client::show_sessions`, which sends it on each connection.
+  P26.22 added, compatibly, the `GetHubUsage` command with its `HubUsage` result
+  (`HubUsageTotal`, `HubFailoverTotal`): what each of a hub's provider logins was used for on
+  every host, which a hub adds up from the journals they replicate (see Turn usage).
 
 ## Shape, and how it maps to UniFFI
 
@@ -897,3 +900,15 @@ it after a limit hit; and `failovers_in`, those it moved onto it. A switch a use
 failover. Each daemon counts its own journal, a fork's copy of another session's history
 left out, so a client adds its machines' answers up as it does `totals`. A daemon from before
 it answers none.
+
+`send(hub, GetHubUsage { period })` asks a hub, owners only, for what each of its provider
+logins was used for over `period` on every host that replicates to it, and answers
+`HubUsage { period, since, totals, failovers }`. Each `HubUsageTotal` is one login (`pin`, as
+`ProviderLogin.pin` has it), host, UTC day (`YYYY-MM-DD`) and model, its `usage` the
+`UsageTotal` of the host's account on the login, `vault-<pin>`; each `HubFailoverTotal` is one
+login's limit hits and failovers on one host. The hub counts a host's replicated journal as
+the host counts its own, so a host's `HubUsage` rows add up to the rows of its own
+`UsageSummary` for its `vault-` accounts; a host that has not replicated yet, or whose
+sessions the hub dropped after its retention period, counts less. The login's limit windows
+are its `ProviderLogin.usage` (`ListProviderLogins`). A daemon that is not a hub refuses it
+with `unsupported`. The wire change is additive (protocol 6).

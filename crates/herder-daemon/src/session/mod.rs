@@ -1149,6 +1149,14 @@ impl SessionManager {
                      herder app",
                 ));
             }
+            CommandBody::GetHubUsage { .. } => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this machine is not a hub: what each hub login used, on every machine, \
+                     is added up on the hub it is linked to; ask it there, or ask this machine \
+                     for its own usage with get_usage_summary",
+                ));
+            }
             CommandBody::GetRemoteAccess
             | CommandBody::SetRemoteAccess { .. }
             | CommandBody::EnrollWireGuard { .. }
@@ -2706,6 +2714,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
             | CommandBody::GetProjectIcon { .. }
             | CommandBody::GetHubLink
             | CommandBody::GetUsageSummary { .. }
+            | CommandBody::GetHubUsage { .. }
             | CommandBody::ListAwsProfiles
             | CommandBody::ListBots
             | CommandBody::GetBotStatus

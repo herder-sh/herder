@@ -570,6 +570,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::UnenrollWireGuard
         | CommandBody::GetRelayToken
         | CommandBody::GetUsageSummary { .. }
+        | CommandBody::GetHubUsage { .. }
         | CommandBody::LinkHub { .. }
         | CommandBody::SetHubLink { .. }
         | CommandBody::UnlinkHub

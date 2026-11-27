@@ -1644,6 +1644,7 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     let logins = matches!(
         command,
         CommandBody::ListProviderLogins
+            | CommandBody::GetHubUsage { .. }
             | CommandBody::StartProviderLogin { .. }
             | CommandBody::CompleteProviderLogin { .. }
             | CommandBody::CancelProviderLogin { .. }
@@ -2305,6 +2306,9 @@ mod tests {
             CommandBody::ListSecrets,
             CommandBody::ListSecretAudit { before: None },
             CommandBody::ListProviderLogins,
+            CommandBody::GetHubUsage {
+                period: herder_protocol::UsagePeriod::Week,
+            },
             CommandBody::StartProviderLogin {
                 provider: herder_protocol::Provider::Claude,
             },

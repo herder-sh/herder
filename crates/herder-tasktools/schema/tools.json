@@ -1337,6 +1337,7 @@
                   "set_project_icon",
                   "get_project_icon",
                   "get_usage_summary",
+                  "get_hub_usage",
                   "get_hub_link",
                   "link_hub",
                   "set_hub_link",

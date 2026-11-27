@@ -785,6 +785,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::GetUsageSummary {
             period: UsagePeriod::Month,
         }),
+        command(CommandBody::GetHubUsage {
+            period: UsagePeriod::Week,
+        }),
         command(CommandBody::SetSettings {
             settings: Box::new(settings()),
         }),
@@ -1295,6 +1298,40 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 since: "2026-09-04T12:00:00Z".parse().unwrap(),
                 totals: Vec::new(),
                 failovers: Vec::new(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::HubUsage {
+                period: UsagePeriod::Week,
+                since: "2026-09-27T12:00:00Z".parse().unwrap(),
+                totals: vec![HubUsageTotal {
+                    pin: "claude-ada".into(),
+                    host_id: HostId::new("01J9HOST"),
+                    day: "2026-10-03".into(),
+                    usage: UsageTotal {
+                        account_id: AccountId::new("vault-claude-ada"),
+                        provider: Provider::Claude,
+                        model: "claude-opus-5-5".into(),
+                        turns: 3,
+                        input: 1_200,
+                        output: 800,
+                        cache_read: 40_000,
+                        cache_write: 2_000,
+                        cost_usd: 0.42,
+                        cost_estimated: true,
+                    },
+                }],
+                failovers: vec![HubFailoverTotal {
+                    pin: "claude-ada".into(),
+                    host_id: HostId::new("01J9HOST"),
+                    failovers: FailoverTotal {
+                        account_id: AccountId::new("vault-claude-ada"),
+                        limit_hits: 2,
+                        failovers_out: 1,
+                        failovers_in: 0,
+                    },
+                }],
             },
         },
         ServerMessage::CommandAccepted {
