@@ -1,7 +1,8 @@
 # The Flatpak of the Linux app (linux/, the herder-gtk crate), built from this checkout with
-# no network: cargo-sources.json vendors every crate in Cargo.lock (update-cargo-sources.sh
-# regenerates it). README.md says how to build it locally, and how the Flathub copy differs:
-# only in its first source, a git tag instead of this directory.
+# no network: cargo-sources.json, which update-cargo-sources.sh writes from Cargo.lock and CI
+# generates before each build, vendors every crate. README.md says how to build it locally,
+# and how the Flathub copy differs: only in its first source, a git tag instead of this
+# directory.
 id: sh.herder.Herder
 runtime: org.gnome.Platform
 runtime-version: "51"

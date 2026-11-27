@@ -1,7 +1,7 @@
 #!/bin/sh
-# Regenerates cargo-sources.json, the crates the Flatpak build vendors, from Cargo.lock with
-# flatpak-cargo-generator at a pinned commit. Run it after every Cargo.lock change; the flatpak
-# CI job fails while the committed file differs from what this writes. Needs uv.
+# Writes cargo-sources.json, the crates the Flatpak build vendors, from Cargo.lock with
+# flatpak-cargo-generator at a pinned commit. CI runs it before every Flatpak build; run it
+# before a local build, and for a Flathub update at its tag. The file is not committed. Needs uv.
 set -eu
 
 GENERATOR_COMMIT=41c20aa10819cdb2a4f3ca171758a96d1955c018

@@ -2,17 +2,17 @@
 
 The Flatpak of the Linux app (`linux/`, the `herder-gtk` crate), app ID `sh.herder.Herder`, on
 the GNOME 51 runtime. It builds from source with no network: `cargo-sources.json` vendors
-every crate in `Cargo.lock`.
+every crate in `Cargo.lock`. That file is generated, not committed: CI writes it before each
+build, and `update-cargo-sources.sh` writes it for a local build.
 
-| File                                   | What it is                                               |
-| -------------------------------------- | -------------------------------------------------------- |
-| `sh.herder.Herder.yml`                 | The manifest; builds this checkout                       |
-| `cargo-sources.json`                   | The crates, generated from `Cargo.lock`                  |
-| `update-cargo-sources.sh`              | Regenerates `cargo-sources.json` (needs `uv`)            |
-| `check-metainfo-release.sh`            | Checks the metainfo has the workspace version's release  |
-| `lint.sh`                              | `flatpak-builder-lint` on the manifest and a built repo  |
-| `ci-unlayer-flatpak.sh`                | Works around a CI container runtime-update failure       |
-| `../../data/sh.herder.Herder.metainfo.xml` | The AppStream metainfo                               |
+| File                                       | What it is                                          |
+| ------------------------------------------ | --------------------------------------------------- |
+| `sh.herder.Herder.yml`                     | The manifest; builds this checkout                  |
+| `update-cargo-sources.sh`                  | Writes `cargo-sources.json` from `Cargo.lock` (`uv`) |
+| `add-metainfo-release.sh`                  | Adds a version's `<release>` to the metainfo        |
+| `lint.sh`                                  | `flatpak-builder-lint` on the manifest and a repo   |
+| `ci-unlayer-flatpak.sh`                    | Works around a CI container runtime-update failure  |
+| `../../data/sh.herder.Herder.metainfo.xml` | The AppStream metainfo                              |
 
 ## The sandbox
 
@@ -25,15 +25,20 @@ every crate in `Cargo.lock`.
 
 ## Keeping it current
 
-- **After every `Cargo.lock` change**, run `linux/packaging/flatpak/update-cargo-sources.sh`
-  and commit `cargo-sources.json`. The `flatpak sources` CI job fails while it is stale.
-- **Every release** adds a `<release version="X.Y.Z" date="YYYY-MM-DD">` entry at the top of
-  `<releases>` in the metainfo, in the release PR. The `flatpak sources` job and the release
-  workflow fail without it.
+Nothing to do by hand on a release or a dependency bump:
+
+- CI generates `cargo-sources.json` from `Cargo.lock` before every build (`flatpak.yml` on PRs,
+  `release.yml` on tags), with flatpak-cargo-generator pinned in `update-cargo-sources.sh`.
+- The release workflow adds the tag's `<release>` entry, dated the tag's date, to the
+  metainfo it builds into the bundle when the committed metainfo lacks it. Commit an entry
+  by hand only to give a release a description.
+- If the Flatpak fails to build on a release, the GitHub Release still goes out with the
+  binaries and the Mac app, without the bundle.
 
 ## Build and install locally
 
 ```sh
+linux/packaging/flatpak/update-cargo-sources.sh   # again after Cargo.lock changes
 flatpak install --user flathub org.flatpak.Builder
 flatpak run org.flatpak.Builder --user --install --force-clean \
   --state-dir ~/.cache/herder-flatpak/state ~/.cache/herder-flatpak/build \
@@ -77,11 +82,14 @@ first; the steps as of this writing:
    git checkout -b add-sh.herder.Herder
    ```
 
-4. **Add the manifest and the crates of the release you submit**, say `v0.25.0`:
+4. **Add the manifest, and the crates generated from the release you submit**, say `v0.25.0`.
+   The Flathub repo carries its own `cargo-sources.json`, generated from the tag's
+   `Cargo.lock`; this repo does not commit one.
 
    ```sh
-   herder=~/path/to/herder            # a checkout of herder at the tag
+   herder=~/path/to/herder            # a checkout of herder
    git -C "$herder" checkout v0.25.0
+   "$herder/linux/packaging/flatpak/update-cargo-sources.sh"
    cp "$herder/linux/packaging/flatpak/sh.herder.Herder.yml" \
       "$herder/linux/packaging/flatpak/cargo-sources.json" .
    git -C "$herder" rev-parse v0.25.0^{commit}   # the commit for the source below
@@ -102,8 +110,14 @@ first; the steps as of this writing:
          - cargo-sources.json
    ```
 
-   `x-checker-data` lets Flathub's external data checker open the update PRs for later tags;
-   each of those PRs also needs that tag's `cargo-sources.json` copied in.
+   The release workflow adds each tag's `<release>` entry to the metainfo only in the bundle
+   it builds, so the tag's own metainfo may not list that release yet. If it doesn't, put
+   `- linux/packaging/flatpak/add-metainfo-release.sh 0.25.0 <the tag's date>` first in
+   `build-commands`.
+
+   `x-checker-data` lets Flathub's external data checker open the update PRs for later tags.
+   Each of those PRs needs that tag's `cargo-sources.json` (regenerate it as above, at the
+   new tag) and, if needed, the `add-metainfo-release.sh` line's version and date bumped.
 
 5. **Check it before opening the PR**, from the flathub clone:
 

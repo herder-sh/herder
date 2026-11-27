@@ -17,7 +17,8 @@ on:
       - "apple/scripts/build-mac-release.sh"
       - "apple/scripts/import-mac-cert.sh"
       - "apple/scripts/developer-id-profile.py"
-      - "linux/packaging/flatpak/check-metainfo-release.sh"
+      - "linux/packaging/flatpak/add-metainfo-release.sh"
+      - "linux/packaging/flatpak/update-cargo-sources.sh"
       - "linux/packaging/flatpak/ci-unlayer-flatpak.sh"
 
 concurrency:
@@ -157,15 +158,39 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # The release goes out without the Flatpak if these fail: publish only attaches it.
+  flatpak-sources:
+    name: generate the Flatpak's cargo sources
+    # Never fails the run: the pages workflow refreshes the site only after a green release.
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+      - name: Generate cargo-sources.json from Cargo.lock
+        run: linux/packaging/flatpak/update-cargo-sources.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flatpak-cargo-sources
+          path: linux/packaging/flatpak/cargo-sources.json
+          if-no-files-found: error
+
   flatpak:
     name: build the Flatpak
+    # Never fails the run: the pages workflow refreshes the site only after a green release.
+    continue-on-error: true
+    needs: flatpak-sources
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
       options: --privileged
     steps:
       - uses: actions/checkout@v7
-      - name: Read the version and check the metainfo has its release entry
+      - uses: actions/download-artifact@v8
+        with:
+          name: flatpak-cargo-sources
+          path: linux/packaging/flatpak
+      - name: Read the version and add its release to the metainfo
         id: version
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
@@ -173,7 +198,12 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match the Cargo.toml version $version"
             exit 1
           fi
-          linux/packaging/flatpak/check-metainfo-release.sh
+          # The tag's date (the tagger's for an annotated tag); today when not run on a tag.
+          date=
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            date=$(git for-each-ref --format='%(creatordate:short)' "refs/tags/$GITHUB_REF_NAME")
+          fi
+          linux/packaging/flatpak/add-metainfo-release.sh "$version" "${date:-$(date -u +%F)}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Copy the image's flatpak installation into the container layer
         run: linux/packaging/flatpak/ci-unlayer-flatpak.sh
@@ -234,7 +264,10 @@ jobs:
   publish:
     name: publish
     needs: [build, macos, flatpak]
-    if: github.ref_type == 'tag'
+    # Publishes the binaries and the Mac app even when the Flatpak failed, without it.
+    if: >-
+      !cancelled() && github.ref_type == 'tag' &&
+      needs.build.result == 'success' && needs.macos.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
