@@ -239,6 +239,9 @@ order, the page has:
     to the hub, and an owner turns it on from the machine's page.
   - With no hub, the section is **Machines**, and one line says what a hub would add, with
     **Add a hub…**.
+- **Remote access** (`RemoteAccessSection`, §4.4.1): one card that says in a line how this
+  fleet is reached from outside home, "Reachable from anywhere through the hub" when all is
+  well. It opens the Remote access page.
 - **Updates** (`UpdatesSection`), only while there are any: a quiet row each for a newer
   herder ("herder 0.21.0 is out", Update) and newer provider CLIs ("Claude and Codex have
   updates", Update All). An update never needs you, so it is not a card and not in the badge.
@@ -392,6 +395,82 @@ on launch and has no Fleet banner: it opens from People (`fleet.offerClaim`), th
 Needs you takes over. A `herder://own` link opened from outside the app, and a hub set up from
 a machine's Backup, still approve in `ApproveSheet`. `AddMachineScreenshotTests` draws Install,
 Kubernetes, Approve, Done and a hub to sign in to (`mac-add-machine-*.png`, `mac-add-hub.png`).
+
+### 4.4.1 Remote access (`RemoteAccess`, `RemoteAccessPage`, P26.18)
+
+How this fleet is reached from outside home, and how to set that up, in one calm place.
+herder runs no VPN and is married to no vendor: every connection is end-to-end mutual TLS to
+the machine whatever carries it ([public-access.md](public-access.md)), so this page only says
+what each route this device could use is doing, from data it already has, and how to set up one
+that is not. Nothing here is a problem to fix: a route not set up is a choice, never amber, never
+in Needs you, never in the badge.
+
+**Routes** (`RemoteAccess.routes`), each with a state (`RemoteAccess.State`): **working** (green
+dot), **set up, not seen working from outside yet** (grey dashed ring), **not set up** (grey
+ring), and, only for an address that cannot work as typed, **won't work** (amber triangle).
+
+| route | what it is read from | states |
+|---|---|---|
+| **Through the hub** | the hub's furthest-reaching address (`AddressScope.anywhere`, set once under Public addresses, P26.1), its front-door login (`Machine.addressHeaders` for that address, P26.2), and its check (`PublicCheck`, P26.3) | working while this device is connected through it, or once it was ("Worked from outside 2h ago"); won't work when the name resolves only to the LAN or to nothing; set up otherwise; not set up with no public address |
+| **Tailscale** | every machine's addresses in Tailscale's ranges (100.64.0.0/10, fd7a:115c:a1e0::/48, `*.ts.net`), and whether its connection is over one now (`MachineRoute.tailscale`) | working while a machine answers on it, or once one did; set up when machines have Tailscale addresses but none answered on one yet; not set up with none |
+| **VPN on your router** (WireGuard, OpenVPN, a UniFi gateway's VPN server) | a machine connected at a private IPv4 address (`MachineRoute.local`) that is on none of this device's own networks, while this device has a tunnel interface of its own with an IPv4 address outside Tailscale's range (`NetworkInterface`) | working while that holds, or once it did, naming the home subnets that answered; otherwise not set up |
+
+"Once it was" is this device's memory (`RemoteSightings`, in its defaults): when a route last
+worked from outside, so at home the page still says the router's VPN worked yesterday, rather
+than "not set up". Nothing is probed: the page reads only connections the app made anyway.
+
+**On the Hub tab** (`RemoteAccessSection`): one card under **Remote access**, after Hub and
+machines: a globe tile, green when any route works, then one line (`RemoteAccess.summary`) over
+each route's mark and short name (● Hub ● Tailscale ○ Router VPN), and a chevron:
+
+- "Reachable from anywhere through the hub" — the hub route works;
+- "Reachable over Tailscale", "Reachable over your router's VPN", or both joined — the hub
+  route does not, another does;
+- "The hub's public address hub.example.com doesn't reach it from outside" — won't work;
+- "The hub has a public address, not seen working from outside yet" — set up, unseen;
+- "Machines have Tailscale addresses, not seen answering on them yet";
+- "Reached at home only · set up access from anywhere" — nothing set up.
+
+**The page** (`RemoteAccessPage`, a `DetailPage`, `Page.remoteAccess`): the summary as its
+status, one line on what herder does and does not do, then a card per route, the hub first.
+Each card: the route's mark and name, its state in words, then its facts as label–value rows:
+
+- *Through the hub*: **Public address** (`hub.example.com`, or "None yet"), **Front-door
+  login** for a tunnel address ("Sends cf-access-client-id, cf-access-client-secret", or "None,
+  which is fine": the inner mutual TLS already authenticates), **Checked** (the `PublicCheck` sentence, or
+  "Worked from outside 2h ago"), and **Relays to** (the machines the hub relays to,
+  `FleetHost.relay`, each reached through it when nothing nearer answers, §5.9). **Open ‹hub›** opens its machine page, where public
+  addresses and proxy headers are set.
+- *Tailscale*: a row per machine with a Tailscale address: "Answers on it now", "Answered
+  3d ago" or "Has a Tailscale address"; machines without one are not listed.
+- *VPN on your router*: **Home subnets** that answered (`172.20.40.0/24`), when it last
+  worked.
+
+At each card's foot, **How to set it up** (`SetupSteps`) opens, in place, short numbered steps
+per option, each three or four lines with the commands in monospace:
+
+- *Through the hub*: **Cloudflare Tunnel** (a tunnel listener, `cloudflared tunnel create`,
+  route its DNS, add the `https://` address under Public addresses; optionally Cloudflare
+  Access with a service token, its headers set per device), **Port forward** (forward a TCP
+  port to the hub's, a fixed IP or dynamic DNS name, add `host:port`), **Reverse proxy** (TCP
+  pass-through, or HTTPS with WebSockets on to the tunnel listener; add its address).
+- *Tailscale*: install it on the machines and this device on one tailnet; a machine listening
+  on every interface lists its Tailscale address by itself; keep it on away from home.
+- *VPN on your router*: turn on the router's WireGuard (or OpenVPN) server; make this device's
+  config **split**, routing only the home subnets (`AllowedIPs = 172.20.40.0/24,
+  172.20.10.0/24`, the /24s of the machines' own private addresses, `RemoteAccess.homeSubnets`)
+  rather than `0.0.0.0/0`, so the rest of its traffic does not go through home; turn it on
+  away from home (On Demand). Nothing to add in herder: the machines' home addresses answer.
+
+Steps are collapsed when the route works and open until it does, so a working page reads as
+status first. The TUI has no Remote access view yet; its fleet view still shows each machine's
+addresses.
+
+Screenshots (`RemoteAccessScreenshotTests`): `remote-access-hub-iphone.png` (the Hub tab's
+row, all well), `remote-access-mac.png` (the page: hub working with a front-door login, Tailscale
+on two machines, router VPN worked yesterday), `remote-access-iphone.png` (the page at an
+iPhone's width), `remote-access-none-iphone.png` (nothing set up, every route's steps open); the
+row also shows in `hub-mac.png` and `hub-iphone.png`.
 
 ### 4.5 Usage (`UsageView`)
 
