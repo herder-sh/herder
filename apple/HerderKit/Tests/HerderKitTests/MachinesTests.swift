@@ -90,8 +90,8 @@ func sampleFleetMachines(now: Date = .now) -> [Machine] {
         #expect(mbp.local && !can.local)
         // Only being a member is said, as it is what limits you.
         #expect(draugelis.member && !mbp.member && !can.member)
-        #expect(rows.allSatisfy { $0.reach == .direct })
-        #expect(mbp.reach.label == "Direct")
+        // Each connected row names the route it is reached by.
+        #expect(rows.map(\.reach.label) == ["Local network", "Tailscale", "Local network"])
     }
 
     @Test func machinesHangUnderTheHubTheySyncTo() {

@@ -658,28 +658,45 @@ private struct ToolRow: View {
     }
 }
 
-/// Where a message from this device is: on its way, waiting for its machine to connect, not
-/// delivered for longer than it should take, with the daemon, or refused.
+/// Where a message from this device is: nothing for its first second, then on its way, waiting
+/// for its machine to connect, not delivered for longer than it should take, with the daemon,
+/// or refused. A tap opens its machine's connection card.
 private struct DeliveryLine: View {
     let outgoing: Outgoing
     /// Where the message goes: its machine's connection is read only while it is on its way.
     let fleet: Fleet
     let hostId: HostId
     let retry: () -> Void
+    @State private var showsConnection = false
+    @Environment(\.pages) private var pages
 
     var body: some View {
         HStack(spacing: 6) {
-            switch outgoing.state {
-            case .sending:
-                // Drawn again once the message is overdue, whether or not the machine changed.
-                TimelineView(.explicit([outgoing.sentAt.addingTimeInterval(Outgoing.overdue)])) { _ in
-                    sending
+            Button { showsConnection = true } label: {
+                HStack(spacing: 6) {
+                    switch outgoing.state {
+                    case .sending:
+                        // Drawn again once the quiet second is up and once the message is
+                        // overdue, whether or not the machine changed.
+                        TimelineView(.explicit([outgoing.sentAt.addingTimeInterval(Outgoing.quiet),
+                                                outgoing.sentAt.addingTimeInterval(Outgoing.overdue)])) { _ in
+                            sending
+                        }
+                    case .delivered:
+                        Image(systemName: "checkmark")
+                        Text("Delivered")
+                    case .failed(let reason):
+                        Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.failure)
+                        Text("Not sent: \(reason)").foregroundStyle(Theme.failure).lineLimit(2)
+                    }
                 }
-            case .delivered:
-                EmptyView()
-            case .failed(let reason):
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.failure)
-                Text("Not sent: \(reason)").foregroundStyle(Theme.failure).lineLimit(2)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .help("How this device reaches the machine")
+            .accessibilityIdentifier("delivery-line")
+            .connectionCard(isPresented: $showsConnection, fleet: fleet, hostId: hostId, pages: pages)
+            if case .failed = outgoing.state {
                 Button("Retry", action: retry)
                     .buttonStyle(.plain)
                     .font(.caption.weight(.semibold))
@@ -690,22 +707,23 @@ private struct DeliveryLine: View {
         .foregroundStyle(Theme.tertiary)
     }
 
-    /// The line of a message on its way.
+    /// The line of a message on its way: nothing in its quiet second while its machine is
+    /// connected.
     private var sending: some View {
         let machine = fleet.machines.first { $0.hostId == hostId }
         let now = Date.now
-        let overdue = now.timeIntervalSince(outgoing.sentAt) >= Outgoing.overdue
+        let age = now.timeIntervalSince(outgoing.sentAt)
         return HStack(spacing: 6) {
             if let waiting = outgoing.waiting(at: now, for: machine) {
-                if overdue {
+                if age >= Outgoing.overdue {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.failure)
                 } else if machine?.connection == .connecting {
-                    ProgressView().controlSize(.mini).tint(Theme.tertiary)
+                    ReachMark(reach: .connecting)
                 } else {
-                    Image(systemName: "wifi.slash")
+                    ReachMark(reach: .offline)
                 }
-                Text(waiting).foregroundStyle(overdue ? Theme.failure : Theme.tertiary).lineLimit(2)
-            } else {
+                Text(waiting).foregroundStyle(age >= Outgoing.overdue ? Theme.failure : Theme.tertiary).lineLimit(2)
+            } else if age >= Outgoing.quiet {
                 ProgressView().controlSize(.mini).tint(Theme.tertiary)
                 Text("Sending…")
             }

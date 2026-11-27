@@ -449,10 +449,9 @@ struct DefaultAccountTests {
         #expect(outgoing.waiting(at: soon, for: connected) == nil)
         #expect(outgoing.waiting(at: late, for: connected)
             == "Not delivered yet. devbox is not answering; it gets the message once it does.")
-        #expect(outgoing.waiting(at: soon, for: offline)
-            == "The machine is offline (unreachable). Sends once it connects.")
+        #expect(outgoing.waiting(at: soon, for: offline) == "Waiting for devbox: offline · sends when it is back")
         #expect(outgoing.waiting(at: late, for: offline)
-            == "Not delivered yet. The machine is offline (unreachable). Sends once it connects.")
+            == "Not delivered yet. Waiting for devbox: offline · sends when it is back")
         // Once the machine has it, or refused it, the line says so instead.
         for state: Outgoing.State in [.delivered, .failed("refused")] {
             #expect(Outgoing(text: "next", state: state, sentAt: sent).waiting(at: late, for: connected) == nil)

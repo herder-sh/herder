@@ -1051,13 +1051,17 @@ struct Outgoing: Hashable, Identifiable {
     /// the machine's connection reads.
     static let overdue: TimeInterval = 15
 
+    /// How long a message to a connected machine goes without a line: almost every one is
+    /// delivered by then, and a line that flashes for a moment says nothing.
+    static let quiet: TimeInterval = 1
+
     /// What the line under the message says while it is on its way to `machine`, given how long
     /// ago it was sent: `nil` while it is simply sending.
     func waiting(at now: Date, for machine: Machine?) -> String? {
         guard state == .sending else { return nil }
-        let holdUp = machine.flatMap { $0.connection.holdUp(addresses: $0.addresses.count) }
-        guard now.timeIntervalSince(sentAt) >= Self.overdue else { return holdUp }
         let name = machine?.name ?? "The machine"
+        let holdUp = machine.flatMap { $0.connection.holdUp(machine: name, addresses: $0.addresses.count) }
+        guard now.timeIntervalSince(sentAt) >= Self.overdue else { return holdUp }
         return "Not delivered yet. " + (holdUp ?? "\(name) is not answering; it gets the message once it does.")
     }
 }

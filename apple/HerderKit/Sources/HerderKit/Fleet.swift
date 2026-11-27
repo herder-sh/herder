@@ -189,6 +189,12 @@ public final class Fleet {
         change(key) { $0.apply(update) }
     }
 
+    /// Sets the messages this device has on their way to a session, for tests.
+    func setOutboxForTesting(_ outbox: [Outgoing], of key: SessionKey) {
+        track(key)
+        change(key) { $0.outbox = outbox }
+    }
+
     /// Holds an attachment's bytes as though fetched, for tests.
     func setAttachmentForTesting(_ id: AttachmentId, _ data: Data) { attachments[id] = data }
 

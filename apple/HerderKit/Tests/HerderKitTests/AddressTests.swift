@@ -43,7 +43,7 @@ struct AddressTests {
         #expect(row.reach.label == "Through home hub")
         box.address = "192.168.1.5:7447"
         let direct = try #require(MachineRow.rows([hub, box], summaries: []).first { $0.hostId == "h1" })
-        #expect(direct.reach == .direct)
+        #expect(direct.reach == .direct("Local network"))
         // The route is not this Mac, whatever this Mac is called.
         #expect(!MachineRow.isLocal("hub://v1", names: ["hub"]))
     }
@@ -55,11 +55,13 @@ struct AddressTests {
         #expect(ConnectionState.connecting.labelCounting(addresses: 1) == "Connecting…")
         #expect(ConnectionState.connected.labelCounting(addresses: 3) == "Connected")
         #expect(ConnectionState.disconnected(error: "refused").labelCounting(addresses: 3) == "refused")
-        #expect(ConnectionState.connected.holdUp(addresses: 3) == nil)
-        #expect(ConnectionState.connecting.holdUp(addresses: 3) == "Connecting to the machine (trying 3 addresses)…")
-        #expect(ConnectionState.connecting.holdUp(addresses: 1) == "Connecting to the machine…")
-        #expect(ConnectionState.disconnected(error: "refused").holdUp(addresses: 1)
-            == "The machine is offline (refused). Sends once it connects.")
+        #expect(ConnectionState.connected.holdUp(machine: "devbox", addresses: 3) == nil)
+        #expect(ConnectionState.connecting.holdUp(machine: "devbox", addresses: 3)
+            == "Waiting for devbox: connecting (trying 3 addresses)…")
+        #expect(ConnectionState.connecting.holdUp(machine: "devbox", addresses: 1) == "Waiting for devbox: connecting…")
+        // Why it is offline is on the connection card, not under every message.
+        #expect(ConnectionState.disconnected(error: "refused").holdUp(machine: "devbox", addresses: 1)
+            == "Waiting for devbox: offline · sends when it is back")
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))

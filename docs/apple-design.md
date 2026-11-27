@@ -230,8 +230,8 @@ order, the page has:
   - The **machines that sync to it** hang under the card from a thin rail (`HubRail`), one
     row each (`MachineCard`): the name, "this Mac" on the one this app runs on, "Member"
     where you are not an owner, and how this device reaches it, said quietly with a small
-    mark: **Direct** (green dot), **Through <hub>** (green dot: connected, through the hub's
-    relay), **Connecting…**, **On another network** (the hub hears from it, this device does
+    mark: its route when connected (green dot), **Local network**, **Tailscale**, **Tunnel**,
+    **Internet** or **Through <hub>** (through the hub's relay; §5.9), **Connecting…**, **On another network** (the hub hears from it, this device does
     not) or **Offline** (a grey ring, never red: a laptop asleep is
     expected). A machine with sessions running says "3 running". A row opens the machine's
     page.
@@ -581,7 +581,9 @@ right edge on the composer's, at every width; in a narrow pane the transcript ke
 list pane's title and the sidebar's top bar.
 
 - **Left, stacked:** the title (`Theme.page`, as a `PageHeader`'s, two lines at most), the
-  status line (`StatusGlyph` + state label + `· project · machine`, in `Theme.body`), the
+  status line (`StatusGlyph` + state label + `· project · machine`, in `Theme.body`; while
+  the machine's signal is not good, its mark and word after its name, and a tap opens its
+  connection card, §5.9), the
   branch (monospace, one line, middle-truncated), and "Forked from …" when it is a fork. While
   the session's account is signed out, the amber "Needs sign-in" chip takes the state label's
   place on the status line; its Board row shows the waiting dot and "Claude account needs
@@ -702,6 +704,64 @@ it. The draft shows in the session pane on Mac/iPad and full screen on iPhone.
 Screenshots: `mac-session.png`, `mac-session-approval.png`, `mac-session-running.png`,
 `mac-session-terminal.png`, `ios-session.png`, `ios-session-keyboard.png`,
 `ios-session-approval.png`, `ios-session-running.png`, `ios-session-menu.png`.
+
+### 5.9 Connection and delivery (`ConnectionCard`, P26.15)
+
+The user checks in for a few minutes at a time, often on a slow network, and needs to know two
+things without reading a dashboard: can I reach this machine, and did my message get there.
+The rule is **quiet when all is well, a word when it is not, everything one tap away**.
+
+**Signal** (`ConnectionSignal`, from the machine's state and its round trips): **good**,
+**slow** (connected, 300 ms or more on average on this connection, when sending and streaming
+lag), **connecting**, **offline**. Only the last three are ever shown unasked, each as a small
+mark plus one word (`SignalLabel`): a dashed ring "Connecting…", a grey ring "Offline" (never
+red: a laptop asleep is expected), an amber tortoise "Slow".
+
+**Route** (`MachineRoute`, from `Machine::address`): what the connection in use goes over,
+named by kind, then its transport: **Local network** (a private range, loopback, `.local`),
+**Tailscale** (100.64.0.0/10, fd7a:115c:a1e0::/48, `*.ts.net`), **Tunnel** (a `wss://`
+address), **Internet** (any other public address) or **Through ‹hub›** (a `hub://` route,
+relayed by the hub). The transport follows after a dot, "Tailscale · WebSocket"; every
+connection is WebSocket today, and QUIC (P26.9) adds its own word there, not a new place.
+
+Where it shows:
+
+- **Session header** (§5.1): the status line ends `· project · machine`. While the machine's
+  signal is not good, its mark and word follow ("devbox ◌ Connecting…", "devbox ○ Offline",
+  "devbox 🐢 Slow"); while it is good, nothing. The status line is a button: one tap opens the
+  machine's **connection card**, a popover on the Mac and iPad, a medium sheet on a phone.
+- **A sent message** (`DeliveryLine`, under its bubble, which stays dimmed until the session
+  takes it): nothing for the first second, as almost every message is delivered by then; then
+  "Sending…" with a small spinner; **✓ Delivered** once the machine has it and until the
+  session takes it; "Waiting for devbox: offline · sends when it is back" (or "connecting")
+  while its machine is not connected; after 15 s (`Outgoing.overdue`, #654) "Not delivered yet"
+  with the reason, in the failure colour; "Not sent: ‹reason›" with **Retry** when the machine
+  refused it. Tapping the line opens the same connection card.
+- **Hub's machine rows** (§4.4): a connected machine's word is its route's kind ("Tailscale",
+  "Local network", "Tunnel", "Through herder-hub"), where it said "Direct".
+- **Machine page** (§8.7): the Connection section opens with the card, always shown, above
+  the addresses and the link's history.
+- **The sidebar's and Board's foot** stay as P26.7 left them: only open work waiting on an
+  offline machine is said there (`StalledWork`).
+
+**The connection card** (`ConnectionCard`, from `ConnectionFacts`): the machine's name with its
+mark and state, then label–value rows, each only when it has a value:
+
+| row | example |
+|---|---|
+| Route | Tailscale · WebSocket |
+| Address | devbox.tail1234.ts.net:7447 (monospace) |
+| Round trip | 38 ms · 41 ms on average, then the verdict's advice when it is not good |
+| Connected for / Last connected | 12 min / 3 min ago (from the connection log) |
+| Reconnects | 2 since the app opened |
+| Messages | 1 sending · 2 delivered, not started (this device's outbox for the machine) |
+| Why | the last error, while offline (`ConnectionState.explain`) |
+
+and, at its foot, **Machine Page**, where the addresses are. Screenshots (`ConnectionScreenshotTests`):
+`connection-header-mac.png` (all well: nothing extra), `connection-offline-mac.png` and
+`connection-offline-iphone.png` (an offline machine in the header and on a message),
+`connection-card-mac.png`, `connection-card-iphone.png`, and `connection-delivery-mac.png`
+(each delivery line).
 
 ---
 
@@ -965,7 +1025,7 @@ protocol has no plan, no daily usage and no command to remove an account. Screen
   ("Caught up · 3m ago"), **Stop…**, and the **Back up sessions** and **Secrets** switches. It
   shows where the machine
   last said it backs up (`Fleet.backupLinks`) while it asks again.
-- **Connection**: the name on this device, and the addresses, which unfold to reorder, add,
+- **Connection**: the connection card (§5.9), the name on this device, and the addresses, which unfold to reorder, add,
   remove and connect through them, with the link's health since the app opened.
 - **About** (fingerprint, host id), **Danger zone** (Forget).
 
