@@ -370,6 +370,11 @@ impl MainWindow {
         let action = gtk::gio::SimpleAction::new("new-session", None);
         action.connect_activate(move |_, _| creator.new_session());
         this.window.add_action(&action);
+        let remover = this.clone();
+        this.machines_page
+            .set_remove_account(Rc::new(move |host_id, account_id| {
+                remover.send(host_id, CommandBody::RemoveAccount { account_id });
+            }));
         let adder = this.clone();
         this.machines_page.set_add(Rc::new(move || {
             adder.machines_page.add_machine(&adder.window)
@@ -1496,6 +1501,55 @@ impl MainWindow {
     /// Whether the session pane shows a session.
     pub fn shows_session(&self) -> bool {
         self.split.content().as_ref() == Some(self.session_view.page())
+    }
+
+    /// Every label's text on the machines page, in order.
+    pub fn machines_texts(&self) -> Vec<String> {
+        let mut texts = Vec::new();
+        collect_labels(self.machines_page.widget().upcast_ref(), &mut texts);
+        texts
+    }
+
+    /// The machines page's buttons whose tooltip is `tooltip`, in order.
+    pub fn machines_buttons(&self, tooltip: &str) -> Vec<gtk::Button> {
+        let mut buttons = Vec::new();
+        find_all(self.machines_page.widget().upcast_ref(), &mut buttons);
+        buttons.retain(|button: &gtk::Button| button.tooltip_text().as_deref() == Some(tooltip));
+        buttons
+    }
+
+    /// Every label's text over the whole window, dialogs and toasts too.
+    pub fn window_texts(&self) -> Vec<String> {
+        let mut texts = Vec::new();
+        collect_labels(self.window.upcast_ref(), &mut texts);
+        texts
+    }
+
+    /// Answers the dialog the window shows with `response`, as its button does.
+    pub fn respond(&self, response: &str) {
+        let mut dialogs = Vec::new();
+        find_all(self.window.upcast_ref(), &mut dialogs);
+        let dialog: &adw::AlertDialog = dialogs.last().expect("a dialog");
+        let (signal, detail) = glib::subclass::SignalId::parse_name(
+            &format!("response::{response}"),
+            adw::AlertDialog::static_type(),
+            false,
+        )
+        .expect("the response signal");
+        dialog.emit_with_details::<()>(signal, detail.expect("a detail"), &[&response]);
+        dialog.close();
+    }
+}
+
+#[cfg(test)]
+fn find_all<W: IsA<gtk::Widget>>(widget: &gtk::Widget, out: &mut Vec<W>) {
+    if let Some(found) = widget.downcast_ref::<W>() {
+        out.push(found.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        find_all(&widget, out);
+        child = widget.next_sibling();
     }
 }
 
