@@ -566,7 +566,12 @@ pinned one, **never** on a disabled one (dimmed) and **in use** on the connectio
 cycles the selected route through in the race, only this and never (`set_route`); `K`/`J` try it
 earlier or later (`set_addresses`); esc is done. It is this device's choice, so members rank
 routes too. Outside it, the details' **addresses** say "(only this)" and "(never)" beside
-those routes.
+those routes. A tunnel behind a login proxy (`Machine::front_doors`, P28.7) says **sign in
+with s**, **sign in again with s** once its token was refused or expired, or **signed in**.
+`s` on a tunnel starts a browser sign-in (`begin_front_door_sign_in`). The TUI opens the
+proxy's login page, or shows its URL in a notice where there is no browser, as
+`cloudflared access login` does. A notice says when the person has signed in there and the
+machine reconnects.
 
 ```text
    box · routes on this device
@@ -575,7 +580,7 @@ those routes.
    ▶ 2. your VPN          wg://home-udm/192.168.1.5:7447
      3. system VPN        100.101.1.2:7447  only this  in use
      4. through home hub                    never
- j/k move  space auto · only this · never  K earlier  J later  esc done
+ j/k move  space auto · only this · never  K earlier  J later  s sign in  esc done
 ```
 
 ### 2.7 Switch account / provider / model (picker)
