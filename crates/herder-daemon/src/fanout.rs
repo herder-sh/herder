@@ -577,6 +577,11 @@ pub(crate) fn append(body: &mut ItemBody, delta: &str) {
 
 /// One client's queue of messages waiting to be written, and its subscriptions.
 ///
+/// Messages wait in two queues: a catch-up's, for the events a subscription replays from the
+/// journal and the `synced` after them, and the queue for everything else. The writer takes
+/// from the catch-up only while the other is empty, so a command's answer, an approval
+/// request or a terminal's output never waits behind megabytes of replay.
+///
 /// Lock order: the fanout's state, then an outbox.
 #[derive(Debug, Default)]
 pub(crate) struct Outbox {
@@ -590,6 +595,8 @@ pub(crate) struct Outbox {
 #[derive(Debug, Default)]
 struct Inner {
     queue: VecDeque<ServerMessage>,
+    /// Replayed events and syncs, written when `queue` is empty.
+    catch_up: VecDeque<ServerMessage>,
     subs: HashMap<SessionId, Sub>,
     /// Coalesced deltas not yet queued, one entry per item.
     pending: Vec<Pending>,
@@ -661,6 +668,17 @@ impl Outbox {
         self.wake();
     }
 
+    /// Queues replayed events, or a sync answered after them, behind every other message.
+    /// The caller paces itself with [`Outbox::wait_below`].
+    pub(crate) fn catch_up(&self, messages: impl IntoIterator<Item = ServerMessage>) {
+        let mut inner = self.lock();
+        if inner.state == OutboxState::Open {
+            inner.catch_up.extend(messages);
+        }
+        drop(inner);
+        self.wake();
+    }
+
     /// Queues bytes a terminal wrote, or closes the outbox as [`OutboxState::Overflowed`] when
     /// [`TERMINAL_BACKLOG`] messages are already queued. False once the outbox no longer accepts
     /// messages, so the terminal can let go of it.
@@ -677,9 +695,14 @@ impl Outbox {
         open
     }
 
-    /// The next message to write.
+    /// The next message to write: a catch-up's only once nothing else waits.
     pub(crate) fn pop(&self) -> Option<ServerMessage> {
-        let message = self.lock().queue.pop_front();
+        let mut inner = self.lock();
+        let message = inner
+            .queue
+            .pop_front()
+            .or_else(|| inner.catch_up.pop_front());
+        drop(inner);
         if message.is_some() {
             self.drained.notify_one();
         }
@@ -687,12 +710,14 @@ impl Outbox {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.lock().queue.is_empty()
+        let inner = self.lock();
+        inner.queue.is_empty() && inner.catch_up.is_empty()
     }
 
     /// How many messages wait to be written.
     pub(crate) fn queued(&self) -> usize {
-        self.lock().queue.len()
+        let inner = self.lock();
+        inner.queue.len() + inner.catch_up.len()
     }
 
     pub(crate) fn state(&self) -> OutboxState {
@@ -714,12 +739,13 @@ impl Outbox {
         self.ready.notified().await;
     }
 
-    /// Waits until fewer than `len` messages are queued, or the outbox is no longer open.
+    /// Waits until fewer than `len` catch-up messages are queued, or the outbox is no longer
+    /// open.
     pub(crate) async fn wait_below(&self, len: usize) {
         loop {
             {
                 let inner = self.lock();
-                if inner.queue.len() < len || inner.state != OutboxState::Open {
+                if inner.catch_up.len() < len || inner.state != OutboxState::Open {
                     return;
                 }
             }
@@ -772,6 +798,7 @@ impl Inner {
     fn overflow(&mut self) {
         self.state = OutboxState::Overflowed;
         self.queue.clear();
+        self.catch_up.clear();
         self.subs.clear();
         self.pending.clear();
         self.stale.clear();
@@ -890,12 +917,14 @@ impl Inner {
 
     /// Forgets everything queued or owed for a session that is being (re)subscribed or left.
     fn purge(&mut self, session_id: &SessionId) {
-        self.queue.retain(|message| match message {
+        let other = |message: &ServerMessage| match message {
             ServerMessage::Event(event) => event.session_id != *session_id,
             ServerMessage::Snapshot { session_id: s, .. }
             | ServerMessage::Delta { session_id: s, .. } => s != session_id,
             _ => true,
-        });
+        };
+        self.queue.retain(other);
+        self.catch_up.retain(other);
         self.pending
             .retain(|pending| pending.session_id != *session_id);
         self.stale.retain(|(session, _)| session != session_id);

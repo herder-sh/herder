@@ -1640,6 +1640,13 @@ fn a_long_outage_shows_once_and_recovers() {
     });
 }
 
+/// How soon a command sent during the replay of the test below is answered. Ahead of the
+/// answer go the 64 kB the relay holds, the 16 kB the daemon's socket holds unsent, and the
+/// rest of the event being written, at most some 60 kB compressed: 5.6 s at 25 kB a second,
+/// then two round trips of up to 380 ms. It takes 6.4 s; on a busy machine the paused clock
+/// runs ahead of the sockets and it reads up to twice that. Behind the replay it took 95 s.
+const ANSWER_BOUND: Duration = secs(15);
+
 /// The app sleeps through a turn that adds two megabytes to the session and wakes on a link
 /// of 25 kB a second: the replay takes over a minute. The one connection that carries it is
 /// kept all the way, through the pings it delays, a command and a wake's probe; it is never
@@ -1690,8 +1697,18 @@ fn a_slow_link_carrying_a_big_replay_is_kept() {
             session_id: renamed.0.clone(),
             title: renamed.1.clone(),
         };
+        // Sent while the replay has most of a minute to go, it is answered within a few round
+        // trips and what the link holds ahead of it, not behind the replay.
+        let asked = Instant::now();
         let answer = world.app.send(world.host.clone(), rename).await;
         assert_eq!(answer.unwrap(), CommandResult::Applied);
+        let took = asked.elapsed();
+        assert_eq!(*world.seen.ended.borrow(), 0, "the replay arrived first");
+        eprintln!("answered in {took:?} during the replay");
+        assert!(
+            took < ANSWER_BOUND,
+            "answered in {took:?} during the replay"
+        );
         world.did.renamed.push(renamed);
         tokio::time::sleep(secs(10)).await;
         world.app.wake();
@@ -2345,6 +2362,14 @@ fn a_prompt_during_a_catch_up_is_applied_in_half_a_round_trip() {
             after(started) <= 260,
             "started {} ms after the send",
             after(started)
+        );
+        // Its answer goes ahead of the catch-up: a round trip of 450 ms, and what the link
+        // and the daemon's socket hold ahead of it, some 80 kB at 500 kB a second. It takes
+        // some 800 ms, and 2.9 s behind the catch-up; a busy machine stretches the paused clock.
+        assert!(
+            after(answered) <= 1500,
+            "answered {} ms after the send",
+            after(answered)
         );
         drop(watched);
         world.nothing_wrong();
