@@ -4,7 +4,7 @@
      crashes, hangs and performance traces to Sentry, and which features are used and how
      connections go to PostHog, scrubbed of anything that names a person,
      a machine or their work, with a random install id. None of it is linked to the person or
-     used for tracking. The SDKs' own manifests declare the APIs they use. -->
+     used for tracking. Sentry is compiled into the app, so the APIs it uses are declared here. -->
 <plist version="1.0">
 <dict>
 	<key>NSPrivacyTracking</key>
@@ -73,6 +73,23 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>CA92.1</string>
+			</array>
+		</dict>
+		<!-- Sentry: boot time and file timestamps, as its own manifest declares. -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
 			</array>
 		</dict>
 	</array>

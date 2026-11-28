@@ -1,5 +1,5 @@
 import Foundation
-import Sentry
+import SentrySwift
 
 /// Sentry in the apps, while the person shares diagnostics (`DiagnosticsSwitch`): crashes, app
 /// hangs, slow starts and screen loads, sampled profiles on the iPhone, and the app's span

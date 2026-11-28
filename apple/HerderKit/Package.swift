@@ -27,7 +27,10 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 // Draws SVG project icons, which UIImage cannot read.
                 .product(name: "SwiftDraw", package: "SwiftDraw"),
-                .product(name: "Sentry", package: "sentry-cocoa"),
+                // Built from source, as Sentry recommends: the prebuilt `Sentry` product is a
+                // static xcframework that Xcode embeds as a stub Sentry.framework, which App Store
+                // Connect rejects as not properly signed. Its privacy manifest is App/'s.
+                .product(name: "SentrySPM", package: "sentry-cocoa"),
                 // Speak to Chat's system-wide hotkey, and its recorder in Settings.
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts", condition: .when(platforms: [.macOS])),
             ],
