@@ -471,9 +471,10 @@ machine connected right now". A tap opens it in place:
   and Try Earlier / Try Later (`set_route`, `set_addresses`). Under them, one line: routes are
   tried when a connection starts, after a drop or a network change, never moved mid-use (P27.2).
 
-**The tabs** (`RemoteTab`), a segmented control: **Your VPN**, **Hub WireGuard**, **Cloudflare**,
-**Tailscale & others** (on iPhone, where four share the width: Your VPN, Hub, Cloudflare,
-Others). The page opens on the first tab whose way in works, else the first set up, else Your
+**The tabs** (`RemoteTab`, `RemoteTabPicker`), a segmented control: **Your VPN**, **Hub
+WireGuard**, **Cloudflare**, **Tailscale & others** (on iPhone, where four share the width: Your
+VPN, Hub, Cloudflare, Others); where even those do not fit (a narrow phone at a large text
+size), a menu of the same four. The page opens on the first tab whose way in works, else the first set up, else Your
 VPN. Each tab holds one or more route cards (`RouteCard`): the route's tile, mark and state in
 words, one line, its facts and actions, and **How to set it up** (`SetupSteps`): two or three
 short numbered steps per option, commands in monospace, open while the route does not work yet

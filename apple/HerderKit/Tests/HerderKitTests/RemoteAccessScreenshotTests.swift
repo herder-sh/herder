@@ -119,6 +119,9 @@ import Testing
         .dynamicTypeSize(.accessibility1)
         let width = NSHostingController(rootView: form).sizeThatFits(in: CGSize(width: 320, height: 4000)).width
         #expect(width <= 320)
+        // The page's margins leave 288 points for the tabs.
+        let tabs = RemoteTabPicker(tab: .constant(.ownVpn)).dynamicTypeSize(.accessibility1)
+        #expect(NSHostingController(rootView: tabs).sizeThatFits(in: CGSize(width: 288, height: 100)).width <= 288)
         let rows = SettingsGroup { MachineRoutesList(machines: routes, actions: RemoteActions()) }
         #expect(NSHostingController(rootView: rows).sizeThatFits(in: CGSize(width: 320, height: 4000)).width <= 320)
         try await shoot(RemoteAccessView(access: longConfig, machines: routes, tab: .ownVpn) { _ in }
