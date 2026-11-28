@@ -547,9 +547,10 @@ pub struct RequestSecretInput {
     /// Its name, the environment variable commands get it as: uppercase letters, digits and
     /// underscores, not starting with a digit, such as `GITHUB_SIEM_PAT`.
     pub name: String,
-    /// What the value is and where the user gets it, on one line of at most 200 characters,
-    /// such as "GitHub fine-grained PAT, read-only on the org audit log"; it becomes the
-    /// secret's description.
+    /// What the value is, then where the user gets it: the page's full https:// URL, then each
+    /// click, joined by ` → `. One line of at most 200 characters, such as "Cloudflare API
+    /// token, Zone DNS edit. https://dash.cloudflare.com/profile/api-tokens → Create Token";
+    /// it becomes the secret's description.
     #[serde(default)]
     pub description: String,
 }
