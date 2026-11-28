@@ -842,10 +842,10 @@ impl Actor {
                 files,
             } => {
                 let Some((picks, _)) = self.questions.get(&question_id) else {
-                    return Err(error(
-                        ErrorCode::NotFound,
-                        format!("question {question_id} is not pending"),
-                    ));
+                    let attached = !images.is_empty() || !files.is_empty();
+                    self.question_not_open(&question_id, &answer, attached)
+                        .await?;
+                    return Ok(CommandResult::Applied);
                 };
                 if let Err(problem) = picks.check(&answer) {
                     return Err(error(
@@ -1392,6 +1392,59 @@ impl Actor {
                 .tasks
                 .withdraw(primary, &self.session.session_id, &request);
         }
+    }
+
+    /// What an answer to `question_id`, which is not open, comes to. The same answer again,
+    /// as a device sends that was tapped twice while it was out of reach, is done already:
+    /// nothing more to do. Another is refused, saying why: the question was answered, its
+    /// turn ended, or it was never asked.
+    async fn question_not_open(
+        &self,
+        question_id: &QuestionId,
+        answer: &Answer,
+        attached: bool,
+    ) -> Result<(), ErrorInfo> {
+        let journal = self
+            .inner
+            .journal
+            .all(self.session.session_id.clone())
+            .await
+            .map_err(super::internal)?;
+        let mut asked = false;
+        for event in &journal {
+            match &event.body {
+                EventBody::QuestionAsked {
+                    question_id: id, ..
+                } if id == question_id => {
+                    asked = true;
+                }
+                EventBody::QuestionAnswered {
+                    question_id: id,
+                    answer: given,
+                    ..
+                } if id == question_id => {
+                    if given == answer && !attached {
+                        return Ok(());
+                    }
+                    return Err(error(
+                        ErrorCode::Conflict,
+                        format!("question {question_id} was already answered"),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        Err(if asked {
+            error(
+                ErrorCode::Conflict,
+                format!("question {question_id} is no longer open: its turn ended"),
+            )
+        } else {
+            error(
+                ErrorCode::NotFound,
+                format!("question {question_id} does not exist"),
+            )
+        })
     }
 
     /// Why an answer to `approval_id`, which is not open, is refused: already resolved, or
