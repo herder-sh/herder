@@ -2501,12 +2501,12 @@ async fn first_seen(seen: &Seen, wanted: impl Fn(&EventBody) -> bool) -> Instant
 /// sends a prompt the moment it shows the machine connected, while the daemon resumes every
 /// subscription and replays the megabyte and a half one session did meanwhile. Nothing
 /// waits before the prompt goes out: the daemon applies it and starts its turn half a round
-/// trip after the send, and its answer goes ahead of the catch-up on its way back. Printed is
-/// when each step happened.
+/// trip after the send, and its answer goes ahead of the catch-up on its way back, so the app
+/// has it about one round trip after the send. Printed is when each step happened.
 #[test]
 fn a_prompt_during_a_catch_up_is_applied_in_half_a_round_trip() {
     run(async {
-        prompt_during_a_catch_up(World::start(41, 2, Some(1_500_000)).await, 1500).await;
+        prompt_during_a_catch_up(World::start(41, 2, Some(1_500_000)).await, 1000).await;
     });
 }
 
@@ -2609,9 +2609,11 @@ async fn prompt_during_a_catch_up(mut world: World, answered_within: u128) {
         "started {} ms after the send",
         after(started)
     );
-    // Its answer goes ahead of the catch-up: a round trip of 450 ms, and what the link
-    // and the daemon's socket hold ahead of it, some 80 kB at 500 kB a second. It takes
-    // some 800 ms, and 2.9 s behind the catch-up; a busy machine stretches the paused clock.
+    // Its answer goes ahead of the catch-up: a round trip of 450 ms, and what is on its way
+    // ahead of it at 500 kB a second. That is the rest of the catch-up's frame the daemon was
+    // writing when the prompt came, up to 64 kB, and what the daemon's socket and the link
+    // hold, some 100 kB. Direct, it takes some 810 ms, against 2.9 s behind the catch-up;
+    // through a hub, which holds a little more, some 1.05 s.
     assert!(
         after(answered) <= answered_within,
         "answered {} ms after the send",
