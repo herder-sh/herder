@@ -222,14 +222,7 @@ struct RemoteAccessView: View {
         DetailPage(title: "Remote access") {
             summary
             VStack(alignment: .leading, spacing: 16) {
-                Picker("Way in", selection: $tab) {
-                    ForEach(RemoteTab.allCases, id: \.self) { tab in
-                        Text(tab.title).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .accessibilityIdentifier("remote-access-tabs")
+                RemoteTabPicker(tab: $tab)
                 switch tab {
                 case .ownVpn: ownVpn
                 case .hubWireGuard: hubWireGuard
@@ -388,6 +381,29 @@ struct RemoteAccessView: View {
         RouteCard(title: "Port forward or proxy", symbol: "arrow.left.arrow.right", state: access.directState,
                   line: access.directLine, options: SetupOption.direct(access), opensSteps: false) { EmptyView() }
             .accessibilityIdentifier("remote-access-direct")
+    }
+}
+
+/// The tabs as a segmented control where its four segments fit, else as a menu, so a narrow
+/// phone at a large text size never gets a control wider than its screen.
+struct RemoteTabPicker: View {
+    @Binding var tab: RemoteTab
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            picker.pickerStyle(.segmented)
+            picker.pickerStyle(.menu).fixedSize()
+        }
+        .accessibilityIdentifier("remote-access-tabs")
+    }
+
+    private var picker: some View {
+        Picker("Way in", selection: $tab) {
+            ForEach(RemoteTab.allCases, id: \.self) { tab in
+                Text(tab.title).tag(tab)
+            }
+        }
+        .labelsHidden()
     }
 }
 
