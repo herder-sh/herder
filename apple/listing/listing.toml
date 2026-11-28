@@ -120,7 +120,13 @@ userGeneratedContent = false
 unrestrictedWebAccess = true
 
 [review]
-# The contact is left for the owner to fill in.
+# The App Review contact, which `app-store-listing.py submit` needs: set it here, uncommented, or
+# as REVIEW_CONTACT_FIRST_NAME, REVIEW_CONTACT_LAST_NAME, REVIEW_CONTACT_EMAIL and
+# REVIEW_CONTACT_PHONE in the environment, which keeps it out of the repository.
+# contact_first_name = ""
+# contact_last_name = ""
+# contact_email = ""
+# contact_phone = ""
 notes = """
 herder is a client for herder daemons that people run on their own Linux machines and Macs, where they drive coding agents (Claude Code, Codex, Cursor, OpenCode). Without a daemon of your own, use the demo mode:
 

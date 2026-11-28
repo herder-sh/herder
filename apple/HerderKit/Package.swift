@@ -35,8 +35,12 @@ let package = Package(
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts", condition: .when(platforms: [.macOS])),
             ],
             // Mermaid 11.17.2 (MIT, LICENSE alongside) renders diagrams offline;
-            // demo.json is the demo fleet the empty state offers, from scripts/record-demo.sh.
-            resources: [.copy("Resources/Mermaid"), .copy("Resources/demo.json")],
+            // demo.json is the demo fleet the empty state offers, from scripts/record-demo.sh;
+            // PrivacyInfo.xcprivacy is HerderKit's privacy manifest.
+            resources: [
+                .copy("Resources/Mermaid"), .copy("Resources/demo.json"),
+                .copy("Resources/PrivacyInfo.xcprivacy"),
+            ],
             // VideoPlayer's view subclasses AVKit's player view, but the SwiftUI overlay it lives
             // in does not pull AVKit in: unlinked, the app aborts the moment a video artifact shows.
             linkerSettings: [.linkedFramework("AVKit")]),

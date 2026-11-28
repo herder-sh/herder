@@ -63,6 +63,43 @@ TestFlight group get it in the TestFlight app, on the iPhone or the Mac. The Mac
 build is the same app as a team-signed `install-mac.sh` one, so it keeps its machines
 (`~/.config/herder`) and its container.
 
+### App Store
+
+The iPhone app ships to the App Store. The Mac app stays on its Developer ID (GitHub Releases)
+and TestFlight, not the Mac App Store: its sandbox reads and writes `~/.config/herder`, the
+machines it shares with the CLI, through a `temporary-exception` entitlement, which Mac App
+Store review does not accept.
+
+Both apps carry `App/PrivacyInfo.xcprivacy`, and HerderKit its own in its resource bundle; the
+`apple` workflow's `ios-build` and `mac-ui` jobs, and `upload-testflight.sh` after the archive,
+fail through `scripts/check-privacy-manifest.sh` when a built app lacks one. Its SwiftPM
+dependencies ship none (Sentry has one only in its prebuilt framework, so `App/`'s declares the
+APIs Sentry uses).
+
+`scripts/app-store-listing.py` sets the listing in `listing/listing.toml` and submits it for
+review. Left to do once, by hand; the first three in App Store Connect, as the API cannot set them:
+
+1. App Privacy: Data Collected, as `listing/listing.toml`'s header and the privacy manifest list
+   it: Crash Data, Performance Data, Other Diagnostic Data and Product Interaction, all not
+   linked to the person and not used for tracking, and only while sharing diagnostics is on.
+2. Pricing and Availability: Free, in every country or region.
+3. The EU Digital Services Act trader status (App Store Connect › Business).
+4. The App Review contact: in `listing.toml`'s `[review]`, or `REVIEW_CONTACT_*` in the
+   environment, so it stays out of the repository.
+
+Then, for each release, once its iOS build has processed on TestFlight and the app has an iOS
+App Store version of that number (App Store Connect › the app › iOS App › +):
+
+```sh
+apple/scripts/listing-screenshots.py <shots> <frames>   # frame the screenshots
+apple/scripts/app-store-listing.py upload <frames>      # copy, categories, age rating, review notes, screenshots
+apple/scripts/app-store-listing.py submit               # newest valid build of the version, to App Review
+```
+
+Both run under `herder secret run` with the App Store Connect key, as the script's docstring
+shows. `submit` takes the editable iOS version `upload` sets, attaches the newest valid build whose
+version matches it, and submits it for review; it is the only command that submits.
+
 ## Test
 
 The HerderKit tests pair with the fake daemon `build-ffi.sh` builds:

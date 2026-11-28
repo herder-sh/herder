@@ -39,6 +39,7 @@ xcodebuild archive -quiet -skipPackagePluginValidation -project apple/herder.xco
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
   HERDER_SENTRY_DSN="$dsn" HERDER_POSTHOG_TOKEN="${POSTHOG_PROJECT_TOKEN:-}"
+apple/scripts/check-privacy-manifest.sh "$work/herder.xcarchive/Products/Applications/herder.app"
 # The export signs with the entitlements it finds in the archived app's signature, and an
 # unsigned app has none: without this ad-hoc signature carrying them, the app lacks
 # webcredentials:herder.sh and every passkey approval fails as "not associated with domain"
