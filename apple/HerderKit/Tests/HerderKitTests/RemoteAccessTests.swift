@@ -34,14 +34,13 @@ func interface(_ name: String, _ address: String, _ netmask: String = "255.255.2
         #expect(access.tailscaleState == .notSetUp && access.router.state == .notSetUp)
         #expect(access.overall == .notSetUp)
         #expect(access.summary == "Reached at home only · set up access from anywhere")
-        #expect(access.hubLine == "No hub yet. A hub relays to every machine that syncs to it.")
         #expect(access.tailscaleLine == "No machine has a Tailscale address")
-        #expect(access.routerLine == "Not set up. Optional, for your home subnets from anywhere.")
+        #expect(access.routerLine.hasPrefix("None seen yet."))
         #expect(access.routes.map(\.state) == [.notSetUp, .notSetUp, .notSetUp])
         // A split config routes the subnets the machines answer on.
         #expect(access.homeSubnets == ["192.168.1.0/24"])
-        #expect(SetupOption.router(access)[0].steps[1].contains("`AllowedIPs = 192.168.1.0/24`"))
-        #expect(SetupOption.hub(access).map(\.title) == ["First, a hub", "Cloudflare Tunnel", "Port forward", "Reverse proxy"])
+        #expect(SetupOption.ownVpn(access)[0].steps[2].contains("(`192.168.1.0/24`)"))
+        #expect(SetupOption.direct(access).map(\.title) == ["First, a hub", "Port forward", "Reverse proxy"])
     }
 
     /// Through the hub works while this device is connected at its public address, and is
@@ -61,7 +60,6 @@ func interface(_ name: String, _ address: String, _ netmask: String = "255.255.2
         machines[3].address = "wss://hub.example.com"
         let away = FleetReach(machines: machines, now: now)
         #expect(away.hub.state == .working && away.checked == "Connected through it now")
-        #expect(away.hubLine == "hub.example.com · connected through it now")
         #expect(away.summary == "Reachable from anywhere through the hub")
         #expect(away.sightings.contains("hub:wss://hub.example.com"))
 
@@ -85,7 +83,7 @@ func interface(_ name: String, _ address: String, _ netmask: String = "255.255.2
         // A hub with no public address is not set up.
         machines[3].addresses = ["172.20.40.200:7448"]
         let none = FleetReach(machines: machines, now: now)
-        #expect(none.hub.state == .notSetUp && none.hubLine == "No public address yet")
+        #expect(none.hub.state == .notSetUp && none.directState == .notSetUp)
     }
 
     /// Tailscale is read from the machines' addresses, and which of them answer on it now.
@@ -139,9 +137,11 @@ func interface(_ name: String, _ address: String, _ netmask: String = "255.255.2
         for index in machines.indices { machines[index].connection = .disconnected(error: "away") }
         let away = FleetReach(machines: machines, now: now)
         #expect(away.homeSubnets == ["172.20.10.0/24", "172.20.40.0/24"])
-        #expect(SetupOption.router(away)[0].steps[1].contains("`AllowedIPs = 172.20.10.0/24, 172.20.40.0/24`"))
-        #expect(SetupOption.hub(away).map(\.title) == ["Cloudflare Tunnel", "Port forward", "Reverse proxy"])
-        #expect(SetupOption.hub(away)[0].steps[2].contains("herder-hub-0’s page"))
+        #expect(SetupOption.ownVpn(away)[0].steps[2].contains("(`172.20.10.0/24, 172.20.40.0/24`)"))
+        #expect(SetupOption.direct(away).map(\.title) == ["Port forward", "Reverse proxy"])
+        #expect(SetupOption.direct(away)[0].steps[1].contains("herder-hub-0’s page"))
+        #expect(SetupOption.hubWireGuard(away)[0].steps[1].contains("UDP port `51900` to herder-hub-0"))
+        #expect(SetupOption.cloudflare(away)[1].steps[2].contains("herder-hub-0’s page"))
     }
 
     @Test func sightingsRoundTrip() {

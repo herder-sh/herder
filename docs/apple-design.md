@@ -396,7 +396,7 @@ Needs you takes over. A `herder://own` link opened from outside the app, and a h
 a machine's Backup, still approve in `ApproveSheet`. `AddMachineScreenshotTests` draws Install,
 Kubernetes, Approve, Done and a hub to sign in to (`mac-add-machine-*.png`, `mac-add-hub.png`).
 
-### 4.4.1 Remote access (`FleetReach`, `RemoteAccessPage`, P26.18, P27.8)
+### 4.4.1 Remote access (`FleetReach`, `RemoteAccessPage`, P26.18, P27.8, P28.9)
 
 How this fleet is reached from outside home, and how to set that up, in one calm place: the
 one place to pick and set up each route ([remote-access.md](remote-access.md)). herder is
@@ -415,7 +415,7 @@ ring), and, only for an address that cannot work as typed, **won't work** (amber
 |---|---|---|
 | **Through the hub** | the hub's furthest-reaching address (`AddressScope.anywhere`, set once under Public addresses, P26.1), its front-door login (`Machine.addressHeaders` for that address, P26.2), and its check (`PublicCheck`, P26.3) | working while this device is connected through it, or once it was ("Worked from outside 2h ago"); won't work when the name resolves only to the LAN or to nothing; set up otherwise; not set up with no public address |
 | **Tailscale** | every machine's addresses in Tailscale's ranges (100.64.0.0/10, fd7a:115c:a1e0::/48, `*.ts.net`), and whether its connection is over one now (`MachineRoute.tailscale`) | working while a machine answers on it, or once one did; set up when machines have Tailscale addresses but none answered on one yet; not set up with none |
-| **VPN on your router** (WireGuard, OpenVPN, a UniFi gateway's VPN server) | a machine connected at a private IPv4 address (`MachineRoute.local`) that is on none of this device's own networks, while this device has a tunnel interface of its own with an IPv4 address outside Tailscale's range (`NetworkInterface`) | working while that holds, or once it did, naming the home subnets that answered; otherwise not set up |
+| **Another VPN on this device** (a router's WireGuard or OpenVPN server, through an app here) | a machine connected at a private IPv4 address (`MachineRoute.local`) that is on none of this device's own networks, while this device has a tunnel interface of its own with an IPv4 address outside Tailscale's range (`NetworkInterface`) | working while that holds, or once it did, naming the home subnets that answered; otherwise not set up |
 
 herder's own options (`RemoteOptions`), read from this device's WireGuard configs
 (`Client::wireguard_tunnels`) and the hub's `get_remote_access`, asked when the hub connects and
@@ -446,87 +446,90 @@ each route's mark and short name (● Hub ● Tailscale ○ Router VPN), and a c
 - "Machines have Tailscale addresses, not seen answering on them yet";
 - "Reached at home only · set up access from anywhere" — nothing set up.
 
-**The page** (`RemoteAccessPage`, a `DetailPage`, `Page.remoteAccess`): the summary as its
-status, one line on what carries a connection, then **Your machines**, then a card per route:
-through the hub, your VPN in herder, herder's WireGuard on the hub and Cloudflare (both only with
-a hub), Tailscale, the VPN on your router.
+**The page** (`RemoteAccessPage`, a `DetailPage`, `Page.remoteAccess`, P28.9): a calm summary,
+then one tab per way in, then one quiet line: every connection is end-to-end encrypted to the
+machine whatever carries it, and none of these is required.
 
-**Your machines** (`MachineRoutesCard`, from `MachineRoutes`): a row per machine, a green dot
-while connected, its name, and one line: the route in use and its round trip ("Tailscale ·
-38 ms", P26.15's `MachineRoute` and `Machine::quality`), "Offline", and "· pinned" or "· pinned
-to Home network" when the user pinned one. A tap opens its routes in place, in the order they are
-tried, numbered: each route's name by what carries it (`route_kind`: Local network, Your VPN,
-Tailscale, Internet, Hub WireGuard, Tunnel, Through ‹hub›, Cloudflare relay), its address in
-monospace, **In use** on the one in use, and a quiet menu: **In the race** (Auto), **Only this
-route** (pinned: only it is dialled), **Never** (disabled: never dialled, drawn dimmed), and Try
-Earlier / Try Later to reorder (`set_route`, `set_addresses`). Under them, one line: routes are
-tried when a connection starts, after a drop or a network change, never moved mid-use (P27.2).
+**The summary**, a card: the globe tile, `FleetReach.summary` in a line, and under it every
+machine's route in one more (`MachineRoutes.line`): "All 4 connected · Tailscale · 38 ms",
+"3 of 4 connected · 3 routes · 12–61 ms" (route names while there are two or fewer), "No
+machine connected right now". A tap opens it in place:
 
-herder's options set up in place, in the card, without a sheet:
+- the hub's **Public address** (`hub.example.com`, or "None, which is fine"), **Checked** (the
+  `PublicCheck` sentence, or "Worked from outside 2h ago"), **Proxy headers** for a tunnel
+  address ("Sends cf-access-client-id, cf-access-client-secret", or "None, which is fine": the
+  inner mutual TLS already authenticates), **Relays to** (`FleetHost.relay`, §5.9), and **Open
+  ‹hub›**, where public addresses and proxy headers are set;
+- **each machine** (`MachineRoutesList`, from `MachineRoutes`): a green dot while connected, its
+  name, and its route in use and round trip ("Tailscale · 38 ms", P26.15's `MachineRoute` and
+  `Machine::quality`), "Offline", and "· pinned" or "· pinned to Home network". A tap opens its
+  routes in place, in the order they are tried, numbered: each named by what carries it
+  (`route_kind`: Local network, Your VPN, Tailscale, Internet, Hub WireGuard, Tunnel, Through
+  ‹hub›, Cloudflare relay), its address in monospace, **In use** on the one in use, and a quiet
+  menu: **In the race** (Auto), **Only this route** (pinned), **Never** (disabled, drawn dimmed),
+  and Try Earlier / Try Later (`set_route`, `set_addresses`). Under them, one line: routes are
+  tried when a connection starts, after a drop or a network change, never moved mid-use (P27.2).
 
-- *Your VPN, in herder* (`OwnVpnFacts`): a row per imported config, its name, endpoint and
-  AllowedIPs, with **Remove**; then **Import a WireGuard Config…**, which opens a name and a
-  config field in the card, with **Choose File…** for a `.conf` (a UniFi router's export) and
-  **Import** (`import_wireguard`). One line says the private key stays on this device and that
-  herder carries only its own connections, so another VPN here stays on.
-- *herder's WireGuard on the hub* (`HubWireGuardFacts`): while the hub offers it, **Use on this
-  device**, a switch (`set_hub_wireguard`). To an owner, the router's public `host:port` and the
-  hub's UDP port (51900 by default) and **Turn On**; once on, **Change…** and **Turn Off**
-  (`set_remote_access`). One line says to forward that UDP port, and that only paired devices
-  get an answer.
-- *Cloudflare, set up by the hub* (`CloudflareFacts`): a row each for the **Tunnel** and the
-  **Relay** while set up, with its mark and host or Cloudflare's message. To an owner, **Set
-  Up…** opens the account ID, the API token (secure; kept on the hub as the secret
-  `cloudflare/CLOUDFLARE_API_TOKEN`, where `herder hub tunnel` puts it too, never read back; left empty it keeps the one there), the
-  tunnel's hostname (optional) and a **Relay** switch, and **Set Up** (`put_secret`, then
-  `set_remote_access`); once set up, **Change…** and **Remove**.
+**The tabs** (`RemoteTab`), a segmented control: **Your VPN**, **Hub WireGuard**, **Cloudflare**,
+**Tailscale & others** (on iPhone, where four share the width: Your VPN, Hub, Cloudflare,
+Others). The page opens on the first tab whose way in works, else the first set up, else Your
+VPN. Each tab holds one or more route cards (`RouteCard`): the route's tile, mark and state in
+words, one line, its facts and actions, and **How to set it up** (`SetupSteps`): two or three
+short numbered steps per option, commands in monospace, open while the route does not work yet
+(Tailscale's and the port forward's start closed: nothing to set up in herder).
 
-A member sees each option's state and "An owner of the hub sets it up". A hub too old to answer
+- **Your VPN** — *WireGuard configs* (`OwnVpnFacts`, P27.3): the line is "1 config · up now",
+  "2 configs · idle until herder needs one", or what importing one does. A row per imported
+  config: its mark, name and status ("Up now"; "Idle · last up 2h ago", from this device's
+  memory, `RemoteSightings` key `wg:<id>`; "Idle · comes up when herder needs it"), its endpoint
+  and AllowedIPs in monospace, and **Remove**. Then **Import a WireGuard Config…**: a name and
+  a config field (paste), **Choose File…** for a `.conf`, on iPhone **Scan QR Code…**, and
+  **Import** (`import_wireguard`); one line says the private key stays on this device and only
+  herder's connections use it, so another VPN here stays on. Steps: add a client on your
+  WireGuard server (a UniFi gateway: Settings › VPN › VPN Server), import it here, and that's
+  all: the machines' home addresses (`FleetReach.homeSubnets`) answer through it.
+- **Hub WireGuard** — *herder's WireGuard on the hub* (`HubWireGuardFacts`, P27.4): while the
+  hub offers it, **Use on this device**, a switch (`set_hub_wireguard`). To an owner, the
+  router's public `host:port` and the hub's UDP port (51900 by default) and **Turn On**; once on,
+  **Change…** and **Turn Off** (`set_remote_access`). Steps: an owner turns it on, forward that
+  UDP port to the hub (a hub in Kubernetes has it on its Service), turn it on per device.
+- **Cloudflare** — *Relay and tunnel, set up by the hub* (`CloudflareFacts`, P27.5, P27.6): a row
+  each for the **Tunnel** and the **Relay** while set up, with its mark and host or Cloudflare's
+  message. To an owner, **Set Up…** opens the account ID, the API token (secure; kept on the hub
+  as the secret `cloudflare/CLOUDFLARE_API_TOKEN`, where `herder hub tunnel` puts it too, never
+  read back; left empty it keeps the one there), the tunnel's hostname (optional) and a
+  **Relay** switch, and **Set Up** (`put_secret`, then `set_remote_access`); once set up,
+  **Change…** and **Remove**. Steps: the token's scopes, Set Up, and, as a second option, a
+  Cloudflare Tunnel run by hand (`cloudflared`, then its address under Public addresses).
+  *Browser sign-in* (`FrontDoorFacts`, P28.7): working while this device is signed in to the
+  login in front of the hub's tunnel, set up while it asks; **Sign In…** or **Sign In Again…**
+  opens the login in a browser sheet that closes once the hub has the token (as on the
+  machine's page, §8.7). Steps: a Cloudflare Access self-hosted application with an Allow
+  policy.
+- **Tailscale & others** — one line: these carry herder by themselves once they reach your
+  machines. *Tailscale*: a row per machine with a Tailscale address ("Answers on it now",
+  "Answered 3d ago", "Has a Tailscale address"). *Another VPN on this device* (the router's VPN
+  as `FleetReach.router` detects it): **Home subnets** that answered, when it last worked; "None
+  seen yet" otherwise, no steps. *Port forward or proxy*: the hub's public address when it is not
+  a tunnel's (`FleetReach.directState`), with Port forward and Reverse proxy steps.
+
+The tabs for what the hub runs say "Needs a hub" with no hub, with one step to add one. A
+member sees each option's state and "An owner of the hub sets it up". A hub too old to answer
 says "The hub's herder is too old for this. Update it from Hub › Updates." in the card's line.
-
-The routes the owner runs keep their cards. Each: the route's mark and name, its state in words,
-then its facts as label–value rows:
-
-- *Through the hub*: **Public address** (`hub.example.com`, or "None yet"), **Front-door
-  login** for a tunnel address ("Sends cf-access-client-id, cf-access-client-secret", or "None,
-  which is fine": the inner mutual TLS already authenticates), **Checked** (the `PublicCheck` sentence, or
-  "Worked from outside 2h ago"), and **Relays to** (the machines the hub relays to,
-  `FleetHost.relay`, each reached through it when nothing nearer answers, §5.9). **Open ‹hub›** opens its machine page, where public
-  addresses and proxy headers are set.
-- *Tailscale*: a row per machine with a Tailscale address: "Answers on it now", "Answered
-  3d ago" or "Has a Tailscale address"; machines without one are not listed.
-- *VPN on your router*: **Home subnets** that answered (`172.20.40.0/24`), when it last
-  worked.
-
-At each card's foot, **How to set it up** (`SetupSteps`) opens, in place, short numbered steps
-per option, each three or four lines with the commands in monospace:
-
-- *Through the hub*: **Cloudflare Tunnel** (a tunnel listener, `cloudflared tunnel create`,
-  route its DNS, add the `https://` address under Public addresses; optionally Cloudflare
-  Access with a service token, its headers set per device), **Port forward** (forward a TCP
-  port to the hub's, a fixed IP or dynamic DNS name, add `host:port`), **Reverse proxy** (TCP
-  pass-through, or HTTPS with WebSockets on to the tunnel listener; add its address).
-- *Tailscale*: install it on the machines and this device on one tailnet; a machine listening
-  on every interface lists its Tailscale address by itself; keep it on away from home.
-- *VPN on your router*: turn on the router's WireGuard (or OpenVPN) server; make this device's
-  config **split**, routing only the home subnets (`AllowedIPs = 172.20.40.0/24,
-  172.20.10.0/24`, the /24s of the machines' own private addresses, `FleetReach.homeSubnets`)
-  rather than `0.0.0.0/0`, so the rest of its traffic does not go through home; turn it on
-  away from home (On Demand). Nothing to add in herder: the machines' home addresses answer.
-
-Steps are collapsed when the route works and open until it does, so a working page reads as
-status first; herder's options have no steps, as they set themselves up. The TUI's remote access
-screen (`w` in the fleet, `docs/tui-design.md` §2.6) sets up the same options, and ranks routes
-with `o`; browser sign-in to a front door is `s` on a tunnel route there.
+Nothing is amber unless set up so it cannot work. The TUI's remote access screen (`w` in the
+fleet, `docs/tui-design.md` §2.6) sets up the same options, and ranks routes with `o`; browser
+sign-in to a front door is `s` on a tunnel route there.
 
 Screenshots (`RemoteAccessScreenshotTests`): `remote-access-hub-iphone.png` (the Hub tab's
-row, all well), `remote-access-mac.png` (the page: each machine's route and round trip, work-mbp
-pinned through the hub; hub working with a front-door login; a WireGuard config imported and up;
-the hub's WireGuard on; its Cloudflare tunnel up and relay failed; Tailscale on two machines;
-router VPN worked yesterday), `remote-access-iphone.png` (the page at an iPhone's width),
-`remote-access-offers-iphone.png` (a hub this device owns, nothing of herder's set up: each
-option's set-up offered), `remote-access-none-iphone.png` (nothing set up, no hub, every route's
-steps open); the row also shows in `hub-mac.png` and `hub-iphone.png`.
+row, all well); `remote-access-<tab>-mac.png` and `remote-access-<tab>-iphone.png` for each tab
+(`your-vpn`, `hub-wireguard`, `cloudflare`, `others`) with all set up: a WireGuard config
+imported and up, the hub's WireGuard on, its Cloudflare tunnel up and relay failed, signed in
+to its front door, Tailscale on two machines, the router's VPN seen yesterday;
+`remote-access-summary-mac.png` and `-iphone.png` (the summary opened: the hub's public address
+and each machine's route, work-mbp pinned through the hub); `remote-access-none-iphone.png`
+(nothing set up, no hub); `remote-access-offers-hub-wireguard-iphone.png` and
+`remote-access-offers-cloudflare-iphone.png` (a hub this device owns, nothing of herder's set
+up: each offered). The Hub tab's row also shows in `hub-mac.png` and `hub-iphone.png`.
 
 ### 4.5 Usage (`UsageView`)
 

@@ -7,11 +7,12 @@ import SwiftUI
 import Testing
 
 /// Draws Remote access as the app's dark appearance shows it: the Hub tab's row with all well;
-/// the page with the hub public behind a front-door login, Tailscale on two machines, the
-/// router's VPN seen yesterday and herder's own options (a WireGuard config imported, the hub's
-/// WireGuard on, its Cloudflare tunnel up and relay failed) at the Mac's and an iPhone's width;
-/// and with nothing set up, every route's steps open and each option offered to its owner. Attaches each; with `HERDER_SCREENSHOT_DIR` set, also writes them
-/// there as `remote-access-<screen>.png`.
+/// the page, its summary closed and opened, on each tab, with the hub public behind a
+/// front-door login, Tailscale on two machines, the router's VPN seen yesterday and herder's
+/// own options (a WireGuard config imported, the hub's WireGuard on, its Cloudflare tunnel up
+/// and relay failed) at the Mac's and an iPhone's width; and with nothing set up, and each
+/// option offered to its owner. Attaches each; with `HERDER_SCREENSHOT_DIR` set, also writes
+/// them there as `remote-access-<screen>.png`.
 @MainActor @Suite(.serialized) struct RemoteAccessScreenshotTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
@@ -22,6 +23,8 @@ import Testing
         machines[3].address = "wss://hub.example.com"
         machines[0].addresses = ["172.20.10.5:7447", "100.101.1.2:7447"]
         machines[0].address = "hub://h-hub"
+        machines[3].frontDoors = [FrontDoor(address: "wss://hub.example.com", expiresAt: "2096-10-02T07:06:40Z",
+                                            signIn: false)]
         var options = RemoteOptions(hub: "h-hub", owner: true, tunnels: [homeTunnel(up: true)])
         options.read(remoteOffer())
         return FleetReach(machines: machines, seen: ["vpn:172.20.40.0/24": now.addingTimeInterval(-86400),
@@ -65,24 +68,40 @@ import Testing
         try await shoot(row, size: CGSize(width: 390, height: 130), named: "remote-access-hub-iphone.png")
     }
 
-    @Test func drawsThePageOnTheMac() async throws {
-        try await shoot(RemoteAccessView(access: working, machines: routes) { _ in }, size: CGSize(width: 1040, height: 2100),
-                        named: "remote-access-mac.png")
+    /// Each tab with all set up, at the Mac's and an iPhone's width.
+    @Test(arguments: RemoteTab.allCases) func drawsEachTab(_ tab: RemoteTab) async throws {
+        let name = switch tab {
+        case .ownVpn: "your-vpn"
+        case .hubWireGuard: "hub-wireguard"
+        case .cloudflare: "cloudflare"
+        case .others: "others"
+        }
+        try await shoot(RemoteAccessView(access: working, machines: routes, tab: tab) { _ in },
+                        size: CGSize(width: 1040, height: 1400), named: "remote-access-\(name)-mac.png")
+        try await shoot(RemoteAccessView(access: working, machines: routes, tab: tab) { _ in },
+                        size: CGSize(width: 390, height: 1700), named: "remote-access-\(name)-iphone.png")
     }
 
-    @Test func drawsThePageOnAnIPhone() async throws {
-        try await shoot(RemoteAccessView(access: working, machines: routes) { _ in }, size: CGSize(width: 390, height: 2500),
-                        named: "remote-access-iphone.png")
+    /// The summary opened: the hub's public address and each machine's route, to rank or pin.
+    @Test func drawsTheSummaryOpened() async throws {
+        try await shoot(RemoteAccessView(access: working, machines: routes, showsDetail: true) { _ in },
+                        size: CGSize(width: 1040, height: 1700), named: "remote-access-summary-mac.png")
+        try await shoot(RemoteAccessView(access: working, machines: routes, showsDetail: true) { _ in },
+                        size: CGSize(width: 390, height: 2000), named: "remote-access-summary-iphone.png")
     }
 
     @Test func drawsNothingSetUpOnAnIPhone() async throws {
-        try await shoot(RemoteAccessView(access: nothing) { _ in }, size: CGSize(width: 390, height: 3600),
+        try await shoot(RemoteAccessView(access: nothing) { _ in }, size: CGSize(width: 390, height: 1400),
                         named: "remote-access-none-iphone.png")
     }
 
+    /// A hub this device owns with nothing of herder's set up: the hub's WireGuard and
+    /// Cloudflare offered.
     @Test func drawsTheOptionsOfferedToAnOwnerOnAnIPhone() async throws {
-        try await shoot(RemoteAccessView(access: offers) { _ in }, size: CGSize(width: 390, height: 3600),
-                        named: "remote-access-offers-iphone.png")
+        try await shoot(RemoteAccessView(access: offers, tab: .hubWireGuard) { _ in }, size: CGSize(width: 390, height: 1400),
+                        named: "remote-access-offers-hub-wireguard-iphone.png")
+        try await shoot(RemoteAccessView(access: offers, tab: .cloudflare) { _ in }, size: CGSize(width: 390, height: 1700),
+                        named: "remote-access-offers-cloudflare-iphone.png")
     }
 
     private func shoot(_ content: some View, size: CGSize, named name: String) async throws {

@@ -164,15 +164,13 @@ struct RemoteOptions: Equatable {
     }
     var tunnelState: FleetReach.State { tunnel?.state ?? .notSetUp }
 
-    /// Your VPN's line: "home-udm · 192.168.1.0/24 · up now".
+    /// Your VPN's line: "1 config · up now"; each config's own status is on its row.
     var ownVpnLine: String {
         guard !imported.isEmpty else {
-            return "Not set up. Import your WireGuard server’s config (a UniFi router’s, say), and herder reaches home through it, beside any other VPN."
+            return "Not set up. Import your WireGuard server’s config (a UniFi gateway’s, say), and herder reaches home through it, beside any other VPN."
         }
-        return imported.map { tunnel in
-            ([tunnel.name] + (tunnel.allowedIps.isEmpty ? [] : [tunnel.allowedIps.joined(separator: ", ")])
-                + [tunnel.up ? "up now" : "up only while used"]).joined(separator: " · ")
-        }.joined(separator: "\n")
+        let count = imported.count == 1 ? "1 config" : "\(imported.count) configs"
+        return "\(count) · " + (imported.contains(where: \.up) ? "up now" : "idle until herder needs one")
     }
 
     /// The hub's WireGuard line.
@@ -265,8 +263,8 @@ struct MachineRoutes: Equatable, Identifiable {
     let entries: [Entry]
     /// The route in use, "Tailscale"; nil while not connected.
     let route: String?
-    /// "38 ms": the latest round trip on the connection in use.
-    let roundTrip: String?
+    /// The latest round trip on the connection in use, in milliseconds.
+    let roundTripMs: UInt32?
     let signal: ConnectionSignal
 
     init(_ machine: Machine, among machines: [Machine]) {
@@ -285,15 +283,38 @@ struct MachineRoutes: Equatable, Identifiable {
                          choice: choice, inUse: address == connected)
         }
         route = MachineRoute(machine, among: machines)?.name
-        roundTrip = connected == nil ? nil : machine.quality.lastRttMs.map { "\($0) ms" }
+        roundTripMs = connected == nil ? nil : machine.quality.lastRttMs
         signal = ConnectionSignal(machine)
     }
 
     /// The row's line: "Tailscale · 38 ms", "Offline", "Pinned to Home network".
     var line: String {
-        let said = [route ?? signal.word ?? "Offline", roundTrip].compactMap(\.self).joined(separator: " · ")
+        let said = [route ?? signal.word ?? "Offline", roundTripMs.map { "\($0) ms" }].compactMap(\.self)
+            .joined(separator: " · ")
         guard let pinned = entries.first(where: { $0.choice == .pinned }) else { return said }
         return pinned.inUse ? "\(said) · pinned" : "\(said) · pinned to \(pinned.name)"
+    }
+
+    /// Every machine's route in one line, the Remote access summary's: "All 4 connected ·
+    /// Tailscale · 38 ms", "3 of 4 connected · 3 routes · 12–61 ms".
+    static func line(_ machines: [MachineRoutes]) -> String {
+        let connected = machines.filter { $0.route != nil }
+        guard !connected.isEmpty else { return machines.isEmpty ? "" : "No machine connected right now" }
+        let count = if connected.count < machines.count {
+            "\(connected.count) of \(machines.count) connected"
+        } else {
+            machines.count == 1 ? "Connected" : "All \(machines.count) connected"
+        }
+        var routes: [String] = []
+        for route in connected.compactMap(\.route) where !routes.contains(route) { routes.append(route) }
+        let over = routes.count <= 2 ? FleetReach.joined(routes) : "\(routes.count) routes"
+        let trips = connected.compactMap(\.roundTripMs)
+        let trip: String? = switch (trips.min(), trips.max()) {
+        case let (low?, high?) where low == high: "\(low) ms"
+        case let (low?, high?): "\(low)–\(high) ms"
+        default: nil
+        }
+        return [count, over, trip].compactMap(\.self).joined(separator: " · ")
     }
 
     /// What a route's choice says beside it.
