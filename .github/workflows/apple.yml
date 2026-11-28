@@ -332,8 +332,21 @@ jobs:
           [ -d "$bundle" ] || exit 0
           xcrun xcresulttool get test-results summary --path "$bundle" |
             jq -r '.testFailures[]? | "\(.testIdentifierString): \(.failureText)"'
+      # The screenshots the UI tests attach (a tooltip on hover, the cheat sheet), as PNGs.
+      - name: Export the UI tests' screenshots
+        if: always()
+        run: |
+          bundle=target/mac-ui-tests/tests.xcresult
+          [ -d "$bundle" ] || exit 0
+          xcrun xcresulttool export attachments --path "$bundle" --output-path "$RUNNER_TEMP/mac-ui-shots"
       - uses: actions/upload-artifact@v7
         if: always()
+        with:
+          name: mac-ui-screenshots
+          path: ${{ runner.temp }}/mac-ui-shots
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v7
+        if: failure()
         with:
           name: mac-ui-tests-xcresult
           path: target/mac-ui-tests/tests.xcresult

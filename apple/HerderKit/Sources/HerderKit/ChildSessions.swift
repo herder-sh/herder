@@ -527,7 +527,7 @@ struct ChildBanner: View {
                     Group {
                         if let open {
                             Button { open(parent) } label: { back }
-                                .keyboardShortcut("[", modifiers: .command)
+                                .keyboardShortcut(.back)
                         } else if let path, path.wrappedValue.dropLast().last == .session(parent) {
                             // Pushed from the parent: back pops to it, where it was left.
                             Button { path.wrappedValue.removeLast() } label: { back }
@@ -536,7 +536,7 @@ struct ChildBanner: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .help("Back to \(name) (⌘[)")
+                    .help("Back to \(name)", shortcut: .back)
                     .accessibilityLabel("Back to parent session \(name)")
                 }
                 HStack(spacing: 5) {

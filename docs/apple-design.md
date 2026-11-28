@@ -943,15 +943,41 @@ phone), `mac-new-session.png`, `ios-new-session.png`, `mac-machine-settings.png`
   cannot. Already compliant: `ActionButton` (48), `ChoiceButton` (48), `InputBox` and
   `ChoiceChips` (44), the iOS `QueueTray` rows (44), `ListAndSession`'s Back (44).
 - **Mac:** controls are 28–34 pt (`IconButton` 30, `HeaderLabel` 32, `SidebarRow` 34), with
-  hover states, tooltips (`.help`) and a keyboard shortcut for every frequent action: ⌘N new
-  session, ⌘R reconnect, ⇧⌘\ sidebar, ⌘\ list, ⌘\` terminal, ⌥⌘I inspector, ⌘[ parent, ⌘↩ send,
-  ⇧⌘D dictate.
+  hover states, tooltips (`.help`) and a keyboard shortcut for every frequent action (§7.1).
 - **Labels never wrap inside a button.** A labelled button that does not fit drops to its icon
   (`ViewThatFits`), keeping the label as its accessibility label.
 - **Hover-only actions have a touch equivalent:** the archive button on hover (`SessionLink`) is
   a swipe and a context menu on iOS; the settings gear on hover (`SidebarRow`) also shows on the
   selected row, which is how iPad reaches it.
 - **Every icon-only button has an accessibility label** (`IconButton.help`, `HeaderButton`).
+
+### 7.1 Keyboard shortcuts (`Shortcut`, `Keymap`, `CheatSheet`, P26.24)
+
+- **One list.** Every shortcut is a case of `Shortcut`, with its title, group (General, View,
+  Go, Session, Artifacts) and default key. Nothing calls `.keyboardShortcut("x")` with a key of
+  its own: a control takes `.keyboardShortcut(.find)` and its tooltip `.help("Find in the
+  transcript", shortcut: .find)` (or `IconButton`'s and `CircleButton`'s `shortcut:`), which
+  read `Keymap`, so a rebound key shows at once in the menu bar, the tooltips and the cheat sheet.
+  A tooltip ends with the key in brackets, "Dictate, on this device (⇧⌘D)", and drops it when
+  the key is cleared.
+- **Defaults** are the keys the app had: ⌘N new session, ⌥⌘N new chat, ⌃⌥⌘D Speak to Chat,
+  ⌘R reconnect, ⌘/ the cheat sheet, ⇧⌘\ sidebar, ⌘\ session list, ⌥⌘I events, ⌘1–⌘6 the
+  sections, ⌘[ back, ⇧⌘D dictate, ⌘↩ send, ⌘F find, ⌘G and ⇧⌘G next and previous match, ⌘\`
+  terminal; in the artifact viewer ⌘[ and ⌘] step, ⌘9 fit width, ⌘- ⌘0 ⌘= zoom, ⌘S save.
+  ⌘/ clashes with nothing on the Mac or iPad (⇧⌘/ is the system's Help search).
+- **Settings → Shortcuts (Mac)** lists them by group in a grouped form, each with a recorder
+  (KeyboardShortcuts) and a reset arrow, and Restore Defaults at the end. A key another
+  shortcut has where both can be pressed is refused, naming it; the viewer's keys may repeat
+  the window's. While a recorder listens, the app's keys step aside. The typing and list keys
+  (Return, ⇧Return, Tab in the composer; J, K, Return, E and ⌘Z on the Board) are listed under
+  them as fixed.
+- **The cheat sheet** (⌘/, or Help → Keyboard Shortcuts) is a card over a dimmed window: two
+  columns of groups, each row a title and its key in a quiet cap (`KeyCaps`), a dash for a
+  cleared key. Esc, a click outside or ⌘/ again closes it. On iPad the You page has a Keyboard
+  Shortcuts row that opens it; iPad keys are the defaults and are not rebound.
+- **Speak to Chat** (⌃⌥⌘D) works with herder in the background: it brings herder forward and,
+  with a session or a draft on show, starts or stops dictation in its composer; only with none
+  open does it start a new chat, listening. Pressed again it stops.
 
 ---
 

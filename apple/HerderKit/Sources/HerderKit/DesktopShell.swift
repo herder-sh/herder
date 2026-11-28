@@ -468,9 +468,9 @@ struct Sidebar: View {
             HStack(spacing: 6) {
                 Spacer()
                 // Their keys are the menu bar's (`HerderCommands`).
-                IconButton(symbol: "sidebar.left", help: "Collapse the sidebar (⇧⌘\\)") { collapsed = true }
-                IconButton(symbol: "arrow.clockwise", help: "Reconnect (⌘R)") { fleet.wake() }
-                IconButton(symbol: "square.and.pencil", help: "New Session (⌘N)", action: newSession)
+                IconButton(symbol: "sidebar.left", help: "Collapse the sidebar", shortcut: .sidebar) { collapsed = true }
+                IconButton(symbol: "arrow.clockwise", help: "Reconnect", shortcut: .reconnect) { fleet.wake() }
+                IconButton(symbol: "square.and.pencil", help: "New Session", shortcut: .newSession, action: newSession)
             }
             // Room for the window's traffic lights on the Mac.
             .frame(height: Self.topBar)
@@ -598,8 +598,8 @@ private struct SidebarRail: View {
         let lists = fleet.lists
         VStack(spacing: 10) {
             Spacer().frame(height: Sidebar.topBar - 8)
-            IconButton(symbol: "sidebar.left", help: "Expand the sidebar (⇧⌘\\)") { collapsed = false }
-            IconButton(symbol: "square.and.pencil", help: "New Session (⌘N)", action: newSession)
+            IconButton(symbol: "sidebar.left", help: "Expand the sidebar", shortcut: .sidebar) { collapsed = false }
+            IconButton(symbol: "square.and.pencil", help: "New Session", shortcut: .newSession, action: newSession)
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("checklist", "Board", .board)
             rail(Switcher.chatSymbol, "Chats", .chats)
@@ -703,6 +703,8 @@ private struct SidebarRow: View {
 struct IconButton: View {
     let symbol: String
     let help: String
+    /// The shortcut its tooltip names, with its key as bound now.
+    var shortcut: Shortcut?
     let action: () -> Void
 
     var body: some View {
@@ -715,7 +717,7 @@ struct IconButton: View {
                 .hitTarget()
         }
         .buttonStyle(.plain)
-        .help(help)
+        .help(shortcut.map { Keymap.shared.help(help, $0) } ?? help)
         .accessibilityLabel(help)
     }
 }

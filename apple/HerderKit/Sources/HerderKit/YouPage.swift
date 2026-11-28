@@ -368,6 +368,9 @@ struct YouPage: View {
                         .font(Theme.body).foregroundStyle(Theme.secondary)
                 }
                 DiagnosticsRow(diagnostics: .shared)
+                #if os(iOS)
+                ShortcutsRow()
+                #endif
             }
             .pageColumn()
         }

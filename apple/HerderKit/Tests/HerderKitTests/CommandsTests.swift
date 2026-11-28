@@ -65,6 +65,40 @@ struct CommandsTests {
         #expect(CommandRoute(.newChat, fleet: fleet, item: .board) == .draft(draft, listens: false))
     }
 
+    /// ⌃⌥⌘D with a session or a draft on show dictates into its composer; only with none
+    /// does it open a chat. New Chat opens one either way.
+    @Test func speakToChatDictatesIntoTheComposerOnShow() throws {
+        let fleet = try Fleet.demo()
+        #expect(CommandRoute(.speakToChat, fleet: fleet, item: .board, composing: true) == .dictate)
+        guard case .draft(_, true) = CommandRoute(.speakToChat, fleet: fleet, item: .board, composing: false) else {
+            Issue.record("Speak to Chat with nothing open opened no listening chat")
+            return
+        }
+        guard case .draft(_, false) = CommandRoute(.newChat, fleet: fleet, item: .board, composing: true) else {
+            Issue.record("New Chat over a session opened no chat")
+            return
+        }
+    }
+
+    /// The composer that came on show last is the one that dictates; once it goes, the one
+    /// under it; once all have gone, none.
+    @Test func theComposerOnShowLastDictates() {
+        let commands = AppCommands()
+        let session = UUID(), draft = UUID()
+        var toggled: [String] = []
+        #expect(!commands.composing)
+        commands.composer(session) { toggled.append("session") }
+        commands.composer(draft) { toggled.append("draft") }
+        #expect(commands.composing)
+        commands.dictateInComposer()
+        commands.composer(draft, toggle: nil)
+        commands.dictateInComposer()
+        commands.composer(session, toggle: nil)
+        commands.dictateInComposer()
+        #expect(toggled == ["draft", "session"])
+        #expect(!commands.composing)
+    }
+
     /// With no machine to chat on, it says so instead of opening nothing.
     @Test func withoutAMachineAChatSaysWhy() throws {
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
