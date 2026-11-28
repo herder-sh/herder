@@ -1,59 +1,236 @@
 import Herder
 import SwiftUI
 
-/// What an agent's `request_secret` asks: "This session asks you to add the secret
-/// GITHUB_SIEM_PAT in coingate on herder-hub-0", with its hint, a warning when it replaces
-/// a value, the hub's sets to pick another from, and a secure field for the value.
+/// An agent's `request_secret`, as its card shows it: the secret's name with Decline, where it
+/// goes as a chip that changes the set, the agent's hint as a link and steps, and, fixed at the
+/// bottom, the value field with Paste or Store. Only the hint scrolls, so short of room (the
+/// keyboard up under a pinned card, a long hint) the field and Store stay in view.
 struct SecretRequestAsk: View {
+    let request: PendingRequest
     let fleet: Fleet
-    let hostId: HostId
     let secret: SecretRequest
     @Binding var picked: String?
     @Binding var value: SecretInput
+    /// What the card shows of the session and why it routed here, under the destination.
+    let context: AnyView
     @State private var hub: Machine?
     @State private var sets: [String] = []
     /// The hub's secrets, to tell whether the picked set has the name already.
     @State private var held: [SecretInfo]?
     @State private var problem: String?
+    @State private var explaining = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(Self.question(secret, set: chosen, hub: hub?.name))
-                .font(.subheadline)
-                .foregroundStyle(Theme.text)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("request-secret-question")
-            if !secret.description.isEmpty {
-                Text(secret.description).font(.footnote).foregroundStyle(Theme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("request-secret-hint")
-            }
-            if Self.replaces(secret, set: chosen, held: held) {
-                Label("\(chosen) already holds \(secret.name): storing replaces its value.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.accent)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("request-secret-replaces")
-            }
-            HStack(spacing: 8) {
-                Text("Set").font(.footnote).foregroundStyle(Theme.secondary)
-                Picker("Set", selection: Binding(get: { chosen }, set: { picked = $0 })) {
-                    ForEach(choices, id: \.self) { Text($0).tag($0) }
+            header
+            destination
+            context
+            let hint = SecretHint(secret.description)
+            if !hint.isEmpty {
+                // A long hint scrolls under the header rather than pushing the field out of view.
+                ViewThatFits(in: .vertical) {
+                    hintView(hint)
+                    ScrollView { hintView(hint) }.frame(maxHeight: 240)
                 }
-                .labelsHidden()
-                .accessibilityIdentifier("request-secret-set")
-                Spacer(minLength: 0)
             }
-            valueField
-            Text("Goes straight to the hub. The agent only learns that it was stored.")
-                .font(.caption).foregroundStyle(Theme.tertiary)
+            entry
             if let problem {
                 Text(problem).font(.footnote).foregroundStyle(Theme.failure)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .task(id: hostId) { await load() }
+        .task(id: request.session.key.hostId) { await load() }
     }
+
+    /// The key and the secret's name, which is the question; Decline answers no.
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "key.fill")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(Theme.accent)
+            Text(secret.name)
+                .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .accessibilityIdentifier("request-secret-name")
+            Spacer(minLength: 4)
+            Text(request.age).font(.caption).foregroundStyle(Theme.tertiary)
+            Button { Task { await fleet.answer(request, allow: false) } } label: {
+                Text("Decline")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.secondary)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: Self.small)
+                    .background(Theme.raised, in: .capsule)
+                    .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("request-secret-decline")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Secret requested: \(secret.name)")
+    }
+
+    /// "→ coingate · hub-0", a menu of the hub's sets, and whether storing replaces a value.
+    private var destination: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Picker("Set", selection: Binding(get: { chosen }, set: { picked = $0 })) {
+                    ForEach(choices, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.right").font(.caption2.weight(.bold))
+                    Text(Self.destination(set: chosen, hub: hub?.name)).lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.semibold))
+                        .foregroundStyle(Theme.tertiary)
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Theme.secondary)
+                .padding(.horizontal, 9)
+                .frame(minHeight: Self.small)
+                .background(Theme.raised, in: .capsule)
+                .contentShape(.capsule)
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .fixedSize()
+            .accessibilityLabel("Stores in \(Self.destination(set: chosen, hub: hub?.name))")
+            .accessibilityHint("Picks another set")
+            .accessibilityIdentifier("request-secret-set")
+            if Self.replaces(secret, set: chosen, held: held) {
+                Label("Replaces its value", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
+                    .help("\(chosen) already holds \(secret.name): storing replaces its value.")
+                    .accessibilityLabel("\(chosen) already holds \(secret.name): storing replaces its value.")
+                    .accessibilityIdentifier("request-secret-replaces")
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// What the value is, then where to get it, a numbered step a line, links tappable.
+    private func hintView(_ hint: SecretHint) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !hint.lead.isEmpty {
+                Text(Self.linked(hint.lead))
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(Array(hint.steps.enumerated()), id: \.offset) { index, step in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(index + 1)")
+                        .font(.caption2.weight(.bold).monospacedDigit())
+                        .foregroundStyle(Theme.secondary)
+                        .frame(width: 18, height: 18)
+                        .background(Theme.raised, in: .circle)
+                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                    Text(Self.linked(step))
+                        .font(.footnote)
+                        .foregroundStyle(Theme.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .tint(Theme.link)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("request-secret-hint")
+    }
+
+    /// The value, and beside it Paste while it is empty, Store once it is not: never a grey
+    /// button with nothing to say. Return in the field stores too.
+    private var entry: some View {
+        HStack(spacing: 8) {
+            valueField
+            if value.isEmpty {
+                PasteButton(payloadType: String.self) { strings in
+                    guard let text = strings.first else { return }
+                    Task { @MainActor in value = SecretInput(text: text) }
+                }
+                .labelStyle(.titleAndIcon)
+                .buttonBorderShape(.roundedRectangle(radius: Theme.corner))
+                .controlSize(.large)
+                .tint(Theme.accent)
+                .accessibilityIdentifier("request-secret-paste")
+            } else {
+                ActionButton(title: "Store", style: .primary) { await store() }
+                    .frame(width: 92)
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("request-secret-store")
+            }
+        }
+    }
+
+    /// A secure field for one line, or what was pasted for a value of several, such as a PEM
+    /// key, whose newlines a secure field drops: its size, and a button that clears it.
+    private var valueField: some View {
+        HStack(spacing: 6) {
+            if Self.isMultiline(value) {
+                Image(systemName: "doc.on.clipboard").foregroundStyle(Theme.secondary)
+                Text(Self.pasted(value)).font(.subheadline).foregroundStyle(Theme.text).lineLimit(1)
+                    .accessibilityIdentifier("request-secret-pasted")
+                Spacer(minLength: 0)
+                Button { value = SecretInput() } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.tertiary).hitTarget()
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear the value")
+            } else {
+                SecureField("Value", text: $value.text)
+                    .textFieldStyle(.plain)
+                    .font(Theme.mono)
+                    .foregroundStyle(Theme.text)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .onSubmit { Task { await store() } }
+                    .accessibilityIdentifier("request-secret-value")
+            }
+            Button { explaining = true } label: {
+                Image(systemName: "info.circle").foregroundStyle(Theme.tertiary).hitTarget()
+            }
+            .buttonStyle(.plain)
+            .help(Self.reassurance)
+            .accessibilityLabel("Where the value goes")
+            .accessibilityIdentifier("request-secret-info")
+            .popover(isPresented: $explaining) {
+                Text(Self.reassurance)
+                    .font(.footnote)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 240)
+                    .padding(14)
+                    .presentationCompactAdaptation(.popover)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, minHeight: 48)
+        .background(Theme.canvas, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(value.isEmpty ? Theme.accent : Theme.stroke))
+    }
+
+    private func store() async {
+        guard SecretRequestAsk.problem(value) == nil else { return }
+        if await fleet.supplySecret(request, secret, value: value, in: chosen) {
+            value = SecretInput()
+        }
+    }
+
+    /// The height of the header's and the destination's small controls.
+    #if os(iOS)
+    private static var small: CGFloat { 32 }
+    #else
+    private static var small: CGFloat { 24 }
+    #endif
 
     private var chosen: String { picked ?? secret.set }
 
@@ -62,48 +239,9 @@ struct SecretRequestAsk: View {
         sets.contains(secret.set) ? sets : [secret.set] + sets
     }
 
-    /// A secure field for one line, or Paste for a value of several, such as a PEM key, whose
-    /// newlines a secure field drops; a pasted value shows only its size.
-    private var valueField: some View {
-        HStack(spacing: 8) {
-            Group {
-                if Self.isMultiline(value) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "doc.on.clipboard").foregroundStyle(Theme.secondary)
-                        Text(Self.pasted(value)).font(.subheadline).foregroundStyle(Theme.text)
-                        Spacer(minLength: 0)
-                        IconButton(symbol: "xmark", help: "Clear the Value") { value = SecretInput() }
-                    }
-                    .padding(.horizontal, 12)
-                    .accessibilityIdentifier("request-secret-pasted")
-                } else {
-                    SecureField("Value", text: $value.text)
-                        .textFieldStyle(.plain)
-                        .font(Theme.mono)
-                        .foregroundStyle(Theme.text)
-                        .autocorrectionDisabled()
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        #endif
-                        .padding(12)
-                        .accessibilityIdentifier("request-secret-value")
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .background(.card, in: .rect(cornerRadius: Theme.corner))
-            .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
-            PasteButton(payloadType: String.self) { strings in
-                guard let text = strings.first else { return }
-                Task { @MainActor in value = SecretInput(text: text) }
-            }
-            .labelStyle(.iconOnly)
-            .accessibilityIdentifier("request-secret-paste")
-        }
-    }
-
     private func load() async {
         do {
-            let hub = try await fleet.ownedHub(of: hostId)
+            let hub = try await fleet.ownedHub(of: request.session.key.hostId)
             self.hub = hub
             guard case .secrets(let sets, let secrets) = try await fleet.client.send(hostId: hub.hostId, command: .listSecrets)
             else { return }
@@ -115,9 +253,16 @@ struct SecretRequestAsk: View {
         }
     }
 
-    /// "This session asks you to add the secret GITHUB_SIEM_PAT in coingate on hub-0."
-    nonisolated static func question(_ secret: SecretRequest, set: String, hub: String?) -> String {
-        "This session asks you to add the secret \(secret.name) in \(set) on \(hub ?? "its hub")."
+    /// "coingate · hub-0": where Store puts the value; the set alone until the hub is known.
+    nonisolated static func destination(set: String, hub: String?) -> String {
+        hub.map { "\(set) · \($0)" } ?? set
+    }
+
+    nonisolated static let reassurance = "Goes straight to the hub. The agent only learns that it was stored."
+
+    /// `text`'s inline Markdown with its bare URLs linked, as the transcript shows them.
+    static func linked(_ text: String) -> AttributedString {
+        MarkdownText.inline(text)
     }
 
     /// Whether storing in `set` replaces a value: as the hub lists its secrets once loaded,
@@ -151,5 +296,54 @@ struct SecretRequestAsk: View {
     nonisolated static func pasted(_ value: SecretInput) -> String {
         let lines = value.text.split(whereSeparator: \.isNewline).count
         return "Pasted \(SecretStoreAsk.size(UInt64(value.text.utf8.count))), \(lines) line\(lines == 1 ? "" : "s")"
+    }
+}
+
+/// An agent's one-line hint, as the card shows it: what the value is, then where to get it as
+/// numbered steps. An arrow-chained path, `https://dash.cloudflare.com/profile → API Tokens →
+/// Create Token`, or numbered steps, `1. Open … 2. Click …`, become steps; the sentence before
+/// them is the lead. A bare domain step, `dash.cloudflare.com`, links to it.
+struct SecretHint: Equatable {
+    var lead: String
+    var steps: [String]
+
+    var isEmpty: Bool { lead.isEmpty && steps.isEmpty }
+
+    init(lead: String, steps: [String]) {
+        self.lead = lead
+        self.steps = steps
+    }
+
+    init(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let numbered = text.split(separator: /(?:^|\s)\d{1,2}[.)]\s+/, omittingEmptySubsequences: false)
+        let arrowed = text.split(separator: /\s+(?:→|->|›|»)\s+/)
+        var lead: Substring
+        var steps: [Substring]
+        if numbered.count >= 3 {
+            lead = numbered[0]
+            steps = Array(numbered.dropFirst())
+        } else if arrowed.count >= 2 {
+            // The path starts after the first part's last sentence or colon.
+            let first = arrowed[0]
+            if let cut = first.ranges(of: /[.:]\s+/).last {
+                lead = first[..<cut.lowerBound] + (first[cut].hasPrefix(".") ? "." : "")
+                steps = [first[cut.upperBound...]] + arrowed.dropFirst()
+            } else {
+                lead = ""
+                steps = Array(arrowed)
+            }
+        } else {
+            lead = Substring(text)
+            steps = []
+        }
+        self.lead = lead.trimmingCharacters(in: .whitespaces)
+        self.steps = steps.map { Self.linkingDomain($0.trimmingCharacters(in: .whitespaces)) }.filter { !$0.isEmpty }
+    }
+
+    /// `dash.cloudflare.com/profile` as a link to it over https; any other step as it is.
+    private static func linkingDomain(_ step: String) -> String {
+        guard step.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}(\/\S*)?/.ignoresCase()) != nil else { return step }
+        return "[\(step)](https://\(step))"
     }
 }

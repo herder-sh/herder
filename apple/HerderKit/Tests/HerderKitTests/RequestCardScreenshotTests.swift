@@ -46,44 +46,109 @@ import Testing
         }
     }
 
-    /// An agent's `request_secret`: the name, the agent's hint, the warning that it replaces a
-    /// value, the set, the secure field with Paste, and Decline and Store. Hosted in a window,
-    /// as the field, the picker and Paste are AppKit's; drawn before the card asks the machine
-    /// for its hub, which this test has none of.
-    @Test func drawsARequestSecretCard() throws {
+    /// An agent's `request_secret` as the card shows it with a long hint and the warning that it
+    /// replaces a value, with a short hint, and squeezed to the height a pinned card has with the
+    /// keyboard up. Drawn before the card asks the machine for its hub, which this test has none
+    /// of; with `HERDER_SCREENSHOT_DIR` set, each is written there as `request-secret-<case>.png`.
+    @Test(arguments: SecretCase.allCases)
+    func drawsARequestSecretCard(_ shown: SecretCase) throws {
+        let host = try hosted(secretCard(shown), height: shown.height)
+        let png = try snapshot(host)
+        Attachment.record(png, named: "request-secret-\(shown).png")
+        if let dir = ProcessInfo.processInfo.environment["HERDER_SCREENSHOT_DIR"] {
+            try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("request-secret-\(shown).png"))
+        }
+    }
+
+    /// Short of room, the hint gives way and the value field and Store stay in view: the one
+    /// thing the card is for can never be scrolled out of sight.
+    @Test func keepsTheValueFieldAndStoreInViewWhenShortOfRoom() throws {
+        let host = try hosted(secretCard(.cramped), height: SecretCase.cramped.height)
+        for id in ["request-secret-value", "request-secret-store"] {
+            let frame = try #require(Self.frame(of: id, in: host), "the card has no \(id)")
+            #expect(host.bounds.contains(frame), "\(id) at \(frame) is outside the card's \(host.bounds)")
+        }
+    }
+
+    enum SecretCase: String, CaseIterable, CustomStringConvertible {
+        case long, short, cramped
+        var description: String { rawValue }
+
+        /// The height the card gets; `nil` for as tall as it wants.
+        var height: CGFloat? { self == .cramped ? 230 : nil }
+
+        var secret: SecretRequest {
+            switch self {
+            case .short:
+                SecretRequest(set: "homelab", name: "NPM_TOKEN", description: "npm automation token", replaces: false)
+            case .long, .cramped:
+                SecretRequest(
+                    set: "homelab", name: "CF_HOMELAB_ACCESS_TOKEN",
+                    description: "Cloudflare API token, Zone DNS edit on homelab.dev. "
+                        + "https://dash.cloudflare.com/profile/api-tokens → Create Token → Edit zone DNS → homelab.dev",
+                    replaces: true)
+            }
+        }
+    }
+
+    private func secretCard(_ shown: SecretCase) throws -> some View {
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
-            Issue.record("no profile")
-            return
+            throw ProfileUnavailable()
         }
         let session = SessionSummary(
-            key: SessionKey(hostId: "h1", sessionId: "s1"), title: "Ship the SIEM audit-log export",
-            project: "siem", branch: "", machine: "devbox", state: .needsYou, activity: "", age: "now")
+            key: SessionKey(hostId: "h1", sessionId: "s1"), title: "Point homelab DNS at the new ingress",
+            project: "homelab", branch: "", machine: "devbox", state: .needsYou, activity: "", age: "now")
         var request = PendingRequest(
             requestId: "secret-1", session: session,
-            kind: .approval(summary: "Supply the secret GITHUB_SIEM_PAT in coingate, replacing its value"),
+            kind: .approval(summary: "Supply the secret \(shown.secret.name) in \(shown.secret.set)"),
             since: .now, age: "1m ago")
-        request.secretRequest = SecretRequest(
-            set: "coingate", name: "GITHUB_SIEM_PAT",
-            description: "GitHub fine-grained PAT, read-only on the org audit log", replaces: true)
-        let card = RequestCard(request: request, fleet: fleet)
+        request.secretRequest = shown.secret
+        return RequestCard(request: request, fleet: fleet)
+    }
+
+    private struct ProfileUnavailable: Error {}
+
+    /// `card` 460 points wide, as the app's dark appearance shows it, hosted in a window, as the
+    /// field and Paste are AppKit's; `height` tall, else as tall as it fits.
+    private func hosted(_ card: some View, height: CGFloat?) throws -> NSHostingView<AnyView> {
+        let root = card
             .frame(width: 460)
+            .frame(height: height, alignment: .bottom)
             .padding(20)
             .background(Theme.canvas)
             .environment(\.colorScheme, .dark)
-        let host = NSHostingView(rootView: card)
+        let host = NSHostingView(rootView: AnyView(root))
         host.appearance = NSAppearance(named: .darkAqua)
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = host
         host.layoutSubtreeIfNeeded()
+        return host
+    }
+
+    private func snapshot(_ host: NSView) throws -> Data {
         let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: rep)
         #expect(rep.pixelsWide >= 460)
-        let png = try #require(rep.representation(using: .png, properties: [:]))
-        Attachment.record(png, named: "request-secret-card.png")
-        if let dir = ProcessInfo.processInfo.environment["HERDER_SCREENSHOT_DIR"] {
-            try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("request-secret-card.png"))
+        return try #require(rep.representation(using: .png, properties: [:]))
+    }
+
+    /// Where the element `id` shows in `host`, in its coordinates, as accessibility reports it.
+    private static func frame(of id: String, in host: NSView) -> NSRect? {
+        func find(_ element: Any) -> NSAccessibilityElementProtocol? {
+            if let element = element as? NSAccessibilityElementProtocol & NSObject,
+               element.accessibilityIdentifier() == id {
+                return element
+            }
+            for child in (element as? NSObject)?.accessibilityChildren() ?? [] {
+                if let found = find(child) { return found }
+            }
+            return nil
         }
+        guard let element = find(host) as? NSObject, let window = host.window else { return nil }
+        let onScreen = element.accessibilityFrame()
+        let inWindow = window.convertFromScreen(onScreen)
+        return host.convert(inWindow, from: nil)
     }
 }
 #endif
