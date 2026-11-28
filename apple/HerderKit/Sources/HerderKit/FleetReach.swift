@@ -14,6 +14,8 @@ struct FleetReach: Equatable {
         /// It is set up, and has not been seen working from outside yet.
         case unseen
         case notSetUp
+        /// Set up, and unused by design: an imported WireGuard config no connection needs now.
+        case idle
         /// It is set up so it cannot work: a public name that resolves only to the LAN, or to
         /// nothing.
         case wontWork
@@ -23,6 +25,7 @@ struct FleetReach: Equatable {
             case .working: "Working"
             case .unseen: "Set up, not seen working from outside yet"
             case .notSetUp: "Not set up"
+            case .idle: "Set up, idle until needed"
             case .wontWork: "Won’t work as set up"
             }
         }
@@ -90,6 +93,20 @@ struct FleetReach: Equatable {
     var sightings: [String]
     /// When each imported WireGuard config, by id, was last seen up on this device.
     var tunnelsSeen: [String: Date]
+    /// The machines with an address through each imported WireGuard config, by its id.
+    var tunnelUses: [String: [TunnelUse]]
+
+    /// A machine with an address through an imported WireGuard config.
+    struct TunnelUse: Hashable {
+        let hostId: HostId
+        let name: String
+        /// "wg://home-udm/192.168.1.5:7447".
+        let address: String
+        /// Whether its connection runs through the config now.
+        let carried: Bool
+        /// The route it is connected over instead, "Tailscale"; nil while not connected.
+        let instead: String?
+    }
     /// The options herder sets up: an imported VPN config, the hub's WireGuard, Cloudflare.
     var options: RemoteOptions
     let now: Date
@@ -186,6 +203,18 @@ struct FleetReach: Equatable {
         sightings += options.imported.filter(\.up).map { Self.tunnelKey + $0.id }
         tunnelsSeen = Dictionary(uniqueKeysWithValues: seen.filter { $0.key.hasPrefix(Self.tunnelKey) }
             .map { (String($0.key.dropFirst(Self.tunnelKey.count)), $0.value) })
+        var uses: [String: [TunnelUse]] = [:]
+        for tunnel in options.imported {
+            let prefix = "wg://\(tunnel.id)/"
+            uses[tunnel.id] = machines.compactMap { machine in
+                guard let address = machine.addresses.first(where: { $0.hasPrefix(prefix) }) else { return nil }
+                let connected = machine.connection == .connected
+                let carried = connected && machine.address == address
+                return TunnelUse(hostId: machine.hostId, name: machine.name, address: address, carried: carried,
+                                 instead: connected && !carried ? MachineRoute(machine, among: machines)?.name : nil)
+            }
+        }
+        tunnelUses = uses
         self.sightings = sightings
     }
 
@@ -194,10 +223,26 @@ struct FleetReach: Equatable {
     /// What it keys an imported WireGuard config by, before its id.
     static let tunnelKey = "wg:"
 
-    /// An imported config's status: "Up now", "Idle · last up 2h ago", or idle until used.
+    /// An imported config's status, saying why when no connection uses it: "Working · carries
+    /// work-mbp", "Not used: work-mbp is connected through Tailscale", "Idle · last used 2h ago".
     func status(_ tunnel: RemoteOptions.Tunnel) -> String {
-        if tunnel.up { return "Up now" }
-        return tunnelsSeen[tunnel.id].map { "Idle · last up \(ago($0))" } ?? "Idle · comes up when herder needs it"
+        let uses = tunnelUses[tunnel.id] ?? []
+        let carried = uses.filter(\.carried).map(\.name)
+        if !carried.isEmpty { return "Working · carries \(Self.joined(carried))" }
+        if tunnel.up { return "Working · up now" }
+        if let use = tryable(tunnel), let instead = use.instead {
+            return "Not used: \(use.name) is connected through \(instead)"
+        }
+        if uses.isEmpty { return "Not used: no machine has a home address inside it" }
+        return tunnelsSeen[tunnel.id].map { "Idle · last used \(ago($0))" } ?? "Idle · comes up when herder needs it"
+    }
+
+    /// A machine connected over another route that has an address through `tunnel`: the one
+    /// **Try It Now** reconnects through it. Connections stay on the route in use, so the
+    /// config is never tried while that route works.
+    func tryable(_ tunnel: RemoteOptions.Tunnel) -> TunnelUse? {
+        guard !tunnel.up else { return nil }
+        return tunnelUses[tunnel.id]?.first { $0.instead != nil }
     }
 
     /// The fleet's reach in a line, the Hub tab's: "Reachable from anywhere through the hub"
@@ -246,9 +291,9 @@ struct FleetReach: Equatable {
                 RouteState(name: "Router VPN", state: router.state)] + own.filter { $0.state != .notSetUp }
     }
 
-    /// The best of `states`: working, then set up, then won't work, then not set up.
+    /// The best of `states`: working, then set up, then idle, then won't work, then not set up.
     static func best(_ states: [State]) -> State {
-        [State.working, .unseen, .wontWork].first(where: { states.contains($0) }) ?? .notSetUp
+        [State.working, .unseen, .idle, .wontWork].first(where: { states.contains($0) }) ?? .notSetUp
     }
 
     /// "A", "A and B", "A, B and C".

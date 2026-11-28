@@ -63,6 +63,10 @@ struct RemoteAccessReader<Content: View>: View {
             setAddresses: { try fleet.setAddresses($0, to: $1) },
             importConfig: { try fleet.importWireGuard(name: $0, config: $1); changed() },
             removeTunnel: { try fleet.removeWireGuard($0); changed() },
+            connectThrough: { hostId, address in
+                try await fleet.connect(hostId, through: address)
+                changed()
+            },
             useHubWireGuard: { on in
                 guard let hub else { return }
                 try await fleet.setHubWireGuard(hub, enabled: on)
@@ -182,11 +186,12 @@ enum RemoteTab: Hashable, CaseIterable {
         }
     }
 
-    /// The tab the page opens on: the first way in that works, else the first set up, else
+    /// The tab the page opens on: the first way in that works, else the first set up (idle or
+    /// not seen yet), else
     /// Your VPN.
     static func first(_ access: FleetReach) -> RemoteTab {
         allCases.first(where: { $0.state(access) == .working })
-            ?? allCases.first(where: { $0.state(access) == .unseen }) ?? .ownVpn
+            ?? allCases.first(where: { [.unseen, .idle].contains($0.state(access)) }) ?? .ownVpn
     }
 }
 
@@ -515,7 +520,7 @@ struct FactRow<Value: View>: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(label).font(.subheadline).foregroundStyle(Theme.secondary).lineLimit(1).fixedSize()
+            Text(label).font(.subheadline).foregroundStyle(Theme.secondary).lineLimit(1).layoutPriority(1)
             Spacer(minLength: 8)
             value
                 .font(.subheadline).foregroundStyle(Theme.text)
@@ -666,7 +671,7 @@ private struct RouteTile: View {
         switch state {
         case .working: Theme.success
         case .wontWork: Theme.accent
-        case .unseen, .notSetUp: Theme.tertiary
+        case .unseen, .notSetUp, .idle: Theme.tertiary
         }
     }
 
@@ -696,6 +701,8 @@ struct RouteMark: View {
                     .frame(width: 8, height: 8)
             case .notSetUp:
                 Circle().strokeBorder(Theme.tertiary, lineWidth: 1.5).frame(width: 8, height: 8)
+            case .idle:
+                Circle().fill(Theme.tertiary).frame(width: 8, height: 8)
             case .wontWork:
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9)).foregroundStyle(Theme.accent)
             }

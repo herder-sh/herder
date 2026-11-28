@@ -90,6 +90,43 @@ import Testing
                         size: CGSize(width: 390, height: 2000), named: "remote-access-summary-iphone.png")
     }
 
+    /// A UniFi config with a long name and endpoint, unused while a machine stays on
+    /// Tailscale, and the import form with a long config pasted.
+    private var longConfig: FleetReach {
+        var machines = remoteFleet(now: now)
+        machines[1].addresses = ["trash-can-01.tail.ts.net:7447", "wg://home-udm-pro-max/172.20.40.9:7447"]
+        let tunnel = RemoteOptions.Tunnel(id: "home-udm-pro-max", name: "Home UniFi Dream Machine Pro Max VPN",
+                                          endpoint: "a-very-long-dynamic-dns-name.home.example.net:51821",
+                                          allowedIps: ["0.0.0.0/0", "::/0"], up: false)
+        return FleetReach(machines: machines, options: RemoteOptions(tunnels: [tunnel]), now: now)
+    }
+
+    private static let pasted = """
+        [Interface]
+        PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+        Address = 192.168.3.2/32
+        [Peer]
+        PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+        Endpoint = a-very-long-dynamic-dns-name.home.example.net:51821
+        AllowedIPs = 0.0.0.0/0, ::/0
+        """
+
+    /// The narrowest iPhone, 320 points, with large text: nothing runs off the sides.
+    @Test func fitsTheNarrowestIPhoneWithALongConfig() async throws {
+        let form = SettingsGroup {
+            OwnVpnFacts(access: longConfig, actions: RemoteActions(), importing: true, config: Self.pasted)
+        }
+        .dynamicTypeSize(.accessibility1)
+        let width = NSHostingController(rootView: form).sizeThatFits(in: CGSize(width: 320, height: 4000)).width
+        #expect(width <= 320)
+        let rows = SettingsGroup { MachineRoutesList(machines: routes, actions: RemoteActions()) }
+        #expect(NSHostingController(rootView: rows).sizeThatFits(in: CGSize(width: 320, height: 4000)).width <= 320)
+        try await shoot(RemoteAccessView(access: longConfig, machines: routes, tab: .ownVpn) { _ in }
+            .dynamicTypeSize(.accessibility1),
+                        size: CGSize(width: 320, height: 1500), named: "remote-access-your-vpn-se.png")
+        try await shoot(form.padding(16), size: CGSize(width: 320, height: 900), named: "remote-access-import-se.png")
+    }
+
     @Test func drawsNothingSetUpOnAnIPhone() async throws {
         try await shoot(RemoteAccessView(access: nothing) { _ in }, size: CGSize(width: 390, height: 1400),
                         named: "remote-access-none-iphone.png")

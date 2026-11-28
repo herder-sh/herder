@@ -408,7 +408,8 @@ runs); and gives short steps for the ones the owner runs. Nothing here is a prob
 route not set up is a choice, never amber, never in Needs you, never in the badge.
 
 **Routes** (`FleetReach.routes`), each with a state (`FleetReach.State`): **working** (green
-dot), **set up, not seen working from outside yet** (grey dashed ring), **not set up** (grey
+dot), **set up, not seen working from outside yet** (grey dashed ring), **set up, idle until
+needed** (grey dot: an imported WireGuard config no connection needs now), **not set up** (grey
 ring), and, only for an address that cannot work as typed, **won't work** (amber triangle).
 
 | route | what it is read from | states |
@@ -423,7 +424,7 @@ after each change:
 
 | option | states |
 |---|---|
-| **Your VPN, in herder** (an imported WireGuard config, P27.3) | working while a connection runs through one; set up once one is imported; not set up |
+| **Your VPN, in herder** (an imported WireGuard config, P27.3) | working while a connection runs through one; idle once one is imported; not set up |
 | **herder's WireGuard on the hub** (P27.4) | working while this device's connection runs through it; set up when the hub offers it and this device is enrolled; not set up when the hub has it off or this device is not enrolled |
 | **Cloudflare, set up by the hub** (the managed tunnel, P27.6, and the Durable Object relay, P27.5) | each from its `RouteStatus`: up is working, setting up is unseen, failed is **won't work** with Cloudflare's message; the card takes the failed one first, else the better |
 
@@ -480,11 +481,20 @@ short numbered steps per option, commands in monospace, open while the route doe
 
 - **Your VPN** — *WireGuard configs* (`OwnVpnFacts`, P27.3): the line is "1 config · up now",
   "2 configs · idle until herder needs one", or what importing one does. A row per imported
-  config: its mark, name and status ("Up now"; "Idle · last up 2h ago", from this device's
-  memory, `RemoteSightings` key `wg:<id>`; "Idle · comes up when herder needs it"), its endpoint
-  and AllowedIPs in monospace, and **Remove**. Then **Import a WireGuard Config…**: a name and
+  config: its mark (green while a connection runs through it, a grey dot while idle by
+  design, never a dashed "not seen yet" ring), its name, and its status, saying why when unused:
+  "Working · carries work-mbp" or "Working · up now"; "Not used: work-mbp is connected through
+  Tailscale" (connections stay on the route in use, so the config is never tried while that
+  route works), with **Try It Now**, which puts the machine's address through the config first
+  and reconnects it (`Fleet.connect(_:through:)`); "Not used: no machine has a home address
+  inside it"; "Idle · last used 2h ago" (this device's memory, `RemoteSightings` key `wg:<id>`)
+  or "Idle · comes up when herder needs it". Under it the endpoint and what it routes, in
+  monospace, truncated in the middle: its AllowedIPs, or "all addresses" for a router's
+  full-tunnel export (`0.0.0.0/0`), never as the headline. Then **Remove**. client-core does not
+  report a WireGuard handshake time, so none is shown. Then **Import a WireGuard Config…**: a name and
   a config field (paste), **Choose File…** for a `.conf`, on iPhone **Scan QR Code…**, and
-  **Import** (`import_wireguard`); one line says the private key stays on this device and only
+  **Import** (`import_wireguard`), in one row where it fits, else the sources over Cancel and
+  Import, else one per line, so the form fits a 320-point iPhone at large text; one line says the private key stays on this device and only
   herder's connections use it, so another VPN here stays on. Steps: add a client on your
   WireGuard server (a UniFi gateway: Settings › VPN › VPN Server), import it here, and that's
   all: the machines' home addresses (`FleetReach.homeSubnets`) answer through it.
@@ -529,7 +539,10 @@ to its front door, Tailscale on two machines, the router's VPN seen yesterday;
 and each machine's route, work-mbp pinned through the hub); `remote-access-none-iphone.png`
 (nothing set up, no hub); `remote-access-offers-hub-wireguard-iphone.png` and
 `remote-access-offers-cloudflare-iphone.png` (a hub this device owns, nothing of herder's set
-up: each offered). The Hub tab's row also shows in `hub-mac.png` and `hub-iphone.png`.
+up: each offered); `remote-access-your-vpn-se.png` and `remote-access-import-se.png` (320 points
+at accessibility text size: a UniFi config with a long name and endpoint, unused while
+trash-can-01 stays on Tailscale, and the import form with a long config pasted; the test also
+checks each fits in 320 points). The Hub tab's row also shows in `hub-mac.png` and `hub-iphone.png`.
 
 ### 4.5 Usage (`UsageView`)
 
