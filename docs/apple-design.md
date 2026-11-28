@@ -139,6 +139,13 @@ Rules:
   request count), Chats (with Bots as its second switch), Projects, Hub (badged amber with what
   needs you). Skills, Providers and a hub's page show inside Hub. Each tab is its own `NavigationStack` (`boardPath`,
   `projectsPath`), so switching tabs keeps each tab's place.
+- **A project reopens its last session** (`ProjectMemory`). Each project remembers, per
+  device and by its id, the session last open *inside it*: selected in its pane on the Mac and
+  iPad, or pushed from its screen on iPhone. A session opened anywhere else (the Board, Chats,
+  a link, a notification) counts once it is viewed inside the project. Switching to the project
+  opens that session beside its list; on iPhone it is pushed over the project's screen, so Back
+  returns to the list, and coming Back to the list does not push it again. A session gone or
+  archived is forgotten, and the project opens on its list as before.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
   parent, a page's breadcrumb (`PageTrail`, ⌘[) to what it opened over.

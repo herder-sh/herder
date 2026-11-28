@@ -248,7 +248,7 @@ struct FleetView: View {
     }
 
     private var screens: some View {
-        commanded
+        remembering
         .onAppear { Launch.mark(.frame) }
         .task { await fleet.follow() }
         .overlay(alignment: .bottom) { ToastView(fleet: fleet) }
@@ -297,10 +297,52 @@ struct FleetView: View {
         // A draft belongs to the Board or its own project, a chat to Chats;
         // leaving for elsewhere closes it, and its card stays in those lists.
         .onChange(of: item) {
-            guard let draft else { return }
-            let home: SidebarItem = draft.isChat ? .chats : .project(draft.projectId ?? "")
-            if item != home && (draft.isChat || !showsEverySession) { self.draft = nil }
+            if let draft {
+                let home: SidebarItem = draft.isChat ? .chats : .project(draft.projectId ?? "")
+                if item != home && (draft.isChat || !showsEverySession) { self.draft = nil }
+            }
+            reopenLastSession()
         }
+    }
+
+    /// Remembers the session open in a project's pane or pushed from its screen, and opens it
+    /// again on switching to the project (`ProjectMemory`).
+    private var remembering: some View {
+        commanded
+            .onChange(of: session) {
+                guard !compact, let session, case .project(let id) = item,
+                      let project = fleet.lists.projects.first(where: { $0.id == id }) else { return }
+                ProjectMemory.shared.remember(session, in: project)
+            }
+            .onChange(of: projectsPath) { old, new in
+                if let shown = ProjectMemory.shown(in: new),
+                   let project = fleet.lists.projects.first(where: { $0.id == shown.projectId }) {
+                    ProjectMemory.shared.remember(shown.session, in: project)
+                }
+                // On iPhone the session goes on top of the project's screen, so Back returns to
+                // its list rather than trap the user in the session.
+                guard compact, let id = ProjectMemory.entered(from: old, to: new),
+                      let project = fleet.lists.projects.first(where: { $0.id == id }),
+                      let last = ProjectMemory.shared.last(in: project) else { return }
+                projectsPath.append(.session(last))
+            }
+    }
+
+    /// On the Mac and iPad, switching to a project with no session chosen opens the one last
+    /// open in it, if it still can.
+    private func reopenLastSession() {
+        guard !compact, session == nil, draft == nil, case .project(let id) = item,
+              let project = fleet.lists.projects.first(where: { $0.id == id }) else { return }
+        session = ProjectMemory.shared.last(in: project)
+    }
+
+    /// Whether the tabs show rather than the sidebar.
+    private var compact: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
+        #endif
     }
 
     /// The Board lists every project's sessions, so a session started from it opens beside it
