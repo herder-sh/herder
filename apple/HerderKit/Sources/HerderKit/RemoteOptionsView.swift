@@ -294,7 +294,7 @@ struct HubWireGuardFacts: View {
             RowDivider()
             if editing || options.hubWireGuard == nil {
                 VStack(alignment: .leading, spacing: 10) {
-                    InputBox(placeholder: "Your router’s public name and port, e.g. home.example.net:51820",
+                    InputBox(placeholder: "Your router’s public name and port, e.g. home.example.net:\(RemoteOptions.defaultPort)",
                              text: $endpoint, mono: true)
                     InputBox(placeholder: "UDP port on the hub, \(RemoteOptions.defaultPort)", text: $port, mono: true)
                     Text("Forward that UDP port on your router to the hub. Only devices you paired get an answer; to anyone else the port looks closed.")

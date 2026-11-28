@@ -106,8 +106,14 @@ spec:
     # herder's WireGuard (docs/remote-access.md): one UDP port, silent to anyone without an
     # enrolled key. Forward it on the router to the load balancer's address; the hub binds it
     # once an owner turns WireGuard on. Use the same port in the Hub tab's setting.
+    #
+    # On k3s's ServiceLB every port here becomes a host port on every node, which takes over
+    # whatever on the node uses it. Never 51820 or 51821: flannel's wireguard-native backend
+    # (and Calico's, and most WireGuard setups) tunnels between nodes on those, and taking
+    # them breaks pod-to-pod traffic across the cluster. 51900 is clear of them; check your
+    # nodes before changing it (deploy/README.md).
     - name: wireguard
-      port: 51820
+      port: 51900
       targetPort: wireguard
       protocol: UDP
 ---
@@ -134,7 +140,7 @@ spec:
 #
 # In: its own ports only. Only pods of the cloudflared namespace reach the tunnel listener,
 # which trusts the client address its peer names; hosts and apps reach 7447, hosts 8317,
-# and apps herder's WireGuard on UDP 51820, from anywhere, as without a policy. Change the
+# and apps herder's WireGuard on UDP 51900, from anywhere, as without a policy. Change the
 # namespace's name if your cloudflared runs in another.
 #
 # Out: the cluster's DNS, and the internet: the providers' APIs the CLIProxyAPI calls, and
@@ -161,7 +167,7 @@ spec:
     - ports:
         - port: 7447
         - port: 8317
-        - port: 51820
+        - port: 51900
           protocol: UDP
     - from:
         - namespaceSelector:
@@ -281,7 +287,7 @@ spec:
             - name: tunnel
               containerPort: 7448
             - name: wireguard
-              containerPort: 51820
+              containerPort: 51900
               protocol: UDP
           readinessProbe:
             tcpSocket:

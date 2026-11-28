@@ -471,7 +471,7 @@ herder's options set up in place, in the card, without a sheet:
   herder carries only its own connections, so another VPN here stays on.
 - *herder's WireGuard on the hub* (`HubWireGuardFacts`): while the hub offers it, **Use on this
   device**, a switch (`set_hub_wireguard`). To an owner, the router's public `host:port` and the
-  hub's UDP port (51820 by default) and **Turn On**; once on, **Change…** and **Turn Off**
+  hub's UDP port (51900 by default) and **Turn On**; once on, **Change…** and **Turn Off**
   (`set_remote_access`). One line says to forward that UDP port, and that only paired devices
   get an answer.
 - *Cloudflare, set up by the hub* (`CloudflareFacts`): a row each for the **Tunnel** and the

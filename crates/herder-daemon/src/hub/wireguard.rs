@@ -105,8 +105,19 @@ impl HubWireGuard {
         }
     }
 
-    /// The endpoint, serving, on `settings`' port.
+    /// The endpoint, serving, on `settings`' port. A port something else on this machine
+    /// holds is refused rather than taken over ([`port_holder`]).
     async fn start(&self, settings: &WireGuardSettings) -> Result<Running, ErrorInfo> {
+        if let Some(holder) = port_holder(Path::new("/proc"), Path::new("/sys"), settings.port) {
+            return Err(ErrorInfo {
+                code: ErrorCode::BadRequest,
+                message: format!(
+                    "UDP port {} is already in use on this machine, by {holder}; herder will \
+                     not take it over: choose another port for herder's WireGuard",
+                    settings.port
+                ),
+            });
+        }
         let network = IpCidr::new(HUB_ADDRESS.into(), WIREGUARD_NETWORK.1);
         let any6 = SocketAddr::new(std::net::Ipv6Addr::UNSPECIFIED.into(), settings.port);
         let endpoint = match Endpoint::bind(any6, self.key, network, self.hub_address()).await {
@@ -188,6 +199,90 @@ async fn serve(endpoint: Arc<Endpoint>, shared: Weak<Shared>, stop: Cancellation
     }
 }
 
+/// What already holds UDP `port` in this network namespace, other than this process, read
+/// from `proc` and `sys` (`/proc` and `/sys` on Linux; elsewhere nothing is found): a kernel
+/// socket, as a WireGuard interface (flannel's `wireguard-native` backend, Calico, Cilium,
+/// `wg-quick`) or a VXLAN tunnel holds, or another program's.
+///
+/// It sees only the namespace the hub runs in. On a machine that is the host's, so a node's
+/// WireGuard is found. In a pod without `hostNetwork` it is the pod's own, and the node's
+/// ports are out of sight: an unprivileged pod cannot read them, and a Service publishing
+/// the port as a host port on every node (k3s's ServiceLB) is the cluster admin's to
+/// check (`deploy/README.md`).
+fn port_holder(proc: &Path, sys: &Path, port: u16) -> Option<String> {
+    let own = own_sockets(proc);
+    let inode = ["net/udp", "net/udp6"]
+        .iter()
+        .filter_map(|table| std::fs::read_to_string(proc.join(table)).ok())
+        .flat_map(|text| {
+            text.lines()
+                .skip(1)
+                .filter_map(|line| udp_socket(line, port))
+                .collect::<Vec<_>>()
+        })
+        .find(|inode| !own.contains(inode))?;
+    if inode != 0 {
+        return Some("another program".to_owned());
+    }
+    // A kernel socket has no inode; a WireGuard interface's own port is not in `sys`, so
+    // the interfaces there are named as the likely holder.
+    let interfaces = wireguard_interfaces(sys);
+    Some(if interfaces.is_empty() {
+        "a kernel socket, such as a WireGuard or VXLAN tunnel".to_owned()
+    } else {
+        format!(
+            "a kernel socket, likely the WireGuard interface {}",
+            interfaces.join(" or ")
+        )
+    })
+}
+
+/// The inode of the socket in `line` of `/proc/net/udp{,6}` when it is bound to local `port`.
+fn udp_socket(line: &str, port: u16) -> Option<u64> {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    let (_, local_port) = fields.get(1)?.rsplit_once(':')?;
+    (u16::from_str_radix(local_port, 16).ok()? == port)
+        .then(|| fields.get(9)?.parse().ok())
+        .flatten()
+}
+
+/// The inodes of this process's sockets, from `<proc>/self/fd`.
+fn own_sockets(proc: &Path) -> Vec<u64> {
+    let Ok(fds) = std::fs::read_dir(proc.join("self/fd")) else {
+        return Vec::new();
+    };
+    fds.filter_map(|fd| {
+        let target = std::fs::read_link(fd.ok()?.path()).ok()?;
+        let target = target.to_str()?;
+        target
+            .strip_prefix("socket:[")?
+            .strip_suffix(']')?
+            .parse()
+            .ok()
+    })
+    .collect()
+}
+
+/// The names of the WireGuard interfaces in `<sys>/class/net`, sorted.
+fn wireguard_interfaces(sys: &Path) -> Vec<String> {
+    let Ok(links) = std::fs::read_dir(sys.join("class/net")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = links
+        .filter_map(|link| {
+            let link = link.ok()?;
+            let uevent = std::fs::read_to_string(link.path().join("uevent")).ok()?;
+            uevent
+                .lines()
+                .any(|line| line == "DEVTYPE=wireguard")
+                .then(|| link.file_name().to_str().map(str::to_owned))
+                .flatten()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 /// The hub's WireGuard key in `path`, made and kept there, private, the first time.
 fn key(path: &PathBuf) -> Result<Key> {
     match std::fs::read_to_string(path) {
@@ -209,5 +304,90 @@ fn key(path: &PathBuf) -> Result<Key> {
             warn!("reading {}: {err}", path.display());
             Err(err).with_context(|| format!("reading {}", path.display()))
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    const HEADER: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when \
+                          retrnsmt   uid  timeout inode ref pointer drops\n";
+
+    /// A `/proc/net/udp` line for a socket on `port` with `inode`.
+    fn socket(port: u16, inode: u64) -> String {
+        format!(
+            "  7: 00000000:{port:04X} 00000000:0000 07 00000000:00000000 00:00000000 \
+             00000000     0        0 {inode} 2 0000000000000000 0\n"
+        )
+    }
+
+    fn machine(udp: &str, udp6: &str, wireguard: &[&str], own: &[u64]) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let proc = root.path().join("proc");
+        std::fs::create_dir_all(proc.join("net")).unwrap();
+        std::fs::create_dir_all(proc.join("self/fd")).unwrap();
+        std::fs::write(proc.join("net/udp"), format!("{HEADER}{udp}")).unwrap();
+        std::fs::write(proc.join("net/udp6"), format!("{HEADER}{udp6}")).unwrap();
+        for (fd, inode) in own.iter().enumerate() {
+            std::os::unix::fs::symlink(
+                format!("socket:[{inode}]"),
+                proc.join(format!("self/fd/{fd}")),
+            )
+            .unwrap();
+        }
+        for (name, devtype) in wireguard
+            .iter()
+            .map(|name| (name, "wireguard"))
+            .chain([(&"eth0", "")])
+        {
+            let link = root.path().join("sys/class/net").join(name);
+            std::fs::create_dir_all(&link).unwrap();
+            std::fs::write(
+                link.join("uevent"),
+                format!("DEVTYPE={devtype}\nINTERFACE={name}\n"),
+            )
+            .unwrap();
+        }
+        root
+    }
+
+    fn holder(root: &tempfile::TempDir, port: u16) -> Option<String> {
+        port_holder(&root.path().join("proc"), &root.path().join("sys"), port)
+    }
+
+    #[test]
+    fn a_node_wireguard_port_is_found_with_its_interface() {
+        // flannel's wireguard-native: kernel sockets on 51820, v4 and v6.
+        let root = machine(&socket(51820, 0), &socket(51820, 0), &["flannel-wg"], &[]);
+        assert_eq!(
+            holder(&root, 51820).as_deref(),
+            Some("a kernel socket, likely the WireGuard interface flannel-wg")
+        );
+        assert_eq!(holder(&root, 51900), None);
+    }
+
+    #[test]
+    fn a_kernel_socket_without_wireguard_is_named_as_such() {
+        let root = machine("", &socket(4789, 0), &[], &[]);
+        assert_eq!(
+            holder(&root, 4789).as_deref(),
+            Some("a kernel socket, such as a WireGuard or VXLAN tunnel")
+        );
+    }
+
+    #[test]
+    fn another_program_is_found_but_not_the_hub_itself() {
+        let root = machine(&socket(51900, 4242), "", &[], &[]);
+        assert_eq!(holder(&root, 51900).as_deref(), Some("another program"));
+        // The hub's own endpoint, on while it restarts on the same port.
+        let root = machine(&socket(51900, 4242), "", &[], &[4242]);
+        assert_eq!(holder(&root, 51900), None);
+    }
+
+    #[test]
+    fn nothing_is_found_without_proc() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(holder(&root, 51900), None);
     }
 }

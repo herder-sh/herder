@@ -240,8 +240,9 @@ struct RemoteOptions: Equatable {
     static let tokenName = "CLOUDFLARE_API_TOKEN"
     static var tokenRef: SecretRef { "\(tokenSet)/\(tokenName)" }
 
-    /// The hub's WireGuard port unless set otherwise, WireGuard's usual.
-    static let defaultPort: UInt16 = 51820
+    /// The hub's WireGuard port unless set otherwise, the protocol's `DEFAULT_WIREGUARD_PORT`:
+    /// not WireGuard's usual 51820, which a cluster's network plugin takes on its nodes.
+    static let defaultPort: UInt16 = 51900
 }
 
 /// A machine's addresses as routes, in the order they are tried, each named by what carries it,
