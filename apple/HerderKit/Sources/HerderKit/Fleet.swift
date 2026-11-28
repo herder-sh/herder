@@ -105,6 +105,9 @@ public final class Fleet {
     /// Whether the client pings its machines, so that silence means it reaches none of them;
     /// the demo pings nothing.
     @ObservationIgnored var hearsPings = true
+    /// Whether this is the demo fleet (`Fleet.demo`). Mocks of features not built yet, such as
+    /// Integrations (P30.1), show only here, so none reaches a real fleet.
+    @ObservationIgnored var isDemo = false
     /// Each machine's connection changes since the app opened, oldest first.
     private(set) var connectionLog: [HostId: [ConnectionChange]] = [:]
     /// Each machine's ping round trips since the app opened, oldest first.

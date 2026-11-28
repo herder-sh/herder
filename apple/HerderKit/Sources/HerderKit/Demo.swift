@@ -12,6 +12,7 @@ extension Fleet {
         }
         let fleet = Fleet(client: try Client.openDemo(demo: try String(contentsOf: url, encoding: .utf8)))
         fleet.hearsPings = false
+        fleet.isDemo = true
         return fleet
     }
 }

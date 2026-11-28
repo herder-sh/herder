@@ -368,6 +368,7 @@ struct DevicesSection: View {
 private struct WorkspaceLinks: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
+    @Environment(\.pages) private var pages
 
     var body: some View {
         SettingsGroup {
@@ -383,6 +384,15 @@ private struct WorkspaceLinks: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("providers-link")
+            // MOCK (P30.1): the demo alone shows Integrations.
+            if fleet.isDemo {
+                RowDivider()
+                Button { pages.open(.integrations) } label: {
+                    link("Integrations", symbol: Switcher.integrationsSymbol, summary: MockIntegrations.status)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("integrations-link")
+            }
         }
     }
 

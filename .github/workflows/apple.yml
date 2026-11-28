@@ -247,6 +247,25 @@ jobs:
           for file in "$RUNNER_TEMP"/attachments/*.txt; do
             if [ -f "$file" ]; then echo "::group::$(basename "$file")"; cat "$file"; echo "::endgroup::"; fi
           done
+      # The screenshots UI tests attach for review, such as the Integrations mock's
+      # (`ios-integrations*.png`), named after their attachment.
+      - name: Export the UI tests' screenshots
+        if: always()
+        run: |
+          bundle="$RUNNER_TEMP/ios-tests.xcresult"
+          out="$RUNNER_TEMP/ios-screenshots"
+          mkdir -p "$out"
+          [ -d "$bundle" ] || exit 0
+          xcrun xcresulttool export attachments --path "$bundle" --output-path "$RUNNER_TEMP/shots" || exit 0
+          jq -r '.[].attachments[] | select(.suggestedHumanReadableName | startswith("ios-"))
+            | "\(.exportedFileName)\t\(.suggestedHumanReadableName)"' "$RUNNER_TEMP/shots/manifest.json" |
+            while IFS=$'\t' read -r file name; do base=${name%.png}; cp "$RUNNER_TEMP/shots/$file" "$out/${base%%_*}.png"; done || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ios-screenshots-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ios-screenshots
+          if-no-files-found: ignore
       # Shows each shard ran its tests, and how long each took, to rebalance the shards by
       # (apple/scripts/ios-ui-shards.sh).
       - name: Report the UI tests this shard ran

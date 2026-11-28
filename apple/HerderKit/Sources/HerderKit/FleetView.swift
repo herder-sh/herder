@@ -4,6 +4,8 @@ import SwiftUI
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
     case board, chats, skills, providers, hub
+    /// MOCK (P30.1): the Integrations catalog, listed only in the demo (`Fleet.isDemo`).
+    case integrations
     case project(String)
     /// The bots' conversations: one bot's, by its `BotGroup.id`, or every bot's for `nil`.
     case bots(String?)
@@ -20,7 +22,7 @@ enum CompactTab: Hashable, CaseIterable {
         case .project: self = .projects
         case .chats, .bots: self = .chats
         case .board: self = .board
-        case .skills, .providers, .hub: self = .hub
+        case .skills, .providers, .hub, .integrations: self = .hub
         }
     }
 

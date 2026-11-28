@@ -28,6 +28,10 @@ enum Page: Hashable {
     case bot(hostId: HostId, botId: BotId)
     /// How the fleet is reached from outside home, opened from Hub.
     case remoteAccess
+    /// MOCK (P30.1), demo only: the Integrations catalog, opened from Hub on iPhone.
+    case integrations
+    /// MOCK (P30.1), demo only: one integration of the catalog, by its id.
+    case integration(String)
 }
 
 extension Page {
@@ -57,6 +61,10 @@ extension Page {
             return botId
         case .remoteAccess:
             return "Remote access"
+        case .integrations:
+            return "Integrations"
+        case .integration(let id):
+            return MockIntegrations.find(id)?.name ?? "Integration"
         }
     }
 
@@ -74,6 +82,11 @@ extension Page {
         case .recovery: RecoveryPage(fleet: fleet)
         case .bot(let hostId, let botId): BotPage(fleet: fleet, hostId: hostId, botId: botId)
         case .remoteAccess: RemoteAccessPage(fleet: fleet)
+        // Demo only: the mocks never draw on a real fleet, whatever opens them.
+        case .integrations:
+            if fleet.isDemo { IntegrationsView(fleet: fleet, sheet: sheet) }
+        case .integration(let id):
+            if fleet.isDemo { IntegrationPage(fleet: fleet, integrationId: id, sheet: sheet) }
         }
     }
 }

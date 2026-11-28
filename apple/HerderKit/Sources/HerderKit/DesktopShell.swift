@@ -80,6 +80,7 @@ struct DesktopShell: View {
         case .skills: "Skills"
         case .providers: "Providers"
         case .hub: "Hub"
+        case .integrations: "Integrations"
         case .project(let id): lists.projects.first { $0.id == id }?.name ?? "Project"
         case .bots(let id): lists.bots.first { $0.id == id }.map(fleet.botName) ?? "Bots"
         }
@@ -181,6 +182,15 @@ struct DesktopShell: View {
             }
         case .hub:
             HubPane(fleet: fleet, people: people, sheet: $sheet, switcher: switcher)
+        case .integrations:
+            // MOCK (P30.1): only the demo lists it; anywhere else it draws nothing.
+            if fleet.isDemo {
+                Pane(fleet: fleet, title: "Integrations", status: MockIntegrations.status, switcher: switcher) {
+                    IntegrationsView(fleet: fleet, sheet: $sheet)
+                } actions: {
+                    EmptyView()
+                }
+            }
         }
     }
 
@@ -366,6 +376,8 @@ struct Switcher {
     static let botsSymbol = "ellipsis.bubble"
     /// The symbol of Hub, the hub card's mark.
     static let hubSymbol = "point.3.connected.trianglepath.dotted"
+    /// The symbol of Integrations (a mock, P30.1).
+    static let integrationsSymbol = "puzzlepiece.extension"
     let fleet: Fleet
     let item: Binding<SidebarItem>
     let session: Binding<SessionKey?>
@@ -380,6 +392,9 @@ struct Switcher {
         Button("Providers", systemImage: "person.2") { go(.providers) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
         Button("Hub", systemImage: Self.hubSymbol) { go(.hub) }
+        if fleet.isDemo {
+            Button("Integrations", systemImage: Self.integrationsSymbol) { go(.integrations) }
+        }
         Divider()
         ForEach(order.sorted(fleet.lists.projects)) { project in
             Button(project.name, systemImage: "shippingbox") { go(.project(project.id)) }
@@ -491,6 +506,11 @@ struct Sidebar: View {
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
             SidebarRow(title: "Hub", symbol: Switcher.hubSymbol, selected: item == .hub) { select(.hub) }
+            if fleet.isDemo {
+                SidebarRow(title: "Integrations", symbol: Switcher.integrationsSymbol, selected: item == .integrations) {
+                    select(.integrations)
+                }
+            }
 
             heading("Projects") {
                 Menu {
@@ -608,6 +628,7 @@ private struct SidebarRail: View {
             rail("person.2", "Providers", .providers)
             rail("book.closed", "Skills", .skills)
             rail(Switcher.hubSymbol, "Hub", .hub)
+            if fleet.isDemo { rail(Switcher.integrationsSymbol, "Integrations", .integrations) }
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             ScrollView {
                 VStack(spacing: 10) {
