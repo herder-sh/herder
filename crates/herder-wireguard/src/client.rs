@@ -46,6 +46,24 @@ pub struct Tunnel {
     stop: CancellationToken,
 }
 
+/// `err` from opening the tunnel's socket to `endpoint`, said in plain words when the system
+/// refused it (EPERM): on a Mac a network extension, such as a VPN or firewall app, refuses
+/// the flow, or a sandbox lets the app send no UDP. Still [`io::ErrorKind::PermissionDenied`],
+/// so a caller can tell that a moment changes nothing.
+fn refused(err: io::Error, endpoint: &str) -> io::Error {
+    if err.kind() != io::ErrorKind::PermissionDenied {
+        return err;
+    }
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "this device refused UDP to {endpoint} ({err}): a VPN or firewall app, such as \
+             Cloudflare WARP, Little Snitch or LuLu, is blocking it; allow or exclude \
+             {endpoint} there, or use another route"
+        ),
+    )
+}
+
 impl Tunnel {
     /// Resolves the server and opens the tunnel's socket; the handshake waits for the first
     /// connection. Needs a tokio runtime.
@@ -64,8 +82,12 @@ impl Tunnel {
         } else {
             ([0u16; 8], 0).into()
         };
-        let udp = UdpSocket::bind(local).await?;
-        udp.connect(server).await?;
+        let udp = UdpSocket::bind(local)
+            .await
+            .map_err(|err| refused(err, &config.endpoint))?;
+        udp.connect(server)
+            .await
+            .map_err(|err| refused(err, &config.endpoint))?;
         let addresses: Vec<IpCidr> = config
             .addresses
             .iter()
@@ -188,5 +210,31 @@ async fn take(tunn: &mut Tunn, udp: &UdpSocket, shared: &Shared, datagram: &[u8]
             }
             TunnResult::Done | TunnResult::Err(_) => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_socket_says_what_blocks_it_and_stays_permission_denied() {
+        let eperm = io::Error::from_raw_os_error(1);
+        assert_eq!(eperm.kind(), io::ErrorKind::PermissionDenied);
+        let said = refused(eperm, "88.135.27.77:51820");
+        assert_eq!(said.kind(), io::ErrorKind::PermissionDenied);
+        let text = said.to_string();
+        assert!(
+            text.starts_with("this device refused UDP to 88.135.27.77:51820 (")
+                && text.contains("Cloudflare WARP")
+                && text.contains("exclude 88.135.27.77:51820 there, or use another route"),
+            "{text}"
+        );
+        // Anything else is left as it is.
+        let unreachable = io::Error::from(io::ErrorKind::NetworkUnreachable);
+        assert_eq!(
+            refused(unreachable, "x:1").kind(),
+            io::ErrorKind::NetworkUnreachable
+        );
     }
 }
