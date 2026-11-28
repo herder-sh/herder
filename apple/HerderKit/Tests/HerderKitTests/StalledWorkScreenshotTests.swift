@@ -35,6 +35,16 @@ import Testing
         try await shoot(board, collapsed: true, size: CGSize(width: 390, height: 640), named: "stalled-work-iphone.png")
     }
 
+    /// While all is well the Board's foot takes no room: padding and a background around the
+    /// empty line once drew a strip of the page's ground through the iPhone's tab bar.
+    @Test func takesNoRoomOnTheBoardWhileAllIsWell() async throws {
+        let fleet = try await sampleFleet(devboxOffline: false)
+        let host = NSHostingView(rootView: BoardStalledWork(fleet: fleet) { _ in })
+        #expect(host.fittingSize == .zero)
+        let stalled = NSHostingView(rootView: BoardStalledWork(fleet: try await sampleFleet(devboxOffline: true)) { _ in })
+        #expect(stalled.fittingSize.height > 0)
+    }
+
     private func window(_ fleet: Fleet) -> some View {
         DesktopShell(fleet: fleet, sheet: .constant(nil), item: .constant(.board), pages: .constant(PageStack()),
                      session: .constant(nil), draft: .constant(nil), people: FleetPeople(fleet: fleet), opened: { _ in },
