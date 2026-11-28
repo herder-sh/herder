@@ -117,11 +117,50 @@ struct BotsTests {
         fleet.keep(["devbox", "old"]) { hostId in
             hostId == "old" ? MachineBots(hostId: hostId) { _ in throw Self.unknownCommand } : Machine().model()
         }
-        #expect(fleet.status == "")
+        #expect(fleet.status() == "")
         await fleet.reload()
-        #expect(fleet.status == "1 bot · 1 waiting for the hub · 1 machine needs a newer herder")
+        #expect(fleet.status() == "1 bot · 1 waiting for the hub · 1 machine needs a newer herder")
         fleet.keep([]) { _ in Machine().model() }
-        #expect(fleet.status == "")
+        #expect(fleet.status() == "")
+    }
+
+    @Test func everyBotTheSidebarListsIsInBotSettingsOrSaysWhyItIsNot() async {
+        func group(_ hostId: HostId, _ botId: BotId) -> BotGroup {
+            BotGroup(hostId: hostId, botId: botId, kind: .slack, live: [], archived: [])
+        }
+        let devbox = Machine().model()
+        await devbox.reload()
+        let machines = [
+            machine("devbox", name: "devbox", sessions: []),
+            machine("off", name: "trash-can-01", sessions: [], connection: .disconnected(error: "offline")),
+            machine("shared", name: "shared", sessions: [], role: .member),
+            machine("asking", name: "asking", sessions: []),
+            // A hub that keeps the sessions of a machine this device has no pairing with.
+            machine("hub", name: "draugelis", sessions: [],
+                    hosts: [FleetHost(hostId: "behind", hostName: "draugelis", online: false, lastSeen: "")]),
+        ]
+        let unmanaged = UnmanagedBot.all(
+            [group("devbox", "trash-can"), group("devbox", "gone"), group("off", "a"), group("shared", "b"),
+             group("asking", "c"), group("behind", "draugelis")],
+            machines: machines, bots: ["devbox": devbox])
+        // The table has devbox's trash-can; asking's list has not come back yet.
+        #expect(unmanaged.map(\.id) == ["devbox/gone", "off/a", "shared/b", "behind/draugelis"])
+        #expect(unmanaged.map(\.reason) == [
+            "devbox no longer has this bot.",
+            "trash-can-01 is offline.",
+            "Only shared’s owners manage its bots.",
+            "This device reaches draugelis only through a hub; add draugelis to manage its bots.",
+        ])
+        #expect(unmanaged.last?.machine == "draugelis")
+        #expect(unmanaged.last?.name == "draugelis")
+
+        // The header no longer says there are none.
+        let fleet = FleetBots()
+        #expect(fleet.status(elsewhere: 1) == "1 not managed from here")
+        fleet.keep(["devbox"]) { _ in MachineBots(hostId: "devbox") { _ in .bots(bots: []) } }
+        await fleet.reload()
+        #expect(fleet.status() == "No bots yet")
+        #expect(fleet.status(elsewhere: 2) == "2 not managed from here")
     }
 
     @Test func addBotOffersOnlyMachinesThatCanRunABotAndSaysWhyNot() async {
