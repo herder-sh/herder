@@ -69,6 +69,67 @@ enum ProvidersFixture {
         ], totals: [total("ops", "claude", "claude-sonnet-4-5", 88.4)], failovers: []),
     ])
 
+    /// The fleet P26.26 tidies: one email signed in on two machines, one of which has not
+    /// probed it yet and goes by the label it was added under; the same email as a Codex login
+    /// and as one of the hub's logins; the hub's proxy added under the label "Vault"; a hub
+    /// login whose label is a typo of its email's name; logins that report no limits; and a
+    /// machine that lacks most of them.
+    static func tidyMachines(now: Date = .now) -> [Machine] {
+        let resets = ISO8601DateFormatter().string(from: now.addingTimeInterval(2 * 3_600 + 20 * 60))
+        let weekResets = ISO8601DateFormatter().string(from: now.addingTimeInterval(4 * 86_400))
+        func windows(_ session: Double?, _ week: Double?) -> [UsageWindow] {
+            [session.map { UsageWindow(window: "five_hour", usedPercent: $0, resetsAt: resets) },
+             week.map { UsageWindow(window: "seven_day", usedPercent: $0, resetsAt: weekResets) }].compactMap(\.self)
+        }
+        func login(_ id: AccountId, _ provider: Provider, label: String, email: String?, session: Double? = nil,
+                   week: Double? = nil, configDir: String? = nil) -> Account {
+            Account(accountId: id, provider: provider, label: label, configDir: configDir, email: email,
+                    usage: windows(session, week))
+        }
+        func hubLogin(_ pin: String, label: String, email: String, session: Double? = nil, week: Double? = nil,
+                      fallback: Bool = false) -> Account {
+            Account(accountId: "vault-\(pin)", provider: "claude", label: label, configDir: nil, email: email,
+                    usage: windows(session, week), fallback: fallback, endpoint: "http://10.0.0.5:8317",
+                    keySecret: AccountDraft.hubKeySecret, hubLogin: "claude-\(email).json")
+        }
+        let proxy = Account(accountId: "vault", provider: "claude", label: "Vault", configDir: nil, email: nil, usage: [],
+                            endpoint: "http://10.0.0.5:8317", keySecret: AccountDraft.hubKeySecret)
+        let hubLogins = [
+            hubLogin("sam", label: "sam@example.com", email: "sam@example.com", session: 18, week: 64),
+            hubLogin("security", label: "Sam Secutity", email: "sam.security@example.com", session: 4, week: 22),
+            hubLogin("spare", label: "Spare", email: "spare@example.com", fallback: true),
+        ]
+        let host = { (id: HostId) in FleetHost(hostId: id, hostName: id, online: true, lastSeen: now.ISO8601Format()) }
+        return [
+            machine("mac", name: "studio-mac", sessions: [], accounts: [
+                login("claude", "claude", label: "Work", email: "sam@example.com", session: 41, week: 70),
+                proxy,
+            ] + hubLogins),
+            machine("can", name: "trash-can-01", sessions: [], accounts: [
+                // Not probed yet: the label it was added under is its email.
+                login("claude", "claude", label: "sam@example.com", email: nil),
+                login("security", "claude", label: "sam.security@example.com", email: "sam.security@example.com",
+                      configDir: "~/.claude_security"),
+                login("codex", "codex", label: "ChatGPT", email: "sam@example.com", session: 12, week: 30),
+                login("cursor", "cursor", label: "Cursor", email: nil),
+                proxy,
+            ] + hubLogins),
+            machine("box", name: "draugelis", sessions: [], accounts: [
+                Account(accountId: "claude", provider: "claude", label: "sam@example.com", configDir: nil,
+                        email: "sam@example.com", usage: windows(41, 70), fallback: false,
+                        needsLogin: ISO8601DateFormatter().string(from: now.addingTimeInterval(-20 * 60))),
+            ]),
+            machine("hub", name: "home-hub", sessions: [], hosts: [host("mac"), host("can")]),
+        ]
+    }
+
+    /// The Providers page over `tidyMachines`.
+    static func tidyOverview(now: Date = .now) -> ProvidersOverview {
+        let machines = tidyMachines(now: now)
+        return ProvidersOverview(accounts: ProviderAccounts(machines: machines, now: now),
+                                 versions: ProviderVersions(machines: machines), installs: [:])
+    }
+
     private static func total(_ id: AccountId, _ provider: Provider, _ model: String, _ cost: Double) -> UsageTotal {
         UsageTotal(accountId: id, provider: provider, model: model, turns: 40, input: 1_000_000, output: 200_000,
                    cacheRead: 0, cacheWrite: 0, costUsd: cost, costEstimated: true)

@@ -84,7 +84,7 @@ struct ProvidersTests {
         let one = [machine("a", name: "laptop", sessions: [], accounts: [account("x", email: "a@example.com")])]
         #expect(ProviderAccounts(machines: one, now: now).groups.first?.logins.first?.machines == "laptop")
         let two = one + [machine("b", name: "server", sessions: [], accounts: [account("x", email: "a@example.com")])]
-        #expect(ProviderAccounts(machines: two, now: now).groups.first?.logins.first?.machines == "2 machines")
+        #expect(ProviderAccounts(machines: two, now: now).groups.first?.logins.first?.machines == "laptop, server")
     }
 
     @Test func accountsAreAddedOnMachinesThisDeviceOwnsAndReaches() {

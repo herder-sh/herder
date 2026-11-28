@@ -243,8 +243,8 @@ struct AccountPage: View {
         let rotation = login.fallbackOn.isEmpty ? "primary"
             : login.fallbackOn.count == login.on.count ? "fallback"
             : "fallback on \(login.fallbackOn.map(\.name).joined(separator: ", "))"
-        let kind = login.hubLogin != nil ? "hub login"
-            : login.endpoint == nil ? nil : login.keyFromHub ? "hub logins" : "endpoint"
+        // The hub's proxy says what it is in its title.
+        let kind = login.hubLogin != nil ? "hub login" : login.endpoint == nil || login.isHubProxy ? nil : "endpoint"
         let parts: [String?] = [ModelCatalog.providerName(login.provider), login.subtitle, kind, on, rotation]
         return parts.compactMap(\.self).joined(separator: " · ")
     }

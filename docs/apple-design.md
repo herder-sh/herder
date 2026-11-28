@@ -527,6 +527,45 @@ router VPN worked yesterday), `remote-access-iphone.png` (the page at an iPhone'
 option's set-up offered), `remote-access-none-iphone.png` (nothing set up, no hub, every route's
 steps open); the row also shows in `hub-mac.png` and `hub-iphone.png`.
 
+### 4.4.2 Providers (`ProvidersView`, `ProvidersPage`, P26.26)
+
+Providers reads at a glance: **Needs you** first (signed-out accounts, failed installs, each
+with its fix), then **Accounts**, then **CLI versions**, herder's versions, MCP servers and the
+week's models.
+
+Accounts are grouped by provider (its mark, name and count), and within a provider by where
+they live: **Hub logins · home-hub** (the hub's logins, shared by every host it serves, and the
+hub's proxy) above **Machine logins** (each machine's own). A provider with no hub logins shows
+its rows under its name alone. Each row is one login (`ProviderAccounts.Login`), never one per
+machine: accounts signed in as one email are one row, whatever case a machine spells it in,
+and a machine that has not probed its email yet joins it by the email-shaped label it was added
+under (`ProviderAccounts.identity`). The row lists the login's machines by name.
+
+- **Identity**: the email is the row's title, the display label beside it in tertiary when it
+  says more, so two logins whose labels look alike ("Sam Secutity", "sam.security@…") read
+  apart by email, or the same. A login without an email shows its label. The hub's proxy (an
+  endpoint account on the hub's key) is **Hub proxy**: never its URL, never the label it was
+  added under; its URL is on its Account page only. Another endpoint account shows its label and
+  an Endpoint badge. Fallback logins carry a Fallback badge. The word "Vault" is never shown.
+- **Columns** (wide): Account, Machines, Session left, Week left, 7 d cost, under one quiet
+  header; narrow (iPhone, a narrow pane): the login, its label and machines under it, and its
+  session window. A limit not reported is a blank cell, not "No limits reported"; a login
+  signed out everywhere says Signed out.
+- **Rename and remove from the list**: the row's context menu (Mac, and a long press on
+  iPhone) has Open, Rename… and Remove…; on iPhone a trailing swipe has Remove and Rename. The
+  rules are #734's: only an owner sees them. A machine's login is renamed on every connected
+  machine the user owns, and removed from one machine at a time: the confirmation asks which
+  when it is on several, and says the login stays in its config directory. One of the hub's
+  logins is renamed and removed in place, on the hub, as its Logins tab does (`LoginChanges`,
+  `HubLogins.remove(named:)`), for the hub's owners only. The hub's proxy is removed like a
+  machine's login, and has no label to rename. A refusal shows above the page.
+- **Not on every machine** is one quiet line under the accounts, "3 accounts aren't on every
+  machine · Set Up…", the machines on hover; Set Up… opens `SetUpSheet`.
+
+On iPhone the page is a `List`, so each account row swipes; on the Mac it stacks in a scroll
+view. Screenshots: `providers-tidy-mac.png`, `providers-tidy-iphone.png` (the fleet the todo
+describes, `ProvidersTidyScreenshotTests`), `providers.png`, `providers-380.png`.
+
 ### 4.5 Usage (`UsageView`)
 
 Modelled on T3 Code's Usage page. A period picker (24h, 7d, 30d, month to date) and a machine
@@ -1132,8 +1171,12 @@ action sets the login up on the first owned machine that lacks it.
   login's account on every connected machine the user owns.
 - **About**: the provider, the email and the account id on each machine.
 
-The plan, a 7-day sparkline and removing the account from a machine are still to come: the
-protocol has no plan, no daily usage and no command to remove an account. Screenshot:
+- **Danger zone**: removing the login's account from a machine the user owns (#734); the same
+  as Remove… on its row in Providers (§4.4.2).
+
+The header names the login by its email, as Providers does; a hub login's label is its
+subtitle, the hub's proxy is "Hub proxy". The plan and a 7-day sparkline are still to come: the
+protocol has no plan and no daily usage. Screenshot:
 [`screenshots/p14-11/account-page.png`](screenshots/p14-11/account-page.png)
 (`AccountPageScreenshotTests`).
 
