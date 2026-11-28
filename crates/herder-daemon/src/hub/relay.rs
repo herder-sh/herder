@@ -83,9 +83,10 @@ const SILENCE: Duration = Duration::from_secs(90);
 /// megabytes, and a catch-up the client's slower link cannot take yet waits in it, where the
 /// host can put nothing ahead of it: an answer the client waits on queues behind all of it.
 /// This little keeps the backlog on the host, which sends what the client waits on first.
-/// It caps a stream at about this per round trip between the host and the hub (Linux doubles
-/// it for its own use): some 2 MB/s at 30 ms.
-const HOST_READ_AHEAD: usize = 64 * 1024;
+/// Linux doubles it, and the hub's window then lets about twice this be on the way, while the
+/// host's socket holds up to half that again unsent: all of it ahead of the answer. It caps a
+/// stream at some 64 KiB per round trip between the host and the hub: 2 MB/s at 30 ms.
+const HOST_READ_AHEAD: usize = 32 * 1024;
 
 /// Time to deliver an answer or a close frame before the socket is dropped.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);

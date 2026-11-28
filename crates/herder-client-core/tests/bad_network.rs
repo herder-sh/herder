@@ -149,6 +149,14 @@ struct Link {
 /// Bytes each of the relay's sockets buffers each way; see [`small_buffers`].
 const RELAY_BUFFER: u32 = 64 * 1024;
 
+/// Bytes each socket of the relay on the daemon's leg to a hub buffers each way, and that leg
+/// has on the way at most. That leg is fast and close to the hub, which reads only as fast as
+/// the app's slower link takes it: a real one then holds no more than the hub's window lets
+/// on the way, and the rest of a catch-up waits in the daemon, which puts an answer ahead of
+/// it. A relay with the app's [`RELAY_BUFFER`] and a window would hold some 100 kB more of
+/// it ahead of the answer, a fifth of a second on a 500 kB/s link.
+const HOP_BUFFER: u32 = 8 * 1024;
+
 /// How long a radio carries nothing before it goes idle, and has to come up for the next piece.
 const RADIO_IDLE: Duration = secs(5);
 
@@ -211,13 +219,16 @@ struct Net {
     carried: AtomicU64,
     /// When each piece the client sent was delivered.
     sent: Mutex<Vec<Instant>>,
+    /// The leg from the daemon to a hub, rather than the app's network.
+    hop: bool,
 }
 
 impl Net {
-    async fn start(target: SocketAddr, seed: u64) -> Arc<Self> {
+    /// The app's network to `target`, or with `hop` the daemon's leg to a hub.
+    async fn start(target: SocketAddr, seed: u64, hop: bool) -> Arc<Self> {
         let mut listeners = Vec::new();
         for _ in 0..2 {
-            let socket = small_buffers();
+            let socket = small_buffers(hop);
             socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
             listeners.push(socket.listen(1024).unwrap());
         }
@@ -232,6 +243,7 @@ impl Net {
             accepted: AtomicU64::new(0),
             carried: AtomicU64::new(0),
             sent: Mutex::default(),
+            hop,
         });
         for (path, listener) in listeners.into_iter().enumerate() {
             let net = Arc::clone(&net);
@@ -265,6 +277,15 @@ impl Net {
     fn accepted(&self) -> u64 {
         self.accepted.load(Ordering::SeqCst)
     }
+
+    /// Bytes the link has on the way at most: on a hop, [`HOP_BUFFER`].
+    fn window(&self) -> u64 {
+        if self.hop {
+            u64::from(HOP_BUFFER)
+        } else {
+            window(&self.link.borrow())
+        }
+    }
 }
 
 /// Carries one connection of the client to the daemon until it ends or is killed.
@@ -288,7 +309,7 @@ async fn carry(net: Arc<Net>, path: usize, mut inbound: TcpStream, mut rng: Rng)
                     return Kill::Fin;
                 }
             }
-            let Ok(daemon) = small_buffers().connect(net.target).await else {
+            let Ok(daemon) = small_buffers(net.hop).connect(net.target).await else {
                 return Kill::Reset;
             };
             // The relay passes on small pieces in quick succession. Nagle's algorithm would
@@ -370,7 +391,7 @@ async fn pipe(
         let mut last = Instant::now();
         let mut held = on_the_way.subscribe();
         loop {
-            let window = window(&net.link.borrow());
+            let window = net.window();
             if held.wait_for(|held| *held < window).await.is_err() {
                 return;
             }
@@ -438,16 +459,21 @@ async fn pipe(
     writing.await;
 }
 
-/// A socket of the relay's, whose buffers each way hold [`RELAY_BUFFER`] at most: what the
-/// link has not carried yet waits with whoever sends to the relay, as on a real network,
-/// where no more than a window is ever on the way. Loopback would otherwise take megabytes
-/// into either end's buffers at once, and a byte the relay wrote would count as carried while
-/// it waited in its own socket. Its segments are an Ethernet's, not loopback's 64 KiB, which
-/// a small window does not fit and stalls on.
-fn small_buffers() -> TcpSocket {
+/// A socket of the relay's, whose buffers each way hold [`RELAY_BUFFER`] at most, or
+/// [`HOP_BUFFER`] on a hop: what the link has not carried yet waits with whoever sends to the
+/// relay, as on a real network, where no more than a window is ever on the way. Loopback
+/// would otherwise take megabytes into either end's buffers at once, and a byte the relay
+/// wrote would count as carried while it waited in its own socket. Its segments are an
+/// Ethernet's, not loopback's 64 KiB, which a small window does not fit and stalls on.
+fn small_buffers(hop: bool) -> TcpSocket {
     let socket = TcpSocket::new_v4().unwrap();
-    socket.set_recv_buffer_size(RELAY_BUFFER).unwrap();
-    socket.set_send_buffer_size(16 * 1024).unwrap();
+    let (receive, send) = if hop {
+        (HOP_BUFFER, HOP_BUFFER)
+    } else {
+        (RELAY_BUFFER, 16 * 1024)
+    };
+    socket.set_recv_buffer_size(receive).unwrap();
+    socket.set_send_buffer_size(send).unwrap();
     socket2::SockRef::from(&socket).set_tcp_mss(1460).unwrap();
     socket
 }
@@ -1013,7 +1039,7 @@ impl World {
         let (app, truth) = (open("app"), open("truth"));
         let (daemon, net, host_net, host) = if relayed {
             let hub = Hub::start(&tmp.path().join("hub")).await;
-            let host_net = Net::start(hub.addr, seed ^ 0x4057).await;
+            let host_net = Net::start(hub.addr, seed ^ 0x4057, true).await;
             let code = hub.auth.mint_host("test-host-1", PAIRING_TTL).unwrap().code;
             let link = HubConfig {
                 backup: false,
@@ -1025,7 +1051,7 @@ impl World {
                 )
             };
             let daemon = Daemon::start(&tmp.path().join("daemon"), script, Some(link)).await;
-            let net = Net::start(hub.addr, seed).await;
+            let net = Net::start(hub.addr, seed, false).await;
             // The app signs in to the daemon where it is, then to the hub over its
             // network, and from then on reaches the daemon through the hub only.
             let direct = vec![daemon.addr.to_string()];
@@ -1056,7 +1082,7 @@ impl World {
             (daemon, net, Some(host_net), host)
         } else {
             let daemon = Daemon::start(&tmp.path().join("daemon"), script, None).await;
-            let net = Net::start(daemon.addr, seed).await;
+            let net = Net::start(daemon.addr, seed, false).await;
             let through = net.addrs.iter().map(ToString::to_string).collect();
             let host =
                 authenticator::sign_in(&daemon.auth, &app, through, &daemon.fingerprint, "alice")
@@ -1845,7 +1871,7 @@ fn a_route_that_works_is_kept_until_a_drop_or_a_wake() {
     run(async {
         let mut world = World::relayed(41, 80, None).await;
         let route = world.machine().address.unwrap();
-        let home = Net::start(world.daemon.addr, 41 ^ 0x4040).await;
+        let home = Net::start(world.daemon.addr, 41 ^ 0x4040, false).await;
         for path in &home.routes {
             path.send_replace(Route::Lost);
         }
@@ -2486,12 +2512,11 @@ fn a_prompt_during_a_catch_up_is_applied_in_half_a_round_trip() {
 
 /// The same through a hub, where the catch-up passes the hub on its way: the hub takes in
 /// only a little more of it than it has passed on, so the answer still goes ahead of the
-/// rest. It still answers some 800 ms later than direct (1.6-1.7 s in CI), so its bound is
-/// 2 s until P26.23 finds the rest of the queueing on the relayed route.
+/// rest, within the same bound.
 #[test]
 fn a_prompt_during_a_catch_up_through_a_hub_is_answered_as_soon() {
     run(async {
-        prompt_during_a_catch_up(World::relayed(41, 2, Some(1_500_000)).await, 2000).await;
+        prompt_during_a_catch_up(World::relayed(41, 2, Some(1_500_000)).await, 1500).await;
     });
 }
 
