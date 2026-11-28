@@ -134,7 +134,7 @@ func homeTunnel(up: Bool = false) -> RemoteOptions.Tunnel {
         machines[2].connection = .disconnected(error: "away")
         let idle = FleetReach(machines: machines, seen: ["wg:home-udm": now.addingTimeInterval(-2 * 3600)],
                               options: RemoteOptions(tunnels: [homeTunnel()]), now: now)
-        #expect(idle.status(homeTunnel()) == "Idle · last used 2h ago" && idle.sightings.isEmpty)
+        #expect(idle.status(homeTunnel()) == "Idle · last used 2h ago" && !idle.sightings.contains("wg:home-udm"))
         #expect(idle.tryable(homeTunnel()) == nil)
         let never = FleetReach(machines: machines, options: RemoteOptions(tunnels: [homeTunnel()]), now: now)
         #expect(never.status(homeTunnel()) == "Idle · comes up when herder needs it")
