@@ -7,8 +7,8 @@
 //! [`AWAY_CAP`], since each attempt there may wait out a whole connect timeout on an address
 //! that is not on this network. A wake (which a network change sends), a reconnect asked for,
 //! new addresses or a command for the machine try it again at once. Within one attempt, an
-//! address this device can't send to at all (a sandbox that forbids the socket, no route to
-//! the network) is not dialled again while the others are still out.
+//! address this device may not send to at all (a sandbox that forbids the socket) is not
+//! dialled again while the others are still out.
 //!
 //! While the app is in the background ([`Supervisor::suspend`]) the task keeps a connection
 //! that is up but neither probes it nor replaces or retries one it loses. Back in the foreground ([`Supervisor::wake`]) it
@@ -2854,21 +2854,14 @@ where
     Err(errors.join("; "))
 }
 
-/// Whether `err` is this device refusing to send to an address at all, as a sandbox that does
-/// not let the app open a socket does, or a network with no route there: nothing that a
-/// moment changes, unlike a daemon that restarts or a connection cut while it is made.
+/// Whether `err` is this device not permitted to send to an address at all, as a sandbox that
+/// does not let the app open the socket: nothing that a moment changes, unlike a daemon that
+/// restarts, a connection cut while it is made, or a network with no route there yet, as
+/// right after a wake.
 fn blocked_here(err: &anyhow::Error) -> bool {
     err.chain()
         .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-        .any(|io| {
-            matches!(
-                io.kind(),
-                std::io::ErrorKind::PermissionDenied
-                    | std::io::ErrorKind::NetworkUnreachable
-                    | std::io::ErrorKind::HostUnreachable
-                    | std::io::ErrorKind::AddrNotAvailable
-            )
-        })
+        .any(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
 }
 
 /// A connection to the daemon at `address`, up to its WebSocket upgrade: the daemon is
@@ -3075,14 +3068,16 @@ mod tests {
         assert!(backoff(30, AWAY_CAP) >= AWAY_CAP / 2);
     }
 
-    /// An address this device can't send to at all, as one the sandbox forbids, is not dialled
-    /// again while another address of the race is still out: it would fail the same way.
-    /// One a daemon refuses is, as a daemon restarting refuses for a moment.
+    /// An address this device may not send to at all, as one the sandbox forbids, is not
+    /// dialled again while another address of the race is still out: it would fail the same
+    /// way. One a daemon refuses is, as a daemon restarting refuses for a moment, and one with
+    /// no route yet, as right after a wake.
     #[tokio::test(start_paused = true)]
     async fn an_address_blocked_here_is_not_dialled_again_in_a_race() {
         for (kind, again) in [
             (std::io::ErrorKind::PermissionDenied, false),
-            (std::io::ErrorKind::NetworkUnreachable, false),
+            // As right after a wake, until the network is up.
+            (std::io::ErrorKind::NetworkUnreachable, true),
             (std::io::ErrorKind::ConnectionRefused, true),
         ] {
             let dials = Arc::new(Mutex::new(Vec::new()));
