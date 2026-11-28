@@ -139,10 +139,12 @@ struct FindBar: View {
                 Text(position).font(.caption.monospacedDigit()).foregroundStyle(Theme.tertiary)
             }
             Button("Previous Match", systemImage: "chevron.up") { find.step(by: -1, in: matches) }
-                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .keyboardShortcut(.previousMatch)
+                .help("Previous match", shortcut: .previousMatch)
                 .disabled(matches.isEmpty)
             Button("Next Match", systemImage: "chevron.down") { find.step(by: 1, in: matches) }
-                .keyboardShortcut("g", modifiers: .command)
+                .keyboardShortcut(.nextMatch)
+                .help("Next match", shortcut: .nextMatch)
                 .disabled(matches.isEmpty)
             Button("Done") { find.shown = false }
                 .keyboardShortcut(.cancelAction)

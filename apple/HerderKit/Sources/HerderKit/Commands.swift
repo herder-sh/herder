@@ -11,7 +11,8 @@ enum AppCommand: Hashable, Sendable {
     /// ⌘N: a session where the window is, as the sidebar's New Session.
     case newSession
     case newChat
-    /// A new chat with dictation listening, so you just talk.
+    /// Dictation in the session or draft on show; with none open, a new chat listening, so you
+    /// just talk.
     case speakToChat
     /// Reconnects every machine.
     case reconnect
@@ -47,7 +48,7 @@ enum AppCommand: Hashable, Sendable {
             }
         }
 
-        /// ⌘1 for the Board, then on down the sidebar.
+        /// ⌘1 for the Board, then on down the sidebar, until rebound (`Shortcut.go`).
         var key: Character {
             Character(String((Self.allCases.firstIndex(of: self) ?? 0) + 1))
         }
@@ -65,8 +66,12 @@ final class AppCommands {
     private(set) var pending: AppCommand?
     /// The draft, by `Draft.key`, whose composer starts dictating as it shows.
     private(set) var listening: String?
+    /// Whether the keyboard shortcuts show over the window (⌘/).
+    var showsCheatSheet = false
     /// Stops the dictation a composer is running, while one is.
     @ObservationIgnored private var dictating: (id: UUID, stop: () -> Void)?
+    /// The composers on show, the latest last, each with its dictation's toggle.
+    @ObservationIgnored private var shown: [(id: UUID, toggle: () -> Void)] = []
 
     /// Asks for `command`. Speak to Chat while a composer dictates stops it instead, so the
     /// same key starts and stops talking.
@@ -76,6 +81,20 @@ final class AppCommands {
             return
         }
         pending = command
+    }
+
+    /// Whether a session's or a draft's composer is on show, which Speak to Chat dictates into.
+    var composing: Bool { !shown.isEmpty }
+
+    /// A composer came on show (`toggle` given) or went (`nil`).
+    func composer(_ id: UUID, toggle: (() -> Void)?) {
+        shown.removeAll { $0.id == id }
+        if let toggle { shown.append((id, toggle)) }
+    }
+
+    /// Starts or stops dictating in the composer on show.
+    func dictateInComposer() {
+        shown.last?.toggle()
     }
 
     /// The pending command, taken by the window that carries it out.
@@ -112,7 +131,7 @@ final class AppCommands {
     func followHotkey() {
         guard !followsHotkey else { return }
         followsHotkey = true
-        KeyboardShortcuts.onKeyDown(for: .speakToChat) { [weak self] in
+        KeyboardShortcuts.onKeyDown(for: Shortcut.speakToChat.name) { [weak self] in
             NSApp.activate()
             NSApp.windows.first { $0.isMiniaturized }?.deminiaturize(nil)
             self?.send(.speakToChat)
@@ -121,18 +140,12 @@ final class AppCommands {
     #endif
 }
 
-#if os(macOS)
-extension KeyboardShortcuts.Name {
-    /// Speak to Chat from anywhere, herder in front or not; Settings changes or clears it.
-    /// ⌃⌥⌘D by default: ⌥⌘D hides the Dock and ⌃⌘D looks a word up.
-    static let speakToChat = Self("speakToChat", initial: .init(.d, modifiers: [.control, .option, .command]))
-}
-#endif
-
 /// What a command does in the fleet's window, worked out apart from it.
 enum CommandRoute: Equatable {
     /// Opens a draft; `listens` starts dictating in it.
     case draft(Draft, listens: Bool)
+    /// Starts or stops dictating in the composer on show.
+    case dictate
     case sheet(AppSheet)
     case section(SidebarItem)
     /// Opens a session once its machine lists it, as a link does.
@@ -143,9 +156,10 @@ enum CommandRoute: Equatable {
     /// It cannot be done; the toast says why.
     case problem(String)
 
-    /// `command`, with `item` the section shown.
+    /// `command`, with `item` the section shown and `composing` whether a session's or a
+    /// draft's composer is on show.
     @MainActor
-    init(_ command: AppCommand, fleet: Fleet, item: SidebarItem) {
+    init(_ command: AppCommand, fleet: Fleet, item: SidebarItem, composing: Bool = false) {
         switch command {
         case .newSession:
             // A chat in Chats; a draft in the project pane's project; elsewhere the picker.
@@ -157,6 +171,8 @@ enum CommandRoute: Equatable {
             } else {
                 self = .sheet(.newSession)
             }
+        case .speakToChat where composing:
+            self = .dictate
         case .newChat, .speakToChat:
             if let draft = Draft.chat(fleet: fleet) {
                 self = .draft(draft, listens: command == .speakToChat)
@@ -202,7 +218,7 @@ extension FocusedValues {
 }
 
 /// The menu bar: herder's actions with their keys, so they can be found. Each goes to the
-/// action the window already has.
+/// action the window already has; its key is the one `Keymap` has now.
 public struct HerderCommands: Commands {
     @FocusedValue(\.sessionCommands) private var session
     @FocusedValue(\.dictationCommand) private var dictation
@@ -214,75 +230,51 @@ public struct HerderCommands: Commands {
         // One window: ⌘N starts a session instead of opening another.
         CommandGroup(replacing: .newItem) {
             Button("New Session") { send(.newSession) }
-                .keyboardShortcut("n")
+                .keyboardShortcut(.newSession)
             Button("New Chat") { send(.newChat) }
-                .keyboardShortcut("n", modifiers: [.command, .option])
-            speakToChat
+                .keyboardShortcut(.newChat)
+            // On the Mac its key is also the system-wide hotkey (`AppCommands.followHotkey`).
+            Button("Speak to Chat") { send(.speakToChat) }
+                .keyboardShortcut(.speakToChat)
         }
         CommandGroup(after: .sidebar) {
             Button(sidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar") { sidebarCollapsed.toggle() }
-                .keyboardShortcut("\\", modifiers: [.command, .shift])
+                .keyboardShortcut(.sidebar)
             Button(session?.listHidden == true ? "Show Session List" : "Hide Session List") { session?.list?() }
-                .keyboardShortcut("\\", modifiers: .command)
+                .keyboardShortcut(.sessionList)
                 .disabled(session?.list == nil)
             Button("Events and Statistics") { session?.inspector() }
-                .keyboardShortcut("i", modifiers: [.command, .option])
+                .keyboardShortcut(.inspector)
                 .disabled(session == nil)
             Divider()
             Button("Reconnect") { send(.reconnect) }
-                .keyboardShortcut("r")
+                .keyboardShortcut(.reconnect)
         }
         CommandMenu("Go") {
             ForEach(AppCommand.Section.allCases, id: \.self) { section in
                 Button(section.title) { send(.go(section)) }
-                    .keyboardShortcut(KeyEquivalent(section.key))
+                    .keyboardShortcut(Shortcut.go(section))
             }
         }
         CommandMenu("Session") {
             Button(dictation?.listening == true ? "Stop Dictating" : "Dictate") { dictation?.toggle() }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .keyboardShortcut(.dictate)
                 .disabled(dictation == nil)
             Button("Find in Transcript") { session?.find?() }
-                .keyboardShortcut("f")
+                .keyboardShortcut(.find)
                 .disabled(session?.find == nil)
             Button(session?.showsTerminal == true ? "Back to the Chat" : "Terminal") { session?.terminal?() }
-                .keyboardShortcut("`")
+                .keyboardShortcut(.terminal)
                 .disabled(session?.terminal == nil)
         }
-    }
-
-    /// Speak to Chat: on the Mac its key is the system-wide hotkey, which Settings changes;
-    /// on iPad a fixed one.
-    @ViewBuilder private var speakToChat: some View {
-        #if os(macOS)
-        Button("Speak to Chat") { send(.speakToChat) }
-            .globalKeyboardShortcut(.speakToChat)
-        #else
-        Button("Speak to Chat") { send(.speakToChat) }
-            .keyboardShortcut("d", modifiers: [.command, .option, .control])
-        #endif
+        // herder has no help book: Help lists the keys instead.
+        CommandGroup(replacing: .help) {
+            Button("Keyboard Shortcuts") { AppCommands.shared.showsCheatSheet.toggle() }
+                .keyboardShortcut(.cheatSheet)
+        }
     }
 
     private func send(_ command: AppCommand) {
         AppCommands.shared.send(command)
     }
 }
-
-#if os(macOS)
-/// herder's settings window (⌘,): the Speak to Chat hotkey.
-public struct HerderSettings: View {
-    public init() {}
-
-    public var body: some View {
-        Form {
-            KeyboardShortcuts.Recorder("Speak to Chat:", name: .speakToChat)
-            Text("Opens a new chat with dictation listening, even while herder is in the background. Press it again, or Return, to stop.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(20)
-        .frame(width: 420)
-    }
-}
-#endif

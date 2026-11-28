@@ -288,24 +288,24 @@ private struct SessionPane: View {
                     showsTerminal.toggle()
                 }
                     .accessibilityLabel(showsTerminal ? "Chat" : "Terminal")
-                    .help(showsTerminal ? "Back to the chat (⌘`)" : "A shell in this session's worktree (⌘`)")
+                    .help(showsTerminal ? "Back to the chat" : "A shell in this session's worktree", shortcut: .terminal)
             }
             if !showsTerminal {
                 HeaderButton(symbol: "magnifyingglass", selected: find.shown) { toggleFind() }
                     .accessibilityLabel("Find in Transcript")
-                    .help("Find in the transcript (⌘F)")
+                    .help("Find in the transcript", shortcut: .find)
             }
             HeaderButton(symbol: "info.circle", selected: inspector == .pane && inspectorShown) {
                 showInspector()
             }
                 .accessibilityLabel("Events and Statistics")
-                .help("Events and statistics (⌥⌘I)")
+                .help("Events and statistics", shortcut: .inspector)
             #if os(macOS)
             HeaderButton(symbol: listHidden ? "sidebar.squares.left" : "rectangle.expand.vertical") {
                 listHidden.toggle()
             }
                 .accessibilityLabel(listHidden ? "Show the Session List" : "Hide the Session List")
-                .help(listHidden ? "Show the session list (⌘\\)" : "Give the session the whole width (⌘\\)")
+                .help(listHidden ? "Show the session list" : "Give the session the whole width", shortcut: .sessionList)
             #endif
             if let model {
                 actionsMenu(model, threads: summary?.threads ?? [], inToolbar: false)

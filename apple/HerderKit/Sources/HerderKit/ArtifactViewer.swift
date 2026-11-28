@@ -146,34 +146,34 @@ struct ArtifactViewer: View {
 
     private var previousButton: some View {
         Button("Previous Artifact", systemImage: "chevron.left") { step(-1) }
-            .keyboardShortcut("[", modifiers: .command)
+            .keyboardShortcut(.previousArtifact)
             .disabled(index == 0)
-            .help("Previous artifact (⌘[)")
+            .help("Previous artifact", shortcut: .previousArtifact)
     }
 
     private var nextButton: some View {
         Button("Next Artifact", systemImage: "chevron.right") { step(1) }
-            .keyboardShortcut("]", modifiers: .command)
+            .keyboardShortcut(.nextArtifact)
             .disabled(index.map { $0 + 1 >= artifacts.count } ?? true)
-            .help("Next artifact (⌘])")
+            .help("Next artifact", shortcut: .nextArtifact)
     }
 
     @ViewBuilder private var zooming: some View {
         Button("Fit Width", systemImage: "arrow.left.and.right.square") { zoom(.fit) }
-            .keyboardShortcut("9", modifiers: .command)
-            .help("Fit width (⌘9)")
+            .keyboardShortcut(.fitWidth)
+            .help("Fit width", shortcut: .fitWidth)
         Button("Zoom Out", systemImage: "minus.magnifyingglass") { zoom(Zoom.smaller(than: scale)) }
-            .keyboardShortcut("-", modifiers: .command)
-            .help("Zoom out (⌘−)")
+            .keyboardShortcut(.zoomOut)
+            .help("Zoom out", shortcut: .zoomOut)
         Button { zoom(.scale(1)) } label: {
             Text("\(Int((scale * 100).rounded()))%").monospacedDigit().frame(minWidth: 44)
         }
-        .keyboardShortcut("0", modifiers: .command)
-        .help("Actual size (⌘0)")
+        .keyboardShortcut(.actualSize)
+        .help("Actual size", shortcut: .actualSize)
         .accessibilityLabel("Actual Size")
         Button("Zoom In", systemImage: "plus.magnifyingglass") { zoom(Zoom.larger(than: scale)) }
-            .keyboardShortcut("+", modifiers: .command)
-            .help("Zoom in (⌘+)")
+            .keyboardShortcut(.zoomIn)
+            .help("Zoom in", shortcut: .zoomIn)
     }
 
     /// The public link, or on the Mac a private artifact's own file; iOS opens no local files.
@@ -200,9 +200,9 @@ struct ArtifactViewer: View {
 
     private var saveButton: some View {
         Button("Save As…", systemImage: "square.and.arrow.down") { saving = true }
-            .keyboardShortcut("s", modifiers: .command)
+            .keyboardShortcut(.saveArtifact)
             .disabled(data == nil)
-            .help("Save as (⌘S)")
+            .help("Save as", shortcut: .saveArtifact)
     }
 
     /// The public link when there is one, else the file itself.

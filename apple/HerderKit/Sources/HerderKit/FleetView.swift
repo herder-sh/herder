@@ -252,6 +252,7 @@ struct FleetView: View {
         .onAppear { Launch.mark(.frame) }
         .task { await fleet.follow() }
         .overlay(alignment: .bottom) { ToastView(fleet: fleet) }
+        .cheatSheet()
         .alert(fleet.archiveRefusal.map { "Couldn’t archive “\($0.title)”" } ?? "",
                isPresented: Binding(get: { fleet.archiveRefusal != nil }, set: { if !$0 { fleet.archiveRefusal = nil } }),
                presenting: fleet.archiveRefusal) { _ in
@@ -316,7 +317,7 @@ struct FleetView: View {
     private func performPending() {
         let commands = AppCommands.shared
         guard let command = commands.pending else { return }
-        let route = CommandRoute(command, fleet: fleet, item: item)
+        let route = CommandRoute(command, fleet: fleet, item: item, composing: commands.composing)
         if route == .wait { return }
         _ = commands.take()
         follow(route)
@@ -324,7 +325,7 @@ struct FleetView: View {
 
     /// Carries out a command from the window's own controls.
     private func perform(_ command: AppCommand) {
-        follow(CommandRoute(command, fleet: fleet, item: item))
+        follow(CommandRoute(command, fleet: fleet, item: item, composing: AppCommands.shared.composing))
     }
 
     private func follow(_ route: CommandRoute) {
@@ -339,6 +340,8 @@ struct FleetView: View {
             }
             draft = next
             if listens { AppCommands.shared.listen(for: next.key) }
+        case .dictate:
+            AppCommands.shared.dictateInComposer()
         case .sheet(let next):
             sheet = next
         case .section(let next):

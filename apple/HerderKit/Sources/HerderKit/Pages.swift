@@ -138,8 +138,8 @@ struct PageTrail: View {
                     .hitTarget()
             }
             .buttonStyle(.plain)
-            .keyboardShortcut("[", modifiers: .command)
-            .help("Back to \(crumbs.dropLast().last ?? "")")
+            .keyboardShortcut(.back)
+            .help("Back to \(crumbs.dropLast().last ?? "")", shortcut: .back)
             .accessibilityLabel("Back")
             ForEach(Array(crumbs.enumerated()), id: \.offset) { index, crumb in
                 if index > 0 {

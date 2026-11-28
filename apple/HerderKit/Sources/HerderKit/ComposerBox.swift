@@ -163,7 +163,7 @@ struct ComposerBox<Footer: View>: View {
         }
         #endif
         .onAppear { if focusesOnAppear { focus() } }
-        // ⇧⌘D in the menu bar.
+        // Dictate in the menu bar.
         .focusedSceneValue(\.dictationCommand, DictationCommand(listening: dictation.listening, toggle: toggleDictation))
         // Speak to Chat: it listens once this draft shows, after the draft's kept text is in.
         .onChange(observing: { AppCommands.shared.listening }, initial: true) { _, _ in
@@ -174,7 +174,12 @@ struct ComposerBox<Footer: View>: View {
         .onChange(of: dictation.listening) { _, listening in
             AppCommands.shared.dictation(composerId, stop: listening ? { [dictation] in dictation.stop() } : nil)
         }
-        .onDisappear { AppCommands.shared.dictation(composerId, stop: nil) }
+        // So Speak to Chat dictates here while this shows, rather than opening a chat.
+        .onAppear { AppCommands.shared.composer(composerId, toggle: toggleDictation) }
+        .onDisappear {
+            AppCommands.shared.dictation(composerId, stop: nil)
+            AppCommands.shared.composer(composerId, toggle: nil)
+        }
         .onChange(of: text) {
             // A chip deleted from the text takes its image or paste with it.
             PromptText.prune(.image, items: &images, text: &text)
@@ -229,10 +234,10 @@ struct ComposerBox<Footer: View>: View {
             if running && nothingToSend {
                 CircleButton(symbol: "stop.fill", help: "Interrupt", action: stop)
             } else {
-                CircleButton(symbol: "arrow.up", help: "Send", action: submit)
+                CircleButton(symbol: "arrow.up", help: "Send", shortcut: .send, action: submit)
                     .disabled(nothingToSend)
                     .opacity(nothingToSend ? 0.35 : 1)
-                    .keyboardShortcut(.return, modifiers: .command)
+                    .keyboardShortcut(.send)
             }
         }
     }
@@ -426,8 +431,8 @@ struct DictationButton: View {
                 .hitTarget()
         }
         .buttonStyle(.plain)
-        // ⇧⌘D is the menu bar's Dictate (`HerderCommands`).
-        .help(listening ? "Stop dictating (⇧⌘D)" : "Dictate, on this device (⇧⌘D)")
+        // Its key is the menu bar's Dictate (`HerderCommands`).
+        .help(listening ? "Stop dictating" : "Dictate, on this device", shortcut: .dictate)
         .accessibilityLabel(listening ? "Stop dictating" : "Dictate")
     }
 }
@@ -459,6 +464,8 @@ struct FooterItem<Items: View>: View {
 struct CircleButton: View {
     let symbol: String
     let help: String
+    /// The shortcut its tooltip names.
+    var shortcut: Shortcut?
     let action: () -> Void
 
     var body: some View {
@@ -471,7 +478,7 @@ struct CircleButton: View {
                 .hitTarget()
         }
         .buttonStyle(.plain)
-        .help(help)
+        .tooltip(shortcut.map { Keymap.shared.help(help, $0) } ?? help)
         .accessibilityLabel(help)
     }
 }
