@@ -34,9 +34,72 @@ struct BotTableRow: Identifiable {
     }
 }
 
+/// A bot the sidebar lists, from its conversations, that the table can't, with why: its machine
+/// is offline, owned by someone else or reached only through a hub, or no longer has it.
+struct UnmanagedBot: Identifiable, Equatable {
+    var id: String { "\(hostId)/\(botId)" }
+    let hostId: HostId
+    let botId: BotId
+    let kind: BotKind
+    /// Its name, as its machine last listed it, else its id.
+    let name: String
+    let machine: String
+    let reason: String
+
+    /// Each of `groups` whose bot is not in the table; a machine still being asked, or one that
+    /// said why it listed none (`BotsNote`), adds none.
+    @MainActor static func all(_ groups: [BotGroup], machines: [Machine], bots: [HostId: MachineBots]) -> [UnmanagedBot] {
+        groups.compactMap { group in
+            let paired = machines.first { $0.hostId == group.hostId && !$0.isHub }
+            let name = paired?.name
+                ?? machines.lazy.flatMap(\.hosts).first { $0.hostId == group.hostId }?.hostName
+                ?? group.hostId
+            let reason: String
+            if let paired {
+                if paired.connection != .connected {
+                    reason = "\(name) is offline."
+                } else if paired.role != .owner {
+                    reason = "Only \(name)’s owners manage its bots."
+                } else if case .loaded(let list) = bots[group.hostId]?.bots {
+                    guard !list.contains(where: { $0.botId == group.botId }) else { return nil }
+                    reason = "\(name) no longer has this bot."
+                } else {
+                    return nil
+                }
+            } else {
+                reason = "This device reaches \(name) only through a hub; add \(name) to manage its bots."
+            }
+            return UnmanagedBot(hostId: group.hostId, botId: group.botId, kind: group.kind,
+                                name: bots[group.hostId]?.bot(group.botId)?.name ?? group.botId, machine: name, reason: reason)
+        }
+    }
+}
+
+/// A bot this device can't manage, as a row under the table: its kind, name and machine, and why.
+struct UnmanagedBotRow: View {
+    let bot: UnmanagedBot
+
+    var body: some View {
+        HStack(spacing: 10) {
+            BotMark(kind: bot.kind, size: 22)
+            VStack(alignment: .leading, spacing: 1) {
+                Text([bot.name, bot.machine].joined(separator: " · ")).fontWeight(.semibold).lineLimit(1)
+                Text(bot.reason).font(.subheadline).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 8)
+        .frame(minHeight: 36)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("unmanaged-bot-\(bot.botId)")
+    }
+}
+
 /// Every bot on every machine this device owns, as one table: its kind and machine, how its
 /// connection stands, how many people it answers and its default project. A bot opens as its
-/// page. Machines that can't list their bots say why under it, in a line each.
+/// page. Machines that can't list their bots say why under it, in a line each, and so does each
+/// bot the sidebar lists that this device can't manage (`UnmanagedBot`).
 struct BotSettingsView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
@@ -49,13 +112,14 @@ struct BotSettingsView: View {
         let bots = fleet.bots.lists
         let rows = BotTableRow.rows(machines, bots, projectName: fleet.projectName)
         let asking = machines.contains { bots[$0.hostId].map { if case .asking = $0.bots { true } else { false } } ?? true }
+        let unmanaged = UnmanagedBot.all(fleet.lists.bots, machines: fleet.machines, bots: bots)
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 #if os(macOS)
                 // A page over Bots, under its breadcrumb: the bots' status and Add Bot, as
                 // iPhone's toolbar has it.
                 HStack(spacing: 12) {
-                    Text(fleet.bots.status).font(.subheadline).foregroundStyle(Theme.secondary)
+                    Text(fleet.bots.status(elsewhere: unmanaged.count)).font(.subheadline).foregroundStyle(Theme.secondary)
                     Spacer(minLength: 8)
                     PillButton(title: "Add Bot", symbol: "plus", prominent: true) { sheet = .addBot }
                         .disabled(machines.isEmpty)
@@ -67,8 +131,17 @@ struct BotSettingsView: View {
                     }
                 } else if asking {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 120)
-                } else {
+                } else if unmanaged.isEmpty {
                     BotsEmptyState(canAdd: machines.contains { !(bots[$0.hostId]?.outdated ?? false) }) { sheet = .addBot }
+                }
+                if !unmanaged.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Not managed from here").font(.headline).foregroundStyle(Theme.text)
+                            .padding(.horizontal, 8)
+                        ForEach(unmanaged) { bot in
+                            UnmanagedBotRow(bot: bot)
+                        }
+                    }
                 }
                 let notes = machines.compactMap { machine in bots[machine.hostId].flatMap { BotsNote(fleet: fleet, machine: machine, bots: $0) } }
                 if !notes.isEmpty {

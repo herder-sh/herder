@@ -208,18 +208,23 @@ final class FleetBots {
     }
 
     /// "2 bots · 2 waiting for the hub": how many, then how many stand each way but connected,
-    /// then the machines too old for bots; zeros left out.
-    /// Empty until every machine has answered.
-    var status: String {
-        if lists.isEmpty || lists.values.contains(where: { if case .asking = $0.bots { true } else { false } }) { return "" }
+    /// then the machines too old for bots, then the `elsewhere` bots this device can't manage
+    /// (`UnmanagedBot`); zeros left out. Empty until every machine has answered.
+    func status(elsewhere: Int = 0) -> String {
+        let away = elsewhere == 0 ? nil : "\(elsewhere) not managed from here"
+        if lists.isEmpty { return away ?? "" }
+        if lists.values.contains(where: { if case .asking = $0.bots { true } else { false } }) { return "" }
         let bots = lists.values.flatMap { list in list.list.map { list.statuses[$0.botId]?.state } }
         let outdated = lists.values.filter(\.outdated).count
-        var parts = [bots.isEmpty ? "No bots yet" : bots.count == 1 ? "1 bot" : "\(bots.count) bots"]
+        var parts = bots.isEmpty
+            ? [away == nil ? "No bots yet" : nil].compactMap(\.self)
+            : [bots.count == 1 ? "1 bot" : "\(bots.count) bots"]
         for state in [BotState.connecting, .waitingForHub, .tokenRejected, .unsupported] {
             let count = bots.filter { $0 == state }.count
             if count > 0 { parts.append("\(count) \(state.label.lowercased())") }
         }
         if outdated > 0 { parts.append(outdated == 1 ? "1 machine needs a newer herder" : "\(outdated) machines need a newer herder") }
+        if let away { parts.append(away) }
         return parts.joined(separator: " · ")
     }
 }
