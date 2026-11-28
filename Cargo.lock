@@ -2439,7 +2439,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "herder"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2470,7 +2470,7 @@ dependencies = [
 
 [[package]]
 name = "herder-adapters"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "base64 0.23.1",
  "herder-protocol",
@@ -2485,7 +2485,7 @@ dependencies = [
 
 [[package]]
 name = "herder-client-core"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2527,7 +2527,7 @@ dependencies = [
 
 [[package]]
 name = "herder-daemon"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2586,7 +2586,7 @@ dependencies = [
 
 [[package]]
 name = "herder-ffi"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2609,7 +2609,7 @@ dependencies = [
 
 [[package]]
 name = "herder-gtk"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "gtk4",
  "herder-adapters",
@@ -2627,7 +2627,7 @@ dependencies = [
 
 [[package]]
 name = "herder-protocol"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "base64 0.23.1",
  "flate2",
@@ -2640,7 +2640,7 @@ dependencies = [
 
 [[package]]
 name = "herder-store"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "herder-protocol",
  "proptest",
@@ -2653,7 +2653,7 @@ dependencies = [
 
 [[package]]
 name = "herder-tasktools"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "herder-protocol",
  "jsonschema",
@@ -2664,7 +2664,7 @@ dependencies = [
 
 [[package]]
 name = "herder-telemetry"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "posthog",
  "rustls",
@@ -2678,7 +2678,7 @@ dependencies = [
 
 [[package]]
 name = "herder-tui"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2709,7 +2709,7 @@ dependencies = [
 
 [[package]]
 name = "herder-wireguard"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "base64 0.23.1",
  "boringtun",
