@@ -11,55 +11,57 @@ struct RemoteActions {
     /// Imports a WireGuard config's text under a name.
     var importConfig: @MainActor (String, String) throws -> Void = { _, _ in }
     var removeTunnel: @MainActor (String) throws -> Void = { _ in }
+    /// Puts a machine's address first and reconnects it through that address now.
+    var connectThrough: @MainActor (HostId, String) async throws -> Void = { _, _ in }
     /// Uses herder's WireGuard on the hub on this device, or stops.
     var useHubWireGuard: @MainActor (Bool) async throws -> Void = { _ in }
     /// Sets what the hub sets up (owners).
     var setSettings: @MainActor (RemoteAccessSettings) async throws -> Void = { _ in }
     /// Keeps the Cloudflare API token on the hub (owners).
     var putToken: @MainActor (String) async throws -> Void = { _ in }
+    /// Signs in with a browser to the login proxy in front of the hub's tunnel at an address:
+    /// the closure shows the proxy's login page, cancelled once the hub has the token.
+    var signInToFrontDoor: @MainActor (String, @escaping @MainActor (URL) async -> Void) async throws -> Void = { _, _ in }
 }
 
-/// Your machines: each one's route in use and round trip in a line; a tap opens its routes in
-/// the order they are tried, each to pin, disable or move.
-struct MachineRoutesCard: View {
+/// Your machines, as rows in the Remote access summary: each one's route in use and round trip
+/// in a line; a tap opens its routes in the order they are tried, each to pin, disable or move.
+struct MachineRoutesList: View {
     let machines: [MachineRoutes]
     let actions: RemoteActions
     @State private var open: HostId?
     @State private var error: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading(title: "Your machines")
-            SettingsGroup {
-                ForEach(Array(machines.enumerated()), id: \.element.id) { index, machine in
-                    if index > 0 { RowDivider() }
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { open = open == machine.hostId ? nil : machine.hostId }
-                    } label: {
-                        HStack(spacing: 10) {
-                            RouteMark(state: machine.route == nil ? .notSetUp : .working)
-                            Text(machine.name).font(Theme.body).foregroundStyle(Theme.text).lineLimit(1)
-                            Spacer(minLength: 8)
-                            Text(machine.line).font(.subheadline.monospacedDigit()).foregroundStyle(Theme.secondary)
-                                .lineLimit(1)
-                            Image(systemName: open == machine.hostId ? "chevron.up" : "chevron.down")
-                                .font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                        }
-                        .padding(.horizontal, Theme.cellPadding)
-                        .frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
-                        .contentShape(.rect)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(machines) { machine in
+                RowDivider()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { open = open == machine.hostId ? nil : machine.hostId }
+                } label: {
+                    HStack(spacing: 10) {
+                        RouteMark(state: machine.route == nil ? .notSetUp : .working)
+                        Text(machine.name).font(Theme.body).foregroundStyle(Theme.text).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(machine.line).font(.subheadline.monospacedDigit()).foregroundStyle(Theme.secondary)
+                            .lineLimit(1)
+                        Image(systemName: open == machine.hostId ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("remote-access-machine")
-                    if open == machine.hostId {
-                        routes(machine)
-                    }
+                    .padding(.horizontal, Theme.cellPadding)
+                    .frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
+                    .contentShape(.rect)
                 }
-                if let error {
-                    RowDivider()
-                    Text(error).font(.footnote).foregroundStyle(Theme.failure)
-                        .padding(Theme.cellPadding)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("remote-access-machine")
+                if open == machine.hostId {
+                    routes(machine)
                 }
+            }
+            if let error {
+                RowDivider()
+                Text(error).font(.footnote).foregroundStyle(Theme.failure)
+                    .padding(Theme.cellPadding)
             }
         }
         .accessibilityIdentifier("remote-access-machines")
@@ -143,35 +145,33 @@ struct MachineRoutesCard: View {
     }
 }
 
-/// Your VPN, through herder's own WireGuard client: each imported config, and the form that
-/// imports one from its text or file.
+/// Your VPN, through herder's own WireGuard client: each imported config with its status, and
+/// the form that imports one from a QR code, a file or its text.
 struct OwnVpnFacts: View {
-    let options: RemoteOptions
+    let access: FleetReach
     let actions: RemoteActions
+    private var options: RemoteOptions { access.options }
     @State private var importing = false
     @State private var choosingFile = false
     @State private var scanning = false
     @State private var name = ""
     @State private var config = ""
     @State private var error: String?
+    /// The config **Try It Now** is reconnecting through.
+    @State private var trying: String?
+
+    /// `importing` and `config` open the form with that text, as a screenshot shows it.
+    init(access: FleetReach, actions: RemoteActions, importing: Bool = false, config: String = "") {
+        self.access = access
+        self.actions = actions
+        _importing = State(initialValue: importing)
+        _config = State(initialValue: config)
+    }
 
     var body: some View {
         ForEach(options.imported) { tunnel in
             RowDivider()
-            HStack(spacing: 10) {
-                RouteMark(state: tunnel.up ? .working : .unseen)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(tunnel.name).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
-                    Text(([tunnel.endpoint] + tunnel.allowedIps).joined(separator: " · "))
-                        .font(.caption.monospaced()).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.middle)
-                }
-                Spacer(minLength: 8)
-                SettingsButton(title: "Remove", style: .quiet) { perform { try actions.removeTunnel(tunnel.id) } }
-                    .fixedSize()
-                    .accessibilityIdentifier("remote-access-remove-vpn")
-            }
-            .padding(.horizontal, Theme.cellPadding)
-            .padding(.vertical, 8)
+            row(tunnel)
         }
         RowDivider()
         if importing {
@@ -184,24 +184,25 @@ struct OwnVpnFacts: View {
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(Theme.failure).fixedSize(horizontal: false, vertical: true)
                 }
-                HStack(spacing: 10) {
-                    SettingsButton(title: "Choose File…") { choosingFile = true }.fixedSize()
-                    #if os(iOS)
-                    SettingsButton(title: "Scan QR Code…") { scanning = true }
-                        .fixedSize()
-                        .accessibilityIdentifier("remote-access-scan-vpn")
-                    #endif
-                    Spacer(minLength: 0)
-                    SettingsButton(title: "Cancel", style: .quiet) { close() }.fixedSize()
-                    SettingsButton(title: "Import", style: .primary) {
-                        perform {
-                            try actions.importConfig(name.isEmpty ? "WireGuard" : name, config)
-                            close()
+                // One row where it fits; on a narrow phone, or with large text, the sources
+                // over the buttons, then each on its own line.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        sources
+                        Spacer(minLength: 0)
+                        finish
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) { sources }
+                        HStack(spacing: 10) {
+                            Spacer(minLength: 0)
+                            finish
                         }
                     }
-                    .fixedSize()
-                    .disabled(config.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityIdentifier("remote-access-import-vpn-save")
+                    VStack(alignment: .leading, spacing: 10) {
+                        sources
+                        finish
+                    }
                 }
             }
             .padding(Theme.cellPadding)
@@ -233,6 +234,80 @@ struct OwnVpnFacts: View {
             }
             .padding(.horizontal, Theme.cellPadding)
             .padding(.vertical, 8)
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(Theme.failure).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Theme.cellPadding).padding(.bottom, 8)
+            }
+        }
+    }
+
+    /// An imported config's row: its mark, name, status (why it is not in use, when it is not),
+    /// endpoint, **Try It Now** while a machine it reaches is connected over another route,
+    /// and **Remove**. Long names and endpoints truncate, so the row fits a narrow phone.
+    private func row(_ tunnel: RemoteOptions.Tunnel) -> some View {
+        let working = tunnel.up || access.tunnelUses[tunnel.id]?.contains(where: \.carried) == true
+        return HStack(alignment: .top, spacing: 10) {
+            RouteMark(state: working ? .working : .idle).padding(.top, 5)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(tunnel.name).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
+                    .lineLimit(1).truncationMode(.tail)
+                Text(access.status(tunnel)).font(.caption).foregroundStyle(working ? Theme.success : Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("\(tunnel.endpoint) · \(tunnel.reaches)")
+                    .font(.caption.monospaced()).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.middle)
+                if let use = access.tryable(tunnel) {
+                    SettingsButton(title: trying == tunnel.id ? "Trying…" : "Try It Now") {
+                        run(tunnel.id) { try await actions.connectThrough(use.hostId, use.address) }
+                    }
+                    .fixedSize()
+                    .disabled(trying != nil)
+                    .padding(.top, 4)
+                    .accessibilityIdentifier("remote-access-try-vpn")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            SettingsButton(title: "Remove", style: .quiet) { perform { try actions.removeTunnel(tunnel.id) } }
+                .fixedSize()
+                .accessibilityIdentifier("remote-access-remove-vpn")
+        }
+        .padding(.horizontal, Theme.cellPadding)
+        .padding(.vertical, 8)
+    }
+
+    /// Where a config comes from: a file, and on iPhone a QR code.
+    @ViewBuilder private var sources: some View {
+        SettingsButton(title: "Choose File…") { choosingFile = true }.fixedSize()
+        #if os(iOS)
+        SettingsButton(title: "Scan QR Code…") { scanning = true }
+            .fixedSize()
+            .accessibilityIdentifier("remote-access-scan-vpn")
+        #endif
+    }
+
+    @ViewBuilder private var finish: some View {
+        SettingsButton(title: "Cancel", style: .quiet) { close() }.fixedSize()
+        SettingsButton(title: "Import", style: .primary) {
+            perform {
+                try actions.importConfig(name.isEmpty ? "WireGuard" : name, config)
+                close()
+            }
+        }
+        .fixedSize()
+        .disabled(config.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .accessibilityIdentifier("remote-access-import-vpn-save")
+    }
+
+    /// Runs `action` for the config `id`, its error under the rows.
+    private func run(_ id: String, _ action: @escaping () async throws -> Void) {
+        trying = id
+        Task {
+            do {
+                try await action()
+                error = nil
+            } catch {
+                self.error = describe(error)
+            }
+            trying = nil
         }
     }
 
