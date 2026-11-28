@@ -13,7 +13,7 @@ fn remote_access_settings() -> RemoteAccessSettings {
     RemoteAccessSettings {
         wireguard: Some(WireGuardSettings {
             port: DEFAULT_WIREGUARD_PORT,
-            endpoint: "home.example.net:51820".into(),
+            endpoint: "home.example.net:51900".into(),
         }),
         cloudflare: Some(CloudflareSettings {
             account_id: "023e105f4ecef8ad9ca31a8372d0c353".into(),
@@ -21,6 +21,17 @@ fn remote_access_settings() -> RemoteAccessSettings {
             relay: true,
             tunnel_hostname: Some("hub.example.com".into()),
         }),
+    }
+}
+
+/// The hub's WireGuard must not default to a port a cluster's network plugin or a common
+/// WireGuard setup holds on the nodes: k3s's ServiceLB makes it a host port on every node.
+#[test]
+fn default_wireguard_port_is_clear_of_cni_ports() {
+    // 51820/51821: WireGuard's usual, flannel's wireguard backend (IPv4/IPv6), Calico.
+    // 51871: Cilium's WireGuard encryption.
+    for taken in [51820, 51821, 51871] {
+        assert_ne!(DEFAULT_WIREGUARD_PORT, taken);
     }
 }
 
@@ -1602,7 +1613,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 remote_access: Box::new(RemoteAccess {
                     settings: Some(remote_access_settings()),
                     wireguard: Some(WireGuardOffer {
-                        endpoint: "home.example.net:51820".into(),
+                        endpoint: "home.example.net:51900".into(),
                         enrolled: true,
                     }),
                     relay: Some(RouteStatus {
@@ -1635,7 +1646,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             command_id: CommandId::new("01J9COMMAND"),
             result: CommandResult::WireGuardEnrolled {
                 enrollment: WireGuardEnrollment {
-                    endpoint: "home.example.net:51820".into(),
+                    endpoint: "home.example.net:51900".into(),
                     hub_public_key: "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=".into(),
                     address: "10.247.0.2".into(),
                     hub_address: "10.247.0.1:7447".into(),
