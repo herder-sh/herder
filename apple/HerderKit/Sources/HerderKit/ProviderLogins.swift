@@ -104,7 +104,12 @@ final class HubLogins {
     }
 
     func remove(_ login: ProviderLogin) async throws {
-        _ = try await send(.removeProviderLogin(name: login.name))
+        try await remove(named: login.name)
+    }
+
+    /// Has the proxy drop the login `name` and its tokens, on every host at once.
+    func remove(named name: String) async throws {
+        _ = try await send(.removeProviderLogin(name: name))
         await reload()
     }
 
