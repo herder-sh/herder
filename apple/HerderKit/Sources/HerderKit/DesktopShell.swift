@@ -717,7 +717,7 @@ struct IconButton: View {
                 .hitTarget()
         }
         .buttonStyle(.plain)
-        .help(shortcut.map { Keymap.shared.help(help, $0) } ?? help)
+        .tooltip(shortcut.map { Keymap.shared.help(help, $0) } ?? help)
         .accessibilityLabel(help)
     }
 }

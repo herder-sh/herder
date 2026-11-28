@@ -3,6 +3,7 @@ import Foundation
 import SwiftUI
 import Testing
 #if os(macOS)
+import AppKit
 import KeyboardShortcuts
 #endif
 
@@ -86,6 +87,28 @@ struct ShortcutsTests {
         }
         // Speak to Chat keeps its name, so a key set before this list existed stays.
         #expect(Shortcut.speakToChat.name.rawValue == "speakToChat")
+    }
+
+    /// The mic's tooltip is AppKit's, behind the button, naming the key: SwiftUI's `.help`
+    /// showed none there.
+    @Test func theMicsTooltipNamesItsKey() async throws {
+        let button = DictationButton(listening: false) {}
+        let host = NSHostingView(rootView: button)
+        host.frame = CGRect(x: 0, y: 0, width: 60, height: 60)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        for _ in 0..<3 {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        func tips(_ view: NSView) -> [ToolTipView] {
+            ((view as? ToolTipView).map { [$0] } ?? []) + view.subviews.flatMap(tips)
+        }
+        let tip = try #require(tips(host).first)
+        #expect(tip.toolTip == "Dictate, on this device (⇧⌘D)")
+        #expect(tip.bounds.width >= 30 && tip.bounds.height >= 30)
+        // It never takes the click from the button in front of it.
+        #expect(tip.hitTest(CGPoint(x: 15, y: 15)) == nil)
     }
 
     /// A key rebound in Settings shows in the tooltip and the cheat sheet; a cleared one says

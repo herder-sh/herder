@@ -345,6 +345,38 @@ private struct ShortcutHelp: ViewModifier {
     let shortcut: Shortcut
 
     func body(content: Content) -> some View {
-        content.help(Keymap.shared.help(text, shortcut))
+        content.tooltip(Keymap.shared.help(text, shortcut))
     }
 }
+
+extension View {
+    /// A tooltip on hover. On the Mac it is AppKit's own (`NSView.toolTip`) on a view behind
+    /// this one: SwiftUI's `.help` showed none over the composer's and the header's buttons,
+    /// though hover reached them. VoiceOver reads it as the hint.
+    func tooltip(_ text: String) -> some View {
+        #if os(macOS)
+        background(ToolTipHost(text: text)).accessibilityHint(text)
+        #else
+        help(text)
+        #endif
+    }
+}
+
+#if os(macOS)
+/// Holds a tooltip for the SwiftUI view in front of it, which takes the clicks.
+private struct ToolTipHost: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> ToolTipView { ToolTipView() }
+
+    func updateNSView(_ view: ToolTipView, context: Context) {
+        if view.toolTip != text { view.toolTip = text }
+    }
+}
+
+/// A view that is only its tooltip: AppKit shows it from the view's bounds as the pointer
+/// rests there, and never takes a click.
+final class ToolTipView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+#endif
