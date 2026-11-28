@@ -64,14 +64,19 @@ struct StalledWork: View {
 }
 
 /// The stalled-work line at the foot of the iPhone's Board: a view of its own, so only it draws
-/// again as the machines change.
+/// again as the machines change. While all is well it is no view at all: padding and a
+/// background around the empty line would still lay out, as a 16 pt strip of the page's ground
+/// in the middle of the tab bar, down to the screen's edge.
 struct BoardStalledWork: View {
     let fleet: Fleet
     let open: (HostId?) -> Void
 
     var body: some View {
-        StalledWork(machines: fleet.lists.machines, open: open)
-            .padding(.horizontal, 8)
-            .background(.ground)
+        let machines = fleet.lists.machines
+        if StalledWork.line(machines) != nil {
+            StalledWork(machines: machines, open: open)
+                .padding(.horizontal, 8)
+                .background(.ground)
+        }
     }
 }
