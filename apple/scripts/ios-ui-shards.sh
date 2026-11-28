@@ -13,8 +13,8 @@ set -euo pipefail
 shards=(
   # 203 s
   "FakeFleetUITests TaskRowUITests SessionKeyboardUITests DemoUITests TranscriptScrollUITests"
-  # 201 s
-  "SkillMentionUITests PhotoAttachUITests PasskeyApprovalUITests TranscriptInlineCodeUITests TabsUITests"
+  # 201 s, before IntegrationsDemoUITests (new, about 30 s)
+  "SkillMentionUITests PhotoAttachUITests PasskeyApprovalUITests TranscriptInlineCodeUITests TabsUITests IntegrationsDemoUITests"
   # 202 s
   "SecretsUITests TranscriptCopyUITests SessionLinkUITests SessionSearchUITests WaitingTaskUITests"
 )

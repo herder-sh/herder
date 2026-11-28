@@ -41,6 +41,8 @@ enum AppSheet: Identifiable, Hashable {
     /// Moving your machines' old per-machine users to your passkey, and the users that need a
     /// decision: from People (Hub's Needs you), while a machine you own is not moved yet.
     case claim(ClaimPlan)
+    /// MOCK (P30.1), demo only: installing or configuring an integration of the catalog.
+    case installIntegration(String)
 
     var id: Self { self }
 }
@@ -73,6 +75,8 @@ extension AppSheet {
             JoinFleetSheet(fleet: fleet, link: link)
         case .acceptInvite(let link):
             JoinInviteSheet(fleet: fleet, link: link)
+        case .installIntegration(let id):
+            if fleet.isDemo { InstallIntegrationSheet(fleet: fleet, integrationId: id) }
         }
     }
 }

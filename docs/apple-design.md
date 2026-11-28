@@ -702,6 +702,15 @@ left and the forward button, filled `Theme.action`, bottom right. A machine adde
 forgetting the last machine brings it back. `WelcomeScreenshotTests` draws every step on the Mac
 and an iPhone (`welcome-<step>-<mac|iphone>.png`).
 
+### 4.11 Integrations, a mock (`IntegrationsMock.swift`, P30.1)
+
+Only inside the demo (`Fleet.isDemo`): an **Integrations** row under Workspace after Hub (Mac
+sidebar, rail and switcher) and a link at the foot of Hub on iPhone open a catalog of canned
+integrations, each one's page (a `DetailPage`) and the install sheet (`AppSheet.installIntegration`).
+Each says it is a mock, and nothing it does reaches a daemon. The model and its open questions
+are in [`integrations.md`](integrations.md). Screenshots: `integrations-*.png`
+(`IntegrationsScreenshotTests`), `ios-integrations*.png` (`IntegrationsDemoUITests`).
+
 ---
 
 ## 5. Session (`SessionView`)
