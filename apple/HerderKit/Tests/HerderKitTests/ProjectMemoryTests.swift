@@ -12,6 +12,7 @@ private func project(_ projectId: String?, live: [SessionSummary], archived: [Se
     ProjectGroup(projectId: projectId, name: projectId ?? "No project yet", live: live, archived: archived)
 }
 
+@MainActor
 struct ProjectMemoryTests {
     /// A store of its own, so tests neither share nor leave state.
     let memory = ProjectMemory(defaults: UserDefaults(suiteName: "ProjectMemoryTests-\(UUID().uuidString)")!)

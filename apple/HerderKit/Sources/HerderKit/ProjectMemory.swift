@@ -11,7 +11,8 @@ import Herder
 /// session it remembers while that is still listed and not archived; otherwise the project
 /// opens as it did before, on its list.
 struct ProjectMemory {
-    static let shared = ProjectMemory()
+    // Only the views use it, on the main actor; `UserDefaults` is not `Sendable`.
+    @MainActor static let shared = ProjectMemory()
 
     let defaults: UserDefaults
 
