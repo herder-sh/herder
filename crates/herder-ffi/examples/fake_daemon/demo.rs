@@ -1706,7 +1706,28 @@ async fn run(
                     return false;
                 }
             }
-            Step::SleepMs(ms) => tokio::time::sleep(Duration::from_millis(ms)).await,
+            // A turn that pauses between rounds, as the busy session's last one does, can be
+            // interrupted while it waits.
+            Step::SleepMs(ms) => {
+                let sleep = tokio::time::sleep(Duration::from_millis(ms));
+                tokio::pin!(sleep);
+                loop {
+                    tokio::select! {
+                        () = &mut sleep => break,
+                        command = commands.recv() => match command {
+                            Some(AdapterCommand::Interrupt) => {
+                                let turn_id = turn_id.clone();
+                                return events
+                                    .send(AdapterEvent::TurnInterrupted { turn_id })
+                                    .await
+                                    .is_ok();
+                            }
+                            Some(AdapterCommand::Shutdown) | None => return false,
+                            Some(_) => {}
+                        },
+                    }
+                }
+            }
             Step::Write { path, text } => {
                 let path = cwd.join(path);
                 let written = path

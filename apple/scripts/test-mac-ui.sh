@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Runs the Mac UI tests (apple/MacUITests) against the demo fleet:
+# Runs the Mac UI tests (apple/MacUITests) against the busy demo fleet:
 #
 #   apple/scripts/test-mac-ui.sh [-only-testing:herder-macOS-UITests/<Class>/<test> ...]
 #
 # Builds the app as a copy with its own bundle id (the installed app keeps running and keeps its
-# pairings), starts `fake_daemon --demo` and runs the tests on the copy; extra arguments go to
-# `xcodebuild test-without-building`. Keeps the result bundle in target/mac-ui-tests/.
+# pairings), starts `fake_daemon --busy` (the demo fleet and a long, streaming session) and runs the
+# tests on the copy; extra arguments go to `xcodebuild test-without-building`. Keeps the result
+# bundle and the app's transcript log in target/mac-ui-tests/.
 #
 # The tests drive the app with the keyboard and mouse, and use the pasteboard: leave them alone
 # while they run. Needs what build-ffi.sh builds, XcodeGen, and Xcode with its Metal toolchain.
@@ -41,13 +42,19 @@ cp -R "$derived/Build/Products/Debug/herder.app" "$app"
 codesign --force --deep --sign - --entitlements "$entitlements" "$app"
 
 # The daemons run until their stdin closes: when this script exits.
-exec 3> >(env -u GIT_CONFIG_COUNT -u HERDER_SESSION_ID "$daemon" --demo > "$out/fake_daemon.out")
+exec 3> >(env -u GIT_CONFIG_COUNT -u HERDER_SESSION_ID "$daemon" --busy > "$out/fake_daemon.out")
 for _ in $(seq 180); do [ "$(wc -l < "$out/fake_daemon.out")" -ge 2 ] && break; sleep 1; done
 [ "$(wc -l < "$out/fake_daemon.out")" -ge 2 ] || { echo "the fake daemons did not start" >&2; exit 1; }
 
 rm -rf "$out/tests.xcresult"
+started=$(date "+%Y-%m-%d %H:%M:%S")
+status=0
 TEST_RUNNER_HERDER_APP=$app \
 TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$out/fake_daemon.out") \
 TEST_RUNNER_HERDER_PASSKEY=$(sed -n 2p "$out/fake_daemon.out") \
   xcodebuild test-without-building -project apple/herder.xcodeproj -scheme herder-macOS-UITests \
-  -destination "platform=macOS" -derivedDataPath "$derived" -resultBundlePath "$out/tests.xcresult" "$@"
+  -destination "platform=macOS" -derivedDataPath "$derived" -resultBundlePath "$out/tests.xcresult" "$@" || status=$?
+# The app's transcript log (TranscriptLog) for the run: its scroll state as the tests drove it.
+log show --start "$started" --style compact \
+  --predicate 'subsystem == "sh.herder.Herder" AND category == "transcript"' > "$out/transcript.log" 2>&1 || true
+exit "$status"

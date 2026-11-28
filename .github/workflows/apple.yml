@@ -294,8 +294,9 @@ jobs:
           xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
             -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO
 
-  # The Mac UI tests (apple/MacUITests) on the demo fleet: selecting and copying transcript text
-  # with the mouse, which no log shows going wrong.
+  # The Mac UI tests (apple/MacUITests) on the busy demo fleet: selecting and copying transcript
+  # text with the mouse, and a long transcript staying drawn as messages are sent, which no log
+  # shows going wrong.
   mac-ui:
     name: mac-ui
     needs: [key, bindings]
@@ -332,11 +333,20 @@ jobs:
           [ -d "$bundle" ] || exit 0
           xcrun xcresulttool get test-results summary --path "$bundle" |
             jq -r '.testFailures[]? | "\(.testIdentifierString): \(.failureText)"'
+      # The transcript log's blank and shrink lines (TranscriptLog): why a transcript went blank.
+      - name: Print the transcript log's blanks
+        if: failure()
+        run: |
+          log=target/mac-ui-tests/transcript.log
+          [ -f "$log" ] || exit 0
+          grep -E " (blank|outside-content|shrank|drawn after)" "$log" | tail -200 || true
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: mac-ui-tests-xcresult
-          path: target/mac-ui-tests/tests.xcresult
+          path: |
+            target/mac-ui-tests/tests.xcresult
+            target/mac-ui-tests/transcript.log
           if-no-files-found: ignore
 
   macos:
