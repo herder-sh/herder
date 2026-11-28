@@ -2,6 +2,14 @@
 //! cache's cursor, feeds what the daemon sends into the cache, dispatches commands, and on any
 //! failure waits out a capped, jittered exponential backoff before trying again.
 //!
+//! A machine every attempt at which has failed for [`AWAY_AFTER`] is away, as a hub left at
+//! home is from a laptop that travels: the backoff's cap grows from [`BACKOFF_CAP`] to
+//! [`AWAY_CAP`], since each attempt there may wait out a whole connect timeout on an address
+//! that is not on this network. A wake (which a network change sends), a reconnect asked for,
+//! new addresses or a command for the machine try it again at once. Within one attempt, an
+//! address this device may not send to at all (a sandbox that forbids the socket) is not
+//! dialled again while the others are still out.
+//!
 //! While the app is in the background ([`Supervisor::suspend`]) the task keeps a connection
 //! that is up but neither probes it nor replaces or retries one it loses. Back in the foreground ([`Supervisor::wake`]) it
 //! reconnects at once, and checks a connection that is up before trusting it: one silent for
@@ -137,8 +145,17 @@ const REDIAL_SPACING: Duration = Duration::from_secs(1);
 /// First retry delay; each failed attempt doubles it, up to [`BACKOFF_CAP`].
 const BACKOFF_BASE: Duration = Duration::from_millis(250);
 
-/// Longest wait between attempts.
+/// Longest wait between attempts, while a machine has been out of reach for less than
+/// [`AWAY_AFTER`].
 const BACKOFF_CAP: Duration = Duration::from_secs(30);
+
+/// How long every attempt at a machine has to fail before it counts as away, as a hub left
+/// at home is from a laptop that travels: no outage the client rides out lasts this long.
+const AWAY_AFTER: Duration = Duration::from_secs(180);
+
+/// Longest wait between attempts at a machine that is away. A wake, a network change, a
+/// reconnect asked for or anything the user asks of the machine tries it again at once.
+const AWAY_CAP: Duration = Duration::from_secs(120);
 
 /// How many of the latest round trips [`ConnectionQuality`] sums up.
 const RECENT_PONGS: usize = 20;
@@ -1752,8 +1769,8 @@ impl Ended {
 fn flap_wait(flaps: u32, replaced: bool) -> Duration {
     match flaps {
         0 | 1 if replaced => Duration::ZERO,
-        0 | 1 => backoff(0),
-        flaps => backoff(flaps.saturating_add(1)),
+        0 | 1 => backoff(0, BACKOFF_CAP),
+        flaps => backoff(flaps.saturating_add(1), BACKOFF_CAP),
     }
 }
 
@@ -1768,6 +1785,8 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
     // Reconnects asked for, answered once the next attempt connects or fails.
     let mut reconnects: Vec<oneshot::Sender<Result<String, String>>> = Vec::new();
     let mut attempt = 0;
+    // Since when every attempt failed, counted afresh by whatever tries again at once.
+    let mut failing: Option<Instant> = None;
     // Connections in a row that ended sooner than `STEADY` after they were made.
     let mut flaps: u32 = 0;
     let mut suspended = false;
@@ -1837,6 +1856,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                         Some(Op::Wake) => {
                             suspended = false;
                             attempt = 0;
+                            failing = None;
                             redial = Some(dialled + REDIAL_SPACING);
                         }
                         Some(Op::Suspend) => {
@@ -1846,12 +1866,14 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                         // What is raced changed: the races so far are dropped.
                         Some(Op::Readdress) => {
                             attempt = 0;
+                            failing = None;
                             continue 'connection;
                         }
                         Some(Op::Reconnect(reply)) => {
                             reconnects.push(reply);
                             supervisor.lock().answered = None;
                             attempt = 0;
+                            failing = None;
                             continue 'connection;
                         }
                         Some(op) => ops.kept.push_back(op),
@@ -1864,6 +1886,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
         let (error, wait) = match connected {
             Ok((ws, hello, address)) => {
                 attempt = 0;
+                failing = None;
                 let deflate = hello.deflate;
                 let made = Instant::now();
                 {
@@ -1958,7 +1981,13 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                         ("connect_ms", connecting.elapsed().into()),
                     ],
                 );
-                let wait = backoff(attempt);
+                let since = *failing.get_or_insert(connecting);
+                let cap = if since.elapsed() < AWAY_AFTER {
+                    BACKOFF_CAP
+                } else {
+                    AWAY_CAP
+                };
+                let wait = backoff(attempt, cap);
                 attempt = attempt.saturating_add(1);
                 (error, wait)
             }
@@ -1976,6 +2005,8 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
         if wait.is_zero() && (!suspended || !reconnects.is_empty()) {
             continue;
         }
+        // What the user asks of a machine that is away does not wait out the long backoff.
+        let away = failing.is_some_and(|since| since.elapsed() >= AWAY_AFTER);
         let wait = tokio::time::sleep(wait);
         tokio::pin!(wait);
         loop {
@@ -1990,32 +2021,45 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                     Some(Op::Wake) => {
                         suspended = false;
                         attempt = 0;
+                        failing = None;
                         break;
                     }
                     Some(Op::Readdress) => {
                         attempt = 0;
+                        failing = None;
                         break;
                     }
                     Some(Op::Reconnect(reply)) => {
                         reconnects.push(reply);
                         supervisor.lock().answered = None;
                         attempt = 0;
+                        failing = None;
                         break;
                     }
                     Some(Op::Suspend) => {
                         suspended = true;
                         flaps = 0;
                     }
-                    Some(Op::Command(command, reply)) => pending.push(Pending {
-                        command,
-                        reply,
-                        open: None,
-                    }),
-                    Some(Op::Open(command, reply, events)) => pending.push(Pending {
-                        command,
-                        reply,
-                        open: Some(events),
-                    }),
+                    Some(Op::Command(command, reply)) => {
+                        pending.push(Pending {
+                            command,
+                            reply,
+                            open: None,
+                        });
+                        if away && !suspended {
+                            break;
+                        }
+                    }
+                    Some(Op::Open(command, reply, events)) => {
+                        pending.push(Pending {
+                            command,
+                            reply,
+                            open: Some(events),
+                        });
+                        if away && !suspended {
+                            break;
+                        }
+                    }
                     Some(Op::Sync(reply)) => {
                         syncs.insert(ulid::Ulid::generate().to_string(), reply);
                     }
@@ -2781,6 +2825,11 @@ where
                     if errors.len() == distinct {
                         break;
                     }
+                    // This device can't send there at all: trying again in a moment fails the
+                    // same way, so the address waits for the next race.
+                    if blocked_here(&err) {
+                        continue;
+                    }
                     // An address that has not answered yet, as one whose packets are lost
                     // does not for the whole connect timeout, keeps the race open. One that
                     // failed meanwhile is tried again after the backoff's waits, not only
@@ -2803,6 +2852,16 @@ where
     }
     let errors: Vec<String> = errors.into_iter().map(|(_, error, _)| error).collect();
     Err(errors.join("; "))
+}
+
+/// Whether `err` is this device not permitted to send to an address at all, as a sandbox that
+/// does not let the app open the socket: nothing that a moment changes, unlike a daemon that
+/// restarts, a connection cut while it is made, or a network with no route there yet, as
+/// right after a wake.
+fn blocked_here(err: &anyhow::Error) -> bool {
+    err.chain()
+        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .any(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
 }
 
 /// A connection to the daemon at `address`, up to its WebSocket upgrade: the daemon is
@@ -2931,10 +2990,10 @@ pub(crate) async fn receive(ws: &mut Ws) -> anyhow::Result<ServerMessage> {
 
 /// Wait before retry `attempt` (0 for the first): exponential from [`BACKOFF_BASE`], capped at
 /// [`BACKOFF_CAP`], then a random cut of up to half, so clients do not retry in lockstep.
-fn backoff(attempt: u32) -> Duration {
+fn backoff(attempt: u32, cap: Duration) -> Duration {
     let full = BACKOFF_BASE
         .saturating_mul(2u32.saturating_pow(attempt))
-        .min(BACKOFF_CAP);
+        .min(cap);
     let mut byte = [0u8; 1];
     // Without randomness the wait is just not jittered.
     let _ = SystemRandom::new().fill(&mut byte);
@@ -3001,11 +3060,49 @@ mod tests {
             let full = BACKOFF_BASE
                 .saturating_mul(2u32.saturating_pow(attempt))
                 .min(BACKOFF_CAP);
-            let wait = backoff(attempt);
+            let wait = backoff(attempt, BACKOFF_CAP);
             assert!(wait <= full && wait >= full / 2, "{attempt}: {wait:?}");
         }
-        assert!(backoff(0) <= BACKOFF_BASE);
-        assert!(backoff(30) >= BACKOFF_CAP / 2);
+        assert!(backoff(0, BACKOFF_CAP) <= BACKOFF_BASE);
+        assert!(backoff(30, BACKOFF_CAP) >= BACKOFF_CAP / 2);
+        assert!(backoff(30, AWAY_CAP) >= AWAY_CAP / 2);
+    }
+
+    /// An address this device may not send to at all, as one the sandbox forbids, is not
+    /// dialled again while another address of the race is still out: it would fail the same
+    /// way. One a daemon refuses is, as a daemon restarting refuses for a moment, and one with
+    /// no route yet, as right after a wake.
+    #[tokio::test(start_paused = true)]
+    async fn an_address_blocked_here_is_not_dialled_again_in_a_race() {
+        for (kind, again) in [
+            (std::io::ErrorKind::PermissionDenied, false),
+            // As right after a wake, until the network is up.
+            (std::io::ErrorKind::NetworkUnreachable, true),
+            (std::io::ErrorKind::ConnectionRefused, true),
+        ] {
+            let dials = Arc::new(Mutex::new(Vec::new()));
+            let addresses = ["wg://blocked".to_owned(), "silent".to_owned()];
+            let attempt = |address: String| {
+                let dials = Arc::clone(&dials);
+                async move {
+                    dials.lock().unwrap().push(address.clone());
+                    if address == "silent" {
+                        tokio::time::sleep(CONNECT_TIMEOUT).await;
+                        bail!("no answer in {CONNECT_TIMEOUT:?}");
+                    }
+                    Err(anyhow::Error::new(std::io::Error::from(kind)).context("opening"))
+                }
+            };
+            let raced: Result<((), String), String> = race(&addresses, attempt).await;
+            assert!(raced.is_err());
+            let blocked = dials
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|address| *address == "wg://blocked")
+                .count();
+            assert_eq!(blocked > 1, again, "{kind:?}: dialled {blocked} times");
+        }
     }
 
     #[test]

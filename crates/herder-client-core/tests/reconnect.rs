@@ -2703,6 +2703,60 @@ async fn a_suspended_client_replaces_no_connection_until_woken() {
     drop(sub);
 }
 
+/// A machine that stays out of reach, as a hub left at home is from a laptop that travels,
+/// is tried every half minute or so at first, then only every one to two minutes: every try
+/// waits out the ten seconds an attempt is given. What the user asks of it, and a wake, try
+/// it again at once.
+#[tokio::test]
+async fn a_machine_out_of_reach_for_long_is_tried_less_often() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start_here(&tmp.path().join("daemon"), "mid_turn.jsonl").await;
+    let relay = Relay::start(daemon.addr).await;
+    let laptop = Client::open(
+        tmp.path().join("laptop").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = daemon
+        .sign_in(&laptop, "alice", relay.addr)
+        .await
+        .unwrap()
+        .host_id;
+    laptop.synced(host.clone()).await.unwrap();
+    // One connection paired, the other is the supervisor's.
+    assert_eq!(relay.accepted(), 2);
+
+    relay.swallow(true);
+    relay.cut();
+    let ticker = pause();
+    tokio::time::sleep(Duration::from_secs(5 * 60)).await;
+    let away = relay.accepted();
+    tokio::time::sleep(Duration::from_secs(20 * 60)).await;
+    // Each try takes 10 s and then waits a minute or two: some 13 in 20 minutes. Waiting
+    // at most 30 s, it takes 30 to 50.
+    let tries = relay.accepted() - away;
+    assert!((8..=20).contains(&tries), "{tries} tries in 20 minutes");
+
+    // The user asks something of it: it is tried at once, not after the wait.
+    let before = relay.accepted();
+    let asked = tokio::spawn({
+        let (laptop, host) = (laptop.clone(), host.clone());
+        async move { laptop.send(host, CommandBody::GetSettings).await }
+    });
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(relay.accepted(), before + 1);
+
+    // Back in reach: a wake connects at once, and the command is answered.
+    relay.swallow(false);
+    laptop.wake();
+    wait_connection_within(Duration::from_secs(5), &laptop, |state| {
+        *state == ConnectionState::Connected
+    })
+    .await;
+    asked.await.unwrap().unwrap();
+    resume(ticker);
+}
+
 /// Waking with a connection up checks it: a healthy one is kept, a silently dead one replaced.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wake_keeps_a_healthy_connection_and_replaces_a_dead_one() {
