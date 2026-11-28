@@ -49,9 +49,9 @@ name, locale or time zone.
 | --- | --- | --- |
 | `diagnostics_on` | both | |
 | `connected` | client core | `route`, `connect_ms` (since the client started connecting, or since the wake that brought it out of the background), `waited_ms` (of that, before the attempt that connected started), `reach_ms` (that attempt's TCP, TLS and WebSocket upgrade), `hello_ms` (its hello, with any wait for its turn to say it), `reconnect` |
-| `connect_failed` | client core | `attempt`, `connect_ms` |
+| `connect_failed` | client core | `attempt`, `connect_ms`, `machine` (`hub`, `machine`), `failure` (the class every address failed with, else `other`), and for each kind of route tried `route_<kind>` (`route_home_network`, `route_own_vpn`, `route_direct`, `route_system_vpn`, `route_hub_wire_guard`, `route_tunnel`, `route_hub`, `route_cloudflare_relay`): how its addresses failed, `timeout`, `refused`, `eperm`, `unreachable`, `tls`, `auth` or `other`, joined by `_` when they failed differently |
 | `disconnected` | client core | `route`, `cause` (`lost`, `dead`, `dropped`, `asked`), `connected_ms`, `average_rtt_ms`, `max_rtt_ms`, `missed_pongs`, `suspended` |
-| `command` | client core | `command`, `ms` (until the daemon answered), `outcome` (`ok`, `rejected`, `failed`) |
+| `command` | client core | `command`, `ms` (until the daemon answered), `queued_ms` (of that, waiting for a connection), `wire_ms` (on the connection that answered), `reconnected_meanwhile` (a new connection was made while it waited), `outcome` (`ok`, `rejected`, `failed`) |
 | `replayed` | daemon | `events`, `ms`, `from_start` |
 | `turn_started` | daemon | `start_ms` (prompt taken until the CLI has it), `cli_started` |
 

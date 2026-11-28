@@ -1301,9 +1301,11 @@ impl Client {
                 .setting(&host_id, connection, url.clone());
         }
         let started = std::time::Instant::now();
+        // How the latest send went, of the one or two a signed command takes.
+        let sent = Mutex::new(supervisor::Sent::default());
         let result = self
             .signed(&machine, command, |body| {
-                let machine = Arc::clone(&machine);
+                let (machine, sent) = (Arc::clone(&machine), &sent);
                 async move {
                     // The command's span, while the process shares diagnostics.
                     let command = Command {
@@ -1311,18 +1313,21 @@ impl Client {
                         body,
                         trace: herder_telemetry::traceparent(),
                     };
-                    machine
-                        .send(command)
-                        .await?
-                        .map_err(|info| Error::Rejected { info })
+                    let (answer, how) = machine.send_measured(command).await?;
+                    *sent.lock().unwrap_or_else(PoisonError::into_inner) = how;
+                    answer.map_err(|info| Error::Rejected { info })
                 }
             })
             .await;
+        let sent = sent.into_inner().unwrap_or_else(PoisonError::into_inner);
         herder_telemetry::measure(
             "command",
             &[
                 ("command", herder_telemetry::variant(&body).into()),
                 ("ms", started.elapsed().into()),
+                ("queued_ms", sent.queued.into()),
+                ("wire_ms", sent.wire.into()),
+                ("reconnected_meanwhile", sent.reconnected.into()),
                 (
                     "outcome",
                     match &result {
