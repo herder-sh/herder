@@ -34,6 +34,9 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
    sheet on compact width (§6).
 4. **Nothing is ever wider than the screen.** No fixed width over 320 pt on iOS outside a
    regular-width branch; content columns cap at 760 pt and centre (§5.2).
+   `ContentWidthUITests` walks the demo's tabs, Hub pages, sheets and a session on an iPhone
+   at XXXL Dynamic Type and fails on anything past the screen's edge; the apple workflow
+   uploads the screens it draws (`ios-screens-*`).
 5. **Lists put live work first.** Needs you, then running, then idle; archived sessions go in a
    collapsed **Archived** group at the end; children sit under their parent (§4.7).
 6. **State is a glyph plus a colour, never colour alone** (`StatusGlyph`), the same set on every
