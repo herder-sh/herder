@@ -9,6 +9,8 @@ struct SidewaysScroll<Content: View>: View {
 
     var body: some View {
         ScrollView(.horizontal) { content }
+            // ContentWidthUITests: what is in it may run past the screen's edge.
+            .accessibilityIdentifier("sideways")
             .scrollIndicators(.visible)
             .onScrollGeometryChange(for: SidewaysEdges.self) { geometry in
                 SidewaysEdges(offset: geometry.contentOffset.x, visible: geometry.containerSize.width,

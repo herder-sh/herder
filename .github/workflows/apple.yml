@@ -262,6 +262,24 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           total=$(xcrun xcresulttool get test-results summary --path "$bundle" | jq '.totalTestCount')
           [ "$total" -gt 0 ] || { echo "the shard ran no UI tests"; exit 1; }
+      # The screens ContentWidthUITests drew, to see a layout change on an iPhone.
+      - name: Collect the screens the width test drew
+        if: always()
+        run: |
+          bundle="$RUNNER_TEMP/ios-tests.xcresult"
+          [ -d "$bundle" ] || exit 0
+          all="$RUNNER_TEMP/all-attachments"
+          mkdir -p "$RUNNER_TEMP/screens"
+          xcrun xcresulttool export attachments --path "$bundle" --output-path "$all" || exit 0
+          jq -r '.[].attachments[] | select(.suggestedHumanReadableName | startswith("width-")) |
+            "\(.exportedFileName)\t\(.suggestedHumanReadableName)"' "$all/manifest.json" |
+            while IFS=$'\t' read -r file name; do cp "$all/$file" "$RUNNER_TEMP/screens/$name"; done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ios-screens-${{ matrix.shard }}
+          path: ${{ runner.temp }}/screens
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
