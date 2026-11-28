@@ -325,7 +325,7 @@ jobs:
           HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
         run: |
           brew install xcodegen
-          apple/scripts/test-mac-ui.sh -quiet
+          apple/scripts/test-mac-ui.sh -quiet -only-testing:herder-macOS-UITests/TranscriptSendUITests
       - name: Print the failing UI tests' assertions
         if: failure()
         run: |
@@ -340,6 +340,19 @@ jobs:
           log=target/mac-ui-tests/transcript.log
           [ -f "$log" ] || exit 0
           grep -E " (blank|outside-content|shrank|drawn after)" "$log" | tail -200 || true
+      - name: Export attachments (temporary)
+        if: always()
+        run: |
+          xcrun xcresulttool export attachments --path target/mac-ui-tests/tests.xcresult --output-path target/mac-ui-tests/attachments || true
+          grep -E " (blank|outside-content|shrank|drawn after|at-end|blocks )" target/mac-ui-tests/transcript.log | tail -400 || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mac-ui-debug
+          path: |
+            target/mac-ui-tests/attachments
+            target/mac-ui-tests/transcript.log
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
