@@ -145,6 +145,10 @@ const REDIAL_SPACING: Duration = Duration::from_secs(1);
 /// First retry delay; each failed attempt doubles it, up to [`BACKOFF_CAP`].
 const BACKOFF_BASE: Duration = Duration::from_millis(250);
 
+/// Longest wait before an address that failed is dialled again within one race: one with no
+/// route until the network comes up, as right after a wake, connects within this of it.
+const RETRY_CAP: Duration = Duration::from_secs(1);
+
 /// Longest wait between attempts, while a machine has been out of reach for less than
 /// [`AWAY_AFTER`].
 const BACKOFF_CAP: Duration = Duration::from_secs(30);
@@ -1818,7 +1822,9 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
     };
     'connection: loop {
         supervisor.set_connection(ConnectionState::Connecting);
-        let connecting = Instant::now();
+        // Since when the client has been connecting, as the user sees it: from a wake out of
+        // the background, if one came meanwhile, as the OS may have frozen the app before it.
+        let mut connecting = Instant::now();
         let connected = {
             // The races under way; the first connection any of them makes is taken.
             let mut races = FuturesUnordered::new();
@@ -1854,6 +1860,9 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                         // The network may have changed under the races so far: they are
                         // left to end as they will, and the addresses raced again.
                         Some(Op::Wake) => {
+                            if suspended {
+                                connecting = Instant::now();
+                            }
                             suspended = false;
                             attempt = 0;
                             failing = None;
@@ -1884,7 +1893,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
         };
         let failed = connected.is_err();
         let (error, wait) = match connected {
-            Ok((ws, hello, address)) => {
+            Ok((ws, hello, address, timing)) => {
                 attempt = 0;
                 failing = None;
                 let deflate = hello.deflate;
@@ -1914,6 +1923,12 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                     &[
                         ("route", route.clone().into()),
                         ("connect_ms", connecting.elapsed().into()),
+                        (
+                            "waited_ms",
+                            timing.started.saturating_duration_since(connecting).into(),
+                        ),
+                        ("reach_ms", (timing.reached - timing.started).into()),
+                        ("hello_ms", (timing.greeted - timing.reached).into()),
                         ("reconnect", reconnect.into()),
                     ],
                 );
@@ -2697,13 +2712,22 @@ pub(crate) async fn connect(
     hello: ClientHello,
     turn: &Turn,
     via: &Via,
-) -> Result<(Ws, ServerHello, String), String> {
+) -> Result<(Ws, ServerHello, String, Timing), String> {
     match open_in_turn(addresses, fingerprint, device, hello, turn, via).await? {
-        (ws, Opened::Hello(hello), address) => Ok((ws, *hello, address)),
-        (_, Opened::SignIn { .. }, address) => Err(format!(
+        (ws, Opened::Hello(hello), address, timing) => Ok((ws, *hello, address, timing)),
+        (_, Opened::SignIn { .. }, address, _) => Err(format!(
             "{address}: the daemon asked this device to sign in"
         )),
     }
+}
+
+/// When the attempt that connected started, reached the daemon (TCP, TLS and the WebSocket
+/// upgrade) and had its hello answered, which includes waiting for its turn to say it.
+#[derive(Clone, Copy)]
+pub(crate) struct Timing {
+    started: Instant,
+    reached: Instant,
+    greeted: Instant,
 }
 
 /// What a daemon first answers a hello with.
@@ -2727,7 +2751,9 @@ pub(crate) async fn open(
     hello: ClientHello,
 ) -> Result<(Ws, Opened, String), String> {
     let (turn, via) = (Turn::default(), Via::default());
-    open_in_turn(addresses, fingerprint, device, hello, &turn, &via).await
+    let (ws, opened, address, _) =
+        open_in_turn(addresses, fingerprint, device, hello, &turn, &via).await?;
+    Ok((ws, opened, address))
 }
 
 /// [`open`] among the calls that share `turn`.
@@ -2743,7 +2769,7 @@ async fn open_in_turn(
     hello: ClientHello,
     turn: &Turn,
     via: &Via,
-) -> Result<(Ws, Opened, String), String> {
+) -> Result<(Ws, Opened, String, Timing), String> {
     let config = client_config(fingerprint, device).map_err(|err| format!("{err:#}"))?;
     let connector = TlsConnector::from(Arc::new(config));
     let attempt = |address: String| {
@@ -2751,7 +2777,9 @@ async fn open_in_turn(
         let route = herder_telemetry::variant(&crate::route_kind(address.clone()));
         let span = tracing::info_span!("connect", route, outcome = tracing::field::Empty);
         let attempting = async move {
+            let started = Instant::now();
             let mut ws = reach(&address, &connector, via).await?;
+            let reached = Instant::now();
             // Held until this attempt is dropped: with its hello answered, that is once
             // every other attempt is gone.
             let _turn = turn.lock().await;
@@ -2760,7 +2788,12 @@ async fn open_in_turn(
             let opened = greeting
                 .await
                 .unwrap_or_else(|_| Err(anyhow!("no hello in {HELLO_TIMEOUT:?}")))?;
-            Ok((ws, opened))
+            let timing = Timing {
+                started,
+                reached,
+                greeted: Instant::now(),
+            };
+            Ok((ws, opened, timing))
         };
         async move {
             let attempted = attempting.instrument(span.clone()).await;
@@ -2770,7 +2803,7 @@ async fn open_in_turn(
     };
     race(addresses, attempt)
         .await
-        .map(|((ws, opened), address)| (ws, opened, address))
+        .map(|((ws, opened, timing), address)| (ws, opened, address, timing))
 }
 
 /// What the first `attempt` on one of `addresses` to succeed made, and its address; else why
@@ -2832,10 +2865,13 @@ where
                     }
                     // An address that has not answered yet, as one whose packets are lost
                     // does not for the whole connect timeout, keeps the race open. One that
-                    // failed meanwhile is tried again after the backoff's waits, not only
-                    // once that timeout is over: a daemon that restarts refuses for a
-                    // moment, and a connection cut while it is made fails once.
-                    let wait = BACKOFF_BASE.saturating_mul(2u32.saturating_pow(failed - 1));
+                    // failed meanwhile is tried again after the backoff's waits, at most
+                    // [`RETRY_CAP`], not only once that timeout is over: a daemon that
+                    // restarts refuses for a moment, a connection cut while it is made fails
+                    // once, and a network that is not up yet is up a moment later.
+                    let wait = BACKOFF_BASE
+                        .saturating_mul(2u32.saturating_pow(failed - 1))
+                        .min(RETRY_CAP);
                     running.push(attempt(&address, wait));
                 }
             },
@@ -3103,6 +3139,31 @@ mod tests {
                 .count();
             assert_eq!(blocked > 1, again, "{kind:?}: dialled {blocked} times");
         }
+    }
+
+    /// After a wake the network may take seconds to come up: an address with no route until
+    /// then is dialled again at least every [`RETRY_CAP`], and connects within that of the
+    /// network being up, not after a wait that doubled to eight seconds meanwhile.
+    #[tokio::test(start_paused = true)]
+    async fn an_address_that_fails_until_the_network_is_up_connects_soon_after() {
+        let start = Instant::now();
+        let up = start + Duration::from_secs(4);
+        let addresses = ["home".to_owned(), "silent".to_owned()];
+        let attempt = |address: String| async move {
+            if address == "silent" {
+                tokio::time::sleep(CONNECT_TIMEOUT).await;
+                bail!("no answer in {CONNECT_TIMEOUT:?}");
+            }
+            if Instant::now() < up {
+                let unreachable = std::io::Error::from(std::io::ErrorKind::NetworkUnreachable);
+                return Err(anyhow::Error::new(unreachable).context("connecting"));
+            }
+            Ok(())
+        };
+        let ((), address) = race(&addresses, attempt).await.unwrap();
+        assert_eq!(address, "home");
+        let took = start.elapsed();
+        assert!(took <= Duration::from_secs(4) + RETRY_CAP, "{took:?}");
     }
 
     #[test]
