@@ -45,6 +45,8 @@ private struct SessionPane: View {
     private var inspector: InspectorPresentation { InspectorPresentation(compact: compact) }
     /// The block at the top of the transcript, for the checkpoint rail.
     @State private var top = TranscriptTop()
+    /// The reader follows the transcript's end; see `FollowsEnd`. A jump to a block stops it.
+    @State private var followsEnd = true
     @State private var find = TranscriptFind()
     /// The folded blocks shown open, by id; outside the rows, so a row drawn again keeps them.
     @State private var expanded: Set<String> = []
@@ -108,22 +110,24 @@ private struct SessionPane: View {
                         let resources = fleet.machines.first { $0.hostId == key.hostId }?.resources
                         WaitingForCapacityNote(load: resources.map(TurnLoad.init)) { pages.open(.machine(key.hostId)) }
                     }
+                    // The bottom margin is the stack's spacing above this row.
+                    Color.clear.frame(height: 1).id(TranscriptEnd.id)
                 }
                 .scrollTargetLayout()
                 .frame(maxWidth: SessionColumn.transcript)
                 .frame(maxWidth: .infinity)
-                .padding(SessionColumn.transcriptMargin)
+                .padding([.horizontal, .top], SessionColumn.transcriptMargin)
             }
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("transcript")
-            .modifier(FollowsEnd(key: opened, blocks: blocks, top: top))
+            .modifier(FollowsEnd(key: opened, blocks: blocks, top: top, proxy: proxy, follows: $followsEnd))
             .id(opened)
-            .environment(\.transcriptScroll) { id, anchor in proxy.scrollTo(id, anchor: anchor) }
+            .environment(\.transcriptScroll) { id, anchor in jump(to: id, anchor: anchor, proxy) }
             .onChange(of: find.current) {
                 guard let id = find.current else { return }
                 // A match in a turn's folded work, or in earlier reports, opens it.
                 if let block = blocks.first(where: { $0.id == id }) { expanded.formUnion(find.opens(block)) }
-                proxy.scrollTo(id, anchor: .center)
+                jump(to: id, anchor: .center, proxy)
             }
             .overlay(alignment: .topTrailing) {
                 if find.shown {
@@ -134,7 +138,7 @@ private struct SessionPane: View {
                 let checkpoints = Checkpoints(blocks)
                 // Hover is how the rail reads; a phone has none, and no margin to spare.
                 if !compact && checkpoints.items.count > 1 {
-                    CheckpointRail(checkpoints: checkpoints, top: top) { id in proxy.scrollTo(id, anchor: .top) }
+                    CheckpointRail(checkpoints: checkpoints, top: top) { id in jump(to: id, anchor: .top, proxy) }
                 }
             }
             }
@@ -158,6 +162,7 @@ private struct SessionPane: View {
             }
         }
         .onChange(of: opened) { old, _ in
+            followsEnd = true
             showsTerminal = false
             find = TranscriptFind()
             expanded = []
@@ -194,6 +199,14 @@ private struct SessionPane: View {
             }
         }
         #endif
+    }
+
+    /// Scrolls the transcript to the block `id`. The reader no longer follows the end, unless
+    /// the block is at it: the rows the jump lays out, resizing the content as it lands, would
+    /// take them back there.
+    private func jump(to id: String, anchor: UnitPoint, _ proxy: ScrollViewProxy) {
+        followsEnd = false
+        proxy.scrollTo(id, anchor: anchor)
     }
 
     // MARK: Header
@@ -489,46 +502,64 @@ private struct SessionPane: View {
 /// session's history included as it loads. Scrolled up, nothing moves what they read: what
 /// comes below shows a "New" pill instead, but for a message they send, which it scrolls to.
 /// Tells `top` the block at the top of the view.
+///
+/// Whether the reader follows the end is theirs: only their own scrolling (or a jump to a
+/// block) changes it, never content that grows or shrinks. Going to the end scrolls to
+/// `TranscriptEnd`, a row the lazy stack lays out where it lands, rather than to the end of
+/// the content as the stack guesses its height: landed by a guess, rows measured smaller left
+/// the view past the content's end, blank until the reader scrolled.
 private struct FollowsEnd: ViewModifier {
     let key: SessionKey
     let blocks: [TranscriptBlock]
     let top: TranscriptTop
-    /// Not bound to a block: only the pill sets it, to the end, past the transcript's margin.
-    @State private var position = ScrollPosition()
-    @State private var atEnd = true
+    let proxy: ScrollViewProxy
+    @Binding var follows: Bool
+    /// The reader is scrolling: nothing moves the view under their hand.
+    @State private var scrolling = false
     /// The transcript grew below the reader since they scrolled up.
     @State private var unseen = false
     /// Not observed: logging the scroll state redraws nothing.
     @State private var log = TranscriptLog()
 
     private func grew() {
-        if !atEnd { unseen = true }
+        if !follows { unseen = true }
+    }
+
+    private func toEnd() {
+        proxy.scrollTo(TranscriptEnd.id, anchor: .bottom)
     }
 
     func body(content: Content) -> some View {
         content
-            .scrollPosition($position)
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .alignment)
             // Anchored at the bottom, growth anywhere pushes what is read up; unanchored, the
             // view keeps its offset, and a lazy stack keeps the rows in view where they are.
-            .defaultScrollAnchor(atEnd ? .bottom : nil, for: .sizeChanges)
+            .defaultScrollAnchor(follows ? .bottom : nil, for: .sizeChanges)
             .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+                let ids = ids.filter { $0 != TranscriptEnd.id }
                 top.id = ids.first
                 log.visible(ids, blocks: blocks.count, key: key)
             }
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.visibleRect.maxY >= geometry.contentSize.height + geometry.contentInsets.bottom - 40
-            } action: { _, end in
-                atEnd = end
-                if end { unseen = false }
-                log.atEnd(end, blocks: blocks.count, key: key)
+            .onScrollPhaseChange { _, phase in
+                scrolling = [ScrollPhase.tracking, .interacting, .decelerating].contains(phase)
             }
             .onScrollGeometryChange(for: TranscriptScrollState.self, of: { TranscriptScrollState($0) }) { old, state in
                 log.geometry(state, blocks: blocks.count, key: key)
-                // The content shrank from under the view, which shows past its end, blank:
-                // back to the end, as the content is now.
-                if state.shrankFromUnder(old) { position.scrollTo(edge: .bottom) }
+                guard !scrolling else {
+                    follows = state.atEnd(within: TranscriptScrollState.endSlack)
+                    return
+                }
+                let next = state.follow(from: old, follows: follows)
+                // Content that shrank from under the view, which shows past its end, blank:
+                // what the owner's transcript did. Told, then mended.
+                if state.shrankFromUnder(old) { log.shrank(state, blocks: blocks.count, key: key) }
+                follows = next.follows
+                if next.toEnd { toEnd() }
+            }
+            .onChange(of: follows) { _, follows in
+                if follows { unseen = false }
+                log.atEnd(follows, blocks: blocks.count, key: key)
             }
             .onAppear { log.appeared(key, blocks: blocks.count) }
             // A block more, or the last one grown: a running turn's "Working" line stays last.
@@ -538,17 +569,18 @@ private struct FollowsEnd: ViewModifier {
             }
             .onChange(of: blocks.last) { grew() }
             // A message the reader sends shows where they look for it, at the end, even when
-            // they had scrolled up, or the transcript took them for scrolled up as its lazy
-            // stack measured again: under a "New" pill it looks lost.
+            // they had scrolled up: under a "New" pill it looks lost.
             .onChange(of: blocks.lastSentAt) { old, sent in
                 guard let sent, sent > old ?? .distantPast else { return }
                 unseen = false
-                position.scrollTo(edge: .bottom)
+                follows = true
+                toEnd()
             }
             .overlay(alignment: .bottom) {
                 if unseen {
                     Button {
-                        position.scrollTo(edge: .bottom)
+                        follows = true
+                        toEnd()
                     } label: {
                         Label("New", systemImage: "arrow.down")
                             .font(.footnote.weight(.semibold))
@@ -566,6 +598,12 @@ private struct FollowsEnd: ViewModifier {
                 }
             }
     }
+}
+
+/// The transcript's last row: its bottom margin, under the last block by the stack's spacing.
+/// Following the end scrolls to it.
+private enum TranscriptEnd {
+    static let id = "transcript-end"
 }
 
 /// The prompt box of a session: model and permissions in the box, where it runs and on which

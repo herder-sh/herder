@@ -48,6 +48,20 @@ enum AppSentry {
         }
     }
 
+    /// Tells Sentry of `kind`, a type name herder gives an issue of its own, as a handled
+    /// warning: no message, no values, nothing of what the app shows. Nothing while Sentry is
+    /// off.
+    static func report(_ kind: String) {
+        guard running != nil, SentrySDK.isEnabled else { return }
+        let event = Event(level: .warning)
+        let exception = Exception(value: nil, type: kind)
+        let mechanism = Mechanism(type: "herder")
+        mechanism.handled = true
+        exception.mechanism = mechanism
+        event.exceptions = [exception]
+        SentrySDK.capture(event: event)
+    }
+
     /// The options Sentry runs with: what it watches, and the scrub everything passes.
     nonisolated static func configure(_ options: Options, dsn: String, installId: String) {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String

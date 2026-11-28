@@ -59,6 +59,37 @@ struct TranscriptScrollState: Equatable {
     func shrankFromUnder(_ old: Self) -> Bool {
         contentHeight < old.contentHeight && [.pastEnd, .outside].contains(placement)
     }
+
+    /// Whether the view's bottom is within `slack` of the content's end, or past it.
+    func atEnd(within slack: CGFloat) -> Bool {
+        visible.maxY >= contentHeight + insetBottom - slack
+    }
+
+    /// What the transcript does as its geometry goes from `old` to this, for a reader who
+    /// `follows` its end: whether they follow it now, and whether the view goes back to it.
+    ///
+    /// Only the reader, or a jump to a block, moves the view while the content and the view
+    /// keep their size: they follow the end from there if they left it there. A resize (a block
+    /// more, rows measured again, the composer or the queue tray changing the view's height) is
+    /// not the reader: one that leaves the view past the content's end, blank, takes it back
+    /// to the end, whoever reads; one that leaves a reader who follows short of it, or past it,
+    /// takes them back too, where the scroll view's own anchor did not.
+    func follow(from old: Self, follows: Bool) -> Follow {
+        let resized = contentHeight != old.contentHeight || container.height != old.container.height
+        guard resized else { return Follow(follows: atEnd(within: Self.endSlack), toEnd: false) }
+        if [.pastEnd, .outside].contains(placement) { return Follow(follows: true, toEnd: true) }
+        if follows { return Follow(follows: true, toEnd: !atEnd(within: 1)) }
+        return Follow(follows: atEnd(within: Self.endSlack), toEnd: false)
+    }
+
+    /// Whether the reader follows the end, and whether the view goes back to it.
+    struct Follow: Equatable {
+        var follows: Bool
+        var toEnd: Bool
+    }
+
+    /// How near the end the reader still reads it.
+    static let endSlack: CGFloat = 40
 }
 
 
@@ -83,6 +114,8 @@ struct TranscriptScrollState: Equatable {
     private var atEnd = true
     /// When the transcript last went blank, while it is.
     private var blankSince: ContinuousClock.Instant?
+    /// Whether this view told Sentry of a shrink already.
+    private var reported = false
 
     func appeared(_ key: SessionKey, blocks: Int) {
         self.blocks = blocks
@@ -127,6 +160,22 @@ struct TranscriptScrollState: Equatable {
         }
         toldVisible = now
     }
+
+    /// The content shrank from under the view and left it past its end, blank, before the
+    /// view went back to the end: what the owner's transcript did after a send, kept as a
+    /// signal it comes back. Also to Sentry, once a session view, while the person shares
+    /// diagnostics: the kind alone, no numbers or ids.
+    func shrank(_ state: TranscriptScrollState, blocks: Int, key: SessionKey) {
+        self.state = state
+        self.blocks = blocks
+        Self.logger.error("shrank \(Self.name(key), privacy: .public) \(self.summary, privacy: .public)")
+        guard !reported else { return }
+        reported = true
+        AppSentry.report(Self.shrankKind)
+    }
+
+    /// The issue Sentry gets for a transcript that shrank from under its view.
+    static let shrankKind = "TranscriptShrankFromUnder"
 
     func blocks(from old: Int, to new: Int, key: SessionKey) {
         blocks = new
