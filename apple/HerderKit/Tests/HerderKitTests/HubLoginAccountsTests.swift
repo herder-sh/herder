@@ -55,7 +55,9 @@ struct HubLoginAccountsTests {
         #expect(logins.count == 4)
         let work = try #require(logins.first { $0.id == ProviderAccounts.hubKey(provider: "claude",
                                                                                       name: "claude-ada@example.com.json") })
-        #expect(work.title == "Work" && work.subtitle == "ada@example.com")
+        // Its email first, as that is who it is; the hub owner's label beside it.
+        #expect(work.title == "ada@example.com" && work.subtitle == "Work")
+        #expect(work.throughHub && work.hub?.name == "home-hub")
         #expect(work.hubLogin == "claude-ada@example.com.json" && work.endpoint == nil)
         #expect(work.on.map(\.name) == ["work-mbp", "trash-can-01"] && work.missing.isEmpty)
         #expect(work.session?.percentLeft == 58 && work.weekly?.percentLeft == 19)
@@ -144,10 +146,12 @@ struct HubLoginAccountsTests {
         let overview = ProvidersOverview(accounts: ProviderAccounts(machines: machines),
                                          versions: ProviderVersions(machines: machines), installs: [:])
         let page = ScrollView {
-            ProvidersPage(overview: overview, report: nil, actions: ProvidersPage.Actions(
-                open: { _ in }, signIn: { _ in }, retry: { _ in }, fix: { _ in }, install: { _ in }, setUp: {},
-                addAccount: {}))
-                .padding(20)
+            VStack(alignment: .leading, spacing: 0) {
+                ProvidersPage(overview: overview, report: nil, actions: ProvidersPage.Actions(
+                    open: { _ in }, signIn: { _ in }, retry: { _ in }, fix: { _ in }, install: { _ in }, setUp: {},
+                    addAccount: {}))
+            }
+            .padding(20)
         }
         try await shoot(page, width: Self.pageWidth, height: 420, named: "hub-logins-providers-\(Self.device).png")
     }

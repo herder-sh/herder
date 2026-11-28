@@ -3,9 +3,18 @@ import SwiftUI
 
 /// Each provider's logins across the machines: the accounts signed in as one email, or without
 /// one the accounts with one id, the machines that have it and those that do not yet, and what
-/// is left of its plan's limits. A hub runs no sessions, so has no accounts; a machine never
-/// connected has not said which it has.
+/// is left of its plan's limits; those that come through a hub apart from each machine's own.
+/// A hub runs no sessions, so has no accounts; a machine never connected has not said which it
+/// has.
 struct ProviderAccounts: Equatable {
+    /// The hub a login comes through: one of its logins, or its proxy with the hub's key.
+    struct Hub: Equatable {
+        let hostId: HostId
+        let name: String
+        /// Whether this device's user owns it: only they rename or remove its logins.
+        let owner: Bool
+    }
+
     struct Place: Equatable, Identifiable {
         let hostId: HostId
         let name: String
@@ -36,6 +45,8 @@ struct ProviderAccounts: Equatable {
         var session: WindowLeft?
         /// The plan's weekly window, when the provider reports one.
         var weekly: WindowLeft?
+        /// The hub it comes through, when this device knows it.
+        var hub: Hub?
 
         var id: String { ProviderAccounts.key(account) }
 
@@ -57,15 +68,22 @@ struct ProviderAccounts: Equatable {
                 : "Runs against this API server with its client key; no login. Its limits are the server’s."
         }
 
-        /// What it is shown as: its email, or its label without one; a hub login's label, which
-        /// the hub's owner chose.
-        var title: String { hubLogin == nil ? email ?? account.label : account.label }
+        /// Whether it comes through a hub: one of the hub's logins, or an endpoint account that
+        /// fetches its key from the hub, which is the hub's proxy.
+        var throughHub: Bool { hubLogin != nil || keyFromHub }
 
-        /// What is shown beside the title, when it says more: a login's label, a hub login's
-        /// email.
+        /// Whether it is the hub's proxy itself: an endpoint account on the hub's key.
+        var isHubProxy: Bool { endpoint != nil && keyFromHub }
+
+        /// What it is shown as: its email, as that is who it is, or its label without one. The
+        /// hub's proxy is named for what it is, never by its URL or the label it was added as.
+        var title: String { isHubProxy ? "Hub proxy" : email ?? account.label }
+
+        /// The display label beside the email, when it says more than the email: two logins
+        /// with near-alike labels read apart by their emails.
         var subtitle: String? {
-            let other = hubLogin == nil ? email.map { _ in account.label } : email
-            return other == title ? nil : other
+            guard !isHubProxy, email != nil, account.label.caseInsensitiveCompare(title) != .orderedSame else { return nil }
+            return account.label
         }
 
         /// Where the login is fallback-only; machines may disagree.
@@ -81,8 +99,8 @@ struct ProviderAccounts: Equatable {
         /// Plenty until a window reports otherwise.
         var headroom: Headroom { tightest?.window.headroom ?? .plenty }
 
-        /// The machines it is on, for a cell: the one's name, or how many.
-        var machines: String { on.count == 1 ? on.map(\.name).joined() : "\(on.count) machines" }
+        /// The machines it is on, by name, for a cell.
+        var machines: String { on.map(\.name).joined(separator: ", ") }
 
         /// Whether it is signed out on every machine it is on.
         var signedOutEverywhere: Bool { !on.isEmpty && on.allSatisfy { !$0.signedOut.isEmpty } }
@@ -119,6 +137,12 @@ struct ProviderAccounts: Equatable {
         let logins: [Login]
 
         var id: Herder.Provider { provider }
+
+        /// The logins that come through a hub, shared by its hosts.
+        var throughHub: [Login] { logins.filter(\.throughHub) }
+
+        /// Each machine's own logins.
+        var own: [Login] { logins.filter { !$0.throughHub } }
     }
 
     let groups: [Group]
@@ -129,7 +153,14 @@ struct ProviderAccounts: Equatable {
         for account in daemons.flatMap(\.accounts) where firsts[Self.key(account)] == nil {
             firsts[Self.key(account)] = account
         }
-        let logins = firsts.map { id, account in
+        let logins = firsts.map { id, first in
+            let all = daemons.flatMap(\.accounts).filter { Self.key($0) == id }
+            // The email any machine reports: one that has not probed it yet is the same login.
+            var account = first
+            if account.email == nil, account.hubLogin == nil, account.endpoint == nil {
+                account.email = all.compactMap(\.email).first
+                    ?? Self.identity(first).map { _ in first.label.trimmingCharacters(in: .whitespaces) }
+            }
             let has = { (machine: Machine) in machine.accounts.contains { Self.key($0) == id } }
             let place = { (machine: Machine) in
                 let status = machine.providers.first { $0.provider == account.provider }
@@ -142,13 +173,18 @@ struct ProviderAccounts: Equatable {
                              signedOut: signedOut.map(\.accountId),
                              signedOutSince: signedOut.compactMap { $0.needsLogin.flatMap(Timestamp.date) }.min())
             }
-            let windows = daemons.flatMap(\.accounts).filter { Self.key($0) == id }.flatMap(\.usage)
+            let windows = all.flatMap(\.usage)
+            let on = daemons.filter(has)
+            let hub = account.hubLogin != nil || account.keySecret != nil
+                ? AccountPage.hub(of: on.map(\.hostId), in: machines)
+                    .map { Hub(hostId: $0.hostId, name: $0.name, owner: $0.role == .owner) }
+                : nil
             return Login(provider: account.provider, email: account.email, account: account,
                          // A hub login is on every host of its hub by itself: none sets it up.
-                         on: daemons.filter(has).map(place),
+                         on: on.map(place),
                          missing: account.hubLogin == nil ? daemons.filter { !has($0) }.map(place) : [],
                          session: Self.latest("Session", of: windows, now: now),
-                         weekly: Self.latest("Weekly", of: windows, now: now))
+                         weekly: Self.latest("Weekly", of: windows, now: now), hub: hub)
         }
         groups = Dictionary(grouping: logins, by: \.provider)
             .map { Group(provider: $0.key, logins: $0.value.sorted(by: Self.attentionFirst)) }
@@ -170,7 +206,17 @@ struct ProviderAccounts: Equatable {
     static func key(_ account: Herder.Account) -> String {
         if let hubLogin = account.hubLogin { return hubKey(provider: account.provider, name: hubLogin) }
         if let endpoint = account.endpoint { return endpointKey(provider: account.provider, endpoint: endpoint) }
-        return "\(account.provider)/\(account.email ?? "id:\(account.accountId)")"
+        return "\(account.provider)/\(identity(account) ?? "id:\(account.accountId)")"
+    }
+
+    /// Who an account is signed in as, the same however a machine spells it: its email, or
+    /// before the machine has probed one the label it was added under when that is an email.
+    static func identity(_ account: Herder.Account) -> String? {
+        let label = account.label.trimmingCharacters(in: .whitespaces)
+        let parts = label.split(separator: "@", omittingEmptySubsequences: false)
+        let looksLikeEmail = parts.count == 2 && !parts[0].isEmpty && parts[1].contains(".") && !label.contains(" ")
+        let email = account.email ?? (looksLikeEmail ? label : nil)
+        return email?.trimmingCharacters(in: .whitespaces).lowercased()
     }
 
     /// The login of `provider`'s accounts on the hub login `name`.
@@ -303,8 +349,24 @@ struct ProvidersView: View {
     @Binding var sheet: AppSheet?
     @State private var presented: Presented?
     @Environment(\.pages) private var pages
+    @Environment(\.pageMargin) private var margin
     @State private var showsModels = false
+    /// The login being renamed from the list, and the label typed for it.
+    @State private var renaming: Change?
+    @State private var label = ""
+    /// The login asked about removing from the list.
+    @State private var removing: Change?
+    /// Why the last rename or removal from the list was refused.
+    @State private var changeError: String?
     private let period = UsagePeriod.week
+
+    /// A login renamed or removed from the list, and what that changes.
+    struct Change: Identifiable {
+        let login: ProviderAccounts.Login
+        let target: LoginTarget
+
+        var id: String { login.id }
+    }
 
     /// An account to log in to on a machine.
     struct Setup: Identifiable {
@@ -331,28 +393,7 @@ struct ProvidersView: View {
         let overview = ProvidersOverview(fleet: fleet)
         let answer = fleet.usageCache[period]
         let report = answer.map { UsageReport($0.machines) }
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                #if os(iOS)
-                Text(overview.status).font(Theme.body).foregroundStyle(Theme.secondary)
-                #endif
-                ForEach(answer?.failures ?? [], id: \.self) { failure in
-                    Text(failure).font(.footnote).foregroundStyle(Theme.failure)
-                }
-                ProvidersPage(overview: overview, report: report, actions: ProvidersPage.Actions(
-                    open: { pages.open(.account(loginId: $0.id)) },
-                    signIn: { fleet.relogin($0.accountId, on: $0.place.hostId) },
-                    retry: { fleet.retry($0) },
-                    fix: { key in Task { await fleet.fix(key) } },
-                    install: { fleet.install($0.provider, on: $0.hostId) },
-                    setUp: { presented = .setUp },
-                    addAccount: { sheet = .addAccount }))
-                HerderVersionsSection(fleet: fleet)
-                if !fleet.mcpMachines.isEmpty { McpServersSection(fleet: fleet) }
-                if let report, !report.models.isEmpty { models(report.models) }
-            }
-            .pageColumn()
-        }
+        page(overview: overview, failures: answer?.failures ?? [], report: report)
         .background(.ground)
         .navigationTitle("Providers")
         .toolbar {
@@ -377,6 +418,97 @@ struct ProvidersView: View {
                                 initialDraft: setup.draft)
             }
         }
+        .alert("Rename \(renaming?.login.title ?? "")", isPresented: Binding(
+            get: { renaming != nil }, set: { if !$0 { renaming = nil } }), presenting: renaming) { change in
+            TextField(change.login.email ?? "Display label", text: $label)
+                .autocorrectionDisabled()
+            Button("Save") { Task { changeError = await LoginChanges(fleet: fleet).rename(change.target, to: label) } }
+            Button("Cancel", role: .cancel) {}
+        } message: { change in
+            Text(change.target.onHub ? "On every host of the hub. Leave it empty to go back to its email."
+                 : "On every machine you own.")
+        }
+        .confirmationDialog(removing.map { question($0).title } ?? "", isPresented: Binding(
+            get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible,
+                            presenting: removing) { change in
+            switch change.target {
+            case .hubLogin:
+                Button("Remove Login", role: .destructive) { remove(change) }
+            case .accounts(let rows) where rows.count == 1:
+                Button("Remove Account", role: .destructive) { remove(change) }
+                    .disabled(!rows[0].place.connected)
+            case .accounts(let rows):
+                ForEach(rows) { row in
+                    Button("Remove from \(row.place.name)", role: .destructive) { remove(change, row: row) }
+                        .disabled(!row.place.connected)
+                }
+            }
+        } message: { change in
+            Text(question(change).message)
+        }
+    }
+
+    /// The page's sections, a List on iPhone so each account row swipes, stacked in a scroll
+    /// view on the Mac.
+    @ViewBuilder private func page(overview: ProvidersOverview, failures: [String], report: UsageReport?) -> some View {
+        #if os(iOS)
+        List {
+            Group { sections(overview: overview, failures: failures, report: report) }
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 0, leading: margin, bottom: 0, trailing: margin))
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        #else
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                sections(overview: overview, failures: failures, report: report)
+            }
+            .pageColumn()
+        }
+        #endif
+    }
+
+    @ViewBuilder private func sections(overview: ProvidersOverview, failures: [String], report: UsageReport?) -> some View {
+        #if os(iOS)
+        Text(overview.status).font(Theme.body).foregroundStyle(Theme.secondary).padding(.bottom, 20)
+        #endif
+        ForEach(failures, id: \.self) { failure in
+            Text(failure).font(.footnote).foregroundStyle(Theme.failure).padding(.bottom, 12)
+        }
+        if let changeError {
+            Label(changeError, systemImage: "exclamationmark.triangle")
+                .font(.footnote).foregroundStyle(Theme.failure)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 12)
+                .accessibilityIdentifier("providers-change-error")
+        }
+        ProvidersPage(overview: overview, report: report, actions: ProvidersPage.Actions(
+            open: { pages.open(.account(loginId: $0.id)) },
+            signIn: { fleet.relogin($0.accountId, on: $0.place.hostId) },
+            retry: { fleet.retry($0) },
+            fix: { key in Task { await fleet.fix(key) } },
+            install: { fleet.install($0.provider, on: $0.hostId) },
+            setUp: { presented = .setUp },
+            addAccount: { sheet = .addAccount },
+            target: { LoginTarget($0, machines: fleet.machines) },
+            rename: { login, target in
+                label = login.subtitle ?? (login.email == nil ? login.account.label : "")
+                renaming = Change(login: login, target: target)
+            },
+            remove: { login, target in removing = Change(login: login, target: target) }))
+        HerderVersionsSection(fleet: fleet).padding(.top, 28)
+        if !fleet.mcpMachines.isEmpty { McpServersSection(fleet: fleet).padding(.top, 28) }
+        if let report, !report.models.isEmpty { models(report.models).padding(.top, 28) }
+    }
+
+    private func question(_ change: Change) -> (title: String, message: String) {
+        change.target.removalQuestion(title: change.login.title)
+    }
+
+    private func remove(_ change: Change, row: AccountMachine? = nil) {
+        Task { changeError = await LoginChanges(fleet: fleet).remove(change.target, row: row) }
     }
 
     /// The week's tokens and dollars per model, folded away until asked for.
@@ -417,7 +549,9 @@ struct ProvidersView: View {
 }
 
 /// The Providers page's sections, from its overview and the week's usage: what needs the user,
-/// the accounts table and the CLI versions matrix.
+/// the accounts by provider, those through a hub apart from each machine's own, and the CLI
+/// versions matrix. Each section and each account row is its own view, so a List on iPhone
+/// gives each row its swipe; the Mac stacks them.
 struct ProvidersPage: View {
     /// What the page's buttons do.
     struct Actions {
@@ -429,14 +563,10 @@ struct ProvidersPage: View {
         let install: (ProviderVersions.Cell) -> Void
         let setUp: () -> Void
         let addAccount: () -> Void
-    }
-
-    /// An account's row in the table, with its week's cost once the machines have said it.
-    struct AccountRow: Identifiable {
-        let login: ProviderAccounts.Login
-        let usage: UsageReport.Login?
-
-        var id: String { login.id }
+        /// What the user may rename and remove of a login; nil where they own none of it.
+        var target: (ProviderAccounts.Login) -> LoginTarget? = { _ in nil }
+        var rename: (ProviderAccounts.Login, LoginTarget) -> Void = { _, _ in }
+        var remove: (ProviderAccounts.Login, LoginTarget) -> Void = { _, _ in }
     }
 
     let overview: ProvidersOverview
@@ -446,27 +576,74 @@ struct ProvidersPage: View {
     @State private var details: Set<JobKey> = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            if overview.needsAttention { attention }
-            let logins = overview.accounts.groups.flatMap(\.logins)
-            if logins.isEmpty {
-                empty
-            } else {
-                ProvidersSection(title: "Accounts", count: logins.count) {
-                    let rows = logins.map { AccountRow(login: $0, usage: report?.logins[$0.id]) }
-                    ViewThatFits(in: .horizontal) {
-                        accounts(rows, narrow: false).frame(minWidth: ProvidersColumns.wideTable)
-                        accounts(rows, narrow: true)
-                    }
-                    if !overview.gaps.isEmpty { gaps }
+        if overview.needsAttention { attention.padding(.bottom, 28) }
+        let groups = overview.accounts.groups
+        if groups.isEmpty {
+            empty
+        } else {
+            ProvidersSection(title: "Accounts", count: groups.flatMap(\.logins).count) {
+                ViewThatFits(in: .horizontal) {
+                    ProviderAccountRow.header.frame(minWidth: ProvidersColumns.wideTable)
+                    Color.clear.frame(height: 0)
                 }
             }
-            if !overview.versions.rows.isEmpty {
-                ProvidersSection(title: "CLI versions", note: "latest from each vendor") {
-                    VersionMatrix(overview: overview, act: actions.install, retry: actions.retry, fix: actions.fix)
+            ForEach(groups) { group in
+                heading(group)
+                if !group.throughHub.isEmpty {
+                    place(Self.hubHeading(group.throughHub))
+                    ForEach(group.throughHub) { row($0) }
+                    if !group.own.isEmpty { place("Machine logins") }
                 }
+                ForEach(group.own) { row($0) }
             }
+            if !overview.gaps.isEmpty { gaps }
         }
+        if !overview.versions.rows.isEmpty {
+            ProvidersSection(title: "CLI versions", note: "latest from each vendor") {
+                VersionMatrix(overview: overview, act: actions.install, retry: actions.retry, fix: actions.fix)
+            }
+            .padding(.top, 28)
+        }
+    }
+
+    /// "Hub logins · home-hub": where the logins through a hub come from.
+    nonisolated static func hubHeading(_ logins: [ProviderAccounts.Login]) -> String {
+        let hubs = logins.compactMap(\.hub?.name).reduce(into: [String]()) { names, name in
+            if !names.contains(name) { names.append(name) }
+        }
+        return (["Hub logins"] + hubs).joined(separator: " · ")
+    }
+
+    /// A provider's mark and name over its logins.
+    private func heading(_ group: ProviderAccounts.Group) -> some View {
+        HStack(spacing: 8) {
+            ProviderMark(provider: group.provider, size: 14)
+            Text(ModelCatalog.providerName(group.provider)).font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.text)
+            Text("\(group.logins.count)").font(Theme.meta).foregroundStyle(Theme.tertiary)
+        }
+        .padding(.top, 16)
+        .padding(.bottom, 2)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    /// Where a provider's next logins live: through a hub, or on each machine.
+    private func place(_ title: String) -> some View {
+        Text(title).font(Theme.meta.weight(.medium)).foregroundStyle(Theme.tertiary)
+            .lineLimit(1)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+    }
+
+    private func row(_ login: ProviderAccounts.Login) -> some View {
+        var rename: (() -> Void)?
+        var remove: (() -> Void)?
+        if let target = actions.target(login) {
+            remove = { actions.remove(login, target) }
+            if LoginTarget.renamable(login) { rename = { actions.rename(login, target) } }
+        }
+        return ProviderAccountRow(login: login, usage: report?.logins[login.id], reported: report != nil,
+                                open: { actions.open(login) }, rename: rename, remove: remove)
     }
 
     // MARK: Needs you
@@ -516,20 +693,22 @@ struct ProvidersPage: View {
         }
     }
 
-    /// The accounts some machines lack, under the table: worth setting up, not urgent.
+    /// The accounts some machines lack: one quiet line, worth setting up, not urgent; which
+    /// machines, on hover.
     private var gaps: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "info.circle").foregroundStyle(Theme.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(overview.gaps.title).font(Theme.body).foregroundStyle(Theme.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(overview.gaps.detail).font(.caption).foregroundStyle(Theme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 12)
-            PillButton(title: "Set Up…") { actions.setUp() }
+        HStack(spacing: 6) {
+            Image(systemName: "info.circle")
+            Text(overview.gaps.title).lineLimit(1)
+            Button("Set Up…") { actions.setUp() }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.secondary)
+                .accessibilityIdentifier("providers-set-up")
         }
-        .padding(.vertical, 10)
+        .font(.caption)
+        .foregroundStyle(Theme.tertiary)
+        .padding(.top, 12)
+        .help(overview.gaps.detail)
     }
 
     private func problem<Detail: View, Fix: View, More: View>(
@@ -582,84 +761,136 @@ struct ProvidersPage: View {
         }
     }
 
-    // MARK: Accounts
+}
 
-    private func accounts(_ rows: [AccountRow], narrow: Bool) -> some View {
-        SortableTable("providers.accounts", rows: rows, sortedBy: TableSort(column: "Session left"),
-                      columns: columns(narrow: narrow)) { actions.open($0.login) }
+/// A login in the Providers list: its email, its display label beside it, the machines it is on,
+/// what is left of its session and weekly windows and its week's cost; a narrow pane keeps the
+/// login, its machines under it and its session window. A blank cell is a limit not reported.
+/// Its context menu, and on iPhone its swipe, rename and remove it where the user owns it.
+struct ProviderAccountRow: View {
+    let login: ProviderAccounts.Login
+    let usage: UsageReport.Login?
+    /// Whether the week's usage has come, so a login without any shows a dash.
+    let reported: Bool
+    let open: () -> Void
+    var rename: (() -> Void)?
+    var remove: (() -> Void)?
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: open) {
+            ViewThatFits(in: .horizontal) {
+                wide.frame(minWidth: ProvidersColumns.wideTable)
+                narrow
+            }
+            .font(Theme.body)
+            .foregroundStyle(Theme.text)
+            .padding(.vertical, 8)
+            .frame(minHeight: Theme.rowHeight)
+            .background((hovered ? Theme.raised : .clear).padding(.horizontal, -Theme.cellPadding / 2))
+            .overlay(alignment: .bottom) { Rectangle().fill(Theme.stroke).frame(height: 1) }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .contextMenu {
+            Button("Open", systemImage: "arrow.right.circle", action: open)
+            if let rename { Button("Rename…", systemImage: "pencil", action: rename) }
+            if let remove {
+                Divider()
+                Button("Remove…", systemImage: "trash", role: .destructive, action: remove)
+            }
+        }
+        #if os(iOS)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            // No destructive role: the row stays until the user confirms and the machines drop it.
+            if let remove { Button("Remove", systemImage: "trash", action: remove).tint(Theme.danger) }
+            if let rename { Button("Rename", systemImage: "pencil", action: rename).tint(Theme.secondary) }
+        }
+        #endif
+        .accessibilityIdentifier("providers.accounts.\(login.id)")
     }
 
-    /// Account, machines, the session and weekly windows, and the week's cost; a narrow pane
-    /// keeps the account, what its session window leaves and its cost.
-    private func columns(narrow: Bool) -> [SortableColumn<AccountRow>] {
-        let all = [
-            SortableColumn<AccountRow>("Account", value: { "\(ModelCatalog.providerName($0.login.provider)) \($0.login.title)" }) { row in
-                account(row.login, label: !narrow)
-            },
-            SortableColumn("Machines", width: ProvidersColumns.machines, value: { $0.login.machines }) { row in
-                Text(row.login.machines).foregroundStyle(Theme.secondary)
+    /// The column titles over the wide rows.
+    static var header: some View {
+        HStack(spacing: ProvidersColumns.spacing) {
+            Text("Account").frame(maxWidth: .infinity, alignment: .leading)
+            Text("Machines").frame(width: ProvidersColumns.machines, alignment: .leading)
+            Text("Session left").frame(width: ProvidersColumns.wide, alignment: .leading)
+            Text("Week left").frame(width: ProvidersColumns.narrow, alignment: .leading)
+            Text("7 d cost").frame(width: ProvidersColumns.last, alignment: .trailing)
+        }
+        .font(Theme.meta.weight(.medium))
+        .foregroundStyle(Theme.tertiary)
+        .lineLimit(1)
+        .padding(.vertical, 6)
+    }
+
+    private var wide: some View {
+        HStack(spacing: ProvidersColumns.spacing) {
+            identity(subtitle: true).frame(maxWidth: .infinity, alignment: .leading)
+            Text(login.machines).foregroundStyle(Theme.secondary)
+                .lineLimit(1).truncationMode(.tail)
+                .help(login.machines)
+                .frame(width: ProvidersColumns.machines, alignment: .leading)
+            session(resets: true).frame(width: ProvidersColumns.wide, alignment: .leading)
+            Group {
+                if !login.signedOutEverywhere, let weekly = login.weekly { limit(weekly, resets: false) } else { Text("") }
+            }
+            .frame(width: ProvidersColumns.narrow, alignment: .leading)
+            cost.frame(width: ProvidersColumns.last, alignment: .trailing)
+        }
+    }
+
+    private var narrow: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                identity(subtitle: false)
+                Text(([login.subtitle].compactMap(\.self) + [login.machines]).joined(separator: " · "))
+                    .font(.caption).foregroundStyle(Theme.tertiary)
                     .lineLimit(1).truncationMode(.tail)
-                    .help(row.login.on.map(\.name).joined(separator: ", "))
-            },
-            SortableColumn("Session left", width: narrow ? ProvidersColumns.narrowLimit : ProvidersColumns.wide, value: { Self.left($0.login, \.session) }) { row in
-                if row.login.signedOutEverywhere {
-                    Text("Signed out").font(Theme.meta.weight(.medium)).foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 8).padding(.vertical, 2)
-                        .background(Theme.accent.opacity(0.12), in: .capsule)
-                } else if row.login.endpoint != nil {
-                    // The server behind it holds the provider's limits.
-                    Text("Endpoint").foregroundStyle(Theme.tertiary)
-                } else if row.login.session == nil && row.login.weekly == nil {
-                    Text("No limits reported").foregroundStyle(Theme.tertiary)
-                } else if let session = row.login.session {
-                    limit(session, resets: !narrow)
-                } else {
-                    Text("")
-                }
-            },
-            SortableColumn("Week left", width: ProvidersColumns.narrow, value: { Self.left($0.login, \.weekly) }) { row in
-                // An empty cell would take no room, and shift the cells after it.
-                if !row.login.signedOutEverywhere, let weekly = row.login.weekly { limit(weekly, resets: false) } else { Text("") }
-            },
-            SortableColumn("7 d cost", width: ProvidersColumns.last, alignment: .trailing, value: { $0.usage?.amount.costUsd ?? -1 }) { row in
-                Group {
-                    if let usage = row.usage, usage.amount.turns > 0 {
-                        Text(UsageReport.dollars(usage.amount))
-                    } else {
-                        Text(report == nil ? "" : "—").foregroundStyle(Theme.tertiary)
-                    }
-                }
-                .monospacedDigit()
-            },
-        ]
-        return narrow ? all.filter { ["Account", "Session left", "7 d cost"].contains($0.title) } : all
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            session(resets: false)
+        }
     }
 
-    /// What a window leaves, to sort by: a signed-out login first, one that reports none last.
-    private static func left(_ login: ProviderAccounts.Login, _ window: KeyPath<ProviderAccounts.Login, WindowLeft?>) -> Double {
-        login.signedOutEverywhere ? -1 : login[keyPath: window]?.percentLeft ?? 101
-    }
-
-    /// The account's email, or its label without one; `label` adds the label after the email,
-    /// or an endpoint account's URL after its label. A hub login shows its label, then its
-    /// email, marked Hub.
-    private func account(_ login: ProviderAccounts.Login, label: Bool) -> some View {
+    /// The email, or the label without one, the label beside it when `subtitle`, and its marks.
+    private func identity(subtitle: Bool) -> some View {
         HStack(spacing: 8) {
-            ProviderMark(provider: login.provider, size: 14)
             Text(login.title).lineLimit(1).truncationMode(.middle)
-            if label, let subtitle = login.subtitle {
-                Text(subtitle).foregroundStyle(Theme.tertiary).lineLimit(1)
+            if subtitle, let label = login.subtitle {
+                Text(label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
             }
-            if login.hubLogin != nil { Badge(text: "Hub") }
-            if let endpoint = login.endpoint {
-                Badge(text: login.keyFromHub ? "Hub" : "Endpoint")
-                if label {
-                    Text(endpoint).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
-                        .lineLimit(1).truncationMode(.middle)
-                }
-            }
+            if login.endpoint != nil && !login.isHubProxy { Badge(text: "Endpoint") }
             if !login.fallbackOn.isEmpty { Badge(text: "Fallback") }
         }
+    }
+
+    /// Signed out, or what the session window leaves; blank when none is reported, as for an
+    /// endpoint account, whose server holds its limits.
+    @ViewBuilder private func session(resets: Bool) -> some View {
+        if login.signedOutEverywhere {
+            Text("Signed out").font(Theme.meta.weight(.medium)).foregroundStyle(Theme.accent)
+                .padding(.horizontal, 8).padding(.vertical, 2)
+                .background(Theme.accent.opacity(0.12), in: .capsule)
+                .fixedSize()
+        } else if let session = login.session {
+            limit(session, resets: resets)
+        } else {
+            Text("")
+        }
+    }
+
+    private var cost: some View {
+        Group {
+            if let usage, usage.amount.turns > 0 {
+                Text(UsageReport.dollars(usage.amount))
+            } else {
+                Text(reported ? "—" : "").foregroundStyle(Theme.tertiary)
+            }
+        }
+        .monospacedDigit()
     }
 
     private func limit(_ window: WindowLeft, resets: Bool = true) -> some View {
