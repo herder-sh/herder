@@ -644,17 +644,22 @@ public final class Fleet {
     /// Sends a command about a session; a refusal is kept to show with it.
     func send(_ command: CommandBody, about key: SessionKey) async {
         do {
-            // In a span of the app's while it shares diagnostics, which the client core's and
-            // the machine's join.
-            _ = try await AppSentry.traced(DiagnosticsSwitch.name(of: command)) { trace in
-                if let trace {
-                    return try await client.sendTraced(hostId: key.hostId, command: command, trace: trace)
-                }
-                return try await client.send(hostId: key.hostId, command: command)
-            }
+            try await deliver(command, about: key)
             refusals[key] = nil
         } catch {
             refusals[key] = describe(error)
+        }
+    }
+
+    /// Sends `command` about `key`'s session to its machine, throwing what refused it.
+    private func deliver(_ command: CommandBody, about key: SessionKey) async throws {
+        // In a span of the app's while it shares diagnostics, which the client core's and the
+        // machine's join.
+        _ = try await AppSentry.traced(DiagnosticsSwitch.name(of: command)) { trace in
+            if let trace {
+                return try await client.sendTraced(hostId: key.hostId, command: command, trace: trace)
+            }
+            return try await client.send(hostId: key.hostId, command: command)
         }
     }
 
@@ -808,16 +813,26 @@ public final class Fleet {
 
     /// Sends what the user typed, with its attachments: the answer to the session's oldest
     /// question when one is pending, else a prompt, queued behind the turn when one runs, as
-    /// the TUI does.
+    /// the TUI does. A question answered meanwhile, on another device or by an earlier send
+    /// this device held while out of reach, or whose turn ended, takes no answer: what was
+    /// typed goes as a prompt instead of being lost.
     func submit(_ text: String, images: [Herder.Image] = [], files: [PromptFile] = [], to key: SessionKey) async {
         guard let session = session(key) else { return }
         if let question = session.questions.first {
-            await send(
-                .answerQuestion(
-                    sessionId: key.sessionId, questionId: question.id, answer: .text(text: text), images: images,
-                    files: files),
-                about: key)
-            return
+            do {
+                try await deliver(
+                    .answerQuestion(
+                        sessionId: key.sessionId, questionId: question.id, answer: .text(text: text), images: images,
+                        files: files),
+                    about: key)
+                refusals[key] = nil
+                return
+            } catch HerderError.Rejected(let info) where info.code == .conflict {
+                // No longer open: on to the prompt.
+            } catch {
+                refusals[key] = describe(error)
+                return
+            }
         }
         var outgoing = Outgoing(text: text, images: images, files: files)
         outgoing.after = allCopies(of: key).compactMap { boxes[$0]?.model.lastSeq }.max() ?? 0

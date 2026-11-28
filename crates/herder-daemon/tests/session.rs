@@ -1267,6 +1267,59 @@ async fn question_is_journaled_for_the_user_and_its_answer_reaches_the_adapter()
     );
 }
 
+/// A phone out of reach queues each tap on an answer: once it is back they all arrive, and
+/// the first answers the question. The same answer again is done already, not refused; a
+/// different one is refused, saying the question was answered.
+#[tokio::test]
+async fn the_same_answer_again_is_done_and_another_is_told_the_question_was_answered() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "question.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Add a migration.").await;
+    daemon.until_status(SessionStatus::NeedsYou).await;
+
+    let answer = |answer: Answer| CommandBody::AnswerQuestion {
+        session_id: session.clone(),
+        question_id: QuestionId::new("question-1"),
+        answer,
+        images: Vec::new(),
+        files: Vec::new(),
+    };
+    let first = daemon
+        .manager
+        .handle(bob(), answer(Answer::Choice { index: 1 }))
+        .await;
+    assert_eq!(first.unwrap(), CommandResult::Applied);
+    let again = daemon
+        .manager
+        .handle(bob(), answer(Answer::Choice { index: 1 }))
+        .await;
+    assert_eq!(again.unwrap(), CommandResult::Applied);
+    let other = daemon
+        .manager
+        .handle(bob(), answer(Answer::Choice { index: 0 }))
+        .await
+        .unwrap_err();
+    assert_eq!(other.code, ErrorCode::Conflict);
+    assert!(
+        other.message.contains("already answered"),
+        "{}",
+        other.message
+    );
+    daemon.until_status(SessionStatus::Idle).await;
+
+    // Answered once, as the first said.
+    let journal = daemon.journal(&session).await;
+    let answers: Vec<_> = describe(&journal)
+        .into_iter()
+        .filter(|line| line.contains("question_answered"))
+        .collect();
+    assert_eq!(
+        answers,
+        ["bob: question_answered question-1 Choice { index: 1 }"]
+    );
+}
+
 #[tokio::test]
 async fn an_answers_image_reaches_the_agent_right_after_the_turn_ahead_of_the_queue() {
     let dir = tempfile::tempdir().unwrap();

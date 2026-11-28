@@ -20,6 +20,9 @@ struct RequestCard: View {
     @State private var storeSet: String?
     /// The value the owner typed for a `request_secret`, until it is stored.
     @State private var secretValue = SecretInput()
+    /// Whether a choice was picked and its answer is on its way: out of reach, it waits for
+    /// the connection, and a second tap would only send a second answer the machine refuses.
+    @State private var answering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -65,6 +68,7 @@ struct RequestCard: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.accent, lineWidth: 1.5))
         // The next question of a batch starts with nothing ticked.
         .onChange(of: request.requestId) {
+            answering = false
             picks = Picks()
             storeSet = nil
             secretValue = SecretInput()
@@ -121,8 +125,13 @@ struct RequestCard: View {
                             }
                         } else {
                             ChoiceButton(index: index + 1, choice: choice) {
+                                guard !answering else { return }
+                                answering = true
                                 await fleet.answer(request, with: .choice(index: UInt32(index)))
+                                answering = false
                             }
+                            .disabled(answering)
+                            .opacity(answering ? 0.5 : 1)
                         }
                     }
                     if multiSelect, !labels.isEmpty {
