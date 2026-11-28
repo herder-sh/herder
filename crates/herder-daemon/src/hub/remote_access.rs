@@ -714,6 +714,42 @@ mod tests {
         panic!("the relay is still being set up");
     }
 
+    /// While Cloudflare is slow to answer the hub setting up its relay and tunnel, which it
+    /// does as it starts and on every retry, how the hub is reached is still answered at
+    /// once: `get_remote_access` does not wait for Cloudflare.
+    #[tokio::test]
+    async fn remote_access_is_answered_while_cloudflare_is_slow() {
+        let fake = FakeCloudflare::start();
+        let dir = tempfile::tempdir().unwrap();
+        let (access, shutdown) = hub(dir.path(), &fake, Some(SecretsKey::new(&[1; 32]))).await;
+        access
+            .put_token(SecretValue::new(TOKEN).unwrap())
+            .await
+            .unwrap();
+        fake.stall(true);
+        let mut both = tunnel("herder.example.com", TOKEN_NAME);
+        if let Some(cloudflare) = &mut both.cloudflare {
+            cloudflare.relay = true;
+        }
+        let quick = Duration::from_secs(1);
+        tokio::time::timeout(quick, access.set(both))
+            .await
+            .expect("setting waited for Cloudflare")
+            .unwrap();
+        // Both are under way, waiting for Cloudflare.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        for _ in 0..3 {
+            let shown = tokio::time::timeout(quick, access.get(true, false))
+                .await
+                .expect("get_remote_access waited for Cloudflare");
+            assert_eq!(shown.relay.unwrap().state, RouteState::SettingUp);
+            assert_eq!(shown.tunnel.unwrap().state, RouteState::SettingUp);
+        }
+        fake.stall(false);
+        assert_eq!(relay_settled(&access).await.unwrap().state, RouteState::Up);
+        shutdown.cancel();
+    }
+
     #[tokio::test]
     async fn an_owner_deploys_the_relay_which_is_repaired_updated_and_removed() {
         use std::os::unix::fs::PermissionsExt as _;

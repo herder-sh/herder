@@ -246,8 +246,10 @@ impl ManagedTunnel {
 
     /// Makes Cloudflare and `cloudflared` match `desired`.
     async fn apply(&self, desired: Desired) -> Result<()> {
-        let mut state = self.state.lock().await;
-        let previous = state.clone();
+        // Not held across the calls to Cloudflare, which may take seconds: the status the
+        // hub's clients ask for reads it meanwhile. Only this task, one apply at a time,
+        // changes it.
+        let previous = self.state.lock().await.clone();
         let base = self.api.clone();
         let Some(wanted) = desired.wanted.map_err(anyhow::Error::msg)? else {
             let Some(old) = previous else {
@@ -269,7 +271,7 @@ impl ManagedTunnel {
                     return Err(err).with_context(|| format!("removing {}", path.display()));
                 }
             }
-            *state = None;
+            *self.state.lock().await = None;
             info!("the managed tunnel is deleted");
             return Ok(());
         };
@@ -301,7 +303,7 @@ impl ManagedTunnel {
             *running = wanted;
             changed
         });
-        *state = Some(new);
+        *self.state.lock().await = Some(new);
         Ok(())
     }
 }

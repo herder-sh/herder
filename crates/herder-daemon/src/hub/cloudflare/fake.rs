@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -77,6 +79,8 @@ pub const SUBDOMAIN: &str = "ada";
 pub struct FakeCloudflare {
     pub url: String,
     pub held: Arc<Mutex<Held>>,
+    /// While set, requests wait for their answer, as from a Cloudflare that is slow.
+    stalled: Arc<AtomicBool>,
 }
 
 impl FakeCloudflare {
@@ -84,7 +88,8 @@ impl FakeCloudflare {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let held = Arc::new(Mutex::new(Held::default()));
-        let shared = Arc::clone(&held);
+        let stalled = Arc::new(AtomicBool::new(false));
+        let (shared, stalls) = (Arc::clone(&held), Arc::clone(&stalled));
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -92,6 +97,9 @@ impl FakeCloudflare {
                 let Some((head, body)) = read_request(&mut stream) else {
                     continue;
                 };
+                while stalls.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
                 let (status, answer) = answer(&shared, &head, &body);
                 let text = answer.to_string();
                 let _ = write!(
@@ -102,7 +110,12 @@ impl FakeCloudflare {
                 );
             }
         });
-        Self { url, held }
+        Self { url, held, stalled }
+    }
+
+    /// Whether requests wait for their answer from now on, until this is called with `false`.
+    pub fn stall(&self, stalled: bool) {
+        self.stalled.store(stalled, Ordering::SeqCst);
     }
 
     pub fn held(&self) -> std::sync::MutexGuard<'_, Held> {
