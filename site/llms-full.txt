@@ -7,7 +7,7 @@
 herder has three parts, all built on one shared Rust client core:
 
 - `herder daemon` runs on each Linux machine or Mac and hosts agent sessions. It runs the unmodified Claude Code, Codex, Cursor or OpenCode CLI, each account under its own config dir, and keeps every session in an append-only journal.
-- The herder Mac and iPhone apps are native apps. The Board lists every open task on every paired machine, with its agents folded under it; a session shows its transcript, questions and approvals. Providers, Fleet, Skills, Integrations and Activity cover accounts, CLI versions, MCP servers, hubs, bots and every install, update and login. The Mac app is a download from GitHub; the iPhone app is in TestFlight and not on the App Store yet.
+- The herder Mac and iPhone apps are native apps. The Board lists every open task on every paired machine, with its agents folded under it; a session shows its transcript, questions and approvals. Providers, Fleet, Skills, Integrations and Activity cover accounts, CLI versions, MCP servers, hubs, bots and every install, update and login. The Mac app is a download from GitHub, signed with Developer ID and notarized by Apple; the iPhone app is on its way to the App Store.
 - Bare `herder` opens the terminal UI. It works over SSH or mosh, including from a phone: below 65 columns it shows one pane at a time, and every view works with the arrow keys, Tab and Enter.
 
 herder is pre-1.0 and changes quickly.
@@ -24,7 +24,9 @@ herder update            # replace herder with the latest release
 
 The script installs the binary to `~/.local/bin/herder` after checking its sha256. Set `HERDER_VERSION=1.2.3` to install a specific release.
 
-The Mac app is a zip on the latest GitHub release (https://github.com/herder-sh/herder/releases/latest). It is not notarized yet: move `herder.app` to Applications and run `xattr -dr com.apple.quarantine /Applications/herder.app`.
+The Mac app (Apple silicon) is a zip on the latest GitHub release (https://github.com/herder-sh/herder/releases/latest), signed with Developer ID and notarized by Apple: unzip it and move `herder.app` to Applications. To run agents on that Mac too, install the daemon with the script above.
+
+The iPhone app is on its way to the App Store. Until then, run `herder` over SSH or mosh from a phone SSH app such as Termius or Moshi; the terminal UI fits the narrow screen.
 
 ## Get started
 
@@ -109,11 +111,11 @@ Yes. `herder claim` also prints a `herder login` command: run it in a terminal, 
 
 ### Is there a herder app for Mac and iPhone?
 
-Yes. The herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app is in TestFlight and not on the App Store yet; until then, you can also run `herder` over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen.
+Yes. The herder Mac app runs on Apple silicon and is a free download from the latest GitHub release, signed with Developer ID and notarized by Apple. The iPhone app is coming to the App Store; until then, you can run `herder` over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen.
 
-### Why does macOS say the herder app can't be opened?
+### How do I install the herder Mac app?
 
-The herder Mac app is not notarized by Apple yet, so Gatekeeper blocks it the first time. Move `herder.app` to Applications and run `xattr -dr com.apple.quarantine /Applications/herder.app`, or try to open it once and then choose Open Anyway in System Settings, Privacy & Security.
+Download the zip from herder.sh or the latest GitHub release, unzip it and move `herder.app` to Applications. It is signed with Developer ID and notarized by Apple, so it opens like any other app. To run agents on that Mac too, install the herder daemon with `curl -fsSL https://herder.sh/install | sh` and `herder service install`.
 
 ### How much does herder cost?
 

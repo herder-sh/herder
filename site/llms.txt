@@ -2,7 +2,7 @@
 
 > herder runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. A daemon on each Linux machine or Mac drives each vendor's own, unmodified CLI; you watch and steer every session from the Mac app, the iPhone app, a terminal UI, or Slack and Telegram bots. When an account hits its usage limit, herder moves the session to another account of the same provider. herder never reads, stores, copies or relays provider login tokens. Free and open source, Apache-2.0, pre-1.0.
 
-Install on Linux (x86_64 or arm64) or an Apple silicon Mac: `curl -fsSL https://herder.sh/install | sh`, then `herder service install` to run the daemon at boot. Bare `herder` opens the terminal UI; `herder pair` pairs the Mac and iPhone apps.
+Install on Linux (x86_64 or arm64) or an Apple silicon Mac: `curl -fsSL https://herder.sh/install | sh`, then `herder service install` to run the daemon at boot. Bare `herder` opens the terminal UI; `herder pair` pairs the Mac and iPhone apps. The Mac app (Apple silicon, signed and notarized) is a zip on the latest GitHub release, linked from https://herder.sh/#install; the iPhone app is on its way to the App Store.
 
 How it connects: the apps reach a machine's daemon directly on the same network, encrypted end to end with mutual TLS and pinned certificates. Each machine keeps one outbound connection to the hub, which keeps a copy of every session and the fleet's secrets. Away from that network, the apps reach every machine through the hub, exposed however suits you (a Cloudflare Tunnel, a port forward, a reverse proxy or a VPN).
 

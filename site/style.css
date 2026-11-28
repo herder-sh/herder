@@ -240,11 +240,25 @@ section { max-width: 1160px; margin: 0 auto; padding: 120px 24px 0; }
 .final .big { margin: 0 auto; }
 .final .install { margin-top: 32px; }
 
+/* install: one card per platform, then what to do next */
+.platforms { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); margin: 40px 0 0; }
+.platform { background: var(--bg); display: grid; grid-template-columns: 220px 1fr; gap: 32px; padding: 28px; }
+.plat-head h3 { font: 700 22px/1.2 "JetBrains Mono", monospace; letter-spacing: -.02em; margin: 0; display: flex; align-items: center; gap: 12px; }
+.plat-head h3::before { content: ""; width: 12px; height: 12px; background: var(--b1); }
+#install-mac .plat-head h3::before { background: var(--b2); }
+#install-iphone .plat-head h3::before { background: var(--b4); }
+.plat-head p { margin: 8px 0 0 24px; color: var(--dim); font: 13px "JetBrains Mono", monospace; }
+.plat-body { min-width: 0; display: flex; flex-direction: column; gap: 12px; max-width: 680px; }
+.plat-body p { margin: 0; color: var(--muted); font-size: 15.5px; }
+.plat-body .ctas { justify-content: flex-start; margin: 0; }
+.btn.soon { color: var(--muted); border-style: dashed; cursor: default; }
+.btn.soon:active { transform: none; }
+.then-h { font: 500 13px "JetBrains Mono", monospace; text-transform: lowercase; letter-spacing: .08em; color: var(--accent); margin: 48px 0 0; }
+.steps.then { margin-top: 18px; }
+
 .steps { list-style: none; padding: 0; margin: 48px 0 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
-.steps li { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.steps li { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
 .steps li:nth-child(1) .tag { color: var(--b1); } .steps li:nth-child(2) .tag { color: var(--b2); } .steps li:nth-child(3) .tag { color: var(--b3); }
-.steps pre { margin: 0; min-width: 0; background: var(--surface); border: 1px solid var(--line); padding: 16px 18px; overflow-x: auto; scrollbar-width: thin; font-size: 13.5px; line-height: 1.7; }
-.steps pre code { font-size: 1em; background: none; border: 0; padding: 0; white-space: pre; }
 .steps p { margin: 0; color: var(--muted); font-size: 15px; }
 .qs { border-top: 1px solid var(--line); max-width: 860px; }
 details { border-bottom: 1px solid var(--line); }
@@ -290,6 +304,7 @@ details p { margin: -4px 0 22px; color: var(--muted); max-width: 760px; }
   .facts dl { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 860px) {
+  .platform { grid-template-columns: 1fr; gap: 18px; }
   .feature { grid-template-columns: 1fr; gap: 32px; }
   .feature.flip .copy-col { order: 0; }
 }
@@ -308,7 +323,7 @@ details p { margin: -4px 0 22px; color: var(--muted); max-width: 760px; }
   .cmd code { font-size: 13px; white-space: normal; overflow-wrap: anywhere; }
   .prompt { display: none; }
   .copy { min-width: 0; padding: 8px 10px; }
-  .steps pre { font-size: 12px; padding: 14px; }
+  .platform { padding: 20px 16px; }
   .btn { flex: 1 1 100%; justify-content: center; }
   .stage { margin-top: 48px; padding: 0 12% 10% 0; }
   .stage .phone { width: 30%; }
