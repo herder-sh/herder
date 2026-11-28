@@ -33,6 +33,13 @@ struct RemoteOptions: Equatable {
 
     /// A WireGuard config herder carries its own connections through, imported or the hub's.
     struct Tunnel: Hashable, Identifiable {
+        /// What it routes, for its detail line: "all addresses" for a router's full-tunnel
+        /// export (`0.0.0.0/0`), else its AllowedIPs.
+        var reaches: String {
+            allowedIps.contains { $0 == "0.0.0.0/0" || $0 == "::/0" } ? "all addresses"
+                : allowedIps.joined(separator: ", ")
+        }
+
         let id: String
         let name: String
         /// The server's `host:port`.
@@ -125,7 +132,7 @@ struct RemoteOptions: Equatable {
     /// up once one is imported.
     var ownVpnState: FleetReach.State {
         if imported.contains(where: \.up) { return .working }
-        return imported.isEmpty ? .notSetUp : .unseen
+        return imported.isEmpty ? .notSetUp : .idle
     }
 
     /// herder's WireGuard on the hub, as this device uses it.
