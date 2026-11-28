@@ -1,6 +1,6 @@
 import Foundation
 @testable import HerderKit
-import Sentry
+import SentrySwift
 import Testing
 
 /// What would name a person, a machine or their work, as it shows up in real diagnostics.
