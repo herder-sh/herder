@@ -214,6 +214,8 @@ jobs:
           # The tag's date (the tagger's for an annotated tag); today when not run on a tag.
           date=
           if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # The container runs as root over a checkout owned by the runner's user.
+            git config --global --add safe.directory "$GITHUB_WORKSPACE"
             date=$(git for-each-ref --format='%(creatordate:short)' "refs/tags/$GITHUB_REF_NAME")
           fi
           linux/packaging/flatpak/add-metainfo-release.sh "$version" "${date:-$(date -u +%F)}"
