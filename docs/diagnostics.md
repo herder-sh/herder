@@ -48,7 +48,7 @@ name, locale or time zone.
 | Event | From | Properties |
 | --- | --- | --- |
 | `diagnostics_on` | both | |
-| `connected` | client core | `route`, `connect_ms`, `reconnect` |
+| `connected` | client core | `route`, `connect_ms` (since the client started connecting, or since the wake that brought it out of the background), `waited_ms` (of that, before the attempt that connected started), `reach_ms` (that attempt's TCP, TLS and WebSocket upgrade), `hello_ms` (its hello, with any wait for its turn to say it), `reconnect` |
 | `connect_failed` | client core | `attempt`, `connect_ms` |
 | `disconnected` | client core | `route`, `cause` (`lost`, `dead`, `dropped`, `asked`), `connected_ms`, `average_rtt_ms`, `max_rtt_ms`, `missed_pongs`, `suspended` |
 | `command` | client core | `command`, `ms` (until the daemon answered), `outcome` (`ok`, `rejected`, `failed`) |
