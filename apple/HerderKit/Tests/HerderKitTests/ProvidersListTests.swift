@@ -83,7 +83,8 @@ struct ProvidersListTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func login(_ machines: [Machine], where match: (ProviderAccounts.Login) -> Bool) throws -> ProviderAccounts.Login {
-        try #require(ProviderAccounts(machines: machines, now: now).groups.flatMap(\.logins).first(where: match))
+        let found = ProviderAccounts(machines: machines, now: now).groups.flatMap(\.logins).first(where: match)
+        return try #require(found)
     }
 
     @Test func anOwnedHubsLoginIsChangedOnTheHub() throws {
