@@ -153,15 +153,15 @@
      "name": "Is there a herder app for Mac and iPhone?",
      "acceptedAnswer": {
       "@type": "Answer",
-      "text": "Yes. The herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app is in TestFlight and not on the App Store yet; until then, you can also run herder over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen."
+      "text": "Yes. The herder Mac app runs on Apple silicon and is a free download from the latest GitHub release, signed with Developer ID and notarized by Apple. The iPhone app is coming to the App Store; until then, you can run herder over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen."
      }
     },
     {
      "@type": "Question",
-     "name": "Why does macOS say the herder app can't be opened?",
+     "name": "How do I install the herder Mac app?",
      "acceptedAnswer": {
       "@type": "Answer",
-      "text": "The herder Mac app is not notarized by Apple yet, so Gatekeeper blocks it the first time. Move herder.app to Applications and run xattr -dr com.apple.quarantine /Applications/herder.app, or try to open it once and then choose Open Anyway in System Settings, Privacy & Security."
+      "text": "Download the zip from herder.sh or the latest GitHub release, unzip it and move herder.app to Applications. It is signed with Developer ID and notarized by Apple, so it opens like any other app. To run agents on that Mac too, install the herder daemon with curl -fsSL https://herder.sh/install | sh and herder service install."
      }
     },
     {
@@ -212,7 +212,7 @@
   <nav aria-label="Main">
     <a href="#features">features</a>
     <a href="#compare">compare</a>
-    <a href="#start">start</a>
+    <a href="#install">install</a>
     <a href="#faq">faq</a>
     <a href="https://github.com/herder-sh/herder">github</a>
   </nav>
@@ -239,9 +239,9 @@
       </div>
       <div class="ctas">
         <a class="btn primary" data-mac-download href="https://github.com/herder-sh/herder/releases/download/v0.14.0/herder-app-0.14.0-macos-arm64.zip"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="2"/></svg>Download for Mac</a>
-        <a class="btn" href="#features">See how it works <span aria-hidden="true">↓</span></a>
+        <a class="btn" href="#install">All install options <span aria-hidden="true">↓</span></a>
       </div>
-      <p class="fine">Linux and Apple silicon Macs · iPhone app <a href="#faq-apps">in TestFlight</a> · Mac app <a href="#faq-mac">not notarized yet</a> · free, Apache-2.0</p>
+      <p class="fine"><a href="#install">Linux, Mac and iPhone</a> · Mac app notarized by Apple · free, Apache-2.0</p>
     </div>
 
     <div class="stage rise" style="--d:5">
@@ -305,7 +305,7 @@
         <p class="eyebrow">iphone</p>
         <h2 id="phone-h">Answer your agents from your phone.</h2>
         <p>When an agent asks a question or wants to run a command, it waits for you on the iPhone. Allow, deny or answer, follow any task, and start the next one from wherever you are.</p>
-        <p class="how"><span>how</span> scan the QR code <code>herder pair</code> prints. The iPhone app is in TestFlight; the terminal UI also works over SSH from a phone.</p>
+        <p class="how"><span>how</span> scan the QR code <code>herder pair</code> prints. The iPhone app is coming to the App Store; until then, the terminal UI works over SSH from a phone.</p>
       </div>
       <div class="phones">
         <figure class="shot phone">
@@ -399,25 +399,79 @@ herder session status &lt;id&gt; --json</code></pre>
     </div>
   </section>
 
-  <section id="start" class="start" aria-labelledby="start-h">
-    <p class="eyebrow">get started</p>
-    <h2 id="start-h" class="big">Three commands to a herd.</h2>
-    <ol class="steps">
+  <section id="install" class="install-sec" aria-labelledby="install-h">
+    <p class="eyebrow">install</p>
+    <h2 id="install-h" class="big">Install herder.</h2>
+    <p class="sub">The herder daemon runs your agents on each Linux machine or Mac. The apps and the terminal UI watch and steer them from anywhere.</p>
+    <div class="platforms">
+      <article class="platform" id="install-linux" aria-labelledby="install-linux-h">
+        <div class="plat-head">
+          <h3 id="install-linux-h">linux</h3>
+          <p>x86_64 and arm64</p>
+        </div>
+        <div class="plat-body">
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="linux-install">curl -fsSL https://herder.sh/install | sh</code>
+            <button class="copy" type="button" data-copy="linux-install" aria-label="Copy the install command"><span>copy</span></button>
+          </div>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="linux-service">herder service install</code>
+            <button class="copy" type="button" data-copy="linux-service" aria-label="Copy the service install command"><span>copy</span></button>
+          </div>
+          <p>The script checks the binary's sha256 and puts it in <code>~/.local/bin/herder</code>. <code>herder service install</code> runs the daemon now and at every boot with systemd. <code>herder doctor</code> checks the machine and says how to fix what is not ready.</p>
+        </div>
+      </article>
+      <article class="platform" id="install-mac" aria-labelledby="install-mac-h">
+        <div class="plat-head">
+          <h3 id="install-mac-h">mac</h3>
+          <p>Apple silicon</p>
+        </div>
+        <div class="plat-body">
+          <div class="ctas">
+            <a class="btn primary" data-mac-download href="https://github.com/herder-sh/herder/releases/download/v0.14.0/herder-app-0.14.0-macos-arm64.zip"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="2"/></svg>Download the Mac app</a>
+          </div>
+          <p>Unzip it and move <code>herder.app</code> to Applications. It is signed with Developer ID and notarized by Apple, so it opens like any other app. To run agents on this Mac too, install the daemon:</p>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="mac-install">curl -fsSL https://herder.sh/install | sh</code>
+            <button class="copy" type="button" data-copy="mac-install" aria-label="Copy the install command"><span>copy</span></button>
+          </div>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="mac-service">herder service install</code>
+            <button class="copy" type="button" data-copy="mac-service" aria-label="Copy the service install command"><span>copy</span></button>
+          </div>
+        </div>
+      </article>
+      <article class="platform" id="install-iphone" aria-labelledby="install-iphone-h">
+        <div class="plat-head">
+          <h3 id="install-iphone-h">iphone</h3>
+          <p>iOS app</p>
+        </div>
+        <div class="plat-body">
+          <!-- Once the app is approved, make this a link: <a class="btn primary" href="https://apps.apple.com/app/id6819734090">Download on the App Store</a> -->
+          <div class="ctas">
+            <span class="btn soon" data-app-store="https://apps.apple.com/app/id6819734090">Coming to the App Store</span>
+          </div>
+          <p>The iPhone app is on its way to the App Store. Until then, run <code>herder</code> over SSH or mosh from a phone SSH app such as Termius or Moshi: the terminal UI fits the narrow screen.</p>
+        </div>
+      </article>
+    </div>
+    <h3 class="then-h">then</h3>
+    <ol class="steps then">
       <li>
-        <span class="tag">01 · install</span>
-        <pre><code>curl -fsSL https://herder.sh/install | sh
-herder service install</code></pre>
-        <p>Installs herder on a Linux box or a Mac and runs its daemon now and at every boot.</p>
+        <span class="tag">01 · claim the machine</span>
+        <p><code>herder service install</code> prints a link and a QR code that make the machine yours, and <code>herder claim</code> prints them again. Open the herder app, paste the link into the Mac app's Add to Fleet or scan it with the iPhone app, and approve with your passkey. <a href="#faq-no-apple">No Apple device?</a> Run the <code>herder login</code> command it prints, and the terminal becomes the owner with a passkey of its own.</p>
       </li>
       <li>
-        <span class="tag">02 · claim</span>
-        <pre><code>herder claim</code></pre>
-        <p>Prints a link and a QR code that make the machine yours. Scan it with the iPhone app or paste it into the Mac app's Add to Fleet, and approve with Face ID. <a href="#faq-no-apple">No Apple device?</a> Run the <code>herder login</code> command it prints, and the terminal becomes the owner with a passkey of its own.</p>
+        <span class="tag">02 · add an account</span>
+        <p>Add Account in the app, or run <code>herder</code> and press <kbd>n</kbd> in the terminal UI: the vendor's own login runs on the machine, and herder just shows you its terminal.</p>
       </li>
       <li>
-        <span class="tag">03 · add an account</span>
-        <pre><code>herder</code></pre>
-        <p>Add Account in the app, or <kbd>n</kbd> in the terminal UI: the vendor's own login runs on the machine, and herder just shows you its terminal.</p>
+        <span class="tag">03 · start a task</span>
+        <p>Start a task on any machine from the Board in the app, or from the terminal UI. Add more machines the same way; they all join your Fleet.</p>
       </li>
     </ol>
   </section>
@@ -468,11 +522,11 @@ herder service install</code></pre>
       </details>
       <details id="faq-apps">
         <summary>Is there a herder app for Mac and iPhone?</summary>
-        <p>Yes. The herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app is in TestFlight and not on the App Store yet; until then, you can also run <code>herder</code> over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen.</p>
+        <p>Yes. The herder Mac app runs on Apple silicon and is a free download from the latest GitHub release, signed with Developer ID and notarized by Apple. The iPhone app is coming to the App Store; until then, you can run <code>herder</code> over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen.</p>
       </details>
       <details id="faq-mac">
-        <summary>Why does macOS say the herder app can't be opened?</summary>
-        <p>The herder Mac app is not notarized by Apple yet, so Gatekeeper blocks it the first time. Move <code>herder.app</code> to Applications and run <code>xattr -dr com.apple.quarantine /Applications/herder.app</code>, or try to open it once and then choose Open Anyway in System Settings, Privacy &amp; Security.</p>
+        <summary>How do I install the herder Mac app?</summary>
+        <p>Download the zip from the <a href="#install">install section</a> or the latest GitHub release, unzip it and move <code>herder.app</code> to Applications. It is signed with Developer ID and notarized by Apple, so it opens like any other app. To run agents on that Mac too, install the herder daemon with <code>curl -fsSL https://herder.sh/install | sh</code> and <code>herder service install</code>.</p>
       </details>
       <details>
         <summary>How much does herder cost?</summary>
