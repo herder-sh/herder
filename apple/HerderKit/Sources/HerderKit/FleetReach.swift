@@ -37,6 +37,11 @@ struct FleetReach: Equatable {
         var address: String?
         /// The headers this device sends a proxy in front of that address (P26.2).
         var frontDoor: [String] = []
+        /// "Sign In…" or "Sign In Again…" while a login proxy in front of that address wants a
+        /// browser sign-in (P28.7); nil otherwise.
+        var signIn: String?
+        /// Whether this device is signed in to that login proxy.
+        var signedIn = false
         var check = PublicCheck.unchecked
         /// When this device last reached the hub through that address.
         var lastSeen: Date?
@@ -83,6 +88,8 @@ struct FleetReach: Equatable {
     var homeSubnets: [String]
     /// What this device saw working from outside just now, for `RemoteSightings` to remember.
     var sightings: [String]
+    /// When each imported WireGuard config, by id, was last seen up on this device.
+    var tunnelsSeen: [String: Date]
     /// The options herder sets up: an imported VPN config, the hub's WireGuard, Cloudflare.
     var options: RemoteOptions
     let now: Date
@@ -114,8 +121,11 @@ struct FleetReach: Equatable {
             case (_, .connected): .working
             default: lastSeen == nil ? .unseen : .working
             }
+            let door = address.flatMap { FrontDoorPrompt.door(of: $0, in: pick) }
+            let signIn = door.flatMap(FrontDoorPrompt.action)
             hub = Hub(name: pick.name, hostId: pick.hostId, address: address,
                       frontDoor: (address.flatMap { pick.addressHeaders[$0] } ?? []).sorted(),
+                      signIn: signIn, signedIn: door != nil && signIn == nil,
                       check: check, lastSeen: lastSeen,
                       relays: pick.hosts.filter(\.relay).map(\.hostName).sorted { $0.lowercased() < $1.lowercased() },
                       state: state)
@@ -171,11 +181,24 @@ struct FleetReach: Equatable {
         }
         let inUse = subnets(machines.filter { $0.connection == .connected }.compactMap(\.address))
         homeSubnets = inUse.isEmpty ? subnets(machines.flatMap(\.addresses)) : inUse
+
+        // Each imported WireGuard config up now, and when each last was.
+        sightings += options.imported.filter(\.up).map { Self.tunnelKey + $0.id }
+        tunnelsSeen = Dictionary(uniqueKeysWithValues: seen.filter { $0.key.hasPrefix(Self.tunnelKey) }
+            .map { (String($0.key.dropFirst(Self.tunnelKey.count)), $0.value) })
         self.sightings = sightings
     }
 
     /// What `RemoteSightings` keys a router's VPN subnet by, before the subnet.
     static let vpnKey = "vpn:"
+    /// What it keys an imported WireGuard config by, before its id.
+    static let tunnelKey = "wg:"
+
+    /// An imported config's status: "Up now", "Idle · last up 2h ago", or idle until used.
+    func status(_ tunnel: RemoteOptions.Tunnel) -> String {
+        if tunnel.up { return "Up now" }
+        return tunnelsSeen[tunnel.id].map { "Idle · last up \(ago($0))" } ?? "Idle · comes up when herder needs it"
+    }
 
     /// The fleet's reach in a line, the Hub tab's: "Reachable from anywhere through the hub"
     /// when all is well.
@@ -223,17 +246,44 @@ struct FleetReach: Equatable {
                 RouteState(name: "Router VPN", state: router.state)] + own.filter { $0.state != .notSetUp }
     }
 
+    /// The best of `states`: working, then set up, then won't work, then not set up.
+    static func best(_ states: [State]) -> State {
+        [State.working, .unseen, .wontWork].first(where: { states.contains($0) }) ?? .notSetUp
+    }
+
     /// "A", "A and B", "A, B and C".
     static func joined(_ names: [String]) -> String {
         guard let last = names.last, names.count > 1 else { return names.first ?? "" }
         return names.dropLast().joined(separator: ", ") + " and " + last
     }
 
-    /// The hub's route in a line: "hub.example.com · connected through it now".
-    var hubLine: String {
-        guard hub.name != nil else { return "No hub yet. A hub relays to every machine that syncs to it." }
-        guard let host = hub.host else { return "No public address yet" }
+    /// The hub's public address when a port forward or a proxy carries it, rather than a
+    /// tunnel's `wss://` address: the state of the route through it.
+    var directState: State {
+        guard let address = hub.address, !AddressHeaders.takesHeaders(address) else { return .notSetUp }
+        return hub.state
+    }
+
+    /// The port forward's line: "home.example.net · connected through it now".
+    var directLine: String {
+        guard directState != .notSetUp, let host = hub.host else {
+            return "Not set up. Optional: a port forward or a proxy of yours to the hub, its address saved once."
+        }
         return "\(host) · \(checked.prefix(1).lowercased() + String(checked.dropFirst()))"
+    }
+
+    /// The browser sign-in to a login proxy in front of the hub's tunnel (P28.7): working
+    /// while signed in, set up while it asks for one.
+    var frontDoorState: State {
+        if hub.signedIn { return .working }
+        return hub.signIn == nil ? .notSetUp : .unseen
+    }
+
+    var frontDoorLine: String {
+        let host = hub.host ?? "the hub"
+        if hub.signedIn { return "Signed in on this device to the login in front of \(host)" }
+        if hub.signIn != nil { return "The login in front of \(host) asks you to sign in with a browser" }
+        return "Not set up. Optional: a login such as Cloudflare Access in front of the hub’s tunnel, signed in to here with a browser."
     }
 
     /// What is known of the hub's public address.
@@ -266,7 +316,9 @@ struct FleetReach: Equatable {
 
     /// The router's VPN in a line.
     var routerLine: String {
-        guard router.state == .working else { return "Not set up. Optional, for your home subnets from anywhere." }
+        guard router.state == .working else {
+            return "None seen yet. A VPN app here that reaches home is used by itself, with nothing to add in herder."
+        }
         let subnets = router.subnets.joined(separator: ", ")
         return router.lastSeen.map { "Worked from outside home \(ago($0)), to \(subnets)" }
             ?? "Working from outside home now, to \(subnets)"
@@ -281,7 +333,7 @@ struct FleetReach: Equatable {
 
 /// When each route last worked from outside, on this device, so at home the page still says
 /// the router's VPN worked yesterday. Kept in its defaults, as JSON of seconds since 1970 by
-/// route: "hub:<address>", "tailscale:<host id>", "vpn:<subnet>".
+/// route: "hub:<address>", "tailscale:<host id>", "vpn:<subnet>", "wg:<imported config id>".
 enum RemoteSightings {
     static let key = "remoteSightings"
 

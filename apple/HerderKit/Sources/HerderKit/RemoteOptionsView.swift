@@ -17,49 +17,49 @@ struct RemoteActions {
     var setSettings: @MainActor (RemoteAccessSettings) async throws -> Void = { _ in }
     /// Keeps the Cloudflare API token on the hub (owners).
     var putToken: @MainActor (String) async throws -> Void = { _ in }
+    /// Signs in with a browser to the login proxy in front of the hub's tunnel at an address:
+    /// the closure shows the proxy's login page, cancelled once the hub has the token.
+    var signInToFrontDoor: @MainActor (String, @escaping @MainActor (URL) async -> Void) async throws -> Void = { _, _ in }
 }
 
-/// Your machines: each one's route in use and round trip in a line; a tap opens its routes in
-/// the order they are tried, each to pin, disable or move.
-struct MachineRoutesCard: View {
+/// Your machines, as rows in the Remote access summary: each one's route in use and round trip
+/// in a line; a tap opens its routes in the order they are tried, each to pin, disable or move.
+struct MachineRoutesList: View {
     let machines: [MachineRoutes]
     let actions: RemoteActions
     @State private var open: HostId?
     @State private var error: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading(title: "Your machines")
-            SettingsGroup {
-                ForEach(Array(machines.enumerated()), id: \.element.id) { index, machine in
-                    if index > 0 { RowDivider() }
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { open = open == machine.hostId ? nil : machine.hostId }
-                    } label: {
-                        HStack(spacing: 10) {
-                            RouteMark(state: machine.route == nil ? .notSetUp : .working)
-                            Text(machine.name).font(Theme.body).foregroundStyle(Theme.text).lineLimit(1)
-                            Spacer(minLength: 8)
-                            Text(machine.line).font(.subheadline.monospacedDigit()).foregroundStyle(Theme.secondary)
-                                .lineLimit(1)
-                            Image(systemName: open == machine.hostId ? "chevron.up" : "chevron.down")
-                                .font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                        }
-                        .padding(.horizontal, Theme.cellPadding)
-                        .frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
-                        .contentShape(.rect)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(machines) { machine in
+                RowDivider()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { open = open == machine.hostId ? nil : machine.hostId }
+                } label: {
+                    HStack(spacing: 10) {
+                        RouteMark(state: machine.route == nil ? .notSetUp : .working)
+                        Text(machine.name).font(Theme.body).foregroundStyle(Theme.text).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(machine.line).font(.subheadline.monospacedDigit()).foregroundStyle(Theme.secondary)
+                            .lineLimit(1)
+                        Image(systemName: open == machine.hostId ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("remote-access-machine")
-                    if open == machine.hostId {
-                        routes(machine)
-                    }
+                    .padding(.horizontal, Theme.cellPadding)
+                    .frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
+                    .contentShape(.rect)
                 }
-                if let error {
-                    RowDivider()
-                    Text(error).font(.footnote).foregroundStyle(Theme.failure)
-                        .padding(Theme.cellPadding)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("remote-access-machine")
+                if open == machine.hostId {
+                    routes(machine)
                 }
+            }
+            if let error {
+                RowDivider()
+                Text(error).font(.footnote).foregroundStyle(Theme.failure)
+                    .padding(Theme.cellPadding)
             }
         }
         .accessibilityIdentifier("remote-access-machines")
@@ -143,11 +143,12 @@ struct MachineRoutesCard: View {
     }
 }
 
-/// Your VPN, through herder's own WireGuard client: each imported config, and the form that
-/// imports one from its text or file.
+/// Your VPN, through herder's own WireGuard client: each imported config with its status, and
+/// the form that imports one from a QR code, a file or its text.
 struct OwnVpnFacts: View {
-    let options: RemoteOptions
+    let access: FleetReach
     let actions: RemoteActions
+    private var options: RemoteOptions { access.options }
     @State private var importing = false
     @State private var choosingFile = false
     @State private var scanning = false
@@ -161,7 +162,12 @@ struct OwnVpnFacts: View {
             HStack(spacing: 10) {
                 RouteMark(state: tunnel.up ? .working : .unseen)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(tunnel.name).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
+                    HStack(spacing: 6) {
+                        Text(tunnel.name).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
+                        Text(access.status(tunnel)).font(.caption)
+                            .foregroundStyle(tunnel.up ? Theme.success : Theme.secondary)
+                    }
+                    .lineLimit(1)
                     Text(([tunnel.endpoint] + tunnel.allowedIps).joined(separator: " · "))
                         .font(.caption.monospaced()).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.middle)
                 }
