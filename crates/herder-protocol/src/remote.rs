@@ -24,8 +24,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SecretRef, Timestamp};
 
-/// The UDP port a hub's WireGuard endpoint binds unless set otherwise, WireGuard's usual.
-pub const DEFAULT_WIREGUARD_PORT: u16 = 51820;
+/// The UDP port a hub's WireGuard endpoint binds unless set otherwise.
+///
+/// Not WireGuard's usual 51820, nor 51821: flannel's wireguard backend, Calico's and most
+/// WireGuard setups take those on a cluster's nodes (Cilium takes 51871), and on k3s's
+/// ServiceLB a Service port becomes a host port on every node, so the hub's would take
+/// theirs over.
+pub const DEFAULT_WIREGUARD_PORT: u16 = 51900;
 
 /// What a hub offers devices away from home, answering `get_remote_access` and
 /// `set_remote_access`.
@@ -63,7 +68,7 @@ pub struct WireGuardSettings {
     /// rule. The router forwards it to the hub.
     pub port: u16,
     /// Where devices send to from outside, as `host:port`: the router's public name or IP
-    /// and the port it forwards, such as `home.example.net:51820`.
+    /// and the port it forwards, such as `home.example.net:51900`.
     pub endpoint: String,
 }
 

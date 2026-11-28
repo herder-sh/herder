@@ -6154,7 +6154,7 @@
       "type": "object",
       "properties": {
         "endpoint": {
-          "description": "Where devices send to from outside, as `host:port`: the router's public name or IP\nand the port it forwards, such as `home.example.net:51820`.",
+          "description": "Where devices send to from outside, as `host:port`: the router's public name or IP\nand the port it forwards, such as `home.example.net:51900`.",
           "type": "string"
         },
         "port": {
