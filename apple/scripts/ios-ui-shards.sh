@@ -14,7 +14,7 @@ shards=(
   # 203 s
   "FakeFleetUITests TaskRowUITests SessionKeyboardUITests DemoUITests TranscriptScrollUITests"
   # 201 s
-  "SkillMentionUITests PhotoAttachUITests PasskeyApprovalUITests TranscriptInlineCodeUITests TabsUITests"
+  "SkillMentionUITests PhotoAttachUITests PasskeyApprovalUITests TranscriptInlineCodeUITests TabsUITests ContentWidthUITests"
   # 202 s
   "SecretsUITests TranscriptCopyUITests SessionLinkUITests SessionSearchUITests WaitingTaskUITests"
 )
