@@ -192,8 +192,10 @@ impl ManagedRelay {
 
     /// Makes Cloudflare match `desired`.
     async fn apply(&self, desired: Desired) -> Result<()> {
-        let mut state = self.state.lock().await;
-        let previous = state.clone();
+        // Not held across the calls to Cloudflare, which may take seconds: the status the
+        // hub's clients ask for reads it meanwhile. Only this task, one apply at a time,
+        // changes it.
+        let previous = self.state.lock().await.clone();
         let base = self.api.clone();
         let Some(wanted) = desired.wanted.map_err(anyhow::Error::msg)? else {
             let Some(old) = previous else {
@@ -210,7 +212,7 @@ impl ManagedRelay {
             .await
             .context("the relay removal panicked")??;
             remove(&self.dir)?;
-            *state = None;
+            *self.state.lock().await = None;
             info!("the Cloudflare relay is deleted");
             return Ok(());
         };
@@ -227,7 +229,7 @@ impl ManagedRelay {
         save(&self.dir, &new)?;
         info!(url = new.url, "the Cloudflare relay is deployed");
         self.relay.set(Some(deployed(&new)));
-        *state = Some(new);
+        *self.state.lock().await = Some(new);
         Ok(())
     }
 }
