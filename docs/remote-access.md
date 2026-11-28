@@ -72,10 +72,14 @@ For a user with a hub at home and no VPN of their own: the hub runs a userspace 
 endpoint on one UDP port, and devices enable it with one toggle.
 
 - **Hub side**: `GetRemoteAccess`/`SetRemoteAccess` (owners) turn on
-  `RemoteAccessSettings::wireguard`: the UDP `port` it binds (default 51820) and the
-  `endpoint` devices send to (`home.example.net:51820`, the router's public name and the
+  `RemoteAccessSettings::wireguard`: the UDP `port` it binds (default 51900, clear of
+  the 51820 a cluster's WireGuard takes) and the `endpoint` devices send to
+  (`home.example.net:51900`, the router's public name and the
   forwarded port). The hub generates its WireGuard key once, in its data dir. No pod
-  privileges: a UDP socket, no TUN, no `NET_ADMIN`. The router forwards that one UDP port
+  privileges: a UDP socket, no TUN, no `NET_ADMIN`. It refuses a port something else in its
+  network namespace already holds, such as a node's WireGuard interface, and names it; in
+  a pod that is the pod's own namespace, so the node's ports are the cluster admin's to
+  check (`deploy/README.md`). The router forwards that one UDP port
   to the hub (`deploy/hub.yaml` has it on the Service; `deploy/README.md`, herder's
   WireGuard, has the steps and the patch for a hub already running).
 - **Enrolled through pairing**: the device's toggle has client-core generate an X25519 key

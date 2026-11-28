@@ -115,7 +115,7 @@ impl RemoteAccessHub {
             if wireguard.port == 0 {
                 return Err(error(
                     ErrorCode::BadRequest,
-                    "herder's WireGuard needs a UDP port, such as 51820".into(),
+                    "herder's WireGuard needs a UDP port, such as 51900".into(),
                 ));
             }
         }
@@ -333,7 +333,7 @@ fn endpoint(text: &str, port: u16) -> Result<String, String> {
     let invalid = || {
         format!(
             "{text:?} is not where devices reach the hub's WireGuard: give the router's public \
-             name or IP and the UDP port it forwards, such as home.example.net:51820"
+             name or IP and the UDP port it forwards, such as home.example.net:51900"
         )
     };
     if text.is_empty() || text.contains(|c: char| c.is_whitespace() || c == '/') {
@@ -530,17 +530,17 @@ mod tests {
     #[test]
     fn a_wireguard_endpoint_is_host_and_port() {
         assert_eq!(
-            endpoint("home.example.net", 51820).unwrap(),
-            "home.example.net:51820"
+            endpoint("home.example.net", 51900).unwrap(),
+            "home.example.net:51900"
         );
         assert_eq!(
-            endpoint(" home.example.net:4500 ", 51820).unwrap(),
+            endpoint(" home.example.net:4500 ", 51900).unwrap(),
             "home.example.net:4500"
         );
-        assert_eq!(endpoint("203.0.113.7", 51820).unwrap(), "203.0.113.7:51820");
+        assert_eq!(endpoint("203.0.113.7", 51900).unwrap(), "203.0.113.7:51900");
         assert_eq!(
-            endpoint("2001:db8::7", 51820).unwrap(),
-            "[2001:db8::7]:51820"
+            endpoint("2001:db8::7", 51900).unwrap(),
+            "[2001:db8::7]:51900"
         );
         for bad in [
             "",
@@ -549,7 +549,7 @@ mod tests {
             "home:0",
             "home:x",
         ] {
-            assert!(endpoint(bad, 51820).is_err(), "{bad}");
+            assert!(endpoint(bad, 51900).is_err(), "{bad}");
         }
     }
 

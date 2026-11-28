@@ -254,37 +254,69 @@ endpoint on one UDP port (no privileges, no TUN device), and each device turns i
 one switch (`docs/remote-access.md`). Inside it a device reaches the hub's port 7447 and,
 through the hub, every machine; nothing else on your network.
 
-1. **Forward one UDP port** on your router to the hub: 51820 to the load balancer's
+1. **Forward one UDP port** on your router to the hub: 51900 to the load balancer's
    address (the manifest's `herder-hub` Service carries it as `wireguard`), or to the
    machine running `herder hub install`. The endpoint answers no packet from a key it
    has not enrolled, so a scan sees a closed port.
 2. **Turn it on** as an owner: in the app, Hub tab › Remote access › herder's WireGuard,
-   with the port (51820) and where devices reach it from outside, your router's public
-   name or IP and that port, such as `home.example.net:51820`. That is
+   with the port (51900) and where devices reach it from outside, your router's public
+   name or IP and that port, such as `home.example.net:51900`. That is
    `set_remote_access`'s `wireguard`; the hub keeps it in `remote-access.json` and its
    WireGuard key in `wireguard.key`, both in its data dir.
 3. **Use it** on each device: the switch on the same card. The device makes its own key,
    gives the hub only the public half, and from then on reaches the hub through
    WireGuard whenever its other routes do not answer. Revoking the device drops its key.
 
+#### Keep the port clear of the nodes' own
+
+The port must be one nothing on any node uses. On k3s's built-in ServiceLB (klipper), a
+LoadBalancer Service's every port becomes a host port on **every node**: each node
+redirects all incoming traffic on that port into the Service's `svclb` pod, whatever on
+the node was using it. Other load balancers that bind host ports do the same.
+
+So never give the hub UDP 51820 or 51821 on a cluster. They are the ports of flannel's
+`wireguard-native` backend (k3s's `--flannel-backend=wireguard-native`, IPv4 and IPv6),
+of Calico's WireGuard encryption and of most WireGuard setups; Cilium's is 51871. Taken
+by the hub's Service, every node hands the cluster's own node-to-node tunnel packets to
+the hub's pod, and pod traffic between nodes stops cluster-wide. Removing the port does
+not undo it at once: the redirect's conntrack entries outlive it while the tunnel's
+keepalives refresh them, so flush them (`conntrack -D -p udp --orig-port-dst <port>` on
+each node) or reboot the nodes.
+
+The manifest uses 51900. Before you publish it, or any other port, check each node:
+
+```sh
+sudo ss -uanp 'sport = :51900'   # nothing listed: free
+sudo wg show all listen-port     # the WireGuard interfaces' ports, flannel-wg's among them
+```
+
+The hub refuses a port something already holds where it runs, naming it (a WireGuard
+interface, say), but in a pod it sees only the pod's own network: the nodes' ports are
+out of an unprivileged pod's sight, so this check is yours.
+
 #### Apply to a hub already running
 
 On the live hub, whose Kubernetes objects keep the `herder-vault` names (namespace
-`herder`), add the port to the StatefulSet's `hub` container, the Service and the
-NetworkPolicy, then forward UDP 51820 on the router to the Service's address:
+`herder`), on k3s with ServiceLB and flannel's `wireguard-native` backend (which holds
+UDP 51820 on every node), first check the nodes as above. Then add the port to the
+StatefulSet's `hub` container, the Service and the NetworkPolicy, and forward UDP 51900
+on the router to the Service's address:
 
 ```sh
 kubectl -n herder patch statefulset herder-vault --type json -p '[
   {"op": "add", "path": "/spec/template/spec/containers/0/ports/-",
-   "value": {"name": "wireguard", "containerPort": 51820, "protocol": "UDP"}}]'
+   "value": {"name": "wireguard", "containerPort": 51900, "protocol": "UDP"}}]'
 kubectl -n herder patch service herder-vault --type json -p '[
   {"op": "add", "path": "/spec/ports/-",
-   "value": {"name": "wireguard", "port": 51820, "targetPort": "wireguard", "protocol": "UDP"}}]'
+   "value": {"name": "wireguard", "port": 51900, "targetPort": "wireguard", "protocol": "UDP"}}]'
 kubectl -n herder get networkpolicy        # if the hub has one, add the port to its ingress:
 kubectl -n herder patch networkpolicy herder-vault --type json -p '[
-  {"op": "add", "path": "/spec/ingress/0/ports/-", "value": {"port": 51820, "protocol": "UDP"}}]'
-kubectl -n herder get service herder-vault  # the address to forward UDP 51820 to
+  {"op": "add", "path": "/spec/ingress/0/ports/-", "value": {"port": 51900, "protocol": "UDP"}}]'
+kubectl -n herder get service herder-vault  # the address to forward UDP 51900 to
 ```
+
+If WireGuard was turned on at 51820 before, change its port to 51900 in the Hub tab
+(Change…) and the router's forward with it.
 
 Check first that container 0 is `hub` (`kubectl -n herder get sts herder-vault -o
 jsonpath='{.spec.template.spec.containers[*].name}'`) and use its index if not. The
