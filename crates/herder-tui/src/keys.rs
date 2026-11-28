@@ -664,6 +664,10 @@ pub const FLEET: &[Keys] = &[
     keys(&[ch('b')], "backups"),
     keys(&[ch('s')], "a hub's secrets"),
     keys(&[ch('u')], "what a hub's logins used, on every machine"),
+    keys(
+        &[ch('w')],
+        "remote access: your VPN's WireGuard configs, a hub's WireGuard and Cloudflare relay and tunnel, each machine's route in use",
+    ),
     keys(&[ch('r')], "reconnect"),
     keys(&[ch('?')], "this help"),
     keys(&[ESC, BACKSPACE, ch('m'), ch('q')], "close"),

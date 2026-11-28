@@ -40,6 +40,7 @@ pub mod passkey;
 mod projects;
 mod prompt;
 mod prs;
+mod remote_access;
 mod secrets;
 mod selection;
 mod session;
@@ -252,6 +253,23 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                         if let Err(err) = client.set_addresses(host_id, addresses) {
                             let _ = tx.send(Msg::Notice(format!("routes: {err}")));
                         }
+                    }
+                    Effect::WireGuardTunnels => {
+                        let tunnels = client.wireguard_tunnels().map_err(|err| err.to_string());
+                        let _ = tx.send(Msg::WireGuardTunnels(tunnels));
+                    }
+                    Effect::ImportWireGuard { path } => {
+                        import_wireguard(&client, path, tx.clone());
+                    }
+                    Effect::RemoveWireGuard(id) => {
+                        if let Err(err) = client.remove_wireguard(id) {
+                            let _ = tx.send(Msg::Notice(format!("removing the config: {err}")));
+                        }
+                        let tunnels = client.wireguard_tunnels().map_err(|err| err.to_string());
+                        let _ = tx.send(Msg::WireGuardTunnels(tunnels));
+                    }
+                    Effect::SetHubWireGuard { host_id, enabled } => {
+                        set_hub_wireguard(&client, host_id, enabled, tx.clone());
                     }
                     Effect::FrontDoorSignIn { host_id, address } => {
                         front_door_sign_in(&client, host_id, address, tx.clone());
@@ -574,6 +592,62 @@ fn log_in(
 /// Signs in with a browser to the login proxy in front of `address`, a tunnel of machine
 /// `host_id`, as `cloudflared access login` does: opens its login page, or shows its URL where
 /// there is no browser, and says how it went.
+/// Imports the WireGuard config at `path`, named after the file, and lists the configs again.
+fn import_wireguard(client: &Client, path: String, tx: mpsc::UnboundedSender<Msg>) {
+    let client = client.clone();
+    tokio::task::spawn_blocking(move || {
+        let file = match path.strip_prefix("~/") {
+            Some(rest) => std::env::home_dir().unwrap_or_default().join(rest),
+            None => std::path::PathBuf::from(&path),
+        };
+        let name = file
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let imported = std::fs::read_to_string(&file)
+            .map_err(|err| err.to_string())
+            .and_then(|config| {
+                client
+                    .import_wireguard(name, config)
+                    .map_err(|err| err.to_string())
+            });
+        let notice = match imported {
+            Ok(tunnel) => format!("imported {} ({})", tunnel.name, tunnel.endpoint),
+            Err(err) => format!("importing {path}: {err}"),
+        };
+        let _ = tx.send(Msg::Notice(notice));
+        let tunnels = client.wireguard_tunnels().map_err(|err| err.to_string());
+        let _ = tx.send(Msg::WireGuardTunnels(tunnels));
+    });
+}
+
+/// Enrolls this device with `host_id`'s WireGuard, or removes it, then asks the hub what it
+/// offers and lists the configs again.
+fn set_hub_wireguard(
+    client: &Client,
+    host_id: herder_protocol::HostId,
+    enabled: bool,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    let client = client.clone();
+    tokio::spawn(async move {
+        let notice = match client.set_hub_wireguard(host_id.clone(), enabled).await {
+            Ok(()) if enabled => "this device uses the hub's WireGuard".to_owned(),
+            Ok(()) => "this device no longer uses the hub's WireGuard".to_owned(),
+            Err(err) => format!("the hub's WireGuard: {err}"),
+        };
+        let _ = tx.send(Msg::Notice(notice));
+        let tunnels = client.wireguard_tunnels().map_err(|err| err.to_string());
+        let _ = tx.send(Msg::WireGuardTunnels(tunnels));
+        let origin = compose::Origin::RemoteAccess(remote_access::Sent::Get(host_id.clone()));
+        let result = client
+            .send(host_id, herder_protocol::CommandBody::GetRemoteAccess)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(Msg::Sent { origin, result });
+    });
+}
+
 fn front_door_sign_in(
     client: &Client,
     host_id: herder_protocol::HostId,

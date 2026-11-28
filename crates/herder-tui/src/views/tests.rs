@@ -2713,3 +2713,118 @@ fn the_fleet_offers_usage_on_a_hub_only() {
     let screen = render(&mut app, 160, 30).backend().to_string();
     assert!(screen.contains("u usage"), "{screen}");
 }
+
+#[test]
+fn the_remote_access_screen_at_three_widths() {
+    let mut app = fake::remote_access();
+    at_three_widths("remote_access", &mut app);
+    let screen = render(&mut app, 100, 40).backend().to_string();
+    for shown in [
+        "home-router  vpn.example.net:51820  up",
+        "on at home.example.net:51900 · used on this device",
+        "Cloudflare (account 0123456789abcdef)",
+        "https://herder-relay.example.workers.dev",
+        "devbox  100.101.1.2:7447",
+        "system VPN · 38 ms",
+    ] {
+        assert!(screen.contains(shown), "{shown} in {screen}");
+    }
+}
+
+#[test]
+fn the_remote_access_screen_sets_the_hubs_wireguard_endpoint() {
+    let mut app = fake::remote_access();
+    press(&mut app, KeyCode::Char('w'));
+    let screen = render(&mut app, 100, 40).backend().to_string();
+    assert!(screen.contains("WireGuard endpoint"), "{screen}");
+    // The endpoint the hub has is there to change: ctrl-u clears it.
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('u'),
+        KeyModifiers::CONTROL,
+    )));
+    for c in "router.example.org:4500".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    let effects = app.update(key(KeyCode::Enter));
+    let sent = effects.iter().find_map(|effect| match effect {
+        crate::app::Effect::Send {
+            command: herder_protocol::CommandBody::SetRemoteAccess { settings },
+            ..
+        } => Some(settings.clone()),
+        _ => None,
+    });
+    let settings = sent.expect("set_remote_access");
+    assert_eq!(
+        settings.wireguard,
+        Some(herder_protocol::WireGuardSettings {
+            port: 4500,
+            endpoint: "router.example.org:4500".into(),
+        })
+    );
+    // The rest of the hub's settings stay as they were.
+    assert!(settings.cloudflare.is_some_and(|c| c.relay));
+}
+
+#[test]
+fn the_remote_access_screen_keeps_a_new_cloudflare_token_before_setting_it_up() {
+    use herder_protocol::{CommandBody, CommandResult};
+    let mut app = fake::remote_access();
+    press(&mut app, KeyCode::Char('c'));
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(effects.is_empty(), "{effects:?}");
+    for c in "zqx".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    let screen = render(&mut app, 100, 40).backend().to_string();
+    assert!(
+        screen.contains("•••") && !screen.contains("zqx"),
+        "{screen}"
+    );
+    let mut effects = app.update(key(KeyCode::Enter));
+    let mut commands = Vec::new();
+    // The set, then the token, then the settings naming it; each answered.
+    let settings = loop {
+        let Some(crate::app::Effect::Send {
+            origin, command, ..
+        }) = effects.pop()
+        else {
+            panic!("no set_remote_access after {commands:?}");
+        };
+        let result = match &command {
+            CommandBody::CreateSecretSet { .. } => Err("the set exists".to_owned()),
+            CommandBody::PutSecret { .. } => Ok(CommandResult::Applied),
+            CommandBody::SetRemoteAccess { settings } => break settings.clone(),
+            other => panic!("unexpected {other:?}"),
+        };
+        commands.push(command);
+        effects = app.update(Msg::Sent { origin, result });
+    };
+    assert!(matches!(
+        &commands[..],
+        [
+            CommandBody::CreateSecretSet { set, .. },
+            CommandBody::PutSecret { name, value, .. },
+        ] if set == "cloudflare" && name == "CLOUDFLARE_API_TOKEN" && value.expose() == "zqx"
+    ));
+    let cloudflare = settings.cloudflare.expect("cloudflare settings");
+    assert_eq!(cloudflare.account_id, "0123456789abcdef");
+    assert_eq!(
+        cloudflare.api_token.to_string(),
+        "cloudflare/CLOUDFLARE_API_TOKEN"
+    );
+}
+
+#[test]
+fn the_remote_access_screen_uses_the_hubs_wireguard_here_or_stops() {
+    let mut app = fake::remote_access();
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(matches!(
+        &effects[..],
+        [crate::app::Effect::SetHubWireGuard { enabled: false, .. }]
+    ));
+    let effects = app.update(key(KeyCode::Char('d')));
+    assert!(matches!(
+        &effects[..],
+        [crate::app::Effect::RemoveWireGuard(id)] if id == "home-router"
+    ));
+}

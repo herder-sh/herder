@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 47] = [
+const SCENES: [Scene; 48] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -269,6 +269,9 @@ const SCENES: [Scene; 47] = [
     }),
     ("hub-full", |theme, _, width, height| {
         app_buffer(fake::hub_storage(412.8), theme, width, height)
+    }),
+    ("remote-access", |theme, _, width, height| {
+        app_buffer(fake::remote_access(), theme, width, height)
     }),
     ("backup-pick", |theme, _, width, height| {
         app_buffer(backup(0, &[]), theme, width, height)

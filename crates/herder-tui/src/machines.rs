@@ -55,6 +55,8 @@ pub struct MachinePanel {
     pub secrets: Option<Secrets>,
     /// The usage screen of the selected hub, over the panel.
     pub usage: Option<crate::hub_usage::HubUsage>,
+    /// The remote access screen, over the panel.
+    pub remote: Option<crate::remote_access::RemoteAccess>,
     /// Where each machine this client owns backs up, as it last said.
     pub links: Links,
     /// How full each hub's disk is, as it said with its link when the panel opened.
@@ -306,6 +308,8 @@ pub enum Input {
     Secrets,
     /// See what the selected hub's logins used.
     Usage,
+    /// See and set up how this device reaches the fleet from outside home.
+    RemoteAccess,
     /// Edit the public addresses of the selected machine.
     Public,
     /// Rank the routes of the selected machine on this device.
@@ -348,6 +352,9 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
     }
     if panel.usage.is_some() {
         return crate::hub_usage::for_key(key);
+    }
+    if let Some(screen) = &panel.remote {
+        return crate::remote_access::for_key(key, screen);
     }
     let input = match &panel.edit {
         Some(PanelEdit::Rename(_) | PanelEdit::Public(_)) => match key.code {
@@ -424,6 +431,7 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Char('b') => Input::Backup,
             KeyCode::Char('s') => Input::Secrets,
             KeyCode::Char('u') => Input::Usage,
+            KeyCode::Char('w') => Input::RemoteAccess,
             KeyCode::Char('p') => Input::Public,
             KeyCode::Char('o') => Input::Routes,
             KeyCode::Char('t') => Input::Diagnostics,
@@ -644,6 +652,7 @@ impl App {
                 }
                 Input::Secrets => return self.open_secrets(),
                 Input::Usage => return self.open_hub_usage(),
+                Input::RemoteAccess => return self.open_remote_access(),
                 Input::AddAccount => {
                     let Some(at) = panel.selected(&self.machines) else {
                         return Vec::new();

@@ -85,6 +85,7 @@ fn buttons(app: &App) -> Vec<Button> {
         && panel.backup.is_none()
         && panel.secrets.is_none()
         && panel.usage.is_none()
+        && panel.remote.is_none()
     {
         let mut buttons = vec![
             button("a", "add", char('a')),
@@ -96,6 +97,7 @@ fn buttons(app: &App) -> Vec<Button> {
             buttons.extend([
                 button("s", "secrets", char('s')),
                 button("u", "usage", char('u')),
+                button("w", "remote", char('w')),
             ]);
         } else {
             buttons.push(button("b", "backup", char('b')));
@@ -111,6 +113,23 @@ fn buttons(app: &App) -> Vec<Button> {
         return vec![
             button("⏎", "open", enter()),
             button("p", "period", char('p')),
+            button("r", "reload", char('r')),
+            esc(),
+        ];
+    }
+    if let Some(remote) = app
+        .machine_panel
+        .as_ref()
+        .and_then(|panel| panel.remote.as_ref())
+    {
+        if remote.prompt.is_some() {
+            return vec![button("⏎", "go on", enter()), esc()];
+        }
+        return vec![
+            button("i", "import", char('i')),
+            button("⏎", "use here", enter()),
+            button("w", "WireGuard", char('w')),
+            button("c", "Cloudflare", char('c')),
             button("r", "reload", char('r')),
             esc(),
         ];
