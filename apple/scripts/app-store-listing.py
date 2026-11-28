@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Uploads the iPhone app's App Store listing from apple/listing/listing.toml through the App
-Store Connect API: the en-US copy, the categories, the age rating, the App Review notes and the
-screenshots that listing-screenshots.py framed. It never submits anything for review.
+Store Connect API: the en-US copy, the categories, the age rating, the App Review notes and
+contact, and the screenshots that listing-screenshots.py framed. Only `submit` submits anything
+for review: it picks the newest valid build of the editable version, sets it on the version and
+sends the version to App Review.
 
 usage: apple/scripts/app-store-listing.py upload <frames>   set it all, then show it
+       apple/scripts/app-store-listing.py submit            submit the version for review
        apple/scripts/app-store-listing.py show              read the listing back
        apple/scripts/app-store-listing.py get <path>        print an API resource as JSON
+
+The App Review contact comes from listing.toml's [review] contact_* keys, or from
+REVIEW_CONTACT_FIRST_NAME, REVIEW_CONTACT_LAST_NAME, REVIEW_CONTACT_EMAIL and
+REVIEW_CONTACT_PHONE in the environment, which win; `submit` fails without it.
 
 Needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_PRIVATE_KEY (the .p8's contents) in the environment,
 as `herder secret run apple-herder/ASC_KEY_ID apple-herder/ASC_ISSUER_ID
@@ -21,6 +28,7 @@ import sys
 import tempfile
 import time
 import tomllib
+from datetime import datetime
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -32,6 +40,13 @@ LOCALE = "en-US"
 DISPLAY = "APP_IPHONE_67"
 # The version and app info states whose metadata can still change.
 EDITABLE = {"PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED", "METADATA_REJECTED"}
+# The App Review contact's fields: listing.toml's key, the environment's, and the API's.
+CONTACT = [
+    ("contact_first_name", "REVIEW_CONTACT_FIRST_NAME", "contactFirstName"),
+    ("contact_last_name", "REVIEW_CONTACT_LAST_NAME", "contactLastName"),
+    ("contact_email", "REVIEW_CONTACT_EMAIL", "contactEmail"),
+    ("contact_phone", "REVIEW_CONTACT_PHONE", "contactPhone"),
+]
 
 
 def b64(data: bytes) -> bytes:
@@ -92,7 +107,9 @@ class Api:
         return self.call("PATCH", f"/v1/{kind}/{id}", {"data": data})["data"]
 
     def post(self, kind: str, attributes: dict, relationships: dict) -> dict:
-        body = {"data": {"type": kind, "attributes": attributes, "relationships": relationships}}
+        body = {"data": {"type": kind, "relationships": relationships}}
+        if attributes:
+            body["data"]["attributes"] = attributes
         return self.call("POST", f"/v1/{kind}", body)["data"]
 
 
@@ -110,6 +127,50 @@ def editable(items: list[dict], state: str) -> dict:
     if not found:
         sys.exit(f"nothing editable: {[(i['id'], i['attributes'].get(state)) for i in items]}")
     return found[0]
+
+
+def contact(review: dict, environ: dict) -> dict | None:
+    """The App Review contact as the API names it, when every field of it is set.
+
+    >>> contact({"contact_first_name": "A", "contact_last_name": "B", "contact_email": "c@d.e"},
+    ...         {"REVIEW_CONTACT_PHONE": "+1 555 0100", "REVIEW_CONTACT_EMAIL": "f@g.h"})
+    {'contactFirstName': 'A', 'contactLastName': 'B', 'contactEmail': 'f@g.h', 'contactPhone': '+1 555 0100'}
+    >>> contact({"contact_first_name": "A"}, {}) is None
+    True
+    """
+    found = {api: (environ.get(env) or review.get(key) or "").strip() for key, env, api in CONTACT}
+    return found if all(found.values()) else None
+
+
+def newest_build(builds: dict, version: str) -> dict | None:
+    """The newest valid, unexpired build of `version` (its CFBundleShortVersionString), in a
+    /v1/builds response that includes each build's preReleaseVersion.
+
+    >>> def build(id, number, state, uploaded, expired=False):
+    ...     return {"id": id, "relationships": {"preReleaseVersion": {"data": {"id": number}}},
+    ...             "attributes": {"processingState": state, "uploadedDate": uploaded, "expired": expired}}
+    >>> response = {
+    ...     "data": [build("old", "v1", "VALID", "2026-11-01T10:00:00-08:00"),
+    ...              build("new", "v1", "VALID", "2026-11-02T10:00:00-08:00"),
+    ...              build("processing", "v1", "PROCESSING", "2026-11-03T10:00:00-08:00"),
+    ...              build("expired", "v1", "VALID", "2026-11-04T10:00:00-08:00", expired=True),
+    ...              build("other", "v2", "VALID", "2026-11-05T10:00:00-08:00")],
+    ...     "included": [{"type": "preReleaseVersions", "id": "v1", "attributes": {"version": "0.21.0"}},
+    ...                  {"type": "preReleaseVersions", "id": "v2", "attributes": {"version": "0.22.0"}}]}
+    >>> newest_build(response, "0.21.0")["id"]
+    'new'
+    >>> newest_build(response, "0.22.0")["id"]
+    'other'
+    >>> newest_build(response, "0.23.0") is None
+    True
+    """
+    versions = {i["id"]: i["attributes"]["version"] for i in builds.get("included", [])
+                if i["type"] == "preReleaseVersions"}
+    matching = [b for b in builds["data"]
+                if b["attributes"]["processingState"] == "VALID" and not b["attributes"]["expired"]
+                and versions.get((b["relationships"]["preReleaseVersion"]["data"] or {}).get("id")) == version]
+    # Dates come with their offset, so they are compared as times, not as strings.
+    return max(matching, key=lambda b: datetime.fromisoformat(b["attributes"]["uploadedDate"]), default=None)
 
 
 class Listing:
@@ -158,17 +219,61 @@ class Listing:
         declaration = self.api.get(f"/v1/appInfos/{self.info['id']}/ageRatingDeclaration")["data"]
         self.api.patch("ageRatingDeclarations", declaration["id"], self.listing["age_rating"])
 
-    def review(self) -> None:
-        """The App Review notes; the contact stays for the owner to fill in."""
+    def review(self, required: bool = False) -> None:
+        """The App Review notes, and the contact when it is set; `required` fails without it."""
         detail = self.api.get(f"/v1/appStoreVersions/{self.version['id']}/appStoreReviewDetail")["data"]
         attributes = {"notes": self.listing["review"]["notes"], "demoAccountRequired": False}
+        person = contact(self.listing["review"], os.environ)
+        if person:
+            attributes |= person
+        elif required:
+            sys.exit("set the App Review contact first: contact_first_name, contact_last_name, "
+                     "contact_email and contact_phone in listing.toml's [review], or "
+                     "REVIEW_CONTACT_FIRST_NAME, REVIEW_CONTACT_LAST_NAME, REVIEW_CONTACT_EMAIL "
+                     "and REVIEW_CONTACT_PHONE in the environment")
         if detail:
             # A change needs the contact filled in, which a new detail does not.
-            if detail["attributes"]["notes"] != attributes["notes"]:
+            if any(detail["attributes"].get(key) != value for key, value in attributes.items()):
                 self.api.patch("appStoreReviewDetails", detail["id"], attributes)
         else:
             self.api.post("appStoreReviewDetails", attributes,
                           {"appStoreVersion": to("appStoreVersions", self.version["id"])})
+
+    def submit(self) -> None:
+        """Sets the newest valid build of the version on it and submits the version for review."""
+        app, platform = self.listing["app"], self.listing["platform"]
+        number = self.version["attributes"]["versionString"]
+        self.review(required=True)
+        print(f"set the App Review notes and contact on {number}")
+        builds = self.api.get(f"/v1/builds?filter[app]={app}&filter[preReleaseVersion.platform]={platform}"
+                              f"&filter[preReleaseVersion.version]={number}&include=preReleaseVersion"
+                              "&sort=-uploadedDate&limit=50")
+        build = newest_build(builds, number)
+        if build is None:
+            sys.exit(f"no valid processed build of {number}: upload one (upload-testflight.sh ios) "
+                     "and wait for App Store Connect to process it")
+        self.api.patch("appStoreVersions", self.version["id"], relationships={"build": to("builds", build["id"])})
+        print(f"set build {build['attributes']['version']} on {number}")
+        # App Store Connect keeps one open submission per platform; one left from an earlier try
+        # is reused.
+        pending = self.api.get(f"/v1/reviewSubmissions?filter[app]={app}&filter[platform]={platform}"
+                            "&filter[state]=READY_FOR_REVIEW")["data"]
+        if pending:
+            submission = pending[0]
+            print(f"reusing review submission {submission['id']}")
+        else:
+            submission = self.api.post("reviewSubmissions", {"platform": platform}, {"app": to("apps", app)})
+            print(f"created review submission {submission['id']}")
+        items = self.api.get(f"/v1/reviewSubmissions/{submission['id']}/items?include=appStoreVersion")["data"]
+        if not any((i["relationships"]["appStoreVersion"].get("data") or {}).get("id") == self.version["id"]
+                   for i in items):
+            self.api.post("reviewSubmissionItems", {}, {
+                "reviewSubmission": to("reviewSubmissions", submission["id"]),
+                "appStoreVersion": to("appStoreVersions", self.version["id"]),
+            })
+            print(f"added {number} to the submission")
+        submitted = self.api.patch("reviewSubmissions", submission["id"], {"submitted": True})
+        print(f"submitted {number} ({build['attributes']['version']}) for review: {submitted['attributes']['state']}")
 
     def screenshots(self, frames: Path) -> None:
         """Replaces the 6.9" set's screenshots with `frames`, in the order of their names."""
@@ -246,7 +351,7 @@ def main() -> None:
     if command == "get" and len(sys.argv) == 3:
         print(json.dumps(Api().get(sys.argv[2]), indent=2))
         return
-    if command not in ("upload", "show") or len(sys.argv) != (3 if command == "upload" else 2):
+    if command not in ("upload", "submit", "show") or len(sys.argv) != (3 if command == "upload" else 2):
         sys.exit(__doc__)
     listing = Listing(Api(), tomllib.loads((ROOT / "apple/listing/listing.toml").read_text()))
     if command == "upload":
@@ -255,6 +360,9 @@ def main() -> None:
         listing.age_rating()
         listing.review()
         listing.screenshots(Path(sys.argv[2]))
+    if command == "submit":
+        listing.submit()
+        return
     listing.show()
 
 
