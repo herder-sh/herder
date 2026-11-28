@@ -18,7 +18,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::task::{Context, Poll, ready};
 
-use anyhow::{Context as _, anyhow};
+use anyhow::Context as _;
 use herder_protocol::{HostId, RelayError, RelayRoute};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio_rustls::TlsConnector;
@@ -161,7 +161,9 @@ impl Via {
         };
         let (mut tls, _) = supervisor::race(&addresses, reaching)
             .await
-            .map_err(|error| anyhow!("the hub {}: {error}", saved.name))?;
+            .map_err(|failed| {
+                anyhow::Error::new(failed).context(format!("the hub {}", saved.name))
+            })?;
         let key = generate_key();
         let request = format!(
             "GET {} HTTP/1.1\r\nHost: herder\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\

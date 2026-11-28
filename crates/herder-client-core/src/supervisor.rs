@@ -372,6 +372,8 @@ pub(crate) struct Supervisor {
 struct State {
     /// The machine's display name, once renamed.
     name: Option<String>,
+    /// When the latest connection was made.
+    made: Option<Instant>,
     /// Addresses in order of preference.
     addresses: Vec<String>,
     /// The headers each tunnel address sends on its upgrade.
@@ -1016,20 +1018,43 @@ impl Supervisor {
     /// reconnect until the daemon answers. Fails at once with `Local` for a command too large
     /// to send.
     pub(crate) async fn send(&self, command: Command) -> Result<Answer, Error> {
+        self.send_measured(command).await.map(|(answer, _)| answer)
+    }
+
+    /// [`Self::send`], also saying how long the command waited for a connection and how long
+    /// on it.
+    pub(crate) async fn send_measured(&self, command: Command) -> Result<(Answer, Sent), Error> {
         if self.demo.is_some() {
-            return self.demo_answer(&command.body).map(Ok);
+            let answer = self.demo_answer(&command.body)?;
+            return Ok((Ok(answer), Sent::default()));
         }
         if let Some(error) = too_large(&command) {
             return Err(error);
         }
+        let asked = Instant::now();
+        let connections = self.lock().quality.connections;
         let (reply, answer) = oneshot::channel();
         self.ops
             .send(Op::Command(command, reply))
             .map_err(|_| Error::Closed)?;
-        tokio::select! {
+        let answer = tokio::select! {
             () = self.stop.cancelled() => Err(Error::Closed),
             answer = answer => answer.map_err(|_| Error::Closed),
-        }
+        }?;
+        let answered = Instant::now();
+        let (made, now) = {
+            let state = self.lock();
+            (state.made, state.quality.connections)
+        };
+        // A command is written as soon as it is asked on a connection that is up, else as
+        // soon as the next one is: the connection that answered it, made since or before.
+        let written = made.map_or(asked, |made| made.max(asked)).min(answered);
+        let sent = Sent {
+            queued: written - asked,
+            wire: answered - written,
+            reconnected: now != connections,
+        };
+        Ok((answer, sent))
     }
 
     /// Sends `body`, an `open_terminal`, `add_account` or `log_in_account`, and streams the
@@ -1445,6 +1470,27 @@ impl Supervisor {
         Some((named, state.address.clone()))
     }
 
+    /// Whether this machine is a hub, as telemetry says it: `hub` when it relays to other
+    /// machines or another machine of the client goes through it, else `machine`.
+    fn machine_kind(&self) -> &'static str {
+        if !self.relays_to().is_empty() {
+            return "hub";
+        }
+        let through_it = self.machines.upgrade().is_some_and(|machines| {
+            // Every update leaves the list whole, so a poisoned list is consistent.
+            let machines = machines.lock().unwrap_or_else(PoisonError::into_inner);
+            machines
+                .iter()
+                .filter(|machine| machine.saved.host_id != self.saved.host_id)
+                .any(|machine| {
+                    machine.lock().addresses.iter().any(|address| {
+                        address::hub(address).is_some_and(|hub| hub == self.saved.host_id)
+                    })
+                })
+        });
+        if through_it { "hub" } else { "machine" }
+    }
+
     /// The hosts this machine, a hub, says it relays clients to now.
     pub(crate) fn relays_to(&self) -> Vec<herder_protocol::HostId> {
         let state = self.lock();
@@ -1476,7 +1522,10 @@ impl Supervisor {
                 let (connector, via) = (connector.clone(), via.clone());
                 async move { reach(&address, &connector, &via).await.map(drop) }
             };
-            race(&better, reaching).await.map(|((), address)| address)
+            race(&better, reaching)
+                .await
+                .map(|((), address)| address)
+                .map_err(|failed| failed.message)
         }))
     }
 
@@ -1700,6 +1749,16 @@ impl Drop for Subscription {
     }
 }
 
+/// How a command went to the daemon: how long it waited for a connection (`queued`), how long
+/// on the connection that answered it (`wire`), and whether a new connection was made
+/// meanwhile, to carry it or to resend it on.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Sent {
+    pub(crate) queued: Duration,
+    pub(crate) wire: Duration,
+    pub(crate) reconnected: bool,
+}
+
 /// A command waiting for its answer, resent on every new connection until it gets one.
 struct Pending {
     command: Command,
@@ -1910,6 +1969,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                     }
                     state.address = Some(address.clone());
                     state.answered = Some(address.clone());
+                    state.made = Some(made);
                     state.dirty = true;
                 }
                 supervisor.set_connection(ConnectionState::Connected);
@@ -1985,17 +2045,19 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, ops: mpsc::Unbounde
                 supervisor.lost(error.clone());
                 (error, wait)
             }
-            Err(error) => {
+            Err(failed) => {
+                let error = failed.message.clone();
                 supervisor.set_connection(ConnectionState::Disconnected {
                     error: error.clone(),
                 });
-                herder_telemetry::measure(
-                    "connect_failed",
-                    &[
-                        ("attempt", attempt.into()),
-                        ("connect_ms", connecting.elapsed().into()),
-                    ],
-                );
+                let mut measured = vec![
+                    ("attempt", attempt.into()),
+                    ("connect_ms", connecting.elapsed().into()),
+                    ("machine", supervisor.machine_kind().into()),
+                    ("failure", failed.class().into()),
+                ];
+                measured.extend(route_outcomes(&failed));
+                herder_telemetry::measure("connect_failed", &measured);
                 let since = *failing.get_or_insert(connecting);
                 let cap = if since.elapsed() < AWAY_AFTER {
                     BACKOFF_CAP
@@ -2712,12 +2774,13 @@ pub(crate) async fn connect(
     hello: ClientHello,
     turn: &Turn,
     via: &Via,
-) -> Result<(Ws, ServerHello, String, Timing), String> {
+) -> Result<(Ws, ServerHello, String, Timing), Failed> {
     match open_in_turn(addresses, fingerprint, device, hello, turn, via).await? {
         (ws, Opened::Hello(hello), address, timing) => Ok((ws, *hello, address, timing)),
-        (_, Opened::SignIn { .. }, address, _) => Err(format!(
-            "{address}: the daemon asked this device to sign in"
-        )),
+        (_, Opened::SignIn { .. }, address, _) => {
+            let message = format!("{address}: the daemon asked this device to sign in");
+            Err(Failed::of(address, "auth", message))
+        }
     }
 }
 
@@ -2751,8 +2814,9 @@ pub(crate) async fn open(
     hello: ClientHello,
 ) -> Result<(Ws, Opened, String), String> {
     let (turn, via) = (Turn::default(), Via::default());
-    let (ws, opened, address, _) =
-        open_in_turn(addresses, fingerprint, device, hello, &turn, &via).await?;
+    let (ws, opened, address, _) = open_in_turn(addresses, fingerprint, device, hello, &turn, &via)
+        .await
+        .map_err(|failed| failed.message)?;
     Ok((ws, opened, address))
 }
 
@@ -2769,8 +2833,11 @@ async fn open_in_turn(
     hello: ClientHello,
     turn: &Turn,
     via: &Via,
-) -> Result<(Ws, Opened, String, Timing), String> {
-    let config = client_config(fingerprint, device).map_err(|err| format!("{err:#}"))?;
+) -> Result<(Ws, Opened, String, Timing), Failed> {
+    let config = client_config(fingerprint, device).map_err(|err| Failed {
+        message: format!("{err:#}"),
+        routes: Vec::new(),
+    })?;
     let connector = TlsConnector::from(Arc::new(config));
     let attempt = |address: String| {
         let (connector, hello, turn) = (connector.clone(), hello.clone(), Arc::clone(turn));
@@ -2787,7 +2854,7 @@ async fn open_in_turn(
                 .instrument(tracing::info_span!("handshake"));
             let opened = greeting
                 .await
-                .unwrap_or_else(|_| Err(anyhow!("no hello in {HELLO_TIMEOUT:?}")))?;
+                .unwrap_or_else(|_| Err(timed_out(format!("no hello in {HELLO_TIMEOUT:?}"))))?;
             let timing = Timing {
                 started,
                 reached,
@@ -2812,7 +2879,7 @@ async fn open_in_turn(
 pub(crate) async fn race<T, A>(
     addresses: &[String],
     attempt: impl Fn(String) -> A,
-) -> Result<(T, String), String>
+) -> Result<(T, String), Failed>
 where
     A: Future<Output = anyhow::Result<T>>,
 {
@@ -2826,9 +2893,9 @@ where
     let mut queue = addresses.iter();
     let distinct = addresses.iter().collect::<HashSet<_>>().len();
     let mut running = FuturesUnordered::new();
-    // Each address that failed, in the order they first did: its latest error, and how many
-    // times it failed.
-    let mut errors: Vec<(String, String, u32)> = Vec::new();
+    // Each address that failed, in the order they first did: its latest error, how many
+    // times it failed, and how it last did.
+    let mut errors: Vec<(String, String, u32, &'static str)> = Vec::new();
     let next_start = tokio::time::sleep(HEAD_START);
     tokio::pin!(next_start);
     loop {
@@ -2843,14 +2910,16 @@ where
                 Ok(made) => return Ok((made, address)),
                 Err(err) => {
                     let error = format!("{address}: {err:#}");
+                    let class = failure_class(&err);
                     let failed = match errors.iter_mut().find(|(failed, ..)| *failed == address) {
                         Some(known) => {
                             known.1 = error;
                             known.2 += 1;
+                            known.3 = class;
                             known.2
                         }
                         None => {
-                            errors.push((address.clone(), error, 1));
+                            errors.push((address.clone(), error, 1, class));
                             1
                         }
                     };
@@ -2884,10 +2953,141 @@ where
         }
     }
     if errors.is_empty() {
-        return Err("the machine has no address".to_owned());
+        return Err(Failed {
+            message: "the machine has no address".to_owned(),
+            routes: Vec::new(),
+        });
     }
-    let errors: Vec<String> = errors.into_iter().map(|(_, error, _)| error).collect();
-    Err(errors.join("; "))
+    let message = errors
+        .iter()
+        .map(|(_, error, ..)| error.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let routes = errors
+        .into_iter()
+        .map(|(address, _, _, class)| (address, class))
+        .collect();
+    Err(Failed { message, routes })
+}
+
+/// Why every address of a race failed: the errors, as the machine shows them, and each
+/// address with the class of its latest failure ([`failure_class`]).
+#[derive(Debug)]
+pub(crate) struct Failed {
+    pub(crate) message: String,
+    pub(crate) routes: Vec<(String, &'static str)>,
+}
+
+impl Failed {
+    /// A failure of `address` alone, of `class`.
+    fn of(address: String, class: &'static str, message: String) -> Self {
+        Self {
+            message,
+            routes: vec![(address, class)],
+        }
+    }
+}
+
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Failed {}
+
+impl Failed {
+    /// The class every address failed with, else `other`; `other` too with no address.
+    pub(crate) fn class(&self) -> &'static str {
+        match self.routes.split_first() {
+            Some(((_, first), rest)) if rest.iter().all(|(_, class)| class == first) => first,
+            _ => "other",
+        }
+    }
+}
+
+/// How each kind of route `failed`, as `route_<kind>` properties: the class of its address's
+/// failure, or of each of its addresses' joined by `_` when they failed differently.
+fn route_outcomes(failed: &Failed) -> Vec<(&'static str, herder_telemetry::Measure)> {
+    let mut by_kind: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
+    for (address, class) in &failed.routes {
+        let name = route_property(&crate::route_kind(address.clone()));
+        match by_kind.iter_mut().find(|(kind, _)| *kind == name) {
+            Some((_, classes)) => classes.push(class),
+            None => by_kind.push((name, vec![class])),
+        }
+    }
+    by_kind
+        .into_iter()
+        .map(|(name, mut classes)| {
+            classes.sort_unstable();
+            classes.dedup();
+            (name, classes.join("_").into())
+        })
+        .collect()
+}
+
+/// The property a route kind's outcome goes in.
+fn route_property(kind: &crate::RouteKind) -> &'static str {
+    use crate::RouteKind;
+    match kind {
+        RouteKind::HomeNetwork => "route_home_network",
+        RouteKind::OwnVpn { .. } => "route_own_vpn",
+        RouteKind::Direct => "route_direct",
+        RouteKind::SystemVpn => "route_system_vpn",
+        RouteKind::HubWireGuard => "route_hub_wire_guard",
+        RouteKind::Tunnel => "route_tunnel",
+        RouteKind::Hub { .. } => "route_hub",
+        RouteKind::CloudflareRelay => "route_cloudflare_relay",
+    }
+}
+
+/// A daemon that turned this device away in its hello.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct TurnedAway(String);
+
+/// How an attempt failed, as telemetry says it: `timeout` (no answer in time), `refused`
+/// (nothing listens there), `eperm` (this device may not send there), `unreachable` (no
+/// route there), `tls` (the TLS failed, as for another machine's certificate), `auth` (the
+/// daemon turned the device away) or `other`.
+pub(crate) fn failure_class(err: &anyhow::Error) -> &'static str {
+    use std::io::ErrorKind;
+    for cause in err.chain() {
+        // A race inside this attempt, as through a hub to the hub's own addresses.
+        if let Some(failed) = cause.downcast_ref::<Failed>() {
+            return failed.class();
+        }
+        if cause.is::<rustls::Error>() {
+            return "tls";
+        }
+        if cause.is::<TurnedAway>() {
+            return "auth";
+        }
+        let Some(io) = cause.downcast_ref::<std::io::Error>() else {
+            continue;
+        };
+        // An io error's source is its inner error's source, not the inner error itself.
+        if io
+            .get_ref()
+            .is_some_and(|inner| inner.is::<rustls::Error>())
+        {
+            return "tls";
+        }
+        match io.kind() {
+            ErrorKind::TimedOut => return "timeout",
+            ErrorKind::ConnectionRefused => return "refused",
+            ErrorKind::PermissionDenied => return "eperm",
+            ErrorKind::NetworkUnreachable | ErrorKind::HostUnreachable => return "unreachable",
+            _ => {}
+        }
+    }
+    "other"
+}
+
+/// A timeout of `what`, which [`failure_class`] tells from other failures.
+fn timed_out(what: String) -> anyhow::Error {
+    std::io::Error::new(std::io::ErrorKind::TimedOut, what).into()
 }
 
 /// Whether `err` is this device not permitted to send to an address at all, as a sandbox that
@@ -2918,7 +3118,7 @@ async fn reach(address: &str, connector: &TlsConnector, via: &Via) -> anyhow::Re
     };
     let reached = tokio::time::timeout(CONNECT_TIMEOUT, reaching)
         .await
-        .unwrap_or_else(|_| Err(anyhow!("no answer in {CONNECT_TIMEOUT:?}")));
+        .unwrap_or_else(|_| Err(timed_out(format!("no answer in {CONNECT_TIMEOUT:?}"))));
     via.note(address, &reached);
     reached
 }
@@ -3006,7 +3206,7 @@ async fn greet(ws: &mut Ws, hello: &ClientHello) -> anyhow::Result<Opened> {
             challenge,
             registration,
         }),
-        ServerMessage::Error { error, .. } => Err(anyhow!(error.message)),
+        ServerMessage::Error { error, .. } => Err(TurnedAway(error.message).into()),
         _ => Err(anyhow!("the daemon did not say hello")),
     }
 }
@@ -3129,7 +3329,7 @@ mod tests {
                     Err(anyhow::Error::new(std::io::Error::from(kind)).context("opening"))
                 }
             };
-            let raced: Result<((), String), String> = race(&addresses, attempt).await;
+            let raced: Result<((), String), Failed> = race(&addresses, attempt).await;
             assert!(raced.is_err());
             let blocked = dials
                 .lock()
@@ -3164,6 +3364,54 @@ mod tests {
         assert_eq!(address, "home");
         let took = start.elapsed();
         assert!(took <= Duration::from_secs(4) + RETRY_CAP, "{took:?}");
+    }
+
+    /// Each failure has a class telemetry can count, from the error's causes, not its words;
+    /// and each kind of route says how its addresses failed.
+    #[test]
+    fn failures_are_classed_by_their_cause_and_route() {
+        use std::io::{Error as Io, ErrorKind};
+        let io = |kind: ErrorKind| anyhow::Error::new(Io::from(kind)).context("connecting");
+        let tls = Io::new(
+            ErrorKind::InvalidData,
+            rustls::Error::InvalidCertificate(rustls::CertificateError::BadSignature),
+        );
+        let cases = [
+            (timed_out("no answer in 10s".into()), "timeout"),
+            (io(ErrorKind::ConnectionRefused), "refused"),
+            (io(ErrorKind::PermissionDenied), "eperm"),
+            (io(ErrorKind::HostUnreachable), "unreachable"),
+            (anyhow::Error::new(tls).context("TLS"), "tls"),
+            (TurnedAway("device refused".into()).into(), "auth"),
+            (anyhow!("the daemon did not say hello"), "other"),
+        ];
+        for (err, class) in cases {
+            assert_eq!(failure_class(&err), class, "{err:#}");
+        }
+
+        let failed = Failed {
+            message: String::new(),
+            routes: vec![
+                ("192.168.1.2:7447".into(), "timeout"),
+                ("10.0.0.2:7447".into(), "refused"),
+                ("wg://home/10.0.0.2:7447".into(), "eperm"),
+                ("100.100.1.2:7447".into(), "timeout"),
+            ],
+        };
+        let outcomes: HashMap<_, _> = route_outcomes(&failed).into_iter().collect();
+        let word = |class: &str| herder_telemetry::Measure::Word(class.into());
+        assert_eq!(outcomes["route_home_network"], word("refused_timeout"));
+        assert_eq!(outcomes["route_own_vpn"], word("eperm"));
+        assert_eq!(outcomes["route_system_vpn"], word("timeout"));
+        assert_eq!(outcomes.len(), 3);
+        assert_eq!(failed.class(), "other");
+        // Through a hub, the hub's own race is what the attempt failed of.
+        let hub = Failed {
+            message: String::new(),
+            routes: vec![("192.168.1.2:7447".into(), "timeout")],
+        };
+        let through = anyhow::Error::new(hub).context("the hub");
+        assert_eq!(failure_class(&through), "timeout");
     }
 
     #[test]
