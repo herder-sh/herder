@@ -177,4 +177,13 @@ struct AppSentryTests {
         #expect(AppScrub.isSymbol("Fleet.start(_:accountId:)"))
         #expect(!AppScrub.isSymbol("100.64.0.7:7447"))
     }
+
+    /// A transcript that shrank from under its view goes to Sentry by its kind alone.
+    @Test func aTranscriptShrinkKeepsItsKindAndNothingElse() throws {
+        let event = Event(level: .warning)
+        event.exceptions = [Exception(value: nil, type: TranscriptLog.shrankKind)]
+        let scrubbed = try #require(AppScrub.event(event, installId: "0123456789abcdef0123456789abcdef"))
+        #expect(scrubbed.exceptions?.first?.type == "TranscriptShrankFromUnder")
+        #expect(scrubbed.message == nil)
+    }
 }

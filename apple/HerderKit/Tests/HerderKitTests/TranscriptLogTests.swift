@@ -61,6 +61,39 @@ struct TranscriptLogTests {
         #expect(!state(offset: 4400, content: 6000).shrankFromUnder(state(offset: 4400)))
     }
 
+    /// The owner's send: rows measured smaller after the view went to the end left it past the
+    /// new end, blank. Back to the end, whether or not the reader followed it.
+    @Test func aShrinkThatLeavesTheViewPastTheEndGoesBackToIt() {
+        let before = state(offset: 1675, content: 3446, height: 900)
+        let after = state(offset: 1675, content: 2298, height: 900)
+        #expect(after.follow(from: before, follows: true) == .init(follows: true, toEnd: true))
+        #expect(after.follow(from: before, follows: false) == .init(follows: true, toEnd: true))
+    }
+
+    /// A block more, or the composer collapsing, that the scroll view's anchor did not follow:
+    /// a reader at the end goes on following it, one reading above is left alone.
+    @Test func aResizeTakesAReaderWhoFollowsBackToTheEnd() {
+        let atEnd = state(offset: 4400)
+        let grown = state(offset: 4400, content: 5600)
+        #expect(grown.follow(from: atEnd, follows: true) == .init(follows: true, toEnd: true))
+        #expect(grown.follow(from: atEnd, follows: false) == .init(follows: false, toEnd: false))
+        let taller = TranscriptScrollState(contentHeight: 5000, offsetY: 4400,
+                                           visible: CGRect(x: 0, y: 4400, width: 800, height: 500),
+                                           container: CGSize(width: 800, height: 500))
+        #expect(taller.follow(from: atEnd, follows: true) == .init(follows: true, toEnd: true))
+        // Kept at the end by the anchor: nothing to do.
+        #expect(state(offset: 5000, content: 5600).follow(from: atEnd, follows: true) == .init(follows: true, toEnd: false))
+    }
+
+    /// Only the reader moves the view on a layout that kept its size: they follow the end if
+    /// they left the view there, and growth no longer takes them anywhere.
+    @Test func theReaderAloneDecidesWhetherTheyFollow() {
+        #expect(state(offset: 2000).follow(from: state(offset: 4400), follows: true) == .init(follows: false, toEnd: false))
+        #expect(state(offset: 4380).follow(from: state(offset: 2000), follows: false) == .init(follows: true, toEnd: false))
+        // A bounce past the end, on content that kept its size, is the reader's too.
+        #expect(state(offset: 4500).follow(from: state(offset: 4400), follows: true) == .init(follows: true, toEnd: false))
+    }
+
     @Test func noBlockInViewOfATranscriptWithBlocksIsBlank() {
         #expect(TranscriptScrollState.blank(visible: 0, blocks: 120))
         #expect(!TranscriptScrollState.blank(visible: 3, blocks: 120))
