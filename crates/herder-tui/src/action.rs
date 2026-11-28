@@ -68,6 +68,8 @@ pub enum Action {
     Secrets(crate::secrets::Input),
     /// Input to the fleet's hub usage screen.
     HubUsage(crate::hub_usage::Input),
+    /// Input to the fleet's remote access screen.
+    RemoteAccess(crate::remote_access::Input),
     /// Open the selected session's terminal picker, or close it.
     Terminals,
     /// Something in the inbox.

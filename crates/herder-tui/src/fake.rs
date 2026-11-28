@@ -1947,3 +1947,99 @@ pub fn hub_usage() -> App {
     }
     app
 }
+
+/// The remote access screen of [`backups`]' hub: a config of the user's own VPN imported and
+/// up, herder's WireGuard on at the router's name and used on this device, and in Cloudflare
+/// the relay up and the tunnel being set up; `devbox` has a Tailscale address too.
+pub fn remote_access() -> App {
+    use herder_client_core::{WireGuardKind, WireGuardTunnel};
+    use herder_protocol::{
+        CloudflareSettings, CommandBody, CommandResult, RemoteAccess, RemoteAccessSettings,
+        RouteState, RouteStatus, SecretRef, WireGuardOffer, WireGuardSettings,
+    };
+    let mut app = backups();
+    let mut machines = app.machines.clone();
+    for machine in &mut machines {
+        machine.quality.last_rtt_ms = Some(if machine.host_id.as_str() == "v" {
+            3
+        } else {
+            38
+        });
+        if machine.name == "devbox" {
+            machine.addresses.push("100.101.1.2:7447".into());
+            machine.address = Some("100.101.1.2:7447".into());
+        } else {
+            machine.address = machine.addresses.first().cloned();
+        }
+    }
+    app.update(Msg::Machines(machines));
+    let press = |app: &mut App, c: char| {
+        app.update(Msg::Key(ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char(c),
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        )))
+    };
+    press(&mut app, 'j');
+    press(&mut app, 'j');
+    let tunnels = vec![WireGuardTunnel {
+        id: "home-router".into(),
+        name: "home-router".into(),
+        endpoint: "vpn.example.net:51820".into(),
+        addresses: vec!["10.6.0.2/32".into()],
+        allowed_ips: vec!["192.168.1.0/24".into()],
+        kind: WireGuardKind::Imported,
+        up: true,
+    }];
+    let offer = RemoteAccess {
+        settings: Some(RemoteAccessSettings {
+            wireguard: Some(WireGuardSettings {
+                port: 51900,
+                endpoint: "home.example.net:51900".into(),
+            }),
+            cloudflare: Some(CloudflareSettings {
+                account_id: "0123456789abcdef".into(),
+                api_token: SecretRef {
+                    set: Some("cloudflare".into()),
+                    name: "CLOUDFLARE_API_TOKEN".into(),
+                },
+                relay: true,
+                tunnel_hostname: Some("hub.example.com".into()),
+            }),
+        }),
+        wireguard: Some(WireGuardOffer {
+            endpoint: "home.example.net:51900".into(),
+            enrolled: true,
+        }),
+        relay: Some(RouteStatus {
+            url: "https://herder-relay.example.workers.dev".into(),
+            state: RouteState::Up,
+            error: None,
+        }),
+        tunnel: Some(RouteStatus {
+            url: String::new(),
+            state: RouteState::SettingUp,
+            error: None,
+        }),
+    };
+    for effect in press(&mut app, 'w') {
+        match effect {
+            crate::app::Effect::WireGuardTunnels => {
+                app.update(Msg::WireGuardTunnels(Ok(tunnels.clone())));
+            }
+            crate::app::Effect::Send {
+                origin,
+                command: CommandBody::GetRemoteAccess,
+                ..
+            } => {
+                app.update(Msg::Sent {
+                    origin,
+                    result: Ok(CommandResult::RemoteAccess {
+                        remote_access: Box::new(offer.clone()),
+                    }),
+                });
+            }
+            _ => {}
+        }
+    }
+    app
+}

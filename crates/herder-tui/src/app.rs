@@ -65,6 +65,8 @@ pub enum Msg {
     },
     /// Something to tell the user on the status line, such as a refused command.
     Notice(String),
+    /// This device's WireGuard configs, as [`Effect::WireGuardTunnels`] asked.
+    WireGuardTunnels(Result<Vec<herder_client_core::WireGuardTunnel>, String>),
     /// The machine this terminal signs in to gave the login's code, for an app to approve.
     LoginCode(String),
     /// Signing in to a machine ended: the machine, or why it failed.
@@ -175,6 +177,24 @@ pub enum Effect {
         host_id: HostId,
         /// The tunnel address.
         address: String,
+    },
+    /// List this device's WireGuard configs; they come back as [`Msg::WireGuardTunnels`].
+    WireGuardTunnels,
+    /// Import the WireGuard config at `path` (`~` is the home directory), named after the
+    /// file; a failure comes back as a notice, the configs as [`Msg::WireGuardTunnels`].
+    ImportWireGuard {
+        /// The config file.
+        path: String,
+    },
+    /// Remove an imported WireGuard config, by its id; as [`Effect::ImportWireGuard`].
+    RemoveWireGuard(String),
+    /// Enroll this device with a hub's WireGuard, or remove it; as
+    /// [`Effect::ImportWireGuard`], and the hub's offer is asked again.
+    SetHubWireGuard {
+        /// The hub.
+        host_id: HostId,
+        /// Whether to use it.
+        enabled: bool,
     },
     /// Clear the screen and draw every cell anew, as after a resize.
     Repaint,
@@ -624,6 +644,10 @@ impl App {
                 self.notice = Some(text);
                 Vec::new()
             }
+            Msg::WireGuardTunnels(tunnels) => {
+                self.remote_access_tunnels(tunnels);
+                Vec::new()
+            }
             Msg::LoginCode(code) => {
                 self.login_code(code);
                 Vec::new()
@@ -711,6 +735,7 @@ impl App {
             Action::Backup(input) => return self.backup_input(input),
             Action::Secrets(input) => return self.secrets_input(input),
             Action::HubUsage(input) => return self.hub_usage_input(input),
+            Action::RemoteAccess(input) => return self.remote_access_input(input),
             Action::OpenMachines => return self.open_machines(false),
             Action::AddMachine => return self.open_machines(true),
             Action::ToggleHelp => self.help = !self.help,

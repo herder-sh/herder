@@ -65,6 +65,9 @@ pub(super) fn draw(
     if let Some(usage) = &panel.usage {
         return super::hub_usage::draw(frame, area, app, usage, hits);
     }
+    if let Some(remote) = &panel.remote {
+        return super::remote_access::draw(frame, area, app, remote, hits);
+    }
     list(frame, area, app, panel, hits);
     match (&panel.account, &panel.add, &panel.backup) {
         (Some(account), _, _) => account_dialog(frame, area, app, account),
@@ -437,7 +440,7 @@ fn choice_word(choice: RouteChoice) -> Option<&'static str> {
 }
 
 /// What carries a connection to `address`: "home network", "through herder-hub".
-fn carrier(app: &App, address: &str) -> String {
+pub(super) fn carrier(app: &App, address: &str) -> String {
     match herder_client_core::route_kind(address.to_owned()) {
         RouteKind::HomeNetwork => "home network".to_owned(),
         RouteKind::OwnVpn { .. } => "your VPN".to_owned(),

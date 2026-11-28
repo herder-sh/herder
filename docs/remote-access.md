@@ -312,8 +312,10 @@ Durable Object relay when granted one), `HubHello::relay_grant: Option<RelayGran
   done when, with a token and `tunnel_hostname`, herder sets up, repairs and removes the
   tunnel and hostname (mocked API), the hub runs `cloudflared` and publishes the hostname
   as a public address, `RemoteAccess::tunnel` reports its state, and docs cover it.
-- **P27.7 · Sign in to a front door with a browser.** Unchanged.
-- **P27.8 · Remote access options in the Hub tab.** Unchanged, with `GetRemoteAccess`,
-  `set_route`, `route_kind` and the WireGuard calls as its data.
+- **P27.7 · Sign in to a front door with a browser.** Done as P28.7 (#724): the apps' machine
+  page and the TUI's routes (`s`).
+- **P27.8 · Remote access options in the Hub tab.** Done as P28.8: the apps' Remote access page
+  (#714) and the TUI's remote access screen (`w` in the fleet), with `GetRemoteAccess`,
+  `SetRemoteAccess`, `set_route`, `route_kind` and the WireGuard calls as their data.
 
 [`RelayGrant`]: ../crates/herder-protocol/src/remote.rs

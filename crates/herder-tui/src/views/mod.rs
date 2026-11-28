@@ -45,6 +45,7 @@ mod palette;
 mod phone;
 mod projects;
 mod prs;
+mod remote_access;
 mod resources;
 mod secrets;
 mod sessions;

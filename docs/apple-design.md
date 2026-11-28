@@ -515,8 +515,9 @@ per option, each three or four lines with the commands in monospace:
   away from home (On Demand). Nothing to add in herder: the machines' home addresses answer.
 
 Steps are collapsed when the route works and open until it does, so a working page reads as
-status first; herder's options have no steps, as they set themselves up. The TUI has no Remote
-access view yet; its fleet view still shows each machine's addresses.
+status first; herder's options have no steps, as they set themselves up. The TUI's remote access
+screen (`w` in the fleet, `docs/tui-design.md` §2.6) sets up the same options, and ranks routes
+with `o`; browser sign-in to a front door is `s` on a tunnel route there.
 
 Screenshots (`RemoteAccessScreenshotTests`): `remote-access-hub-iphone.png` (the Hub tab's
 row, all well), `remote-access-mac.png` (the page: each machine's route and round trip, work-mbp

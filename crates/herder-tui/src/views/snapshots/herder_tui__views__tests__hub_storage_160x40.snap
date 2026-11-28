@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 1147
 expression: terminal.backend()
 ---
 " herder        inbox 0 « │ fleet · 3 machines                                                                                                                   "
@@ -41,4 +42,4 @@ expression: terminal.backend()
 " ─────────────────────── │                                                                                                                                      "
 " + new            ≡ menu │                                                                                                                                      "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── "
-" j/k move  a add machine  n add account  e rename  s secrets  u usage  d forget  r reconnect  esc back  ? help                       ● devbox  ● laptop  ● hub  "
+" j/k move  a add machine  n add account  e rename  s secrets  u usage  w remote  d forget  r reconnect  esc back  ? help             ● devbox  ● laptop  ● hub  "

@@ -143,6 +143,32 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
             help,
         ];
     }
+    if let Some(remote) = app
+        .machine_panel
+        .as_ref()
+        .and_then(|panel| panel.remote.as_ref())
+        && app.mode().is_none()
+    {
+        if remote.prompt.is_some() {
+            return vec![
+                tap("enter", "go on", KeyCode::Enter),
+                tap("esc", "cancel", KeyCode::Esc),
+            ];
+        }
+        return vec![
+            hint("j/k", "move"),
+            tap("i", "import", char('i')),
+            tap("d", "remove", char('d')),
+            tap("enter", "use here", KeyCode::Enter),
+            tap("w", "WireGuard", char('w')),
+            tap("c", "Cloudflare", char('c')),
+            tap("l", "relay", char('l')),
+            tap("h", "tunnel", char('h')),
+            tap("r", "reload", char('r')),
+            tap("esc", "back", KeyCode::Esc),
+            help,
+        ];
+    }
     match app.mode() {
         // The fleet and the accounts are views, whose keys the bar shows.
         None if app.machine_panel.as_ref().is_some_and(|panel| {
@@ -151,6 +177,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                 && panel.backup.is_none()
                 && panel.secrets.is_none()
                 && panel.usage.is_none()
+                && panel.remote.is_none()
         }) =>
         {
             match app
@@ -188,6 +215,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                     if app.on_hub() {
                         hints.push(tap("s", "secrets", char('s')));
                         hints.push(tap("u", "usage", char('u')));
+                        hints.push(tap("w", "remote", char('w')));
                     } else {
                         hints.push(tap("b", "backup", char('b')));
                     }

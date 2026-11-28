@@ -583,6 +583,52 @@ machine reconnects.
  j/k move  space auto · only this · never  K earlier  J later  s sign in  esc done
 ```
 
+**Remote access** (`w`, P28.8): every way this device reaches the fleet from outside home,
+over the fleet, for the selected machine; the same options as the apps' Remote access page
+(`docs/apple-design.md` §4.4.1), one section each, with the keys that set it up on the right.
+
+- **Your VPN**: the WireGuard configs imported on this device (`wireguard_tunnels`), whatever
+  machine is selected. `i` asks for a config file's path and imports it (`import_wireguard`),
+  named after the file; `d` removes the selected one (`j`/`k`).
+- **herder's WireGuard on the hub**: on a hub, from `get_remote_access`: where it is on and
+  whether this device uses it. `enter` uses it here or stops (`set_hub_wireguard`). Owners
+  press `w` to set the endpoint, `host:port` (the port bound is the one it names; empty turns
+  it off), sent with `set_remote_access`, which keeps the rest of the hub's settings.
+- **Cloudflare**: `c` asks for the account id, then the API token, shown as dots; the token is
+  put as the hub secret `cloudflare/CLOUDFLARE_API_TOKEN` (`create_secret_set`, `put_secret`),
+  then the settings name it; an empty token keeps the hub's. `l` turns the relay on or off;
+  `h` sets the tunnel's hostname (empty removes it). The relay's and the tunnel's state
+  (✓ up, … setting up, ✗ failed and why) is under it.
+- **Tailscale**: each machine's Tailscale address (a system VPN's, `route_kind`), or how to get
+  one.
+- **Routes in use**: each machine's route and its last round trip; `o` in the fleet ranks them.
+
+Members see the hub's options and use its WireGuard; the keys that change the hub are refused
+with a notice. `r` asks again; esc goes back to the fleet. Snapshots: `remote_access_*`.
+
+```text
+ remote access · hub                                         r ask again
+
+ Your VPN                                            i import · d remove
+ ▶ home-router  vpn.example.net:51820  up
+
+ herder's WireGuard on the hub                 w set up · enter use here
+   on at home.example.net:51900 · used on this device
+
+ Cloudflare (account 0123456789abcdef)     c set up · l relay · h tunnel
+   relay   ✓ up  https://herder-relay.example.workers.dev
+   tunnel  … setting up  hub.example.com
+
+ Tailscale
+   devbox  100.101.1.2:7447
+
+ Routes in use                                 o in the fleet ranks them
+   devbox  system VPN · 38 ms
+   laptop  home network · 38 ms
+   hub     internet · 3 ms
+ j/k move  i import  d remove  enter use here  w WireGuard  c Cloudflare  l relay  h tunnel
+```
+
 ### 2.7 Switch account / provider / model (picker)
 
 This is OpenCode's model picker reshaped around herder's switches:
