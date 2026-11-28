@@ -64,7 +64,7 @@ struct SecretRequestAsk: View {
                     .padding(.horizontal, 10)
                     .frame(minHeight: Self.small)
                     .background(Theme.raised, in: .capsule)
-                    .contentShape(.capsule)
+                    .hitTarget()
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("request-secret-decline")
@@ -93,7 +93,7 @@ struct SecretRequestAsk: View {
                 .padding(.horizontal, 9)
                 .frame(minHeight: Self.small)
                 .background(Theme.raised, in: .capsule)
-                .contentShape(.capsule)
+                .hitTarget()
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
@@ -164,7 +164,6 @@ struct SecretRequestAsk: View {
             } else {
                 ActionButton(title: "Store", style: .primary) { await store() }
                     .frame(width: 92)
-                    .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("request-secret-store")
             }
         }

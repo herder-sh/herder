@@ -224,9 +224,10 @@ struct SecretsTests {
         #expect(SecretHint("Cloudflare API token, Zone DNS edit. https://dash.cloudflare.com/profile/api-tokens → Create Token → Edit zone DNS")
             == SecretHint(lead: "Cloudflare API token, Zone DNS edit.",
                           steps: ["https://dash.cloudflare.com/profile/api-tokens", "Create Token", "Edit zone DNS"]))
-        // A bare domain links to it; a path without a sentence before it has no lead.
-        #expect(SecretHint("dash.cloudflare.com → My Profile → API Tokens")
-            == SecretHint(lead: "", steps: ["[dash.cloudflare.com](https://dash.cloudflare.com)", "My Profile", "API Tokens"]))
+        // A first step that is a bare domain links to it, a later one does not; a path without a
+        // sentence before it has no lead.
+        #expect(SecretHint("dash.cloudflare.com → My Profile → API Tokens → homelab.dev")
+            == SecretHint(lead: "", steps: ["[dash.cloudflare.com](https://dash.cloudflare.com)", "My Profile", "API Tokens", "homelab.dev"]))
         #expect(SecretHint("Grafana token: grafana.example.com/org/apikeys -> Add API key")
             == SecretHint(lead: "Grafana token", steps: ["[grafana.example.com/org/apikeys](https://grafana.example.com/org/apikeys)", "Add API key"]))
         #expect(SecretHint("PagerDuty REST key. 1. Open Integrations 2. API Access Keys 3. Create New API Key")
