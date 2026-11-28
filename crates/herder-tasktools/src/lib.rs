@@ -259,7 +259,11 @@ impl Tool {
                  command runs with it. Use this rather than telling the user to add the secret \
                  themselves and come back, and never ask them to paste a value in the chat. \
                  When the value is already in a file on this machine, use `store_secret` \
-                 instead. Say in `description` what the value is and where they get it; it \
+                 instead. In `description`, say in a short sentence what the value is, then \
+                 where they get it: the page's full https:// URL, then each click, joined \
+                 by ` → `, e.g. \"Cloudflare API token, Zone DNS edit. \
+                 https://dash.cloudflare.com/profile/api-tokens → Create Token → Edit zone \
+                 DNS\"; the app shows the URL as a link and the clicks as numbered steps. It \
                  becomes the secret's description. When the set already holds a secret of that \
                  name, the user is told the value will replace it. The call returns once they \
                  answered: `stored`, with the set they picked, or `declined`; never the value. \

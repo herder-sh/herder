@@ -203,8 +203,8 @@ struct SecretsTests {
         let secret = SecretRequest(
             set: "coingate", name: "GITHUB_SIEM_PAT",
             description: "GitHub fine-grained PAT, read-only on the org audit log", replaces: true)
-        #expect(SecretRequestAsk.question(secret, set: "coingate", hub: "herder-hub-0")
-            == "This session asks you to add the secret GITHUB_SIEM_PAT in coingate on herder-hub-0.")
+        #expect(SecretRequestAsk.destination(set: "coingate", hub: "herder-hub-0") == "coingate · herder-hub-0")
+        #expect(SecretRequestAsk.destination(set: "coingate", hub: nil) == "coingate")
         // Until the hub lists its secrets, as the host saw them; then as the hub has them.
         #expect(SecretRequestAsk.replaces(secret, set: "coingate", held: nil))
         #expect(!SecretRequestAsk.replaces(secret, set: "personal", held: nil))
@@ -217,6 +217,25 @@ struct SecretsTests {
         #expect(SecretRequestAsk.description(bare, set: "personal", held: described) == "SIEM audit log")
         #expect(SecretRequestAsk.description(bare, set: "coingate", held: described) == "")
         #expect(SecretRequestAsk.description(secret, set: "personal", held: described) == secret.description)
+    }
+
+    /// An agent's one-line hint shows as what the value is, then where to get it, a step a line.
+    @Test func aHintsPathBecomesNumberedSteps() {
+        #expect(SecretHint("Cloudflare API token, Zone DNS edit. https://dash.cloudflare.com/profile/api-tokens → Create Token → Edit zone DNS")
+            == SecretHint(lead: "Cloudflare API token, Zone DNS edit.",
+                          steps: ["https://dash.cloudflare.com/profile/api-tokens", "Create Token", "Edit zone DNS"]))
+        // A first step that is a bare domain links to it, a later one does not; a path without a
+        // sentence before it has no lead.
+        #expect(SecretHint("dash.cloudflare.com → My Profile → API Tokens → homelab.dev")
+            == SecretHint(lead: "", steps: ["[dash.cloudflare.com](https://dash.cloudflare.com)", "My Profile", "API Tokens", "homelab.dev"]))
+        #expect(SecretHint("Grafana token: grafana.example.com/org/apikeys -> Add API key")
+            == SecretHint(lead: "Grafana token", steps: ["[grafana.example.com/org/apikeys](https://grafana.example.com/org/apikeys)", "Add API key"]))
+        #expect(SecretHint("PagerDuty REST key. 1. Open Integrations 2. API Access Keys 3. Create New API Key")
+            == SecretHint(lead: "PagerDuty REST key.", steps: ["Open Integrations", "API Access Keys", "Create New API Key"]))
+        // A hint without a path is its lead alone.
+        #expect(SecretHint("GitHub fine-grained PAT, read-only on the org audit log")
+            == SecretHint(lead: "GitHub fine-grained PAT, read-only on the org audit log", steps: []))
+        #expect(SecretHint("").isEmpty)
     }
 
     @Test func aRequestedValueIsCheckedAsTheHubChecksIt() {
